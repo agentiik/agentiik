@@ -1,0 +1,576 @@
+{
+  "version": "0.1.0",
+  "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
+  "schemas": {
+    "workflow": "../workflow.schema.json",
+    "brick": "../brick.schema.json",
+    "envelope": "../envelope.schema.json"
+  },
+  "notes": [
+    "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
+    "Digests are written out in full. The documentation elides them in the middle, as 9f2c1d...b7e0, which is a typographic elision and not a value; the fixtures keep the first and last characters and fill the rest so that each one is a well formed sha256.",
+    "A fixture carrying a manifest key is checked against a brick manifest that lives elsewhere in this corpus. The rule it pins is about the two documents together, so neither file alone shows it.",
+    "A fixture carrying a role key is not an entry point. mcp-in-included-file.yaml is the included file itself, which is where the rule it pins can be seen at all."
+  ],
+  "fixtures": {
+    "workflow": {
+      "valid": [
+        {
+          "file": "workflow/valid/minimal.yaml",
+          "covers": "apiVersion, kind, metadata, steps.image, steps.outputs"
+        },
+        {
+          "file": "workflow/valid/monthly-invoicing.yaml",
+          "covers": "the whole entry point",
+          "source": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/valid/script-steps.yaml",
+          "covers": "script, before_script, after_script, shell, files",
+          "source": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        },
+        {
+          "file": "workflow/valid/mcp-server.yaml",
+          "covers": "mcp block",
+          "source": "https://agentiik.github.io/docs/#a-workflow-as-an-mcp-server"
+        },
+        {
+          "file": "workflow/valid/retention.yaml",
+          "covers": "retain grammar",
+          "source": "https://agentiik.github.io/docs/#artifact-expiry"
+        },
+        {
+          "file": "workflow/valid/hidden-blocks.yaml",
+          "covers": "include, hidden blocks, extends",
+          "source": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "workflow/valid/merge-and-fan-out.yaml",
+          "covers": "merge, strategy, and the per-step execution settings",
+          "source": "https://agentiik.github.io/docs/#merge-strategies"
+        },
+        {
+          "file": "workflow/valid/sub-workflow.yaml",
+          "covers": "workflow step keyword, concurrency, triggers",
+          "source": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/valid/run-timeout.yaml",
+          "covers": "timeout at the root, which bounds the whole run, beside the step limit of the same name",
+          "source": "https://agentiik.github.io/docs/#yaml"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "workflow/invalid/unknown-root-key.yaml",
+          "rule": "A key at the root of the file that the language does not define.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/api-version-unknown.yaml",
+          "rule": "A language version the reader does not know. apiVersion is read before anything else, so a file cannot ask to be read by rules that do not exist.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/kind-not-workflow.yaml",
+          "rule": "A workflow entry point declaring another kind. The same apiVersion covers the brick manifest, so the kind is what tells a reader which of the two it holds.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/metadata-name-missing.yaml",
+          "rule": "A workflow with no name. The name and the namespace form the identity a run, a grant and a git remote are addressed by.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/step-name-not-an-identifier.yaml",
+          "rule": "A step name that is not an identifier. The name is used in needs, in expressions and in the run detail, so it stays to letters, digits, hyphens and underscores.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/step-unknown-keyword.yaml",
+          "rule": "A step keyword the language does not define. The set of step keywords is closed, so a misspelling is refused rather than silently ignored.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/step-image-and-workflow.yaml",
+          "rule": "A step that both runs an image and calls a sub-workflow. workflow is an alternative to image, never a companion to it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/step-workflow-and-script.yaml",
+          "rule": "A step that calls a sub-workflow and also carries a script. script commands run inside image and workflow is an alternative to image, so a sub-workflow call has no container for a script to run in.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/param-name-not-an-identifier.yaml",
+          "rule": "A step parameter name that is not an identifier. A parameter name is a key of /agk/params.json and is exported as AGK_PARAM_<NAME> when the step runs a script, so it cannot carry a hyphen. The brick manifest keys its own params by the same grammar, and a script step has no manifest to be validated against, so this document is the only one that catches the name.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        },
+        {
+          "file": "workflow/invalid/resources-cpu-not-a-string.yaml",
+          "rule": "A CPU request written as a number. It is written as a string so that half a core reads as 0.5 wherever it travels, in the workflow file, in the brick manifest and in the task message alike; brick/invalid/resources-cpu-not-a-string.yaml pins the same refusal on the other document.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#the-task-message"
+        },
+        {
+          "file": "workflow/invalid/extends-not-hidden-block.yaml",
+          "rule": "An extends naming a block whose name does not start with a dot. Only a hidden block can be extended, and a hidden block is exactly a name that starts with a dot and is never executed.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "workflow/invalid/when-unknown-state.yaml",
+          "rule": "An upstream state that is not one of succeeded, failed, skipped or always.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/retry-on-unknown-kind.yaml",
+          "rule": "A retryable failure kind outside transient, failed, lost and timeout.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/merge-join-without-on.yaml",
+          "rule": "A key join that does not say what it matches items on. Without it, unmatched items cannot be told from matched ones.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#merge-strategies"
+        },
+        {
+          "file": "workflow/invalid/fan-out-batch-without-size.yaml",
+          "rule": "A batch fan-out that does not say how many items go into a batch. The size is written in the parentheses, as batch(50).",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#fan-out"
+        },
+        {
+          "file": "workflow/invalid/fan-out-batch-of-zero.yaml",
+          "rule": "A batch fan-out of no items. batch(n) is one container per batch of n items, and a batch of zero describes a shard that can never be filled.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#fan-out"
+        },
+        {
+          "file": "workflow/invalid/retain-fetches-on-intermediate.yaml",
+          "rule": "A fetch count on something that is not a workflow output. Only a workflow output can be one-shot: an artifact travelling between two steps is read once per shard and again by a replay.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#artifact-expiry"
+        },
+        {
+          "file": "workflow/invalid/retain-fetches-without-for.yaml",
+          "rule": "A one-shot output saying how many fetches it survives and not how long it lives. The two mechanisms compose: a one-shot artifact still has a duration, which is what expires it when nobody ever comes for it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#artifact-expiry"
+        },
+        {
+          "file": "workflow/invalid/retain-fetches-zero.yaml",
+          "rule": "A fetch count of zero, which would declare an output that may never be collected. A one-shot output is fetches: 1, and two consumers are fetches: 2.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#artifact-expiry"
+        },
+        {
+          "file": "workflow/invalid/duration-without-unit.yaml",
+          "rule": "A duration written as a bare number. A duration carries its unit, so that a file says 10m where a reader would otherwise have to work out what 600 means.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/run-timeout-in-weeks.yaml",
+          "rule": "A run timeout written in weeks. A duration is a number and one of the five units the language carries, ms, s, m, h or d, so a fortnight is written 14d.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/workflow-output-without-port.yaml",
+          "rule": "A workflow output naming a step but not the port it is taken from. An output is a view of one step port, because an output that concatenated several would hide which step produced what.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/include-workflow-without-ref.yaml",
+          "rule": "A workflow include with no ref. A moving ref would let another repository change what this workflow does without this commit changing.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "workflow/invalid/include-path-and-workflow.yaml",
+          "rule": "An include that is both a file of this repository and another repository. A path include resolves inside the same commit and a workflow include resolves elsewhere at a ref; one entry cannot be both.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "workflow/invalid/include-path-with-ref.yaml",
+          "rule": "A path include pinned to a ref. A path include resolves inside the same commit, so it can never be stale and there is nothing for a ref to pin.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#includes-and-inheritance"
+        },
+        {
+          "file": "workflow/invalid/mcp-async-tool-with-timeout.yaml",
+          "rule": "A timeout on an async tool, where it would mean nothing: the call returns the run identifier at once.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-input-from-step.yaml",
+          "rule": "A tool input taken from a step port. A tool is a view of the workflow's own boundary, never of the graph, which is what keeps the graph free to change beneath a published tool.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-without-description.yaml",
+          "rule": "A published tool with no description. The description is the field a model acts on, so a tool without one is published to nobody's benefit.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/network-unknown-value.yaml",
+          "rule": "A network posture outside none, egress and internal. Every task gets its own network, and there is no posture that puts a container on the host's.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/egress-allow-without-port.yaml",
+          "rule": "An egress entry naming a host and no port. The runner proxy enforces the list as host and port pairs.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/egress-allow-port-above-range.yaml",
+          "rule": "An egress entry whose port is outside 1 to 65535. The runner proxy opens a connection to the pair, and there is no port above that to open.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/runs-on-not-key-value.yaml",
+          "rule": "A runner selector that is not a label. Selectors are written as key=value, because that is what a runner's labels are.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/resources-memory-without-unit.yaml",
+          "rule": "A memory ceiling with no unit. Memory is a quantity with a binary suffix, so that 512Mi cannot be read as 512 bytes.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/secret-without-provider.yaml",
+          "rule": "A secret declared without the store it is read from. The value is never written in the file, so the provider is all there is to resolve it by.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/cron-not-five-fields.yaml",
+          "rule": "A cron expression that is not five fields. A schedule is a five-field expression read in the timezone given beside it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/webhook-auth-unknown.yaml",
+          "rule": "A webhook authenticating by a means the engine does not offer. auth is hmac, bearer, mtls or none, and it proves which caller is speaking, never which user.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#triggers"
+        },
+        {
+          "file": "workflow/invalid/cycle-in-graph.yaml",
+          "rule": "A cycle in the graph. Cycles are rejected at validation, before registration; looping is done by calling a sub-workflow.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#scheduling-semantics"
+        },
+        {
+          "file": "workflow/invalid/needs-unknown-step.yaml",
+          "rule": "An edge coming from a step the workflow does not declare. An edge is the only form of dependency there is, so it has to name something that exists.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#graph"
+        },
+        {
+          "file": "workflow/invalid/edge-port-not-declared.yaml",
+          "rule": "An edge taking an output port nobody declares. normalize publishes ok and rejected, and an edge cannot invent a third port on it.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#graph"
+        },
+        {
+          "file": "workflow/invalid/step-output-not-in-manifest.yaml",
+          "rule": "A step declaring an output port its brick manifest does not carry. outputs must be a subset of the ports the manifest declares.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#step-keywords",
+          "manifest": "brick/valid/normalize.yaml"
+        },
+        {
+          "file": "workflow/invalid/step-input-port-not-in-manifest.yaml",
+          "rule": "A step feeding an input port nobody declares. The runner mounts one directory per port the brick declares, and there is no directory for a port the manifest never named.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest",
+          "manifest": "brick/valid/normalize.yaml"
+        },
+        {
+          "file": "workflow/invalid/output-from-unknown-step.yaml",
+          "rule": "A workflow output taken from a step the workflow does not declare.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/secret-not-declared.yaml",
+          "rule": "A step mounting a secret the workflow never declared. Secrets are mounted by the name the secrets block gives them, and only secrets of the owning namespace can be named there.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#step-keywords"
+        },
+        {
+          "file": "workflow/invalid/script-without-outputs.yaml",
+          "rule": "A script step that declares no output port. The image is a base image, no manifest is read and nothing about its ports is inferred, so outputs must be declared.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-input-not-declared.yaml",
+          "rule": "A tool input naming something the workflow does not declare.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-tool-input-without-schema.yaml",
+          "rule": "A tool whose input is a workflow input carrying no schema. A tool has to publish an inputSchema, so the input it maps has to have one.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-duplicate-tool-name.yaml",
+          "rule": "Two published tools carrying the same name. A tool identifier is unique within the workflow, because clients hold it.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-sync-timeout-above-ceiling.yaml",
+          "rule": "A sync tool waiting longer than the ceiling. A sync call is capped at 120 seconds because clients time out, and a workflow that cannot finish inside it has to be async. The value is a literal in this file, so the ceiling is carried by the grammar of the timeout rather than left to the validator.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools"
+        },
+        {
+          "file": "workflow/invalid/mcp-in-included-file.yaml",
+          "rule": "An mcp block in an included file. Reuse applies to steps and defaults; the published surface is declared by the workflow that publishes it, so that reading one file tells you everything that workflow exposes. This fixture is the included file itself, named by an entry point as include: [{ path: ./common-bricks.yaml }].",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#publishing-tools",
+          "role": "include target, not an entry point"
+        },
+        {
+          "file": "workflow/invalid/expression-unknown-root.yaml",
+          "rule": "An expression reading a context root that is not exposed. The roots are workflow, run, trigger, event, vars, inputs, steps, item, matrix and secrets.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#exposed-context"
+        },
+        {
+          "file": "workflow/invalid/expression-item-outside-fan-out-item.yaml",
+          "rule": "An expression reading item where the step is not sharded per item. item is available only under fan_out: item, which is what keeps the controller from loading a namespace's data in order to schedule.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#exposed-context"
+        },
+        {
+          "file": "workflow/invalid/expression-secret-in-condition.yaml",
+          "rule": "A condition reading a secret. secrets is exposed to params and to secrets and nowhere else, and a secret is never reachable from a condition.",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#exposed-context"
+        }
+      ]
+    },
+    "brick": {
+      "valid": [
+        {
+          "file": "brick/valid/http-request.yaml",
+          "covers": "the worked manifest of the brick contract, embedded in an image at /agk/brick.yaml",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest",
+          "source": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/valid/normalize.yaml",
+          "covers": "the manifest the workflow fixtures on ports are checked against: two input ports, two output ports, a port declared without a schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/valid/minimal.yaml",
+          "covers": "the smallest manifest the contract accepts: an identity and the account the container runs as",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "brick/invalid/kind-not-brick.yaml",
+          "rule": "A manifest declaring another kind. A brick manifest and a workflow entry point are both YAML carrying an apiVersion, and the kind is what tells one from the other before anything else is read.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/metadata-version-not-semver.yaml",
+          "rule": "A brick version that is not a semantic version. The version moves with the brick and not with the image tag, and it is what a person reads to know which release a digest holds.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/metadata-name-not-lowercase.yaml",
+          "rule": "A brick name that is not lowercase and hyphenated. The name is what a person types and what the catalog page is filed under.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/spec-missing-runtime.yaml",
+          "rule": "A manifest that says nothing about what it needs from its container. The runner builds the host configuration from the runtime block.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/spec-unknown-key.yaml",
+          "rule": "A key under spec that the contract does not define.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/runtime-missing-user.yaml",
+          "rule": "A runtime block that does not say which account the container runs as. It is required because the rule that refuses root has to have something to read.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/runtime-user-root.yaml",
+          "rule": "A manifest declaring root. It is refused here and checked again at publication, because a read-only root filesystem and dropped capabilities are worth little to a process running as uid 0.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/runtime-user-uid-zero.yaml",
+          "rule": "The same refusal written as a uid and a gid: uid 0 is root whatever it is spelled as.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/runtime-network-unknown.yaml",
+          "rule": "A network posture outside none, egress and internal.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/port-name-with-comma.yaml",
+          "rule": "A port name carrying a comma. A port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/port-unknown-key.yaml",
+          "rule": "A port carrying a key other than its schema. What a step must feed is decided by the workflow, not asserted by the port.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/param-name-not-an-identifier.yaml",
+          "rule": "A parameter name that is not an identifier. A parameter name is a key of /agk/params.json and is exported as AGK_PARAM_<NAME> when a step runs a script, so it cannot carry a hyphen.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/secret-mount-outside-agk-secrets.yaml",
+          "rule": "A secret mounted somewhere other than /agk/secrets/<name>. The runner mounts secret values on tmpfs there, and nowhere else.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/resources-cpu-not-a-string.yaml",
+          "rule": "A CPU request written as a number. It is written as a string so that half a core reads as 0.5 wherever it travels, in the manifest and in the task message alike.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        }
+      ]
+    },
+    "envelope": {
+      "valid": [
+        {
+          "file": "envelope/valid/two-items-with-artifact.json",
+          "covers": "the worked envelope of the data exchange model, with the digest the documentation elides written out in full",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure",
+          "source": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/valid/empty-port.json",
+          "covers": "the envelope a declared port publishes when the container never writes it, and the one every port of a skipped step publishes",
+          "reference": "https://agentiik.github.io/docs/#scheduling-semantics"
+        },
+        {
+          "file": "envelope/valid/retry-attempt.json",
+          "covers": "a batch published by a second attempt, carrying one item with no payload of its own and nothing attached",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "envelope/invalid/meta-missing.json",
+          "rule": "An envelope with no metadata. A task is self-contained and a runner never sees the graph it came from, so the run, the step and the port travel with the data instead of being looked up.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/items-not-an-array.json",
+          "rule": "An envelope whose items are not a list. Order is part of the contract: wait_all concatenates in edge declaration order and zip pairs by rank.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/item-without-id.json",
+          "rule": "An item with no identifier. The identifier is what a shard, a replay and a run inspector speak about the same element by, once the batch has been split, concatenated or reordered.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/item-without-files.json",
+          "rule": "An item with no files list. An item with nothing attached carries an empty list, so that a consumer never has to tell absent from empty.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/item-data-not-an-object.json",
+          "rule": "An item whose data is not an object. The shape belongs to the port, declared by the schema the brick manifest gives it, and the envelope says only that it is an object.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/meta-attempt-zero.json",
+          "rule": "An attempt numbered zero. Attempts count from 1, which is what separates the batch that was kept from the ones that failed before it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/meta-count-negative.json",
+          "rule": "A negative item count. The count is what a condition weighs a batch by without its contents ever being loaded.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/meta-unknown-key.json",
+          "rule": "Metadata carrying a key the envelope does not define. The shard index reaches a container as AGK_SHARD and does not travel in the envelope.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/meta-port-with-comma.json",
+          "rule": "An envelope naming a port that carries a comma. The name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS; brick/invalid/port-name-with-comma.yaml refuses the declaration and this refuses the same name on the wire.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "envelope/invalid/file-digest-not-a-sha256.json",
+          "rule": "An attached file whose digest is the documentation's typographic elision rather than a digest. The digest is the artifact's address, so it is sixty-four lowercase hexadecimal characters and never an abbreviation of one.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/file-without-sha256.json",
+          "rule": "An attached file with no digest. The digest is also the artifact's address: it is what the physical key sha256/<digest> is built from, and what a consumer checks its transfer against.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#data"
+        }
+      ]
+    }
+  }
+}

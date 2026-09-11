@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agentiik.dev/envelope.schema.json",
+  "title": "Envelope",
+  "description": "The JSON object { meta, items } that travels along a port. A port carries exactly one envelope, published once when the emitting step ends, so one document describes the whole of what a step hands to the next: metadata saying where the batch came from, and the items themselves. A step split into shards has its shard envelopes concatenated port by port before publication, and a port that is declared but never written publishes an empty envelope, which is not an error. The engine settings inline_max_bytes, envelope_max_bytes and max_items bound what may travel; they are limits applied by the runner to a serialised envelope and not properties of its shape, so they are not expressed here.",
+  "type": "object",
+  "required": ["meta", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "$ref": "#/$defs/meta",
+      "description": "Where the batch came from and how large it is. Metadata is what the controller and the console read to schedule, to display and to test a condition; the contents of the items are behind the run:read_data permission, which is why the count lives here rather than being found by reading the payload.",
+      "examples": [
+        {
+          "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+          "step": "normalize",
+          "port": "ok",
+          "attempt": 1,
+          "count": 2,
+          "produced_at": "2026-09-10T06:00:12.418Z"
+        }
+      ]
+    },
+    "items": {
+      "type": "array",
+      "description": "The batch itself, in order. Order is part of the contract: wait_all concatenates items in edge declaration order and zip pairs them by rank, so a consumer may depend on where an item sits. An empty array is a legitimate envelope, and is what a port never written by the container publishes, as does every port of a step whose if condition was false.",
+      "items": { "$ref": "#/$defs/item" },
+      "examples": [
+        [],
+        [
+          {
+            "id": "01JMZ8W4K7A1B2C3D4E5",
+            "data": { "customer_id": "C-1042", "total": 1290.50, "currency": "EUR" },
+            "files": []
+          }
+        ]
+      ]
+    }
+  },
+  "examples": [
+    {
+      "meta": {
+        "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+        "step": "normalize",
+        "port": "ok",
+        "attempt": 1,
+        "count": 2,
+        "produced_at": "2026-09-10T06:00:12.418Z"
+      },
+      "items": [
+        {
+          "id": "01JMZ8W4K7A1B2C3D4E5",
+          "data": { "customer_id": "C-1042", "total": 1290.50, "currency": "EUR" },
+          "files": []
+        },
+        {
+          "id": "01JMZ8W4K7A1B2C3D4E6",
+          "data": { "customer_id": "C-1043", "total": 88.00, "currency": "EUR" },
+          "files": [
+            {
+              "name": "purchase-order.pdf",
+              "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+              "media_type": "application/pdf",
+              "size": 481233,
+              "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+
+  "$defs": {
+    "identifier": {
+      "title": "Identifier",
+      "description": "A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": ["normalize", "out", "ok", "error"]
+    },
+
+    "meta": {
+      "title": "Envelope metadata",
+      "description": "Identifies one batch on one port: the run, the step and the port it left by, the attempt that produced it, how many items it holds and when it was published. A task is self-contained and a runner never sees the graph it came from, so this travels with the data instead of being looked up.",
+      "type": "object",
+      "required": ["run_id", "step", "port", "attempt", "count", "produced_at"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "The documentation says a run carries a ULID, and a ULID is twenty-six Crockford base32 characters, but every run identifier the documentation prints is shorter than that and no two are the same length: twenty characters in the envelope, fifteen and twelve in the task message. A twenty-six character pattern here would refuse the documentation\u0027s own example, so no length is imposed and the reading is recorded instead.",
+          "description": "The run that produced the envelope, carried as the run's ULID. It is what ties the batch to the run detail, to the logs and to the artifact URIs, whose first path segment is this same value.",
+          "examples": ["01JMZ8W4K2R7Q0E3N5T9"]
+        },
+        "step": {
+          "$ref": "#/$defs/identifier",
+          "description": "The step that emitted the envelope, under the identifier the workflow gave it. Reading it is how a consumer, a replay or an incident tells apart two batches that reached the same port from different places in the graph.",
+          "examples": ["normalize", "invoice", "archive"]
+        },
+        "port": {
+          "$ref": "#/$defs/identifier",
+          "description": "The output port the envelope left by. A step declares several ports so that a rejected item takes a different path from an accepted one, and the port name is what says which of those paths this batch took. The names are the brick's own, so no set of values is fixed here.",
+          "examples": ["out", "ok", "error"]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Which attempt of the step produced this batch, counting from 1. A retried step publishes again, so the attempt number is what separates the batch that was kept from the ones that failed before it.",
+          "examples": [1, 2]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many items the envelope holds. The controller schedules on port metadata rather than on payloads, and this is the number exposed to expressions as inputs.<port>.count and steps.<id>.outputs.<port>.count, so a condition can weigh a batch without its contents ever being loaded.",
+          "examples": [0, 1, 2]
+        },
+        "produced_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the emitting step ended and the envelope was published, as an RFC 3339 timestamp. It orders batches across retries and replays without depending on the order in which they were stored.",
+          "examples": ["2026-09-10T06:00:12.418Z"]
+        }
+      },
+      "examples": [
+        {
+          "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+          "step": "normalize",
+          "port": "ok",
+          "attempt": 1,
+          "count": 2,
+          "produced_at": "2026-09-10T06:00:12.418Z"
+        }
+      ]
+    },
+
+    "item": {
+      "title": "Item",
+      "description": "A single element of an envelope, carrying an identifier, a data object and a list of attached files. The item is the unit a fan-out shards on, a join matches on and a downstream port either accepts or rejects, which is why it holds its own identity rather than being known by its rank.",
+      "type": "object",
+      "required": ["id", "data", "files"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifies the item. It is what a shard, a replay and a run inspector use to speak about the same element after the batch has been split, concatenated or reordered, so it stays with the item instead of being its position in the list.",
+          "examples": ["01JMZ8W4K7A1B2C3D4E5", "01JMZ8W4K7A1B2C3D4E6"]
+        },
+        "data": {
+          "type": "object",
+          "description": "The item's JSON payload, and the default channel between two bricks. Its shape belongs to the port, declared by the schema the brick manifest gives that port, so the envelope says only that it is an object. A value heavier than inline_max_bytes does not belong here: it is written as an artifact and referenced from files, which is what keeps the channel readable, diffable and replayable.",
+          "examples": [
+            { "customer_id": "C-1042", "total": 1290.50, "currency": "EUR" },
+            {}
+          ]
+        },
+        "files": {
+          "type": "array",
+          "description": "The artifacts attached to the item. This is where a payload too heavy to travel inline arrives, and where a brick that produces documents rather than fields puts them. The consuming container receives each one as a read-only mount under /agk/in/<port>/ and never a store URL. An item with nothing attached carries an empty list.",
+          "items": { "$ref": "#/$defs/file" },
+          "examples": [
+            [],
+            [
+              {
+                "name": "purchase-order.pdf",
+                "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+                "media_type": "application/pdf",
+                "size": 481233,
+                "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+              }
+            ]
+          ]
+        }
+      },
+      "examples": [
+        {
+          "id": "01JMZ8W4K7A1B2C3D4E5",
+          "data": { "customer_id": "C-1042", "total": 1290.50, "currency": "EUR" },
+          "files": []
+        }
+      ]
+    },
+
+    "file": {
+      "title": "Attached file",
+      "description": "One artifact attached to an item: a file produced by a step, held in the object store, addressed by its SHA-256 digest and referenced by URI. The reference is what travels in the envelope; the bytes reach the next container as a mounted path.",
+      "type": "object",
+      "required": ["name", "uri", "media_type", "size", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the artifact is called on this port, and the last segment of its URI. It is the name the consuming container finds under its input mount, and the name the run detail keeps showing after the artifact has expired or been collected.",
+          "examples": ["purchase-order.pdf"]
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^agk://run/",
+          "description": "Where the artifact is addressed from, in the logical form agk://run/<run>/<step>/<port>/<name>. The logical URI resolves to the physical key sha256/<digest>, so two steps producing identical bytes store one copy and a replay that recomputes the same content writes nothing. Deduplication is scoped per namespace, and the URI is never handed to the consuming container, which sees a mounted path instead.",
+          "examples": ["agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf"]
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the bytes are, as an IANA media type. A consumer decides how to read the file from this rather than from the ending of its name, and a brick that emits several kinds of artifact on one port is legible because of it.",
+          "examples": ["application/pdf", "application/json", "text/csv"]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many bytes the artifact holds. It lets a consumer decide before it fetches, and it is what the run detail shows beside the name and the digest once the artifact itself is gone. The engine setting artifact_max_bytes caps what may be written and is not a bound on this field.",
+          "examples": [481233, 1284]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The SHA-256 digest of the artifact's bytes, which is also its address: this is the <digest> the physical key sha256/<digest> is built from. A consumer checks its transfer against it, and the engine recognises content it already holds by it, which is how a replay avoids rewriting what it recomputed identically. It is written out in full, sixty-four lowercase hexadecimal characters: the documentation elides the middle of a digest for the page, and that elision is typography rather than a value.",
+          "examples": ["c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"]
+        }
+      },
+      "examples": [
+        {
+          "name": "purchase-order.pdf",
+          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+          "media_type": "application/pdf",
+          "size": 481233,
+          "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+        }
+      ]
+    }
+  }
+}
