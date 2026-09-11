@@ -1,0 +1,14 @@
+# valid: the smallest manifest the contract accepts: an identity and the
+#   account the container runs as
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: jq
+  version: 0.1.0
+
+spec:
+  runtime:
+    user: nonroot

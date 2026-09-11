@@ -1,0 +1,19 @@
+# invalid: A step that calls a sub-workflow and also carries a script. script
+#   commands run inside image, and workflow is an alternative to image, so a
+#   sub-workflow call has no container for a script to run in.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: dunning
+  namespace: finance
+
+steps:
+  remind:
+    workflow: finance/common
+    script:
+      - echo "there is no container here"
+    outputs: [out]

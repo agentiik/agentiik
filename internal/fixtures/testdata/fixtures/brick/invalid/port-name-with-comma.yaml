@@ -1,0 +1,19 @@
+# invalid: A port name carrying a comma. A port name becomes a directory under
+#   /agk/in/, a file name under /agk/out/ports/ and one entry of the comma
+#   separated AGK_OUT_PORTS.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  outputs:
+    "out,error": {}
+
+  runtime:
+    user: "65532:65532"

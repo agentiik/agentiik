@@ -1,0 +1,16 @@
+# invalid: A brick version that is not a semantic version. The version moves
+#   with the brick and not with the image tag, and it is what a person reads
+#   to know which release a digest holds.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: "1.4"
+
+spec:
+  runtime:
+    user: "65532:65532"

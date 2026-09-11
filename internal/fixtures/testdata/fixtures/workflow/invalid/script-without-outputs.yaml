@@ -1,0 +1,18 @@
+# invalid: A script step that declares no output port. The image is a base
+#   image, no manifest is read and nothing about its ports is inferred, so
+#   outputs must be declared.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: order-loading
+  namespace: finance
+
+steps:
+  normalize:
+    image: python:3.13-slim@sha256:1c4d5e543ecc82da20b5839890bfa7ea486a005598b2a3bde6b385c4e2b59a02
+    script:
+      - python /agk/repo/scripts/normalize.py

@@ -1,0 +1,16 @@
+# invalid: A runtime block that does not say which account the container runs
+#   as. It is required because the rule that refuses root has to have
+#   something to read.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  runtime:
+    network: egress

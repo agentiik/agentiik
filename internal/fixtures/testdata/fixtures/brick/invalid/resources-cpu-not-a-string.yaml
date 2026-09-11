@@ -1,0 +1,20 @@
+# invalid: A CPU request written as a number. It is written as a string so
+#   that half a core reads as 0.5 wherever it travels, in the manifest and in
+#   the task message alike.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  resources:
+    cpu: 0.5
+    memory: 256Mi
+
+  runtime:
+    user: "65532:65532"

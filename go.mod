@@ -2,12 +2,40 @@ module github.com/agentiik/agentiik
 
 go 1.27
 
-// JSON Schema 2020-12, used by package schema alone and by nothing else in this module.
-// The workflow language defines an input's schema as a 2020-12 document, and this
-// implementation is the draft itself rather than an older one; it takes a custom
-// loader, which is how a $ref is resolved against the commit's tree and refused when it
-// leaves it; and it returns a structured error whose keyword and instance location are
-// what a refusal message names.
-require github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+require (
+	// CEL, used by package internal/expr alone and reached only from package graph.
+	// The documentation names the language and names the reason: CEL "evaluates in
+	// linear time, is mutation free, and not Turing-complete", which is what lets a
+	// controller serving every namespace evaluate a tenant's conditions in its own
+	// process. This is the implementation the specification is written against, it
+	// compiles against a declared environment, which is how the exposed-context table
+	// is enforced by the compiler rather than by a guard, and it carries the escaped
+	// identifier syntax that gives inputs.in.count a spelling at all.
+	cel.dev/cel-go v0.32.0
+	// YAML 1.2, used to read the two documents of the language: the workflow entry point
+	// in package graph and the brick manifest in package brick. The version of YAML is
+	// the reason for the choice rather than the API. A YAML 1.1 parser reads the bare key
+	// on: as the boolean true, and on: is how the language spells the trigger block, so
+	// such a parser fails every workflow that carries a trigger. It also refuses a
+	// duplicate key without being asked, and keeps the line and column a value was
+	// written at, which is what lets a refusal point at the text the author wrote.
+	github.com/goccy/go-yaml v1.19.2
+	// JSON Schema 2020-12, used by package schema alone and by nothing else in this module.
+	// The workflow language defines an input's schema as a 2020-12 document, and this
+	// implementation is the draft itself rather than an older one; it takes a custom
+	// loader, which is how a $ref is resolved against the commit's tree and refused when it
+	// leaves it; and it returns a structured error whose keyword and instance location are
+	// what a refusal message names.
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+)
 
-require golang.org/x/text v0.14.0 // indirect
+require (
+	cel.dev/expr v0.25.1 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
+	golang.org/x/text v0.22.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
+)

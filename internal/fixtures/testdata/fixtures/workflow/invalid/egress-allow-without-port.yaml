@@ -1,0 +1,19 @@
+# invalid: An egress entry naming a host and no port. The runner proxy
+#   enforces the list as host and port pairs.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    network: egress
+    egress:
+      allow: ["api.billing.example.com"]
+    outputs: [out]

@@ -1,0 +1,125 @@
+# valid: the worked example of the workflow language, with the digests the
+# documentation elides written out in full.
+# covers: metadata, inputs, outputs with a schema on the published one, on, mcp,
+#         include, vars, secrets, defaults, timeout at the root, steps with image,
+#         inputs, outputs, params, needs, if, when, merge, strategy, retry,
+#         timeout, egress, network, secrets, cache, extends.
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+  labels:
+    domain: billing
+
+# --- Workflow inputs and outputs -----------------------------------
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+  customers:
+    schema: { $ref: "./schemas/customer.json" }
+    default: []
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }
+    schema: { $ref: "./schemas/invoice.json" }
+    retain: 90d
+  errors:
+    from: { step: invoice, port: error }
+
+# --- Triggers -------------------------------------------------------
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+      timezone: Europe/Paris
+  webhook:
+    - path: /invoicing
+      method: POST
+      auth: hmac
+      map:
+        orders: ${{ trigger.body.orders }}
+  event:
+    - type: com.example.order.approved
+      filter: ${{ event.data.amount > 0 }}
+
+# --- Published as tools ---------------------------------------------
+mcp:
+  name: invoicing
+  tools:
+    - name: create_invoice
+      description: Issue one invoice for a customer.
+      input:  { from: { input: orders } }
+      output: { from: { output: invoices } }
+      mode: sync
+
+# --- Reuse ----------------------------------------------------------
+include:
+  - path: ./common-bricks.yaml            # same commit, nothing to pin
+  - workflow: finance/common
+    ref: v2.1.0
+
+vars:
+  currency: EUR
+  dunning_days: 30
+
+secrets:
+  billing:
+    provider: vault
+    path: kv/data/agentiik/billing
+
+defaults:
+  timeout: 10m
+  retain: 7d
+  retry:
+    max: 2
+    on: [transient]
+    backoff: { type: exponential, base: 2s, max: 60s }
+  resources: { cpu: "1", memory: 512Mi }
+  network: none
+  runs_on: [arch=amd64]
+
+# --- Deadline for the whole run -------------------------------------
+timeout: 4h
+
+# --- Graph ----------------------------------------------------------
+steps:
+
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+      customers: ${{ workflow.inputs.customers }}
+    outputs: [ok, rejected]
+    params:
+      currency: ${{ vars.currency }}
+
+  invoice:
+    extends: .api-brick
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: normalize, port: ok, as: in }
+    if: ${{ inputs.in.count > 0 }}
+    strategy:
+      fan_out: item
+      max_parallel: 8
+    secrets: [billing]
+    network: egress
+    egress:
+      allow: ["api.billing.example.com:443"]
+    retry: { max: 4, on: [transient] }
+    outputs: [out, error]
+
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs:
+      - { step: invoice,   port: out,      as: invoices }
+      - { step: normalize, port: rejected, as: rejected }
+    merge: wait_all
+    when: [succeeded, skipped]
+    cache: true
+    outputs: [out]

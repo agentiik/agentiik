@@ -1,0 +1,21 @@
+# invalid: An expression reading item where the step is not sharded per item.
+#   item is available only under fan_out: item, which is what keeps the
+#   controller from loading a namespace's data in order to schedule.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#exposed-context
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    strategy:
+      fan_out: batch(50)
+    params:
+      customer: ${{ item.data.customer_id }}
+    outputs: [out]

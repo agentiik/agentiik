@@ -1,0 +1,73 @@
+# valid: a step that calls another workflow instead of running an image, in the
+# three forms the language accepts, beside a concurrency policy and the two
+# triggers the other fixtures do not exercise.
+# covers: workflow as a string, as a string with a ref after an @, and as an
+#         object; concurrency; webhook response and auth bearer; schedule jitter
+#         and catch_up; retain with a fetch count above one.
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: dunning
+  namespace: finance
+  labels:
+    domain: billing
+    tier: critical
+
+concurrency:
+  group: dunning
+  cancel_in_progress: false
+
+on:
+  webhook:
+    - path: /dunning/start
+      method: POST
+      auth: bearer
+      response: sync
+      map:
+        cycle: ${{ trigger.body.cycle }}
+  schedule:
+    - cron: "*/15 * * * *"
+      timezone: UTC
+      jitter: 30s
+      catch_up: false
+
+inputs:
+  cycle:
+    schema: { type: string }
+    default: standard
+
+outputs:
+  report:
+    from: { step: collect, port: out }
+    retain: { for: 24h, fetches: 2 }
+
+secrets:
+  billing:
+    provider: vault
+    path: kv/data/agentiik/billing
+
+steps:
+
+  remind:
+    workflow: finance/common
+    inputs:
+      cycle: ${{ workflow.inputs.cycle }}
+
+  escalate:
+    workflow: finance/common@v2.1.0
+    needs: [remind]
+
+  archive-cycle:
+    workflow:
+      workflow: finance/archive
+      ref: a3f9c1e
+    needs: [escalate]
+
+  collect:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs: [archive-cycle]
+    secrets: [billing]
+    outputs: [out]

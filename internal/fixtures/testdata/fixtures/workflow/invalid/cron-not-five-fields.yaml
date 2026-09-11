@@ -1,0 +1,21 @@
+# invalid: A cron expression that is not five fields. A schedule is a five-
+#   field expression read in the timezone given beside it.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+on:
+  schedule:
+    - cron: "0 6 1 *"
+      timezone: Europe/Paris
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

@@ -271,3 +271,40 @@ func TestCompileIsSafeForConcurrentUse(t *testing.T) {
 		}
 	}
 }
+
+// TestCompileAtResolvesAgainstTheWholeDocument holds what a brick manifest needs: a
+// port schema written as { "$ref": "#/spec/definitions/order" } resolves against the
+// manifest, and not against the fragment the port carries.
+func TestCompileAtResolvesAgainstTheWholeDocument(t *testing.T) {
+	const manifest = `{
+	  "apiVersion": "agentiik.dev/v1",
+	  "kind": "Brick",
+	  "spec": {
+	    "outputs": { "ok": { "schema": { "$ref": "#/spec/definitions/order" } } },
+	    "definitions": {
+	      "order": { "type": "object", "required": ["customer_id"] }
+	    }
+	  }
+	}`
+
+	c := NewCompiler(nil)
+	s, err := c.CompileAt([]byte(manifest), "#/spec/outputs/ok/schema")
+	if err != nil {
+		t.Fatalf("compiling the port schema: %v", err)
+	}
+	if err := s.Validate(map[string]any{"customer_id": "c-1"}); err != nil {
+		t.Fatalf("an order the definition accepts was refused: %v", err)
+	}
+	if err := s.Validate(map[string]any{}); err == nil {
+		t.Fatal("an order carrying no customer_id was accepted, so the reference never resolved")
+	}
+}
+
+// TestCompileAtRefusesAPointerThatIsNotOne keeps the pointer in the form the manifest
+// writes it: it names a place in the document it was written in.
+func TestCompileAtRefusesAPointerThatIsNotOne(t *testing.T) {
+	c := NewCompiler(nil)
+	if _, err := c.CompileAt([]byte(`{}`), "/spec/definitions/order"); err == nil {
+		t.Fatal("a pointer written without its leading # was accepted")
+	}
+}

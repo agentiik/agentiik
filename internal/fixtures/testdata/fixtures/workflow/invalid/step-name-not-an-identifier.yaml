@@ -1,0 +1,17 @@
+# invalid: A step name that is not an identifier. The name is used in needs,
+#   in expressions and in the run detail, so it stays to letters, digits,
+#   hyphens and underscores.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  check vat:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    outputs: [out]

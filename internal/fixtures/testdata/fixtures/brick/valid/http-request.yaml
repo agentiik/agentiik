@@ -1,0 +1,48 @@
+# valid: the worked manifest of the brick contract, embedded in an image at
+#   /agk/brick.yaml
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+  summary: Issues one HTTP request per item and returns the response.
+
+spec:
+  inputs:
+    in:
+      schema: { $ref: "#/spec/definitions/request" }
+  outputs:
+    out:
+      schema: { $ref: "#/spec/definitions/response" }
+    error:
+      schema: { $ref: "#/spec/definitions/failure" }
+
+  params:
+    url:      { type: string, format: uri, required: true }
+    method:   { type: string, enum: [GET, POST, PUT, PATCH, DELETE], default: GET }
+    headers:  { type: object, additionalProperties: { type: string } }
+    timeout:  { type: string, pattern: "^[0-9]+(ms|s|m)$", default: 30s }
+
+  secrets:
+    - name: bearer
+      optional: true
+      mount: /agk/secrets/bearer
+
+  runtime:
+    network: egress          # none | egress | internal
+    streaming: false         # true = JSON Lines on stdin and stdout
+    user: "65532:65532"
+
+  resources:
+    cpu: "0.5"
+    memory: 256Mi
+    pids: 128
+
+  # JSON Schema 2020-12
+  definitions:
+    request:  { type: object, required: [url], properties: { url: { type: string } } }
+    response: { type: object, properties: { status: { type: integer } } }
+    failure:  { type: object, properties: { status: { type: integer }, message: { type: string } } }

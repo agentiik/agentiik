@@ -1,0 +1,30 @@
+# invalid: A cycle in the graph. Cycles are rejected at validation, before
+#   registration; looping is done by calling a sub-workflow.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#scheduling-semantics
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    needs:
+      - { step: archive, port: out, as: in }
+    outputs: [ok]
+
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: normalize, port: ok, as: in }
+    outputs: [out]
+
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs:
+      - { step: invoice, port: out, as: in }
+    outputs: [out]

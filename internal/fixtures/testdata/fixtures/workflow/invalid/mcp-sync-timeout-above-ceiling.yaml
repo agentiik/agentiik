@@ -1,0 +1,34 @@
+# invalid: A sync tool waiting longer than the ceiling. A sync call is capped
+#   at 120 seconds because clients time out, and a workflow that cannot finish
+#   inside it has to be async.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  period:
+    schema: { type: string }
+    required: true
+
+mcp:
+  name: invoicing
+  tools:
+    - name: reconcile_month
+      description: Reconcile a whole month and return the ledger.
+      input:
+        from: { input: period }
+      mode: sync
+      timeout: 10m
+
+steps:
+  reconcile:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    inputs:
+      period: ${{ workflow.inputs.period }}
+    outputs: [out]

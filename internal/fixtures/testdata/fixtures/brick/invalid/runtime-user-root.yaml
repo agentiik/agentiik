@@ -1,0 +1,17 @@
+# invalid: A manifest declaring root. It is refused here and checked again at
+#   publication, because a read-only root filesystem and dropped capabilities
+#   are worth little to a process running as uid 0.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  runtime:
+    network: egress
+    user: root

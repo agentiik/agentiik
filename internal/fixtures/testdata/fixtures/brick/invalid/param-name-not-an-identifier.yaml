@@ -1,0 +1,19 @@
+# invalid: A parameter name that is not an identifier. A parameter name is a
+#   key of /agk/params.json and is exported as AGK_PARAM_<NAME> when a step
+#   runs a script, so it cannot carry a hyphen.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  params:
+    user-agent: { type: string, default: agentiik }
+
+  runtime:
+    user: "65532:65532"

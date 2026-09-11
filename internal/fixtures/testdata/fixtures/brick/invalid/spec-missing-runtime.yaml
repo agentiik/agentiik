@@ -1,0 +1,18 @@
+# invalid: A manifest that says nothing about what it needs from its
+#   container. The runner builds the host configuration from the runtime
+#   block.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  inputs:
+    in: {}
+  outputs:
+    out: {}

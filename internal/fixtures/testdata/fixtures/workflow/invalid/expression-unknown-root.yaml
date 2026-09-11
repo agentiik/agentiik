@@ -1,0 +1,19 @@
+# invalid: An expression reading a context root that is not exposed. The roots
+#   are workflow, run, trigger, event, vars, inputs, steps, item, matrix and
+#   secrets.
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#exposed-context
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    params:
+      currency: ${{ globals.currency }}
+    outputs: [out]

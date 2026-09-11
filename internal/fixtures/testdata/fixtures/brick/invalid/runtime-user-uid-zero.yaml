@@ -1,0 +1,15 @@
+# invalid: The same refusal written as a uid and a gid: uid 0 is root whatever
+#   it is spelled as.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  runtime:
+    user: "0:0"
