@@ -1,0 +1,20 @@
+# invalid: A fetch count on something that is not a workflow output. Only a
+#   workflow output can be one-shot: an artifact travelling between two steps
+#   is read once per shard and again by a replay.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#artifact-expiry
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: payroll
+  namespace: hr
+
+defaults:
+  retain: { for: 7d, fetches: 1 }
+
+steps:
+  render:
+    image: ghcr.io/acme/agk-render@sha256:7b30caf011a8489951644e83116b325d0a49f234d44a76227657cc972af651df
+    outputs: [out]

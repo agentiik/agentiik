@@ -1,0 +1,15 @@
+# invalid: A brick name that is not lowercase and hyphenated. The name is what
+#   a person types and what the catalog page is filed under.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: HTTP_Request
+  version: 1.4.0
+
+spec:
+  runtime:
+    user: "65532:65532"

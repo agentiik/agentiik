@@ -1,0 +1,35 @@
+# valid: the two forms of retain, as the documentation writes them. A duration
+# answers how long an output may be fetched; the long form also answers whether
+# it may be fetched more than once, and only a workflow output may say so.
+# covers: outputs[].retain as a duration and as { for, fetches }, defaults.retain.
+# reference: https://agentiik.github.io/docs/#artifact-expiry
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: payroll
+  namespace: hr
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }
+    retain: 90d                        # available for ninety days
+  payslips:
+    from: { step: render, port: out }
+    retain: { for: 24h, fetches: 1 }   # gone on collection, or a day later
+
+defaults:
+  retain: 7d                           # intermediate artifacts, and any output
+                                       # not saying otherwise
+
+steps:
+  render:
+    image: ghcr.io/acme/agk-render@sha256:7b30caf011a8489951644e83116b325d0a49f234d44a76227657cc972af651df
+    outputs: [out]
+
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs:
+      - { step: render, port: out, as: in }
+    outputs: [out]

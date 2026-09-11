@@ -1,0 +1,18 @@
+# invalid: A step keyword the language does not define. The set of step
+#   keywords is closed, so a misspelling is refused rather than silently
+#   ignored.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    parallelism: 4
+    outputs: [out]

@@ -1,0 +1,23 @@
+# invalid: A webhook authenticating by a means the engine does not offer. auth
+#   is hmac, bearer, mtls or none, and it proves which caller is speaking,
+#   never which user.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#triggers
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+on:
+  webhook:
+    - path: /invoicing
+      method: POST
+      auth: basic
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

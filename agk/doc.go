@@ -26,10 +26,25 @@
 // retry policy. Both travel as a Refusal and are told apart with errors.Is against
 // ErrEnvelopeRejected and ErrStepFailed.
 //
+// # The run, and the task the run is made of
+//
+// The run itself is named here too: the run states and the verdict they end on, the step
+// verdict a downstream when reads, the task states a runner reports, the four failures
+// retry.on can name, the exit code table, the shard and the identifier a task is
+// deduplicated on. None of that is evaluator logic, and it has to sit where both the
+// evaluator and the driver can see it, because the driver imports this package and will
+// never import the evaluator.
+//
+// The verdict of a finished run is a terminal RunState and not a second type. Two types
+// for one fact is two ways for the halves of the engine to disagree about whether a run
+// succeeded.
+//
 // # Where the documentation is silent
 //
-// Three readings are taken here and recorded beside the rule that applies them: the
-// length imposed on a run identifier, in RunID.Validate; the outcome of max_items, in
-// the envelope's own validation; and the attempt and publication time a concatenated
-// envelope carries, in Concat.
+// Six readings are taken here and recorded beside the rule that applies them: the length
+// imposed on a run identifier, in RunID.Validate; the outcome of max_items, in the
+// envelope's own validation; the attempt and publication time a concatenated envelope
+// carries, in Concat; the band an exit code below zero falls in, in Band; the shard
+// index counted from one, in Shard; and what a task identifier is written as when there
+// is no fan-out to name a shard, in NewTaskID.
 package agk

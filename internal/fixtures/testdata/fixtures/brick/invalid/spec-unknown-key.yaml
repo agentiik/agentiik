@@ -1,0 +1,15 @@
+# invalid: A key under spec that the contract does not define.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  entrypoint: /agk/bin/http-request
+  runtime:
+    user: "65532:65532"

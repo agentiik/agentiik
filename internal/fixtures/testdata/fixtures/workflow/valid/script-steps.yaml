@@ -1,0 +1,73 @@
+# valid: steps that run commands inside a base image instead of a published
+# brick, and steps that narrow what they receive from the repository tree.
+# covers: script, before_script, after_script and shell, at the step and in the
+#         defaults; files in both forms; params without a manifest to validate
+#         against.
+# reference: https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: order-loading
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+outputs:
+  loaded:
+    from: { step: load, port: out }
+    retain: 7d
+
+defaults:
+  timeout: 10m
+  shell: ["/bin/sh", "-e"]
+  before_script:
+    - echo "$AGK_WORKFLOW $AGK_STEP attempt $AGK_ATTEMPT" >&2
+  after_script:
+    - cp /tmp/result.json /agk/out/files/ 2>/dev/null || true
+
+steps:
+
+  normalize:
+    image: python:3.13-slim@sha256:1c4d5e543ecc82da20b5839890bfa7ea486a005598b2a3bde6b385c4e2b59a02
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    script:
+      - python /agk/repo/scripts/normalize.py
+    outputs: [ok, rejected]
+
+  check-vat:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    needs:
+      - { step: normalize, port: ok, as: in }
+    outputs: [out, error]
+    params:
+      endpoint: https://vat.example.com/v2
+    # default is ["/bin/sh", "-e"]
+    shell: ["/bin/sh", "-eu", "-o", "pipefail"]
+    before_script:
+      - apk add --no-cache jq curl
+    script:
+      - agk items | jq -r '.data.vat_number' > /tmp/numbers
+      - curl -sSf "$AGK_PARAM_ENDPOINT/check" --data-binary @/tmp/numbers > /tmp/result.json
+      - agk emit out  --from /tmp/result.json --filter '.valid'
+      - agk emit error --from /tmp/result.json --filter '.valid | not'
+    after_script:
+      - cp /tmp/result.json /agk/out/files/ 2>/dev/null || true
+
+  load:
+    image: postgres:17-alpine@sha256:8e21af18c6b590f2df7fa9bc364251212900a8d3493ed74f96bf418479a34b70
+    needs:
+      - { step: check-vat, port: out, as: in }
+    # this repository also holds a large fixture directory, which has no
+    # business being copied to a runner for this step
+    files:
+      - ./sql/**
+      - { from: ./certs/internal-ca.pem, to: /etc/ssl/certs/internal-ca.pem, mode: "0444" }
+    script:
+      - psql -f /agk/repo/sql/orders.sql
+    outputs: [out]

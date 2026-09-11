@@ -1,0 +1,22 @@
+# invalid: A workflow output naming a step but not the port it is taken from.
+#   An output is a view of one step port, because an output that concatenated
+#   several would hide which step produced what.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+outputs:
+  invoices:
+    from: { step: archive }
+    retain: 90d
+
+steps:
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    outputs: [out]

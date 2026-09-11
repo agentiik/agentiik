@@ -1,0 +1,19 @@
+# invalid: A run timeout written in weeks. A duration is a number and one of
+#   the five units the language carries, ms, s, m, h or d, so a fortnight is
+#   written 14d and 2w is refused rather than read as something.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+timeout: 2w
+
+steps:
+  invoice:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    outputs: [out]

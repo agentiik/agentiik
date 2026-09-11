@@ -1,0 +1,107 @@
+# valid: every merge strategy the documentation lists, the fan-outs other than
+# the matrix, and the execution settings a step carries around them. The matrix
+# is in hidden-blocks.yaml, where a hidden block carries it.
+# covers: merge wait_all, zip, join and first; fan_out none, item and batch(n);
+#         max_parallel, fail_fast, when, retry, timeout, resources, network,
+#         runs_on, continue_on_error, cache, idempotent, and the defaults the
+#         other fixtures do not exercise.
+# reference: https://agentiik.github.io/docs/#merge-strategies
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reconciliation
+  namespace: finance
+
+defaults:
+  when: [succeeded]
+  cache: true
+  idempotent: true
+  continue_on_error: false
+  network: egress
+  egress:
+    allow: ["api.billing.example.com:443"]
+  files:
+    - ./lib/**
+  secrets: [ledger]
+
+secrets:
+  ledger:
+    provider: vault
+    path: kv/data/agentiik/ledger
+
+steps:
+
+  fetch-ledger:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    strategy:
+      fan_out: batch(50)
+      max_parallel: 4
+      fail_fast: true
+    outputs: [out]
+
+  fetch-bank:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    strategy:
+      fan_out: none
+    timeout: 2m
+    outputs: [out]
+
+  zip-rows:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: fetch-ledger, port: out, as: in }
+      - { step: fetch-bank,   port: out, as: in }
+    merge: zip
+    outputs: [out]
+
+  match:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs:
+      - { step: fetch-ledger, port: out, as: in }
+      - { step: fetch-bank,   port: out, as: in }
+    merge: { join: { on: "$.data.customer_id" } }
+    outputs: [out, unmatched]
+
+  whichever-first:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs:
+      - { step: zip-rows, port: out, as: in }
+      - { step: match,    port: out, as: in }
+    merge: first
+    outputs: [out]
+
+  per-item:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    needs: [whichever-first]
+    if: ${{ inputs.in.count > 0 }}
+    strategy:
+      fan_out: item
+      max_parallel: 8
+    params:
+      customer: ${{ item.data.customer_id }}
+    resources: { cpu: "0.5", memory: 256Mi, pids: 128 }
+    network: internal
+    runs_on: [zone=dmz, arch=arm64]
+    retry:
+      max: 4
+      on: [transient, lost, timeout]
+      backoff: { type: exponential, base: 2s, max: 60s }
+    continue_on_error: true
+    idempotent: false
+    outputs: [out, error]
+
+  wait-all-rows:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs:
+      - { step: per-item, port: out,   as: in }
+      - { step: match,    port: unmatched, as: in }
+    merge: wait_all
+    outputs: [out]
+
+  cleanup:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    needs: [per-item]
+    when: [always]
+    outputs: [out]

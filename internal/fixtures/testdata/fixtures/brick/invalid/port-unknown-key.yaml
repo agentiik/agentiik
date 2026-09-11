@@ -1,0 +1,20 @@
+# invalid: A port carrying a key other than its schema. What a step must feed
+#   is decided by the workflow, not asserted by the port.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  inputs:
+    in:
+      schema: { type: object }
+      required: true
+
+  runtime:
+    user: "65532:65532"

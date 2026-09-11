@@ -1,16 +1,16 @@
 // Package fixtures carries the released fixture corpus of agentiik/schemas, vendored
 // and pinned.
 //
-// The corpus is what pins the envelope's shape to the documentation: each document
-// under fixtures/envelope names, in the index, the rule it holds the reader to. A test
-// that reads them is testing the rules the documentation states rather than the shape
-// this implementation happens to have, which is the whole reason the corpus is
-// consumed here instead of being reinvented as table entries.
+// The corpus is what pins the shapes to the documentation: each document under
+// fixtures/ names, in the index, the rule it holds the reader to. A test that reads
+// them is testing the rules the documentation states rather than the shape this
+// implementation happens to have, which is the whole reason the corpus is consumed here
+// instead of being reinvented as table entries.
 //
 // It is vendored rather than fetched so that a test run needs no network and a change
 // upstream is a commit here that a person reads. It is embedded rather than read from
-// the working directory so that agk's tests and schema's tests read one copy: a second
-// copy is a second answer to what the shape is.
+// the working directory so that agk's tests, schema's tests and the evaluator's tests
+// read one copy: a second copy is a second answer to what the shape is.
 //
 // Standard library only, which is what lets agk's own tests import it without breaching
 // agk's rule. Test support: nothing at runtime reaches for it.
@@ -31,7 +31,7 @@ const Version = "0.1.0"
 //go:embed testdata
 var vendored embed.FS
 
-// FS is the vendored tree, rooted where the repository roots it: envelope.schema.json
+// FS is the vendored tree, rooted where the repository roots it: the schema documents
 // at the top, the corpus under fixtures/.
 var FS fs.FS
 
@@ -52,28 +52,70 @@ type Case struct {
 	Valid  bool
 	Rule   string
 	Covers string
+
+	// RefusedBy is how an invalid document is refused, and it is what divides the
+	// labour between a reader and a validator. "schema" means the JSON Schema document
+	// alone refuses it, which is shape and which closed decoding gives for nothing.
+	// "validator" means the documentation states the rule and JSON Schema cannot
+	// express it, because it needs the graph, the brick manifest, the included file or
+	// the expression language; those fixtures are schema valid on purpose. It is empty
+	// on a valid document.
+	RefusedBy string
+
+	// Manifest is the brick manifest elsewhere in the corpus that this fixture is
+	// checked against. The rule such a fixture pins is about the two documents
+	// together, so neither file alone shows it. Empty when the fixture stands alone.
+	Manifest string
+
+	// Role says that a fixture is not an entry point. The one fixture carrying it is
+	// the included file itself, which is where the rule it pins can be seen at all.
+	Role string
+}
+
+// entry is one fixture as the index writes it. Valid and invalid entries carry
+// different keys, and one struct reads both because the keys do not collide.
+type entry struct {
+	File      string `json:"file"`
+	Covers    string `json:"covers"`
+	Rule      string `json:"rule"`
+	RefusedBy string `json:"refused_by"`
+	Manifest  string `json:"manifest"`
+	Role      string `json:"role"`
+}
+
+// corpus is one document's fixtures: what must be accepted, and what must be refused.
+type corpus struct {
+	Valid   []entry `json:"valid"`
+	Invalid []entry `json:"invalid"`
 }
 
 // index is the part of fixtures/index.json this package reads.
 type index struct {
 	Version  string `json:"version"`
 	Fixtures struct {
-		Envelope struct {
-			Valid []struct {
-				File   string `json:"file"`
-				Covers string `json:"covers"`
-			} `json:"valid"`
-			Invalid []struct {
-				File string `json:"file"`
-				Rule string `json:"rule"`
-			} `json:"invalid"`
-		} `json:"envelope"`
+		Envelope corpus `json:"envelope"`
+		Workflow corpus `json:"workflow"`
+		Brick    corpus `json:"brick"`
 	} `json:"fixtures"`
 }
 
 // Envelopes returns the envelope corpus, valid documents first, in the order the index
 // lists them.
-func Envelopes() ([]Case, error) {
+func Envelopes() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Envelope }) }
+
+// Workflows returns the workflow corpus, valid documents first, in the order the index
+// lists them. The invalid ones carry RefusedBy, which says whether a document is refused
+// by its shape or by a rule only the validator can reach.
+func Workflows() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Workflow }) }
+
+// Bricks returns the brick manifest corpus, valid documents first, in the order the
+// index lists them.
+func Bricks() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Brick }) }
+
+// read returns one corpus of the index as cases, and refuses an index that names a file
+// the vendored tree does not carry: a corpus that has drifted from its index is a test
+// that passes by reading less than it says it reads.
+func read(pick func(index) corpus) ([]Case, error) {
 	b, err := fs.ReadFile(FS, "fixtures/index.json")
 	if err != nil {
 		return nil, fmt.Errorf("reading the fixture index: %w", err)
@@ -86,18 +128,45 @@ func Envelopes() ([]Case, error) {
 		return nil, fmt.Errorf("the vendored corpus says it is %s and this package is pinned to %s", idx.Version, Version)
 	}
 
-	e := idx.Fixtures.Envelope
-	cases := make([]Case, 0, len(e.Valid)+len(e.Invalid))
-	for _, c := range e.Valid {
-		cases = append(cases, Case{File: "fixtures/" + c.File, Valid: true, Covers: c.Covers})
+	c := pick(idx)
+	cases := make([]Case, 0, len(c.Valid)+len(c.Invalid))
+	for _, e := range c.Valid {
+		cases = append(cases, Case{
+			File:     "fixtures/" + e.File,
+			Valid:    true,
+			Covers:   e.Covers,
+			Manifest: manifestPath(e.Manifest),
+			Role:     e.Role,
+		})
 	}
-	for _, c := range e.Invalid {
-		cases = append(cases, Case{File: "fixtures/" + c.File, Rule: c.Rule})
+	for _, e := range c.Invalid {
+		cases = append(cases, Case{
+			File:      "fixtures/" + e.File,
+			Rule:      e.Rule,
+			RefusedBy: e.RefusedBy,
+			Manifest:  manifestPath(e.Manifest),
+			Role:      e.Role,
+		})
 	}
 	for _, c := range cases {
 		if _, err := fs.Stat(FS, c.File); err != nil {
 			return nil, fmt.Errorf("the index names %s, which is not in the vendored tree: %w", c.File, err)
 		}
+		if c.Manifest == "" {
+			continue
+		}
+		if _, err := fs.Stat(FS, c.Manifest); err != nil {
+			return nil, fmt.Errorf("the index names the manifest %s, which is not in the vendored tree: %w", c.Manifest, err)
+		}
 	}
 	return cases, nil
+}
+
+// manifestPath puts a manifest reference on the same footing as a fixture path, so that
+// a caller reads both out of FS the same way.
+func manifestPath(name string) string {
+	if name == "" {
+		return ""
+	}
+	return "fixtures/" + name
 }

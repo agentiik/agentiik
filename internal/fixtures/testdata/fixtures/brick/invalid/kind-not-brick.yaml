@@ -1,0 +1,16 @@
+# invalid: A manifest declaring another kind. A brick manifest and a workflow
+#   entry point are both YAML carrying an apiVersion, and the kind is what
+#   tells one from the other before anything else is read.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  runtime:
+    user: "65532:65532"

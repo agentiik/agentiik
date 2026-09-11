@@ -1,0 +1,37 @@
+# valid: the manifest the workflow fixtures on ports are checked against: two
+#   input ports, two output ports, a port declared without a schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: normalize
+  version: 2.0.0
+  summary: Normalises orders against a customer table and rejects what it cannot read.
+
+spec:
+  inputs:
+    orders:
+      schema: { $ref: "#/spec/definitions/order" }
+    customers:
+      schema: { $ref: "#/spec/definitions/customer" }
+  outputs:
+    ok:
+      schema: { $ref: "#/spec/definitions/order" }
+    rejected: {}
+
+  params:
+    currency: { type: string, pattern: "^[A-Z]{3}$", required: true }
+
+  runtime:
+    network: none
+    user: "65532:65532"
+
+  resources:
+    cpu: "1"
+    memory: 512Mi
+
+  definitions:
+    order:    { type: object, required: [customer_id], properties: { customer_id: { type: string } } }
+    customer: { type: object, required: [id], properties: { id: { type: string } } }

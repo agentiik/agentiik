@@ -1,0 +1,17 @@
+# invalid: A step that both runs an image and calls a sub-workflow. workflow
+#   is an alternative to image, never a companion to it.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#step-keywords
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: dunning
+  namespace: finance
+
+steps:
+  remind:
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    workflow: finance/common
+    outputs: [out]

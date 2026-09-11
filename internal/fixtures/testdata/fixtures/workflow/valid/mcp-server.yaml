@@ -1,0 +1,59 @@
+# valid: the published surface of a workflow, as the documentation writes it.
+# covers: mcp.name, mcp.description, tools with title, annotations, a sync tool
+#         at the ceiling and an async tool carrying no timeout.
+# reference: https://agentiik.github.io/docs/#a-workflow-as-an-mcp-server
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+  period:
+    schema: { type: string, pattern: "^[0-9]{4}-[0-9]{2}$" }
+    required: true
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }
+    schema: { $ref: "./schemas/invoice.json" }
+    retain: 90d
+
+mcp:
+  name: invoicing
+  description: Issue invoices and check their status.
+
+  tools:
+    - name: create_invoice
+      title: Create an invoice
+      description: >
+        Create one invoice for a customer and return its number and total.
+        Rejects a customer whose VAT number does not validate.
+      input:
+        from: { input: orders }        # its JSON Schema becomes inputSchema
+      output:
+        from: { output: invoices }     # its envelope becomes structuredContent
+      mode: sync
+      timeout: 60s
+      annotations:
+        readOnlyHint: false
+        idempotentHint: false
+
+    - name: reconcile_month
+      description: Reconcile a whole month. Long running; returns a run to follow.
+      input:
+        from: { input: period }
+      mode: async
+
+steps:
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+      period: ${{ workflow.inputs.period }}
+    outputs: [out]

@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agentiik.dev/brick.schema.json",
+  "title": "Brick manifest",
+  "description": "The manifest embedded in a brick image at /agk/brick.yaml. An OCI image becomes a brick as soon as it honours the execution contract and publishes this manifest describing its ports, its parameters and its requirements. The manifest is read on first pull and cached by digest, so what it declares is what the engine validates a step against before any container is created.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "description": "Contract version this manifest is written against. The engine reads the document with the rules of that version, so a later format can be introduced without changing the meaning of a manifest already baked into a published image.",
+      "type": "string",
+      "const": "agentiik.dev/v1",
+      "examples": ["agentiik.dev/v1"]
+    },
+    "kind": {
+      "description": "Which document this is. A brick manifest and a workflow entry point are both YAML carrying an apiVersion, and this is what tells one from the other before anything else is read.",
+      "type": "string",
+      "const": "Brick",
+      "examples": ["Brick"]
+    },
+    "metadata": {
+      "description": "Identity of the brick: what the catalog indexes it under, and what a workflow author reads before deciding to use it.",
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "name": "http-request",
+          "version": "1.4.0",
+          "summary": "Issues one HTTP request per item and returns the response."
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Name the brick is published and searched under. The catalog is an index built from the manifests and annotations read off an ordinary OCI registry, with no parallel store, so this name is the one a person types and the one the catalog page is filed under.",
+          "$comment": "This is narrower than a workflow name, which is written on the identifier grammar and may carry capitals and underscores. The difference is deliberate: the documentation gives the lowercase and hyphenated rule for a published brick name, because a catalog page is filed under it, and gives no such rule for a workflow name. Narrowing the workflow to match would be borrowing a rule written about something else.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "examples": ["http-request", "schema-validate", "jq"]
+        },
+        "version": {
+          "description": "Version of the brick itself, which moves with the brick and not with the image tag. A workflow pins an image by digest in production, so this is what a person reads to know which release of the brick that digest holds.",
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "examples": ["1.4.0", "0.1.0", "2.0.0-rc.2"]
+        },
+        "summary": {
+          "description": "One sentence saying what the brick does, shown beside the name in the catalog. It is all a reader has to choose from before opening the parameter schema, so it says what the brick does to an item rather than what it is built with.",
+          "type": "string",
+          "examples": [
+            "Issues one HTTP request per item and returns the response.",
+            "Item validation against a schema, routing invalid ones to a dedicated port."
+          ]
+        }
+      }
+    },
+    "spec": {
+      "description": "What the brick offers and what it requires: its ports, its parameters, its secrets, its runtime needs and its resources. Everything the engine has to know before a step using this image can be validated or scheduled lives here.",
+      "type": "object",
+      "required": ["runtime"],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "inputs": { "in": { "schema": { "$ref": "#/spec/definitions/request" } } },
+          "outputs": { "out": { "schema": { "$ref": "#/spec/definitions/response" } } },
+          "runtime": { "network": "egress", "user": "65532:65532" },
+          "resources": { "cpu": "0.5", "memory": "256Mi", "pids": 128 }
+        }
+      ],
+      "properties": {
+        "inputs": {
+          "$ref": "#/$defs/ports",
+          "description": "Input ports the brick reads. The runner mounts the envelope of each port the step feeds under /agk/in/<port>/, read only, and the single port a brick reads from standard input is conventionally named in.",
+          "examples": [
+            { "in": { "schema": { "$ref": "#/spec/definitions/request" } } },
+            { "records": {}, "reference": {} }
+          ]
+        },
+        "outputs": {
+          "$ref": "#/$defs/ports",
+          "description": "Output ports the brick writes, one envelope per port at /agk/out/ports/<port>.json. A step may declare a subset of these and never a port absent from here, and the same names reach the container as the comma separated AGK_OUT_PORTS.",
+          "examples": [
+            {
+              "out": { "schema": { "$ref": "#/spec/definitions/response" } },
+              "error": { "schema": { "$ref": "#/spec/definitions/failure" } }
+            }
+          ]
+        },
+        "params": {
+          "description": "Parameters the brick accepts, each declared as a JSON Schema 2020-12 subschema. A step's params are validated against these once expressions are resolved, so a wrong or missing parameter is refused before a container exists rather than inside it.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/paramName" },
+          "additionalProperties": { "$ref": "#/$defs/param" },
+          "examples": [
+            {
+              "url": { "type": "string", "format": "uri", "required": true },
+              "method": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                "default": "GET"
+              },
+              "timeout": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$", "default": "30s" }
+            }
+          ]
+        },
+        "secrets": {
+          "description": "Secrets the brick needs, under the names it expects to read them by. The workflow maps its own declared secrets onto these names, and the runner mounts each value on tmpfs at the mount point, never as an environment variable, because a process environment is readable by its children and ends up in diagnostic dumps.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/secret" },
+          "examples": [
+            [{ "name": "bearer", "optional": true, "mount": "/agk/secrets/bearer" }],
+            [{ "name": "dsn", "mount": "/agk/secrets/dsn" }]
+          ]
+        },
+        "runtime": {
+          "description": "What the brick needs from the container it is given: the network it is attached to, whether it speaks JSON Lines, and the account it runs as. The runner builds the host configuration from these, within what its own policy allows. The root filesystem is not among them: it is mounted read-only for every container whatever a manifest says, so there is nothing here to declare about it.",
+          "type": "object",
+          "required": ["user"],
+          "additionalProperties": false,
+          "examples": [
+            { "network": "egress", "streaming": false, "user": "65532:65532" },
+            { "network": "none", "user": "65532:65532" }
+          ],
+          "properties": {
+            "network": {
+              "description": "Network posture the brick needs. none is the default and attaches no outbound route at all; egress attaches a dedicated network whose outbound traffic passes through the runner proxy enforcing the step's allow list; internal attaches a network with no outbound route, for a brick that only talks to a sidecar service. Every task gets its own network, so two containers on the same host never see each other.",
+              "type": "string",
+              "enum": ["none", "egress", "internal"],
+              "default": "none",
+              "examples": ["none", "egress", "internal"]
+            },
+            "streaming": {
+              "description": "Declares that the brick exchanges JSON Lines on standard input and standard output instead of whole envelopes. The contract still rests on a per-port barrier, so a streaming brick stays bounded by the duration of its task.",
+              "type": "boolean",
+              "default": false,
+              "examples": [false, true]
+            },
+            "user": {
+              "description": "Account the container runs as, written as uid, uid:gid, or a name the image already knows. A manifest declaring root is refused, and the rule is checked again at publication, because a read-only root filesystem and dropped capabilities are worth little to a process running as uid 0.",
+              "$comment": "The refusal reads the uid half only, so nobody:0, a container whose primary group is the root group, is accepted. That is deliberate: the documentation states the rule as a non-root user and justifies it by a process running as uid 0, and says nothing about the group. Extending the refusal to the gid would be a rule this release invented, and it is noted here rather than added so that a reader can tell the two apart.",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.][A-Za-z0-9_.-]*)?$",
+              "not": { "pattern": "^(?:0+|root)(?::|$)" },
+              "examples": ["65532:65532", "1000:1000", "nonroot"]
+            }
+          }
+        },
+        "resources": {
+          "description": "What one container of this brick asks for. The runner policy and the namespace quota cap these values, so they are a request and never a guarantee, and a brick asking for more than the namespace allows is refused rather than quietly given less.",
+          "type": "object",
+          "additionalProperties": false,
+          "examples": [
+            { "cpu": "0.5", "memory": "256Mi", "pids": 128 },
+            { "cpu": "1", "memory": "512Mi" }
+          ],
+          "properties": {
+            "cpu": {
+              "description": "CPU one container asks for, counted in cores and written as a string so that half a core reads as 0.5 wherever it travels, in the manifest, in the workflow file and in the task message alike. The runner turns it into the container CPU limit, and since a limit of zero is how a container is given no limit at all, the value starts above it.",
+              "type": "string",
+              "pattern": "^(?:[0-9]*[1-9][0-9]*(?:\\.[0-9]+)?|[0-9]+\\.[0-9]*[1-9][0-9]*)$",
+              "examples": ["0.5", "1", "2"]
+            },
+            "memory": {
+              "description": "Memory ceiling for one container, in binary units. The runner applies it as the container memory limit, so a brick that loads a whole envelope into memory says here how large that envelope may be. A ceiling of zero would stop the container before it started, so the quantity begins at one.",
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
+              "examples": ["256Mi", "512Mi", "1Gi"]
+            },
+            "pids": {
+              "description": "Maximum number of processes the container may hold, applied by the runner as the pids limit and defaulting to 256. A brick that forks per item declares what it needs here rather than discovering the ceiling at run time.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 256,
+              "examples": [128, 256, 512]
+            }
+          }
+        },
+        "definitions": {
+          "description": "Schemas that the ports and the parameters of this manifest point at with $ref. A request shape used by an input and echoed by an output is written once here, which is also what a client generating types reads. A pointer inside a manifest is a JSON Pointer resolved against the manifest document, so an entry here is named #/spec/definitions/<name> and not #/definitions/<name>.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/definitionName" },
+          "additionalProperties": { "$ref": "#/$defs/jsonSchema" },
+          "examples": [
+            {
+              "request": {
+                "type": "object",
+                "required": ["url"],
+                "properties": { "url": { "type": "string" } }
+              },
+              "response": { "type": "object", "properties": { "status": { "type": "integer" } } }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "agentiik.dev/v1",
+      "kind": "Brick",
+      "metadata": {
+        "name": "http-request",
+        "version": "1.4.0",
+        "summary": "Issues one HTTP request per item and returns the response."
+      },
+      "spec": {
+        "inputs": { "in": { "schema": { "$ref": "#/spec/definitions/request" } } },
+        "outputs": {
+          "out": { "schema": { "$ref": "#/spec/definitions/response" } },
+          "error": { "schema": { "$ref": "#/spec/definitions/failure" } }
+        },
+        "params": {
+          "url": { "type": "string", "format": "uri", "required": true },
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+            "default": "GET"
+          },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "timeout": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$", "default": "30s" }
+        },
+        "secrets": [{ "name": "bearer", "optional": true, "mount": "/agk/secrets/bearer" }],
+        "runtime": {
+          "network": "egress",
+          "streaming": false,
+          "user": "65532:65532"
+        },
+        "resources": { "cpu": "0.5", "memory": "256Mi", "pids": 128 },
+        "definitions": {
+          "request": {
+            "type": "object",
+            "required": ["url"],
+            "properties": { "url": { "type": "string" } }
+          },
+          "response": { "type": "object", "properties": { "status": { "type": "integer" } } },
+          "failure": {
+            "type": "object",
+            "properties": { "status": { "type": "integer" }, "message": { "type": "string" } }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ports": {
+      "title": "Port set",
+      "description": "A set of ports, keyed by name. A port carries exactly one envelope, which is why the set is a mapping and not a list: the name is the address the runner mounts, writes and reports against.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/portName" },
+      "additionalProperties": { "$ref": "#/$defs/port" },
+      "examples": [
+        { "out": { "schema": { "$ref": "#/spec/definitions/response" } }, "error": {} }
+      ]
+    },
+    "port": {
+      "title": "Port",
+      "description": "One named input or output of the brick. Declaring it is what lets a workflow be validated before it runs: a step may only feed a port declared here and may only name outputs that are a subset of these.",
+      "type": "object",
+      "additionalProperties": false,
+      "examples": [{ "schema": { "$ref": "#/spec/definitions/request" } }, {}],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/jsonSchema",
+          "description": "Schema declared for what travels on this port. It is what a workflow author reads to know what to feed the port or what to expect from it, and what the catalog renders as the shape of the port. A port with no schema declared accepts whatever arrives, which is what a passthrough brick says.",
+          "examples": [
+            { "$ref": "#/spec/definitions/request" },
+            { "type": "object", "properties": { "status": { "type": "integer" } } }
+          ]
+        }
+      }
+    },
+    "portName": {
+      "title": "Port name",
+      "description": "Name of a port. It becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": ["in", "out", "error", "rejected"]
+    },
+    "param": {
+      "title": "Parameter",
+      "description": "One parameter of the brick, declared as a JSON Schema 2020-12 subschema and extended with the two keywords the engine reads before the schema itself: required and sensitive. Every parameter reaches the container in /agk/params.json once the workflow expressions are resolved.",
+      "type": "object",
+      "examples": [
+        { "type": "string", "format": "uri", "required": true },
+        { "type": "string", "enum": ["GET", "POST"], "default": "GET" },
+        { "type": "object", "additionalProperties": { "type": "string" } }
+      ],
+      "properties": {
+        "required": {
+          "description": "Whether a step must supply this parameter, written as a boolean on the parameter itself rather than as a list on the block above it, so that everything said about a parameter stays in one place. A missing required parameter is refused when the workflow is validated, before any container exists. The array form is left alone, because a parameter declaration is a JSON Schema subschema and an object-shaped parameter uses that form to name its own required members.",
+          "oneOf": [
+            {
+              "description": "The manifest form: true when a step must supply this parameter.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            {
+              "description": "The JSON Schema form, on a parameter that is itself an object: the names its value must carry.",
+              "type": "array",
+              "items": { "type": "string" },
+              "examples": [["url"], ["user", "password"]]
+            }
+          ],
+          "examples": [true, false, ["user", "password"]]
+        },
+        "sensitive": {
+          "description": "Marks a parameter that may carry a secret value. A secret is never reachable from a condition expression, and a parameter marked here is the only route by which a secret value reaches a brick as a parameter rather than as a mounted file.",
+          "type": "boolean",
+          "examples": [true]
+        }
+      }
+    },
+    "paramName": {
+      "title": "Parameter name",
+      "description": "Name of a parameter. It is a key of /agk/params.json, and the same names are exported as AGK_PARAM_<NAME> when a step runs a script instead of a brick, so a parameter name reads as an identifier.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "examples": ["url", "method", "timeout"]
+    },
+    "secret": {
+      "title": "Secret requirement",
+      "description": "One secret the brick expects to find mounted. The brick names what it needs; the workflow decides which secret of its own namespace answers that name, so a brick carries no reference to anyone's store.",
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "examples": [
+        { "name": "bearer", "optional": true, "mount": "/agk/secrets/bearer" },
+        { "name": "dsn", "mount": "/agk/secrets/dsn" }
+      ],
+      "properties": {
+        "name": {
+          "description": "Name the brick knows this secret by, on the grammar a workflow secret name is written on, because the two are the same name: the workflow declares a secret under it and the runner mounts the value at /agk/secrets/<name>. A name this accepts and a workflow cannot write would be a requirement no workflow could satisfy. A workflow can only map secrets of the namespace that owns it, so moving a workflow elsewhere breaks the reference at validation rather than silently carrying access along.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "examples": ["bearer", "billing"]
+        },
+        "optional": {
+          "description": "Whether the brick runs without this secret. A brick that degrades gracefully, an HTTP client that can call an unauthenticated endpoint for instance, says so here instead of failing inside the container when nothing is mounted.",
+          "type": "boolean",
+          "default": false,
+          "examples": [true, false]
+        },
+        "mount": {
+          "description": "Path the value is mounted at, on tmpfs, for the brick to read as a file. The runner obtains the value at the last moment by redeeming a per-task grant, so the path exists only for the lifetime of the task.",
+          "type": "string",
+          "pattern": "^/agk/secrets/[^/]+$",
+          "examples": ["/agk/secrets/bearer", "/agk/secrets/billing"]
+        }
+      }
+    },
+    "jsonSchema": {
+      "title": "JSON Schema 2020-12 document",
+      "description": "A JSON Schema 2020-12 document, either an object of keywords or a boolean. The manifest carries schemas rather than a shape of its own so that a brick author writes what they already know and a client can generate types from what the catalog serves.",
+      "type": ["object", "boolean"],
+      "examples": [
+        { "$ref": "#/spec/definitions/request" },
+        { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" } } },
+        true
+      ]
+    },
+    "definitionName": {
+      "title": "Definition name",
+      "description": "Key of an entry under definitions. It is the last segment of the JSON Pointer a $ref in this manifest points at, so it carries neither a slash nor a tilde.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+      "examples": ["request", "response", "failure"]
+    }
+  }
+}

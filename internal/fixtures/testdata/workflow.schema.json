@@ -1,0 +1,1434 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agentiik.dev/workflow.schema.json",
+  "title": "Agentiik workflow",
+  "description": "The entry point of a workflow repository, agentiik.yaml at the root. It is the source of truth for what a workflow does, validated before a push is accepted, and the commit that carries it is the version. It is not the source of truth for who may do what: access grants live in the platform and never in this file.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata"],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "apiVersion": "agentiik.dev/v1",
+      "kind": "Workflow",
+      "metadata": { "name": "monthly-invoicing", "namespace": "finance" },
+      "steps": {
+        "normalize": {
+          "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+          "inputs": { "orders": "${{ workflow.inputs.orders }}" },
+          "outputs": ["ok", "rejected"]
+        }
+      }
+    }
+  ],
+  "properties": {
+    "apiVersion": {
+      "description": "Language version this file is written against. It is read before anything else, because it decides how every other key in the file is interpreted.",
+      "const": "agentiik.dev/v1",
+      "examples": ["agentiik.dev/v1"]
+    },
+    "kind": {
+      "description": "Which document of the language this is. The same apiVersion also covers the brick manifest, so a reader has to be told which of the two it is holding.",
+      "const": "Workflow",
+      "examples": ["Workflow"]
+    },
+    "metadata": {
+      "title": "Workflow identity",
+      "description": "What the workflow is called, which namespace owns it, and the labels it is found by. Ownership is not only naming: a workflow reaches the secrets, the quotas and the runner pools of the namespace that owns it, and of no other.",
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "examples": [
+        { "name": "monthly-invoicing", "namespace": "finance", "labels": { "domain": "billing" } }
+      ],
+      "properties": {
+        "name": {
+          "description": "Name of the workflow inside its namespace. With the namespace it forms the <namespace>/<name> identity that a run, a grant and a git remote are all addressed by.",
+          "$comment": "A published brick name is narrower than this, strict lowercase and hyphens, because the catalog files a page under it and a person types it. The documentation gives that rule for a brick and gives none for a workflow name, so this stays on the identifier grammar rather than borrowing a rule written about something else. Every workflow and namespace the documentation writes is lowercase and hyphenated all the same.",
+          "$ref": "#/$defs/identifier",
+          "examples": ["monthly-invoicing", "vat-reconciliation"]
+        },
+        "namespace": {
+          "description": "Namespace that owns the workflow. It is the unit of ownership and the coarse scope for access grants, so it decides which secrets can be named here and which runner pools may be selected.",
+          "$ref": "#/$defs/identifier",
+          "examples": ["finance", "platform"]
+        },
+        "labels": {
+          "description": "Key and value pairs used to group workflows and to find them again. They carry no meaning to the engine: nothing about scheduling, isolation or access is decided by a label.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": {
+            "description": "The text of one label, which is what a search matches on and what the console shows beside the workflow.",
+            "type": "string",
+            "examples": ["billing", "critical"]
+          },
+          "examples": [{ "domain": "billing" }, { "domain": "billing", "tier": "critical" }]
+        }
+      }
+    },
+    "inputs": {
+      "title": "Workflow inputs",
+      "description": "Named values a run is started with, each validated against its schema before any step runs. They are the workflow's own boundary, which is what a trigger fills and what an MCP tool publishes; the graph behind them is free to change without callers noticing.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/workflowInput" },
+      "examples": [
+        {
+          "orders": { "schema": { "$ref": "./schemas/order.json" }, "required": true },
+          "customers": { "schema": { "$ref": "./schemas/customer.json" }, "default": [] }
+        }
+      ]
+    },
+    "outputs": {
+      "title": "Workflow outputs",
+      "description": "The results a run is read by, each one a view of a single step port. Naming the boundary here is what lets a step be renamed, split or replaced without anything that consumes the workflow having to change.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/workflowOutput" },
+      "examples": [
+        {
+          "invoices": { "from": { "step": "archive", "port": "out" }, "retain": "90d" },
+          "errors": { "from": { "step": "invoice", "port": "error" } }
+        }
+      ]
+    },
+    "on": {
+      "title": "Triggers",
+      "description": "What starts a run. A run started by a schedule, a webhook or an event is attributed to the namespace service identity rather than to whoever last edited the file, so production traffic does not stop when an author leaves. Three of the seven kinds of trigger are declared here; the other four are declared elsewhere or by the caller, and are listed in the comment beside this block.",
+      "$comment": "The documentation names seven kinds of trigger and this block carries three of them, because the other four are not written here. manual is started from the API, the command line, the console or a mobile app by a principal holding workflow:run, which supplies the inputs at the call; its settings column reads inputs for that reason and not because a manual entry is declared in the file. mcp is declared in the mcp block, one entry per published tool. terraform is an apply by the provider, and workflow is a call from another workflow step, so both are the caller\u0027s to make. The documentation\u0027s own on block shows exactly these three, and a fourth key would be a spelling it never gives.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "examples": [
+        { "schedule": [{ "cron": "0 6 1 * *", "timezone": "Europe/Paris" }] },
+        { "webhook": [{ "path": "/invoicing", "method": "POST", "auth": "hmac" }] }
+      ],
+      "properties": {
+        "schedule": {
+          "description": "Clock triggers, each a cron expression read in a named timezone.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/scheduleTrigger" },
+          "examples": [[{ "cron": "0 6 1 * *", "timezone": "Europe/Paris" }]]
+        },
+        "webhook": {
+          "description": "HTTP entry points, each served below the namespaced prefix /hooks/<namespace>/ and authenticating the caller rather than a user.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/webhookTrigger" },
+          "examples": [[{ "path": "/invoicing", "method": "POST", "auth": "hmac" }]]
+        },
+        "event": {
+          "description": "Subscriptions to CloudEvents 1.0 carried on the bus. A workflow only sees events published into its own namespace, or into a namespace that granted it read access.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/eventTrigger" },
+          "examples": [[{ "type": "com.example.order.approved" }]]
+        }
+      }
+    },
+    "mcp": {
+      "title": "Published tools",
+      "description": "Publishes the workflow to model-driven clients as an MCP server at /mcp/{namespace}/{workflow}. The block is what makes the server exist: without it the endpoint answers 404, and with it but with an empty tool list it serves a server with nothing on it. Nothing is inferred from the graph, so exposing a workflow never leaks its internals, and publishing, renaming or withdrawing a tool is a commit like any other change.",
+      "type": "object",
+      "additionalProperties": false,
+      "examples": [
+        {
+          "name": "invoicing",
+          "description": "Issue invoices and check their status.",
+          "tools": [
+            {
+              "name": "create_invoice",
+              "description": "Issue one invoice for a customer.",
+              "input": { "from": { "input": "orders" } },
+              "output": { "from": { "output": "invoices" } },
+              "mode": "sync"
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Server name shown to a client. Defaults to the workflow name, and exists so that a published interface need not follow an internal rename.",
+          "$ref": "#/$defs/identifier",
+          "examples": ["invoicing"]
+        },
+        "description": {
+          "description": "What the server is for, in one or two sentences. A model reads it before it reads any tool, so it is the sentence that decides whether the rest is ever looked at.",
+          "type": "string",
+          "examples": ["Issue invoices and check their status."]
+        },
+        "tools": {
+          "description": "The published tools. An empty list serves a server carrying nothing, which is not the same as declaring no mcp block at all.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/mcpTool" },
+          "examples": [
+            [{ "name": "reconcile_month", "description": "Reconcile a whole month. Long running; returns a run to follow.", "input": { "from": { "input": "period" } }, "mode": "async" }]
+          ]
+        }
+      }
+    },
+    "include": {
+      "title": "Includes",
+      "description": "Files and repositories merged into this one before anything else is resolved, in declaration order. Reuse applies to steps and defaults; the published surface is not included, so reading this file tells you everything the workflow exposes.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/include" },
+      "examples": [
+        [{ "path": "./common-bricks.yaml" }, { "workflow": "finance/common", "ref": "v2.1.0" }]
+      ]
+    },
+    "vars": {
+      "title": "Variables",
+      "description": "Values written once and read anywhere an expression is allowed, through the vars context. They keep a currency or a threshold in a single place instead of repeated across steps. They are not secrets: they sit in the file and are readable by anyone who can read the workflow.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": {
+        "description": "Value of one variable, of whatever type the expression reading it expects.",
+        "examples": ["EUR", 30]
+      },
+      "examples": [{ "currency": "EUR", "dunning_days": 30 }]
+    },
+    "secrets": {
+      "title": "Secrets",
+      "description": "The secrets steps of this workflow may mount, declared by name and resolved by the API at the last moment. Only secrets of the owning namespace can be named, so moving a workflow elsewhere breaks the reference at validation instead of quietly carrying access along.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/secret" },
+      "examples": [{ "billing": { "provider": "vault", "path": "kv/data/agentiik/billing" } }]
+    },
+    "defaults": {
+      "$ref": "#/$defs/defaults",
+      "description": "Settings every step of this workflow inherits unless it states its own, so that a decision taken once is not repeated in twenty places.",
+      "examples": [{ "timeout": "10m", "network": "none", "retain": "7d" }]
+    },
+    "concurrency": {
+      "title": "Concurrency policy",
+      "description": "What happens when a trigger fires while a run of this workflow is still going. Groups are scoped to the namespace, so one namespace can never block or cancel another's runs.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "examples": [{ "group": "monthly-invoicing", "cancel_in_progress": false }],
+      "properties": {
+        "group": {
+          "description": "Name that runs queue behind. Two runs sharing a group never overlap, which is how a workflow that writes to one ledger is kept from writing to it twice at once.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["monthly-invoicing", "invoicing-fr"]
+        },
+        "cancel_in_progress": {
+          "description": "Whether the arriving run cancels the one already going instead of waiting behind it. The run it replaces ends in the cancelled state.",
+          "type": "boolean",
+          "examples": [true, false]
+        }
+      }
+    },
+    "timeout": {
+      "title": "Run timeout",
+      "description": "Maximum duration of the whole run. It is not the step keyword of the same name: that one bounds a single shard, this one bounds everything the run does, from the first task to the last. A run still going when it expires is stopped and ends in the timed_out state, which is what makes that state reachable from a file rather than only from an operator cancelling something. It is capped by the namespace quota max_run_duration, so a workflow may always ask for less and never for more, exactly as retain is capped by max_retention_days.",
+      "$comment": "The ceiling is not written into the grammar, unlike the sync call timeout, whose 120 seconds are the same for every namespace and are therefore in its pattern. max_run_duration is a per-namespace quota, so a pattern refusing anything above it would refuse for one namespace what another is entitled to. The validator reads the quota and refuses the file, the way it does for a retain above max_retention_days.",
+      "$ref": "#/$defs/duration",
+      "examples": ["30m", "6h", "24h"]
+    },
+    "steps": {
+      "title": "The graph",
+      "description": "The steps of the workflow, named. The order they appear in has no bearing on scheduling: a step becomes runnable once every declared input port is satisfied, and an edge is the only form of dependency there is. A name starting with a dot is a hidden block, never executed, there to be extended.",
+      "type": "object",
+      "propertyNames": {
+        "description": "Step identifier, unique in the workflow. It names the step in needs, in expressions and in the run detail. A leading dot marks a hidden block, which is never executed.",
+        "pattern": "^\\.?[A-Za-z0-9][A-Za-z0-9_-]*$",
+        "examples": ["normalize", "check-vat", ".api-brick"]
+      },
+      "additionalProperties": { "$ref": "#/$defs/step" },
+      "examples": [
+        {
+          "normalize": {
+            "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d4a77b0c3e51d8a6f2b4c9e0a13d5f7b82c6e04a9d31b7f5c28e6a0b7e0",
+            "inputs": { "orders": "${{ workflow.inputs.orders }}" },
+            "outputs": ["ok", "rejected"]
+          },
+          "archive": {
+            "image": "ghcr.io/acme/agk-archive@sha256:44de9033c0a15bb27e8d41f6a920cd73b58e1f0427cad96b3e8175d20f41c115",
+            "needs": [{ "step": "normalize", "port": "ok", "as": "in" }],
+            "merge": "wait_all",
+            "outputs": ["out"]
+          }
+        }
+      ]
+    }
+  },
+  "patternProperties": {
+    "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$": {
+      "description": "A hidden block at the root of the file, whose name starts with a dot. It is never executed and exists to be named by a step's extends, which is how one set of settings is written once and inherited by many steps.",
+      "$ref": "#/$defs/step",
+      "examples": [{ "timeout": "2m", "network": "egress", "retry": { "max": 3, "on": ["transient"] } }]
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "title": "Identifier",
+      "description": "A name written in the file and used as a key elsewhere: a workflow, a namespace, an input, an output, a port, a variable, a secret or a tool. Kept to letters, digits, hyphens and underscores so that the same name survives a URL, an environment variable and a tool list unchanged.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": ["monthly-invoicing", "create_invoice", "orders"]
+    },
+    "duration": {
+      "title": "Duration",
+      "description": "A length of time written as a number and a unit: ms, s, m, h or d. Written rather than counted in seconds so that a file says 90d where a reader would otherwise have to work out what 7776000 means.",
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d)$",
+      "examples": ["500ms", "30s", "10m", "24h", "90d"]
+    },
+    "paramName": {
+      "title": "Parameter name",
+      "description": "Name of a step parameter. It is a key of /agk/params.json, and the same name is exported as AGK_PARAM_<NAME> where a step runs a script instead of a brick, so a parameter name reads as an identifier and carries no hyphen. It is the grammar the brick manifest keys its own params by, which is what lets a step be validated against a manifest at all.",
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "examples": ["url", "method", "endpoint", "currency"]
+    },
+    "expression": {
+      "title": "Expression",
+      "description": "A CEL expression inside ${{ }}, evaluated by the controller. An expression that fills the whole value keeps its type; one embedded in a longer string is converted to text. CEL is used because it terminates, has no side effects and cannot be made to diverge by the file that carries it.",
+      "type": "string",
+      "examples": ["${{ workflow.inputs.orders }}", "${{ inputs.in.count > 0 }}", "${{ vars.currency }}"]
+    },
+    "jsonSchema": {
+      "title": "JSON Schema",
+      "description": "A JSON Schema 2020-12 document describing a value, either an object of keywords or a boolean. A $ref pointing into the repository tree keeps the schema beside the workflow and versioned with the same commit. The brick manifest calls the same thing by the same name and accepts the same two shapes, so a schema written on a port and a schema written on a workflow boundary are one kind of document.",
+      "type": ["object", "boolean"],
+      "examples": [
+        { "$ref": "./schemas/order.json" },
+        { "type": "object", "required": ["customer_id"], "properties": { "customer_id": { "type": "string" } } },
+        true
+      ]
+    },
+    "workflowInput": {
+      "title": "Workflow input",
+      "description": "One named input of the workflow: what it must look like, whether a run can start without it, and what stands in when it is absent.",
+      "type": "object",
+      "additionalProperties": false,
+      "examples": [
+        { "schema": { "$ref": "./schemas/order.json" }, "required": true },
+        { "schema": { "type": "array" }, "default": [] }
+      ],
+      "properties": {
+        "schema": {
+          "description": "What the value has to look like for the run to start. An input without one is accepted as it comes and cannot be published as an MCP tool input, since a tool has to advertise an inputSchema.",
+          "$ref": "#/$defs/jsonSchema",
+          "examples": [{ "$ref": "./schemas/order.json" }]
+        },
+        "required": {
+          "description": "Refuses a run that does not supply the input, rather than letting every step downstream discover the absence for itself.",
+          "type": "boolean",
+          "default": false,
+          "examples": [true, false]
+        },
+        "default": {
+          "description": "Value used when the run supplies none. It is what makes an optional input ordinary: the graph reads one value and never tests for absence.",
+          "examples": [[], 0, "EUR"]
+        }
+      }
+    },
+    "workflowOutput": {
+      "title": "Workflow output",
+      "description": "One named result of the workflow: the step port it is taken from, how long it stays fetchable, and optionally what it carries.",
+      "type": "object",
+      "required": ["from"],
+      "additionalProperties": false,
+      "examples": [
+        { "from": { "step": "archive", "port": "out" }, "retain": "90d" },
+        { "from": { "step": "render", "port": "out" }, "retain": { "for": "24h", "fetches": 1 } }
+      ],
+      "properties": {
+        "from": {
+          "description": "The single step port whose envelope becomes this output. One port, because an output that concatenated several would hide which step actually produced what.",
+          "type": "object",
+          "required": ["step", "port"],
+          "additionalProperties": false,
+          "examples": [{ "step": "archive", "port": "out" }],
+          "properties": {
+            "step": {
+              "description": "Step the envelope is taken from.",
+              "$ref": "#/$defs/identifier",
+              "examples": ["archive", "invoice"]
+            },
+            "port": {
+              "description": "Output port of that step. An error port raised to a workflow output is how a run reports what it could not process without failing.",
+              "$ref": "#/$defs/identifier",
+              "examples": ["out", "error"]
+            }
+          }
+        },
+        "retain": {
+          "$ref": "#/$defs/retainOutput",
+          "description": "How long this output stays fetchable, and how many times it may be collected.",
+          "examples": ["90d", { "for": "24h", "fetches": 1 }]
+        },
+        "schema": {
+          "description": "What the items of this output carry, written as a JSON Schema 2020-12 document. It is what a tool published from this output advertises as its outputSchema, so a client is told the shape of a result and not only its text. It is the mirror of a tool input, which has to have a schema because a tool has to advertise an inputSchema; here it stays optional, and an output declaring none is published as a tool with no outputSchema beside it.",
+          "$ref": "#/$defs/jsonSchema",
+          "examples": [
+            { "$ref": "./schemas/invoice.json" },
+            { "type": "object", "properties": { "total": { "type": "number" } } }
+          ]
+        }
+      }
+    },
+    "retainOutput": {
+      "title": "Retention of a workflow output",
+      "description": "How long the artifacts of this output stay fetchable, and how many times they may be fetched. A duration answers how long it may be fetched; the long form also answers whether it may be fetched more than once. Retention is capped by the namespace quota: a workflow may always ask for less, never for more.",
+      "oneOf": [
+        {
+          "description": "The artifacts stay fetchable for this long, and for as many fetches as anyone makes.",
+          "$ref": "#/$defs/duration"
+        },
+        {
+          "description": "A duration, and a number of fetches after which the reference is dropped on the spot. A later request is answered 410 Gone rather than 404, so a client can tell what is finished from what never existed.",
+          "type": "object",
+          "required": ["for"],
+          "additionalProperties": false,
+          "properties": {
+            "for": {
+              "description": "How long the artifacts stay fetchable when nobody comes for them. A one-shot output still needs one, because it is what expires an artifact that is never collected.",
+              "$ref": "#/$defs/duration",
+              "examples": ["24h", "7d"]
+            },
+            "fetches": {
+              "description": "How many completed fetches the artifacts survive. The count is per artifact and not per principal, which is why it is a number and not a flag: two consumers of one output are fetches: 2. An interrupted, refused or ranged transfer does not count.",
+              "type": "integer",
+              "minimum": 1,
+              "examples": [1, 2]
+            }
+          }
+        }
+      ],
+      "examples": ["90d", { "for": "24h", "fetches": 1 }]
+    },
+    "retain": {
+      "title": "Retention",
+      "description": "How long artifacts stay fetchable. Only a workflow output may be one-shot, so no fetch count belongs here: an artifact travelling between two steps is read once per shard and again by a replay, and consuming it would make a graph that runs correctly the first time and not the second.",
+      "oneOf": [
+        {
+          "description": "The artifacts stay fetchable for this long.",
+          "$ref": "#/$defs/duration"
+        },
+        {
+          "description": "The same duration written in the long form, which a workflow output extends with a fetch count.",
+          "type": "object",
+          "required": ["for"],
+          "additionalProperties": false,
+          "properties": {
+            "for": {
+              "description": "How long the artifacts stay fetchable.",
+              "$ref": "#/$defs/duration",
+              "examples": ["7d"]
+            }
+          }
+        }
+      ],
+      "examples": ["7d", { "for": "7d" }]
+    },
+    "secret": {
+      "title": "Secret declaration",
+      "description": "Where one secret of the owning namespace is read from. The value is never written here and never reaches the controller: the API redeems a per-task grant at the last moment and the runner mounts the value on tmpfs.",
+      "type": "object",
+      "required": ["provider"],
+      "additionalProperties": false,
+      "examples": [{ "provider": "vault", "path": "kv/data/agentiik/billing" }],
+      "properties": {
+        "provider": {
+          "description": "Store the value is held in. An installation carries a built-in encrypted store, HashiCorp Vault, and API environment variables for development use.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["vault"]
+        },
+        "path": {
+          "description": "Where the value sits inside that store. What it looks like belongs to the provider: a Vault path names a mount and a key.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["kv/data/agentiik/billing"]
+        }
+      }
+    },
+    "include": {
+      "title": "Include",
+      "description": "One file or repository merged into this one. A path include resolves inside the same commit, so it can never be stale and nothing has to pin it. A workflow include resolves another repository at a tag or a commit, requires workflow:read on it, and records the commit it resolved to in the run.",
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["path"],
+          "not": { "anyOf": [{ "required": ["workflow"] }, { "required": ["ref"] }] }
+        },
+        {
+          "required": ["workflow", "ref"],
+          "not": { "required": ["path"] }
+        }
+      ],
+      "additionalProperties": false,
+      "examples": [{ "path": "./common-bricks.yaml" }, { "workflow": "finance/common", "ref": "v2.1.0" }],
+      "properties": {
+        "path": {
+          "description": "A file of this repository, relative to the root. It travels with the commit, which is why it carries no version of its own and why a ref beside it is refused: a path include resolves inside the same commit, so it can never be stale and there is nothing for a ref to pin.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["./common-bricks.yaml", "./includes/defaults.yaml"]
+        },
+        "workflow": {
+          "description": "Another workflow repository, as <namespace>/<name>. Reading it requires workflow:read on it, so an include cannot widen what its author may see.",
+          "$ref": "#/$defs/workflowPath",
+          "examples": ["finance/common"]
+        },
+        "ref": {
+          "description": "Tag or commit the included repository is read at. It is required because a moving ref would let another repository change what this workflow does without this commit changing.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["v2.1.0", "a3f9c1e"]
+        }
+      }
+    },
+    "workflowPath": {
+      "title": "Workflow path",
+      "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": ["finance/common", "finance/monthly-invoicing"]
+    },
+    "scheduleTrigger": {
+      "title": "Schedule trigger",
+      "description": "Starts a run on the clock, on the default branch. The run is attributed to the namespace service identity, so a schedule keeps working after its author is gone.",
+      "type": "object",
+      "required": ["cron"],
+      "additionalProperties": false,
+      "examples": [{ "cron": "0 6 1 * *", "timezone": "Europe/Paris", "jitter": "5m", "catch_up": false }],
+      "properties": {
+        "cron": {
+          "description": "Five-field cron expression, read in the timezone given beside it.",
+          "type": "string",
+          "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$",
+          "examples": ["0 6 1 * *", "*/15 * * * *"]
+        },
+        "timezone": {
+          "description": "IANA timezone the expression is read in, so that a schedule written for a country keeps its local hour across a daylight saving change.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["Europe/Paris", "UTC"]
+        },
+        "jitter": {
+          "description": "Random delay of at most this long added to each occurrence, so that many workflows sharing an hour do not all start in the same second.",
+          "$ref": "#/$defs/duration",
+          "examples": ["30s", "5m"]
+        },
+        "catch_up": {
+          "description": "Whether an occurrence missed during an outage is run once the engine is back. False by default, because a burst of late runs is rarely what a schedule meant.",
+          "type": "boolean",
+          "default": false,
+          "examples": [false, true]
+        }
+      }
+    },
+    "webhookTrigger": {
+      "title": "Webhook trigger",
+      "description": "Starts a run from an HTTP request. Paths are namespaced as /hooks/<namespace>/<path>, and authentication proves which caller is speaking, never which user.",
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "examples": [
+        { "path": "/invoicing", "method": "POST", "auth": "hmac", "map": { "orders": "${{ trigger.body.orders }}" } }
+      ],
+      "properties": {
+        "path": {
+          "description": "Path the trigger answers on, below the namespaced prefix. Two namespaces can therefore use the same word without colliding.",
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9._~/-]*$",
+          "examples": ["/invoicing", "/orders/approved"]
+        },
+        "method": {
+          "description": "HTTP method the trigger accepts. A request arriving with another one is refused before a run is created.",
+          "type": "string",
+          "pattern": "^[A-Z]+$",
+          "examples": ["POST"]
+        },
+        "auth": {
+          "description": "How the caller is proved: hmac over the raw body with a per-trigger secret, bearer for a token bound to a service account, mtls for client certificates, or none where the endpoint is deliberately open.",
+          "enum": ["hmac", "bearer", "mtls", "none"],
+          "examples": ["hmac", "bearer"]
+        },
+        "response": {
+          "description": "What the caller gets back. async answers 202 with the run id; sync holds the request until the run finishes and returns a named workflow output.",
+          "$comment": "The documentation states that a sync response returns a named workflow output and gives no key that names which one. The enum stays bare rather than gaining an invented companion key: a webhook cannot yet write what the sentence describes, and the day the documentation spells that key it belongs here.",
+          "enum": ["async", "sync"],
+          "examples": ["async", "sync"]
+        },
+        "map": {
+          "description": "Fills workflow inputs from the request, through expressions over the trigger context. Without it a body is received and nothing reads it.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": {
+            "description": "Expression, or literal value, feeding one workflow input.",
+            "examples": ["${{ trigger.body.orders }}"]
+          },
+          "examples": [{ "orders": "${{ trigger.body.orders }}" }]
+        }
+      }
+    },
+    "eventTrigger": {
+      "title": "Event trigger",
+      "description": "Starts a run on a CloudEvents 1.0 message from the bus. A workflow only sees events published into its own namespace, or into a namespace that granted it read access.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "examples": [{ "type": "com.example.order.approved", "filter": "${{ event.data.amount > 0 }}" }],
+      "properties": {
+        "type": {
+          "description": "CloudEvents type consumed. It is the event's own name for what happened, so a workflow subscribes to a fact rather than to a publisher.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["com.example.order.approved"]
+        },
+        "source": {
+          "description": "CloudEvents source the event has to come from, for a workflow that cares which system said it.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["/erp/orders"]
+        },
+        "filter": {
+          "description": "CEL expression evaluated over the event's context attributes and over its data. Only an event it accepts starts a run, which keeps a busy topic from starting runs that would immediately decide they had nothing to do.",
+          "$ref": "#/$defs/expression",
+          "examples": ["${{ event.data.amount > 0 }}"]
+        }
+      }
+    },
+    "mcpTool": {
+      "title": "Published tool",
+      "description": "One tool on the workflow's MCP server. It is a view of the workflow's own boundary: an input is published as the tool's schema and an output as its result, and a call is a run like any other, attributed to the caller and subject to the namespace quota.",
+      "type": "object",
+      "required": ["name", "description", "input"],
+      "additionalProperties": false,
+      "dependentSchemas": {
+        "mode": {
+          "if": { "properties": { "mode": { "const": "async" } }, "required": ["mode"] },
+          "then": {
+            "not": { "required": ["timeout"] },
+            "description": "A timeout on an async tool would mean nothing, because the call returns the run identifier at once."
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "create_invoice",
+          "title": "Create an invoice",
+          "description": "Create one invoice for a customer and return its number and total. Rejects a customer whose VAT number does not validate.",
+          "input": { "from": { "input": "orders" } },
+          "output": { "from": { "output": "invoices" } },
+          "mode": "sync",
+          "timeout": "60s"
+        }
+      ],
+      "properties": {
+        "name": {
+          "description": "Tool identifier, unique within the workflow and stable across commits because clients hold it. Renaming one is removing a tool and adding another.",
+          "$ref": "#/$defs/identifier",
+          "examples": ["create_invoice", "reconcile_month"]
+        },
+        "title": {
+          "description": "Label a client shows to a person in a list of tools, where the identifier would read as machinery.",
+          "type": "string",
+          "examples": ["Create an invoice"]
+        },
+        "description": {
+          "description": "What the tool does, when to reach for it and what it refuses. This is the field a model actually acts on, and the one worth spending sentences on.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["Create one invoice for a customer and return its number and total. Rejects a customer whose VAT number does not validate."]
+        },
+        "input": {
+          "description": "The workflow input whose JSON Schema becomes the tool's inputSchema, used as it stands. There is no second schema to write and therefore no way for the two to drift apart, which also means the input it names has to carry a schema.",
+          "type": "object",
+          "required": ["from"],
+          "additionalProperties": false,
+          "examples": [{ "from": { "input": "orders" } }],
+          "properties": {
+            "from": {
+              "description": "Names the workflow input, never a step or a port, so that the graph stays free to change beneath a published tool.",
+              "type": "object",
+              "required": ["input"],
+              "additionalProperties": false,
+              "examples": [{ "input": "orders" }],
+              "properties": {
+                "input": {
+                  "description": "A workflow input declared in this file.",
+                  "$ref": "#/$defs/identifier",
+                  "examples": ["orders", "period"]
+                }
+              }
+            }
+          }
+        },
+        "output": {
+          "description": "The workflow output whose envelope becomes the result, carried as structuredContent with a text rendering beside it, and whose schema, when the output declares one, becomes the tool's outputSchema. Optional, because a tool may have an effect and return only that it succeeded, and an output carrying no schema is published with no outputSchema beside it.",
+          "type": "object",
+          "required": ["from"],
+          "additionalProperties": false,
+          "examples": [{ "from": { "output": "invoices" } }],
+          "properties": {
+            "from": {
+              "description": "Names the workflow output, never a step or a port.",
+              "type": "object",
+              "required": ["output"],
+              "additionalProperties": false,
+              "examples": [{ "output": "invoices" }],
+              "properties": {
+                "output": {
+                  "description": "A workflow output declared in this file.",
+                  "$ref": "#/$defs/identifier",
+                  "examples": ["invoices"]
+                }
+              }
+            }
+          }
+        },
+        "mode": {
+          "description": "Whether the call waits. sync holds the call until the run finishes and returns the output; async returns the run identifier at once, to be followed with the platform server's run.get.",
+          "enum": ["sync", "async"],
+          "default": "sync",
+          "examples": ["sync", "async"]
+        },
+        "timeout": {
+          "description": "How long a sync call waits. It is capped at 120 seconds because clients time out long before a workflow gives up, and a workflow that cannot finish inside that has to be async. The ceiling is carried by the grammar of the value, so a timeout above it is refused here and not left to the validator; the companion rule, that an async tool carries no timeout at all, is stated on mode.",
+          "$ref": "#/$defs/mcpTimeout",
+          "examples": ["60s", "120s"]
+        },
+        "annotations": {
+          "description": "The protocol's own hints, passed through to the client unchanged. They tell a client what to expect of a call, never what it is allowed to do: that is decided by the grants and not by a field in this file.",
+          "type": "object",
+          "additionalProperties": false,
+          "examples": [{ "readOnlyHint": false, "idempotentHint": false }],
+          "properties": {
+            "readOnlyHint": {
+              "description": "Says the tool only reads, so a client may call it without asking anyone first.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "idempotentHint": {
+              "description": "Says calling twice with the same arguments has the same effect as calling once, which is what lets a client retry a call it is unsure about.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "destructiveHint": {
+              "description": "Says the tool can remove or overwrite something, so a client may want a confirmation it would not otherwise ask for.",
+              "type": "boolean",
+              "examples": [true, false]
+            },
+            "openWorldHint": {
+              "description": "Says the tool reaches systems outside this installation, so its result depends on something nobody here controls.",
+              "type": "boolean",
+              "examples": [true, false]
+            }
+          }
+        }
+      }
+    },
+    "mcpTimeout": {
+      "title": "Sync call timeout",
+      "description": "How long a sync call waits, written as a duration and capped at 120 seconds. The ceiling sits in the grammar rather than in a sentence beside it, because a client times out long before a workflow gives up: 120s, 2m and 120000ms are the longest forms this accepts, and an hour or a day cannot be written at all. A workflow that cannot finish inside it is published as an async tool, which carries no timeout.",
+      "type": "string",
+      "pattern": "^(?:(?:[1-9][0-9]{0,4}|1[01][0-9]{4}|120000)ms|(?:[1-9][0-9]?|1[01][0-9]|120)s|[12]m)$",
+      "examples": ["500ms", "60s", "120s", "2m"]
+    },
+    "defaults": {
+      "title": "Defaults",
+      "description": "Settings applied to every step that does not state its own. Resolution is ordered: includes first, then extends depth first, then these defaults, then the step's own values, so a default never overrides something a step said. Graph shape is not settable here: what a step runs and what it depends on belongs to the step.",
+      "type": "object",
+      "additionalProperties": false,
+      "examples": [
+        {
+          "timeout": "10m",
+          "retain": "7d",
+          "retry": { "max": 2, "on": ["transient"], "backoff": { "type": "exponential", "base": "2s", "max": "60s" } },
+          "resources": { "cpu": "1", "memory": "512Mi" },
+          "network": "none",
+          "runs_on": ["arch=amd64"]
+        }
+      ],
+      "properties": {
+        "timeout": {
+          "$ref": "#/$defs/timeout",
+          "description": "How long a shard may run where the step sets no limit of its own.",
+          "examples": ["10m"]
+        },
+        "retain": {
+          "$ref": "#/$defs/retain",
+          "description": "How long intermediate artifacts stay fetchable, and any workflow output that does not say otherwise.",
+          "examples": ["7d"]
+        },
+        "retry": {
+          "$ref": "#/$defs/retry",
+          "description": "The policy a step inherits when it declares no retry of its own.",
+          "examples": [{ "max": 2, "on": ["transient"] }]
+        },
+        "resources": {
+          "$ref": "#/$defs/resources",
+          "description": "What a container is given where the step asks for nothing in particular.",
+          "examples": [{ "cpu": "1", "memory": "512Mi" }]
+        },
+        "network": {
+          "$ref": "#/$defs/network",
+          "description": "The network a step gets unless it asks for another, which is where a workflow says that reaching out is the exception.",
+          "examples": ["none"]
+        },
+        "egress": {
+          "$ref": "#/$defs/egress",
+          "description": "The addresses every step may reach, for a workflow whose steps all talk to the same few hosts.",
+          "examples": [{ "allow": ["api.billing.example.com:443"] }]
+        },
+        "runs_on": {
+          "$ref": "#/$defs/runsOn",
+          "description": "The runner labels every step selects, for a workflow that belongs on one kind of host.",
+          "examples": [["arch=amd64"]]
+        },
+        "secrets": {
+          "$ref": "#/$defs/stepSecrets",
+          "description": "Secrets mounted into every step, for a workflow whose steps all need the same credential.",
+          "examples": [["billing"]]
+        },
+        "cache": {
+          "$ref": "#/$defs/cache",
+          "description": "Whether memoisation is on for the steps that do not decide for themselves.",
+          "examples": [true]
+        },
+        "continue_on_error": {
+          "$ref": "#/$defs/continueOnError",
+          "description": "Whether a failure leaves the run going, for the steps that do not say.",
+          "examples": [false]
+        },
+        "idempotent": {
+          "$ref": "#/$defs/idempotent",
+          "description": "Whether steps may be requeued after a lost task and cached, unless one of them says otherwise.",
+          "examples": [true]
+        },
+        "files": {
+          "$ref": "#/$defs/files",
+          "description": "What every step receives from the repository tree, for a repository too large to hand over whole.",
+          "examples": [["./sql/**"]]
+        },
+        "shell": {
+          "$ref": "#/$defs/shell",
+          "description": "The interpreter every script step is handed to unless it names another.",
+          "examples": [["/bin/sh", "-e"]]
+        },
+        "before_script": {
+          "$ref": "#/$defs/beforeScript",
+          "description": "Commands every script step runs first, merged outwards in with those of the blocks it extends.",
+          "examples": [["apk add --no-cache jq curl"]]
+        },
+        "after_script": {
+          "$ref": "#/$defs/afterScript",
+          "description": "Commands every script step runs last, failure included.",
+          "examples": [["cp /tmp/result.json /agk/out/files/ 2>/dev/null || true"]]
+        },
+        "when": {
+          "$ref": "#/$defs/when",
+          "description": "The upstream states steps start on where they do not say, which stays [succeeded] unless a workflow decides otherwise.",
+          "examples": [["succeeded"]]
+        }
+      }
+    },
+    "step": {
+      "title": "Step",
+      "description": "One instance of a brick, a script or a sub-workflow inside the graph, with its edges, its parameters and its execution settings. A hidden block, whose name starts with a dot, has the same shape and is never executed.",
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "A step runs an image or calls a sub-workflow, never both.",
+          "not": { "required": ["image", "workflow"] }
+        },
+        {
+          "description": "A sub-workflow call runs no container of its own, and script commands run inside image, so none of the script keywords belong beside workflow either.",
+          "if": { "required": ["workflow"] },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["script"] },
+                { "required": ["before_script"] },
+                { "required": ["after_script"] },
+                { "required": ["shell"] }
+              ]
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e5c9d0b3f6182a47ce05d9b3f21708cd4a6e2b95f30c71d8ae64b2c39cc",
+          "needs": [{ "step": "normalize", "port": "ok", "as": "in" }],
+          "if": "${{ inputs.in.count > 0 }}",
+          "strategy": { "fan_out": "item", "max_parallel": 8 },
+          "secrets": ["billing"],
+          "network": "egress",
+          "egress": { "allow": ["api.billing.example.com:443"] },
+          "retry": { "max": 4, "on": ["transient"] },
+          "outputs": ["out", "error"]
+        }
+      ],
+      "properties": {
+        "image": {
+          "description": "OCI image the step runs. A digest is required in production and a mutable tag is accepted in development, where it is resolved once for the whole run so that two shards of one step can never execute different code.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "ghcr.io/acme/agk-invoice@sha256:1ab74e5c9d0b3f6182a47ce05d9b3f21708cd4a6e2b95f30c71d8ae64b2c39cc",
+            "python:3.13-slim@sha256:1c4d5e8f2a70b91c36d0ae47f5b82091c6d3a41e7059bfc2183d6a04e7b19a02"
+          ]
+        },
+        "needs": {
+          "description": "The inbound edges of the step, which are the only form of dependency there is. Each edge names the step and the output port an envelope comes from and the input port it arrives on. A step becomes runnable once every declared port is satisfied, so this is a barrier and not a stream.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/edge" },
+          "examples": [
+            ["normalize"],
+            [{ "step": "invoice", "port": "out", "as": "invoices" }, { "step": "normalize", "port": "rejected", "as": "rejected" }]
+          ]
+        },
+        "inputs": {
+          "description": "Feeds an input port from a workflow input or from an expression, creating no dependency on another step. It is how a step reads what the run was started with rather than what another step produced.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": {
+            "description": "Expression, or literal value, feeding one input port.",
+            "examples": ["${{ workflow.inputs.orders }}"]
+          },
+          "examples": [{ "orders": "${{ workflow.inputs.orders }}", "customers": "${{ workflow.inputs.customers }}" }]
+        },
+        "outputs": {
+          "description": "The output ports this step publishes. For a brick they must be a subset of the ports its manifest declares; a script has no manifest to read them from, so there they have to be written out. A declared port the container never writes publishes an empty envelope, which is not an error.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "description": "Name of one output port.",
+            "$ref": "#/$defs/identifier",
+            "examples": ["out", "error", "rejected"]
+          },
+          "examples": [["ok", "rejected"], ["out", "error"]]
+        },
+        "params": {
+          "description": "Parameters handed to the brick, validated against its manifest schema once the expressions are resolved. A step carrying a script has no manifest to validate against, so each entry is written to /agk/params.json and exported as AGK_PARAM_<NAME>. Substitution belongs here rather than in the repository tree, because a file in the tree is bytes and never a template.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/paramName" },
+          "additionalProperties": {
+            "description": "Value of one parameter, literal or resolved from an expression.",
+            "examples": ["${{ vars.currency }}", "https://vat.example.com/v2"]
+          },
+          "examples": [{ "currency": "${{ vars.currency }}" }, { "endpoint": "https://vat.example.com/v2" }]
+        },
+        "if": {
+          "description": "Decides whether the step runs at all. When it is false the step is skipped and publishes empty envelopes on every port, so the steps below it still get to decide their own fate through when. Item contents are not readable here: a test reads port metadata such as inputs.in.count, which is what keeps the controller from loading a namespace's data to schedule it.",
+          "$ref": "#/$defs/expression",
+          "examples": ["${{ inputs.in.count > 0 }}"]
+        },
+        "when": {
+          "$ref": "#/$defs/when",
+          "description": "Which upstream outcomes let this step start, so that a step cleaning up after a failure runs where an ordinary one would not.",
+          "examples": [["succeeded", "skipped"]]
+        },
+        "merge": {
+          "description": "How several edges arriving on the same input port are combined. wait_all waits for every upstream port and concatenates items in edge declaration order, which is the default when a port has more than one edge. zip pairs items by rank and fails validation on envelopes of differing lengths. join matches items on a JSON path and sends what it cannot match to the unmatched port, when the step declares one. first lifts the barrier as soon as one upstream port has produced, abandoning the other edges and cancelling their steps when nothing else needs them.",
+          "oneOf": [
+            {
+              "description": "The strategy by name, for the three that need nothing configured.",
+              "enum": ["wait_all", "zip", "first"]
+            },
+            {
+              "description": "A key join, which needs to be told what to match on.",
+              "type": "object",
+              "required": ["join"],
+              "additionalProperties": false,
+              "properties": {
+                "join": {
+                  "description": "The join and what it matches items on.",
+                  "type": "object",
+                  "required": ["on"],
+                  "additionalProperties": false,
+                  "examples": [{ "on": "$.data.customer_id" }],
+                  "properties": {
+                    "on": {
+                      "description": "JSON path to the value items are matched by. Items that match nothing leave on the unmatched port if the step declares one, rather than disappearing quietly.",
+                      "type": "string",
+                      "minLength": 1,
+                      "examples": ["$.data.customer_id"]
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "default": "wait_all",
+          "examples": ["wait_all", "first", { "join": { "on": "$.data.customer_id" } }]
+        },
+        "strategy": {
+          "description": "How the step is split into shards and how many of them run at once. Shards of one step have their envelopes concatenated port by port before publication, so a fan-out is invisible to whatever reads the result.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "examples": [
+            { "fan_out": "item", "max_parallel": 8 },
+            { "matrix": { "region": ["fr", "be", "ch"], "profile": ["standard", "reduced"] }, "max_parallel": 3 }
+          ],
+          "properties": {
+            "fan_out": {
+              "description": "Whether one container takes the whole envelope or the work is divided. none gives a single container everything and is the default. item gives one container per item, each receiving a single-item envelope, and is the only place an expression can read item. batch(n) gives one container per n items. matrix gives one container per combination of the matrix variables.",
+              "anyOf": [
+                {
+                  "description": "The strategies that need no number.",
+                  "enum": ["none", "item", "matrix"]
+                },
+                {
+                  "description": "One container per batch of n items, written with the batch size in the parentheses. The size starts at one, because a batch of no items is a shard that can never be filled.",
+                  "type": "string",
+                  "pattern": "^batch\\([1-9][0-9]*\\)$"
+                }
+              ],
+              "default": "none",
+              "examples": ["none", "item", "batch(50)", "matrix"]
+            },
+            "max_parallel": {
+              "description": "Ceiling on how many shards of this step run at the same time. It is what keeps a fan-out of ten thousand items from taking the whole namespace's share of the fleet, before the namespace quota has to.",
+              "type": "integer",
+              "minimum": 1,
+              "examples": [3, 8]
+            },
+            "matrix": {
+              "description": "Variable lists whose cartesian product becomes the shards. Every combination runs as its own shard with its variables injected into params, which is how one step covers three regions and two profiles without being written six times.",
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": { "$ref": "#/$defs/identifier" },
+              "additionalProperties": {
+                "description": "The values one matrix variable takes.",
+                "type": "array",
+                "minItems": 1,
+                "examples": [["fr", "be", "ch"]]
+              },
+              "examples": [{ "region": ["fr", "be", "ch"], "profile": ["standard", "reduced"] }]
+            },
+            "fail_fast": {
+              "description": "Whether the first shard to fail stops the shards still running, rather than letting every shard finish before the step is judged.",
+              "type": "boolean",
+              "examples": [true, false]
+            }
+          }
+        },
+        "retry": {
+          "$ref": "#/$defs/retry",
+          "description": "Whether a failed attempt at this step is made again, and how long the engine waits first.",
+          "examples": [{ "max": 4, "on": ["transient"] }]
+        },
+        "timeout": {
+          "$ref": "#/$defs/timeout",
+          "description": "How long one shard of this step may run before its container is stopped.",
+          "examples": ["2m", "10m"]
+        },
+        "continue_on_error": {
+          "$ref": "#/$defs/continueOnError",
+          "description": "Whether the run survives this step failing.",
+          "examples": [true]
+        },
+        "resources": {
+          "$ref": "#/$defs/resources",
+          "description": "What this step's container is given, for work that needs more or less than the rest of the graph.",
+          "examples": [{ "cpu": "0.5", "memory": "256Mi" }]
+        },
+        "network": {
+          "$ref": "#/$defs/network",
+          "description": "Whether this step can reach anything at all, and through what.",
+          "examples": ["egress"]
+        },
+        "egress": {
+          "$ref": "#/$defs/egress",
+          "description": "The addresses this step is allowed to open a connection to.",
+          "examples": [{ "allow": ["api.billing.example.com:443"] }]
+        },
+        "runs_on": {
+          "$ref": "#/$defs/runsOn",
+          "description": "Where this step has to run, for work that any runner will not do.",
+          "examples": [["zone=dmz", "arch=arm64"]]
+        },
+        "secrets": {
+          "$ref": "#/$defs/stepSecrets",
+          "description": "Which of the workflow's secrets this step is given, kept to the few it actually uses.",
+          "examples": [["billing"]]
+        },
+        "cache": {
+          "$ref": "#/$defs/cache",
+          "description": "Whether an identical earlier execution of this step may stand in for running it again.",
+          "examples": [true]
+        },
+        "idempotent": {
+          "$ref": "#/$defs/idempotent",
+          "description": "Whether this step can safely be run twice, which is what decides if a lost task is requeued.",
+          "examples": [false]
+        },
+        "files": {
+          "$ref": "#/$defs/files",
+          "description": "What this step receives from the repository tree, and where each path is placed.",
+          "examples": [["./sql/**"]]
+        },
+        "script": {
+          "description": "Shell commands run inside image instead of treating it as a brick, under the same contract every brick honours: the same mounts, the same environment, the same isolation, the same meaning for the exit code. No manifest is read, so nothing about the ports is inferred and outputs has to be declared. A script that writes nothing and exits 0 publishes one item on out carrying its standard output and whatever it left in /agk/out/files/, which is what makes a two-line script worth writing.",
+          "$ref": "#/$defs/commands",
+          "examples": [["python /agk/repo/scripts/normalize.py"], ["agk items | jq -r '.data.vat_number' > /tmp/numbers"]]
+        },
+        "before_script": {
+          "$ref": "#/$defs/beforeScript",
+          "description": "What this step runs before its script, usually the one tool the image does not carry.",
+          "examples": [["apk add --no-cache jq curl"]]
+        },
+        "after_script": {
+          "$ref": "#/$defs/afterScript",
+          "description": "What this step runs after its script, whether the script worked or not.",
+          "examples": [["cp /tmp/result.json /agk/out/files/ 2>/dev/null || true"]]
+        },
+        "shell": {
+          "$ref": "#/$defs/shell",
+          "description": "The interpreter this step's commands are handed to, and the flags it starts with.",
+          "examples": [["/bin/sh", "-eu", "-o", "pipefail"]]
+        },
+        "extends": {
+          "description": "The hidden block this step inherits from. A hidden block's name starts with a dot and is never executed, which is how one set of settings is written once and shared by many steps. It is resolved after includes and before defaults, so the step's own values still win.",
+          "type": "string",
+          "pattern": "^\\.[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "examples": [".api-brick", ".region-matrix"]
+        },
+        "workflow": {
+          "description": "Calls a sub-workflow instead of running an image. It is the only way to loop, since cycles in the graph are refused at validation, and it is bounded by a configurable maximum depth. A call into another namespace requires workflow:run on the workflow being called.",
+          "oneOf": [
+            {
+              "description": "The workflow to call, as <namespace>/<name>, optionally at a ref after an @.",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*(@\\S+)?$"
+            },
+            {
+              "description": "The workflow to call and the ref it is read at, written apart.",
+              "type": "object",
+              "required": ["workflow"],
+              "additionalProperties": false,
+              "properties": {
+                "workflow": {
+                  "description": "The workflow to call, as <namespace>/<name>.",
+                  "$ref": "#/$defs/workflowPath",
+                  "examples": ["finance/common"]
+                },
+                "ref": {
+                  "description": "Tag or commit the called workflow is read at, so that a change on its default branch does not change this run.",
+                  "type": "string",
+                  "minLength": 1,
+                  "examples": ["v2.1.0", "a3f9c1e"]
+                }
+              }
+            }
+          ],
+          "examples": ["finance/common", "finance/common@v2.1.0", { "workflow": "finance/common", "ref": "v2.1.0" }]
+        }
+      }
+    },
+    "edge": {
+      "title": "Edge",
+      "description": "One inbound edge: the output port of another step, and the input port it lands on here. The short form names the step alone, which is the same as taking its out port onto in.",
+      "oneOf": [
+        {
+          "description": "Short form, equivalent to { step: <name>, port: out, as: in }.",
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "description": "Long form, for any other pair of ports.",
+          "type": "object",
+          "required": ["step"],
+          "additionalProperties": false,
+          "properties": {
+            "step": {
+              "description": "The step the envelope comes from.",
+              "$ref": "#/$defs/identifier",
+              "examples": ["normalize"]
+            },
+            "port": {
+              "description": "Which of that step's output ports is taken. This is what lets an item rejected by one step bypass the next and still reach the last.",
+              "$ref": "#/$defs/identifier",
+              "default": "out",
+              "examples": ["ok", "rejected", "error"]
+            },
+            "as": {
+              "description": "The input port the envelope arrives on here. Naming it is what lets one step take two different envelopes and still tell them apart.",
+              "$ref": "#/$defs/identifier",
+              "default": "in",
+              "examples": ["in", "invoices", "rejected"]
+            }
+          }
+        }
+      ],
+      "examples": ["normalize", { "step": "normalize", "port": "ok", "as": "in" }]
+    },
+    "when": {
+      "title": "Upstream states that allow a start",
+      "description": "The upstream states this step is willing to start on. The default is [succeeded], which is why a step that cleans up after a failure, or that runs whatever happened, has to say so. A step reached through continue_on_error sees the failed state here.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "One upstream state: succeeded, failed, skipped, or always for any of them.",
+        "enum": ["succeeded", "failed", "skipped", "always"]
+      },
+      "default": ["succeeded"],
+      "examples": [["succeeded", "skipped"], ["always"]]
+    },
+    "retry": {
+      "title": "Retry policy",
+      "description": "When an attempt is made again, and how long the engine waits first. Retrying is deliberate rather than automatic: an application failure is not retried unless this says it should be, and invalid input, exit code 120, is never retried whatever this says.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "examples": [
+        { "max": 4, "on": ["transient"] },
+        { "max": 2, "on": ["transient"], "backoff": { "type": "exponential", "base": "2s", "max": "60s" } }
+      ],
+      "properties": {
+        "max": {
+          "description": "How many further attempts a failure that this policy accepts is given. Beyond it the step is failed and the graph carries on as when says.",
+          "type": "integer",
+          "minimum": 0,
+          "examples": [2, 4]
+        },
+        "on": {
+          "description": "The failures worth another attempt. transient is the 100 to 119 exit range a brick uses to say it was unlucky. failed is the application range, 1 to 99, retried only where the author knows it is safe. lost is a task whose runner stopped reporting, which is requeued only for an idempotent step. timeout is an attempt stopped at its deadline.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "description": "One retryable failure kind.",
+            "enum": ["transient", "failed", "lost", "timeout"]
+          },
+          "examples": [["transient"], ["transient", "lost"]]
+        },
+        "backoff": {
+          "description": "How long to wait between attempts, so that a dependency which is briefly unwell is not hammered while it recovers.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "examples": [{ "type": "exponential", "base": "2s", "max": "60s" }],
+          "properties": {
+            "type": {
+              "description": "How the wait grows. exponential lengthens it after each failure, starting at base and never going past max.",
+              "enum": ["exponential"],
+              "examples": ["exponential"]
+            },
+            "base": {
+              "description": "The wait before the first further attempt, and the value the growth starts from.",
+              "$ref": "#/$defs/duration",
+              "examples": ["2s"]
+            },
+            "max": {
+              "description": "Ceiling on the wait between two attempts, however many have already failed.",
+              "$ref": "#/$defs/duration",
+              "examples": ["60s"]
+            }
+          }
+        }
+      }
+    },
+    "timeout": {
+      "title": "Timeout",
+      "description": "Maximum duration of one shard, not of the step and not of the run: the whole run is bounded by the timeout at the root. On expiry the container is sent SIGTERM and then SIGKILL after a grace period the runner policy sets, so a step with something to flush or to write gets the chance to do it.",
+      "$comment": "The grace period between SIGTERM and SIGKILL is a runner setting and not a keyword. The step keyword table places it in runner policy and says that no keyword in the file sets it, so none is declared here and none is expected beside this one.",
+      "$ref": "#/$defs/duration",
+      "examples": ["2m", "10m"]
+    },
+    "continueOnError": {
+      "title": "Continue on error",
+      "description": "Lets the run carry on when this step fails. The step is still failed and still says so: downstream steps see that state through when, which is how an error path is written without the whole run being marked failed.",
+      "type": "boolean",
+      "examples": [true, false]
+    },
+    "idempotent": {
+      "title": "Idempotent",
+      "description": "Whether running the step again with the same inputs is safe. Only an idempotent step is requeued after a task is lost, because a lost task may well have finished without the result coming back, and only an idempotent step can be cached. The default is true, which puts the burden on the brick author.",
+      "type": "boolean",
+      "default": true,
+      "examples": [true, false]
+    },
+    "resources": {
+      "title": "Resources",
+      "description": "What the container is given and may not exceed. These are capped by the runner policy and by the namespace quota, so they can always ask for less than the fleet allows and never for more.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "examples": [{ "cpu": "1", "memory": "512Mi" }, { "cpu": "0.5", "memory": "256Mi", "pids": 128 }],
+      "properties": {
+        "cpu": {
+          "description": "CPU allowance, in cores, fractions included. It is written as a string so that half a core reads as 0.5 wherever it travels, in this file, in the brick manifest and in the task message alike, and so that cpu: 0.5 and cpu: \"0.5\" are not two different documents in YAML. It is what the runner sets NanoCPUs from, and a runner refuses a task whose demand would take it past its own declared capacity. Zero is not an allowance, and NanoCPUs 0 is how a container is given no limit at all, so the value starts above it.",
+          "type": "string",
+          "pattern": "^(?:[0-9]*[1-9][0-9]*(?:\\.[0-9]+)?|[0-9]+\\.[0-9]*[1-9][0-9]*)$",
+          "examples": ["1", "0.5"]
+        },
+        "memory": {
+          "description": "Memory ceiling for the container, as a quantity with a binary suffix. The container is stopped when it goes past it, which is a failure of the step and not of the runner. A ceiling of zero would stop the container before it started, so the quantity begins at one.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(Ki|Mi|Gi|Ti)$",
+          "examples": ["256Mi", "512Mi", "2Gi"]
+        },
+        "pids": {
+          "description": "Ceiling on the number of processes inside the container, 256 by default. It is the cheap defence against a fork bomb taking a runner with it.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 256,
+          "examples": [128, 256]
+        }
+      }
+    },
+    "network": {
+      "title": "Network",
+      "description": "The network the container is given. none is the default and leaves it with no network at all. egress attaches a network whose outbound traffic goes through the runner proxy that enforces the egress list. internal attaches a network with no route out, for a step that only talks to a sidecar service. Every task gets its own network, so two containers on one host never see each other.",
+      "enum": ["none", "egress", "internal"],
+      "default": "none",
+      "examples": ["none", "egress", "internal"]
+    },
+    "egress": {
+      "title": "Egress allow list",
+      "description": "The addresses this step may reach. The runner proxy enforces it, so anything not listed is refused rather than merely discouraged. It only means something with network: egress, where it is the difference between one API and the whole internet.",
+      "type": "object",
+      "required": ["allow"],
+      "additionalProperties": false,
+      "examples": [{ "allow": ["api.billing.example.com:443"] }],
+      "properties": {
+        "allow": {
+          "description": "The host and port pairs the step is allowed to open a connection to.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "description": "One destination, written as host:port. The port is a real port, from 1 to 65535, because the proxy opens a connection to it and there is nothing above that to open.",
+            "type": "string",
+            "pattern": "^[^\\s/:]+:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})$",
+            "examples": ["api.billing.example.com:443"]
+          },
+          "examples": [["api.billing.example.com:443", "vat.example.com:443"]]
+        }
+      }
+    },
+    "runsOn": {
+      "title": "Runner selectors",
+      "description": "Runner labels a task of this step has to match, for work that has to happen somewhere particular: a zone, an architecture, a host holding a licence. A namespace can only select the runner pools it is allowed to use, so this narrows a choice and never widens it.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "One label selector, written as key=value.",
+        "type": "string",
+        "pattern": "^[^\\s=]+=[^\\s=]+$",
+        "examples": ["arch=amd64", "zone=dmz"]
+      },
+      "examples": [["arch=amd64"], ["zone=dmz", "arch=arm64"]]
+    },
+    "stepSecrets": {
+      "title": "Secrets to mount",
+      "description": "Which of the workflow's declared secrets this step gets, by the name the secrets block gives them. They arrive as files on tmpfs under /agk/secrets/<name> rather than as environment variables, because a process environment is readable by its children and ends up in diagnostic dumps. A secret is never reachable from a condition.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "Name of one secret declared in the workflow secrets block.",
+        "$ref": "#/$defs/identifier",
+        "examples": ["billing"]
+      },
+      "examples": [["billing"]]
+    },
+    "cache": {
+      "title": "Memoisation",
+      "description": "Reuses the result of an identical earlier execution instead of starting a container. The key combines the image digest, the resolved parameters and the digests of the input envelopes, prefixed by the namespace, so a hit never crosses a namespace boundary. A hit that would hand back an expired artifact is not a hit, because the point is to skip work whose result is still there.",
+      "type": "boolean",
+      "examples": [true, false]
+    },
+    "files": {
+      "title": "Files from the repository tree",
+      "description": "Narrows what the step receives from the repository tree, which it otherwise gets whole under /agk/repo/. It is an optimisation for a large repository and never a permission boundary: everything in the tree is readable by anyone who can read the workflow. The long form relocates a path to wherever a tool insists on finding it.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "description": "One path taken from the tree, narrowed or relocated.",
+        "oneOf": [
+          {
+            "description": "Short form: a path or a glob relative to the root of the repository.",
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "description": "Long form, which puts the path somewhere else in the container and can set its mode.",
+            "type": "object",
+            "required": ["from"],
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "description": "The path or glob in the repository tree.",
+                "type": "string",
+                "minLength": 1,
+                "examples": ["./certs/internal-ca.pem", "./sql/**"]
+              },
+              "to": {
+                "description": "Where it is placed in the container, for a tool that will only look in one place.",
+                "type": "string",
+                "minLength": 1,
+                "examples": ["/etc/ssl/certs/internal-ca.pem"]
+              },
+              "mode": {
+                "description": "The permissions it is given, as an octal string. A certificate that has to be world readable and a key that must not be are both written here.",
+                "type": "string",
+                "pattern": "^0?[0-7]{3}$",
+                "examples": ["0444", "0600"]
+              }
+            }
+          }
+        ]
+      },
+      "examples": [
+        ["./sql/**", { "from": "./certs/internal-ca.pem", "to": "/etc/ssl/certs/internal-ca.pem", "mode": "0444" }]
+      ]
+    },
+    "commands": {
+      "title": "Commands",
+      "description": "A list of shell commands, run in order inside the container. The first one to exit non-zero ends the step with that code, which the exit code table then reads as an application, transient or infrastructure failure.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "description": "One command line.",
+        "type": "string",
+        "minLength": 1,
+        "examples": ["python /agk/repo/scripts/normalize.py"]
+      },
+      "examples": [["psql -f /agk/repo/sql/orders.sql"]]
+    },
+    "beforeScript": {
+      "title": "Commands before the script",
+      "description": "Commands prepended to script, merged from defaults and from extends outwards in. They run in the same container, which is where a step installs the one tool it needs before doing its work.",
+      "$ref": "#/$defs/commands",
+      "examples": [["apk add --no-cache jq curl"]]
+    },
+    "afterScript": {
+      "title": "Commands after the script",
+      "description": "Commands appended to script, run in the same container even when script failed, so that a diagnostic dump survives a failure. Their own exit code does not change the step's verdict.",
+      "$ref": "#/$defs/commands",
+      "examples": [["cp /tmp/result.json /agk/out/files/ 2>/dev/null || true"]]
+    },
+    "shell": {
+      "title": "Shell",
+      "description": "The interpreter the commands are handed to, and the flags it starts with. It defaults to [\"/bin/sh\", \"-e\"], so the first command that fails ends the step rather than letting the rest run on a broken assumption.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "description": "The interpreter path, then one flag per entry.",
+        "type": "string",
+        "minLength": 1
+      },
+      "default": ["/bin/sh", "-e"],
+      "examples": [["/bin/sh", "-e"], ["/bin/sh", "-eu", "-o", "pipefail"]]
+    }
+  }
+}

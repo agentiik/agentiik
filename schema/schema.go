@@ -77,6 +77,32 @@ func NewCompiler(fsys fs.FS) *Compiler {
 // not hold together, or names a file the commit does not carry. The caller says which
 // input it came from, because a compiler that guessed would be guessing.
 func (c *Compiler) Compile(doc []byte) (*Schema, error) {
+	return c.compile(doc, "")
+}
+
+// CompileAt compiles one schema out of a larger document, named by a JSON Pointer
+// resolved against that document.
+//
+// A brick manifest is written that way. A definition under spec.definitions is named
+// "#/spec/definitions/<name> and never #/definitions/<name>", and the schema of a port
+// or of a parameter is a fragment of the manifest that may reference one. So the
+// manifest is the resource and the pointer names the part of it to compile, which is
+// what Compile cannot do: it adds the value it is given as the whole resource, and a
+// same-document reference would then resolve against the fragment rather than against
+// the manifest it was written in.
+//
+// The pointer is written as the manifest writes it, with the leading "#". An empty
+// pointer compiles the document itself, which is what Compile does.
+func (c *Compiler) CompileAt(document []byte, pointer string) (*Schema, error) {
+	if pointer != "" && !strings.HasPrefix(pointer, "#") {
+		return nil, fmt.Errorf("pointer %q is not written as a same-document reference: it names a place in the document it was written in, so it begins with #", pointer)
+	}
+	return c.compile(document, pointer)
+}
+
+// compile is the one compilation path: the document is the resource, and the fragment
+// says which part of it is the schema.
+func (c *Compiler) compile(doc []byte, fragment string) (*Schema, error) {
 	// UseNumber throughout, so that a large integer bound written in a schema is the
 	// number the author wrote and not the nearest float64 to it.
 	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(doc))
@@ -93,7 +119,7 @@ func (c *Compiler) Compile(doc []byte) (*Schema, error) {
 	if err := jc.AddResource(treeBase, v); err != nil {
 		return nil, fmt.Errorf("schema could not be read: %w", err)
 	}
-	s, err := jc.Compile(treeBase)
+	s, err := jc.Compile(treeBase + fragment)
 	if err != nil {
 		return nil, fmt.Errorf("schema does not compile: %w", err)
 	}

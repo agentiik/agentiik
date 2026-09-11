@@ -53,3 +53,73 @@ func TestTheEnvelopeSchemaIsVendoredWithIt(t *testing.T) {
 		t.Fatal("the vendored envelope.schema.json is not the released one")
 	}
 }
+
+func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := Workflows()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var valid, invalid, byValidator int
+	for _, c := range cases {
+		switch {
+		case c.Valid:
+			valid++
+			if c.Covers == "" {
+				t.Errorf("%s says nothing about what it covers", c.File)
+			}
+		default:
+			invalid++
+			if c.Rule == "" {
+				t.Errorf("%s names no rule it is refused by", c.File)
+			}
+			switch c.RefusedBy {
+			case "schema":
+			case "validator":
+				byValidator++
+			default:
+				t.Errorf("%s says it is refused by %q, which is neither the schema nor the validator", c.File, c.RefusedBy)
+			}
+		}
+	}
+	// The corpus the release carries: nine documents that must be accepted and
+	// fifty-two that must be refused, of which fifteen are rules no JSON Schema can
+	// express and the evaluator owns.
+	if valid != 9 || invalid != 52 || byValidator != 15 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 52 and 15", valid, invalid, byValidator)
+	}
+}
+
+func TestBricksCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := Bricks()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	if valid != 3 || invalid != 14 {
+		t.Fatalf("the corpus holds %d valid and %d invalid manifests, want 3 and 14", valid, invalid)
+	}
+}
+
+func TestTheWorkflowAndBrickSchemasAreVendoredWithTheirFixtures(t *testing.T) {
+	for _, name := range []string{"workflow.schema.json", "brick.schema.json"} {
+		b, err := fs.ReadFile(FS, name)
+		if err != nil {
+			t.Fatalf("reading the schema: %v", err)
+		}
+		if !strings.Contains(string(b), `"$id": "https://schemas.agentiik.dev/`+name+`"`) {
+			t.Fatalf("the vendored %s is not the released one", name)
+		}
+	}
+}

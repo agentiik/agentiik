@@ -1,0 +1,24 @@
+# invalid: An mcp block in an included file. Reuse applies to steps and
+#   defaults; the published surface is declared by the workflow that publishes
+#   it, so that reading one file tells you everything that workflow exposes.
+#   This fixture is the included file itself, named by an entry point as
+#   include: [{ path: ./common-bricks.yaml }].
+# refused by: the validator, beyond what JSON Schema can state
+# reference: https://agentiik.github.io/docs/#publishing-tools
+
+# ./common-bricks.yaml, merged into an entry point by a path include
+
+.api-brick:
+  timeout: 2m
+  retry: { max: 3, on: [transient] }
+  network: egress
+  resources: { cpu: "0.5", memory: 256Mi }
+
+mcp:
+  name: common
+  tools:
+    - name: run_common
+      description: Run the shared graph.
+      input:
+        from: { input: orders }
+      mode: sync

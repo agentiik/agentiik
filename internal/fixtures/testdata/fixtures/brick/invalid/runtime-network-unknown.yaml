@@ -1,0 +1,15 @@
+# invalid: A network posture outside none, egress and internal.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: http-request
+  version: 1.4.0
+
+spec:
+  runtime:
+    network: host
+    user: "65532:65532"

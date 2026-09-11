@@ -1,0 +1,14 @@
+# valid: the smallest workflow the language accepts.
+# covers: apiVersion, kind, metadata.name, one step carrying an image and a port.
+# reference: https://agentiik.github.io/docs/#yaml
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: nightly-reconciliation
+
+steps:
+  reconcile:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
+    outputs: [out]

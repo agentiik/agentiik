@@ -48,13 +48,26 @@
 //	          that is not JSON Schema's: required and default on a workflow input. The
 //	          only package where a third party JSON Schema implementation appears.
 //
-// Dependencies run one way and there is no cycle: artifact and schema import agk, brick
-// imports agk and artifact, and agk imports nothing outside this module but
-// internal/ulid, which is itself the standard library.
+// Then the group that decides what runs next, which is the one name it claims:
 //
-// Reserved for the groups that follow, so that nothing claims these names early: graph
-// for the evaluator, driver for the container driver, cmd/agk for the command line, and
-// the identifier Run in package agk for the run itself, with its states and its verdict.
-// Until then a run travels as agk.RunID, which is the name the envelope schema gives
-// the field.
+//	graph     The evaluator. It reads the entry point, resolves the graph its edges
+//	          describe, and hands out the task that should run next and takes back what
+//	          happened to it. It decides and never executes: no loop, no goroutine, no
+//	          clock, no socket and no Driver call, so the same sequence of results always
+//	          produces the same sequence of plans and a run replays exactly.
+//
+// The run itself is named in agk, where the driver and the controller can see it without
+// importing the evaluator: the run states, the step verdict, the task states, the four
+// kinds retry.on names and the exit-code table. The identifier Run was held in reserve
+// for this group, and this is the group that takes it up; a run no longer travels as
+// agk.RunID alone.
+//
+// Dependencies run one way and there is no cycle: artifact and schema import agk, brick
+// imports agk and artifact, graph imports agk, brick, schema and internal/expr, and agk
+// imports nothing outside this module but internal/ulid, which is itself the standard
+// library. internal/expr is where cel-go is isolated, on the precedent schema set for
+// JSON Schema: only the evaluator needs a CEL parser, so only the evaluator pays for one.
+//
+// Reserved for the groups that follow, so that nothing claims these names early: driver
+// for the container driver and cmd/agk for the command line.
 package agentiik
