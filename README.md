@@ -11,7 +11,7 @@ brick. The workflow format comes from [`agentiik/schemas`](https://github.com/ag
 pinned by version; nothing here redefines those shapes.
 
 Nothing is implemented yet. What the code is written against is the specification at
-<https://agentiik.github.io/docs>, and that is also where the documentation lives — this
+<https://agentiik.github.io/docs>, and that is also where the documentation lives; this
 README is the only one this repository keeps.
 
 ## Licence
