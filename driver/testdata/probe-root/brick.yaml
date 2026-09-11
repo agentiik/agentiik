@@ -1,0 +1,17 @@
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata:
+  name: probe
+  version: 0.1.0
+  summary: Reports what the container was given, on every port it declares.
+spec:
+  inputs:
+    in:
+      schema: { type: object }
+  outputs:
+    out:
+      schema: { type: object }
+  runtime:
+    network: none
+    streaming: false
+    user: "root"
