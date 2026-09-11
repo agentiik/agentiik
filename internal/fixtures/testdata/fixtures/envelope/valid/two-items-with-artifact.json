@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+    "step": "normalize",
+    "port": "ok",
+    "attempt": 1,
+    "count": 2,
+    "produced_at": "2026-09-10T06:00:12.418Z"
+  },
+  "items": [
+    {
+      "id": "01JMZ8W4K7A1B2C3D4E5",
+      "data": {
+        "customer_id": "C-1042",
+        "total": 1290.5,
+        "currency": "EUR"
+      },
+      "files": []
+    },
+    {
+      "id": "01JMZ8W4K7A1B2C3D4E6",
+      "data": {
+        "customer_id": "C-1043",
+        "total": 88.0,
+        "currency": "EUR"
+      },
+      "files": [
+        {
+          "name": "purchase-order.pdf",
+          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+          "media_type": "application/pdf",
+          "size": 481233,
+          "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+        }
+      ]
+    }
+  ]
+}

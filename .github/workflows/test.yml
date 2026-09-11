@@ -1,0 +1,48 @@
+# The four commands the README names, run on every push and every pull request. They are
+# the same four a person runs locally, in the same order, so that a green checkmark here
+# and a clean working copy there mean the one thing.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The version go.mod requires. Pinned to the minor rather than to stable, so
+          # that a new Go release is a commit someone makes here and reads, and never a
+          # build that changes underneath a branch nobody touched.
+          go-version: '1.27'
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      # The race detector is not optional here. The artifact store is written for
+      # concurrent puts of one key, two steps computing identical bytes being the
+      # ordinary case rather than a race to avoid, and that promise is only held if it
+      # is tested under -race.
+      - name: test
+        run: go test ./... -race
+
+      # gofmt has no exit code of its own for this: it lists the files it would rewrite
+      # and succeeds either way, so the listing is what the job has to check.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite these files:"
+            echo "$unformatted"
+            exit 1
+          fi
