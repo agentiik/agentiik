@@ -1,6 +1,6 @@
 {
   "meta": {
-    "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+    "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
     "step": "normalize",
     "port": "ok",
     "attempt": 1,
@@ -14,7 +14,7 @@
       "files": [
         {
           "name": "purchase-order.pdf",
-          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
           "media_type": "application/pdf",
           "size": 481233
         }
