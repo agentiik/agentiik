@@ -12,7 +12,7 @@
       "description": "Where the batch came from and how large it is. Metadata is what the controller and the console read to schedule, to display and to test a condition; the contents of the items are behind the run:read_data permission, which is why the count lives here rather than being found by reading the payload.",
       "examples": [
         {
-          "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+          "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
           "step": "normalize",
           "port": "ok",
           "attempt": 1,
@@ -40,7 +40,7 @@
   "examples": [
     {
       "meta": {
-        "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+        "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
         "step": "normalize",
         "port": "ok",
         "attempt": 1,
@@ -59,7 +59,7 @@
           "files": [
             {
               "name": "purchase-order.pdf",
-              "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+              "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
               "media_type": "application/pdf",
               "size": 481233,
               "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
@@ -89,9 +89,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1,
-          "$comment": "The documentation says a run carries a ULID, and a ULID is twenty-six Crockford base32 characters, but every run identifier the documentation prints is shorter than that and no two are the same length: twenty characters in the envelope, fifteen and twelve in the task message. A twenty-six character pattern here would refuse the documentation\u0027s own example, so no length is imposed and the reading is recorded instead.",
+          "$comment": "The documentation says a run carries a ULID, and a ULID is twenty-six Crockford base32 characters, but the run identifiers the documentation prints are not all of that length: twenty-six in the envelope, fifteen and twelve in the task message. A twenty-six character pattern here would refuse the documentation\u0027s own task message examples, so no length is imposed and the reading is recorded instead.",
           "description": "The run that produced the envelope, carried as the run's ULID. It is what ties the batch to the run detail, to the logs and to the artifact URIs, whose first path segment is this same value.",
-          "examples": ["01JMZ8W4K2R7Q0E3N5T9"]
+          "examples": ["01JMZ8W4K2R7Q0E3N5T9ZQ4XKB"]
         },
         "step": {
           "$ref": "#/$defs/identifier",
@@ -124,7 +124,7 @@
       },
       "examples": [
         {
-          "run_id": "01JMZ8W4K2R7Q0E3N5T9",
+          "run_id": "01JMZ8W4K2R7Q0E3N5T9ZQ4XKB",
           "step": "normalize",
           "port": "ok",
           "attempt": 1,
@@ -164,7 +164,7 @@
             [
               {
                 "name": "purchase-order.pdf",
-                "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+                "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
                 "media_type": "application/pdf",
                 "size": 481233,
                 "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
@@ -200,7 +200,7 @@
           "format": "uri",
           "pattern": "^agk://run/",
           "description": "Where the artifact is addressed from, in the logical form agk://run/<run>/<step>/<port>/<name>. The logical URI resolves to the physical key sha256/<digest>, so two steps producing identical bytes store one copy and a replay that recomputes the same content writes nothing. Deduplication is scoped per namespace, and the URI is never handed to the consuming container, which sees a mounted path instead.",
-          "examples": ["agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf"]
+          "examples": ["agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf"]
         },
         "media_type": {
           "type": "string",
@@ -224,7 +224,7 @@
       "examples": [
         {
           "name": "purchase-order.pdf",
-          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9/normalize/ok/purchase-order.pdf",
+          "uri": "agk://run/01JMZ8W4K2R7Q0E3N5T9ZQ4XKB/normalize/ok/purchase-order.pdf",
           "media_type": "application/pdf",
           "size": 481233,
           "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"

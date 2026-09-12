@@ -111,6 +111,16 @@ type Policy struct {
 	// paths are "mounted as sized tmpfs", so there is no unsized case to configure.
 	TmpSize int64
 
+	// Source is the file this policy was read from, and empty when nobody read one.
+	//
+	// It exists so that the driver can say where a setting came from without inventing
+	// a provenance. LoadPolicy fills it; DefaultPolicy leaves it empty, which is the
+	// case agk run --local is in, and the one sentence that would otherwise name
+	// PolicyPath says "this runner does not require it" instead of claiming a file
+	// said so. A message that names a file nobody opened sends its reader looking for
+	// a configuration that is not there.
+	Source string
+
 	// SecretsDir is the host directory secret values are written under before they
 	// are bound at /agk/secrets/<name>. It is a tmpfs where the platform has one,
 	// /dev/shm on Linux, because a value that touched a disk is a value somebody has
@@ -231,6 +241,9 @@ func LoadPolicy(path string) (Policy, error) {
 	defer f.Close()
 
 	p := DefaultPolicy()
+	// What was read, so that a message about a setting can name where the setting is
+	// written rather than where it would be written if anybody had read anything.
+	p.Source = path
 	s := bufio.NewScanner(f)
 	line := 0
 	// A key belongs to the table it is written under. Only the root table is read,

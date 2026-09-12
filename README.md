@@ -220,7 +220,7 @@ API is nineteen endpoints of JSON over a unix socket, and the standard library s
   The version of YAML is the reason rather than the API. A YAML 1.1 parser reads the bare
   key `on:` as the boolean true, and `on:` is how the language spells the trigger block,
   so such a parser fails every workflow that carries a trigger.
-- [`cel-go`](https://github.com/google/cel-go), used by `internal/expr` alone and reached
+- [`cel-go`](https://github.com/cel-expr/cel-go), used by `internal/expr` alone and reached
   only from `graph`, on the precedent `schema` set for JSON Schema: only the evaluator
   needs a CEL parser, so only the evaluator pays for one. The documentation names the
   language and names the reason, that CEL evaluates in linear time, is mutation free and
@@ -345,7 +345,7 @@ names, which is one lookup because a rule is spelled the way the corpus spells i
 
 ## Licence
 
-AGPL-3.0-or-later, see [LICENSE](LICENSE). A brick is not a derivative work of this
+Copyright 2026 François Rousselet. AGPL-3.0-or-later, see [LICENSE](LICENSE). A brick is not a derivative work of this
 engine; [LICENSING.md](https://github.com/agentiik/.github/blob/main/LICENSING.md) says so in as many words, and sets out why the
 organisation's repositories are not licensed uniformly.
 
