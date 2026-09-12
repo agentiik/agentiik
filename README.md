@@ -8,9 +8,9 @@ is an architectural constraint rather than a preference: it is what makes
 `agk run --local` the same code path a server run takes, instead of a second
 implementation that drifts from the first.
 
-What is written so far is the group that settles what travels on a port, and the group
-that decides what runs next. The rest of the list is named here because that is where it
-is going, not because it is there.
+What is written so far is the group that settles what travels on a port, the group that
+decides what runs next, and the group that runs it. The rest of the list is named here
+because that is where it is going, not because it is there.
 
 What the code is written against is the specification at
 <https://agentiik.github.io/docs>, and that is also where the documentation lives; this
@@ -21,8 +21,9 @@ the schemas are right.
 
 ## What is in the module
 
-v0.1.0 is the group that settles what travels on a port and the evaluator above it. Five
-packages, and `doc.go` at the root says what each one is for and what it is not.
+v0.1.0 is the group that settles what travels on a port, the evaluator above it, and the
+container driver beside the evaluator. Six packages, and `doc.go` at the root says what
+each one is for and what it is not.
 
 - **`agk`** is the vocabulary the documentation uses and every rule it states about it:
   `Envelope`, `Meta`, `Item`, `File`, `Port`, `Step`, `RunID`, the `agk://` URI, the four
@@ -76,6 +77,53 @@ packages, and `doc.go` at the root says what each one is for and what it is not.
   the verdict from the exit-code table; and the run verdict from the step outcomes. A
   refusal is a `Refusal`, naming the step, the port and the rule in the documentation's
   own words.
+- **`driver`** runs the container. It fills `graph.Driver` and is the only package in the
+  module that may reach a Docker daemon. One task is one container and one conversation
+  with the Engine API: resolve the image and pull it where the daemon does not hold it,
+  read `/agk/brick.yaml` on the first pull and cache it by image digest, refuse a manifest
+  declaring a root user before anything is created, prepare what the contract promises
+  (the envelope on standard input and at `/agk/in/<port>/envelope.json`, `/agk/repo` and
+  `/agk/run.json` and `/agk/params.json` read-only, a secret as a file at
+  `/agk/secrets/<name>`, `/agk/out` writable and `/tmp` a sized tmpfs), set the `AGK_*`
+  table, apply the settings every container gets (`ReadonlyRootfs`, `CapDrop: ALL`,
+  `no-new-privileges`, the pid and memory ceilings, `AutoRemove: false`), give the task a
+  network of its own, open the wait before the start so an exit cannot fall between the
+  two calls, enforce the step timeout as `SIGTERM` then `SIGKILL` after the grace, read
+  the exit code off the table, and collect one envelope per declared port with the files
+  uploaded and the oversized values spilled. `before_script`, `script` and `after_script`
+  are one shell invocation in one container, the shell defaulting to
+  `["/bin/sh", "-e", "-c"]`, and a script that writes nothing and exits 0 publishes one
+  item on `out` carrying its captured standard output. Standard error is collected as a
+  log that is timestamped, indexed and capped, with the secret values the task was given
+  replaced by literal match before anything is written, the item a script publishes
+  included. A `Result` means a container ran; an error means none did, and it names the
+  step, the port and the rule. No exit code is invented for a failure that produced none,
+  because a driver reporting its own trouble as a brick failure fails somebody else's
+  step.
+
+Two settings in the driver belong to the operator rather than to a workflow author, and
+both are decisions the project took before the code:
+
+- **User namespace remapping is a floor that can be lifted.** The driver refuses a daemon
+  that does not remap, so that root inside a container is an unprivileged high-numbered
+  account on the host. An operator lifts the refusal with `require_userns_remap = false`
+  in `/etc/agentiik/runner.toml`, which is a line in a file rather than a flag so that
+  lifting the floor is a thing somebody did on purpose and can be read back. When it is
+  lifted the driver says so once, in one plain sentence naming what is given up: a task's
+  files are then owned by a real uid on the host. The setting exists because Docker
+  Desktop does not offer the remapping and `agk run --local` has to work on a laptop.
+  Where the daemon does remap, the driver prepares each task's working directory with
+  ownership inside the remapped range before it creates the container, which is the cost
+  the documentation warns bind mounts carry.
+- **Network egress is refused for now.** `network: none` and `network: internal` run.
+  `none` is the absence of a network, which is the default and the stronger of the two,
+  and `internal` is a bridge of the task's own with no route out, named after the task and
+  removed with it, so that two containers on one host never see each other.
+  `network: egress` is refused, before anything is created, with an error saying the
+  egress proxy does not exist yet: the posture promises that a proxy on the runner enforces
+  the `egress.allow` list, and a workflow must not be able to believe its list is being
+  enforced when nothing is enforcing it. Nothing opens the network and calls it filtered.
+  The proxy is a task in the v0.2.0 runner group.
 
 The evaluator decides and does not execute. It has no loop, no goroutine, no clock, no
 identifier generator and no `Driver` call; `Next` and `Record` are functions of the state
@@ -89,6 +137,12 @@ driver is the thin thing between two calls that already exist. `State` is plain 
 a version and a JSON round trip, because the controller says failover is a state resume
 and never a rebuild.
 
+The arrow between the two points one way, and it is checked rather than asserted.
+`graph/boundary_test.go` reads the evaluator's whole import closure and fails it on a
+database, an HTTP client, a socket, a process started outside this one, a task bus client,
+a registry client, a container runtime, or the path segment `driver`. The evaluator
+reaches no daemon, and that is a test rather than a preference.
+
 `internal/expr` is the door CEL is behind. It holds the ten roots of the exposed-context
 table and the five positions the table's third column distinguishes, builds a compilation
 environment from that table and from nothing else, keeps the type of an expression that
@@ -97,13 +151,28 @@ expressions except under `fan_out: item`, and a secret is a reference and never 
 exposed to `params` and `secrets` alone. A root the position does not expose is not
 declared, so the table is enforced by the compiler rather than by a guard.
 
+`internal/docker` is the door the Docker daemon is behind, on that same precedent: only
+the driver needs a daemon, so only the driver reaches one, and the socket is a package of
+its own so that the driver's own files are about mounts, environments, signals and bytes
+rather than about HTTP. It speaks the Engine API over the unix socket with the standard
+library alone, which is why the module takes no dependency for it: the official client is
+large, it carries a dependency tree of its own, and what is needed here is nineteen
+endpoints, the frame header that keeps standard output and standard error apart, and the
+hijacked connection an attach becomes. The version is negotiated rather than compiled in, as
+`min(1.56, what the daemon offers)`, with 1.41 as the oldest daemon supported, because a
+hard pin refuses to run where `agk run --local` has to run. `internal/dockertest` is the
+other half: a fake daemon on a temporary socket whose container is a Go function a test
+supplies, plus the one function that answers whether a real daemon is present.
+
 Dependencies run one way and there is no cycle: `artifact` and `schema` import `agk`,
 `brick` imports `agk` and `artifact`, `graph` imports `agk`, `brick`, `schema` and
-`internal/expr`, and `agk` imports nothing outside this module but `internal/ulid`, which
-is itself the standard library.
+`internal/expr`, `driver` imports `agk`, `artifact`, `brick`, `graph` and
+`internal/docker`, and `agk` imports nothing outside this module but `internal/ulid`,
+which is itself the standard library.
 
 The module takes three direct third party dependencies, each recorded in `go.mod` with
-the reason it is taken:
+the reason it is taken. The driver adds none, and the reason is written above: the Engine
+API is nineteen endpoints of JSON over a unix socket, and the standard library speaks it.
 
 - [`santhosh-tekuri/jsonschema/v6`](https://github.com/santhosh-tekuri/jsonschema), used
   by `schema` and by nothing else. It is the 2020-12 draft itself rather than an older
@@ -124,16 +193,22 @@ the reason it is taken:
 
 ## What it deliberately is not, yet
 
-There is no container driver, no controller, no HTTP API, no runner and no command line.
-The names `driver` and `cmd/agk` are reserved so nothing claims them early. Nothing is
-published to `ghcr.io/agentiik/api`, `ghcr.io/agentiik/controller` or
-`ghcr.io/agentiik/runner` yet either.
+There is no controller, no HTTP API, no runner and no command line. The name `cmd/agk` is
+reserved so nothing claims it early. Nothing is published to `ghcr.io/agentiik/api`,
+`ghcr.io/agentiik/controller` or `ghcr.io/agentiik/runner` yet either. The driver runs a
+task when it is handed one; the loop that reads a `Plan`, hands each `Task` over and feeds
+each `Result` back is the controller's and `cmd/agk`'s, and it is not here.
 
-There is no Docker code anywhere. `brick` knows the container contract and nothing about
-how a container is started, which is what will let `agk brick test` run a brick against
-sample envelopes with no driver in reach, and the evaluator knows it less still: a test
-walks the evaluator's whole import closure and fails it on a database, a socket, a task
-bus client, a registry client or a container runtime.
+The Docker code is in `driver` and `internal/docker` and nowhere else. `brick` still knows
+the container contract and nothing about how a container is started, which is what lets
+`agk brick test` run a brick against sample envelopes with no driver in reach.
+
+`network: egress` is refused rather than approximated, and the proxy that would make it
+real is a task in the v0.2.0 runner group. Signature verification before a pull, the
+registry credentials a private image needs, the startup sweep that would remove what a
+previous process left on the host, and the runner-side `pre_task` and `post_task` hooks
+are all the runner's rather than the driver's, and arrive with it. The `cpu_seconds` and
+`max_rss_bytes` of the usage block are not measured yet; `image_pull_ms` is.
 
 Replay from a chosen step and the cache lookup are not in the evaluator's surface.
 `CacheKey` is computed, because the evaluator already holds the image digest, the
@@ -166,7 +241,30 @@ gofmt -l .
 
 `gofmt -l .` printing nothing is the passing result.
 
-A test run needs no network and no daemon. The released fixture corpus of
+A test run needs no network and no daemon. The two things in the driver that resist a
+test are the socket and the container, and each has a package of its own:
+`internal/docker` holds the Engine API and nothing else, and `internal/dockertest` is a
+fake daemon on a temporary unix socket whose container is a Go function the test supplies,
+given the working directory as the driver prepared it and the environment as the driver
+computed it. It is a fake daemon on a real socket rather than an in-process interface on
+purpose: an in-process fake would let a wire bug pass every rule test, because the rules
+would never be marshalled. It can also be asked for the things that actually go wrong, a
+pull that fails half way through a 200, a container that exits during the attach, a daemon
+that closes every connection, an event stream that drops, an `/info` with and without
+`name=userns`, and an out-of-memory kill the wait never sees, so those failure modes are
+covered where no daemon exists.
+
+What genuinely needs a real daemon skips itself when there is none, and the decision is
+one function rather than a skip condition copied into every file that needs one:
+`dockertest.Socket()` consults `DOCKER_HOST`, then the per-user path Docker Desktop puts
+its socket at, then `/var/run/docker.sock`. The suite is therefore green in CI and runs
+against the real thing on a machine that has one, where it starts real containers off a
+small public image and asserts that `/agk/repo` refuses a write, that a secret reaches the
+container and never the log, that the settings table is what the container actually lives
+under, that a manifest declaring root is refused before a container exists, and that a
+redelivered task adopts the container it already started.
+
+The released fixture corpus of
 `agentiik/schemas` is vendored and embedded under `internal/fixtures`, pinned at the
 version written in `internal/fixtures/testdata/SCHEMAS_VERSION`, so the envelope, the
 brick manifest and the workflow file are tested against the documents that pin the shape

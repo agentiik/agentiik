@@ -1,0 +1,110 @@
+package docker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// ImagePull pulls a reference and reads every message of the progress stream.
+//
+// Reading every message is the point rather than an implementation detail. The daemon
+// commits to a 200 before it knows whether the pull will work, so a pull that dies
+// arrives as an error object part way through a stream that has already reported half
+// its layers as complete. A caller that only checked the status would take a failed pull
+// for a pull that worked, and the container created afterwards would fail for a reason
+// nobody could read.
+//
+// auth is the X-Registry-Auth header value, base64url of the registry credentials as
+// JSON, and empty for an anonymous pull. Composing it is the caller's, because which
+// credentials a namespace may use is a permission question and not a wire question.
+//
+// onProgress may be nil. Where it is not, it is called for every message, in order, on
+// this goroutine.
+func (c *Client) ImagePull(ctx context.Context, ref, auth string, onProgress func(Progress)) error {
+	name, tag := splitReference(ref)
+	q := url.Values{}
+	q.Set("fromImage", name)
+	if tag != "" {
+		q.Set("tag", tag)
+	}
+
+	req, err := c.request(ctx, http.MethodPost, "/images/create", q, nil)
+	if err != nil {
+		return err
+	}
+	if auth != "" {
+		req.Header.Set("X-Registry-Auth", auth)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return transportError(c.socket, http.MethodPost, "/images/create", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("pulling %s: %w", ref, refusal(resp))
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var p Progress
+		if err := dec.Decode(&p); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("pulling %s: reading the progress stream: %w", ref, err)
+		}
+		if onProgress != nil {
+			onProgress(p)
+		}
+		if message := p.failure(); message != "" {
+			// The stream is abandoned here rather than drained: the pull has
+			// already failed, and the daemon writes nothing after the error
+			// that a caller could act on.
+			return fmt.Errorf("pulling %s: %s", ref, message)
+		}
+	}
+}
+
+// failure is what a progress message says went wrong, or nothing where it reports
+// progress. The daemon writes the same trouble twice, once as a string and once as an
+// object, and either one alone is enough to know the pull died.
+func (p Progress) failure() string {
+	if p.ErrorDetail != nil && p.ErrorDetail.Message != "" {
+		return p.ErrorDetail.Message
+	}
+	return p.Error
+}
+
+// ImageInspect is the image as the daemon holds it, which is how a reference is turned
+// into the digest it resolved to and how the account an image declares is read.
+func (c *Client) ImageInspect(ctx context.Context, ref string) (Image, error) {
+	var img Image
+	if err := c.call(ctx, http.MethodGet, "/images/"+ref+"/json", nil, nil, &img); err != nil {
+		return Image{}, err
+	}
+	return img, nil
+}
+
+// splitReference takes a reference apart the way POST /images/create wants it, as a name
+// and a tag, where a digest travels in the tag position.
+//
+// A digest is separated by @ and a tag by :, and only the last colon of the last path
+// segment is a tag: a registry written with a port, registry.example:5000/brick, carries
+// a colon that is not one.
+func splitReference(ref string) (name, tag string) {
+	if name, digest, ok := strings.Cut(ref, "@"); ok {
+		return name, digest
+	}
+	slash := strings.LastIndex(ref, "/")
+	colon := strings.LastIndex(ref, ":")
+	if colon > slash {
+		return ref[:colon], ref[colon+1:]
+	}
+	return ref, ""
+}

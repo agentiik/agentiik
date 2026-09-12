@@ -62,12 +62,48 @@
 // for this group, and this is the group that takes it up; a run no longer travels as
 // agk.RunID alone.
 //
-// Dependencies run one way and there is no cycle: artifact and schema import agk, brick
-// imports agk and artifact, graph imports agk, brick, schema and internal/expr, and agk
-// imports nothing outside this module but internal/ulid, which is itself the standard
-// library. internal/expr is where cel-go is isolated, on the precedent schema set for
-// JSON Schema: only the evaluator needs a CEL parser, so only the evaluator pays for one.
+// Then the group that runs what the evaluator decided, and what a brick is given:
 //
-// Reserved for the groups that follow, so that nothing claims these names early: driver
-// for the container driver and cmd/agk for the command line.
+//	driver    The container driver. It fills graph.Driver and is the only package in
+//	          this module that may reach a Docker daemon. One container per task
+//	          through the Engine API: resolve and pull by digest, read and cache
+//	          /agk/brick.yaml, prepare the mounts and the environment the contract
+//	          promises, apply the settings every container gets, give each task a
+//	          network of its own, hold the user namespace floor, enforce the step
+//	          timeout, read the exit code off the table, and collect what the
+//	          container produced with the secret values masked before anything is
+//	          written. It is the thin thing between brick.WriteInputs and
+//	          brick.Collect, and it decides nothing about what runs next.
+//
+// Two decisions inside it are the operator's business rather than an author's. User
+// namespace remapping is a floor: a daemon without it is refused, and only
+// require_userns_remap = false in /etc/agentiik/runner.toml gets past the refusal, after
+// which the driver says once what the machine gives up. Network egress is refused
+// outright, because the proxy that would enforce an egress.allow list does not exist yet
+// and a workflow must not be able to believe its list is being enforced when nothing is
+// enforcing it. network: none and network: internal run.
+//
+// Dependencies run one way and there is no cycle: artifact and schema import agk, brick
+// imports agk and artifact, graph imports agk, brick, schema and internal/expr, driver
+// imports agk, artifact, brick, graph and internal/docker, and agk imports nothing
+// outside this module but internal/ulid, which is itself the standard library.
+// internal/expr is where cel-go is isolated, on the precedent schema set for JSON Schema:
+// only the evaluator needs a CEL parser, so only the evaluator pays for one.
+// internal/docker is the Engine API over the unix socket, on that same precedent and for
+// that same reason: only the driver needs a daemon, it is written against the standard
+// library alone so the module takes no dependency for it, and keeping it in a package of
+// its own is what lets the driver's own files be about mounts, environments, signals and
+// bytes rather than about HTTP. internal/dockertest is a fake daemon on a temporary
+// socket, which is how every one of those rules is tested with no Docker in reach.
+//
+// The arrow between the evaluator and the driver points one way, and it is checked rather
+// than asserted. graph states the Driver interface and calls neither of its methods;
+// driver implements it and imports graph; graph imports nothing of driver.
+// graph/boundary_test.go reads the evaluator's whole import closure and fails it on a
+// database, an HTTP client, a socket, a process started outside this one, a task bus
+// client, a registry client, a container runtime, or the path segment driver. The
+// evaluator reaches no daemon, and that is a test rather than a preference.
+//
+// Reserved for the group that follows, so that nothing claims the name early: cmd/agk for
+// the command line.
 package agentiik
