@@ -1,0 +1,19 @@
+flowchart LR
+	step_archive["archive<br/>ghcr.io/acme/agk-archive@sha256:44de90c115<br/>merge: zip"]
+	step_audit_log["audit-log<br/>script on alpine:3.21"]
+	step_invoice["invoice<br/>ghcr.io/acme/agk-invoice@sha256:1ab74e39cc<br/>if: ${{ inputs.in.count #62; 0 }}<br/>fan_out: item"]
+	step_normalize["normalize<br/>ghcr.io/acme/agk-normalize@sha256:9f2c1db7e0"]
+
+	step_invoice -->|"out to invoices"| step_archive
+	step_normalize -->|"rejected to invoices"| step_archive
+	step_archive -->|"out to in"| step_audit_log
+	step_normalize -->|"ok to in"| step_invoice
+
+	input_customers(["customers"])
+	input_customers -. "customers" .-> step_normalize
+	input_orders(["orders"])
+	input_orders -. "orders" .-> step_normalize
+	output_errors(["errors"])
+	step_invoice -. "error" .-> output_errors
+	output_invoices(["invoices"])
+	step_archive -. "out" .-> output_invoices

@@ -1,0 +1,26 @@
+digraph "finance/monthly-invoicing" {
+	rankdir=LR
+	node [shape=plain]
+
+	"archive" [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4"><TR><TD COLSPAN="2"><B>archive</B></TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">ghcr.io/acme/agk-archive@sha256:44de90c115</TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">merge: zip</TD></TR><TR><TD PORT="in_invoices" ALIGN="LEFT">invoices</TD><TD PORT="out_out" ALIGN="RIGHT">out</TD></TR></TABLE>>]
+
+	"audit-log" [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4"><TR><TD COLSPAN="2"><B>audit-log</B></TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">script on alpine:3.21</TD></TR><TR><TD PORT="in_in" ALIGN="LEFT">in</TD><TD PORT="out_out" ALIGN="RIGHT">out</TD></TR></TABLE>>]
+
+	"invoice" [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4"><TR><TD COLSPAN="2"><B>invoice</B></TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">ghcr.io/acme/agk-invoice@sha256:1ab74e39cc</TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">if: ${{ inputs.in.count &gt; 0 }}</TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">fan_out: item</TD></TR><TR><TD PORT="in_in" ALIGN="LEFT">in</TD><TD PORT="out_error" ALIGN="RIGHT">error</TD></TR><TR><TD></TD><TD PORT="out_out" ALIGN="RIGHT">out</TD></TR></TABLE>>]
+
+	"normalize" [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4"><TR><TD COLSPAN="2"><B>normalize</B></TD></TR><TR><TD COLSPAN="2" ALIGN="LEFT">ghcr.io/acme/agk-normalize@sha256:9f2c1db7e0</TD></TR><TR><TD PORT="in_customers" ALIGN="LEFT">customers</TD><TD PORT="out_ok" ALIGN="RIGHT">ok</TD></TR><TR><TD PORT="in_orders" ALIGN="LEFT">orders</TD><TD PORT="out_rejected" ALIGN="RIGHT">rejected</TD></TR></TABLE>>]
+
+	"invoice":out_out:e -> "archive":in_invoices:w
+	"normalize":out_rejected:e -> "archive":in_invoices:w
+	"archive":out_out:e -> "audit-log":in_in:w
+	"normalize":out_ok:e -> "invoice":in_in:w
+
+	"input:customers" [shape=box style=dashed label="customers"]
+	"input:customers" -> "normalize":in_customers:w [style=dashed]
+	"input:orders" [shape=box style=dashed label="orders"]
+	"input:orders" -> "normalize":in_orders:w [style=dashed]
+	"output:errors" [shape=box style=dashed label="errors"]
+	"invoice":out_error:e -> "output:errors" [style=dashed]
+	"output:invoices" [shape=box style=dashed label="invoices"]
+	"archive":out_out:e -> "output:invoices" [style=dashed]
+}

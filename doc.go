@@ -104,6 +104,49 @@
 // client, a registry client, a container runtime, or the path segment driver. The
 // evaluator reaches no daemon, and that is a test rather than a preference.
 //
-// Reserved for the group that follows, so that nothing claims the name early: cmd/agk for
-// the command line.
+// Then the group that makes the other six usable, which is the one the root reserved a name
+// for and the one that takes it up:
+//
+//	cmd/agk         The command line. It is the table #command-line states and nothing
+//	                else: agk validate, agk graph, agk run --local and agk brick test do
+//	                the work, and the seven verbs that reach an installation refuse by
+//	                name, because a verb the documentation lists and the binary does not
+//	                know is a binary that looks broken. It holds no scheduling decision,
+//	                no collection and no daemon call of its own; the loop that reads a
+//	                Plan, hands each Task to the driver and feeds each Result back lives
+//	                under cmd/agk/internal/local, which is the only thing this group adds
+//	                to the execution path and the thing the controller will own a second
+//	                copy of for a server run.
+//	cmd/agk-helper  The static helper bound read-only at /agk/bin/agk for a script step:
+//	                agk items, agk emit and agk attach. It imports agk and nothing else,
+//	                which is what lets it be built CGO_ENABLED=0 and mounted into an image
+//	                this project does not control. It is a convenience and never a
+//	                requirement, so a build carrying no binary for the daemon's platform
+//	                binds nothing and says so once.
+//
+// agk run --local is those six packages wired together and nothing more. That is the
+// property #command-line's own Decision block names as the reason the command exists, so
+// the wiring is all this group may be: a rule about when a step is ready, what a port
+// carries, how many shards there are or which exit code means what, appearing here, would
+// be a rule the workflow file cannot show.
+//
+// cmd/agk imports agk, artifact, brick, schema, graph and driver, which is every package
+// above it and no daemon of its own: internal/docker is module-wide and reachable from
+// here, and the two facts the command line needs off a daemon before there is a driver,
+// the platform a container runs natively and whether user namespaces are remapped, are
+// asked of driver.Probe so that driver stays the only package in this module that dials
+// one. Four packages sit under cmd/agk/internal because a laptop's facts are not the
+// command line's: local for one local run, draw for the DOT and the Mermaid, diff for what
+// "the same envelopes" means, and helper for where the static helper is carried and laid
+// down.
+//
+// # The proof of v0.1.0
+//
+// "A multi-step workflow with a fan-out and a merge runs end to end on a laptop, and
+// running it again on the same inputs produces the same envelopes." That sentence closes
+// the milestone and it is a test rather than a claim: cmd/agk/milestone_test.go runs the
+// fixture under cmd/agk/testdata/milestone through the command line twice, against the
+// Docker daemon of the machine it is on, and compares the envelopes the two runs handed
+// back. It skips where there is no daemon, so the suite stays green in CI and a laptop
+// proves the sentence.
 package agentiik

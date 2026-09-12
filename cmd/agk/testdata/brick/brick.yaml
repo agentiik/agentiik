@@ -1,0 +1,19 @@
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata:
+  name: counter
+  version: 0.1.0
+  summary: Counts the items it is given, attaches a report, and refuses an empty batch.
+spec:
+  inputs:
+    orders:
+      schema: { type: object }
+  outputs:
+    ok:
+      schema: { type: object }
+    rejected:
+      schema: { type: object }
+  runtime:
+    network: none
+    streaming: false
+    user: "65532:65532"

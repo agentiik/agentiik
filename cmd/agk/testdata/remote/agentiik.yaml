@@ -1,0 +1,20 @@
+# A workflow include, which reaches another repository at a ref. There is no server here, so it
+# is refused naming the repository and the ref it wanted.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reaches-another-repository
+  namespace: finance
+
+include:
+  - workflow: finance/common
+    ref: v2.1.0
+
+steps:
+
+  only:
+    image: alpine:3.21
+    script:
+      - echo only
+    outputs: [out]

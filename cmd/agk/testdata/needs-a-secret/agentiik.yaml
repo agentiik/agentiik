@@ -1,0 +1,23 @@
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata:
+  name: needs-a-secret
+  namespace: finance
+inputs:
+  cycle:
+    schema: { type: string }
+    required: true
+secrets:
+  billing_api:
+    provider: builtin
+    path: finance/billing-api
+outputs:
+  invoices:
+    from: { step: charge, port: out }
+steps:
+  charge:
+    image: alpine:3.21
+    secrets: [billing_api]
+    script:
+      - 'printf "%s" "$AGK_RUN_ID" > /dev/null'
+    outputs: [out]

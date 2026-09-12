@@ -1,0 +1,41 @@
+# A workflow of script steps alone, so that everything agk validate does to a file can be
+# tested with no daemon in reach: graph.Images names the image of a non-script step, and there
+# is not one here.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: reading-commands
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { $ref: "./schemas/order.json" }
+    required: true
+
+outputs:
+  counted:
+    from: { step: count, port: out }
+
+include:
+  - path: ./common.yaml
+
+steps:
+
+  normalize:
+    extends: .quick
+    image: alpine:3.21
+    inputs:
+      in: ${{ workflow.inputs.orders }}
+    script:
+      - echo normalising
+    outputs: [ok]
+
+  count:
+    image: alpine:3.21
+    needs:
+      - { step: normalize, port: ok, as: in }
+    if: ${{ inputs.in.count > 0 }}
+    script:
+      - echo counting
+    outputs: [out]

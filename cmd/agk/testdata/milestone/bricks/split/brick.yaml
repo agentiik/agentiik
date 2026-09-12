@@ -1,0 +1,24 @@
+# The first step of the proof: it reads the orders the run was given and publishes one item
+# per order, with an identity derived from the order's own reference so that two runs over
+# the same orders publish the same items.
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata:
+  name: split-orders
+  version: 0.1.0
+  summary: Publishes one item per order of the batch it is given.
+spec:
+  inputs:
+    orders:
+      schema: { type: object }
+  outputs:
+    ok:
+      schema: { type: object }
+  params:
+    currency:
+      type: string
+      required: true
+  runtime:
+    network: none
+    streaming: false
+    user: "65532:65532"

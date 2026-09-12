@@ -9,8 +9,15 @@ is an architectural constraint rather than a preference: it is what makes
 implementation that drifts from the first.
 
 What is written so far is the group that settles what travels on a port, the group that
-decides what runs next, and the group that runs it. The rest of the list is named here
-because that is where it is going, not because it is there.
+decides what runs next, the group that runs it, and the command line that makes the three of
+them usable. The rest of the list is named here because that is where it is going, not
+because it is there.
+
+v0.1.0 is closed by one sentence, and it is a test rather than a claim: a multi-step
+workflow with a fan-out and a merge runs end to end on a laptop, and running it again on the
+same inputs produces the same envelopes. That test is `cmd/agk/milestone_test.go`, it runs
+real containers against the real daemon of the machine it is on, twice, and it compares the
+envelopes.
 
 What the code is written against is the specification at
 <https://agentiik.github.io/docs>, and that is also where the documentation lives; this
@@ -21,9 +28,10 @@ the schemas are right.
 
 ## What is in the module
 
-v0.1.0 is the group that settles what travels on a port, the evaluator above it, and the
-container driver beside the evaluator. Six packages, and `doc.go` at the root says what
-each one is for and what it is not.
+v0.1.0 is the group that settles what travels on a port, the evaluator above it, the
+container driver beside the evaluator, and the command line that wires the six of them
+together. Six library packages and two commands, and `doc.go` at the root says what each one
+is for and what it is not.
 
 - **`agk`** is the vocabulary the documentation uses and every rule it states about it:
   `Envelope`, `Meta`, `Item`, `File`, `Port`, `Step`, `RunID`, the `agk://` URI, the four
@@ -100,6 +108,34 @@ each one is for and what it is not.
   step, the port and the rule. No exit code is invented for a failure that produced none,
   because a driver reporting its own trouble as a brick failure fails somebody else's
   step.
+- **`cmd/agk`** is the command line, and it is the table `#command-line` states rather than
+  a surface of its own. `agk validate` resolves the includes and the inheritance, detects
+  the cycles and checks every step's ports against the manifests of the images it names;
+  `agk graph` writes the resolved graph as DOT or Mermaid for review inside a merge request;
+  `agk run --local` runs the whole graph against the daemon of this machine with no
+  controller, no bus and no database, mounting the working tree at `/agk/repo`, giving the
+  run a ULID, labelling it `local` so a history never mistakes it for a server run, and
+  taking secrets from `--secret` and `--secret-file` to mount them exactly as a server run
+  does; `agk brick test` runs a brick against sample envelopes and compares against expected
+  outputs. The seven verbs that reach an installation, `login`, `whoami`, `push`, `share`,
+  `grants`, `logs` and `brick init`, are each in the table and each refuses naming what is
+  missing, because a verb the documentation lists and the binary does not know is a binary
+  that looks broken. No scheduling decision, no collection and no daemon call of its own
+  lives here: the loop that reads a `Plan`, hands each `Task` to the driver and feeds each
+  `Result` back is `cmd/agk/internal/local`, and that loop is the whole of what this group
+  adds to the execution path. The flags are the standard library's `flag` package, so the
+  module takes no dependency for them. Exit codes are five and each is a different thing to
+  do next: 0 did what it says, 1 refused with nothing run, 2 the command line was wrong, 3
+  the run reached a terminal state other than `succeeded`, and 4 no outcome could be
+  determined.
+- **`cmd/agk-helper`** is the static helper bound read-only at `/agk/bin/agk` for a script
+  step, with `agk items`, `agk emit` and `agk attach`. It imports `agk` and nothing else,
+  which is what lets it be built `CGO_ENABLED=0` and mounted into an image this project does
+  not control, and what is about to be bound is checked first: a regular file, a linux ELF,
+  the daemon's own machine, and no `PT_INTERP`, which is what "static" means spelled as
+  something a machine can check. It is a convenience and never a requirement, so a build
+  that carries no binary for the daemon's platform binds nothing and says so in one
+  sentence.
 
 Two settings in the driver belong to the operator rather than to a workflow author, and
 both are decisions the project took before the code:
@@ -193,11 +229,27 @@ API is nineteen endpoints of JSON over a unix socket, and the standard library s
 
 ## What it deliberately is not, yet
 
-There is no controller, no HTTP API, no runner and no command line. The name `cmd/agk` is
-reserved so nothing claims it early. Nothing is published to `ghcr.io/agentiik/api`,
-`ghcr.io/agentiik/controller` or `ghcr.io/agentiik/runner` yet either. The driver runs a
-task when it is handed one; the loop that reads a `Plan`, hands each `Task` over and feeds
-each `Result` back is the controller's and `cmd/agk`'s, and it is not here.
+There is no controller, no HTTP API and no runner. Nothing is published to
+`ghcr.io/agentiik/api`, `ghcr.io/agentiik/controller` or `ghcr.io/agentiik/runner` yet
+either. The loop that reads a `Plan`, hands each `Task` to the driver and feeds each
+`Result` back is here now, once, under `cmd/agk/internal/local`, which is what a local run
+is; the controller's own will be a second caller of the same two evaluator methods and not a
+second set of rules, which is the property `graph/boundary_test.go` exists to keep.
+
+The command line is here and it is not the whole table. Seven of the documented verbs reach
+an installation that does not exist at v0.1.0, and `login`, `whoami`, `push`, `share`,
+`grants`, `logs` and `brick init` each refuse naming what is missing rather than being left
+out of the binary. `agk run` without `--local` refuses for the same reason, since there is
+nothing to reach until the API arrives.
+
+The embedded static helper is a release artifact and not a committed one.
+`cmd/agk/internal/helper/bin/` carries a committed `README.md` and no binaries, because
+`//go:embed` refuses a directory it matches nothing in and this module has to compile on a
+machine that has never cross-compiled the helper. A plain `go build ./...` therefore produces
+an `agk` that carries none, and `agk run --local` says so in one sentence and binds nothing;
+`--helper <path>` and `$AGK_HELPER` are how a script step gets one in the meantime. Nothing
+in this repository populates that directory yet, so the release stage that does is still to
+be written.
 
 The Docker code is in `driver` and `internal/docker` and nowhere else. `brick` still knows
 the container contract and nothing about how a container is started, which is what lets
@@ -263,6 +315,22 @@ small public image and asserts that `/agk/repo` refuses a write, that a secret r
 container and never the log, that the settings table is what the container actually lives
 under, that a manifest declaring root is refused before a container exists, and that a
 redelivered task adopts the container it already started.
+
+The sentence that closes v0.1.0 is one of those tests. `cmd/agk/milestone_test.go` runs the
+fixture under `cmd/agk/testdata/milestone` through `run(ctx, Env, args)` itself, the way a
+person types it: four steps, three of them bricks built there from plain Dockerfiles and one a
+script step using the static helper, a fan-out of three containers, a merge of two edges into
+one port under `wait_all`, one committed inputs file and one secret supplied on the command
+line. It runs twice, six containers each time, and compares the four declared output
+envelopes through `cmd/agk/internal/diff`. What is held aside is `diff.Default` and nothing
+more, which is `meta.run_id`, `meta.produced_at` and the run segment of every artifact URI:
+the three facts about which run this was. Item identities, item data, counts, port names,
+file names, media types, sizes and every `sha256` are compared, and the test fails if the
+default is ever widened to hold identities aside, because a proof that gave them up would be
+true of a brick that mints a fresh identifier on every pass. It also asserts that two runs
+over the same inputs added no second copy to the content-addressed store. Like every other
+test that needs a daemon it skips where there is none, so CI stays green and a laptop proves
+the sentence.
 
 The released fixture corpus of
 `agentiik/schemas` is vendored and embedded under `internal/fixtures`, pinned at the

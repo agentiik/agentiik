@@ -1,0 +1,5 @@
+# A fragment: a hidden block and nothing else. It has no apiVersion, no kind and no metadata,
+# and it is here so that the workflow under test is one whose steps were resolved through an
+# include.
+.quick:
+  timeout: 30s

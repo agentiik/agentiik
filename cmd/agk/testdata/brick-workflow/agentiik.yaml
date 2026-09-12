@@ -1,0 +1,26 @@
+# A workflow whose step runs the brick under testdata/brick, so that agk validate has a manifest
+# to check the ports against. The image is built by the test and was never pushed anywhere,
+# which is the image a laptop meets.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: counts-the-orders
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { type: array }
+    required: true
+
+outputs:
+  counted:
+    from: { step: count, port: ok }
+
+steps:
+
+  count:
+    image: agk-counter-brick:test
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]

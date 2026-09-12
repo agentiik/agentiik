@@ -70,6 +70,36 @@
 // a stop can arrive for a task that already finished, and a driver that failed there
 // would fail on a duplicate.
 //
+// # What a caller may ask of an image without running one
+//
+// Manifest(ctx, step, image) answers with the brick manifest of one image. It is asked of
+// this package rather than read in the command line because reading /agk/brick.yaml means
+// pulling an image and inspecting it, and this package is the only one in the module that
+// may reach a daemon; a second reader of that file would be a second pull, a second inspect
+// and a second answer to what a manifest is. It adds no behaviour: it is the resolve, the
+// pull, the read and the root-account refusal that one task already does, stopping where the
+// container would be created, and it fills the same digest-keyed cache, so the manifest agk
+// validate read is the one the run that follows uses.
+//
+// It answers with a refusal where the image carries no manifest rather than with an absence.
+// graph.Images names the image of a non-script step, a step held to the ports and the
+// parameters its manifest declares, so an image with nothing at that path is a contract
+// break there and not the base image a script step legitimately runs in.
+//
+// # What a caller may ask of the daemon before there is a driver
+//
+// Probe(ctx, socket) dials, asks the daemon what it is, and closes: the socket that answered,
+// the API version being spoken, the platform a container runs on natively, and whether the
+// daemon remaps user namespaces. It is a package-level function and not a method because the
+// whole point of it is to be asked before New. Policy.Helper is part of the configuration New
+// is given, which static helper may be bound depends on the architecture a container runs on,
+// and an amd64 binary bound into an arm64 container gives a script an exec format error rather
+// than a program. The second Info call per run is the honest price of that ordering.
+//
+// It is also what keeps the command line off the Engine API. internal/docker is module-wide,
+// so cmd/agk could dial a daemon itself; asking for these facts here leaves this package the
+// only one in the module that does.
+//
 // # The order of one task
 //
 // One task is one conversation with the daemon, and its order is chosen so that the races

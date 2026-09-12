@@ -1,0 +1,23 @@
+# The merge: one port fed by two edges, the charges and the rejections, concatenated in edge
+# declaration order by wait_all and handed to one container.
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata:
+  name: total-charges
+  version: 0.1.0
+  summary: Totals the charges of a cycle and counts what was rejected.
+spec:
+  inputs:
+    charges:
+      schema: { type: object }
+  outputs:
+    ok:
+      schema: { type: object }
+  params:
+    cycle:
+      type: string
+      required: true
+  runtime:
+    network: none
+    streaming: false
+    user: "65532:65532"
