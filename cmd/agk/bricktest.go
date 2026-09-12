@@ -31,6 +31,7 @@ import (
 //	<case>/out/<port>.json    the envelope expected on that output port
 //	<case>/files/<name>       the bytes of an artifact an input envelope attaches
 //	<case>/params.json        what the brick reads at /agk/params.json, where it reads any
+//	<case>/repo/              the workflow repository tree, bound read-only at /agk/repo
 //	<case>/exit               the exit code the brick is expected to leave with, default 0
 //
 // The case's own name is the step the brick runs as, which is what AGK_STEP carries. A port
@@ -108,6 +109,15 @@ func brickTest(ctx context.Context, e Env, args []string) int {
 	// being built here, so the driver is given the store as a closure and the store is
 	// opened before the first case, which is the only moment the closure is called at.
 	var store *artifact.Store
+	// The tree of the case being run, where it carries one. A brick may read the workflow
+	// repository at /agk/repo, and a brick whose parameter names a file of it cannot be
+	// tested at all without one: schema-validate takes its schema inline or as a path in
+	// the tree, and only one of those two is a case anybody could write.
+	//
+	// It is the case's repo/ directory and never the case directory itself. What is under a
+	// case is the harness's documents, and a brick reading those as a repository would be
+	// reading the test rather than a tree somebody wrote.
+	var tree string
 	// A brick test keeps no log. The container's own output reaches the report through
 	// the result and through what the brick wrote on its ports, which is what is being
 	// tested; a log sink here would be a file nobody reads.
@@ -118,7 +128,11 @@ func brickTest(ctx context.Context, e Env, args []string) int {
 			}
 			return store, nil
 		},
-		Policy:   policy,
+		Policy: policy,
+		// The cases run one at a time, so the tree of the one running is what this
+		// answers. A driver is opened once for the whole command because the manifest
+		// cache is what makes the second case as fast as the first.
+		Repo:     func(context.Context, string, string, string) (string, error) { return tree, nil },
 		WorkRoot: filepath.Join(work, "tasks"),
 		Now:      e.now,
 		Announce: func(s string) { fmt.Fprintln(e.Err, s) },
@@ -148,6 +162,7 @@ func brickTest(ctx context.Context, e Env, args []string) int {
 
 	matched := 0
 	for _, name := range names {
+		tree = treeOf(filepath.Join(dir, name))
 		verdict := runCase(ctx, e, d, store, caseOf{
 			Dir:      filepath.Join(dir, name),
 			Name:     name,
@@ -168,6 +183,20 @@ func brickTest(ctx context.Context, e Env, args []string) int {
 		return exitRefused
 	}
 	return exitSucceeded
+}
+
+// treeOf is the repository tree a case gives the brick, or nothing.
+//
+// A case with no repo/ directory gives the brick no tree, which is not a failure: most bricks
+// never read one, and a tree invented for them would be a mount they did not ask for. A repo
+// that is there but is a file rather than a directory is left to the driver to refuse, which
+// names the step and the path.
+func treeOf(dir string) string {
+	path := filepath.Join(dir, "repo")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // caseOf is one case, as everything that runs it needs it.

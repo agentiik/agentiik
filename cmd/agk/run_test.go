@@ -343,3 +343,34 @@ func TestACancelledRunReportsWhatWasStopped(t *testing.T) {
 		t.Errorf("the report is %q: a step that never started was not stopped", line)
 	}
 }
+
+// A report names a file as the person reading it would type it next. A local run writes under
+// .agk beside the entry point, so every line of the report otherwise carries the same long
+// prefix and the part that differs is at the end, where it is hardest to read.
+func TestTheReportNamesAFileTheWayItWouldBeTyped(t *testing.T) {
+	dir := filepath.Join(string(filepath.Separator), "Users", "someone", "invoicing")
+	run := filepath.Join(dir, ".agk", "runs", "01M2AA21522VNDK2RHS8TADECD")
+
+	if got, want := under(dir, filepath.Join(run, "outputs", "invoiced.json")),
+		filepath.Join(".agk", "runs", "01M2AA21522VNDK2RHS8TADECD", "outputs", "invoiced.json"); got != want {
+		t.Errorf("a file inside the working directory reads as %q, not %q", got, want)
+	}
+
+	// A --dir elsewhere is the news, so it is printed in full rather than climbed to.
+	elsewhere := filepath.Join(string(filepath.Separator), "var", "tmp", "agk", "outputs", "invoiced.json")
+	if got := under(dir, elsewhere); got != elsewhere {
+		t.Errorf("a file outside the working directory reads as %q, not in full", got)
+	}
+
+	// The directory itself is not "." : a report that said the run is in "." would be
+	// naming the working directory rather than the run.
+	if got := under(dir, dir); got != dir {
+		t.Errorf("the working directory itself reads as %q", got)
+	}
+
+	// No directory to be relative to is every path in full, which is what a caller that
+	// did not set one gets rather than a panic or a guess.
+	if got := under("", run); got != run {
+		t.Errorf("with no directory, a path reads as %q", got)
+	}
+}

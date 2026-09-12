@@ -229,12 +229,30 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
+// under is a path as the person reading it would type it next: relative to the directory the
+// command was run in where it is inside it, and absolute where it is not.
+//
+// A local run writes under .agk beside the entry point, so the absolute form is the same
+// eighty characters of prefix on every line of the report, five times over, and the part that
+// differs is at the end where it is hardest to read. A --dir somewhere else prints in full,
+// because then the prefix is the news.
+func under(dir, path string) string {
+	if dir == "" {
+		return path
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return rel
+}
+
 // reportSuccess is the success line of a run and where everything it produced is.
 //
 // A control names its effect, so it says what the run did rather than that it finished: the
 // run, the state, how long it took, what it ran, and one line per declared output naming the
 // file and how many items it carries.
-func reportSuccess(w io.Writer, l local.Layout, out local.Outcome) {
+func reportSuccess(w io.Writer, dir string, l local.Layout, out local.Outcome) {
 	fmt.Fprintf(w, "%s %s in %s: %s, %s\n", out.Run.Workflow, out.Run.State,
 		elapsed(out.Run.FinishedAt.Sub(out.Run.StartedAt)),
 		counted(len(out.State.Steps), "step", "steps"),
@@ -242,9 +260,9 @@ func reportSuccess(w io.Writer, l local.Layout, out local.Outcome) {
 	for _, name := range slices.Sorted(maps.Keys(out.Outputs)) {
 		fmt.Fprintf(w, "%s: %s in %s\n", name,
 			counted(len(out.Outputs[name].Items), "item", "items"),
-			filepath.Join(l.Outputs(out.Run.ID), name+".json"))
+			under(dir, filepath.Join(l.Outputs(out.Run.ID), name+".json")))
 	}
-	fmt.Fprintf(w, "run %s: %s\n", out.Run.ID, l.Dir(out.Run.ID))
+	fmt.Fprintf(w, "run %s: %s\n", out.Run.ID, under(dir, l.Dir(out.Run.ID)))
 
 	// A failure the run tolerated is still a failure and still worth its lines. What
 	// continue_on_error did is not fail the run, and a success report that said nothing about

@@ -235,7 +235,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 		return exitNotSucceeded
 	}
 
-	reportSuccess(report, layout, out)
+	reportSuccess(report, e.Dir, layout, out)
 	if *output == "json" {
 		if err := writeOutputs(e.Out, out.Outputs); err != nil {
 			refusal(e.Err, err)

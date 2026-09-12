@@ -257,9 +257,10 @@ func stdinPort(t graph.Task) (agk.Port, bool) {
 // /etc/ssl/certs/internal-ca.pem has to find it there, and a bind is what puts it there.
 func repoBinds(t graph.Task, repo string) ([]docker.Mount, error) {
 	if repo == "" {
-		// A run with no repository tree behind it, which is what agk brick test
-		// is, mounts nothing. Binding an empty path would create a directory on
-		// the host and call it the workflow.
+		// A task with no repository tree behind it mounts nothing, which is a brick
+		// test whose case carries no repo/ directory and any caller that has no tree
+		// to give. Binding an empty path would create a directory on the host and
+		// call it the workflow.
 		return nil, nil
 	}
 	mounts := []docker.Mount{bind(repo, RepoDir, true)}

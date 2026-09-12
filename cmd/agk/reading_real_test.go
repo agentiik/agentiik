@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agentiik/agentiik/internal/dockertest"
@@ -22,7 +23,12 @@ import (
 const counterImage = "agk-counter-brick:test"
 
 // realDaemon skips unless there is a daemon and a docker command to build the fixture with, and
-// builds the fixture brick once.
+// builds the fixture brick once per test binary.
+//
+// Built and not adopted from whatever the daemon already holds under that tag. An earlier build
+// of a fixture that has since been edited is the worst kind of green: the test passes against
+// the brick of a week ago and says nothing about the one in the tree. The daemon's own layer
+// cache is what makes doing it properly cost nothing when nothing changed.
 func realDaemon(t *testing.T) {
 	t.Helper()
 	if _, ok := dockertest.Socket(); !ok {
@@ -31,14 +37,20 @@ func realDaemon(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("no docker command to build the fixture brick with")
 	}
-	if err := exec.Command("docker", "image", "inspect", counterImage).Run(); err == nil {
-		return
-	}
-	out, err := exec.Command("docker", "build", "-t", counterImage, "testdata/brick").CombinedOutput()
-	if err != nil {
-		t.Skipf("the fixture brick could not be built: %v\n%s", err, out)
+	builtFixture.Do(func() {
+		fixtureBuild, fixtureErr = exec.Command("docker", "build", "-t", counterImage, "testdata/brick").CombinedOutput()
+	})
+	if fixtureErr != nil {
+		t.Skipf("the fixture brick could not be built: %v\n%s", fixtureErr, fixtureBuild)
 	}
 }
+
+// What the one build left behind, so that every test after the first is told the same thing.
+var (
+	builtFixture sync.Once
+	fixtureBuild []byte
+	fixtureErr   error
+)
 
 // TestTheManifestOfAReferencedImageIsWhatTheStepIsHeldTo is the fourth clause of agk validate:
 // "checks ports against the manifests of the referenced images".
@@ -99,8 +111,9 @@ func TestTheFixtureBrickMatchesItsCases(t *testing.T) {
 	for _, want := range []string{
 		"counter 0.1.0 on " + counterImage,
 		"case counts-three-items matched",
+		"case reads-the-repository matched",
 		"case refuses-an-empty-batch matched",
-		"2 cases, 2 matched",
+		"3 cases, 3 matched",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the report does not say %q", want)
@@ -120,7 +133,7 @@ func TestABrickThatDerivesItsIdentitiesCanBeHeldToThemExactly(t *testing.T) {
 	if code != exitSucceeded {
 		t.Fatalf("the exit code is %d with the identities compared: %s%s", code, out, errs)
 	}
-	if !strings.Contains(out.String(), "2 cases, 2 matched") {
+	if !strings.Contains(out.String(), "3 cases, 3 matched") {
 		t.Errorf("the report reads %s", out)
 	}
 }
@@ -180,7 +193,7 @@ func TestACaseWhoseExpectationMovedIsNamedMemberByMember(t *testing.T) {
 		}
 	}
 	// The case that was right is still right, and the summary says both.
-	if !strings.Contains(out.String(), "2 cases, 1 matched") {
+	if !strings.Contains(out.String(), "3 cases, 2 matched") {
 		t.Errorf("the summary does not say what matched: %s", out)
 	}
 }

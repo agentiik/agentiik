@@ -92,7 +92,7 @@ func TestTheCasesOfTheFixtureBrickAreReadInNameOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"counts-three-items", "refuses-an-empty-batch"}
+	want := []string{"counts-three-items", "reads-the-repository", "refuses-an-empty-batch"}
 	if len(names) != len(want) {
 		t.Fatalf("the cases are %v and they are %v", names, want)
 	}
