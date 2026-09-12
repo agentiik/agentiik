@@ -1,0 +1,22 @@
+# A step declaring an output port its brick does not write. "Outputs must be a subset of the
+# ports in the brick manifest", and that is the rule agk validate cannot apply without reading
+# the manifest of the referenced image.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: writes-a-port-nobody-has
+  namespace: finance
+
+steps:
+
+  count:
+    image: agk-counter-brick:test
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, invoices]
+
+inputs:
+  orders:
+    schema: { type: array }
+    required: true

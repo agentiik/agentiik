@@ -49,6 +49,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
+	// Said here rather than when the daemon was opened, because this is the first
+	// moment it is true of anything: a task with no secret never has a value written
+	// for it, and a person who reads the sentence on a run that declares none learns
+	// to scroll past it.
+	if len(t.Secrets) > 0 {
+		d.floor.announceSecrets(d.cfg.Policy, t.Step, d.say)
+	}
+
 	// The task is held from here, before anything is pulled or created, so that a stop
 	// arriving while it is being prepared lands on something. That window is the image
 	// pull and it is minutes wide on a cold registry; a stop answered nil inside it

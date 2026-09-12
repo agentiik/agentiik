@@ -1,0 +1,26 @@
+# Two steps that need each other. "Cycles are rejected at validation, before registration.
+# Looping is done by calling a sub-workflow."
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: round-and-round
+  namespace: finance
+
+steps:
+
+  first:
+    image: alpine:3.21
+    needs:
+      - { step: second, port: out, as: in }
+    script:
+      - echo first
+    outputs: [out]
+
+  second:
+    image: alpine:3.21
+    needs:
+      - { step: first, port: out, as: in }
+    script:
+      - echo second
+    outputs: [out]

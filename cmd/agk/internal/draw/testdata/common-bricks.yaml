@@ -1,0 +1,7 @@
+# An included fragment: hidden blocks and shared settings, no apiVersion, no kind and no
+# metadata. It is here so that the drawing is of a workflow whose steps were resolved
+# through an include, which is what agk graph is given.
+.api-brick:
+  timeout: 2m
+  retry: { max: 3, on: [transient] }
+  resources: { cpu: "0.5", memory: 256Mi }

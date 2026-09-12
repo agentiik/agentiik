@@ -110,6 +110,17 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 		return collected{}, err
 	}
 
+	// Here and not lower down, because everything below this line writes: a value over
+	// inline_max_bytes is spilled to the object store by Spill, so a secret masked after
+	// the spill would already be in the store as bytes, and an envelope is validated and
+	// published straight after. This is the last moment at which what a brick wrote is
+	// still only in memory. The shorthand is masked where it is assembled, a few lines
+	// below, and every other payload is masked here.
+	for port, e := range out {
+		e.Items = maskItems(c.Mask, e.Items)
+		out[port] = e
+	}
+
 	files := filepath.Join(c.Dir, filesDir)
 	// One upload per port and name, because two items of one envelope attaching the
 	// same file is ordinary, a fan-in of a shared document being the usual case, and

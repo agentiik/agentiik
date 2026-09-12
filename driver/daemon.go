@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/docker"
 )
 
@@ -41,9 +42,11 @@ type usernsFloor struct {
 	Lifted bool
 
 	// said and saidSecrets carry the two sentences this machine is worth saying
-	// once. Each is a property of the daemon and the policy rather than of a task,
-	// so each is said when the daemon is opened; a sentence repeated per task is a
-	// sentence nobody reads.
+	// once. Each is a property of the daemon and the policy rather than of a task, so
+	// neither is repeated per task; a sentence said eight times is a sentence nobody
+	// reads. They differ in when they are due: the floor applies to every container
+	// this daemon will create and is said when it is opened, where a secret landing on
+	// a disk applies only to a task that was given one and waits for the first.
 	said        sync.Once
 	saidSecrets sync.Once
 }
@@ -83,13 +86,14 @@ func newRemappedFloor(uid, gid string) (*usernsFloor, error) {
 	return &usernsFloor{Remapped: true, UID: u, GID: g}, nil
 }
 
-// announce says, once, what this machine gives up. It is called when the daemon is
-// opened and not per task, because both sentences are about the machine and the policy.
+// announce says, once, what this machine gives up about every container it will create. It
+// is called when the daemon is opened and not per task, because the sentence is about the
+// machine and the policy rather than about any one task.
 //
-// Each is one plain sentence naming the consequence rather than the setting, because the
+// It is one plain sentence naming the consequence rather than the setting, because the
 // person who reads it on a laptop is not the person who wrote the file, and
-// "require_userns_remap is false" tells them nothing they can act on. A machine that
-// gives up neither thing says nothing at all.
+// "require_userns_remap is false" tells them nothing they can act on. A machine that gives
+// up nothing says nothing at all.
 func (f *usernsFloor) announce(p Policy, say func(string)) {
 	if f == nil || say == nil {
 		return
@@ -99,16 +103,34 @@ func (f *usernsFloor) announce(p Policy, say func(string)) {
 			say("user namespace remapping is off on this daemon and require_userns_remap is false in " + PolicyPath + ", so the floor is lifted: a task's files are owned by a real uid on the host, root inside a container is the host's own root, and a process that escapes a container is that account rather than an unprivileged high-numbered one that maps to no real user.")
 		})
 	}
-	// A secret is meant to be "mounted on tmpfs", and a tmpfs the daemon creates at
-	// container start is empty and cannot be pre-populated, so the value is written
-	// on this side and bound in. Where this platform has no tmpfs of its own, which
-	// is the laptop the floor gets lifted for, it is written into the task's working
-	// directory on a real filesystem instead. That is a difference worth one sentence.
-	if p.SecretsDir == "" {
-		f.saidSecrets.Do(func() {
-			say("this platform has no tmpfs for the runner to write secret values on, so a task that is given a secret has its value written into the task's working directory on disk, where it is removed with the container rather than never having been written at all. An operator with a tmpfs names it in " + PolicyPath + ".")
-		})
+}
+
+// announceSecrets says, once, where a secret value lands on a platform with no tmpfs.
+//
+// A secret is meant to be "mounted on tmpfs", and a tmpfs the daemon creates at container
+// start is empty and cannot be pre-populated, so the value is written on this side and
+// bound in. Where this platform has no tmpfs of its own, which is the laptop the floor gets
+// lifted for, it is written into the task's working directory on a real filesystem instead.
+// That is a difference between what the documentation promises and what this machine can
+// do, and it is worth one sentence.
+//
+// It is said at the first task that is actually given a secret, and not when the daemon is
+// opened, because a warning a person meets when they have asked for nothing of the kind is
+// a warning they learn to scroll past. agk validate opens a daemon to read the manifests of
+// the images a workflow names and never writes a value; a run whose steps declare no secret
+// never writes one either. Either of those printing this sentence would spend the only
+// attention it gets on a run it does not apply to.
+//
+// The step that earned it is named first, because a sentence said while a run is narrating
+// itself lands between two lines about some other step, and a reader is owed the one it is
+// actually about.
+func (f *usernsFloor) announceSecrets(p Policy, step agk.Step, say func(string)) {
+	if f == nil || say == nil || p.SecretsDir != "" {
+		return
 	}
+	f.saidSecrets.Do(func() {
+		say(string(step) + " is given a secret and this platform has no tmpfs for the runner to write secret values on, so the value is written into the task's working directory on disk, where it is removed with the container rather than never having been written at all. An operator with a tmpfs names it in " + PolicyPath + ".")
+	})
 }
 
 // ownership is the account a task's working directory is given, and whether there is one

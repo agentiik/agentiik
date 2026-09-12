@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/docker"
@@ -264,4 +265,34 @@ func declaresRootUser(user string) bool {
 	default:
 		return false
 	}
+}
+
+// Manifest reads the brick manifest of one image, which is what agk validate needs to
+// check a step's ports against the brick it runs and what a caller needs before it can
+// call graph.Build at all.
+//
+// It is a method of this package because this package is the only one in the module that
+// may reach a Docker daemon, and because the work is already here: resolve the reference,
+// pull only what the daemon does not hold, read /agk/brick.yaml out of the image, refuse a
+// manifest declaring root, and keep what was read in the same digest-keyed cache a Run
+// would have filled. The manifest agk validate read is therefore the manifest the run that
+// follows it uses, and neither pulls twice.
+//
+// The step is an argument because every error of this package names one: a *Fault naming no
+// step would be a refusal a person has to locate themselves, and the caller always knows
+// which step asked.
+//
+// There is no absent answer. graph.Images names the image of a non-script step, and such a
+// step is held to its manifest, so an image with no /agk/brick.yaml is a contract break
+// here rather than the base image a script step legitimately runs in.
+func (d *Docker) Manifest(ctx context.Context, step agk.Step, image string) (brick.Manifest, error) {
+	r, err := resolveImage(ctx, d.cli, d.cache, graph.Task{Step: step, Image: image}, "", nil)
+	if err != nil {
+		return brick.Manifest{}, err
+	}
+	if r.Manifest == nil {
+		return brick.Manifest{}, fault(step, ErrContractBroken, ChargeBrick,
+			"%s carries no %s: an image becomes a brick by carrying one, and a step that is not a script step is held to the ports and the parameters its manifest declares", r.Ref, brick.ManifestPath)
+	}
+	return *r.Manifest, nil
 }

@@ -1,0 +1,77 @@
+# The fixture both writers are held to. It carries every shape a drawing has to show: a
+# step fed from the workflow's own inputs, a condition, a fan-out, one port fed by two
+# edges under a merge strategy, a script step whose image is a base image, a step name
+# carrying a hyphen, and both ends of the boundary.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema: { type: array }
+    required: true
+  customers:
+    schema: { type: array }
+    default: []
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }
+  errors:
+    from: { step: invoice, port: error }
+
+include:
+  - path: ./common-bricks.yaml
+
+vars:
+  currency: EUR
+
+secrets:
+  billing:
+    provider: vault
+    path: kv/data/agentiik/billing
+
+defaults:
+  timeout: 10m
+
+steps:
+
+  normalize:
+    image: ghcr.io/acme/agk-normalize@sha256:9f2c1db7e0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+      customers: ${{ workflow.inputs.customers }}
+    outputs: [ok, rejected]
+    params:
+      currency: ${{ vars.currency }}
+
+  invoice:
+    extends: .api-brick
+    image: ghcr.io/acme/agk-invoice@sha256:1ab74e39cc
+    needs:
+      - { step: normalize, port: ok, as: in }
+    if: ${{ inputs.in.count > 0 }}
+    strategy:
+      fan_out: item
+      max_parallel: 8
+    secrets: [billing]
+    outputs: [out, error]
+
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de90c115
+    needs:
+      - { step: invoice, port: out, as: invoices }
+      - { step: normalize, port: rejected, as: invoices }
+    merge: zip
+    outputs: [out]
+
+  audit-log:
+    image: alpine:3.21
+    needs:
+      - { step: archive, port: out, as: in }
+    script:
+      - echo "archived ${AGK_RUN_ID}"
+    outputs: [out]

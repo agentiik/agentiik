@@ -3,6 +3,8 @@ package driver
 import (
 	"bytes"
 	"slices"
+
+	"github.com/agentiik/agentiik/agk"
 )
 
 // maskToken is what a secret value is replaced by.
@@ -100,4 +102,80 @@ func (m *masker) hold() int {
 	}
 	// The values are sorted longest first, so the first one is the longest.
 	return len(m.values[0]) - 1
+}
+
+// maskItems is the payload half of the rule, which doc.go states and which for a while only
+// the standard output shorthand kept: "masking covers the payload and not only the log".
+//
+// The subject is what a brick wrote at /agk/out/ports/<port>.json. That document is collected
+// output exactly as the log is, and a brick that reads /agk/secrets/<name> and puts the value
+// in a field of an item it publishes would otherwise have it written to the object store, to
+// the state of the run, to the envelope on disk and to standard output in the clear. It is the
+// same literal match, with the same guarantee and the same limits: a value as it arrived is
+// caught, one that was encoded or hashed first is not.
+//
+// What it walks is items[].data and nothing else. An item's identity is what a shard, a merge
+// and a replay speak about, and a files[] entry is a reference to bytes whose digest the
+// envelope asserts and a consumer verifies: rewriting either would refuse a downstream step
+// for a reason nobody could find, and a secret deliberately written into an artifact's bytes is
+// the case the documentation already answers, masking being "a guard against accident, never
+// against intent".
+//
+// Nothing handed in is written into. The envelopes come back from brick.Collect and the caller
+// still holds them, so a mask that mutated a map in place would make the order of two
+// collections matter. A task with no secrets is returned as it came, which is most tasks.
+//
+// One consequence is wider here than it is in a log, and it is the documentation's own rule
+// rather than a defect: a literal match finds the value wherever it appears, so a value short
+// enough to occur by accident rewrites payload a person meant to keep. A one-character secret
+// turns the reference a1 into a[masked]. The answer is not a minimum length on this side, which
+// would quietly stop masking a short value that really is a secret; it is that a value with so
+// little entropy was never a secret, and the documentation says what masking is for: "a guard
+// against accident, never against intent".
+func maskItems(m *masker, items []agk.Item) []agk.Item {
+	if m == nil || len(m.values) == 0 || len(items) == 0 {
+		return items
+	}
+	out := make([]agk.Item, len(items))
+	for i, item := range items {
+		out[i] = item
+		out[i].Data = m.maskValue(item.Data).(map[string]any)
+	}
+	return out
+}
+
+// maskValue walks one decoded JSON value and replaces every string inside it.
+//
+// A key is walked as well as a value, because a brick that wrote a secret as a field name put
+// it in the document just the same, and a decoded document is the four shapes below and
+// nothing else: what came out of encoding/json is an object, an array, a string, or a scalar
+// that cannot hold text.
+func (m *masker) maskValue(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			out[m.maskString(key)] = m.maskValue(value)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, value := range v {
+			out[i] = m.maskValue(value)
+		}
+		return out
+	case string:
+		return m.maskString(v)
+	default:
+		// A boolean and null carry no text. A number carries digits and is deliberately
+		// not walked: agk.Decode reads a payload with UseNumber, so a number arrives as
+		// json.Number, which is a string type this case catches rather than the string
+		// case above. Replacing inside one would leave a document whose number is the
+		// word [masked], which is not a number, and the envelope would then be refused
+		// by its own size and shape rules with nothing to say why. A secret that is a
+		// bare number is the encoded case the documentation already excludes: "it
+		// catches a secret printed as it arrived", and a value that has to be read as a
+		// number to be used was not printed, it was parsed.
+		return v
+	}
 }

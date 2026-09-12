@@ -1,0 +1,8 @@
+{
+  "cycle": "2026-01",
+  "orders": [
+    { "ref": "a1", "amount": 1200 },
+    { "ref": "b2", "amount": 3400 },
+    { "ref": "c3", "amount": 0 }
+  ]
+}

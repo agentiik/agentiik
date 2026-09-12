@@ -1,0 +1,97 @@
+# The workflow the milestone sentence is about: "a multi-step workflow with a fan-out and a
+# merge runs end to end on a laptop, and running it again on the same inputs produces the
+# same envelopes".
+#
+# Four steps, three of them bricks built from the plain Dockerfiles under bricks/ and one a
+# script step that uses the static helper mounted at /agk/bin/agk. The fan-out is charge, one
+# container per order; the merge is total, one port fed by two edges under wait_all. Every
+# identity every step publishes is derived from the payload it came from, which is what makes
+# the second run's envelopes comparable to the first's at all.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+inputs:
+  orders:
+    schema:
+      type: array
+      items:
+        type: object
+        required: [ref, amount]
+        properties:
+          ref: { type: string }
+          amount: { type: integer }
+    required: true
+  cycle:
+    schema: { type: string }
+    required: true
+
+vars:
+  currency: EUR
+
+secrets:
+  billing_api:
+    provider: builtin
+    path: finance/billing-api
+
+# Four outputs, and the two that are views of the fan-out's own ports are what make the
+# comparison of two runs reach the items the fan-out published rather than only the totals a
+# merge computed from them: their identities, the length of the secret each shard was given and
+# the digest of the receipt each one attached all travel here.
+outputs:
+  charged:
+    from: { step: charge, port: ok }
+  rejected:
+    from: { step: charge, port: rejected }
+  invoiced:
+    from: { step: total, port: ok }
+  archived:
+    from: { step: archive, port: out }
+
+steps:
+
+  split:
+    image: agk-milestone-split:test
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    params:
+      currency: ${{ vars.currency }}
+    outputs: [ok]
+
+  charge:
+    image: agk-milestone-charge:test
+    needs:
+      - { step: split, port: ok, as: in }
+    strategy:
+      fan_out: item
+      max_parallel: 2
+    secrets: [billing_api]
+    outputs: [ok, rejected]
+
+  total:
+    image: agk-milestone-total:test
+    needs:
+      - { step: charge, port: ok, as: charges }
+      - { step: charge, port: rejected, as: charges }
+    merge: wait_all
+    params:
+      cycle: ${{ workflow.inputs.cycle }}
+    outputs: [ok]
+
+  archive:
+    image: alpine:3.21
+    needs:
+      - { step: total, port: ok, as: in }
+    script:
+      - |
+        line=$(/agk/bin/agk items)
+        cycle=$(printf '%s' "$line" | grep -o '"cycle":"[^"]*"' | sed 's/^"cycle":"//; s/"$//')
+        total=$(printf '%s' "$line" | grep -o '"charged_total":[0-9][0-9]*' | sed 's/^"charged_total"://')
+        printf '{"invoice":"archived-%s","charged_total":%s}\n' "$cycle" "$total" > /tmp/payload.json
+        /agk/bin/agk emit out --from /tmp/payload.json --id invoice
+        printf 'invoice=archived-%s\ntotal=%s\n' "$cycle" "$total" > /tmp/ledger.txt
+        /agk/bin/agk attach /tmp/ledger.txt --port out --all --media-type text/plain
+    outputs: [out]

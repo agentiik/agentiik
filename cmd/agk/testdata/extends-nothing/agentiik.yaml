@@ -1,0 +1,18 @@
+# A step extending a hidden block that no file carries. "Resolution is ordered: includes first,
+# in declaration order, then extends depth-first", so an extends naming a block nobody carries is
+# refused once everything that will ever be included has been.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: extends-nothing
+  namespace: finance
+
+steps:
+
+  only:
+    extends: .nobody-carries-this
+    image: alpine:3.21
+    script:
+      - echo only
+    outputs: [out]
