@@ -3,6 +3,7 @@ package driver
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agentiik/agentiik/internal/docker"
@@ -82,10 +83,26 @@ func TestALiftedFloorTakesWorkAndSaysSoOnce(t *testing.T) {
 	}
 	// Naming what is given up is the whole of the sentence's job. The person
 	// reading it on a laptop is not the person who wrote the file.
-	for _, want := range []string{"require_userns_remap", PolicyPath, "owned by a real uid on the host"} {
+	for _, want := range []string{"this runner does not require it", "owned by a real uid on the host"} {
 		if !strings.Contains(said[0], want) {
 			t.Fatalf("the announcement does not name %q: %s", want, said[0])
 		}
+	}
+	// And it names no file, because this policy was not read from one. A sentence that
+	// said a configuration set this would send its reader looking for a configuration
+	// that is not on the machine: nothing in this package opens PolicyPath, and the
+	// caller that prints this most often is agk run --local, which opens nothing.
+	if strings.Contains(said[0], PolicyPath) {
+		t.Fatalf("the announcement names a file nobody read: %s", said[0])
+	}
+
+	// Where a file was read, the sentence names it, because there the claim is true.
+	var fromFile []string
+	p.Source = "/etc/agentiik/runner.toml"
+	floor.said = sync.Once{}
+	floor.announce(p, func(line string) { fromFile = append(fromFile, line) })
+	if len(fromFile) != 1 || !strings.Contains(fromFile[0], "require_userns_remap is false in /etc/agentiik/runner.toml") {
+		t.Fatalf("a policy read from a file was announced as %v", fromFile)
 	}
 }
 

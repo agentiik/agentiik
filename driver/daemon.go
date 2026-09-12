@@ -94,13 +94,25 @@ func newRemappedFloor(uid, gid string) (*usernsFloor, error) {
 // person who reads it on a laptop is not the person who wrote the file, and
 // "require_userns_remap is false" tells them nothing they can act on. A machine that gives
 // up nothing says nothing at all.
+//
+// It names a file only where one was read. Policy.Source is the file LoadPolicy took the
+// setting from, and it is empty for the caller that prints this sentence most often: agk run
+// --local builds a Policy of its own, lifts the floor by default and opens no configuration
+// at all. Naming PolicyPath there would be inventing a file, and a reader told their
+// configuration says false goes looking for a configuration that is not on the machine. The
+// refusal above, where the floor is held, does name PolicyPath, because there it is advice
+// about where an operator would write the setting rather than a claim that anybody read it.
 func (f *usernsFloor) announce(p Policy, say func(string)) {
 	if f == nil || say == nil {
 		return
 	}
 	if f.Lifted && !f.Remapped {
 		f.said.Do(func() {
-			say("user namespace remapping is off on this daemon and require_userns_remap is false in " + PolicyPath + ", so the floor is lifted: a task's files are owned by a real uid on the host, root inside a container is the host's own root, and a process that escapes a container is that account rather than an unprivileged high-numbered one that maps to no real user.")
+			because := "this runner does not require it"
+			if p.Source != "" {
+				because = "require_userns_remap is false in " + p.Source
+			}
+			say("user namespace remapping is off on this daemon and " + because + ", so the floor is lifted: a task's files are owned by a real uid on the host, root inside a container is the host's own root, and a process that escapes a container is that account rather than an unprivileged high-numbered one that maps to no real user.")
 		})
 	}
 }
