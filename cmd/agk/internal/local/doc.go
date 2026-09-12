@@ -158,8 +158,9 @@
 // run with a layout of its own would need a second handle, and a second handle is a second
 // manifest cache, which is the thing this type exists to avoid.
 //
-// The floor is lifted by default and the driver's own two Announce sentences are printed
-// once, naming what this machine gives up. That is the case the lift exists for:
+// The floor is lifted by default and the driver's own Announce sentences are printed once,
+// naming what this machine gives up: the floor as the daemon is opened, and where a secret
+// lands at the first step that was given one. That is the case the lift exists for:
 // driver/doc.go says so, because Docker Desktop does not offer the remapping and agk run
 // --local has to work on a laptop, and a lift that needed a flag on every invocation would
 // not make it work. Nothing lifts the floor and says nothing, which is the same shape as

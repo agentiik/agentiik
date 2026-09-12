@@ -120,8 +120,8 @@ func TestAPlatformWithNoTmpfsSaysWhereASecretLands(t *testing.T) {
 	}
 	var said []string
 	say := func(line string) { said = append(said, line) }
-	floor.announce(p, say)
-	floor.announce(p, say)
+	floor.announceSecrets(p, "charge", say)
+	floor.announceSecrets(p, "charge", say)
 	if len(said) != 1 {
 		t.Fatalf("the driver said it %d times: %v", len(said), said)
 	}
@@ -129,6 +129,34 @@ func TestAPlatformWithNoTmpfsSaysWhereASecretLands(t *testing.T) {
 		if !strings.Contains(said[0], want) {
 			t.Fatalf("the announcement does not name %q: %s", want, said[0])
 		}
+	}
+}
+
+// Opening a daemon is not a reason to hear about secrets. agk validate opens one to read
+// the manifests of the images a workflow names, and a run whose steps declare no secret
+// writes no value either; a sentence printed on both is one spent where it does not apply.
+func TestOpeningADaemonSaysNothingAboutSecrets(t *testing.T) {
+	p := DefaultPolicy()
+	p.RequireUsernsRemap = RemapLifted
+	p.SecretsDir = ""
+
+	floor, err := readUsernsFloor(plain(), p)
+	if err != nil {
+		t.Fatalf("readUsernsFloor: %s", err)
+	}
+	var said []string
+	floor.announce(p, func(line string) { said = append(said, line) })
+	if len(said) != 1 {
+		t.Fatalf("opening the daemon said %d things: %v", len(said), said)
+	}
+	if strings.Contains(said[0], "tmpfs") {
+		t.Fatalf("opening the daemon named a secret's landing place: %s", said[0])
+	}
+
+	// And the sentence is still there for the task that earns it.
+	floor.announceSecrets(p, "charge", func(line string) { said = append(said, line) })
+	if len(said) != 2 || !strings.Contains(said[1], "tmpfs") {
+		t.Fatalf("the first task with a secret was told %v", said[1:])
 	}
 }
 

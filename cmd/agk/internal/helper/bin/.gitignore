@@ -1,0 +1,5 @@
+# The helper binaries the release build writes here are not committed: README.md beside this
+# file says why, and an untracked nine megabytes one directory deep is what git add -A sweeps
+# up on the machine that has just built them. //go:embed ignores a name starting with a dot,
+# so this file is not carried into the binary.
+agk-*

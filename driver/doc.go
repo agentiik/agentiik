@@ -190,8 +190,10 @@
 // Policy.SecretsDir, /dev/shm on Linux. A tmpfs the daemon creates at container start is
 // empty and cannot be pre-populated, so a value could not be placed in one before the
 // container's first instruction runs. Where no host tmpfs exists, which is the laptop the
-// userns floor gets lifted for, the values touch the work root instead and the driver
-// says so once.
+// userns floor gets lifted for, the values touch the work root instead and the driver says
+// so once, at the first task that is given a secret rather than when the daemon is opened:
+// a run that declares none never writes a value, and a warning met on a run it does not
+// apply to is a warning that gets scrolled past on the run it does.
 //
 // The shell defaults to three elements, DefaultShell. Without -c there is nothing to hand
 // a command string to.

@@ -169,5 +169,8 @@
 // /etc/agentiik/runner.toml is not read. A local run is not a runner, driver.Policy is a
 // value this side builds, and two sources for one setting is one too many. The floor is
 // lifted by default and what the machine gives up is printed once, through the driver's
-// own Announce sentences, which is what that hook exists for.
+// own Announce sentences, which is what that hook exists for. They arrive while the run is
+// narrating itself, from inside driver.Run and not from this goroutine, so Announce and the
+// narration share one writer with a lock on it: two Fprintf on standard error is a data race
+// and, before it is a race, it is two half-lines spliced into one.
 package main

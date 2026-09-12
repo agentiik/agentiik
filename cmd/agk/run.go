@@ -177,12 +177,16 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "no static helper is mounted at %s: a script step that calls agk items, agk emit or agk attach will not find one, and jq and a redirect do the same job\n", driver.BinPath)
 	}
 
+	// The driver says its own sentences from inside Run, at the same time as the loop
+	// narrates the transitions, so both go through one writer with a lock on it.
+	story := &serial{w: e.Err}
+
 	session, err := local.Open(ctx, local.Daemon{
 		Socket:             daemon.Socket,
 		Helper:             binary,
 		RequireUsernsRemap: *requireRemap,
 		Limits:             agk.DefaultLimits(),
-		Announce:           func(s string) { fmt.Fprintln(e.Err, s) },
+		Announce:           func(s string) { fmt.Fprintln(story, s) },
 	}, layout)
 	if err != nil {
 		refusal(e.Err, err)
@@ -202,7 +206,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	// 7. The run. Everything below this line has already been written: the loop is
 	// internal/local's, and inside driver.Run are the mounts, the environment, the wait,
 	// the collection and the spill.
-	narration := newNarration(e.Err, g, *verbose)
+	narration := newNarration(story, g, *verbose)
 	out, err := session.Run(ctx, local.Request{
 		Graph:   g,
 		Tree:    root,

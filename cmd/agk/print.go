@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -127,6 +128,25 @@ func counted(n int, one, many string) string {
 //
 // All of it goes to standard error. The answer of a run is its output envelopes, and a
 // narration on standard output would land in the pipe they were meant for.
+
+// serial is one writer two goroutines may write to, which standard error is during a run:
+// the loop narrates every transition, and the driver says its own sentences from inside Run,
+// where a secret lands on a platform with no tmpfs and a log sink that failed. Two Fprintf
+// on one writer is a data race, and before it is a race it is two half-lines spliced into
+// one, which is worse than either sentence arriving late.
+//
+// Only the run needs it. Everything else this command writes to standard error it writes
+// from the one goroutine that read the flags.
+type serial struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *serial) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // narration prints what a run says as it says it.
 type narration struct {
