@@ -38,6 +38,8 @@ Every repository carries the same version, tagged at the same moment, released t
 
 **Link the work.** A pull request opens with `Closes #12, closes #13`, plus `Part of #N` for the group issue, which stays open while tasks remain. It carries the milestone of its release and sits on the project with its fields set. Unlinked work leaves issues to be closed by hand and a board that says nothing is happening while something is.
 
+**A release is written before it is tagged.** Every repository carries a `CHANGELOG.md`, and a version's entry is merged before the tag is placed, never after. A tag that has to be moved to pick up its own changelog often cannot be moved at all: `v0.1.0` was tagged first, and within minutes `sum.golang.org` had recorded the commit of `agentiik` and `bricks` in a public append-only log, so moving those tags would have made `go get` serve the old code from the proxy for ever and a direct fetch fail with a checksum mismatch that reads as a supply-chain attack. `v0.1.1` exists because of that ordering.
+
 ## Writing
 
 **English throughout**, including comments, identifiers and commit messages.
