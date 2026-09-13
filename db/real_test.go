@@ -53,13 +53,14 @@ func database(t *testing.T) (super string, app string) {
 			t.Fatalf("%s: %s", stmt, err)
 		}
 	}
+	// The role goes with the database and is named after it. A role is a property of the
+	// cluster rather than of a database, so one role shared by every test is a role that
+	// two packages testing at once each drop while the other is using it. Cleanups run in
+	// the reverse of the order they are registered, and a role cannot be dropped while a
+	// database still grants it anything, so the role's is registered first and runs last.
+	t.Cleanup(func() { drop(ctx, url, `drop role if exists `+name) })
 	t.Cleanup(func() {
-		c, err := pgx.Connect(context.WithoutCancel(ctx), url)
-		if err != nil {
-			return
-		}
-		defer c.Close(context.WithoutCancel(ctx))
-		c.Exec(context.WithoutCancel(ctx), fmt.Sprintf(`drop database if exists %s with (force)`, name))
+		drop(ctx, url, fmt.Sprintf(`drop database if exists %s with (force)`, name))
 	})
 
 	super = withDatabase(url, name)
@@ -75,16 +76,28 @@ func database(t *testing.T) (super string, app string) {
 		t.Fatalf("the schema could not be created: %s", err)
 	}
 	for _, stmt := range []string{
-		`drop role if exists agentiik_test`,
-		`create role agentiik_test login password 'test' nosuperuser nobypassrls`,
-		`grant usage on schema public to agentiik_test`,
-		`grant select, insert, update, delete on all tables in schema public to agentiik_test`,
+		`drop role if exists ` + name,
+		`create role ` + name + ` login password 'test' nosuperuser nobypassrls`,
+		`grant usage on schema public to ` + name,
+		`grant select, insert, update, delete on all tables in schema public to ` + name,
 	} {
 		if _, err := sc.Exec(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatalf("%s: %s", stmt, err)
 		}
 	}
-	return super, withCredentials(super, "agentiik_test", "test")
+	return super, withCredentials(super, name, "test")
+}
+
+// drop runs one tidying statement and says nothing if it cannot: a test that has finished is
+// not made to fail by a cluster that is already gone.
+func drop(ctx context.Context, url, stmt string) {
+	ctx = context.WithoutCancel(ctx)
+	c, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return
+	}
+	defer c.Close(ctx)
+	c.Exec(ctx, stmt)
 }
 
 func withDatabase(url, name string) string {
