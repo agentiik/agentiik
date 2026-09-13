@@ -97,7 +97,18 @@ func TestTheMigrationsAreOrderedAsTheyAreNamed(t *testing.T) {
 // installation side and says so here. A table that appeared in neither list would be a
 // table nobody decided about, which is how a tenant's rows end up readable by another.
 func TestEveryTableIsDecidedAbout(t *testing.T) {
-	sql := readMigration(t, "0001_state.sql")
+	// Every migration, not the first one alone: a table added later is a table that would
+	// otherwise arrive with nobody having decided whether it belongs to a namespace.
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var whole strings.Builder
+	for _, m := range all {
+		whole.WriteString(m.SQL)
+		whole.WriteString("\n")
+	}
+	sql := whole.String()
 
 	// The eight the Storage chapter names that belong to a namespace, plus the object
 	// row that carries the reference count.
@@ -107,8 +118,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
-	// is the name of a namespace and cannot be scoped to itself.
-	installation := map[string]bool{"namespaces": true, "runners": true}
+	// is the name of a namespace and cannot be scoped to itself. The controller's term is
+	// the installation's too: there is one active controller across all of them.
+	installation := map[string]bool{"namespaces": true, "runners": true, "controller_term": true}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
 	if len(created) == 0 {
