@@ -238,12 +238,12 @@ func TestTheVocabularyTravelsAsItIsSpelled(t *testing.T) {
 		Trigger agk.TriggerKind `json:"trigger"`
 		Failure agk.Failure     `json:"failure"`
 	}
-	in := doc{agk.TimedOut, agk.VerdictSkipped, agk.TaskPublishing, agk.TriggerCron, agk.FailureTimeout}
+	in := doc{agk.TimedOut, agk.VerdictSkipped, agk.TaskPublishing, agk.TriggerSchedule, agk.FailureTimeout}
 	b, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"run":"timed_out","verdict":"skipped","task":"publishing","trigger":"cron","failure":"timeout"}`
+	const want = `{"run":"timed_out","verdict":"skipped","task":"publishing","trigger":"schedule","failure":"timeout"}`
 	if string(b) != want {
 		t.Errorf("it travels as %s\nand the documentation spells it %s", b, want)
 	}

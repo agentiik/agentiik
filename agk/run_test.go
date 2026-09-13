@@ -57,7 +57,7 @@ func TestWhatStartedTheRun(t *testing.T) {
 	}{
 		{agk.TriggerManual, "manual"},
 		{agk.TriggerWebhook, "webhook"},
-		{agk.TriggerCron, "cron"},
+		{agk.TriggerSchedule, "schedule"},
 		{agk.TriggerEvent, "event"},
 	} {
 		if got := c.kind.String(); got != c.name {

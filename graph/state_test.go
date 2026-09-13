@@ -23,7 +23,7 @@ func TestTheStateSurvivesBeingWrittenDown(t *testing.T) {
 			Workflow:    "finance/monthly-invoicing@1.4.0",
 			Namespace:   "finance",
 			Commit:      "a3f9c1e",
-			Trigger:     agk.TriggerCron,
+			Trigger:     agk.TriggerSchedule,
 			TriggeredBy: "schedule",
 			State:       agk.Running,
 			StartedAt:   at,
@@ -81,7 +81,7 @@ func TestTheStateSurvivesBeingWrittenDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, _ := doc["run"].(map[string]any)
-	if run["state"] != "running" || run["trigger"] != "cron" {
+	if run["state"] != "running" || run["trigger"] != "schedule" {
 		t.Errorf("the run travels as %v", run)
 	}
 	steps, _ := doc["steps"].(map[string]any)

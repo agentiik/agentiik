@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -358,7 +359,7 @@ func TestTheIdempotencyKeyIsComputedAndUnique(t *testing.T) {
 	}
 	defer pool.Close()
 
-	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+	const run agk.RunID = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 	var fanned, alone string
 	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
 		if _, err := ns.tx.Exec(ctx,
@@ -385,11 +386,14 @@ func TestTheIdempotencyKeyIsComputedAndUnique(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := run + "/invoice/2/3"; fanned != want {
-		t.Errorf("a fanned out task's key is %q, want %q", fanned, want)
+	// Compared against what agk mints rather than against a literal, because the point of
+	// the column is that it equals the identifier on the wire and a literal here would let
+	// the two drift while both tests stayed green.
+	if want := string(agk.NewTaskID(run, "invoice", 2, agk.Shard{Index: 3, Of: 8})); fanned != want {
+		t.Errorf("a fanned out task's key is %q and agk mints %q", fanned, want)
 	}
-	if want := run + "/invoice/1"; alone != want {
-		t.Errorf("a task with no shard has key %q, want %q", alone, want)
+	if want := string(agk.NewTaskID(run, "invoice", 1, agk.Shard{})); alone != want {
+		t.Errorf("a task with no shard has key %q and agk mints %q", alone, want)
 	}
 
 	// The same unit of work twice is refused, which is what makes at-least-once
