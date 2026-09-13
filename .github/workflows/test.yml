@@ -13,6 +13,26 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # A PostgreSQL, because the tests that hold the namespace rule are written against a real
+    # one and skip without it. They skip so that a laptop with nothing installed still runs
+    # the rest, not so that nobody ever runs them: row level security is not a thing a stub
+    # can have an opinion about, and a policy nothing exercises is a policy nobody knows is
+    # there. The version is the one the deployment profiles name.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: agk
+          POSTGRES_DB: agk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +55,11 @@ jobs:
       # is tested under -race.
       - name: test
         run: go test ./... -race
+        env:
+          # A superuser, because the tests create a database of their own, the schema, and
+          # the unprivileged role the application connects as. What is under test is what
+          # that role can see, and db.Open refuses a superuser for exactly that reason.
+          AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
 
       # gofmt has no exit code of its own for this: it lists the files it would rewrite
       # and succeeds either way, so the listing is what the job has to check.
