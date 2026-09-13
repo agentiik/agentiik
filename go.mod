@@ -20,6 +20,14 @@ require (
 	// duplicate key without being asked, and keeps the line and column a value was
 	// written at, which is what lets a refusal point at the text the author wrote.
 	github.com/goccy/go-yaml v1.19.2
+	// PostgreSQL, used by package db alone. The documentation names the database and
+	// names two things database/sql cannot express: the controller is elected by a
+	// session-level PostgreSQL advisory lock, held for the life of a connection, and it
+	// holds LISTEN while the API wakes it with NOTIFY. A pooled database/sql connection
+	// is handed back between statements, which drops the lock and carries the LISTEN to
+	// the next caller; this driver pins one. It also takes parameters natively, which is
+	// what keeps a namespace a parameter and never a string interpolated into SQL.
+	github.com/jackc/pgx/v5 v5.11.0
 	// JSON Schema 2020-12, used by package schema alone and by nothing else in this module.
 	// The workflow language defines an input's schema as a 2020-12 document, and this
 	// implementation is the draft itself rather than an older one; it takes a custom
@@ -32,8 +40,14 @@ require (
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect

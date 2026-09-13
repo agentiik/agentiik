@@ -1,0 +1,449 @@
+package db
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// The half of this package that only a real PostgreSQL can hold it to.
+//
+// Everything here skips when AGENTIIK_TEST_DATABASE_URL is unset and runs when it is,
+// exactly as the driver's tests skip without a Docker daemon, so that continuous
+// integration stays green on a machine with nothing installed and this machine tests for
+// real. The variable names a superuser, because the tests create the schema and the
+// unprivileged role the application uses; what is under test is what that role can see.
+//
+//	docker run -d --name agk-pg -e POSTGRES_PASSWORD=agk -e POSTGRES_DB=agk \
+//	  -p 55432:5432 postgres:17-alpine
+//	AGENTIIK_TEST_DATABASE_URL=postgres://postgres:agk@127.0.0.1:55432/agk go test ./db/
+
+// database prepares a schema of this test's own, with the application role, and answers
+// with the two addresses: the superuser's, for migrating, and the application's, which is
+// the one the package is meant to be opened with.
+func database(t *testing.T) (super string, app string) {
+	t.Helper()
+	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("no PostgreSQL on this machine: set AGENTIIK_TEST_DATABASE_URL")
+	}
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Skipf("the database at AGENTIIK_TEST_DATABASE_URL could not be reached: %s", err)
+	}
+	defer conn.Close(ctx)
+
+	// One database per test, so that two tests cannot see each other's rows and a
+	// failure leaves something a person can open afterwards.
+	name := "agk_" + strings.ToLower(strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
+	if len(name) > 60 {
+		name = name[:60]
+	}
+	for _, stmt := range []string{
+		fmt.Sprintf(`drop database if exists %s with (force)`, name),
+		fmt.Sprintf(`create database %s`, name),
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	t.Cleanup(func() {
+		c, err := pgx.Connect(context.WithoutCancel(ctx), url)
+		if err != nil {
+			return
+		}
+		defer c.Close(context.WithoutCancel(ctx))
+		c.Exec(context.WithoutCancel(ctx), fmt.Sprintf(`drop database if exists %s with (force)`, name))
+	})
+
+	super = withDatabase(url, name)
+
+	// The application role, created the way a deployment profile creates it: able to
+	// read and write, and unable to walk through a policy.
+	sc, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close(ctx)
+	if _, err := Migrate(ctx, sc); err != nil {
+		t.Fatalf("the schema could not be created: %s", err)
+	}
+	for _, stmt := range []string{
+		`drop role if exists agentiik_test`,
+		`create role agentiik_test login password 'test' nosuperuser nobypassrls`,
+		`grant usage on schema public to agentiik_test`,
+		`grant select, insert, update, delete on all tables in schema public to agentiik_test`,
+	} {
+		if _, err := sc.Exec(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	return super, withCredentials(super, "agentiik_test", "test")
+}
+
+func withDatabase(url, name string) string {
+	if i := strings.LastIndex(url, "/"); i > 0 {
+		if j := strings.Index(url[i:], "?"); j > 0 {
+			return url[:i+1] + name + url[i+j:]
+		}
+		return url[:i+1] + name
+	}
+	return url
+}
+
+func withCredentials(url, user, password string) string {
+	i := strings.Index(url, "://")
+	rest := url[i+3:]
+	if at := strings.Index(rest, "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	return url[:i+3] + user + ":" + password + "@" + rest
+}
+
+// seed writes two namespaces of identical shape, which is what makes "one namespace cannot
+// see another" a question with a wrong answer available.
+func seed(t *testing.T, super string) {
+	t.Helper()
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance'), ('team-ops')`,
+		`insert into workflows (namespace, name) values ('finance','monthly-invoicing'), ('team-ops','nightly')`,
+		`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
+		   values ('finance','monthly-invoicing','a3f9c1e','{}','alice', now()),
+		          ('team-ops','nightly','b1c2d3e','{}','bob', now())`,
+		`insert into runs (namespace, id, workflow, commit, trigger)
+		   values ('finance','01JMZ8V1P9C4XQ7K2N4D6F8H0A','monthly-invoicing','a3f9c1e','manual'),
+		          ('team-ops','01M2AAZ9G62NQXFAFCXKRPJEH5','nightly','b1c2d3e','schedule')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seeding: %s", err)
+		}
+	}
+}
+
+// The sentence this whole package exists for, executed: with no namespace bound, a read
+// returns nothing. Not an error, not another tenant's rows. Nothing.
+func TestAQueryThatCarriesNoNamespaceReadsNothing(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// Reaching the table without a door is what this package makes unexpressible, so
+	// the test reaches for it the only way anything can: through a door, and then
+	// unbinding what the door bound.
+	var count int
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		if _, err := ns.tx.Exec(ctx, `select set_config('agentiik.namespace', '', true)`); err != nil {
+			return err
+		}
+		return ns.tx.QueryRow(ctx, `select count(*) from runs`).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("a query with no namespace bound read %d rows, and the promise is that it reads none", count)
+	}
+}
+
+// One namespace sees its own rows and not the other's, which is the same property from the
+// side somebody actually uses.
+func TestOneNamespaceCannotSeeAnother(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	for _, c := range []struct{ namespace, workflow string }{
+		{"finance", "monthly-invoicing"},
+		{"team-ops", "nightly"},
+	} {
+		var count int
+		var workflow string
+		err := pool.In(t.Context(), c.namespace, func(ctx context.Context, ns *NS) error {
+			// No namespace in the statement. That is the point: the policy is what
+			// filters, so a query somebody forgot to filter is filtered anyway.
+			return ns.tx.QueryRow(ctx, `select count(*), min(workflow) from runs`).Scan(&count, &workflow)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 || workflow != c.workflow {
+			t.Errorf("%s saw %d runs, the first being %q", c.namespace, count, workflow)
+		}
+	}
+}
+
+// A write cannot land in a namespace the caller is not in, which the reading half alone
+// would not give: a handle that can only read its own rows but write anywhere is a handle
+// that can plant one.
+func TestAWriteCannotLandInAnotherNamespace(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		_, err := ns.tx.Exec(ctx,
+			`insert into runs (namespace, id, workflow, commit, trigger)
+			 values ('team-ops','01M2BBBBBBBBBBBBBBBBBBBBBB','nightly','b1c2d3e','manual')`)
+		return err
+	})
+	if err == nil {
+		t.Fatal("a row was written into another namespace")
+	}
+	if !strings.Contains(err.Error(), "row-level security") {
+		t.Fatalf("the write was refused, and not by the policy: %s", err)
+	}
+}
+
+// The door for what legitimately has no namespace. Without it the controller's sweep, the
+// three purges and the collector would read an empty database while every namespaced test
+// passed, which is the failure the reading of this design nearly shipped.
+func TestTheInstallationDoorSeesEveryNamespace(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	var count int
+	err = pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		return w.tx.QueryRow(ctx, `select count(*) from runs`).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("the sweep saw %d runs of the two that exist, so the controller would be scheduling against an empty database", count)
+	}
+
+	// And it insists on being told why.
+	if err := pool.Installation(t.Context(), "", func(context.Context, *Wide) error { return nil }); err == nil {
+		t.Error("the installation door opened with no reason given")
+	}
+}
+
+// What binds the namespace lasts exactly as long as the transaction. A pooled connection
+// carrying one into the next caller would be the same bug as a forgotten filter, arriving
+// by a route nobody would look down.
+func TestTheNamespaceDoesNotOutliveItsTransaction(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	if err := pool.In(t.Context(), "team-ops", func(context.Context, *NS) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next door onto the same pool, and very likely the same connection, is the
+	// installation one: if the previous namespace were still bound it would see one row
+	// rather than two.
+	var count int
+	err = pool.Installation(t.Context(), Purge, func(ctx context.Context, w *Wide) error {
+		return w.tx.QueryRow(ctx, `select count(*) from runs`).Scan(&count)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("a later transaction saw %d runs, so what one bound survived into another", count)
+	}
+}
+
+// A connection that walks through the policies makes every test above pass and the
+// property false, so it is refused where it can still be caught.
+func TestOpenRefusesAConnectionThePolicyDoesNotApplyTo(t *testing.T) {
+	super, _ := database(t)
+
+	_, err := Open(t.Context(), super)
+	if err == nil {
+		t.Fatal("a superuser connection was accepted, and row level security does not apply to one")
+	}
+	for _, want := range []string{"NOSUPERUSER", "enforced nowhere"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %s", want, err)
+		}
+	}
+}
+
+// An installation is upgraded rather than rebuilt, so applying the schema twice is not an
+// error and the second time does nothing.
+func TestMigratingTwiceAppliesNothingTheSecondTime(t *testing.T) {
+	super, _ := database(t)
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// database() already migrated once, so this is the second and third times.
+	again, err := Migrate(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("a second migration applied %v", again)
+	}
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded int
+	if err := conn.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != len(all) {
+		t.Fatalf("%d migrations are recorded and %d are embedded", recorded, len(all))
+	}
+}
+
+// The key a runner refuses a second container on is computed by the database from the four
+// columns that already say it, so a writer cannot get it wrong and two writers cannot
+// disagree.
+func TestTheIdempotencyKeyIsComputedAndUnique(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+	var fanned, alone string
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		if _, err := ns.tx.Exec(ctx,
+			`insert into steps (namespace, run_id, step) values ('finance', $1, 'invoice')`, run); err != nil {
+			return err
+		}
+		if _, err := ns.tx.Exec(ctx,
+			`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of)
+			 values ('finance','01M2CCCCCCCCCCCCCCCCCCCCCC',$1,'invoice',2,3,8)`, run); err != nil {
+			return err
+		}
+		if _, err := ns.tx.Exec(ctx,
+			`insert into tasks (namespace, id, run_id, step, attempt)
+			 values ('finance','01M2DDDDDDDDDDDDDDDDDDDDDD',$1,'invoice',1)`, run); err != nil {
+			return err
+		}
+		if err := ns.tx.QueryRow(ctx,
+			`select idempotency_key from tasks where attempt = 2`).Scan(&fanned); err != nil {
+			return err
+		}
+		return ns.tx.QueryRow(ctx,
+			`select idempotency_key from tasks where attempt = 1`).Scan(&alone)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := run + "/invoice/2/3"; fanned != want {
+		t.Errorf("a fanned out task's key is %q, want %q", fanned, want)
+	}
+	if want := run + "/invoice/1"; alone != want {
+		t.Errorf("a task with no shard has key %q, want %q", alone, want)
+	}
+
+	// The same unit of work twice is refused, which is what makes at-least-once
+	// delivery survivable.
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		_, err := ns.tx.Exec(ctx,
+			`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of)
+			 values ('finance','01M2EEEEEEEEEEEEEEEEEEEEEE',$1,'invoice',2,3,8)`, run)
+		return err
+	})
+	if err == nil {
+		t.Fatal("one unit of work was written twice")
+	}
+	if !strings.Contains(err.Error(), "tasks_by_idempotency_key") {
+		t.Fatalf("the second write was refused, and not by the uniqueness rule: %s", err)
+	}
+}
+
+// An exit code is read off a container that decided something. A task stopped at its
+// deadline or by a cancellation decided nothing, and a row claiming both would be a row
+// the retry policy reads backwards.
+func TestOnlyATaskThatRanCarriesAnExitCode(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		_, err := ns.tx.Exec(ctx,
+			`insert into steps (namespace, run_id, step) values ('finance', $1, 'invoice')`, run)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, c := range []struct {
+		state   string
+		code    int
+		allowed bool
+	}{
+		{"failed", 108, true},
+		{"succeeded", 0, true},
+		{"timed_out", 137, false},
+		{"cancelled", 143, false},
+		{"lost", 1, false},
+	} {
+		// A task identifier of the right alphabet, one per case, so that a refusal is
+		// the check constraint and never a collision on the primary key.
+		id := fmt.Sprintf("01M2F%021d", i)
+		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			_, err := ns.tx.Exec(ctx,
+				`insert into tasks (namespace, id, run_id, step, attempt, state, exit_code)
+				 values ('finance', $1, $2, 'invoice', $3, $4, $5)`,
+				id, run, i+1, c.state, c.code)
+			return err
+		})
+		if c.allowed && err != nil {
+			t.Errorf("a %s task could not carry an exit code: %s", c.state, err)
+		}
+		if !c.allowed && err == nil {
+			t.Errorf("a %s task carried exit code %d, and nothing decided it", c.state, c.code)
+		}
+	}
+}

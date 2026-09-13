@@ -6,6 +6,14 @@ Every repository of the project carries the same version and is tagged at the sa
 
 `0.y.z` promises nothing beyond itself: what a release here describes may be gone in the next one.
 
+## Unreleased
+
+**Where the state lives.** Package `db` is the PostgreSQL half of the engine: ten tables, the migration tool that applies them, and a handle that makes the namespace structurally impossible to forget. A `Pool` has no `Query` and no `Exec`. It hands out three doors: `In` binds one namespace for the transaction, `Installation` steps past it for one of six named reasons, and `Session` pins a connection for the two things a transaction cannot hold, the controller's advisory lock and its `LISTEN`. Row level security on every namespaced table reads what the door bound, so a query somebody forgot to filter reads that namespace's rows rather than everybody's, and a query with nothing bound reads none at all. `Open` refuses a superuser connection, since a policy a superuser walks through is a policy that protects nothing.
+
+**Artifacts, envelopes and logs.** The reference half of the store. A logical `agk://run/<run>/<step>/<port>/<name>` resolves to a physical `<namespace>/sha256/<digest>`, deduplication is scoped per namespace, and a reference carries its own size and media type because it has to outlive the object it names: expiry drops the reference, and the object goes only when nothing references it. A fetch budget is spent by a response that completed, the last one retires the reference on the spot, and what comes after is gone rather than absent. An envelope is counted in the same place as an artifact, because two steps publishing identical bytes publish one object. The three purges and the collector are there, each through the installation door with its reason named.
+
+**A boundary test for the driver.** The root says the evaluator and the container driver are both importable with no controller, no task bus and no database behind them, and only the evaluator was being checked. The driver's closure is now read the same way, with a list that allows it the daemon it exists to drive and refuses it the database beside it.
+
 ## v0.1.2, 2026-09-13
 
 Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.
