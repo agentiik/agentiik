@@ -106,8 +106,16 @@ create table runs (
   commit        text not null check (commit ~ '^[0-9a-f]{7,40}$'),
   state         run_state not null default 'queued',
   -- What started it, and who. The trigger kinds are the language's own.
+  -- The seven the Triggers table names, which is three declared blocks and four ways a run
+  -- begins that no block describes. api was not one of them: a run started through the API
+  -- is manual, which is what manual means. mcp and terraform were missing, and the page says
+  -- why they are kinds of their own rather than folded into manual: "a run that appears here
+  -- is reproducible from a configuration, which is exactly what a person looking at the run
+  -- list wants to know". A test holds this list against the Go vocabulary so the two cannot
+  -- drift.
   trigger       text not null
-                check (trigger in ('manual', 'schedule', 'webhook', 'event', 'workflow', 'api')),
+                check (trigger in ('manual', 'schedule', 'webhook', 'event',
+                                   'mcp', 'terraform', 'workflow')),
   triggered_by  text,
   -- The declared inputs as they were bound, and the declared outputs as digests. The
   -- outputs are digests and not envelopes for the reason the chapter gives: the database
@@ -184,13 +192,20 @@ create table tasks (
   shard_index     integer check (shard_index >= 1),
   shard_of        integer check (shard_of >= 1),
   state           task_state not null default 'pending',
-  -- run_id/step/attempt/shard, with the shard omitted where there is none. Generated
-  -- rather than written, because it restates four columns that are already here and a
-  -- writer that could get it wrong eventually would: "a runner refuses to start a
-  -- container for a key that has already completed" is only as good as the key.
+  -- run_id/step/attempt/shard, with the shard omitted where there is none, and the shard
+  -- written index and cardinality because that is what a shard is: AGK_SHARD carries 3/8
+  -- and agk.NewTaskID builds the same string. The column has to equal the identifier on the
+  -- wire exactly. If it did not, the uniqueness rule enforced here would be over a different
+  -- string from the one "a runner refuses to start a container for a key that has already
+  -- completed" compares, and each would be right about its own key while the pair let a
+  -- container start twice.
+  --
+  -- Generated rather than written, because it restates four columns that are already here
+  -- and a writer that could get it wrong eventually would.
   idempotency_key text generated always as (
     run_id || '/' || step || '/' || attempt ||
-    case when shard_index is null then '' else '/' || shard_index end
+    case when shard_index is null then ''
+         else '/' || shard_index || '/' || shard_of end
   ) stored,
   runner          text,
   exit_code       integer,

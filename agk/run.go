@@ -108,33 +108,62 @@ func (r *RunState) UnmarshalText(b []byte) error {
 	return nil
 }
 
-// TriggerKind says what started the run. The four kinds are the four trigger blocks the
-// language has, with manual standing for a run started through the API or the command
-// line rather than by a declared trigger.
+// TriggerKind says what started the run.
+//
+// Seven, which is the Triggers table and not the on: block. Three of them are blocks a
+// workflow declares, schedule, webhook and event, and four are ways a run begins that no
+// block describes: a principal asking, an MCP tools/call, a Terraform apply, and another
+// workflow calling this one.
+//
+// The page keeps terraform apart from manual and says why: "It is distinguished from manual
+// rather than folded into it because a run that appears here is reproducible from a
+// configuration, which is exactly what a person looking at the run list wants to know." The
+// same reasoning keeps mcp and workflow apart, and it is the reason this is seven values
+// rather than four with a comment.
 type TriggerKind int
 
 const (
-	// TriggerManual: a principal asked for this run.
+	// TriggerManual: a principal asked for this run, "from the API, the command line,
+	// the console or a mobile app". It is first so that the zero value is the kind a run
+	// has when nobody said otherwise, which is a person having asked for it.
 	TriggerManual TriggerKind = iota
+
+	// TriggerSchedule: the schedule of the workflow came round.
+	TriggerSchedule
 
 	// TriggerWebhook: an inbound request matched the workflow's webhook trigger.
 	TriggerWebhook
 
-	// TriggerCron: the schedule of the workflow came round.
-	TriggerCron
-
 	// TriggerEvent: an event the workflow subscribes to was published.
 	TriggerEvent
+
+	// TriggerMCP: "An MCP tools/call starts a run whose inputs are the tool's
+	// arguments", attributed to the calling principal.
+	TriggerMCP
+
+	// TriggerTerraform: an apply started it, through agentiik_run or the provider's
+	// action.
+	TriggerTerraform
+
+	// TriggerWorkflow: "Called by a workflow: step of another workflow."
+	TriggerWorkflow
 )
 
-// triggerKinds spells the kinds as the trigger blocks are named in the language, with
-// cron rather than schedule because that is the word a run carries when it says what
-// started it.
+// triggerKinds spells the kinds exactly as the Triggers table names them.
+//
+// schedule and not cron. The language writes the block on.schedule, the workflow schema
+// declares it as scheduleTrigger, and the table names the kind schedule; cron is a field
+// inside it, the five-field expression. Two spellings for one thing is the rule about
+// identifiers being broken, and the run is not the place to invent a third name for a block
+// the file already names.
 var triggerKinds = [...]string{
-	TriggerManual:  "manual",
-	TriggerWebhook: "webhook",
-	TriggerCron:    "cron",
-	TriggerEvent:   "event",
+	TriggerManual:    "manual",
+	TriggerSchedule:  "schedule",
+	TriggerWebhook:   "webhook",
+	TriggerEvent:     "event",
+	TriggerMCP:       "mcp",
+	TriggerTerraform: "terraform",
+	TriggerWorkflow:  "workflow",
 }
 
 // String names the trigger kind.

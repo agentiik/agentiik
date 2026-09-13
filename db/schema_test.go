@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -65,6 +66,87 @@ func TestTheStateVocabulariesAreTheEngineOwn(t *testing.T) {
 		got := domainValues(t, sql, c.domain)
 		if !sameSet(got, c.want) {
 			t.Errorf("domain %s holds %v, and package agk holds %v", c.domain, got, c.want)
+		}
+	}
+}
+
+// A run says what started it in the words the language uses for the block that started it,
+// and the column holds exactly what the Go vocabulary can produce. A check constraint listing
+// a value nothing can write says the column holds something it never holds, and one missing a
+// value something can write refuses a legitimate run at three in the morning.
+func TestTheTriggerKindsAreTheEngineOwn(t *testing.T) {
+	sql := readMigration(t, "0001_state.sql")
+
+	const tooMany = 64
+	var kinds []string
+	for k := agk.TriggerManual; len(kinds) < tooMany; k++ {
+		name := k.String()
+		if strings.HasPrefix(name, "trigger kind ") || name == "" {
+			break
+		}
+		kinds = append(kinds, name)
+	}
+	if len(kinds) >= tooMany {
+		t.Fatalf("the end of the vocabulary could not be found: String no longer names an unknown value the way this test looks for it")
+	}
+	// Seven, which is the Triggers table: three blocks a workflow declares and four ways a
+	// run begins that no block describes.
+	if len(kinds) != 7 {
+		t.Fatalf("package agk has %d trigger kinds, %v, and the Triggers table names seven", len(kinds), kinds)
+	}
+
+	// schedule and not cron. The language writes on.schedule, the workflow schema declares
+	// scheduleTrigger, and cron is the five-field expression inside it.
+	for _, want := range []string{"manual", "schedule", "webhook", "event", "mcp", "terraform", "workflow"} {
+		if !slices.Contains(kinds, want) {
+			t.Errorf("package agk does not spell a trigger kind %q, and the language does", want)
+		}
+	}
+
+	re := regexp.MustCompile(`(?s)trigger\s+text not null\s*\n\s*check \(trigger in \((.*?)\)\)`)
+	m := re.FindStringSubmatch(sql)
+	if m == nil {
+		t.Fatal("runs.trigger is not a check over a list")
+	}
+	var held []string
+	for _, v := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(m[1], -1) {
+		held = append(held, v[1])
+	}
+	if !sameSet(held, kinds) {
+		t.Errorf("runs.trigger holds %v and package agk produces %v", held, kinds)
+	}
+}
+
+// The identifier a task is known by is one string, and two places build it: agk.NewTaskID for
+// the wire, and a generated column for the uniqueness rule. They have to agree exactly, or
+// each is right about its own key while the pair let a container start twice.
+func TestTheIdempotencyKeyIsTheOneOnTheWire(t *testing.T) {
+	sql := readMigration(t, "0001_state.sql")
+
+	for _, c := range []struct {
+		run     agk.RunID
+		step    agk.Step
+		attempt int
+		shard   agk.Shard
+		want    string
+	}{
+		{"01JMZ8V1P9C4XQ7K2N4D6F8H0A", "archive", 1, agk.Shard{}, "01JMZ8V1P9C4XQ7K2N4D6F8H0A/archive/1"},
+		{"01JMZ8V1P9C4XQ7K2N4D6F8H0A", "invoice", 2, agk.Shard{Index: 3, Of: 8}, "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"},
+	} {
+		if got := string(agk.NewTaskID(c.run, c.step, c.attempt, c.shard)); got != c.want {
+			t.Fatalf("agk mints %q and this test expected %q", got, c.want)
+		}
+	}
+
+	// The column concatenates the same four columns in the same order, cardinality
+	// included. Read from the file rather than from a live database, so the disagreement is
+	// caught on a laptop with nothing installed.
+	for _, want := range []string{
+		`run_id || '/' || step || '/' || attempt`,
+		`'/' || shard_index || '/' || shard_of`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the generated key does not build %s, so the key in the database is not the key on the wire", want)
 		}
 	}
 }
