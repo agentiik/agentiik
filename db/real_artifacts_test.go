@@ -39,7 +39,7 @@ func steps(t *testing.T, super string) {
 		   ('team-ops', '` + opsRun + `', 'archive')`,
 		`insert into tasks (namespace, id, run_id, step, attempt, state, log_uri, log_lines)
 		   values ('finance', '01M2T1AAAAAAAAAAAAAAAAAAAA', '` + financeRun + `', 'archive', 1,
-		           'succeeded', 'agk://log/finance/01M2T1AAAAAAAAAAAAAAAAAAAA', 812)`,
+		           'succeeded', 'agk://log/` + financeRun + `/` + financeRun + `%2Farchive%2F1', 812)`,
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("seeding: %s", err)
