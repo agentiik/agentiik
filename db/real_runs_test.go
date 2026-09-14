@@ -303,7 +303,9 @@ func TestTheSweepFindsWhatANotificationWouldHave(t *testing.T) {
 	}
 }
 
-// A terminal run is not swept, however long ago its clock was.
+// A terminal run is not swept, however long ago its clock was. It also starts before the row
+// that records it was written, which is legitimate: the controller's clock and the database's
+// are two clocks and neither orders the other.
 func TestAFinishedRunIsNotSwept(t *testing.T) {
 	pool, _ := created(t)
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
@@ -316,7 +318,7 @@ func TestAFinishedRunIsNotSwept(t *testing.T) {
 		return w.SaveDecision(ctx, Decision{
 			Namespace: "finance", Run: theRun, Was: 0, Seq: 1,
 			Document: json.RawMessage(`{"version":1}`), State: agk.Succeeded,
-			StartedAt: now, FinishedAt: now.Add(time.Minute), ExpiresAt: now.Add(7 * 24 * time.Hour),
+			StartedAt: now.Add(-time.Hour), FinishedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour),
 			Outputs: map[string]any{"invoices": "sha256:aaa"},
 		})
 	}); err != nil {

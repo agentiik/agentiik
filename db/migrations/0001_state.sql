@@ -154,7 +154,12 @@ create table runs (
     references workflow_versions (namespace, workflow, commit),
   -- A run that has finished has started, and a run that has not started has not finished.
   check (finished_at is null or started_at is not null),
-  check (started_at is null or started_at >= created_at),
+  -- And no check that started_at is at or after created_at, though it reads like an obvious
+  -- one. They are two clocks. created_at is the database's now(), and started_at is the
+  -- controller's, which the evaluator takes as an argument on purpose: "the moment is an
+  -- argument rather than a clock so that evaluation is pure and a replay is exact". A
+  -- constraint ordering two clocks refuses a legitimate run the moment they disagree by a
+  -- millisecond, which is a schema deciding that skew is a data error.
   check (expires_at is null or finished_at is not null)
 );
 
