@@ -228,7 +228,13 @@ create table tasks (
   exit_code       integer,
   -- The log as the chapter allows it to be kept: a URI, a line count and whether it was
   -- capped. Never the lines.
-  log_uri         text,
+  --
+  -- agk://log/<run>/<task>, which is the scheme's second kind. A log belongs to one task and
+  -- not to one port, so it is not addressed like an artifact: a step fanned out into eight
+  -- shards has eight logs and no port to tell them apart. The check holds the kind and not
+  -- the rest, because the task inside carries percent escapes and a pattern over those would
+  -- be this file having an opinion about agk.ParseLogURI.
+  log_uri         text check (log_uri is null or log_uri like 'agk://log/%'),
   log_lines       integer check (log_lines >= 0),
   log_truncated   boolean not null default false,
   dispatched_at   timestamptz,
