@@ -56,12 +56,33 @@ func TestTheStateVocabulariesAreTheEngineOwn(t *testing.T) {
 		t.Fatalf("package agk has %d task states, %v, and the documentation names nine", len(tasks), tasks)
 	}
 
+	// And what happened to a step is a third list, not a reuse of the second. A step can be
+	// skipped, which no container can be, and no step is ever dispatched or publishing.
+	var verdicts []string
+	for v := agk.VerdictPending; len(verdicts) < tooMany; v++ {
+		name := v.String()
+		if strings.HasPrefix(name, "verdict ") || name == "" {
+			break
+		}
+		verdicts = append(verdicts, name)
+	}
+	if len(verdicts) >= tooMany {
+		t.Fatalf("the end of the verdicts could not be found: String no longer names an unknown value the way this test looks for it")
+	}
+	if len(verdicts) != 6 {
+		t.Fatalf("package agk has %d verdicts, %v", len(verdicts), verdicts)
+	}
+	if slices.Contains(tasks, "skipped") || !slices.Contains(verdicts, "skipped") {
+		t.Error("skipped belongs to a step and not to a task: a step whose if condition was false publishes empty envelopes and no container ran")
+	}
+
 	for _, c := range []struct {
 		domain string
 		want   []string
 	}{
 		{"run_state", runs},
 		{"task_state", tasks},
+		{"step_verdict", verdicts},
 	} {
 		got := domainValues(t, sql, c.domain)
 		if !sameSet(got, c.want) {
@@ -228,6 +249,11 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 			t.Errorf("the migration never says %q, so the namespace is a column and not a rule", want)
 		}
 	}
+	// And the one column where the two vocabularies were confused: a step holds a verdict.
+	if !regexp.MustCompile(`(?s)create table steps\b.*?state\s+step_verdict`).MatchString(sql) {
+		t.Error("steps.state is not a step_verdict, and a step that cannot be skipped is a step the language can put in a state the column refuses")
+	}
+
 	for name := range namespaced {
 		if !strings.Contains(sql, "'"+name+"'") {
 			t.Errorf("table %s is called namespaced and is not in the list the policies are built from", name)

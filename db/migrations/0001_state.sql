@@ -32,6 +32,18 @@ create domain task_state as text
   check (value in ('pending', 'dispatched', 'running', 'publishing', 'succeeded',
                    'failed', 'lost', 'timed_out', 'cancelled'));
 
+-- What happened to one step, which is not what happened to one task and cannot be held by
+-- the same list. A step whose if condition is false "moves to skipped and publishes empty
+-- envelopes on all its ports", and skipped is not a state a container can be in: no task ran.
+-- A task is dispatched, publishing, lost or timed out, and none of those is a thing a step
+-- is either, because a step is however many attempts of however many shards it took.
+--
+-- Six, and they are agk.Verdict's own, which is one type for the state a step reaches and for
+-- the value a downstream when reads: "a second enumeration for the reading would let the two
+-- disagree over what succeeded means". A test holds this list against that one.
+create domain step_verdict as text
+  check (value in ('pending', 'running', 'succeeded', 'failed', 'skipped', 'cancelled'));
+
 -- A name written in the workflow file, on the one grammar the language chapter fixes for
 -- all of them: "letters, digits, hyphens and underscores, beginning with a letter or a
 -- digit". A step, a port and a workflow name are all this.
@@ -154,7 +166,9 @@ create table steps (
   namespace   text not null,
   run_id      ulid not null,
   step        name not null,
-  state       task_state not null default 'pending',
+  -- A verdict and not a task state. The chapter says "per-step state within a run", and what
+  -- a step's state is is the verdict the evaluator fixes when it ends.
+  state       step_verdict not null default 'pending',
   -- One entry per published output port, keyed by port name, each
   -- {"digest": "sha256:...", "size": <bytes>, "items": <count>}. This is the chapter's
   -- "envelope digests for each port", and it is a column rather than a table because a
@@ -174,6 +188,9 @@ create table steps (
   -- object has been deleted, which is what keeps a sweep from claiming the same step for
   -- ever.
   envelopes_purged_at timestamptz,
+  -- The highest attempt any shard of this step reached, which is what a person reading a run
+  -- wants from one number: a step whose third shard took four goes says four. It is not a
+  -- count of task rows, since those are countable by counting them.
   attempts    integer not null default 0 check (attempts >= 0),
   started_at  timestamptz,
   finished_at timestamptz,
