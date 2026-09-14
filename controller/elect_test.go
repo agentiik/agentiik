@@ -114,7 +114,7 @@ func TestAFormerHolderCannotWrite(t *testing.T) {
 
 	// Its write works while it is the holder, which is what makes the refusal below mean
 	// something.
-	if err := was.Write(t.Context(), old, func(ctx context.Context, w *db.Wide) error {
+	if err := was.Fenced(t.Context(), old, func(ctx context.Context, w *db.Wide) error {
 		return nil
 	}); err != nil {
 		t.Fatalf("the holder's own write was refused: %s", err)
@@ -129,7 +129,7 @@ func TestAFormerHolderCannotWrite(t *testing.T) {
 	}
 
 	// And now the former holder, which has not noticed, writes.
-	err = was.Write(t.Context(), old, func(ctx context.Context, w *db.Wide) error {
+	err = was.Fenced(t.Context(), old, func(ctx context.Context, w *db.Wide) error {
 		t.Error("a former holder's write reached its body, and the fence is what should have stopped it before anything was read")
 		return nil
 	})
@@ -182,9 +182,9 @@ func TestAControllerIsNamed(t *testing.T) {
 }
 
 // The fencing token is only as good as the number of writes that carry it, so this package
-// opens a write transaction in exactly one place. A second call site would be a write a former
-// holder could still make.
-func TestOnlyOnePlaceWrites(t *testing.T) {
+// reaches the database in exactly one place. A second call site would be something a former
+// holder could still do, and a read is not exempt: a controller reads in order to decide.
+func TestOnlyOnePlaceReachesTheDatabase(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -205,10 +205,10 @@ func TestOnlyOnePlaceWrites(t *testing.T) {
 		}
 	}
 	if len(found) != 1 {
-		t.Fatalf("this package opens a write transaction in %d places, %v, and the fencing token is only as good as the number of writes that carry it", len(found), found)
+		t.Fatalf("this package opens a transaction in %d places, %v, and the fencing token is only as good as the number of writes that carry it", len(found), found)
 	}
 	if found[0] != "elect.go" {
-		t.Errorf("the one write is in %s, and it belongs beside the election it is fenced by", found[0])
+		t.Errorf("the one door is in %s, and it belongs beside the election it is fenced by", found[0])
 	}
 }
 
@@ -233,7 +233,7 @@ func TestATakeoverWaitsForAWriteAlreadyInFlight(t *testing.T) {
 	finish := make(chan struct{})
 	written := make(chan error, 1)
 	go func() {
-		written <- c.Write(t.Context(), term, func(ctx context.Context, w *db.Wide) error {
+		written <- c.Fenced(t.Context(), term, func(ctx context.Context, w *db.Wide) error {
 			close(inside)
 			<-finish
 			return nil

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
+
 	"github.com/agentiik/agentiik/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,6 +32,24 @@ type Controller struct {
 
 	// Sweep is how often the active controller looks for work nobody told it about.
 	Sweep time.Duration
+
+	// Trouble is where something worth saying goes: a run that could not be decided, a
+	// message the bus refused, a stop nobody took. None of them is fatal to the controller
+	// and all of them are worth a person seeing, so an installation says where they go and
+	// a controller with nowhere to put them drops them rather than choosing for it.
+	//
+	// It is a field rather than a package level logger because a controller is a value a
+	// test builds, and a test that had to read standard error to find out what happened is
+	// a test nobody writes.
+	Trouble func(run agk.RunID, err error)
+}
+
+// report says one thing, through whatever Trouble was given.
+func (c *Controller) report(run agk.RunID, err error) {
+	if c.Trouble == nil {
+		return
+	}
+	c.Trouble(run, err)
 }
 
 // New builds a controller. name is what an operator calls this process, and is written on the
@@ -97,17 +117,22 @@ func (c *Controller) waitForTheLock(ctx context.Context, conn *pgxpool.Conn) err
 	}
 }
 
-// Write is the one place this package writes state, and everything it writes is fenced.
+// Fenced is the one place this package reaches the database, and everything it does is fenced.
 //
 // The token is checked before fn reads or writes anything, inside the same transaction, so a
 // former holder is refused rather than applied late. A caller that finds db.ErrFenced has lost
 // the term and should stop being a controller rather than retry: retrying is precisely what a
 // partitioned former holder would do.
 //
-// The reason is named here and not taken as an argument, because a controller writing state
+// Reads go through it too, and not as an oversight. A controller reads in order to decide, so a
+// former holder reading state is as wrong as one writing it: what it would do with what it read
+// is take a decision it has no right to take. Making the door one door also makes the rule one
+// a test can count, which is the whole of why the rule holds.
+//
+// The reason is named here and not taken as an argument, because a controller touching state
 // has exactly one why: it is the decider, acting across every namespace at once. The three
 // purges and the collector are sweeps on the pool with reasons of their own.
-func (c *Controller) Write(ctx context.Context, term db.Term, fn func(context.Context, *db.Wide) error) error {
+func (c *Controller) Fenced(ctx context.Context, term db.Term, fn func(context.Context, *db.Wide) error) error {
 	return c.pool.Installation(ctx, db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		if err := w.Fence(ctx, term.Token); err != nil {
 			return err

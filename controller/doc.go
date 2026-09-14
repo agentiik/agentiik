@@ -23,12 +23,13 @@
 // The counter is a column rather than the lock's own, because PostgreSQL does not expose an
 // acquisition counter for an advisory lock. Everything else about the election is the lock.
 //
-// # One place writes
+// # One place reaches the database
 //
 // The fencing token is only as good as the number of writes that carry it, so this package has
-// exactly one function that opens a write transaction, and a test counts them. A write that
-// went around it would be a write a former holder could still make, which is the one thing the
-// token exists to prevent.
+// exactly one function that opens a transaction, and a test counts them. A write that went
+// around it would be a write a former holder could still make, which is the one thing the token
+// exists to prevent, and a read is not exempt: a controller reads in order to decide, so a
+// former holder reading state is as wrong as one writing it.
 //
 // # Woken, and sweeping anyway
 //

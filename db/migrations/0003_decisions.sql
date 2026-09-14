@@ -56,4 +56,4 @@ alter table tasks
   add column published_at timestamptz;
 
 create index tasks_unpublished on tasks (namespace, run_id)
-  where published_at is null and state = 'pending';
+  where published_at is null and state in ('pending', 'dispatched');

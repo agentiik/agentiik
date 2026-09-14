@@ -368,7 +368,8 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 		  and (wake_at is null or wake_at <= $1
 		       or exists (select 1 from tasks t
 		                  where t.namespace = runs.namespace and t.run_id = runs.id
-		                    and t.published_at is null and t.state = 'pending'))
+		                    and t.published_at is null
+		                    and t.state in ('pending', 'dispatched')))
 		order by coalesce(wake_at, created_at)
 		limit $2`, now, batch)
 	if err != nil {
@@ -387,10 +388,16 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 }
 
 // Unpublished names the tasks of one run whose messages never went.
+//
+// Pending or dispatched, because a task is dispatched in the evaluator's state the moment it is
+// planned: "recording the dispatch is what fixes the task's deadline, because the deadline runs
+// from the moment the work became somebody's". A task that has reached running or beyond was
+// plainly delivered, whatever the stamp says.
 func (w *Wide) Unpublished(ctx context.Context, namespace string, run agk.RunID) ([]agk.TaskID, error) {
 	rows, err := w.tx.Query(ctx,
 		`select idempotency_key from tasks
-		 where namespace = $1 and run_id = $2 and published_at is null and state = 'pending'`,
+		 where namespace = $1 and run_id = $2 and published_at is null
+		   and state in ('pending', 'dispatched')`,
 		namespace, string(run))
 	if err != nil {
 		return nil, fmt.Errorf("db: the unpublished tasks of run %s could not be read: %w", run, err)
