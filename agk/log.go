@@ -39,15 +39,35 @@ func (l LogURI) String() string {
 	return logPrefix + string(l.Run) + "/" + url.PathEscape(string(l.Task))
 }
 
-// MarshalJSON writes the URI as the single string a result message carries.
-func (l LogURI) MarshalJSON() ([]byte, error) { return json.Marshal(l.String()) }
+// IsZero says there is no log. A task that wrote nothing has no log to address, which is not
+// the same as a log at an address that happens to be empty.
+func (l LogURI) IsZero() bool { return l.Run == "" && l.Task == "" }
+
+// MarshalJSON writes the URI as the single string a result message carries, and null where there
+// is no log.
+//
+// Null rather than the empty string, and rather than the shape the fields would compose to. The
+// zero value would otherwise travel as agk://log// and come back refused, which is a task with
+// no log being a task whose result cannot be read: the one case that has to work is the one
+// where nothing happened.
+func (l LogURI) MarshalJSON() ([]byte, error) {
+	if l.IsZero() {
+		return []byte("null"), nil
+	}
+	return json.Marshal(l.String())
+}
 
 // UnmarshalJSON reads one and refuses anything else, an artifact URI included: the two kinds
-// are separate so that a reader can tell what it has without asking what it points at.
+// are separate so that a reader can tell what it has without asking what it points at. Null and
+// an absent field are both a task with no log.
 func (l *LogURI) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*l = LogURI{}
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
-		return reject("", "a log URI is a string, written as %s", logForm)
+		return reject("", "a log URI is a string, written as %s, or null where there is no log", logForm)
 	}
 	p, err := ParseLogURI(s)
 	if err != nil {
