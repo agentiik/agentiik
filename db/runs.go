@@ -261,8 +261,14 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	}
 
 	// Read before the row is overwritten, because the diff the counts move by is against
-	// what this run referenced a moment ago and the update below is what replaces it.
+	// what this run referenced a moment ago and the update below is what replaces it. The
+	// state it was in comes from the same look, since a notification is about a run that has
+	// just become terminal and a row already updated cannot say whether it just did.
 	was, err := w.envelopesOf(ctx, d.Namespace, d.Run)
+	if err != nil {
+		return err
+	}
+	before, startedBy, err := w.stateOf(ctx, d.Namespace, d.Run)
 	if err != nil {
 		return err
 	}
@@ -308,7 +314,26 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 			return fmt.Errorf("db: the artifact %s of run %s: %w", a.URI, d.Run, err)
 		}
 	}
-	return nil
+	return w.emit(ctx, d.Namespace, d.Run, before, d.State, startedBy)
+}
+
+// stateOf is what a run was before this decision, and who started it.
+func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (agk.RunState, string, error) {
+	var state string
+	var by *string
+	if err := w.tx.QueryRow(ctx,
+		`select state, triggered_by from runs where namespace = $1 and id = $2`,
+		namespace, string(run)).Scan(&state, &by); err != nil {
+		return 0, "", fmt.Errorf("db: run %s could not be read: %w", run, err)
+	}
+	var s agk.RunState
+	if err := s.UnmarshalText([]byte(state)); err != nil {
+		return 0, "", fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
+	}
+	if by == nil {
+		return s, "", nil
+	}
+	return s, *by, nil
 }
 
 // writeTask records one task, keyed by the identifier it is known by everywhere else.

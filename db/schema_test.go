@@ -218,6 +218,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	namespaced := map[string]bool{
 		"workflows": true, "workflow_versions": true, "runs": true, "steps": true,
 		"tasks": true, "approvals": true, "artifacts": true, "artifact_objects": true,
+		"notification_events": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -255,8 +256,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	}
 
 	for name := range namespaced {
-		if !strings.Contains(sql, "'"+name+"'") {
-			t.Errorf("table %s is called namespaced and is not in the list the policies are built from", name)
+		// Either in the array the first migration builds its policies from, or carrying a
+		// policy of its own because it arrived later.
+		if !strings.Contains(sql, "'"+name+"'") && !strings.Contains(sql, "create policy "+name+"_by_namespace") {
+			t.Errorf("table %s is called namespaced and is behind no policy", name)
 		}
 		if !regexp.MustCompile(`(?s)create table ` + name + `\b.*?namespace\s+text not null`).MatchString(sql) {
 			t.Errorf("table %s is called namespaced and has no namespace column", name)
