@@ -79,6 +79,47 @@ func TestALogURISurvivesTheRoundTrip(t *testing.T) {
 	}
 }
 
+// A task that wrote no log has no log URI, and that has to survive the round trip: the one case
+// that must work is the one where nothing happened.
+func TestATaskWithNoLogTravels(t *testing.T) {
+	var none agk.LogURI
+	if !none.IsZero() {
+		t.Fatal("the zero value says it is a log")
+	}
+	encoded, err := json.Marshal(none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != "null" {
+		t.Errorf("a task with no log travels as %s", encoded)
+	}
+	var back agk.LogURI
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatalf("a task with no log could not be read back: %s", err)
+	}
+	if back != none {
+		t.Errorf("it came back as %+v", back)
+	}
+
+	// And inside a document, which is where it actually travels.
+	type result struct {
+		Task agk.TaskID `json:"task"`
+		Log  agk.LogURI `json:"log"`
+	}
+	in := result{Task: agk.NewTaskID(aRun, "invoice", 1, agk.Shard{})}
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out result
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("%s could not be read back: %s", body, err)
+	}
+	if out != in {
+		t.Errorf("%s came back as %+v", body, out)
+	}
+}
+
 // The run in the URI and the run in the task have to be one run, or the URI addresses one
 // run's prefix and another run's task and a sweep over a run's logs misses it.
 func TestALogURICannotNameTwoRuns(t *testing.T) {

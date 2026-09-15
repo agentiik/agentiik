@@ -33,8 +33,26 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+
     steps:
       - uses: actions/checkout@v4
+
+      # And a NATS with JetStream, for the same reason the database is here: what the bus
+      # tests are about is what WorkQueue retention, durable pull consumers and at-least-once
+      # redelivery actually do, and a fake would agree with whatever this code believes about
+      # all three.
+      #
+      # Started here rather than declared as a service because JetStream is an argument,
+      # -js, and a service container takes an image and an entrypoint but no arguments. An
+      # entrypoint with no -js is a NATS that answers every stream call with "JetStream not
+      # enabled", which reads as a broken test rather than as a missing flag.
+      - name: bus
+        run: |
+          docker run -d --name agk-nats -p 4222:4222 nats:alpine -js
+          for i in $(seq 1 30); do
+            if docker exec agk-nats nats-server --help >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
 
       - uses: actions/setup-go@v5
         with:
@@ -60,6 +78,7 @@ jobs:
           # the unprivileged role the application connects as. What is under test is what
           # that role can see, and db.Open refuses a superuser for exactly that reason.
           AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
+          AGENTIIK_TEST_BUS_URL: nats://127.0.0.1:4222
 
       # gofmt has no exit code of its own for this: it lists the files it would rewrite
       # and succeeds either way, so the listing is what the job has to check.
