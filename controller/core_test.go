@@ -95,6 +95,14 @@ func (q *fakeQueue) Stop(_ context.Context, s graph.Stop) error {
 	return nil
 }
 
+func (q *fakeQueue) stops() []graph.Stop {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := q.stopped
+	q.stopped = nil
+	return out
+}
+
 func (q *fakeQueue) taken() []graph.Task {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -111,6 +119,7 @@ func deciding(t *testing.T) (*Core, *fakeQueue, *db.Pool, string) {
 
 func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, string) {
 	t.Helper()
+	clock.set(time.Date(2026, 9, 14, 6, 0, 0, 0, time.UTC))
 	pool, super := dbtest.Open(t)
 
 	conn := dbtest.Superuser(t, super)
@@ -166,15 +175,42 @@ func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, str
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 
-	at := time.Date(2026, 9, 14, 6, 0, 0, 0, time.UTC)
 	core, err := NewCore(c, term, Options{
 		Queue: q, Versions: oneVersion{g}, Objects: artifact.Dir(root),
-		Now: func() time.Time { return at },
+		Now: clock.now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return core, q, pool, super
+}
+
+// clock is the one a test moves. A backoff places an attempt at a moment in the future and a
+// deadline places the end of a run at one, so a test that could not move time would be a test
+// that could only watch the first half of both.
+var clock = &movable{at: time.Date(2026, 9, 14, 6, 0, 0, 0, time.UTC)}
+
+type movable struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (m *movable) now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.at
+}
+
+func (m *movable) set(at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.at = at
+}
+
+func (m *movable) advance(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.at = m.at.Add(d)
 }
 
 const decidedRun agk.RunID = "01M2Z8V1P9C4XQ7K2N4D6F8H0C"

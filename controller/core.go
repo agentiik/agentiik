@@ -171,6 +171,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	}
 
 	steps, tasks := project(state)
+	stampDeadlines(tasks, plan)
 	decision := db.Decision{
 		Namespace: e.Namespace, Run: run,
 		Was: e.Seq, Seq: state.Seq,
@@ -246,6 +247,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: the document of run %s could not be written: %w", run, err)
 	}
 	steps, tasks = project(state)
+	stampDeadlines(tasks, plan)
 	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
@@ -361,6 +363,27 @@ func project(s *graph.State) ([]db.StepRow, []db.TaskRow) {
 		steps = append(steps, row)
 	}
 	return steps, tasks
+}
+
+// stampDeadlines writes each planned task's deadline onto its row.
+//
+// The deadline is not in the state and cannot be: it is computed from the step's timeout and the
+// moment the work became somebody's, so the evaluator puts it on the task it hands out rather
+// than on the shard it hands out from. The row wants it all the same, because it is what a
+// person reading a stuck run looks at and what a lost-task sweep will compare against.
+func stampDeadlines(tasks []db.TaskRow, plan graph.Plan) {
+	if len(plan.Start) == 0 {
+		return
+	}
+	by := make(map[agk.TaskID]time.Time, len(plan.Start))
+	for _, t := range plan.Start {
+		by[t.ID] = t.Deadline
+	}
+	for i := range tasks {
+		if at, ok := by[tasks[i].ID]; ok {
+			tasks[i].Deadline = at
+		}
+	}
 }
 
 // taskOf is one shard, as the projection holds it.
