@@ -8,6 +8,12 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**A run ends the ways it can end, and the controller carries each of them.** A step that fails without `continue_on_error` fails the run; one that declares it does not, and the step downstream sees the failure through `when` and runs anyway. A failure with attempts left waits out its backoff rather than going straight back on the queue, and the run writes down when to come back so the sweep finds it then and not before, with `max: 2` being three attempts because the number counts further ones. A task carries the deadline its step's timeout lands on, the row carries it too, and past the run's own root timeout the run is `timed_out` and what it was holding is asked to stop. Cancelling does the same, with the reason that says which of the two it was.
+
+**Cancelling has a path of its own.** It makes the run terminal, and the loop leaves a terminal run alone because a finished run has nothing to decide, so the one pass that must still happen is the pass that names what to stop. Cancelling twice is not an error, and a result that arrives after the stop reached the runner changes nothing.
+
+**A deadline is stamped from the plan and not from the state.** It is computed from the step's timeout and the moment the work became somebody's, so the evaluator puts it on the task it hands out rather than on the shard it hands out from. The row wants it all the same: it is what a person reading a stuck run looks at.
+
 **What a result carries.** A result comes back off the bus and the controller writes down everything in it: the new step and task state, who held the task, where its log went and how many lines there were, what the attempt cost, the digest of every port the step published, and the artifacts those envelopes reference. Then it decides the run again, because a result is the only thing that makes a step downstream of it runnable. Recording one twice is free, which it has to be: a bus is allowed to deliver twice, and the evaluator answers a duplicate by counting no decision, so there is nothing to write.
 
 **An artifact lives as long as the workflow said.** `retain` is declared on a workflow output or in `defaults` and never on a step, so what an artifact on a port lives by depends on whether that port is a declared output. The controller is what knows, because it is what has the graph: a runner does not, and the API does not read it. The reference it records is what expiry acts on, and until it exists nothing expires and nothing is counted.

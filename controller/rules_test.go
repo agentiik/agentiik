@@ -1,0 +1,317 @@
+package controller
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/dbtest"
+)
+
+// The rules a run ends by, played out through the controller rather than through the evaluator
+// alone. Every one of them is package graph's and is already tested there; what is tested here
+// is that the controller carries them, which is a different claim: a rule the evaluator holds
+// and the controller loses on the way to a column is a rule the engine does not have.
+
+// failed is what a runner sends back for a container that exited non-zero. "Which failure it is,
+// and whether it is worth another attempt, is read off the exit code and nowhere else."
+func failed(task graph.Task, code int, at time.Time) graph.Result {
+	return graph.Result{
+		Task: task.ID, State: agk.TaskFailed, ExitCode: code,
+		DispatchedAt: at, StartedAt: at, FinishedAt: at,
+	}
+}
+
+// "failed: At least one step failed without continue_on_error."
+func TestAStepThatFailsFailsTheRun(t *testing.T) {
+	core, q, pool, _ := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+	core.answer(t, failed(taken[0], 1, core.now()))
+
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Fatalf("a run whose only reached step failed is %s", got)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("a failed run published %d more tasks", len(got))
+	}
+}
+
+const tolerantWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: archive, port: ok } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    continue_on_error: true
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+  archive:
+    image: ` + theImage + `
+    when: [succeeded, failed]
+    needs:
+      - { step: normalize, port: ok, as: orders }
+    outputs: [ok]
+`
+
+// "continue_on_error: A failure of this step does not fail the run. Downstream steps see the
+// failed state through when."
+func TestContinueOnErrorKeepsTheRunGoing(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, tolerantWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 || taken[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v", taken)
+	}
+	core.answer(t, failed(taken[0], 1, core.now()))
+
+	if got := stateOf(t, core); got.Terminal() {
+		t.Fatalf("a step declared continue_on_error failed and the run is already %s", got)
+	}
+	after := q.taken()
+	if len(after) != 1 || after[0].Step != "archive" {
+		t.Fatalf("the step downstream of a tolerated failure was not published: %+v", after)
+	}
+	core.answer(t, succeeded(t, after[0], core.now()))
+
+	// "succeeded: Every reached step finished, none failed beyond tolerance."
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Errorf("the run ended in %s, and the only failure was one the workflow tolerated", got)
+	}
+}
+
+const retryingWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    retry:
+      max: 2
+      on: [failed]
+      backoff: { type: exponential, base: 2s, max: 60s }
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+`
+
+// "A transient failure sends the task back to dispatched with an exponential backoff." What the
+// controller owes that rule is the clock: it has to write down when to come back, and come back.
+func TestARetryWaitsAndThenRunsAgain(t *testing.T) {
+	core, q, pool, super := decidingOn(t, retryingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.taken()
+	if len(first) != 1 || first[0].Attempt != 1 {
+		t.Fatalf("the first pass published %+v", first)
+	}
+	core.answer(t, failed(first[0], 1, core.now()))
+
+	// The run is not failed: an attempt is owed.
+	if got := stateOf(t, core); got.Terminal() {
+		t.Fatalf("a step with retry left is %s after one failure", got)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Fatalf("the retry was published before its backoff had passed: %+v", got)
+	}
+
+	// And the run says when to come back, which is what the sweep orders by.
+	conn := dbtest.Superuser(t, super)
+	var wake *time.Time
+	if err := conn.QueryRow(t.Context(),
+		`select wake_at from runs where id = $1`, string(decidedRun)).Scan(&wake); err != nil {
+		t.Fatal(err)
+	}
+	if wake == nil {
+		t.Fatal("a run owed a retry has no wake time, so nothing would ever come back for it")
+	}
+	if !wake.After(core.now()) {
+		t.Errorf("the wake time is %s and the clock says %s", wake, core.now())
+	}
+
+	// Before the backoff has passed, a sweep finds nothing.
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Fatalf("a sweep before the backoff published %+v", got)
+	}
+
+	// After it, the second attempt goes out.
+	clock.set(wake.Add(time.Second))
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := q.taken()
+	if len(second) != 1 {
+		t.Fatalf("after the backoff the sweep published %d tasks", len(second))
+	}
+	if second[0].Attempt != 2 {
+		t.Errorf("the retry is attempt %d", second[0].Attempt)
+	}
+	if second[0].ID == first[0].ID {
+		t.Error("the retry carries the identifier of the attempt that failed, and an attempt is what a task identifier counts")
+	}
+
+	// "max counts further attempts, which is why max: 2 is three attempts", so one more
+	// failure is owed an attempt and the one after it is not.
+	core.answer(t, failed(second[0], 1, core.now()))
+	if got := stateOf(t, core); got.Terminal() {
+		t.Fatalf("with one further attempt still owed the run is %s", got)
+	}
+	clock.advance(2 * time.Minute)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	third := q.taken()
+	if len(third) != 1 || third[0].Attempt != 3 {
+		t.Fatalf("the third attempt reads %+v", third)
+	}
+	core.answer(t, failed(third[0], 1, core.now()))
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Errorf("after the last of three attempts failed the run is %s", got)
+	}
+}
+
+const boundedWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+timeout: 1h
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    timeout: 30m
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+`
+
+// "timed_out: The deadline set by the root timeout of the entry point expired, and the tasks
+// still running were stopped."
+func TestARunEndsAtItsDeadlineAndStopsWhatItHolds(t *testing.T) {
+	core, q, pool, super := decidingOn(t, boundedWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+
+	// The step's own timeout lands on the task, which is what AGK_DEADLINE carries and what
+	// the runner stops the container at.
+	if taken[0].Deadline.IsZero() {
+		t.Fatal("the task carries no deadline, and the runner has nothing to stop the container at")
+	}
+	conn := dbtest.Superuser(t, super)
+	var deadline *time.Time
+	if err := conn.QueryRow(t.Context(),
+		`select deadline from tasks where idempotency_key = $1`, string(taken[0].ID)).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	if deadline == nil || !deadline.Equal(taken[0].Deadline) {
+		t.Errorf("the row says the deadline is %v and the task says %s", deadline, taken[0].Deadline)
+	}
+
+	// Past the run's own deadline, the run ends and what it was holding is asked to stop.
+	clock.advance(2 * time.Hour)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.TimedOut {
+		t.Fatalf("past its root timeout the run is %s", got)
+	}
+	stops := q.stops()
+	if len(stops) != 1 || stops[0].Task != taken[0].ID {
+		t.Fatalf("the tasks still running were not stopped: %+v", stops)
+	}
+	if stops[0].Reason != graph.StopDeadline {
+		t.Errorf("the stop says %s", stops[0].Reason)
+	}
+}
+
+// "cancelled: Cancelled by a principal holding workflow:run, by a concurrency group or by a
+// merge: first."
+func TestCancellingARunStopsWhatItHolds(t *testing.T) {
+	core, q, pool, _ := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+
+	if err := core.Cancel(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Fatalf("a cancelled run is %s", got)
+	}
+	stops := q.stops()
+	if len(stops) != 1 || stops[0].Task != taken[0].ID {
+		t.Fatalf("cancelling stopped %+v", stops)
+	}
+	if stops[0].Reason != graph.StopCancelled {
+		t.Errorf("the stop says %s, and the run was cancelled", stops[0].Reason)
+	}
+
+	// Cancelling twice is not an error: a principal asking again, or asking about a run that
+	// ended while they were asking, has got what they wanted either way.
+	if err := core.Cancel(t.Context(), decidedRun); err != nil {
+		t.Errorf("cancelling a cancelled run answered %s", err)
+	}
+
+	// And a result arriving afterwards changes nothing, which a runner that was already
+	// finishing when the stop reached it produces.
+	core.answer(t, succeeded(t, taken[0], core.now()))
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Errorf("a late result took a cancelled run to %s", got)
+	}
+}
+
+// stateOf reads the run's state back through the door the controller uses.
+func stateOf(t *testing.T, co *Core) agk.RunState {
+	t.Helper()
+	var e db.Evaluation
+	if err := co.controller.Fenced(t.Context(), co.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		e, err = w.Run(ctx, decidedRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return e.State
+}
