@@ -596,3 +596,99 @@ func (w *Wide) envelopesOf(ctx context.Context, namespace string, run agk.RunID)
 	}
 	return out, rows.Err()
 }
+
+// Admission: what a queued run is waiting on.
+//
+// "queued: Created, waiting on a concurrency lock or on namespace quota." Both answers are
+// counts over rows the controller already writes, which is why neither is a lock table: a group
+// holds at most one started run, so what holds it is that run, and a quota is how many tasks a
+// namespace has in flight.
+
+// Holding names the run that holds a concurrency group, and whether it is this one.
+//
+// A run holds its group once it has started. A queued run holds nothing, which is what lets
+// several queue up behind one without any of them believing it is in charge. The oldest queued
+// run is the one that goes next, because a group that let the newest through would starve the
+// first arrival for as long as triggers kept firing.
+func (w *Wide) Holding(ctx context.Context, namespace, group string) (agk.RunID, error) {
+	if group == "" {
+		return "", nil
+	}
+	var id agk.RunID
+	err := w.tx.QueryRow(ctx, `
+		select id from runs
+		where namespace = $1 and concurrency_group = $2
+		  and state in ('running', 'waiting')
+		order by created_at
+		limit 1`, namespace, group).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: the holder of concurrency group %q could not be read: %w", group, err)
+	}
+	return id, nil
+}
+
+// NextInLine says whether this run is the one a free group should let through.
+//
+// Creation order, which is the only order that does not starve somebody: a group admitting the
+// newest arrival would leave the first one queued for as long as triggers kept firing.
+func (w *Wide) NextInLine(ctx context.Context, namespace, group string, run agk.RunID) (bool, error) {
+	if group == "" {
+		return true, nil
+	}
+	var first agk.RunID
+	err := w.tx.QueryRow(ctx, `
+		select id from runs
+		where namespace = $1 and concurrency_group = $2 and state = 'queued'
+		order by created_at, id
+		limit 1`, namespace, group).Scan(&first)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("db: the queue of concurrency group %q could not be read: %w", group, err)
+	}
+	return first == run, nil
+}
+
+// SetGroup records which concurrency group a run belongs to.
+//
+// Stamped by the controller on the first pass that looks at the run, because the group is read
+// out of the graph and whoever created the run does not read graphs.
+func (w *Wide) SetGroup(ctx context.Context, namespace string, run agk.RunID, group string) error {
+	if _, err := w.tx.Exec(ctx,
+		`update runs set concurrency_group = $3 where namespace = $1 and id = $2`,
+		namespace, string(run), nilIfEmpty(group)); err != nil {
+		return fmt.Errorf("db: the concurrency group of run %s could not be recorded: %w", run, err)
+	}
+	return nil
+}
+
+// Slots is how many more tasks this namespace may have in flight.
+//
+// "max_concurrent_tasks: Caps how much of the runner fleet one namespace can hold at once, so a
+// fan-out of ten thousand items cannot starve everyone else." What counts against it is a task
+// that holds a runner or is on its way to one, which is the four states between being decided
+// and being over.
+func (w *Wide) Slots(ctx context.Context, namespace string) (int, error) {
+	var ceiling, held int
+	if err := w.tx.QueryRow(ctx,
+		`select max_concurrent_tasks from namespaces where name = $1`, namespace).Scan(&ceiling); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("db: namespace %q has no row, so the ceiling on what it may hold is unknown", namespace)
+		}
+		return 0, fmt.Errorf("db: the task ceiling of namespace %q could not be read: %w", namespace, err)
+	}
+	if err := w.tx.QueryRow(ctx,
+		`select count(*) from tasks
+		 where namespace = $1 and state in ('pending', 'dispatched', 'running', 'publishing')
+		   and published_at is not null`, namespace).Scan(&held); err != nil {
+		return 0, fmt.Errorf("db: what namespace %q holds could not be counted: %w", namespace, err)
+	}
+	if held >= ceiling {
+		return 0, nil
+	}
+	return ceiling - held, nil
+}
