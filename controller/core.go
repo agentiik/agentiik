@@ -149,6 +149,17 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: the graph of run %s could not be resolved: %w", run, err)
 	}
 
+	// Admission comes before the evaluator does, and it has to: graph.Start stamps the run
+	// as started and the root timeout runs from there, so a run admitted late would be a run
+	// whose deadline had been running while it queued.
+	admit, err := co.admitted(ctx, e, g)
+	if err != nil {
+		return err
+	}
+	if !admit {
+		return nil
+	}
+
 	now := co.now().UTC()
 	ev, err := co.resume(ctx, e, g, now)
 	if err != nil {
@@ -159,6 +170,16 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	if err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
+
+	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
+	// decision is written rather than after, so that the row says what was handed out. A task
+	// held back is not refused: it stays pending in the evaluator's state, which is what
+	// makes the next pass hand it out again.
+	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start)
+	if err != nil {
+		return err
+	}
+	plan.Start = within
 
 	state := ev.State()
 	doc, err := Elide(ctx, state, e.Namespace, co.objects)
