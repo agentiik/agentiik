@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -531,49 +532,67 @@ func TestAReferenceArrivingAfterAClaimKeepsTheObject(t *testing.T) {
 }
 
 // Two steps publishing identical bytes share one object, which is why an envelope is counted
-// rather than deleted by digest.
+// rather than deleted by digest. What publishes a port is a decision, and the decision is what
+// the purge reads back, so both are exercised here through the one door there is.
 func TestTwoStepsPublishingTheSameEnvelopeShareOneObject(t *testing.T) {
 	pool, super := opened(t)
 	d := digestOf("1")
 
-	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		for _, step := range []agk.Step{"archive", "render"} {
-			if err := ns.PublishPorts(ctx, financeRun, step, []Published{
-				{Port: "ok", Digest: d, Size: 128, Items: 2},
-			}); err != nil {
-				return err
-			}
+	// A run whose document names one envelope twice, once per step.
+	document := func(digest string, steps ...string) []byte {
+		var refs []map[string]any
+		for _, step := range steps {
+			refs = append(refs, map[string]any{
+				"step": step, "shard": PublishedByTheStep, "port": "ok",
+				"digest": digest, "size": 128,
+			})
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+		b, err := json.Marshal(map[string]any{"version": 1, "envelopes": refs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
 	}
+	decide := func(was, seq int, digest string, steps ...string) {
+		t.Helper()
+		var refs []EnvelopeRef
+		for _, step := range steps {
+			refs = append(refs, EnvelopeRef{
+				Step: agk.Step(step), Shard: PublishedByTheStep, Port: "ok",
+				Digest: digest, Size: 128, Items: 2,
+			})
+		}
+		err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			return w.SaveDecision(ctx, Decision{
+				Namespace: "finance", Run: financeRun, Was: was, Seq: seq,
+				Document: document(digest, steps...), State: agk.Running,
+				StartedAt: time.Now().UTC(), Envelopes: refs,
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	decide(0, 1, d, "archive", "render")
 	if got := refsOf(t, pool, "finance", d); got != 2 {
 		t.Fatalf("two steps publishing one envelope count %d", got)
 	}
 
-	// Republishing what was already published changes nothing.
-	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		return ns.PublishPorts(ctx, financeRun, "archive", []Published{
-			{Port: "ok", Digest: d, Size: 128, Items: 2},
-		})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Deciding again with the same envelopes changes nothing.
+	decide(1, 2, d, "archive", "render")
 	if got := refsOf(t, pool, "finance", d); got != 2 {
-		t.Errorf("republishing an unchanged port left a count of %d", got)
+		t.Errorf("a pass that published nothing new left a count of %d", got)
 	}
 
-	// The run expires, both steps are purged, and only then is the object collectable.
+	// The run expires, and the purge lowers every envelope it referenced.
 	conn, err := pgx.Connect(t.Context(), super)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close(t.Context())
 	if _, err := conn.Exec(t.Context(),
-		`update runs set started_at = now(), finished_at = now(), expires_at = now() - interval '1 minute'
+		`update runs set finished_at = now(), expires_at = now() - interval '1 minute'
 		 where namespace = 'finance' and id = $1`, financeRun); err != nil {
 		t.Fatal(err)
 	}
@@ -582,11 +601,11 @@ func TestTwoStepsPublishingTheSameEnvelopeShareOneObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if purged != 2 {
-		t.Fatalf("the envelope purge took %d steps and two had expired", purged)
+	if purged != 1 {
+		t.Fatalf("the envelope purge took %d runs and one had expired", purged)
 	}
 	if got := refsOf(t, pool, "finance", d); got != 0 {
-		t.Errorf("after purging both steps the count is %d", got)
+		t.Errorf("after purging the run the count is %d", got)
 	}
 
 	// Purging twice takes nothing, which is what the stamp is for.
@@ -595,7 +614,7 @@ func TestTwoStepsPublishingTheSameEnvelopeShareOneObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	if again != 0 {
-		t.Errorf("the second purge took %d steps", again)
+		t.Errorf("the second purge took %d runs", again)
 	}
 
 	// And the digest is still readable, because it is the record of what was published.
@@ -618,19 +637,33 @@ func TestRepublishingAPortMovesTheCount(t *testing.T) {
 	pool, _ := opened(t)
 	first, second := digestOf("2"), digestOf("3")
 
-	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		if err := ns.PublishPorts(ctx, financeRun, "archive", []Published{
-			{Port: "ok", Digest: first, Size: 10, Items: 1},
-		}); err != nil {
-			return err
+	decide := func(was, seq int, digest string, size int64) {
+		t.Helper()
+		b, err := json.Marshal(map[string]any{"version": 1, "envelopes": []map[string]any{{
+			"step": "archive", "shard": PublishedByTheStep, "port": "ok",
+			"digest": digest, "size": size,
+		}}})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return ns.PublishPorts(ctx, financeRun, "archive", []Published{
-			{Port: "ok", Digest: second, Size: 20, Items: 3},
+		err = pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			return w.SaveDecision(ctx, Decision{
+				Namespace: "finance", Run: financeRun, Was: was, Seq: seq,
+				Document: b, State: agk.Running, StartedAt: time.Now().UTC(),
+				Envelopes: []EnvelopeRef{{
+					Step: "archive", Shard: PublishedByTheStep, Port: "ok",
+					Digest: digest, Size: size, Items: 1,
+				}},
+			})
 		})
-	})
-	if err != nil {
-		t.Fatal(err)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
+
+	decide(0, 1, first, 10)
+	decide(1, 2, second, 20)
+
 	if got := refsOf(t, pool, "finance", first); got != 0 {
 		t.Errorf("the envelope that was replaced is still counted %d times", got)
 	}

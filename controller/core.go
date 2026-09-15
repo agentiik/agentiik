@@ -180,16 +180,26 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		FinishedAt: state.Run.FinishedAt,
 		WakeAt:     plan.Wake,
 		Steps:      steps, Tasks: tasks,
+		Envelopes: referencesOf(doc),
+		Artifacts: artifactsOf(g, state),
 	}
 	if state.Run.State.Terminal() {
 		if outputs, err := ev.Outputs(); err == nil {
 			decision.Outputs = digestsOf(outputs)
 		}
 	}
-	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-		return w.SaveDecision(ctx, decision)
-	}); err != nil {
-		return err
+	// A pass that decided nothing writes nothing. The evaluator counts decisions, so a
+	// sequence that has not moved is the honest statement that this pass was a no-op:
+	// asking again at the same instant is idempotent by design, and the commonest case is
+	// a sweep reaching a run that is simply waiting.
+	saved := e.Seq
+	if state.Seq != saved {
+		if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			return w.SaveDecision(ctx, decision)
+		}); err != nil {
+			return err
+		}
+		saved = state.Seq
 	}
 
 	// Committed. Only now does anything leave this process, and everything that does is
@@ -219,6 +229,14 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return fmt.Errorf("controller: the dispatch of %s could not be recorded: %w", t.ID, err)
 		}
 	}
+	if state.Seq == saved {
+		// The messages went and the evaluator learned nothing from it, which happens
+		// only when every one of them was a task it had already seen dispatched.
+		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
+			return err
+		})
+	}
 	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
 	if err != nil {
 		return err
@@ -231,13 +249,15 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
-			Was: decision.Seq, Seq: state.Seq,
+			Was: saved, Seq: state.Seq,
 			Document:   encoded,
 			State:      state.Run.State,
 			StartedAt:  state.Run.StartedAt,
 			FinishedAt: state.Run.FinishedAt,
 			WakeAt:     plan.Wake,
 			Steps:      steps, Tasks: tasks,
+			Envelopes: referencesOf(dispatched),
+			Artifacts: artifactsOf(g, state),
 		}); err != nil {
 			return err
 		}
