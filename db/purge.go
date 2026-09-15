@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 )
 
@@ -125,10 +126,12 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 
 // PurgeEnvelopes drops the envelopes of runs whose retention has run out.
 //
-// A step's digests stay: they are the record of what was published, and the chapter keeps
-// only digests and URIs in the database anyway. What goes is the count on the objects behind
-// them, which is what eventually lets the bytes be collected. The stamp is what keeps a sweep
-// from taking the same step for ever.
+// A run's envelopes are what its decision document references, published and per shard alike,
+// because both are objects the controller put in the store and an object nothing counts is an
+// object the collector never sees. What goes is the count on them, which is what eventually
+// lets the bytes be collected. What stays is the record: the digests in steps.ports are the
+// record of what was published, and the chapter keeps only digests and URIs in the database
+// anyway. The stamp is what keeps a sweep from taking the same run for ever.
 func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -136,33 +139,55 @@ func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 	}
 	var purged int
 	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
-		return w.tx.QueryRow(ctx, `
-			with due as (
-			  select s.namespace, s.run_id, s.step, s.ports
-			  from steps s join runs r on r.namespace = s.namespace and r.id = s.run_id
-			  where s.envelopes_purged_at is null
-			    and r.expires_at is not null and r.expires_at <= now()
-			  order by r.expires_at
-			  limit $1
-			  for update of s skip locked
-			), stamped as (
-			  update steps s set envelopes_purged_at = now()
-			  from due d
-			  where s.namespace = d.namespace and s.run_id = d.run_id and s.step = d.step
-			  returning 1
-			), counted as (
-			  select d.namespace, e.value->>'digest' as digest, count(*)::int as n
-			  from due d, jsonb_each(d.ports) e
-			  group by 1, 2
-			), lowered as (
-			  update artifact_objects o
-			  set refs = greatest(o.refs - c.n, 0),
-			      collectable_at = case when o.refs - c.n <= 0 then now() else null end
-			  from counted c
-			  where o.namespace = c.namespace and o.digest = c.digest
-			  returning 1
-			)
-			select (select count(*) from due)::int`, batch).Scan(&purged)
+		rows, err := w.tx.Query(ctx, `
+			select r.namespace, r.id
+			from runs r
+			where r.expires_at is not null and r.expires_at <= now()
+			  and exists (select 1 from steps s
+			              where s.namespace = r.namespace and s.run_id = r.id
+			                and s.envelopes_purged_at is null)
+			order by r.expires_at
+			limit $1`, batch)
+		if err != nil {
+			return err
+		}
+		type due struct {
+			namespace string
+			run       agk.RunID
+		}
+		var expired []due
+		for rows.Next() {
+			var d due
+			if err := rows.Scan(&d.namespace, &d.run); err != nil {
+				rows.Close()
+				return err
+			}
+			expired = append(expired, d)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		for _, d := range expired {
+			held, err := w.envelopesOf(ctx, d.namespace, d.run)
+			if err != nil {
+				return err
+			}
+			for _, e := range held {
+				if err := lower(ctx, w.tx, d.namespace, "sha256:"+e.Digest, ""); err != nil {
+					return err
+				}
+			}
+			if _, err := w.tx.Exec(ctx,
+				`update steps set envelopes_purged_at = now()
+				 where namespace = $1 and run_id = $2 and envelopes_purged_at is null`,
+				d.namespace, string(d.run)); err != nil {
+				return err
+			}
+			purged++
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("db: the envelope purge failed: %w", err)

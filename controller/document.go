@@ -66,8 +66,9 @@ type EnvelopeRef struct {
 	Size   int64  `json:"size"`
 }
 
-// published is the Shard value of an envelope the step published rather than a shard.
-const published = -1
+// publishedByTheStep is the Shard value of an envelope the step published rather than one a
+// shard produced. It is db.PublishedByTheStep spelled on this side of the boundary.
+const publishedByTheStep = -1
 
 // Elide writes every envelope of a state to the object store and answers the document to
 // persist. The state it was given is not touched: the evaluator holds that pointer, and a
@@ -96,7 +97,7 @@ func Elide(ctx context.Context, s *graph.State, namespace string, objects artifa
 			if err != nil {
 				return Document{}, fmt.Errorf("controller: the envelope of %s on %s: %w", name, port, err)
 			}
-			ref.Step, ref.Shard, ref.Port = name, published, port
+			ref.Step, ref.Shard, ref.Port = name, publishedByTheStep, port
 			d.Envelopes = append(d.Envelopes, ref)
 			st.Ports[port] = hollow(st.Ports[port])
 		}
@@ -143,7 +144,7 @@ func Rehydrate(ctx context.Context, d Document, namespace string, objects artifa
 			return nil, fmt.Errorf("controller: the envelope of %s on %s: %w", ref.Step, ref.Port, err)
 		}
 		switch {
-		case ref.Shard == published:
+		case ref.Shard == publishedByTheStep:
 			if st.Ports == nil {
 				st.Ports = map[agk.Port]agk.Envelope{}
 			}

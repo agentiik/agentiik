@@ -190,6 +190,17 @@ type Decision struct {
 
 	Steps []StepRow
 	Tasks []TaskRow
+
+	// Envelopes are every envelope this decision's document references, published or per
+	// shard. They are counted rather than merely written down, so that the collector can
+	// see the objects the controller put in the store.
+	Envelopes []EnvelopeRef
+
+	// Artifacts are the files those envelopes reference, each with the retention the
+	// workflow declared for the port that published it. Writing one twice is what a pass
+	// that decided something else does, and is free: a reference that says the same thing
+	// is the same reference.
+	Artifacts []Reference
 }
 
 // StepRow is a step as the projection holds it.
@@ -222,6 +233,10 @@ type TaskRow struct {
 	LogLines int
 	LogCut   bool
 
+	// Usage is what the attempt cost, as the runner measured it. Nothing here reads it:
+	// it is carried so that a person, a console and a bill can.
+	Usage map[string]any
+
 	DispatchedAt time.Time
 	StartedAt    time.Time
 	FinishedAt   time.Time
@@ -243,6 +258,13 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	outputs, err := json.Marshal(orEmpty(d.Outputs))
 	if err != nil {
 		return fmt.Errorf("db: the outputs of run %s could not be written: %w", d.Run, err)
+	}
+
+	// Read before the row is overwritten, because the diff the counts move by is against
+	// what this run referenced a moment ago and the update below is what replaces it.
+	was, err := w.envelopesOf(ctx, d.Namespace, d.Run)
+	if err != nil {
+		return err
 	}
 
 	tag, err := w.tx.Exec(ctx,
@@ -277,6 +299,15 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 			return err
 		}
 	}
+
+	if err := w.setEnvelopes(ctx, d.Namespace, d.Run, was, d.Envelopes); err != nil {
+		return err
+	}
+	for _, a := range d.Artifacts {
+		if _, err := writeArtifact(ctx, w.tx, d.Namespace, a); err != nil {
+			return fmt.Errorf("db: the artifact %s of run %s: %w", a.URI, d.Run, err)
+		}
+	}
 	return nil
 }
 
@@ -299,11 +330,16 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		log = &s
 	}
 
-	_, err := w.tx.Exec(ctx,
+	usage, err := json.Marshal(orEmpty(t.Usage))
+	if err != nil {
+		return fmt.Errorf("db: the usage of task %s could not be written: %w", t.ID, err)
+	}
+
+	_, err = w.tx.Exec(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
-		                    dispatched_at, started_at, finished_at, deadline, published_at)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		                    dispatched_at, started_at, finished_at, deadline, published_at, usage)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		 on conflict (namespace, idempotency_key) do update
 		 set state = excluded.state,
 		     runner = coalesce(excluded.runner, tasks.runner),
@@ -315,12 +351,13 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		     started_at = coalesce(tasks.started_at, excluded.started_at),
 		     finished_at = excluded.finished_at,
 		     deadline = coalesce(excluded.deadline, tasks.deadline),
-		     published_at = coalesce(tasks.published_at, excluded.published_at)`,
+		     published_at = coalesce(tasks.published_at, excluded.published_at),
+		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end`,
 		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf,
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt))
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage)
 	if err != nil {
 		return fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
@@ -440,4 +477,122 @@ func nilIfZeroInt(n int) *int {
 		return nil
 	}
 	return &n
+}
+
+// EnvelopeRef is one envelope a run's decision references, as the database holds it.
+//
+// Every envelope the document names is counted here, not only the ones a step published. A
+// shard's envelope is in the document until the step publishes, so a run resumed inside that
+// window needs its bytes, and an object with no row at all is an object the collector cannot
+// see and therefore never deletes. Counting all of them is what makes the store's contents
+// accounted for rather than merely mostly accounted for.
+type EnvelopeRef struct {
+	Step agk.Step
+
+	// Shard is the position in the step's slice, and PublishedByTheStep for the envelope
+	// the step published rather than one a shard produced.
+	Shard int
+
+	Port   agk.Port
+	Digest string
+	Size   int64
+	Items  int
+}
+
+// PublishedByTheStep is the Shard of an envelope the step published.
+//
+// "A port produces exactly one envelope, once, when the emitting step ends. A step split into
+// shards has its shard envelopes concatenated port by port before publication." The publication
+// is what steps.ports records and what a downstream step reads; a shard's own envelope is
+// working material.
+const PublishedByTheStep = -1
+
+// setEnvelopes records what this decision's document references, and moves the counts.
+//
+// The diff is against what the run referenced before, so a pass that changed nothing changes no
+// count, a port republished after a retry lowers what it replaced, and a run that ends holds
+// exactly the envelopes its document names. The count is what makes sharing safe: two steps
+// publishing identical bytes publish one object, and a purge that deleted by digest alone would
+// delete what another step still names.
+func (w *Wide) setEnvelopes(ctx context.Context, namespace string, run agk.RunID, was, next []EnvelopeRef) error {
+	// Counted by digest and by how many times the run names it, because one run can name one
+	// object from two places and dropping one of them must not drop the object.
+	before, after := map[string]int{}, map[string]EnvelopeRef{}
+	for _, e := range was {
+		before[e.Digest]++
+	}
+	now := map[string]int{}
+	for _, e := range next {
+		if !hexDigest.MatchString(e.Digest) {
+			return fmt.Errorf("db: the envelope of %s on %s names %q, and a digest is sixty-four lowercase hexadecimal characters", e.Step, e.Port, e.Digest)
+		}
+		now[e.Digest]++
+		after[e.Digest] = e
+	}
+
+	for digest, count := range now {
+		for range count - before[digest] {
+			if _, err := raise(ctx, w.tx, namespace, "sha256:"+digest, after[digest].Size, envelopeMediaType); err != nil {
+				return err
+			}
+		}
+	}
+	for digest, count := range before {
+		for range count - now[digest] {
+			if err := lower(ctx, w.tx, namespace, "sha256:"+digest, ""); err != nil {
+				return err
+			}
+		}
+	}
+
+	// And what each step published, which is the chapter's "envelope digests for each port"
+	// and what the run detail shows.
+	published := map[agk.Step]map[string]port{}
+	for _, e := range next {
+		if e.Shard != PublishedByTheStep {
+			continue
+		}
+		if published[e.Step] == nil {
+			published[e.Step] = map[string]port{}
+		}
+		published[e.Step][string(e.Port)] = port{Digest: "sha256:" + e.Digest, Size: e.Size, Items: e.Items}
+	}
+	for step, ports := range published {
+		encoded, err := json.Marshal(ports)
+		if err != nil {
+			return fmt.Errorf("db: the published ports of step %s could not be written: %w", step, err)
+		}
+		if _, err := w.tx.Exec(ctx,
+			`update steps set ports = $4 where namespace = $1 and run_id = $2 and step = $3`,
+			namespace, string(run), string(step), encoded); err != nil {
+			return fmt.Errorf("db: the published ports of step %s could not be written: %w", step, err)
+		}
+	}
+	return nil
+}
+
+// envelopesOf reads what a run's stored decision references.
+//
+// The document is package controller's shape, and this reaches two fields of it. That coupling
+// is deliberate and is the narrowest available: the alternative is a second copy of the list in
+// a column of its own, which would be two answers to what a run references and one of them
+// eventually wrong.
+func (w *Wide) envelopesOf(ctx context.Context, namespace string, run agk.RunID) ([]EnvelopeRef, error) {
+	rows, err := w.tx.Query(ctx, `
+		select e->>'step', (e->>'shard')::int, e->>'port', e->>'digest', (e->>'size')::bigint
+		from runs, lateral jsonb_array_elements(coalesce(evaluation->'envelopes', '[]'::jsonb)) as e
+		where namespace = $1 and id = $2`, namespace, string(run))
+	if err != nil {
+		return nil, fmt.Errorf("db: the envelopes of run %s could not be read: %w", run, err)
+	}
+	defer rows.Close()
+	var out []EnvelopeRef
+	for rows.Next() {
+		var e EnvelopeRef
+		if err := rows.Scan(&e.Step, &e.Shard, &e.Port, &e.Digest, &e.Size); err != nil {
+			return nil, fmt.Errorf("db: the envelopes of run %s could not be read: %w", run, err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

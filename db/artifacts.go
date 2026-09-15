@@ -110,6 +110,12 @@ type Written struct {
 // wrote. The same URI naming different bytes is an error, because that is a URI that stopped
 // meaning one thing.
 func (n *NS) WriteArtifact(ctx context.Context, r Reference) (Written, error) {
+	return writeArtifact(ctx, n.tx, n.namespace, r)
+}
+
+// writeArtifact is the work, on whichever door asked for it. The controller records a run's
+// artifacts through the installation door, because a run is decided from outside a namespace.
+func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference) (Written, error) {
 	if err := r.URI.Run.Validate(); err != nil {
 		return Written{}, fmt.Errorf("db: the artifact's run: %w", err)
 	}
@@ -138,19 +144,19 @@ func (n *NS) WriteArtifact(ctx context.Context, r Reference) (Written, error) {
 		r.MediaType = "application/octet-stream"
 	}
 
-	ceiling, err := n.retentionCeiling(ctx)
+	ceiling, err := retentionCeiling(ctx, tx, namespace)
 	if err != nil {
 		return Written{}, err
 	}
 
 	stored := "sha256:" + r.Digest
-	out := Written{Key: artifact.Key(n.namespace, r.Digest), Fetches: r.Fetches}
+	out := Written{Key: artifact.Key(namespace, r.Digest), Fetches: r.Fetches}
 
 	// The object first, because the reference has a foreign key onto it, and counted up
 	// before the reference is written rather than after: a count that is momentarily too
 	// high keeps an object alive that nothing needed, and a count that is momentarily too
 	// low lets a sweep delete an object something did.
-	mustWrite, err := n.raise(ctx, stored, r.Size, r.MediaType)
+	mustWrite, err := raise(ctx, tx, namespace, stored, r.Size, r.MediaType)
 	if err != nil {
 		return Written{}, err
 	}
@@ -165,28 +171,28 @@ func (n *NS) WriteArtifact(ctx context.Context, r Reference) (Written, error) {
 	var expires time.Time
 	var status Status
 	var existing string
-	err = n.tx.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type,
 		                        expires_at, fetches_left)
 		 values ($1, $2, $3, $4, $5, $6, $7, $8,
 		         now() + least($9::bigint * interval '1 second', $10::int * interval '1 day'), $11)
 		 on conflict (namespace, run_id, step, port, name) do nothing
 		 returning expires_at, status, digest`,
-		n.namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
+		namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
 		stored, r.Size, r.MediaType, int64(r.For/time.Second), ceiling, budget).Scan(&expires, &status, &existing)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The reference was already there, so the count this call raised is one too
 		// many and comes straight back down. Idempotent where the reference says the
 		// same thing, and an error where it does not.
-		if err := n.lower(ctx, stored, ""); err != nil {
+		if err := lower(ctx, tx, namespace, stored, ""); err != nil {
 			return Written{}, err
 		}
 		var left *int
-		if err := n.tx.QueryRow(ctx,
+		if err := tx.QueryRow(ctx,
 			`select digest, expires_at, status, fetches_left from artifacts
 			 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`,
-			n.namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
+			namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
 		).Scan(&existing, &expires, &status, &left); err != nil {
 			return Written{}, fmt.Errorf("db: the reference could not be read back: %w", err)
 		}
@@ -327,7 +333,7 @@ func (n *NS) retire(ctx context.Context, u agk.URI, status Status, stored string
 		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name, string(status)); err != nil {
 		return fmt.Errorf("db: %s could not be retired: %w", u, err)
 	}
-	return n.lower(ctx, stored, u.Run)
+	return lower(ctx, n.tx, n.namespace, stored, u.Run)
 }
 
 // retentionCeiling is what the namespace lets a workflow ask for.
@@ -335,12 +341,12 @@ func (n *NS) retire(ctx context.Context, u agk.URI, status Status, stored string
 // "retain is capped by the namespace quota and cannot exceed it; a workflow may always ask
 // for less." Read here rather than trusted from the caller, because a cap a caller applies
 // is a cap a caller can forget.
-func (n *NS) retentionCeiling(ctx context.Context) (int, error) {
+func retentionCeiling(ctx context.Context, tx pgx.Tx, namespace string) (int, error) {
 	var days int
-	err := n.tx.QueryRow(ctx,
-		`select max_retention_days from namespaces where name = $1`, n.namespace).Scan(&days)
+	err := tx.QueryRow(ctx,
+		`select max_retention_days from namespaces where name = $1`, namespace).Scan(&days)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("db: namespace %q has no row, so the ceiling retain is capped by is unknown and nothing may be written under it", n.namespace)
+		return 0, fmt.Errorf("db: namespace %q has no row, so the ceiling retain is capped by is unknown and nothing may be written under it", namespace)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("db: the retention ceiling could not be read: %w", err)

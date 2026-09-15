@@ -17,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/jackc/pgx/v5"
 )
 
 // The loop, end to end: a run created in a namespace, decided by a controller that serves every
@@ -105,6 +106,10 @@ func (q *fakeQueue) taken() []graph.Task {
 // deciding stands up everything a Core needs: a database with a namespace and a workflow, an
 // object store in a directory, a graph, a fake queue and a term.
 func deciding(t *testing.T) (*Core, *fakeQueue, *db.Pool, string) {
+	return decidingOn(t, theWorkflow)
+}
+
+func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, string) {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 
@@ -120,7 +125,7 @@ func deciding(t *testing.T) (*Core, *fakeQueue, *db.Pool, string) {
 		}
 	}
 
-	wf, err := graph.Parse([]byte(theWorkflow))
+	wf, err := graph.Parse([]byte(document))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,47 +256,17 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 	}
 }
 
-// answer feeds one result back the way a runner would, by writing it into the state through the
-// evaluator. It is the half of the loop the bus group will bring, faked here so that the rest of
-// it can be run end to end today.
+// answer feeds one result back the way the bus will, through the door a bus consumer calls.
 func (co *Core) answer(t *testing.T, r graph.Result) {
 	t.Helper()
-	var e db.Evaluation
-	if err := co.controller.Fenced(t.Context(), co.term, func(ctx context.Context, w *db.Wide) error {
-		var err error
-		e, err = w.Run(ctx, decidedRun)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	g, err := co.versions.Graph(t.Context(), e.Namespace, e.Workflow, e.Commit)
+	log, err := agk.NewLogURI(r.Task)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev, err := co.resume(t.Context(), e, g, co.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ev.Record(r, co.now()); err != nil {
-		t.Fatal(err)
-	}
-	state := ev.State()
-	doc, err := Elide(t.Context(), state, e.Namespace, co.objects)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := jsonOf(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	steps, tasks := project(state)
-	if err := co.controller.Fenced(t.Context(), co.term, func(ctx context.Context, w *db.Wide) error {
-		return w.SaveDecision(ctx, db.Decision{
-			Namespace: e.Namespace, Run: decidedRun, Was: e.Seq, Seq: state.Seq,
-			Document: encoded, State: state.Run.State,
-			StartedAt: state.Run.StartedAt, FinishedAt: state.Run.FinishedAt,
-			Steps: steps, Tasks: tasks,
-		})
+	if err := co.Answer(t.Context(), Answer{
+		Result: r, Runner: "runner-dmz-02",
+		Log: log, LogLines: 412,
+		Usage: map[string]any{"cpu_seconds": 12.4, "max_rss_bytes": 198443008, "image_pull_ms": 0},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -321,10 +296,12 @@ func TestARunGoesFromTheFirstStepToATerminalState(t *testing.T) {
 	core, q, pool, super := deciding(t)
 	createRun(t, pool)
 
+	// One decision starts it, and every answer decides it again, which is the loop the page
+	// describes: steps three to seven repeat until nothing is runnable.
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
 	for pass := 1; pass <= 6; pass++ {
-		if err := core.Decide(t.Context(), decidedRun); err != nil {
-			t.Fatalf("pass %d: %s", pass, err)
-		}
 		taken := q.taken()
 		if len(taken) == 0 {
 			break
@@ -400,14 +377,12 @@ func TestAFailoverResumesRatherThanRebuilds(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("the first pass published %d tasks", len(taken))
 	}
-	first.answer(t, succeeded(t, taken[0], first.now()))
 
-	// Everything the first controller held is now gone. A second one takes the term and
-	// picks the run up with nothing but what is written down.
+	// Everything the first controller held is now gone, and the result of the work it
+	// planned comes back to a second one that never saw it planned. That is the failover
+	// worth testing: the instance that takes the answer is not the instance that asked.
 	second, q2, _, _ := resumeOn(t, pool, super, first)
-	if err := second.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	second.answer(t, succeeded(t, taken[0], second.now()))
 	after := q2.taken()
 	if len(after) != 1 || after[0].Step != "archive" {
 		t.Fatalf("the resumed controller published %d tasks: %+v", len(after), after)
@@ -668,4 +643,289 @@ func holds(ids []agk.RunID, want agk.RunID) bool {
 		}
 	}
 	return false
+}
+
+// What a result carries that the evaluator has no use for, recorded where a person can read it:
+// who held the task, where its log went, how many lines there were and what it cost.
+func TestAResultRecordsWhatOnlyTheRunnerKnows(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+	core.answer(t, succeeded(t, taken[0], core.now()))
+
+	conn := dbtest.Superuser(t, super)
+	var runner, uri string
+	var lines int
+	var cut bool
+	var usage []byte
+	if err := conn.QueryRow(t.Context(),
+		`select runner, log_uri, log_lines, log_truncated, usage from tasks
+		 where idempotency_key = $1`, string(taken[0].ID)).
+		Scan(&runner, &uri, &lines, &cut, &usage); err != nil {
+		t.Fatal(err)
+	}
+	if runner != "runner-dmz-02" || lines != 412 || cut {
+		t.Errorf("the task says runner %q, %d lines, cut %v", runner, lines, cut)
+	}
+	want, err := agk.NewLogURI(taken[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uri != want.String() {
+		t.Errorf("the log is at %q and the task wrote %q", uri, want)
+	}
+	var measured map[string]any
+	if err := json.Unmarshal(usage, &measured); err != nil {
+		t.Fatal(err)
+	}
+	if measured["cpu_seconds"] != 12.4 {
+		t.Errorf("the usage came back as %v", measured)
+	}
+
+	// And a result for an attempt that is over changes nothing, because a bus is allowed to
+	// deliver twice.
+	before := seqOf(t, conn)
+	core.answer(t, succeeded(t, taken[0], core.now()))
+	if after := seqOf(t, conn); after == before {
+		t.Log("the duplicate took no decision at all, which is also correct")
+	}
+	var tasks int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from tasks where run_id = $1 and step = 'normalize'`, string(decidedRun)).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 1 {
+		t.Errorf("a result delivered twice left %d task rows", tasks)
+	}
+}
+
+// "A port produces exactly one envelope, once, when the emitting step ends", and what the
+// database keeps of it is the digest. That is what makes the envelope purge able to act.
+func TestAPublishedPortIsRecordedAsADigest(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range q.taken() {
+		core.answer(t, succeeded(t, task, core.now()))
+	}
+
+	var ports db.Ports
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		ports, err = ns.PublishedPorts(ctx, decidedRun, "normalize")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 2 {
+		t.Fatalf("normalize declares two ports and published %d: %+v", len(ports), ports)
+	}
+	ok, found := ports["ok"]
+	if !found || len(ok.Digest) != 64 || ok.Size <= 0 {
+		t.Fatalf("the ok port reads %+v", ok)
+	}
+	if ok.Items != 1 {
+		t.Errorf("the ok port carries %d items, and the step published one", ok.Items)
+	}
+	// "An output port declared but never written by the container publishes an empty
+	// envelope. That is not an error."
+	if rejected := ports["rejected"]; rejected.Items != 0 || len(rejected.Digest) != 64 {
+		t.Errorf("the port nothing was written to reads %+v", rejected)
+	}
+
+	// And every envelope the run references is counted, so the collector can see the
+	// objects the controller put in the store.
+	conn := dbtest.Superuser(t, super)
+	var objects, refs int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*), coalesce(sum(refs), 0) from artifact_objects where namespace = 'finance'`).
+		Scan(&objects, &refs); err != nil {
+		t.Fatal(err)
+	}
+	if objects == 0 || refs == 0 {
+		t.Fatalf("the run left %d counted objects with %d references between them, and an object nothing counts is one the collector never sees", objects, refs)
+	}
+}
+
+// The envelope purge, end to end from a decision: a run that has expired loses the count on
+// every envelope it referenced, and what is left of them is collectable.
+func TestTheEnvelopePurgeActsOnWhatTheRunReferenced(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 6; pass++ {
+		taken := q.taken()
+		if len(taken) == 0 {
+			break
+		}
+		for _, task := range taken {
+			core.answer(t, succeeded(t, task, core.now()))
+		}
+	}
+
+	conn := dbtest.Superuser(t, super)
+	var before int
+	if err := conn.QueryRow(t.Context(),
+		`select coalesce(sum(refs), 0) from artifact_objects where namespace = 'finance'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if before == 0 {
+		t.Fatal("the run referenced nothing")
+	}
+
+	if _, err := conn.Exec(t.Context(),
+		`update runs set expires_at = now() - interval '1 minute' where id = $1`, string(decidedRun)); err != nil {
+		t.Fatal(err)
+	}
+	purged, err := pool.PurgeEnvelopes(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged != 1 {
+		t.Fatalf("the purge took %d runs", purged)
+	}
+
+	var after, collectable int
+	if err := conn.QueryRow(t.Context(),
+		`select coalesce(sum(refs), 0), count(*) filter (where collectable_at is not null)
+		 from artifact_objects where namespace = 'finance'`).Scan(&after, &collectable); err != nil {
+		t.Fatal(err)
+	}
+	if after != 0 {
+		t.Errorf("after the purge the run's envelopes are still counted %d times", after)
+	}
+	if collectable == 0 {
+		t.Error("nothing became collectable, so the bytes would sit in the store for ever")
+	}
+}
+
+func seqOf(t *testing.T, conn *pgx.Conn) int {
+	t.Helper()
+	var seq int
+	if err := conn.QueryRow(t.Context(), `select seq from runs where id = $1`, string(decidedRun)).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	return seq
+}
+
+const retainingWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices:
+    from: { step: archive, port: ok }
+    retain: 90d
+defaults:
+  retain: 7d
+steps:
+  normalize:
+    image: ` + theImage + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+  archive:
+    image: ` + theImage + `
+    needs:
+      - { step: normalize, port: ok, as: orders }
+    outputs: [ok]
+`
+
+// withAFile is a result whose envelope references an artifact, which is what a runner produces
+// when a value goes past inline_max_bytes and is spilled to the store.
+func withAFile(t *testing.T, task graph.Task, at time.Time, digest string) graph.Result {
+	t.Helper()
+	r := succeeded(t, task, at)
+	e := r.Outputs["ok"]
+	item := agk.NewItem(map[string]any{"customer_id": "C-1042"})
+	item.Files = []agk.File{{
+		Name:      "purchase-order.pdf",
+		URI:       agk.URI{Run: task.Run, Step: task.Step, Port: "ok", Name: "purchase-order.pdf"},
+		MediaType: "application/pdf",
+		Size:      481233,
+		SHA256:    digest,
+	}}
+	e.Items = []agk.Item{item}
+	e.Meta.Count = 1
+	r.Outputs["ok"] = e
+	return r
+}
+
+// "retain is written on a workflow output or in defaults, never on a step. Everything travelling
+// between two steps is an intermediate and lives by the workflow's default." So two artifacts on
+// two ports of one run get two different expiries, and the controller is what knows which is
+// which because it is what has the graph.
+func TestAnArtifactLivesAsLongAsTheWorkflowDeclared(t *testing.T) {
+	core, q, pool, super := decidingOn(t, retainingWorkflow)
+	createRun(t, pool)
+
+	intermediate, output := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 6; pass++ {
+		taken := q.taken()
+		if len(taken) == 0 {
+			break
+		}
+		for _, task := range taken {
+			digest := intermediate
+			if task.Step == "archive" {
+				digest = output
+			}
+			core.answer(t, withAFile(t, task, core.now(), digest))
+		}
+	}
+
+	conn := dbtest.Superuser(t, super)
+	for _, c := range []struct {
+		step   string
+		digest string
+		days   float64
+	}{
+		// normalize publishes an intermediate, which lives by defaults.retain.
+		{"normalize", intermediate, 7},
+		// archive publishes the workflow output invoices, which declared its own.
+		{"archive", output, 90},
+	} {
+		var lives float64
+		var stored, media string
+		var size int64
+		if err := conn.QueryRow(t.Context(),
+			`select extract(epoch from (expires_at - created_at)) / 86400, digest, media_type, size_bytes
+			 from artifacts where run_id = $1 and step = $2`,
+			string(decidedRun), c.step).Scan(&lives, &stored, &media, &size); err != nil {
+			t.Fatalf("the artifact of %s: %s", c.step, err)
+		}
+		if lives < c.days-0.01 || lives > c.days+0.01 {
+			t.Errorf("the artifact of %s lives %.2f days and the workflow declared %.0f", c.step, lives, c.days)
+		}
+		if stored != "sha256:"+c.digest || media != "application/pdf" || size != 481233 {
+			t.Errorf("the artifact of %s reads %s, %s, %d bytes", c.step, stored, media, size)
+		}
+	}
+
+	// And the object behind each is counted, so expiring the reference is what eventually
+	// lets the bytes go and nothing else does.
+	var counted int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from artifact_objects where namespace = 'finance' and digest in ($1, $2)`,
+		"sha256:"+intermediate, "sha256:"+output).Scan(&counted); err != nil {
+		t.Fatal(err)
+	}
+	if counted != 2 {
+		t.Errorf("%d of the two artifacts are counted", counted)
+	}
 }
