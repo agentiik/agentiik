@@ -224,7 +224,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
 	// is the name of a namespace and cannot be scoped to itself. The controller's term is
 	// the installation's too: there is one active controller across all of them.
-	installation := map[string]bool{"namespaces": true, "runners": true, "controller_term": true}
+	installation := map[string]bool{
+		"namespaces": true, "runners": true, "controller_term": true, "join_tokens": true,
+	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
 	if len(created) == 0 {
