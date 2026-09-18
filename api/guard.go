@@ -42,11 +42,12 @@ func (n Needs) guards() guard {
 
 // Public is a route that is not authorised by a principal, and says what authorises it instead.
 //
-// There are three of these in the whole design and each has its own answer: registration is
-// authenticated "by the join token in its body and by nothing else", a webhook is authenticated
-// "per trigger", and a health check answers nothing worth having. Why is required and is checked
-// for being a sentence rather than a shrug, because "public" with no reason beside it is how a
-// route that should have been guarded stops being guarded.
+// There are four of these in the whole design and each has its own answer: registration is
+// authenticated "by the join token in its body and by nothing else", an object route is
+// authenticated by the signature in its own URL, a webhook is authenticated "per trigger", and a
+// health check answers nothing worth having. Why is required and is checked for being a sentence
+// rather than a shrug, because "public" with no reason beside it is how a route that should have
+// been guarded stops being guarded.
 type Public struct {
 	Why string
 }
