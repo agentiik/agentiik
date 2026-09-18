@@ -33,4 +33,13 @@
 // value is sealed under a data key of its own, and the old ciphertext is replaced. A store whose
 // rotation went through a read would be a store with a reason to read, and the reason is what
 // gets used for something else eventually.
+//
+// Rotating the master key is a different question and the page does not settle it. Reading the
+// sentence above as covering it too would leave an installation unable to retire a key at all: a
+// value written two years ago and never touched again would keep the key that sealed it in
+// service for ever, and a rotation an installation can start and never finish is not a rotation.
+// So Keyring holds the key everything new is sealed under and the older ones it can still open
+// with, and Reseal moves one value from one to the other without the value leaving this package.
+// Nothing there answers a caller with a value: what goes in is a Sealed from the database and
+// what comes out is a Sealed to put back.
 package secret
