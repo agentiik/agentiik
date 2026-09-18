@@ -389,6 +389,26 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	return nil
 }
 
+// TaskRow is the identifier a task's own row is keyed by.
+//
+// Not the idempotency key. The key says which unit of work this is and is derived from what makes
+// it that; the row says which record, and it is what a grant names inside its own text and what a
+// log is addressed by. The two are separate on purpose: one is a statement about the work and the
+// other is a handle on a row.
+func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (string, error) {
+	var id string
+	err := w.tx.QueryRow(ctx,
+		`select id from tasks where namespace = $1 and idempotency_key = $2`,
+		namespace, string(key)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("db: task %s has no row, and a task is recorded before it is handed out", key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: task %s could not be read: %w", key, err)
+	}
+	return id, nil
+}
+
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what

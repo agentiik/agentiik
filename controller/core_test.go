@@ -17,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/token"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -73,18 +74,18 @@ func (o oneVersion) Graph(context.Context, string, string, string) (*graph.Graph
 // fakeQueue is the whole of the bus as this package sees it.
 type fakeQueue struct {
 	mu        sync.Mutex
-	published []graph.Task
+	published []Dispatch
 	stopped   []graph.Stop
 	refuse    error
 }
 
-func (q *fakeQueue) Publish(_ context.Context, t graph.Task) error {
+func (q *fakeQueue) Publish(_ context.Context, d Dispatch) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.refuse != nil {
 		return q.refuse
 	}
-	q.published = append(q.published, t)
+	q.published = append(q.published, d)
 	return nil
 }
 
@@ -103,7 +104,22 @@ func (q *fakeQueue) stops() []graph.Stop {
 	return out
 }
 
+// taken answers the tasks that went out, which is what most of these tests are about. The
+// dispatch around each one is checked where it matters rather than everywhere.
 func (q *fakeQueue) taken() []graph.Task {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]graph.Task, len(q.published))
+	for i, d := range q.published {
+		out[i] = d.Task
+	}
+	q.published = nil
+	return out
+}
+
+// dispatched answers the whole of what went out, for the tests that are about the grant and the
+// input digests rather than about the task.
+func (q *fakeQueue) dispatched() []Dispatch {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := q.published
@@ -963,5 +979,83 @@ func TestAnArtifactLivesAsLongAsTheWorkflowDeclared(t *testing.T) {
 	}
 	if counted != 2 {
 		t.Errorf("%d of the two artifacts are counted", counted)
+	}
+}
+
+// What leaves the controller carries the three things only the controller can add: the row the
+// task is known by, the grant that turns its names into values, and the digest of every input.
+func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	d := first[0]
+	if d.Row == "" || d.Grant == "" {
+		t.Fatalf("the dispatch reads %+v", d)
+	}
+	if task, ok := token.TaskOf(d.Grant); !ok || task != d.Row {
+		t.Errorf("the grant names %q and the row is %q", task, d.Row)
+	}
+
+	// The grant is stored hashed and expires with its task: a copy of the table is not a set
+	// of working credentials.
+	conn := dbtest.Superuser(t, super)
+	var hashed string
+	var expires time.Time
+	if err := conn.QueryRow(t.Context(),
+		`select hash, expires_at from task_grants where task_id = $1`, d.Row).Scan(&hashed, &expires); err != nil {
+		t.Fatal(err)
+	}
+	if hashed == d.Grant || len(hashed) != 64 {
+		t.Errorf("the grant is stored as %q", hashed)
+	}
+	if !expires.After(core.now()) {
+		t.Errorf("the grant expires at %s and the clock says %s", expires, core.now())
+	}
+
+	// And it can be redeemed once, by its own value and for its own task, and by nothing else.
+	if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
+		ns, err := w.Redeem(ctx, d.Grant, d.Task.ID, core.now())
+		if err != nil {
+			t.Errorf("the grant was refused for its own task: %s", err)
+		} else if ns != "finance" {
+			t.Errorf("the grant resolved to namespace %q", ns)
+		}
+		if _, err := w.Redeem(ctx, d.Grant, "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1", core.now()); !errors.Is(err, db.ErrNoGrant) {
+			t.Errorf("a grant redeemed for another task answered %v", err)
+		}
+		if _, err := w.Redeem(ctx, d.Grant, d.Task.ID, expires.Add(time.Second)); !errors.Is(err, db.ErrNoGrant) {
+			t.Errorf("a grant past its expiry answered %v", err)
+		}
+		if _, err := w.Redeem(ctx, d.Grant+"x", d.Task.ID, core.now()); !errors.Is(err, db.ErrNoGrant) {
+			t.Errorf("a grant that is nearly right answered %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The second step's inputs are named by digest, and the bytes are in the store. The
+	// first dispatch was drained above, so the answer is given against what it held.
+	core.answer(t, succeeded(t, d.Task, core.now()))
+	second := q.dispatched()
+	if len(second) != 1 || second[0].Task.Step != "archive" {
+		t.Fatalf("the second pass dispatched %+v", second)
+	}
+	in, ok := second[0].Inputs["orders"]
+	if !ok || len(in.Digest) != 64 || in.Items != 1 {
+		t.Fatalf("the input reads %+v", second[0].Inputs)
+	}
+	held, err := core.objects.Has(t.Context(), artifact.Key("finance", in.Digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held {
+		t.Error("the input envelope the message names is not in the store, so a runner redeeming the grant would be handed a name for nothing")
 	}
 }

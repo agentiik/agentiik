@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
 )
 
@@ -24,7 +25,7 @@ import (
 // An implementation is the bus group's. A test fakes the whole of it in a dozen lines, which is
 // what keeps every rule in this package testable with no bus behind it.
 type Queue interface {
-	// Publish puts one task on the queue its labels select. It is called after the
+	// Publish puts one dispatch on the queue its labels select. It is called after the
 	// decision that planned it has committed, never before, because the database is the
 	// record and the bus is a courier: a message published against a transaction that then
 	// rolled back is work on a queue that no row accounts for and that nothing can recall.
@@ -32,13 +33,46 @@ type Queue interface {
 	// Publishing twice is expected rather than guarded against. The bus is at-least-once
 	// anyway, the identifier is the idempotency key, and "a runner refuses to start a
 	// container for a key that has already completed".
-	Publish(ctx context.Context, t graph.Task) error
+	Publish(ctx context.Context, d Dispatch) error
 
 	// Stop asks for a task in flight to be stopped, for one of the four reasons
 	// graph.StopReason names. A refusal is worth reporting and is not worth abandoning the
 	// decision for: the task is already being stopped by something, or it has already
 	// ended, and the next pass will say so either way.
 	Stop(ctx context.Context, s graph.Stop) error
+}
+
+// Dispatch is one task, as much of it as leaves this process.
+//
+// It is the task the evaluator decided plus the three things only the controller can supply: the
+// row the task is known by outside the graph, the grant that turns the names in the message into
+// values, and the digest of each input port's envelope. The last of those is why this type exists
+// at all: graph.Task carries the whole envelope, because that is what an evaluator hands a driver
+// in one process, and a task message carries "no business payload", so somebody has to have
+// written those bytes down and know what they are called.
+type Dispatch struct {
+	Task graph.Task
+
+	// Row is the task's own identifier, the ULID the tasks table is keyed by. It is not the
+	// idempotency key: the key says which unit of work this is, the row says which record,
+	// and a grant and a log are both addressed by the row.
+	Row string
+
+	// Grant is the clear value, which exists here and in the message and nowhere else.
+	Grant string
+
+	// Inputs are the envelopes the container will be given, by digest and count. The bytes
+	// are in the object store, put there by the controller before this was built, and the
+	// runner fetches them by redeeming the grant.
+	Inputs map[agk.Port]InputRef
+}
+
+// InputRef is one input port's envelope, named rather than carried.
+type InputRef struct {
+	// Digest is sixty-four lowercase hexadecimal characters, as an envelope's digest is
+	// written everywhere else.
+	Digest string
+	Items  int
 }
 
 // Versions hands out the resolved graph of one workflow version.

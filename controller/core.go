@@ -42,6 +42,7 @@ type Core struct {
 	versions Versions
 	objects  artifact.Objects
 	limits   agk.Limits
+	ceiling  time.Duration
 	now      func() time.Time
 }
 
@@ -59,6 +60,17 @@ type Options struct {
 	// one instant rather than at several: the evaluator's Next "is an argument rather than
 	// a clock so that evaluation is pure and a replay is exact".
 	Now func() time.Time
+
+	// Ceiling is how long a task may run when nothing bounded it.
+	//
+	// It is an installation's answer to a gap rather than a preference. A task message
+	// requires a deadline and a grant expires with its task, so a task with neither is a
+	// message that cannot be published and a credential that never stops working. The
+	// evaluator computes a deadline from the step's timeout or the run's root timeout,
+	// and a workflow that declares neither leaves it zero: nothing on the page fixes a
+	// default for that case, and refusing to run such a workflow would be inventing a
+	// rule rather than filling a gap. The zero value is an hour.
+	Ceiling time.Duration
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -81,10 +93,13 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 	if o.Limits == (agk.Limits{}) {
 		o.Limits = agk.DefaultLimits()
 	}
+	if o.Ceiling <= 0 {
+		o.Ceiling = time.Hour
+	}
 	return &Core{
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
-		limits: o.Limits, now: o.Now,
+		limits: o.Limits, ceiling: o.Ceiling, now: o.Now,
 	}, nil
 }
 
@@ -227,7 +242,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// Committed. Only now does anything leave this process, and everything that does is
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
-	sent := co.hand(ctx, run, plan)
+	sent := co.hand(ctx, e.Namespace, run, plan)
 	if len(sent) == 0 {
 		return nil
 	}
@@ -331,7 +346,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 // A failure here is not a failure of the decision: the decision is committed, and what is left
 // is a courier's job. So it is reported, the pass is not unwound, and what did not go stays
 // pending in the state, which is what makes the next pass send it again.
-func (co *Core) hand(ctx context.Context, run agk.RunID, plan graph.Plan) []agk.TaskID {
+func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) []agk.TaskID {
 	for _, s := range plan.Stop {
 		if err := co.queue.Stop(ctx, s); err != nil {
 			co.controller.report(run, fmt.Errorf("stopping %s: %w", s.Task, err))
@@ -340,13 +355,65 @@ func (co *Core) hand(ctx context.Context, run agk.RunID, plan graph.Plan) []agk.
 
 	var sent []agk.TaskID
 	for _, t := range plan.Start {
-		if err := co.queue.Publish(ctx, t); err != nil {
+		d, err := co.dispatchOf(ctx, namespace, t)
+		if err != nil {
+			co.controller.report(run, fmt.Errorf("preparing %s: %w", t.ID, err))
+			continue
+		}
+		if err := co.queue.Publish(ctx, d); err != nil {
 			co.controller.report(run, fmt.Errorf("publishing %s: %w", t.ID, err))
 			continue
 		}
 		sent = append(sent, t.ID)
 	}
 	return sent
+}
+
+// dispatchOf turns a task the evaluator decided into everything that leaves this process.
+//
+// Three things are added here because only the controller can add them. The input envelopes are
+// written to the object store and named by digest, so that the message can carry a name where
+// graph.Task carries the items. The grant is minted and recorded, so that those names can be
+// turned back into values by whoever holds it and by nobody else. And the row is looked up,
+// because a grant and a log are addressed by the task's own identifier rather than by the key
+// that says which unit of work it is.
+func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) (Dispatch, error) {
+	// A task nothing bounded gets the installation's ceiling, because a message requires a
+	// deadline and a grant expires with its task. It is a fallback and never an override:
+	// where the evaluator computed one, that one stands.
+	if t.Deadline.IsZero() {
+		t.Deadline = co.now().UTC().Add(co.ceiling)
+	}
+	d := Dispatch{Task: t, Inputs: map[agk.Port]InputRef{}}
+
+	// The bytes first. Content addressed, so a task republished after a refused publish
+	// writes nothing, and a shard whose inputs are the step's whole envelope shares the
+	// object the publication already put there.
+	for port, e := range t.Inputs {
+		ref, err := put(ctx, namespace, co.objects, e)
+		if err != nil {
+			return Dispatch{}, fmt.Errorf("the input on %s could not be written: %w", port, err)
+		}
+		d.Inputs[port] = InputRef{Digest: ref.Digest, Items: e.Meta.Count}
+	}
+
+	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		row, err := w.TaskRow(ctx, namespace, t.ID)
+		if err != nil {
+			return err
+		}
+		d.Row = row
+		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, t.Deadline)
+		if err != nil {
+			return err
+		}
+		d.Grant = granted.Clear
+		return nil
+	})
+	if err != nil {
+		return Dispatch{}, err
+	}
+	return d, nil
 }
 
 // project turns a state into the rows everything that queries reads.

@@ -1,0 +1,30 @@
+{
+  "pool": {
+    "name": "dmz",
+    "labels": [
+      "zone=dmz",
+      "arch=amd64"
+    ],
+    "namespaces": [
+      "finance"
+    ],
+    "resource_ceilings": {
+      "cpu": "4",
+      "memory": "8Gi",
+      "pids": 512
+    },
+    "containment": "hardened"
+  },
+  "join_token": {
+    "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+    "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+    "pool": "dmz",
+    "labels": [
+      "zone=dmz",
+      "arch=amd64"
+    ],
+    "single_use": true,
+    "issued_at": "2026-09-10T06:12:00Z",
+    "expires_at": "2026-09-10T07:12:00Z"
+  }
+}

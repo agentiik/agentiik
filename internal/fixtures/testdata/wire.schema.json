@@ -1,0 +1,2952 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agentiik.dev/wire.schema.json",
+  "title": "The wire",
+  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage or $defs/taskResult and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
+  "$defs": {
+    "taskMessage": {
+      "title": "Task message",
+      "description": "One unit of work, published by the controller on the task bus and consumed by exactly one runner. It names everything the runner needs to create a container and nothing else: the run and the step it belongs to, the image resolved to a digest, the parameters with the secret material taken out, the secrets by name and mount point, the inputs by port and digest, the ports the container may write, the ceilings, the network posture, the labels the queue was chosen by, the instant it must be stopped by, and the grant. It carries no business payload, no secret value and no URL that would work without the grant, and the object is closed so that none of those can be written here at all: unexpressible rather than merely undocumented, because a queue holds messages and a message that could carry a value eventually would. Delivery is at least once, so it is built to be replayed: the idempotency key names one attempt at one unit of work, and a runner refuses to start a container for a key that has already completed.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "idempotency_key",
+        "run_id",
+        "namespace",
+        "workflow",
+        "step",
+        "attempt",
+        "image",
+        "params",
+        "secrets",
+        "inputs",
+        "outputs",
+        "resources",
+        "network",
+        "runs_on",
+        "deadline",
+        "grant"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/ulid",
+          "description": "Names this task. It is what the result and the runner hooks call it, and what a pre_task hook receives as AGK_TASK_ID. It is not the idempotency key: the key names the unit of work and stays the same across every redelivery of it, while this names the task the controller created and is the handle everything else speaks about.",
+          "examples": [
+            "01JMZ8V1PC7K3M0QY4B8ZR6TDN"
+          ]
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/idempotencyKey",
+          "description": "What names this attempt at this unit of work, run_id/step/attempt/shard. The bus delivers at least once, so two deliveries of one message have to become one container: the runner keys its own record on this string and refuses to start for a key that has already completed. It restates what task_id, step, attempt and shard already carry, and it travels all the same because it is the one string the heartbeat lists and the result is matched on, so neither has to rebuild it and risk rebuilding it differently.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"
+          ]
+        },
+        "run_id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The run this task belongs to, and what the container reads as AGK_RUN_ID. It ties the task to the run's state, to its logs and to the artifact URIs whose first path segment is this same value, which is how a result coming back from a machine that holds no graph is filed against the right run.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+          ]
+        },
+        "namespace": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace that owns the run, which the container reads as AGK_NAMESPACE. A runner policy can restrict a host to a list of namespaces, so this is read when the task is accepted and not only after it has run, and it is what scopes the quota, the grant and every artifact the task writes.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "workflow": {
+          "$ref": "#/$defs/workflowRef",
+          "description": "The workflow and the commit the run was started from, written name@commit. The namespace travels beside it rather than inside it, since the message already names the namespace and joining the two is the reader's business. The commit is here because the runner fetches the repository tree at it and mounts that tree read only at /agk/repo: a runner never speaks git and holds no credential for it, so what it is told is a commit and it fetches content-addressed objects with the task's grant, exactly as it fetches an artifact.",
+          "examples": [
+            "monthly-invoicing@a3f9c1e"
+          ]
+        },
+        "step": {
+          "$ref": "#/$defs/identifier",
+          "description": "The step this task runs, under the identifier the workflow gave it, which the container reads as AGK_STEP. A runner never sees the graph the step came from, so the name travels with the work rather than being looked up.",
+          "examples": [
+            "invoice",
+            "normalize"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Which attempt this is, counting from 1. A retry publishes a new task with the same run, step and shard and a higher number, so the attempt is what keeps the envelope that was kept apart from the ones that failed before it, and it is one segment of the idempotency key. The container reads it as AGK_ATTEMPT.",
+          "examples": [
+            1,
+            2
+          ]
+        },
+        "shard": {
+          "$ref": "#/$defs/shard",
+          "description": "Which container of a fan-out this is, absent when the step is not fanned out. The absence is the signal: it is how the runner tells one container of eight from the only container there is, and it is why the idempotency key has three segments in one case and four in the other. The container reads it as AGK_SHARD, written index/of.",
+          "examples": [
+            {
+              "index": 3,
+              "of": 8
+            }
+          ]
+        },
+        "image": {
+          "$ref": "#/$defs/imageRef",
+          "description": "The image the container is created from, always resolved to a digest. A mutable tag is accepted in a workflow under development and is resolved once for the whole run, so what reaches a runner is never a tag: the runner pulls exactly what was decided, verifies the signature where the namespace policy requires it, and two tasks of one run cannot end up on two different builds because a tag moved between them.",
+          "examples": [
+            "ghcr.io/acme/agk-invoice@sha256:1ab74e2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e39cc"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "description": "The step's parameters, resolved and with the secret material taken out. A parameter the brick manifest marks sensitive is not written here at all: its value is obtained by redeeming the grant at the last moment, which is what keeps a secret off a queue that holds messages until somebody consumes them. The names are written on the parameter grammar, narrower than the rest of the workflow file because a parameter is exported to a script as AGK_PARAM_<NAME>. The values are the brick's own business, already validated against the manifest schema before the task was published, so no shape is imposed on them here and an empty object is what a step with no parameters sends.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "examples": [
+            {
+              "endpoint": "https://api.billing.example.com/v2"
+            },
+            {
+              "currency": "EUR",
+              "round_half_up": true
+            },
+            {}
+          ]
+        },
+        "secrets": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "The secrets the step mounts, each one a name and a mount point and never a value. The entry is closed, so a value has no key to be written under and a message carrying one is refused rather than tolerated and ignored: the controller names which secret a task may have and never reads one, the API is the only component that reads the store, and the runner obtains the value by redeeming the grant once it is about to start the container. Empty is the ordinary case and is what a step declaring no secret sends.",
+          "items": {
+            "title": "Mounted secret",
+            "description": "One secret the container will be given: the name the namespace knows it by, and the path the value is mounted at. Nothing else, because nothing else can be said about a secret without saying the secret.",
+            "type": "object",
+            "required": [
+              "name",
+              "mount"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/identifier",
+                "description": "The secret's name, as the workflow secrets block declares it and as the brick manifest asks for it. Only secrets of the owning namespace can be named, and this is what the runner presents when it redeems the grant, so the name is the whole of what the message says about the secret.",
+                "examples": [
+                  "billing",
+                  "bearer"
+                ]
+              },
+              "mount": {
+                "type": "string",
+                "pattern": "^/agk/secrets/[^/]+$",
+                "description": "Where the value is mounted inside the container, on tmpfs under /agk/secrets/ and nowhere else: a mount at /run/secrets/bearer, written out of habit, is refused. It is a file and not an environment variable because a process environment is readable by its children and ends up in diagnostic dumps. The controller resolves the path before publishing, from the brick manifest or from the name, so the runner is told where to put the value rather than deriving it and deriving it differently.",
+                "examples": [
+                  "/agk/secrets/billing",
+                  "/agk/secrets/bearer"
+                ]
+              }
+            },
+            "examples": [
+              {
+                "name": "billing",
+                "mount": "/agk/secrets/billing"
+              }
+            ]
+          },
+          "examples": [
+            [
+              {
+                "name": "billing",
+                "mount": "/agk/secrets/billing"
+              }
+            ],
+            []
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "The input envelopes the container will be given, one entry per port, named by port, digest and item count. The URLs come from redeeming the grant, and the entry is closed so that one cannot be written here at all: that is what makes a copy of the message worth nothing on its own. Reading the page took a decision worth naming: the message it prints carries a port, a digest and a count and no URL, and says the grant is redeemed for input URLs, while the task bus chapter describes the message as naming \"the URIs the runner must fetch\". That sentence is read here as the names the grant is redeemed against. The digests are also one of the three parts of the memoisation key, with the image digest and the resolved parameters, so a step whose inputs have not changed can be answered without being run. Empty is what a step fed by nothing upstream sends.",
+          "items": {
+            "title": "Input port",
+            "description": "One envelope the container will receive, on one port. It says which port, which bytes and how many items, which is everything the runner needs to fetch it, check it and size the working directory for it.",
+            "type": "object",
+            "required": [
+              "port",
+              "digest",
+              "items"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "port": {
+                "$ref": "#/$defs/identifier",
+                "description": "The port the envelope arrives on, under the name the step's needs or inputs block gave it. The container finds it as a directory under /agk/in/<port>/, which is why the name carries no path separator and no space.",
+                "examples": [
+                  "in",
+                  "invoices",
+                  "rejected"
+                ]
+              },
+              "digest": {
+                "$ref": "#/$defs/digest",
+                "description": "The digest of the envelope that will be fetched. The runner checks what it downloaded against it, and the controller can name the same batch again on a replay without having kept a copy anywhere the runner could reach.",
+                "examples": [
+                  "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                ]
+              },
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many items the envelope holds. It travels so that the runner can size what it is about to fetch before fetching it, and so that a message stays readable to a component that holds no permission over the payload: the count is metadata, the contents are behind run:read_data. Zero is legitimate and is what a port fed by a skipped step carries.",
+                "examples": [
+                  0,
+                  1,
+                  42
+                ]
+              }
+            },
+            "examples": [
+              {
+                "port": "in",
+                "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                "items": 1
+              }
+            ]
+          },
+          "examples": [
+            [
+              {
+                "port": "in",
+                "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                "items": 1
+              }
+            ],
+            []
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "The output ports the container may write, which is exactly what it reads as the comma separated AGK_OUT_PORTS. The list is the workflow's word rather than the image's, because a step running a script has no manifest to infer ports from and has to declare them, and the runner publishes an empty envelope for a declared port the container never wrote. A name appears once: it is a directory, a file name under /agk/out/ports/ and one entry of a comma separated list, and a repeated name would be one file described twice. An empty list is legitimate, since a step that writes nothing and exits 0 is a legitimate step.",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "examples": [
+            [
+              "out",
+              "error"
+            ],
+            [
+              "ok",
+              "rejected"
+            ],
+            []
+          ]
+        },
+        "resources": {
+          "$ref": "#/$defs/resources",
+          "description": "The ceilings the container is created with, as the manifest and the step wrote them and the runner policy and the namespace quota capped them. They travel because the runner is the one that applies them: memory becomes Memory, cpu becomes NanoCPUs and pids becomes PidsLimit. A ceiling the controller did not decide is absent rather than guessed at, and the runner falls back to its own policy, where the process ceiling defaults to 256.",
+          "examples": [
+            {
+              "cpu": "0.5",
+              "memory": "256Mi",
+              "pids": 128
+            },
+            {
+              "cpu": "1",
+              "memory": "512Mi"
+            }
+          ]
+        },
+        "network": {
+          "$ref": "#/$defs/network",
+          "description": "What the container may reach, and always written, including for the default none: a runner reading an absent field would be deciding something the controller had already decided. Every task gets its own network, so two containers on one host never see each other, and a posture the runner cannot provide is refused rather than approximated.",
+          "examples": [
+            "none",
+            "egress",
+            "internal"
+          ]
+        },
+        "egress_allow": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "The host and port pairs the runner's egress proxy will allow, exactly as the step's egress.allow block wrote them. Egress is decided per step and is default deny because it is the only control that actually bites: a brick that legitimately receives an API key can also send it elsewhere, and the proxy is what decides where. It is meaningful only under network: egress, where a runner with no proxy refuses the task rather than opening the network and calling it filtered.",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})$"
+          },
+          "examples": [
+            [
+              "api.billing.example.com:443"
+            ],
+            [
+              "api.billing.example.com:443",
+              "files.example.org:443"
+            ]
+          ]
+        },
+        "runs_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "The label selectors the step was published under, which is what decided the queue this message went onto. They travel so that the runner can check the task against what it actually claims, which is worth something because labels are not self asserted: a runner may only ever claim the labels its join token allowed, so a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet. An empty list is a step that named no pool and is content with whichever runner the namespace is allowed to use.",
+          "items": {
+            "$ref": "#/$defs/label"
+          },
+          "examples": [
+            [
+              "zone=dmz",
+              "arch=amd64"
+            ],
+            [
+              "arch=amd64"
+            ],
+            []
+          ]
+        },
+        "deadline": {
+          "$ref": "#/$defs/timestamp",
+          "description": "The instant past which the container is stopped, which it reads as AGK_DEADLINE. It is an instant and not the duration the step's timeout was written as, for the reason the shared timestamp records: two machines disagreeing about how long is left is worse than two machines disagreeing about what time it is. On expiry the container gets SIGTERM, then SIGKILL after a grace period the runner policy sets; no keyword of the workflow file sets that grace, so it is not on the wire either.",
+          "examples": [
+            "2026-09-10T06:12:00Z"
+          ]
+        },
+        "grant": {
+          "$ref": "#/$defs/grant",
+          "description": "The bearer token issued with this task, and the only thing that turns the names in this message into values. The runner redeems it at the API for the input URLs, the secret values and the upload URLs, and for nothing that belongs to another task: it is scoped to this one and expires with it. It is the hinge the whole message turns on, since everything else here is a name, and a name without this token names what was going to happen and grants none of it.",
+          "examples": [
+            "agkgrant_01JMZ8V1PC7K3M0QY4B8ZR6TDN_Zm9vYmFyYmF6cXV4MTIzNA"
+          ]
+        },
+        "script": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "The commands the container runs, where the step named a base image rather than a brick. A list and never one block of text, because \"the list is what makes that exit attributable to one command rather than to a script\". It is the workflow author's own words rather than business data: a task message carries no payload, and a command somebody wrote in agentiik.yaml is not one.",
+          "examples": [
+            [
+              "set -eu",
+              "make build"
+            ],
+            [
+              "./bin/report --cycle \"$AGK_PARAM_CYCLE\""
+            ]
+          ]
+        },
+        "before_script": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "Commands run in the same container before script, for setting up what script assumes. A non-zero exit here fails the step before script runs at all.",
+          "examples": [
+            [
+              "apk add --no-cache git"
+            ]
+          ]
+        },
+        "after_script": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "Commands run in the same container after script, and run even when script failed, so that a diagnostic dump survives a failure. Its own exit code does not change the step's verdict, which is the runner's to keep true because it is the runner that watches the two and reports one.",
+          "examples": [
+            [
+              "cat /tmp/debug.log || true"
+            ]
+          ]
+        },
+        "shell": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "description": "The interpreter the commands are handed to, as an argument vector. It travels because the image is the workflow's choice and the interpreter inside it is not something a runner may assume: a distroless base has no shell at all.",
+          "examples": [
+            [
+              "/bin/sh",
+              "-eu",
+              "-c"
+            ],
+            [
+              "/bin/bash",
+              "-o",
+              "pipefail",
+              "-c"
+            ]
+          ]
+        },
+        "files": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The path in the repository tree, at the run's commit.",
+                "examples": [
+                  "config/rates.json",
+                  "templates/invoice.tmpl"
+                ]
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^/",
+                "minLength": 1,
+                "description": "Where it is mounted in the container, an absolute path.",
+                "examples": [
+                  "/agk/files/rates.json"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "pattern": "^0?[0-7]{3}$",
+                "description": "The mode the file is created with, where the step asked for one.",
+                "examples": [
+                  "0444",
+                  "0600"
+                ]
+              }
+            },
+            "description": "One file of the repository tree, and where the container sees it.",
+            "examples": [
+              {
+                "from": "config/rates.json",
+                "to": "/agk/files/rates.json",
+                "mode": "0444"
+              }
+            ]
+          },
+          "description": "The repository files this step asked for, named by where they are and where they go. The bytes are not here: they are fetched from the tree by redeeming the grant, exactly as an input is, which is what keeps a copy of this message worth nothing on its own.",
+          "examples": [
+            [
+              {
+                "from": "config/rates.json",
+                "to": "/agk/files/rates.json",
+                "mode": "0444"
+              }
+            ]
+          ]
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(ms|s|m|h|d)$",
+          "description": "How long this shard may take, as the step declared it. It travels beside deadline rather than instead of it because the two answer different questions: the deadline is the instant this attempt is stopped at, and the timeout is what a person reading the message sees the workflow having asked for.",
+          "examples": [
+            "10m",
+            "4h",
+            "500ms"
+          ]
+        },
+        "idempotent": {
+          "type": "boolean",
+          "description": "Whether running this again on the same inputs is safe, which is what decides whether a lost task may be requeued and whether its result may be cached. It travels because the runner is what refuses to start a container for a key that has already completed, and because \"a lost task is charged to the infrastructure and is requeued only when the step is declared idempotent\".",
+          "examples": [
+            true,
+            false
+          ]
+        },
+        "cache_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]*$",
+          "description": "The memoisation key, where the step asked to be cached. It \"combines the image digest, the resolved parameters and the digests of the input envelopes, prefixed by the namespace, and it never crosses a namespace boundary\", which is why it is computed by the controller and carried rather than worked out by whoever holds the task.",
+          "examples": [
+            "finance/sha256:1ab74e66/9f2c1d07",
+            "finance/invoice/2f6a1c"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "task_id": "01JMZ8V1PC7K3M0QY4B8ZR6TDN",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "namespace": "finance",
+          "workflow": "monthly-invoicing@a3f9c1e",
+          "step": "invoice",
+          "attempt": 2,
+          "shard": {
+            "index": 3,
+            "of": 8
+          },
+          "image": "ghcr.io/acme/agk-invoice@sha256:1ab74e2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e39cc",
+          "params": {
+            "endpoint": "https://api.billing.example.com/v2"
+          },
+          "secrets": [
+            {
+              "name": "billing",
+              "mount": "/agk/secrets/billing"
+            }
+          ],
+          "inputs": [
+            {
+              "port": "in",
+              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+              "items": 1
+            }
+          ],
+          "outputs": [
+            "out",
+            "error"
+          ],
+          "resources": {
+            "cpu": "0.5",
+            "memory": "256Mi",
+            "pids": 128
+          },
+          "network": "egress",
+          "egress_allow": [
+            "api.billing.example.com:443"
+          ],
+          "runs_on": [
+            "zone=dmz",
+            "arch=amd64"
+          ],
+          "deadline": "2026-09-10T06:12:00Z",
+          "grant": "agkgrant_01JMZ8V1PC7K3M0QY4B8ZR6TDN_Zm9vYmFyYmF6cXV4MTIzNA"
+        },
+        {
+          "task_id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+          "namespace": "finance",
+          "workflow": "monthly-invoicing@a3f9c1e",
+          "step": "normalize",
+          "attempt": 1,
+          "image": "ghcr.io/acme/agk-normalize@sha256:9f2c1d0e3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8bb7e0",
+          "params": {
+            "currency": "EUR"
+          },
+          "secrets": [],
+          "inputs": [],
+          "outputs": [
+            "ok",
+            "rejected"
+          ],
+          "resources": {
+            "cpu": "1",
+            "memory": "512Mi",
+            "pids": 256
+          },
+          "network": "none",
+          "runs_on": [
+            "arch=amd64"
+          ],
+          "deadline": "2026-09-10T06:10:00Z",
+          "grant": "agkgrant_01M2AAZ9G62NQXFAFCXKRPJEH5_dGFza2dyYW50ZXhhbXBsZTAx"
+        }
+      ]
+    },
+    "taskResult": {
+      "title": "Task result",
+      "description": "What a runner publishes when a task ends, and the only message the controller reads to decide what happens next: whether the step is done, whether it is retried, what the next tasks are handed and what the run detail shows. It names the task twice, by dispatch and by idempotency key, and repeats nothing the key already spells, so the run, the step, the attempt and the shard have one source on the wire rather than two that can disagree. It carries no item and no artifact content: what travels is a digest per port and a digest per artifact, which is what lets the controller schedule on metadata while the payload stays behind run:read_data. The fields that describe a container are present exactly where a container ran, and the state says which case this is: succeeded and failed report an exit code and a span, lost reports neither, because the point of lost is that there is no outcome to report. The bus delivers at least once, so the controller has to read a redelivered result as the same result; nothing here is a counter it could add twice.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "idempotency_key",
+        "runner",
+        "state"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "exit_code": [
+          "started_at",
+          "finished_at"
+        ],
+        "finished_at": [
+          "started_at"
+        ],
+        "outputs": [
+          "started_at"
+        ],
+        "artifacts": [
+          "started_at"
+        ],
+        "usage": [
+          "started_at"
+        ]
+      },
+      "allOf": [
+        {
+          "$comment": "A container that ran under a state that reports an outcome exited, and an exit is a code and an instant. With the dependentRequired above, exit_code and started_at imply each other in those two states, which is the whole of the rule that an exit code exists where a container ran and does not where none did.",
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "succeeded",
+                  "failed"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "started_at"
+            ]
+          },
+          "then": {
+            "required": [
+              "exit_code",
+              "finished_at"
+            ]
+          }
+        },
+        {
+          "$comment": "Success is exit code 0 and nothing else, because the exit code table reads the verdict off that number alone. A succeeded task also writes its ports, empty list included, so that the controller can tell a step that published nothing from a runner that said nothing.",
+          "if": {
+            "properties": {
+              "state": {
+                "const": "succeeded"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "exit_code",
+              "outputs"
+            ],
+            "properties": {
+              "exit_code": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "$comment": "A lost task has no outcome at all, so every field that would describe one is refused rather than left optional. A result claiming lost and a finished_at at once is the result the controller cannot read: it would say both that nothing observed the end and when the end was.",
+          "if": {
+            "properties": {
+              "state": {
+                "const": "lost"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exit_code": false,
+              "finished_at": false,
+              "outputs": false,
+              "artifacts": false,
+              "log": false,
+              "usage": false
+            }
+          }
+        }
+      ],
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The dispatch this result answers, carried back unchanged from the task message. A requeue after loss keeps the idempotency key and takes a new task_id, so this is what tells two deliveries of one unit of work apart in the audit log, where the key deliberately cannot.",
+          "examples": [
+            "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+            "01M2AAZ9G62NQXFAFCXKRPJEH5"
+          ]
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/idempotencyKey",
+          "description": "The unit of work this result belongs to, and what the controller matches it against. It matches on this rather than on task_id because the bus delivers at least once and a requeued task carries a new dispatch identifier for the same work: matching on the key is what makes a second delivery a no-op instead of a second completion.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+          ]
+        },
+        "runner": {
+          "title": "Runner",
+          "description": "The runner that produced the result, under the name it joined with. It travels because the controller has to charge an infrastructure failure to a host, drain that host and show the run detail where the work actually ran, none of which the idempotency key says. The documentation prints a name and does not fix its grammar, so the schema takes the lowercase hyphenated form it prints, which is how every other name on the wire is written; a looser field would let one host appear under two spellings.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "examples": [
+            "runner-dmz-02",
+            "runner-lan-01"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/taskState",
+          "description": "How the task ended, which is one of the five endings and never a state it passed through: a heartbeat is what says a task is still running, and a result saying so would be a result for work that has not finished. succeeded and failed come from the container's own exit; lost is declared by the controller rather than reported here, and travels on a result only where a runner recovers one it had already lost; timed_out and cancelled are the runner stopping the container, the first at the step's deadline and the second because the run was cancelled.",
+          "enum": [
+            "succeeded",
+            "failed",
+            "lost",
+            "timed_out",
+            "cancelled"
+          ],
+          "examples": [
+            "succeeded",
+            "failed",
+            "timed_out"
+          ]
+        },
+        "exit_code": {
+          "title": "Exit code",
+          "description": "The status the container exited with, present wherever one ran. Nothing else declares the verdict: 0 is success, 1 to 99 is an application failure retried only where retry.on says so, 100 to 119 is transient and retried by the step policy, 120 is never retried whatever retry says, 121 to 124 are reserved for the runner, and 125 and above is read as infrastructure and charged to the runner rather than to the brick. The ceiling is 255 and not 124 because a container stopped at its deadline reports 128 plus the signal, so 137 is an ordinary value here and not an eighth band.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "examples": [
+            0,
+            108,
+            120,
+            137
+          ]
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the container started, on the runner's clock. It bounds what usage measures, together with finished_at, and that is also why the image pull is reported separately: the pull happens before this instant, and counting it here would charge the brick for a download.",
+          "examples": [
+            "2026-09-10T06:41:09.104Z"
+          ]
+        },
+        "finished_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the container exited. A lost task has none of its own, because nothing observed the end: the controller knows only when it stopped hearing, and that instant belongs to its record rather than to a runner that cannot claim it. Present wherever there is an exit code, absent wherever there is not.",
+          "examples": [
+            "2026-09-10T06:42:32.117Z"
+          ]
+        },
+        "outputs": {
+          "title": "Published ports",
+          "description": "One entry per declared output port, naming the envelope published on it. Every declared port appears, including the ones the container never wrote, because an unwritten port publishes an empty envelope and an empty envelope has a digest like any other. A failed task may carry ports too: the documentation's own result example is a failed task publishing two of them, which is how a brick separates the items it rejected from the run failing whole. uniqueItems refuses the same entry twice; that two entries name one port with different digests is a thing the controller refuses, not a shape this schema can describe.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": [
+              "port",
+              "digest",
+              "items"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "port": {
+                "$ref": "#/$defs/identifier",
+                "description": "The output port the envelope left by, under the name the brick declares. The names are the brick's own, so no set of values is fixed here.",
+                "examples": [
+                  "out",
+                  "error",
+                  "ok"
+                ]
+              },
+              "digest": {
+                "$ref": "#/$defs/digest",
+                "description": "The digest of the serialised envelope this task produced on that port. Where the step is fanned out the shard envelopes are concatenated port by port before publication, so it is the concatenation and not this digest that reaches the next task message as an input digest. The controller never opens the batch either way, which is what keeps scheduling out of the payload.",
+                "examples": [
+                  "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                ]
+              },
+              "items": {
+                "title": "Item count",
+                "description": "How many items the envelope holds, the same number its meta.count carries. It travels here so that a condition written on inputs.<port>.count can be weighed without the envelope being read, and so that the run detail can show an empty port as empty rather than as unknown.",
+                "type": "integer",
+                "minimum": 0,
+                "examples": [
+                  0,
+                  3
+                ]
+              }
+            },
+            "examples": [
+              {
+                "port": "error",
+                "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                "items": 3
+              }
+            ]
+          },
+          "examples": [
+            [],
+            [
+              {
+                "port": "out",
+                "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
+                "items": 0
+              },
+              {
+                "port": "error",
+                "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+                "items": 3
+              }
+            ]
+          ]
+        },
+        "artifacts": {
+          "title": "Written artifacts",
+          "description": "What the task wrote to the object store, by digest and by size. The controller records one reference per entry, and a reference is what expiry drops: the physical object is collected when its count reaches zero, so a result that did not list what it wrote would leave bytes nobody is counting. An entry is reported even where the store already held those bytes, because what is declared is the reference and not the write, and deduplication is exactly the case where the two differ.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": [
+              "sha256",
+              "bytes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "sha256": {
+                "title": "Artifact digest",
+                "description": "The digest of the artifact's bytes, sixty four lowercase hexadecimal characters, which is also the <digest> the physical key sha256/<digest> is built from. The key names the algorithm, so the value does not repeat it, exactly as an envelope writes a file's digest; the prefixed form belongs where the field is called digest. The documentation elides the middle of a digest for the page, and that elision is typography rather than a value.",
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "examples": [
+                  "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+                ]
+              },
+              "bytes": {
+                "title": "Size",
+                "description": "How many bytes the artifact holds. It is what the run detail keeps showing beside the digest once the artifact has expired or been collected, and what a namespace's storage is counted against. An envelope calls the same measure size on a file entry: each field keeps the name its own message gives it rather than being tidied into one.",
+                "type": "integer",
+                "minimum": 0,
+                "examples": [
+                  1284,
+                  481233
+                ]
+              }
+            },
+            "examples": [
+              {
+                "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                "bytes": 1284
+              }
+            ]
+          },
+          "examples": [
+            [],
+            [
+              {
+                "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                "bytes": 1284
+              },
+              {
+                "sha256": "3f7b2c1a9e8d4c6b5a0f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f403",
+                "bytes": 481233
+              }
+            ]
+          ]
+        },
+        "log": {
+          "title": "Captured log",
+          "description": "Where the task's output went, how much of it there is and whether it was cut. The runner captures the container's standard error, timestamps it, indexes it and caps it. Ports travel as files under /agk/out/ports/, which is what keeps standard output usable for diagnostics, and a script that writes no port and exits 0 has its standard output published as the single out port. A task that never reached a container writes what stopped it to the same place, a refused pull or a grant that would not redeem being the usual reasons, so this does not depend on a container having run and is the only thing such a result has to say for itself.",
+          "type": "object",
+          "required": [
+            "uri",
+            "lines",
+            "truncated"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "uri": {
+              "title": "Log URI",
+              "description": "Where the log is addressed from. The scheme names a kind in its first segment and a log is its own: agk://log/<run>/<task>, not the agk://run/ space an artifact is addressed in. A log belongs to one task and not to one port, which is why it cannot be addressed like an artifact: a step fanned out into eight shards has eight logs and no port to tell them apart, and a task identifier tells them apart exactly. The task carries slashes of its own, so it is escaped as a path segment.",
+              "type": "string",
+              "format": "uri",
+              "pattern": "^agk://log/",
+              "examples": [
+                "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8"
+              ]
+            },
+            "lines": {
+              "title": "Lines",
+              "description": "How many lines were captured. It is a count of lines rather than of bytes because that is the unit the log is indexed in, and it is on the result so that the console can show the size of what it is about to fetch.",
+              "type": "integer",
+              "minimum": 0,
+              "examples": [
+                0,
+                412
+              ]
+            },
+            "truncated": {
+              "title": "Truncated",
+              "description": "Whether the cap was reached and the rest of the output dropped. It is its own field because the count cannot say it: four hundred lines is either the whole log or the first four hundred of one, and somebody chasing a failure has to know which before reading the last line as the last thing that happened.",
+              "type": "boolean",
+              "examples": [
+                false,
+                true
+              ]
+            }
+          },
+          "examples": [
+            {
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "lines": 412,
+              "truncated": false
+            }
+          ]
+        },
+        "usage": {
+          "title": "Usage",
+          "description": "What the container actually consumed, measured by the runner because nothing else can see it and reported here because the container is gone by the time anyone asks. It is what an author reads before changing resources, and what an operator reads when a ceiling turns out to be the thing that failed. The three figures come from one read of the container's statistics, so a result carrying a usage block carries all three: two numbers and a gap is a number nobody can compare.",
+          "type": "object",
+          "required": [
+            "cpu_seconds",
+            "max_rss_bytes",
+            "image_pull_ms"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cpu_seconds": {
+              "title": "CPU seconds",
+              "description": "CPU time consumed, in seconds. It is not the wall clock span between started_at and finished_at, and the two differ by however oversubscribed the host was, which is the difference an author has to see before blaming the brick for a slow step.",
+              "type": "number",
+              "minimum": 0,
+              "examples": [
+                0.8,
+                12.4
+              ]
+            },
+            "max_rss_bytes": {
+              "title": "Peak resident set",
+              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened.",
+              "type": "integer",
+              "minimum": 0,
+              "examples": [
+                198443008
+              ]
+            },
+            "image_pull_ms": {
+              "title": "Image pull",
+              "description": "How long the image pull took, in milliseconds, and 0 where the host already held it. An image is cached by digest, so the first task to need it on a host pays for the pull and the rest do not: reporting it separately keeps that cost out of the container's span instead of hiding it inside a step's duration and making one host look slow.",
+              "type": "integer",
+              "minimum": 0,
+              "examples": [
+                0,
+                3184
+              ]
+            }
+          },
+          "examples": [
+            {
+              "cpu_seconds": 12.4,
+              "max_rss_bytes": 198443008,
+              "image_pull_ms": 0
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "runner": "runner-dmz-02",
+          "state": "failed",
+          "exit_code": 108,
+          "started_at": "2026-09-10T06:41:09.104Z",
+          "finished_at": "2026-09-10T06:42:32.117Z",
+          "outputs": [
+            {
+              "port": "out",
+              "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
+              "items": 0
+            },
+            {
+              "port": "error",
+              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+              "items": 3
+            }
+          ],
+          "artifacts": [
+            {
+              "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+              "bytes": 1284
+            }
+          ],
+          "log": {
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "lines": 412,
+            "truncated": false
+          },
+          "usage": {
+            "cpu_seconds": 12.4,
+            "max_rss_bytes": 198443008,
+            "image_pull_ms": 0
+          }
+        },
+        {
+          "task_id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "runner": "runner-lan-01",
+          "state": "succeeded",
+          "exit_code": 0,
+          "started_at": "2026-09-10T06:00:01.882Z",
+          "finished_at": "2026-09-10T06:00:12.418Z",
+          "outputs": [
+            {
+              "port": "ok",
+              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+              "items": 2
+            },
+            {
+              "port": "rejected",
+              "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
+              "items": 0
+            }
+          ],
+          "artifacts": [
+            {
+              "sha256": "3f7b2c1a9e8d4c6b5a0f1e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f403",
+              "bytes": 481233
+            }
+          ],
+          "log": {
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Fnormalize%2F1",
+            "lines": 0,
+            "truncated": false
+          },
+          "usage": {
+            "cpu_seconds": 0.8,
+            "max_rss_bytes": 41943040,
+            "image_pull_ms": 3184
+          }
+        },
+        {
+          "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZC",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1/3/8",
+          "runner": "runner-dmz-02",
+          "state": "failed",
+          "log": {
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "lines": 3,
+            "truncated": false
+          }
+        },
+        {
+          "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "runner": "runner-dmz-02",
+          "state": "lost",
+          "started_at": "2026-09-10T06:41:09.104Z"
+        }
+      ]
+    },
+    "runnerRegistration": {
+      "title": "Runner registration",
+      "description": "The one exchange that turns a machine nobody has met into a runner of a named pool: what the agent sends the API at join, and what the API answers. Both halves are written as one subschema because neither is legible alone: the request proves which pool the machine belongs to and says what it is, and the answer is the only place that machine ever learns its own identity and receives a credential. It happens once. Everything after it, heartbeats, grant redemptions, log shipping, is the runner reaching out holding what this answer carried, which is why nothing here is sent again on a later call.",
+      "type": "object",
+      "required": [
+        "request",
+        "response"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "title": "Join request",
+          "description": "What the runner sends, over HTTPS and outbound, in the one call it makes before it holds a credential. It is authenticated by the join token in its body and by nothing else, because the machine has nothing else yet. The object is closed and carries no private key, no address and no pool: the private half of the keypair never leaves the host, nothing ever connects inbound to a runner so an address would be a field no component could use, and the pool travels in the token rather than being claimed, so that a machine cannot join a pool by naming it.",
+          "type": "object",
+          "required": [
+            "token",
+            "public_key",
+            "labels",
+            "capacity",
+            "architecture",
+            "agent_version"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "token": {
+              "title": "Join token",
+              "description": "The join token an administrator issued, and which this call spends. It is single use, so a second registration presenting it is refused rather than producing a second runner, and short lived, one hour by default, so a token that leaks has usually expired before anyone reaches it. It is bound to one pool and to the exact set of labels the runner may claim, which is why neither of those is claimed here. The prefix says which door the value belongs at, so it can be refused early and recognised in a log that should not be holding it, and the pattern refuses anything shorter than forty-three characters after it, which is the shortest base64url that can hold the 256 bits of entropy every token, join token and grant in this installation carries; the longer spellings hexadecimal and base32 produce are accepted too. The API keeps only the hash.",
+              "type": "string",
+              "pattern": "^agkjoin_[A-Za-z0-9_-]{43,}$",
+              "examples": [
+                "agkjoin_lYd41PgjnpmnYTZ1KB2FvzKYJA7GgyKSqukAh9n7h9s",
+                "agkjoin_UNamtuuSePEH_HyjSyDDKSe_EhCUUJO61bD6NFyN_hk"
+              ]
+            },
+            "public_key": {
+              "title": "Public key",
+              "description": "The public half of the keypair the agent generated on this host, written as PEM around a SubjectPublicKeyInfo. The private half never leaves the machine and has no field here: the object is closed, so a request that carried one would be refused rather than accepted and quietly ignored. This key is the runner's identity across restarts, which is what makes a reimaged host a new runner that joins again instead of a record silently reused. The encoding is chosen because it names the algorithm inside the value, so no second field has to agree on it out of band, and because the standard library writes it without a dependency.",
+              "type": "string",
+              "pattern": "^-----BEGIN PUBLIC KEY-----\\n[A-Za-z0-9+/\\n]+={0,2}\\n-----END PUBLIC KEY-----\\n?$",
+              "examples": [
+                "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+                "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAaj+DnTqIqzAtM5UVkhj05IJc+JK9jV3fiW27xAWOCfU=\n-----END PUBLIC KEY-----\n"
+              ]
+            },
+            "labels": {
+              "title": "Claimed labels",
+              "description": "The labels this runner claims, each written key=value, and what a step's runs_on later selects on. A runner may only ever claim labels its join token allowed: the API checks that this list is a subset of what the token permits and refuses the whole registration when it is not, rather than trimming it to the allowed set, because a machine asking for more than it may have is a machine somebody should look at. That rule cannot be written as a constraint here, since what the token permits is never on the wire, so a request this schema accepts can still be refused, and this is the paragraph that says so. The list is required and may be empty, so that claiming nothing is something the request states rather than something a reader infers from a field that is not there.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/label"
+              },
+              "uniqueItems": true,
+              "examples": [
+                [
+                  "zone=dmz",
+                  "arch=amd64",
+                  "gpu=true"
+                ],
+                [
+                  "zone=lan",
+                  "arch=amd64"
+                ],
+                []
+              ]
+            },
+            "capacity": {
+              "title": "Capacity",
+              "description": "What the machine has, as the agent measured it on the host rather than as an operator typed it. It is scheduling input: a runner refuses a task whose resources would take it past what it declared here, so oversubscription is a configuration choice and never an accident, and the runner inventory shows the fleet out of these numbers. What the machine is, its architecture and its agent version, is reported beside this object rather than inside it, because those say what it runs and not how much of it there is.",
+              "type": "object",
+              "required": [
+                "vcpu",
+                "memory",
+                "disk"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "vcpu": {
+                  "title": "vCPU",
+                  "description": "How many virtual cores the host has. Concurrency on a new runner starts at one task per vCPU and is raised from there until memory or disk becomes the limit, so this is the number that first setting is derived from.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "examples": [
+                    8,
+                    64
+                  ]
+                },
+                "memory": {
+                  "title": "Memory",
+                  "description": "How much memory the host has, a whole number above zero with a binary suffix, spelled exactly the way a step spells its own ceiling. One grammar on both sides is what lets a runner weigh a task's request against its own capacity without converting between two notations first.",
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
+                  "examples": [
+                    "64Gi",
+                    "512Gi"
+                  ]
+                },
+                "disk": {
+                  "title": "Disk",
+                  "description": "How much disk the working directory may use, in the same grammar. It is on the wire because it is the ceiling that usually binds first: the runner downloads every input artifact to local disk and stages every output there before uploading, so a host runs out of room long before it runs out of cores.",
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
+                  "examples": [
+                    "1Ti",
+                    "400Gi"
+                  ]
+                }
+              },
+              "examples": [
+                {
+                  "vcpu": 8,
+                  "memory": "64Gi",
+                  "disk": "1Ti"
+                },
+                {
+                  "vcpu": 64,
+                  "memory": "512Gi",
+                  "disk": "400Gi"
+                }
+              ]
+            },
+            "architecture": {
+              "title": "Architecture",
+              "description": "What the machine is, spelled exactly as the arch= label spells it, so that the fact and the selector never diverge. It is reported even where arch= is also claimed as a label, because a label is a permission the token granted and this is what the host actually runs: an installation whose two disagree has a mislabelled machine, and reading both is the only way to find it. No set of values is fixed, since an architecture the engine can build a static agent for is an architecture a runner may report.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+$",
+              "examples": [
+                "amd64",
+                "arm64"
+              ]
+            },
+            "agent_version": {
+              "title": "Agent version",
+              "description": "The version of the agent on this host. Every repository of the installation carries the same version at the same moment, so one string answers what the machine is running, and the API can tell an agent that matches the control plane from one left behind on a host nobody reimaged. Written as the release is tagged.",
+              "type": "string",
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+              "examples": [
+                "0.2.0",
+                "1.4.0"
+              ]
+            },
+            "namespaces": {
+              "title": "Accepted namespaces",
+              "description": "The namespaces this host's own policy accepts, sent only when it accepts fewer than its pool does. It narrows and never widens: the pool's accepted namespaces were set by an administrator and are the ceiling, which is the rule the labels follow too, so a machine cannot admit work its pool was never given. Absent when the runner narrows nothing, which is the ordinary case and why it is not required. An empty list is not how to say that, and is refused, because a runner accepting no namespace is a runner that can never be handed a task.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/namespace"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "examples": [
+                [
+                  "finance"
+                ],
+                [
+                  "finance",
+                  "team-ops"
+                ]
+              ]
+            },
+            "containment": {
+              "title": "Containment",
+              "description": "What this host can prove about how a container will be contained on it, reported at join so that the decision is made before any work is dispatched rather than after a container has already started. The tier is not claimed here: hardened and sandboxed are read from these two facts together with the pool the token named, and separated is an arrangement of hosts that no runner can honestly assert about itself. The block is required because a request that said nothing would have to be read as meeting the floor, and assuming the floor is the wrong default for the one property the runner refuses to start without.. It is optional: the page enumerates what a runner sends at join and does not name it, and the floor is held by the runner's own refusal to take work on a daemon without the remapping rather than by the API at registration. Reported here so that an operator can see from the console what a fleet is actually running on.",
+              "type": "object",
+              "required": [
+                "runtime",
+                "userns_remap"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runtime": {
+                  "title": "Container runtime",
+                  "description": "The runtime the daemon will create this runner's containers with, under the name the daemon knows it by. runc is the default the hardened tier is built on; runsc is gVisor, what a sandboxed pool runs, which intercepts system calls in a userspace kernel written in a memory-safe language and pays for it in application compatibility and per system call overhead. The value is not enumerated, because a pool may be built on a runtime this document has not heard of and the useful answer is the name the host actually reports.",
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_.-]*$",
+                  "examples": [
+                    "runc",
+                    "runsc"
+                  ]
+                },
+                "userns_remap": {
+                  "title": "User namespace remapping",
+                  "description": "Whether the daemon remaps container root to an unprivileged host account, so that a process escaping the namespace is a high-numbered UID that maps to no real user. It is the floor rather than a preference: a runner finding a daemon without it refuses to take work, and an operator gets past that refusal only by setting require_userns_remap to false in /etc/agentiik/runner.toml, a file rather than a command line flag so that lifting the floor can be read back afterwards. false is therefore a value a legitimately running runner reports, and reporting it is how the inventory can name the hosts sitting below the floor instead of leaving them indistinguishable from the rest.",
+                  "type": "boolean",
+                  "examples": [
+                    true,
+                    false
+                  ]
+                }
+              },
+              "examples": [
+                {
+                  "runtime": "runc",
+                  "userns_remap": true
+                },
+                {
+                  "runtime": "runsc",
+                  "userns_remap": true
+                },
+                {
+                  "runtime": "runc",
+                  "userns_remap": false
+                }
+              ]
+            }
+          },
+          "examples": [
+            {
+              "token": "agkjoin_lYd41PgjnpmnYTZ1KB2FvzKYJA7GgyKSqukAh9n7h9s",
+              "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+              "labels": [
+                "zone=dmz",
+                "arch=amd64",
+                "gpu=true"
+              ],
+              "capacity": {
+                "vcpu": 8,
+                "memory": "64Gi",
+                "disk": "1Ti"
+              },
+              "architecture": "amd64",
+              "agent_version": "0.2.0",
+              "namespaces": [
+                "finance"
+              ],
+              "containment": {
+                "runtime": "runc",
+                "userns_remap": true
+              }
+            },
+            {
+              "token": "agkjoin_UNamtuuSePEH_HyjSyDDKSe_EhCUUJO61bD6NFyN_hk",
+              "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAaj+DnTqIqzAtM5UVkhj05IJc+JK9jV3fiW27xAWOCfU=\n-----END PUBLIC KEY-----\n",
+              "labels": [
+                "zone=lan",
+                "arch=amd64"
+              ],
+              "capacity": {
+                "vcpu": 64,
+                "memory": "512Gi",
+                "disk": "400Gi"
+              },
+              "architecture": "amd64",
+              "agent_version": "0.2.0",
+              "containment": {
+                "runtime": "runc",
+                "userns_remap": true
+              }
+            }
+          ]
+        },
+        "response": {
+          "title": "Join answer",
+          "description": "What the API answers once it has verified the token, checked the claimed labels against what that token permits, refused anything else and created the runner record. It carries the two things a machine cannot mint for itself, an identity and a credential, plus the two it has no other way to learn, the pool it landed in and the instant its credential stops being taken. It carries no bus token: the runner asks for a short-lived one whenever the previous nears expiry, so bus credentials are never at rest on a runner host, which is what lets a runner sit in a zone where a stolen disk must not yield a working queue consumer. A refused registration is an error and never this object with its fields left empty.",
+          "type": "object",
+          "required": [
+            "runner",
+            "pool",
+            "credential",
+            "rotate_by"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "runner": {
+              "title": "Runner identifier",
+              "description": "The identifier the API minted for this machine, and the name it answers to everywhere afterwards: the runner field of every task result it publishes, the runner inventory, the console. It is minted here rather than chosen on the host, because a name a machine picks for itself is a name two machines can pick. Lowercase words joined by hyphens, the grammar a namespace and a pool are written in, so the same string reads correctly in a message, in a URL and in a queue name.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "runner-dmz-02",
+                "runner-lan-01"
+              ]
+            },
+            "pool": {
+              "title": "Pool",
+              "description": "The pool the join token was bound to, told back to the machine because this answer is the only place it can learn it. The runner never claimed a pool and has no other way to know which queue is its own, and the bus gives each pool a queue of its own, so an answer withholding this would leave a machine registered, credentialled and unable to find any work.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "default",
+                "dmz"
+              ]
+            },
+            "credential": {
+              "title": "Runner credential",
+              "description": "The long-lived credential the runner authenticates every later call to the API with. It is shown once, here, and stored hashed, so this answer is the only moment the value exists outside the machine that will hold it; the agent writes it to /etc/agentiik/runner.env with mode 0600, owned by the unprivileged account it runs as. It is worth having only on that host: it reaches the API and nothing else, it opens no database, no secret store and no standing object store access, and revoking it from the console stops the runner at its next heartbeat. It carries a prefix of its own for the reason the join token does, and the same 256 bits of entropy every token here carries, which is what the minimum length after the prefix holds room for.",
+              "type": "string",
+              "pattern": "^agkrunner_[A-Za-z0-9_-]{43,}$",
+              "examples": [
+                "agkrunner_3pH6tmJeTcfeByb7K0tEslQFoToW_FOdBCZMVnot_Rk",
+                "agkrunner_48fGI4GzMIVK5N1IT_OI4UA58LzmKa6C5WD-FkjkppE"
+              ]
+            },
+            "rotate_by": {
+              "$ref": "#/$defs/timestamp",
+              "title": "Rotate by",
+              "description": "When this credential stops being accepted. Rotation is automatic and the agent renews well ahead of it; a runner that was offline past this instant has to join again, which is deliberate, because a machine that has been dark for a month should be reconsidered rather than readmitted. It is an instant and not a remaining duration for the reason every time on this wire is one: two machines disagreeing about how long is left is worse than two machines disagreeing about what time it is.",
+              "examples": [
+                "2026-12-09T06:12:00Z"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "runner": "runner-dmz-02",
+              "pool": "dmz",
+              "credential": "agkrunner_3pH6tmJeTcfeByb7K0tEslQFoToW_FOdBCZMVnot_Rk",
+              "rotate_by": "2026-12-09T06:12:00Z"
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "request": {
+            "token": "agkjoin_lYd41PgjnpmnYTZ1KB2FvzKYJA7GgyKSqukAh9n7h9s",
+            "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+            "labels": [
+              "zone=dmz",
+              "arch=amd64",
+              "gpu=true"
+            ],
+            "capacity": {
+              "vcpu": 8,
+              "memory": "64Gi",
+              "disk": "1Ti"
+            },
+            "architecture": "amd64",
+            "agent_version": "0.2.0",
+            "namespaces": [
+              "finance"
+            ],
+            "containment": {
+              "runtime": "runc",
+              "userns_remap": true
+            }
+          },
+          "response": {
+            "runner": "runner-dmz-02",
+            "pool": "dmz",
+            "credential": "agkrunner_3pH6tmJeTcfeByb7K0tEslQFoToW_FOdBCZMVnot_Rk",
+            "rotate_by": "2026-12-09T06:12:00Z"
+          }
+        }
+      ]
+    },
+    "runnerHeartbeat": {
+      "title": "Runner heartbeat",
+      "description": "The exchange a runner repeats every ten seconds against the API, and the only periodic contact between a runner and the installation. The request names the runner, says what it is willing to do and lists the idempotency keys it currently holds, one request covering every in-flight task on that host; the response is where an order comes back. Liveness therefore sits in the database beside the task state rather than as traffic on a work queue that exists to distribute work, and three missed intervals are what move a task to lost. The request and the response are written as one keyword because they are one round trip: every order the response carries is about the keys the request just listed, so a response read apart from its request has nothing to be a response to.",
+      "type": "object",
+      "required": [
+        "request",
+        "response"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "title": "Heartbeat request",
+          "description": "What the runner posts every ten seconds. It carries no task result, no envelope and no log line: results travel on the bus and logs are shipped on their own channel, so this message is liveness, what the runner will accept, and what it is holding. It is the message a registered runner sends on a fixed interval, which is why the few things that change on a host without a new registration are reported here and the things fixed at registration, its labels, its accepted namespaces and its capacity in vCPU, memory and disk, are not repeated.",
+          "type": "object",
+          "required": [
+            "runner",
+            "agent_version",
+            "state",
+            "concurrency",
+            "tasks",
+            "sent_at"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "runner": {
+              "title": "Runner identifier",
+              "description": "Which runner is speaking, under the identifier the API returned at registration. The runner credential on the request is what authorises it, and a heartbeat whose named runner is not the one that credential belongs to is refused rather than believed; the name is carried anyway so that the message says on its own what it is about, as a task result does when it names the runner that produced it.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "runner-dmz-02",
+                "runner-lan-01"
+              ]
+            },
+            "agent_version": {
+              "title": "Agent version",
+              "description": "Which build of the agent is running, as the one version every repository of a release carries. Identity across restarts is the keypair on disk, so an agent upgraded in place keeps its record and never registers again: a host announces its version when it joins, and after that this is the only message that can say what is now running there. The console lists a version per runner, and it is the first thing read when one host in a pool behaves unlike the rest.",
+              "type": "string",
+              "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+              "examples": [
+                "0.4.0",
+                "1.0.0-rc.1"
+              ]
+            },
+            "state": {
+              "title": "Runner state",
+              "description": "What the runner will do with new work, which is a different question from whether it answers. ready pulls and accepts tasks. draining accepts none and is finishing what it holds, which is what a runner reports once a drain order or a revocation has reached it, and it keeps reporting it until tasks is empty. unhealthy accepts none because the runner took itself out of service, as it does after a few consecutive pre_task hook failures, rather than dragging its whole pool down one task at a time. The console needs all three, because a runner that answers and refuses work is present and useless, and present alone would hide that.",
+              "type": "string",
+              "enum": [
+                "ready",
+                "draining",
+                "unhealthy"
+              ],
+              "examples": [
+                "ready",
+                "draining"
+              ]
+            },
+            "concurrency": {
+              "title": "Concurrency ceiling",
+              "description": "The most tasks this host will run at once, as AGK_RUNNER_CONCURRENCY sets it. It is reported on every heartbeat rather than once at registration because it is a line in a unit file and changes when the agent restarts, and a restart is not a new registration. Read with the length of tasks it is what lets the console say six of eight rather than six, which is the difference between a busy pool and a stuck one. It is not max_concurrent_tasks, which is a namespace quota and bounds a tenant rather than a machine.",
+              "type": "integer",
+              "minimum": 1,
+              "examples": [
+                8,
+                1
+              ]
+            },
+            "tasks": {
+              "title": "Tasks held",
+              "description": "Every task in flight on this host, named by the idempotency key that identifies one attempt at one unit of work everywhere else on this wire. One request covers all of them because liveness is a property of the host and not of each task: the API stamps the rows these keys name, and a key absent for three intervals is what moves its task to lost. The list carries no task state, because the result message on the bus is the one channel that reports how a task ended and two channels reporting it would eventually disagree. An empty list is ordinary, on an idle host and as the moment a drain is seen to have finished.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/idempotencyKey"
+              },
+              "examples": [
+                [],
+                [
+                  "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                  "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+                ]
+              ]
+            },
+            "sent_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When the runner sent the heartbeat, by its own clock. The API times arrival itself and never decides liveness from this, so a drifting host cannot argue itself alive; it is here to be compared with received_at, which matters because a runner enforces task deadlines that were written as instants and a host an hour out would stop containers early or late.",
+              "examples": [
+                "2026-09-10T06:41:09.104Z"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "runner": "runner-dmz-02",
+              "agent_version": "0.4.0",
+              "state": "ready",
+              "concurrency": 8,
+              "tasks": [
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+              ],
+              "sent_at": "2026-09-10T06:41:09.104Z"
+            }
+          ]
+        },
+        "response": {
+          "title": "Heartbeat response",
+          "description": "What the API answers, and the only way an order reaches a runner. Every arrow in this architecture starts at the runner or at the controller: a runner opens no listening port and is never connected to, so there is nothing to push an instruction down. Anything the installation wants a runner to do therefore waits for its next heartbeat, which fixes the worst case at one interval, ten seconds, and is the price of a runner that is a firewall rule rather than a project.",
+          "type": "object",
+          "required": [
+            "received_at",
+            "drain",
+            "cancel"
+          ],
+          "additionalProperties": false,
+          "$comment": "results_accepted_until and reason belong to a drain order and are refused without one. A grace period nobody is draining towards, or a reason for an order that was not given, would each be a field a reader has to guess the meaning of.",
+          "if": {
+            "required": [
+              "drain"
+            ],
+            "properties": {
+              "drain": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "results_accepted_until"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          },
+          "properties": {
+            "received_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When the API received the heartbeat, by the installation's clock. It answers sent_at, and the pair is the reason both are on the wire: the runner reads the difference, knows how far it has drifted from the clock the deadlines in its task messages were written against, and can say so in its own log before it starts killing containers at the wrong moment.",
+              "examples": [
+                "2026-09-10T06:41:09.212Z"
+              ]
+            },
+            "drain": {
+              "title": "Drain order",
+              "description": "Whether the runner is to stop accepting new tasks and finish what it holds. This is how a revocation from the console takes effect, at the next heartbeat and not before, and it is a boolean rather than a verb list because the documentation gives a runner exactly one order of this kind. A draining runner does not stop: it keeps heartbeating, keeps publishing results and reports state draining until its tasks list is empty, which is how a drain is watched to completion instead of guessed at.",
+              "type": "boolean",
+              "examples": [
+                false,
+                true
+              ]
+            },
+            "results_accepted_until": {
+              "$ref": "#/$defs/timestamp",
+              "description": "How long the results of the tasks still in hand will be taken, present only with a drain order. Revoking a credential is meant to stop a machine from taking more work, never to throw away work already done, so the grace period is stated on the wire rather than left to each side's arithmetic. It is an instant and not a duration for the reason every deadline here is: two machines disagreeing about what time it is costs less than two machines disagreeing about how long is left.",
+              "examples": [
+                "2026-09-10T06:56:19.208Z"
+              ]
+            },
+            "reason": {
+              "title": "Reason",
+              "description": "Why the drain was ordered, in one line, for the runner to write to its own log. The owner of the machine is rarely the person who revoked the credential in the console, and a host that quietly stops taking work with nothing in its journal is an afternoon of somebody's debugging. It is free text because the causes are operational rather than a vocabulary both sides have to agree on, and because an order is obeyed on the boolean and never on the string.",
+              "type": "string",
+              "minLength": 1,
+              "examples": [
+                "credential revoked from the console",
+                "pool zone=dmz is being retired"
+              ]
+            },
+            "cancel": {
+              "title": "Tasks to stop",
+              "description": "The keys the runner is to stop now, by sending the container SIGTERM and then SIGKILL after the grace period the runner policy sets. Cancelling a run sends SIGTERM to running containers, and this is where that reaches the host, since nothing ever connects inbound to a runner and the heartbeat is its only periodic exchange with the API. The same list carries a task the control plane has already given up on: a key declared lost and requeued elsewhere is one this runner should no longer be working on. Only keys the request listed ever appear here, so a runner is never asked about work it does not have. It is always present and usually empty, so that a runner reads a list rather than testing whether a field arrived.",
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/idempotencyKey"
+              },
+              "examples": [
+                [],
+                [
+                  "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+                ]
+              ]
+            }
+          },
+          "examples": [
+            {
+              "received_at": "2026-09-10T06:41:09.212Z",
+              "drain": false,
+              "cancel": []
+            },
+            {
+              "received_at": "2026-09-10T06:41:19.208Z",
+              "drain": true,
+              "results_accepted_until": "2026-09-10T06:56:19.208Z",
+              "reason": "credential revoked from the console",
+              "cancel": [
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+              ]
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "request": {
+            "runner": "runner-dmz-02",
+            "agent_version": "0.4.0",
+            "state": "ready",
+            "concurrency": 8,
+            "tasks": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+            ],
+            "sent_at": "2026-09-10T06:41:09.104Z"
+          },
+          "response": {
+            "received_at": "2026-09-10T06:41:09.212Z",
+            "drain": false,
+            "cancel": []
+          }
+        },
+        {
+          "request": {
+            "runner": "runner-dmz-02",
+            "agent_version": "0.4.0",
+            "state": "draining",
+            "concurrency": 8,
+            "tasks": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+            ],
+            "sent_at": "2026-09-10T06:41:19.101Z"
+          },
+          "response": {
+            "received_at": "2026-09-10T06:41:19.208Z",
+            "drain": true,
+            "results_accepted_until": "2026-09-10T06:56:19.208Z",
+            "reason": "credential revoked from the console",
+            "cancel": [
+              "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+            ]
+          }
+        }
+      ]
+    },
+    "grantRedemption": {
+      "title": "Grant redemption",
+      "description": "The exchange in which a runner turns the names a task message carries into the values it deliberately does not: the URLs of its inputs, the values of its secrets, the files of the repository it runs against, and the place its outputs are written. The task message is safe to put on a queue precisely because it holds none of that, and the grant is the hinge: it is issued with one task, scoped to that task and the secrets it named, and expires with it. Request and response are written here as one pair because neither half is legible without the other; a message on the wire is one or the other, so neither is required and each is validated against the half it is. Everything the response carries is a credential or a secret, so what is ever recorded about this exchange is that it happened and for which task, and nothing it carried.",
+      "type": "object",
+      "required": [
+        "request",
+        "response"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "title": "Redemption request",
+          "description": "What the runner sends to the API: the grant, and the task it claims the grant is for. It carries no namespace, no workflow and no step, because the API resolves every one of those from the task the grant names, and a request able to assert its own namespace would be a request able to ask for another namespace's secrets. It does not name the runner either: identity comes from the runner credential the call is authenticated with, never from the body, for the same reason a runner cannot claim a label its join token did not allow. The same request may be sent again while the grant lives and returns the same document with fresh URLs, which is how a container that outran a presigned URL still has somewhere to write.",
+          "type": "object",
+          "required": [
+            "grant",
+            "task_id",
+            "idempotency_key"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "grant": {
+              "$ref": "#/$defs/grant",
+              "description": "The token the task message carried, presented here to be spent. It is the whole of the runner's authority for this call: it names one task, it expires with it, and the API holds only its hash, so a value lifted from a queue after the task ended buys nothing. It is never written to a log, a trace attribute or an audit entry; what is recorded is the task it named.",
+              "examples": [
+                "agkgrant_01JMZ8V1PC7K3M0XQ7K2N4D6F8_Zm9vYmFyYmF6cXV4MTIzNA"
+              ]
+            },
+            "task_id": {
+              "$ref": "#/$defs/ulid",
+              "description": "The task the runner is asking for. The grant names the same task inside its own text, and the API refuses a redemption where the two disagree rather than believing either alone. It is also what this exchange is audited against, since the grant value must not be.",
+              "examples": [
+                "01JMZ8V1PC7K3M0XQ7K2N4D6F8"
+              ]
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/idempotencyKey",
+              "description": "Which attempt, and which shard of a fan-out, is asking. The bus delivers a task message at least once, so the key is what keeps two deliveries to one container's worth of access: the runner refuses to start a container for a key that has already completed, so two deliveries of one message are one container. Here it names which attempt and which shard is asking, and it is what the exchange is recorded against.",
+              "examples": [
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "grant": "agkgrant_01JMZ8V1PC7K3M0XQ7K2N4D6F8_Zm9vYmFyYmF6cXV4MTIzNA",
+              "task_id": "01JMZ8V1PC7K3M0XQ7K2N4D6F8",
+              "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"
+            }
+          ]
+        },
+        "response": {
+          "title": "Redemption response",
+          "description": "What the API returns: everything the task message named and did not carry. It is the most sensitive document on the wire, and for two reasons that do not overlap. A presigned URL is a bearer credential, so whoever holds one holds the bytes it addresses, whether or not they hold a runner credential or a grant. A secret value is the secret. Neither is logged, echoed into an error message, attached to a span or shown in the console to anybody of any role. The runner keeps this document in memory for the length of the task and writes only what it must, which is each secret value onto its tmpfs mount and each fetched file into the task's working directory, both removed with the container.",
+          "type": "object",
+          "required": [
+            "task_id",
+            "expires_at",
+            "inputs",
+            "secrets",
+            "tree",
+            "uploads"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "task_id": {
+              "$ref": "#/$defs/ulid",
+              "description": "The task this document belongs to, echoed back. A runner holds several tasks at once, and a document carrying secret values has to say which one it is for: pairing answers by the order they arrived would hand a secret to the wrong container the first time two redemptions overlap.",
+              "examples": [
+                "01JMZ8V1PC7K3M0XQ7K2N4D6F8"
+              ]
+            },
+            "expires_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When everything here stops working. Every URL in this document is signed until this instant and every value should be held no longer. It is short on purpose and it never outlives the task, because the grant that produced it expires with the task: a stolen runner disk yields no standing object-store credential and no secret value, only the runner credential and the keypair that are deliberately at rest there. A runner whose container is still going when this passes redeems again rather than being given something longer lived.",
+              "examples": [
+                "2026-09-10T06:52:00Z"
+              ]
+            },
+            "inputs": {
+              "type": "array",
+              "description": "One entry per input port the task declares, matching the ports the task message named. The envelope of each port and every artifact that envelope references are given together, so the runner never has to come back for what it discovers by reading. A step with no input ports carries an empty list, which is what a source step redeems.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "port",
+                  "envelope",
+                  "artifacts"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "port": {
+                    "$ref": "#/$defs/identifier",
+                    "description": "The port this batch arrives on, under the name the workflow gave it. It is also the directory the envelope and its files are mounted under inside the container, at /agk/in/<port>/, which is why the name travels rather than a position in a list.",
+                    "examples": [
+                      "in",
+                      "orders"
+                    ]
+                  },
+                  "envelope": {
+                    "type": "object",
+                    "description": "Where to fetch the batch that travels on this port, and what it has to hash to. The digest repeats what the task message already said about the port so that the runner can hold what it received against what the controller published, which is the difference between a short transfer and a batch quietly missing items.",
+                    "required": [
+                      "url",
+                      "digest"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri",
+                        "pattern": "^https://",
+                        "description": "A presigned GET, valid until expires_at and for this one object. It is a bearer credential: anyone holding it reads the batch without holding anything else, which is why it never appears in a log line, an error or a span attribute. HTTPS only, because there is no plaintext path anywhere in this system.",
+                        "examples": [
+                          "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b"
+                        ]
+                      },
+                      "digest": {
+                        "$ref": "#/$defs/digest",
+                        "description": "The digest of the envelope document, the same value the task message carried for this port. The runner checks the transfer against it and refuses the task rather than starting a container on bytes nobody promised.",
+                        "examples": [
+                          "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                        ]
+                      }
+                    },
+                    "examples": [
+                      {
+                        "url": "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b",
+                        "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                      }
+                    ]
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "description": "Every artifact the envelope on this port references, each with somewhere to fetch it from. The envelope carries logical agk:// URIs, which address nothing on their own, so the pairing is handed over here rather than being something a runner could work out by itself. An envelope whose items attach no files carries an empty list.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "uri",
+                        "sha256",
+                        "url"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "uri": {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^agk://run/",
+                          "description": "The logical URI as the envelope writes it, agk://run/<run>/<step>/<port>/<name>. It is how the runner pairs this entry with the file entry it read, and it is the only form a person is ever shown, since the presigned URL beside it is a credential and this is a name.",
+                          "examples": [
+                            "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/split/ok/purchase-order.pdf"
+                          ]
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$",
+                          "description": "The digest of the bytes, sixty-four lowercase hexadecimal characters, written as the envelope writes it and as the physical key sha256/<digest> is built from. The runner checks its transfer against it, and a mismatch is a failed fetch rather than an input handed to a container.",
+                          "examples": [
+                            "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b"
+                          ]
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^https://",
+                          "description": "A presigned GET for these bytes, valid until expires_at. It is a bearer credential like every other URL here, so it is not logged, and it is never handed to the container: a brick receives a read-only mount under its input port and no store URL at all, which is what keeps a brick independent of where the bytes live.",
+                          "examples": [
+                            "https://objects.agentiik.example.com/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?X-Amz-Expires=900&X-Amz-Signature=7a9c4e1b0d6f2358"
+                          ]
+                        }
+                      },
+                      "examples": [
+                        {
+                          "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/split/ok/purchase-order.pdf",
+                          "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                          "url": "https://objects.agentiik.example.com/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?X-Amz-Expires=900&X-Amz-Signature=7a9c4e1b0d6f2358"
+                        }
+                      ]
+                    },
+                    "examples": [
+                      [],
+                      [
+                        {
+                          "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/split/ok/purchase-order.pdf",
+                          "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                          "url": "https://objects.agentiik.example.com/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?X-Amz-Expires=900&X-Amz-Signature=7a9c4e1b0d6f2358"
+                        }
+                      ]
+                    ]
+                  }
+                },
+                "examples": [
+                  {
+                    "port": "in",
+                    "envelope": {
+                      "url": "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b",
+                      "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                    },
+                    "artifacts": []
+                  }
+                ]
+              },
+              "examples": [
+                [],
+                [
+                  {
+                    "port": "in",
+                    "envelope": {
+                      "url": "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b",
+                      "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                    },
+                    "artifacts": [
+                      {
+                        "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/split/ok/purchase-order.pdf",
+                        "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                        "url": "https://objects.agentiik.example.com/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?X-Amz-Expires=900&X-Amz-Signature=7a9c4e1b0d6f2358"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            },
+            "secrets": {
+              "type": "array",
+              "description": "The values of the secrets the step mounts, and only those: the grant is scoped to this task and to the secrets this task named, so a runner cannot ask for one the workflow did not declare, and a workflow can only declare secrets of the namespace that owns it. The API is the only component that reads the secret store. The controller decided which secrets this task may have and never saw a value, no role reads one through the API at any time, and these strings are what the runner masks out of collected logs by literal match before a line is written to the store. A step that mounts nothing carries an empty list.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "mount",
+                  "encoding",
+                  "value"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/identifier",
+                    "description": "The secret's name, matching the entry of the same name in the task message. It is resolved in the namespace that owns the workflow and nowhere else, which is why moving a workflow to another namespace breaks the reference at validation instead of quietly carrying access along.",
+                    "examples": [
+                      "billing"
+                    ]
+                  },
+                  "mount": {
+                    "type": "string",
+                    "pattern": "^/agk/secrets/[A-Za-z0-9][A-Za-z0-9_-]*$",
+                    "description": "Where the value is written inside the container: a tmpfs mount at /agk/secrets/<name>, created noexec, nosuid and nodev. It repeats the mount point the task message gave so that a value and the path it belongs at arrive as one entry rather than being paired by position while a secret sits in memory. A secret is not injected as an environment variable, by default, because a process environment is readable by its children and ends up in diagnostic dumps.",
+                    "examples": [
+                      "/agk/secrets/billing"
+                    ]
+                  },
+                  "encoding": {
+                    "type": "string",
+                    "enum": [
+                      "utf-8",
+                      "base64"
+                    ],
+                    "description": "How to read value before writing it. A secret is a file's worth of bytes and not always text: a PEM key is UTF-8, a keystore is not, and JSON carries no arbitrary bytes. The encoding is written on every entry rather than left to a default, because a reader that had to guess would guess wrong exactly once, on the day a value stops being text, and it would guess wrong while holding the value.",
+                    "examples": [
+                      "utf-8",
+                      "base64"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "The secret itself, decoded according to encoding and written at mount as the file the container reads. This is the one place a secret value exists on the wire, and it comes into being as late as it possibly can: the runner asks when it is about to start the container, holds it in memory for the length of the task, writes it nowhere but its tmpfs mount, and does not log it, trace it, include it in an error or hand it to a condition expression. Revoking a grant does not unsay a value a step already used, which is why rotation is the answer to a leak and revocation is not.",
+                    "examples": [
+                      "bk_live_7Qm2rXt9vZa4",
+                      "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t"
+                    ]
+                  }
+                },
+                "examples": [
+                  {
+                    "name": "billing",
+                    "mount": "/agk/secrets/billing",
+                    "encoding": "utf-8",
+                    "value": "bk_live_7Qm2rXt9vZa4"
+                  }
+                ]
+              },
+              "examples": [
+                [],
+                [
+                  {
+                    "name": "billing",
+                    "mount": "/agk/secrets/billing",
+                    "encoding": "utf-8",
+                    "value": "bk_live_7Qm2rXt9vZa4"
+                  }
+                ]
+              ]
+            },
+            "tree": {
+              "type": "array",
+              "description": "The files of the workflow repository this task receives, resolved by the controller from the commit the run pinned and fetched here with the same grant as everything else. Every step sees the repository read-only under /agk/repo, narrowed by the step's files where it declares one, and these entries are what the runner writes there: the globs are already expanded and a relocation travels as the entry's own to, so a runner evaluates no path rule, speaks no git and holds no repository credential. The blobs are content-addressed like artifacts, so a runner that already holds a digest writes it from its own cache and fetches nothing. A step narrowed to nothing carries an empty list.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "mode",
+                  "sha256",
+                  "url"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[^/][^\\x00]*$",
+                    "description": "Where the file goes under /agk/repo, relative to that root. It is the path the container will see and not the path the file happens to have in the repository: the short form of the step's files is a path or a glob relative to the root, and it is already expanded here. It carries no parent segment, so a tree can only ever be written inside the mount it was resolved for. The grammar is the workflow file's own, a string of any character the repository allows, because a repository holds the names it holds and a narrower class here would refuse a file git accepts. The pattern holds the shape, and the refusal beside it holds the one segment a path may not contain.",
+                    "examples": [
+                      "agentiik.yaml",
+                      "scripts/normalise.sh"
+                    ],
+                    "not": {
+                      "pattern": "(^|/)\\.\\.(/|$)",
+                      "description": "And no .. segment, which is what would let a path climb out of the tree it is relative to. It is a refusal rather than a lookahead inside the pattern above, because JSON Schema's pattern is ECMA-262 and a lookahead is legal there while a good half of the engines that read this document cannot compile one: Go, Rust and everything else built on RE2 refuse it outright. A schema only some consumers can read is half a schema.",
+                      "examples": [
+                        "../etc/passwd",
+                        "config/../../secrets"
+                      ]
+                    }
+                  },
+                  "mode": {
+                    "type": "string",
+                    "pattern": "^0?[0-7]{3}$",
+                    "description": "The mode to create the file with, quoted as the workflow file quotes it, since YAML reads 0755 as a decimal number. The mode travels because an entry point that arrives 0644 is a step that will not run, and the runner is the only component in a position to set it. The grammar is the workflow schema's own, which accepts the leading zero and does without it, because the wire echoes a value the workflow file wrote and one string has to mean one thing in the YAML, the API and the schema.",
+                    "examples": [
+                      "0444",
+                      "0600",
+                      "644"
+                    ]
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "The digest of the file's bytes, sixty-four lowercase hexadecimal characters. It is what the blob is fetched by and checked against, and it is what lets a runner recognise a file it already has: two tasks of the same commit fetch the tree once between them.",
+                    "examples": [
+                      "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a"
+                    ]
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^https://",
+                    "description": "A presigned GET for the blob, valid until expires_at. It is a bearer credential like the others and is never logged. A workflow tree is not public: it carries the entry point and whatever the steps need, and reading it is workflow:read rather than something a URL on a queue should confer.",
+                    "examples": [
+                      "https://objects.agentiik.example.com/finance/sha256/a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a?X-Amz-Expires=900&X-Amz-Signature=5c02e8a71b9d43f6"
+                    ]
+                  },
+                  "to": {
+                    "title": "Relocation",
+                    "description": "Where the file is bound instead, absolute, for the one case the short form cannot express: the long form of files \"relocates a path to wherever a tool insists on finding it\", which is how a private authority reaches /etc/ssl/certs/internal-ca.pem in an image that will read it nowhere else. Absent for every ordinary file, which is the ordinary case, and present only where the step wrote the long form. The runner binds rather than copies, so the file stays read-only and outside the mount it came from.",
+                    "type": "string",
+                    "pattern": "^/[^\\x00]*$",
+                    "examples": [
+                      "/etc/ssl/certs/internal-ca.pem"
+                    ]
+                  }
+                },
+                "examples": [
+                  {
+                    "path": "scripts/normalise.sh",
+                    "mode": "0755",
+                    "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a",
+                    "url": "https://objects.agentiik.example.com/finance/sha256/a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a?X-Amz-Expires=900&X-Amz-Signature=5c02e8a71b9d43f6"
+                  }
+                ]
+              },
+              "examples": [
+                [],
+                [
+                  {
+                    "path": "agentiik.yaml",
+                    "mode": "0644",
+                    "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a",
+                    "url": "https://objects.agentiik.example.com/finance/sha256/a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a?X-Amz-Expires=900&X-Amz-Signature=5c02e8a71b9d43f6"
+                  }
+                ]
+              ]
+            },
+            "uploads": {
+              "type": "object",
+              "description": "Where the runner writes what the task produces: its output envelopes and its artifacts, both stored as content-addressed objects. It is one signed authorisation and not a URL per object, because an object's key is the digest of its bytes and no digest exists until the container has exited. The authorisation is bounded by a prefix instead, and the prefix is scoped to the namespace, since deduplication never crosses a namespace and an existence check must never reveal what another namespace holds. The log is not written here: a runner ships its log to the API, which is what lets it stream live over SSE before it is archived.",
+              "required": [
+                "url",
+                "fields",
+                "key_prefix"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://",
+                  "description": "Where the signed write is posted. It is the object store, reached outbound over HTTPS, and it is the only thing the runner has for writing: no standing credential of any kind is on that host, so a runner that stops redeeming stops being able to write at all.",
+                  "examples": [
+                    "https://objects.agentiik.example.com/finance"
+                  ]
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "The signed form fields the object store requires, passed through exactly as given and interpreted in no way. Their names are the store's own, which is why this is the one open object in the document: the wire does not close a vocabulary it did not invent. They carry the signature and the conditions it was made under, so they are a credential and are kept out of logs exactly as a URL is.",
+                  "examples": [
+                    {
+                      "x-amz-algorithm": "AWS4-HMAC-SHA256",
+                      "x-amz-credential": "agentiik/20260910/eu-west-1/s3/aws4_request",
+                      "x-amz-date": "20260910T063700Z",
+                      "policy": "eyJleHBpcmF0aW9uIjoiMjAyNi0wOS0xMFQwNjo1MjowMFoifQ",
+                      "x-amz-signature": "9d4b71e0c6a52f38"
+                    }
+                  ]
+                },
+                "key_prefix": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/sha256/$",
+                  "description": "What the signature allows the runner to write under, and the whole of what it may write: the namespace, then sha256/, ending in a separator so that it reads as a prefix and not as a name. The runner appends the digest of the bytes it is storing. Anything outside it is refused by the store rather than by the runner's good manners, which is the point of signing a prefix instead of trusting a client.",
+                  "examples": [
+                    "finance/sha256/"
+                  ]
+                }
+              },
+              "examples": [
+                {
+                  "url": "https://objects.agentiik.example.com/finance",
+                  "fields": {
+                    "x-amz-algorithm": "AWS4-HMAC-SHA256",
+                    "x-amz-credential": "agentiik/20260910/eu-west-1/s3/aws4_request",
+                    "x-amz-date": "20260910T063700Z",
+                    "policy": "eyJleHBpcmF0aW9uIjoiMjAyNi0wOS0xMFQwNjo1MjowMFoifQ",
+                    "x-amz-signature": "9d4b71e0c6a52f38"
+                  },
+                  "key_prefix": "finance/sha256/"
+                }
+              ]
+            }
+          },
+          "examples": [
+            {
+              "task_id": "01JMZ8V1PC7K3M0XQ7K2N4D6F8",
+              "expires_at": "2026-09-10T06:52:00Z",
+              "inputs": [
+                {
+                  "port": "in",
+                  "envelope": {
+                    "url": "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b",
+                    "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                  },
+                  "artifacts": [
+                    {
+                      "uri": "agk://run/01JMZ8V1P9C4XQ7K2N4D6F8H0A/split/ok/purchase-order.pdf",
+                      "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+                      "url": "https://objects.agentiik.example.com/finance/sha256/c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b?X-Amz-Expires=900&X-Amz-Signature=7a9c4e1b0d6f2358"
+                    }
+                  ]
+                }
+              ],
+              "secrets": [
+                {
+                  "name": "billing",
+                  "mount": "/agk/secrets/billing",
+                  "encoding": "utf-8",
+                  "value": "bk_live_7Qm2rXt9vZa4"
+                }
+              ],
+              "tree": [
+                {
+                  "path": "agentiik.yaml",
+                  "mode": "0644",
+                  "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a",
+                  "url": "https://objects.agentiik.example.com/finance/sha256/a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a?X-Amz-Expires=900&X-Amz-Signature=5c02e8a71b9d43f6"
+                }
+              ],
+              "uploads": {
+                "url": "https://objects.agentiik.example.com/finance",
+                "fields": {
+                  "x-amz-algorithm": "AWS4-HMAC-SHA256",
+                  "x-amz-credential": "agentiik/20260910/eu-west-1/s3/aws4_request",
+                  "x-amz-date": "20260910T063700Z",
+                  "policy": "eyJleHBpcmF0aW9uIjoiMjAyNi0wOS0xMFQwNjo1MjowMFoifQ",
+                  "x-amz-signature": "9d4b71e0c6a52f38"
+                },
+                "key_prefix": "finance/sha256/"
+              }
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "request": {
+            "grant": "agkgrant_01JMZ8V1PC7K3M0XQ7K2N4D6F8_Zm9vYmFyYmF6cXV4MTIzNA",
+            "task_id": "01JMZ8V1PC7K3M0XQ7K2N4D6F8",
+            "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"
+          },
+          "response": {
+            "task_id": "01JMZ8V1PC7K3M0XQ7K2N4D6F8",
+            "expires_at": "2026-09-10T06:52:00Z",
+            "inputs": [
+              {
+                "port": "in",
+                "envelope": {
+                  "url": "https://objects.agentiik.example.com/finance/sha256/7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11?X-Amz-Expires=900&X-Amz-Signature=b3f1c7d2a4e6089b",
+                  "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+                },
+                "artifacts": []
+              }
+            ],
+            "secrets": [
+              {
+                "name": "billing",
+                "mount": "/agk/secrets/billing",
+                "encoding": "utf-8",
+                "value": "bk_live_7Qm2rXt9vZa4"
+              }
+            ],
+            "tree": [
+              {
+                "path": "agentiik.yaml",
+                "mode": "0644",
+                "sha256": "a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a",
+                "url": "https://objects.agentiik.example.com/finance/sha256/a7e1875aa928e8a32bed8728639b06e8f8e2e297df096da697c85caffd34075a?X-Amz-Expires=900&X-Amz-Signature=5c02e8a71b9d43f6"
+              }
+            ],
+            "uploads": {
+              "url": "https://objects.agentiik.example.com/finance",
+              "fields": {
+                "x-amz-algorithm": "AWS4-HMAC-SHA256",
+                "x-amz-credential": "agentiik/20260910/eu-west-1/s3/aws4_request",
+                "x-amz-date": "20260910T063700Z",
+                "policy": "eyJleHBpcmF0aW9uIjoiMjAyNi0wOS0xMFQwNjo1MjowMFoifQ",
+                "x-amz-signature": "9d4b71e0c6a52f38"
+              },
+              "key_prefix": "finance/sha256/"
+            }
+          }
+        }
+      ]
+    },
+    "logShipment": {
+      "title": "Log shipment",
+      "description": "What a runner ships to the API as a task's captured standard error, and what the API answers. The log travels as an outbound request from the host holding the container, because a runner opens no listening port and is never connected to; it goes to the API rather than to the object store, since the API is what indexes a log, applies the retention the workflow declared within the namespace's ceiling and serves it over SSE. Shipping happens in chunks while the container is still running, so that a step running for an hour is readable while it runs, and a last chunk closes the log once the container has exited. The runner credential authenticates the call and the per-task grant scopes it to one task, and neither is a member of either half, because a token written into a body is a token that ends up in the very log this message carries: a token written into a body is a token that ends up in the very log this message carries. Both halves are written here because they are one exchange, and a runner cannot be held to the request without the answer that tells it where it stands.",
+      "type": "object",
+      "required": [
+        "request",
+        "response"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "title": "Log shipment request",
+          "description": "One chunk of a task's captured standard error, on its way to the API. Standard error is the log because standard output belongs to the result: a brick may write its out envelope there, and a stream that is sometimes a payload cannot also be the diagnostic record. The chunk says where it sits instead of relying on the order in which requests arrive, because a retried call and a reconnected client both put the same chunk on the wire twice, and the lines arrive already masked, because the store must never hold a secret value even for the length of a request.",
+          "type": "object",
+          "required": [
+            "idempotency_key",
+            "seq",
+            "first_line",
+            "final",
+            "lines"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "idempotency_key": {
+              "$ref": "#/$defs/idempotencyKey",
+              "description": "Which task's log this is. The key carries the run, the step, the attempt and the shard, which are exactly the four things a log is indexed by, so one string names the task rather than four fields that could disagree with each other. The grant the call carries is scoped to one task, and the key is carried all the same so that a shipment whose body and grant name different tasks is refused, rather than written under whichever of the two was read first.",
+              "examples": [
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+                "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+              ]
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Where this chunk sits in the task's log, counted from 1 and incremented once per chunk by the runner. Ordering is by this number and never by arrival or by the timestamps the lines carry: requests overtake one another, two lines share a millisecond, and a clock can step, while a counter held by the one sender cannot. It is also what makes a redelivery harmless, since the idempotency key and this number together name one chunk: a chunk the API already holds is answered again and not appended twice.",
+              "examples": [
+                1,
+                7
+              ]
+            },
+            "first_line": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The index of this chunk's first line within the whole of the task's log, counted from 1. The chunk declares its position rather than leaving the API to infer one from arrival, which is what lets a redelivered chunk land exactly where it landed the first time. It also makes a gap visible at the moment it happens, instead of turning up later as a line count nobody can reconcile.",
+              "examples": [
+                1,
+                389
+              ]
+            },
+            "final": {
+              "type": "boolean",
+              "description": "Whether this is the last chunk of the task: the container has exited and the runner has read its stream to the end, so the API may close the log and count it. It is written on every chunk rather than left absent on all but one, because the closing chunk is what a result message is allowed to report a line count from, and that is too load-bearing to rest on a missing field. A final chunk carrying no lines is how a container that wrote nothing to standard error is closed, which is not the same thing as a runner that shipped nothing.",
+              "examples": [
+                false,
+                true
+              ]
+            },
+            "lines": {
+              "type": "array",
+              "description": "The lines of this chunk, in order, each one timestamped and already masked. The list is the unit of shipping rather than a byte range of the stream, because the log is indexed and served by line: a chunk cut at a byte boundary would hand the index half a line and the console a line that arrives in two pieces. An empty list is legitimate on a final chunk and says the container wrote nothing more.",
+              "items": {
+                "title": "Log line",
+                "description": "One line of captured standard error: when the runner read it, and what it said once masking had been applied.",
+                "type": "object",
+                "required": [
+                  "at",
+                  "text"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "at": {
+                    "$ref": "#/$defs/timestamp",
+                    "description": "When the runner read the line, on the runner's own clock. A brick is any image that honours the contract and most of them write plain text, so the container is not asked to stamp its own output: the stamp is applied at the one place that sees every line of every brick. It is what the console shows beside the line and what lines a log up against the span of its task.",
+                    "examples": [
+                      "2026-09-10T06:42:31.882Z"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "What the line said, after masking. The runner replaces every secret value the task redeemed by literal match before the line leaves the host, because the API would otherwise have to read those values back to do the same work, and the store would hold the unmasked bytes for as long as the request took. No length is imposed here: the documentation caps the log and not the line, so a per-line ceiling invented in this schema would refuse output the engine accepts.",
+                    "examples": [
+                      "charging order C-1042",
+                      "billing API answered 402 for C-1043",
+                      "authorization: Bearer ***"
+                    ]
+                  }
+                },
+                "examples": [
+                  {
+                    "at": "2026-09-10T06:42:31.882Z",
+                    "text": "charging order C-1042"
+                  }
+                ]
+              },
+              "examples": [
+                [],
+                [
+                  {
+                    "at": "2026-09-10T06:42:31.882Z",
+                    "text": "charging order C-1042"
+                  },
+                  {
+                    "at": "2026-09-10T06:42:32.014Z",
+                    "text": "billing API answered 402 for C-1043"
+                  },
+                  {
+                    "at": "2026-09-10T06:42:32.101Z",
+                    "text": "authorization: Bearer ***"
+                  }
+                ]
+              ]
+            }
+          },
+          "examples": [
+            {
+              "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+              "seq": 7,
+              "first_line": 389,
+              "final": false,
+              "lines": [
+                {
+                  "at": "2026-09-10T06:42:31.882Z",
+                  "text": "charging order C-1042"
+                },
+                {
+                  "at": "2026-09-10T06:42:32.014Z",
+                  "text": "billing API answered 402 for C-1043"
+                },
+                {
+                  "at": "2026-09-10T06:42:32.101Z",
+                  "text": "authorization: Bearer ***"
+                }
+              ]
+            },
+            {
+              "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+              "seq": 1,
+              "first_line": 1,
+              "final": true,
+              "lines": []
+            }
+          ]
+        },
+        "response": {
+          "title": "Log shipment response",
+          "description": "What the API answers a shipment: where the log lives, what it did with the chunk, and where the runner now stands. The runner neither composes the log's address nor counts its lines on its own, because the result message it publishes later carries log.uri, log.lines and log.truncated, and taking all three from this answer is what keeps the result and the store saying the same thing about one log. A refusal is an HTTP status and not a member here, so there is no flag to read before the rest is believed.",
+          "type": "object",
+          "required": [
+            "uri",
+            "accepted",
+            "next_seq",
+            "lines",
+            "truncated"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "uri": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^agk://log/",
+              "description": "Where the task's log is addressed from: agk://log/<run>/<task>. The API answers it on every shipment so that the runner copies an address rather than building one, since a runner deciding where something lives is a runner making a decision the controller and the API are meant to keep. It is not the agk://run/ space an artifact is addressed in, because a log belongs to one task and not to one port: a step fanned out into eight shards has eight logs and no port to tell them apart. The task carries slashes of its own and is escaped as a path segment.",
+              "examples": [
+                "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
+                "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Fnormalize%2F1"
+              ]
+            },
+            "accepted": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many lines of this chunk were written. It is the number shipped in the ordinary case, zero for a chunk the API already holds, which is what a redelivery reads as, and fewer than shipped when the cap fell inside the chunk. None of the three is an error and all three answer the same status: a runner that treated a zero as a failure would ship the chunk a third time and learn the same thing again.",
+              "examples": [
+                3,
+                0
+              ]
+            },
+            "next_seq": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The sequence number the API expects next for this task. It is one more than the highest contiguous seq the API holds, so it never runs past a gap: a runner whose chunk five never arrived is told five and not eight. A runner that lost the answer to a shipment ships that chunk again and reads where it stands from here, which is why resuming needs no separate route to ask.",
+              "examples": [
+                8,
+                1
+              ]
+            },
+            "lines": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many lines the API holds for this task, which is the number the result message reports as log.lines. It is counted where the lines are written rather than where they were read, so a chunk shipped twice, or cut short by the cap, does not leave the result claiming a log the store cannot show.",
+              "examples": [
+                391,
+                0
+              ]
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "Whether the cap has been reached and further lines will be dropped, which is the value the result message reports as log.truncated. The cap is applied where the log is written, so that one component keeps one account of how much of a task's log exists. A runner reading true stops shipping and keeps draining the container's stream all the same, because a container whose output nobody reads blocks on a full pipe, and a brick stalled by its own logging would be a failure charged to the brick for something the platform did.",
+              "examples": [
+                false,
+                true
+              ]
+            }
+          },
+          "examples": [
+            {
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "accepted": 3,
+              "next_seq": 8,
+              "lines": 391,
+              "truncated": false
+            },
+            {
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "accepted": 0,
+              "next_seq": 8,
+              "lines": 391,
+              "truncated": true
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "request": {
+            "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+            "seq": 7,
+            "first_line": 389,
+            "final": false,
+            "lines": [
+              {
+                "at": "2026-09-10T06:42:31.882Z",
+                "text": "charging order C-1042"
+              },
+              {
+                "at": "2026-09-10T06:42:32.014Z",
+                "text": "billing API answered 402 for C-1043"
+              },
+              {
+                "at": "2026-09-10T06:42:32.101Z",
+                "text": "authorization: Bearer ***"
+              }
+            ]
+          },
+          "response": {
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "accepted": 3,
+            "next_seq": 8,
+            "lines": 391,
+            "truncated": false
+          }
+        }
+      ]
+    },
+    "runnerPool": {
+      "title": "Runner pool and join token",
+      "description": "What an administrator writes down before any machine can join a fleet: the pool, and one join token issued from it. The two travel together because neither is legible alone. A pool is the unit everything else is written against, since the bus gives each one a queue or a subject of its own and a namespace is allowed to reach pools rather than hosts, and a join token is the only way a machine nobody has met proves which pool it belongs to. Two rules bind them and are left to the validator, because JSON Schema can hold a value to a constant and not to another value in the same document: the token names the pool it was issued from, and it permits no label that pool does not grant. The token half is absent whenever no token is being issued, which is what a listing of pools is: the page keeps the two acts apart, an administrator creating a pool and then issuing a token from it, and a shape demanding both would refuse a pool the documentation prints on its own.",
+      "type": "object",
+      "required": [
+        "pool"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pool": {
+          "title": "Runner pool",
+          "description": "A named group of runners, carrying the labels its runners may claim, the namespaces whose work it accepts and the ceiling one task may ask for on it. It exists as a thing with a name because too much is written against it for a label selector to serve: the bus gives it a queue, a namespace quota lists it, a deployment profile draws it as a box outside the failure domains, and a namespace that needs separation rather than sharing is given a pool instead of an installation of its own.",
+          "type": "object",
+          "required": [
+            "name",
+            "labels",
+            "namespaces",
+            "resource_ceilings"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "description": "What the pool is called, and its only identity. It is the string a namespace's allowed_runner_pools quota lists and the string an agentiik_runner_pool data source reads back, so the pool carries no second identifier for the same thing: a name an administrator chose is what a person types, what a review reads back and what an installation keeps stable while hosts come and go. The grammar is the one this installation uses everywhere a name is given rather than minted, lowercase words joined by hyphens.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "default",
+                "dmz",
+                "gpu-nvme"
+              ]
+            },
+            "labels": {
+              "description": "Every label a runner of this pool may claim, and therefore everything a step's runs_on can select to reach it. The set is decided here, narrowed by a join token and checked at registration, because labels are never self-asserted: a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet. A zone is one of these labels and not a field of its own, which is what lets one deployment profile draw a pool around zone=lan with no route to the internet and another around zone=dmz behind an egress proxy while the wire learns nothing about either. A pool that grants no label is reachable only by a step that names none.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/label"
+              },
+              "uniqueItems": true,
+              "examples": [
+                [
+                  "zone=dmz",
+                  "arch=amd64"
+                ],
+                [
+                  "zone=lan",
+                  "arch=arm64",
+                  "gpu=true"
+                ]
+              ]
+            },
+            "namespaces": {
+              "description": "Which namespaces this pool accepts work from. An empty list accepts every one of them, which is what a single host installation runs with and what the runner setting spells as an empty string; a list names the only namespaces whose tasks the pool will pull, which is how a namespace is given dedicated capacity without a separate installation. It restricts the pool and grants nothing: a namespace still reaches a pool only when its own allowed_runner_pools quota lists it, so both sides have to agree before a task is ever placed here.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/namespace"
+              },
+              "uniqueItems": true,
+              "examples": [
+                [],
+                [
+                  "finance"
+                ],
+                [
+                  "finance",
+                  "team-ops"
+                ]
+              ]
+            },
+            "resource_ceilings": {
+              "$ref": "#/$defs/resources",
+              "description": "The most one task may be given on this pool, whatever its step asked for. A step writes its own cpu, memory and pids, and they are capped here and by the namespace quota before the runner creates the container, so a pool of small machines cannot be handed a step written for a large one. The ceiling sits on the pool because that is where an administrator decides it once, and it is a cap on a single task and never a total: what a host can actually hold is its own declared capacity, and a runner refuses a task that would take it past that.",
+              "examples": [
+                {
+                  "cpu": "4",
+                  "memory": "8Gi",
+                  "pids": 512
+                },
+                {
+                  "cpu": "2",
+                  "memory": "2Gi"
+                }
+              ]
+            },
+            "containment": {
+              "description": "What runs the containers here. hardened is the default runtime with user-namespace remapping, so that container root maps to an unprivileged host account; sandboxed is gVisor's runsc, bought at reduced application compatibility and a higher per system call cost; separated is hosts of its own, for when the requirement is separation rather than sandboxing. The tier belongs to the pool because that is where the decision is made: a namespace running code its own owners will not vouch for is given a pool, not a keyword on a step. Absent means hardened, since every installation gets that tier always and a runner refuses a daemon without the remapping rather than starting containers whose root maps to the host's.",
+              "type": "string",
+              "enum": [
+                "hardened",
+                "sandboxed",
+                "separated"
+              ],
+              "default": "hardened",
+              "examples": [
+                "hardened",
+                "sandboxed",
+                "separated"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "name": "dmz",
+              "labels": [
+                "zone=dmz",
+                "arch=amd64"
+              ],
+              "namespaces": [
+                "finance"
+              ],
+              "resource_ceilings": {
+                "cpu": "4",
+                "memory": "8Gi",
+                "pids": 512
+              },
+              "containment": "hardened"
+            },
+            {
+              "name": "default",
+              "labels": [
+                "zone=lan",
+                "arch=amd64"
+              ],
+              "namespaces": [],
+              "resource_ceilings": {
+                "cpu": "2",
+                "memory": "2Gi",
+                "pids": 256
+              }
+            }
+          ]
+        },
+        "join_token": {
+          "title": "Join token",
+          "description": "The credential an administrator issues from a pool so that one machine can join it. Registration exists to answer one question safely, how a machine nobody has met proves which pool it belongs to, and this is the whole of the answer: the runner presents the token once together with the public key it generated locally, the API checks that the labels claimed are a subset of what the token permits and refuses anything else, and what comes back is a runner identifier and a long-lived credential worth having only on that machine. The token is spent at that moment and cannot be replayed.",
+          "type": "object",
+          "required": [
+            "id",
+            "pool",
+            "labels",
+            "single_use",
+            "issued_at",
+            "expires_at"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ulid",
+              "description": "What names this token everywhere its secret is not: a listing, the audit log, a revocation. The secret is stored hashed and shown once, so speaking about the token at all needs something else to speak with, and a ULID sorts by the moment it was issued.",
+              "examples": [
+                "01M2AAZ9G62NQXFAFCXKRPJEH5"
+              ]
+            },
+            "token": {
+              "description": "The secret itself, written agkjoin_ and then 256 bits of entropy, which is what an administrator copies and a runner presents to agk runner join. It appears in exactly one message, the answer to the request that created it, because it is stored hashed and shown once at creation: every other field of this object survives in a listing and this one does not. The prefix is there so that a token leaked into a log, a shell history or a repository is recognisable as a credential of this installation, which a bare random string is not.",
+              "type": "string",
+              "pattern": "^agkjoin_[A-Za-z0-9_-]{43,}$",
+              "examples": [
+                "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ"
+              ]
+            },
+            "pool": {
+              "description": "The pool this token admits a machine to, by name. A token is bound to one pool and issues nothing outside it, which is what makes registration answer its question rather than ask one: the machine proves where it belongs instead of choosing where to go.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "dmz",
+                "gpu-nvme"
+              ]
+            },
+            "labels": {
+              "description": "The exact set of labels a runner may claim with this token. A registration claiming anything outside it is refused, and the set is itself within what the pool grants, so one token can admit a machine to a narrower part of a pool than the pool as a whole: a host that is in the demilitarised zone but has no accelerator is joined with a token that says so. Binding the labels to the token rather than to the machine is what keeps a label an administrator's statement about where a host sits instead of the host's statement about itself.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/label"
+              },
+              "uniqueItems": true,
+              "examples": [
+                [
+                  "zone=dmz",
+                  "arch=amd64"
+                ],
+                [
+                  "zone=lan",
+                  "arch=arm64",
+                  "gpu=true"
+                ]
+              ]
+            },
+            "single_use": {
+              "description": "Always true, and written into the message rather than left to prose because the whole exchange rests on it: the token is spent by the registration that succeeds, and anyone who reads it afterwards holds nothing. It is a constant and not a count of remaining uses, because a token good for several machines is a credential worth stealing and there is nothing it would buy that a second token does not: one machine, one token, and a reimaged host joins again.",
+              "type": "boolean",
+              "const": true,
+              "examples": [
+                true
+              ]
+            },
+            "issued_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When the token was created, on the clock of the API that created it. It is what the expiry is read against when two clocks disagree, and what a listing of outstanding tokens is ordered by.",
+              "examples": [
+                "2026-09-10T06:12:00Z"
+              ]
+            },
+            "expires_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When the token stops being accepted, whether or not anybody used it. One hour after it was issued is the default, and it is short because the token only has to survive the minutes between an administrator copying it and a machine presenting it; an installation that needs longer says so when it issues one. It is an instant rather than a lifetime for the reason the timestamp definition gives, and it is here rather than only in an administrator's head so that a reader of the message can see a dead token without asking anyone.",
+              "examples": [
+                "2026-09-10T07:12:00Z"
+              ]
+            },
+            "redeemed_at": {
+              "$ref": "#/$defs/timestamp",
+              "description": "When the token was spent, absent while it has not been. Present, it is the moment the runner record was created and the token became worthless. Absent and past the expiry, it is a machine that never joined, which is worth seeing rather than tidying away: either the host never arrived, or an installation was set up halfway and left.",
+              "examples": [
+                "2026-09-10T06:14:41.902Z"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+              "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+              "pool": "dmz",
+              "labels": [
+                "zone=dmz",
+                "arch=amd64"
+              ],
+              "single_use": true,
+              "issued_at": "2026-09-10T06:12:00Z",
+              "expires_at": "2026-09-10T07:12:00Z"
+            },
+            {
+              "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+              "pool": "dmz",
+              "labels": [
+                "zone=dmz",
+                "arch=amd64"
+              ],
+              "single_use": true,
+              "issued_at": "2026-09-10T06:12:00Z",
+              "expires_at": "2026-09-10T07:12:00Z",
+              "redeemed_at": "2026-09-10T06:14:41.902Z"
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "pool": {
+            "name": "dmz",
+            "labels": [
+              "zone=dmz",
+              "arch=amd64"
+            ],
+            "namespaces": [
+              "finance"
+            ],
+            "resource_ceilings": {
+              "cpu": "4",
+              "memory": "8Gi",
+              "pids": 512
+            },
+            "containment": "hardened"
+          },
+          "join_token": {
+            "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+            "token": "agkjoin_N8yQ2mVr4K7dLpX0sZaHg5Tf1WbCuJeR9iOnM3vY6kQ",
+            "pool": "dmz",
+            "labels": [
+              "zone=dmz",
+              "arch=amd64"
+            ],
+            "single_use": true,
+            "issued_at": "2026-09-10T06:12:00Z",
+            "expires_at": "2026-09-10T07:12:00Z"
+          }
+        }
+      ]
+    },
+    "ulid": {
+      "title": "ULID",
+      "description": "A run or task identifier, minted by the engine and carried unchanged by everything that speaks about it. Crockford base32, which is what a ULID is written in, and no length is imposed: the engine mints twenty-six characters, and the identifiers the documentation prints are fifteen and twelve in the task message it shows, which a twenty-six character pattern would refuse. The envelope took the same reading for the same reason, and two answers to one question would be worse than either. What is held is the alphabet, which is what makes an identifier safe as a path segment and as an object key.",
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]+$",
+      "examples": [
+        "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+        "01M2AAZ9G62NQXFAFCXKRPJEH5",
+        "01JMZ8V1P9C4"
+      ]
+    },
+    "identifier": {
+      "title": "Identifier",
+      "description": "A name given in the workflow file and carried here unchanged: a step or a port. The same grammar the workflow file writes and the brick manifest declares, carrying no path separator, no comma and no space, because the name becomes a directory, a file name and one entry of a comma separated list inside the container.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "examples": [
+        "invoice",
+        "normalize",
+        "out",
+        "error"
+      ]
+    },
+    "namespace": {
+      "title": "Namespace",
+      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "examples": [
+        "finance",
+        "team-ops"
+      ]
+    },
+    "workflowRef": {
+      "title": "Workflow reference",
+      "description": "The workflow and the commit the run was started from, written name@commit. A run pins the commit it started from: the branch may move a minute later and the run does not move with it, which is what makes a replay six months on read the same tree.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*@[0-9a-f]{7,40}$",
+      "examples": [
+        "monthly-invoicing@a3f9c1e",
+        "nightly-reconcile@0f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c"
+      ]
+    },
+    "digest": {
+      "title": "Digest",
+      "description": "A sha256 written as the algorithm, a colon and sixty-four hexadecimal characters. It is how an envelope, an image and an artifact are named on the wire, because a name that is the content cannot be confused with a name that merely points at it.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "examples": [
+        "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11"
+      ]
+    },
+    "imageRef": {
+      "title": "Image reference",
+      "description": "The image a task runs, resolved to a digest rather than to a tag. A tag moves; a run that pinned one would be a run nobody can reproduce, so the controller resolves it once and the runner is told what was resolved.",
+      "type": "string",
+      "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$",
+      "examples": [
+        "ghcr.io/acme/agk-invoice@sha256:1ab74e2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e39cc"
+      ]
+    },
+    "timestamp": {
+      "title": "Timestamp",
+      "description": "An instant, RFC 3339 with a time zone. Every time on the wire is written this way and is the sender's own clock, which is why a deadline is carried as an instant rather than as a duration: two machines disagreeing about how long is left is worse than two machines disagreeing about what time it is.",
+      "type": "string",
+      "format": "date-time",
+      "examples": [
+        "2026-09-10T06:12:00Z",
+        "2026-09-10T06:41:09.104Z"
+      ]
+    },
+    "shard": {
+      "title": "Shard",
+      "description": "Which container of a fan-out this is, and how many there are. Absent when the step is not fanned out, which is how a reader tells one container of eight from the only container there is.",
+      "type": "object",
+      "required": [
+        "index",
+        "of"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "title": "Index",
+          "description": "The position of this shard, counted from one, so that it reads as the AGK_SHARD the container is given.",
+          "type": "integer",
+          "minimum": 1,
+          "examples": [
+            3
+          ]
+        },
+        "of": {
+          "title": "Cardinality",
+          "description": "How many shards the step was divided into.",
+          "type": "integer",
+          "minimum": 1,
+          "examples": [
+            8
+          ]
+        }
+      },
+      "examples": [
+        {
+          "index": 3,
+          "of": 8
+        }
+      ]
+    },
+    "idempotencyKey": {
+      "title": "Idempotency key",
+      "description": "run/step/attempt for a step that runs as one container, and run/step/attempt/index/of where a fan-out produced it. The shard is written index and cardinality because that is what a shard is: AGK_SHARD carries 3/8, and a key that dropped the 8 could not say which fan-out it belonged to, so the third of eight and the third of six would be different units of work with one name. It is derived and never minted: the same decision taken twice, by the same evaluator after a failover or by a bus delivering a message twice, produces the same key, and \"the runner refuses to start a container for a key that has already completed\".",
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]+/[A-Za-z0-9][A-Za-z0-9_-]*/[1-9][0-9]*(?:/[1-9][0-9]*/[1-9][0-9]*)?$",
+      "examples": [
+        "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+        "01JMZ8V1P9C4/invoice/2/3/8",
+        "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+      ]
+    },
+    "runState": {
+      "title": "Run state",
+      "description": "Where a run is, as the documentation fixes the vocabulary. Every component reads this one enumeration: the controller writes it, the API serves it, the console colours it and a phone notifies on it, and a seventh state invented in one of them would be a state the others cannot render.",
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out"
+      ],
+      "examples": [
+        "running",
+        "waiting",
+        "timed_out"
+      ]
+    },
+    "taskState": {
+      "title": "Task state",
+      "description": "Where one task is, in the nine states the documentation names. The four endings are told apart on purpose and never collapsed: failed is charged to the brick and its exit code says which band it falls in; lost is charged to the infrastructure, is declared only by the absence of three heartbeats, and is requeued only where the step is idempotent; timed_out is the attempt stopped at its deadline, where nothing decided anything and there is no exit code of its own to read; and cancelled is somebody stopping the run, which is not a property of the work at all. A retry policy reads the cause, so a vocabulary that folded them together would make retry.on answer a deadline the way it answers a bad minute.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "dispatched",
+        "running",
+        "publishing",
+        "succeeded",
+        "failed",
+        "lost",
+        "timed_out",
+        "cancelled"
+      ],
+      "examples": [
+        "running",
+        "publishing",
+        "lost",
+        "timed_out"
+      ]
+    },
+    "network": {
+      "title": "Network posture",
+      "description": "What the container may reach. none is the default and is what a deterministic tool needs; internal reaches the installation's own services and nothing outside; egress reaches the hosts the step's allow list names, through the runner's proxy, and is refused by a runner that has no such proxy rather than opened and called filtered.",
+      "type": "string",
+      "enum": [
+        "none",
+        "internal",
+        "egress"
+      ],
+      "examples": [
+        "none",
+        "egress"
+      ]
+    },
+    "label": {
+      "title": "Label",
+      "description": "A key=value a runner claims and a step selects on. A runner may only claim labels its join token allowed, so a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*=[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$",
+      "examples": [
+        "zone=dmz",
+        "arch=amd64",
+        "gpu=none"
+      ]
+    },
+    "grant": {
+      "title": "Grant",
+      "description": "The bearer token issued with one task, and the only thing that turns the names in a task message into values. It is scoped to that task and expires with it: the message names the secrets the step mounts and carries none of them, and the input URLs it names work for nobody holding anything else.",
+      "type": "string",
+      "pattern": "^agkgrant_[0-9A-HJKMNP-TV-Z]+_[A-Za-z0-9_-]{16,}$",
+      "examples": [
+        "agkgrant_01JMZ8V1P9C4XQ7K2N4D6F8H0A_Zm9vYmFyYmF6cXV4MTIzNA",
+        "agkgrant_01JMZ8V1PC7K3M0_Zm9vYmFyYmF6cXV4MTIzNA"
+      ]
+    },
+    "resources": {
+      "title": "Resources",
+      "description": "The ceilings the container is created with, as the manifest and the step wrote them and the runner policy capped them. They are on the wire because the runner applies them and the controller decided them: a runner that had to read a manifest to know what to apply would be reading a second source for a decision already made.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "title": "CPU",
+          "description": "Cores, as a quoted decimal above zero. Quoted because YAML reads an unquoted 1 as a number and the manifest refuses a number, and the wire spells it the way the file does.",
+          "type": "string",
+          "pattern": "^(?:0*[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$",
+          "examples": [
+            "0.5",
+            "2"
+          ]
+        },
+        "memory": {
+          "title": "Memory",
+          "description": "A whole number above zero with a binary suffix, as the manifest writes it.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
+          "examples": [
+            "256Mi",
+            "2Gi"
+          ]
+        },
+        "pids": {
+          "title": "Process ceiling",
+          "description": "The most processes the container may hold, applied as PidsLimit.",
+          "type": "integer",
+          "minimum": 1,
+          "examples": [
+            128
+          ]
+        }
+      },
+      "examples": [
+        {
+          "cpu": "0.5",
+          "memory": "256Mi",
+          "pids": 128
+        }
+      ]
+    }
+  }
+}
