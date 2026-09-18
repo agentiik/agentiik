@@ -25,6 +25,7 @@ type guard struct {
 	permission Permission
 	scope      Scope
 	public     bool
+	runner     bool
 	why        string
 }
 
@@ -55,6 +56,9 @@ func (p Public) guards() guard {
 
 // check refuses a guard that says nothing.
 func (g guard) check(method, pattern string) error {
+	if g.runner {
+		return nil
+	}
 	if g.public {
 		if len(g.why) < 20 {
 			return fmt.Errorf("api: %s %s is public and says %q: a route outside the authorisation hook says what authorises it instead, at length, because that sentence is what a reviewer reads", method, pattern, g.why)
@@ -66,6 +70,20 @@ func (g guard) check(method, pattern string) error {
 	}
 	return nil
 }
+
+// ForRunner is a route authorised by a runner credential rather than by a principal.
+//
+// A runner is not a principal and holds none of the permissions: "It holds no database
+// credential, no secret-store credential and no standing object-store credential. Only a runner
+// credential and per-task grants that expire." What it may do is a short closed list, and the
+// routes that serve it are the only ones that take this.
+//
+// It is a third kind of guard, and adding one is deliberately a change to this file that somebody
+// reads. The alternative was to mark these routes public and check the credential inside each
+// handler, which is the shape of every access check that has ever been forgotten.
+type ForRunner struct{}
+
+func (ForRunner) guards() guard { return guard{runner: true} }
 
 // Principal is who is asking.
 //
@@ -97,6 +115,26 @@ type Target struct {
 type Authorizer interface {
 	Allow(ctx context.Context, who Principal, what Permission, over Target) (bool, error)
 }
+
+// IdentifyRunner says which runner a credential belongs to, and refuses a revoked one.
+//
+// It is the runner half of Identify, separate because the two answer different questions: one
+// asks who a person is and the other asks which machine this is. A runner that cannot be
+// identified is not an unauthenticated principal, it is a machine that has to join again.
+type IdentifyRunner interface {
+	Runner(ctx context.Context, credential string) (Runner, error)
+}
+
+// Runner is the machine a credential belongs to, reduced to what a route needs.
+type Runner struct {
+	ID    string
+	Pool  string
+	State string
+}
+
+// ErrNoRunner is a credential that opens no runner, or one that was revoked. One error for both,
+// because telling a caller which it was tells somebody guessing whether they had a real one.
+var ErrNoRunner = errors.New("api: no runner of that credential")
 
 // DenyAll refuses everything, and is what an installation with no access model has.
 //

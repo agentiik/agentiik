@@ -35,6 +35,11 @@ type Router struct {
 	auth     Authorizer
 	identify Identify
 
+	// runners is what a runner-guarded route is checked against, and is nil on an
+	// installation that serves no runner routes. A route taking ForRunner without it is
+	// refused at registration rather than at the first heartbeat.
+	runners IdentifyRunner
+
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
@@ -48,10 +53,15 @@ type Route struct {
 	Permission Permission
 	Scope      Scope
 
-	// Public and Why are set where the route is outside the authorisation hook.
+	// Public and Why are set where the route is outside the authorisation hook, and Runner
+	// where it is authorised by a runner credential instead.
 	Public bool
+	Runner bool
 	Why    string
 }
+
+// RunnerHandler is a route a runner reaches, given the machine the credential named.
+type RunnerHandler func(w http.ResponseWriter, r *http.Request, runner Runner)
 
 // NewRouter builds one. An authorizer is required, and the deny-everything one is a legitimate
 // answer rather than a stand-in: see DenyAll.
@@ -63,6 +73,70 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 		return nil, errors.New("api: no way to say who is asking, and a request with no principal is not the same as a request from nobody")
 	}
 	return &Router{mux: http.NewServeMux(), auth: auth, identify: identify}, nil
+}
+
+// ServeRunners says what a runner credential is checked against. Without it, a route taking
+// ForRunner is refused at registration.
+func (rt *Router) ServeRunners(runners IdentifyRunner) { rt.runners = runners }
+
+// HandleRunner registers one route a runner reaches.
+//
+// Separate from Handle because the handler is given a machine rather than a principal and a
+// target, and because the two hooks answer different questions. What they have in common is that
+// neither is something a handler calls.
+func (rt *Router) HandleRunner(method, pattern string, g ForRunner, h RunnerHandler) error {
+	if h == nil {
+		return fmt.Errorf("api: %s %s has no handler", method, pattern)
+	}
+	if rt.runners == nil {
+		return fmt.Errorf("api: %s %s is authorised by a runner credential and nothing was given to check one against", method, pattern)
+	}
+	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Runner: true})
+	rt.mux.HandleFunc(method+" "+pattern, func(w http.ResponseWriter, r *http.Request) {
+		rt.serveRunner(w, r, h)
+	})
+	return nil
+}
+
+// MustHandleRunner is HandleRunner for a caller that builds its routes at start-up.
+func (rt *Router) MustHandleRunner(method, pattern string, g ForRunner, h RunnerHandler) {
+	if err := rt.HandleRunner(method, pattern, g, h); err != nil {
+		panic(err.Error())
+	}
+}
+
+// serveRunner is the hook every runner route passes through.
+func (rt *Router) serveRunner(w http.ResponseWriter, r *http.Request, h RunnerHandler) {
+	credential, ok := bearerOf(r)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		refuse(w, http.StatusUnauthorized, "this request carries no credential")
+		return
+	}
+	runner, err := rt.runners.Runner(r.Context(), credential)
+	switch {
+	case errors.Is(err, ErrNoRunner):
+		// A revoked credential and one that never existed answer the same thing, and a
+		// runner that gets this joins again rather than retrying.
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		refuse(w, http.StatusUnauthorized, "that credential opens nothing")
+		return
+	case err != nil:
+		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
+		return
+	}
+	h(w, r, runner)
+}
+
+// bearerOf reads a bearer credential, and answers false for anything else: a runner presents one
+// and there is no second way in.
+func bearerOf(r *http.Request) (string, bool) {
+	value := r.Header.Get("Authorization")
+	rest, ok := strings.CutPrefix(value, "Bearer ")
+	if !ok || rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 // Handle registers one route behind one guard.
