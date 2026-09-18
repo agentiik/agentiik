@@ -8,6 +8,14 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**The first four routes, and what they deliberately do not do.** A version is pushed, a run is started, runs are listed and one is read. None of them decides anything: the API writes a row and issues the notification in the same transaction, so the row and the wake-up are one fact rather than two, and what happens next is the controller's. A test checks that starting a run creates no task, because a route here that started one would be a second scheduler.
+
+**A version that cannot be rebuilt is refused at the push.** It is built before it is written, so a workflow whose manifests are missing or whose edges name a step nobody declared fails in front of the person pushing it rather than at three in the morning in front of nobody.
+
+**A run answers 202 rather than 201.** The run exists and nothing has happened yet, which is what `queued` means: "Created, waiting on a concurrency lock or on namespace quota."
+
+**A body carrying a field nobody knows is refused rather than half understood**, and a push carries no timestamp of its own, because a caller that could name its own creation time could make a version look older than the one it replaced.
+
 **A version is a commit, and now something can store one.** `workflow_versions.graph` was declared not null and described as "the resolved graph", and nothing in the engine could write one: a graph holds unexported state, a workflow holds the document it was parsed from so a refusal can name a line, and neither has a serialised form. What a version actually has to be is reconstructible without the repository, for ever, because a branch that moves afterwards must change nothing about a run already pinned to that commit. So what is stored is what it takes to rebuild: the entry point as it was, every file it included, and the manifest of every image it names. Rebuilding reaches no tree and no registry.
 
 **What a version holds is what the loader read, recorded as it read it.** A repository holds a great deal a workflow does not name, and a version that stored all of it would grow with the repository rather than with the workflow. Working out the closure by parsing the include blocks again would be this package reimplementing resolution in order to agree with resolution, and an include may itself include. So the tree is wrapped in something that remembers, the loader is asked to resolve, and what it touched is the version. It records the bytes rather than the paths, so a capture and a later read of the same tree cannot disagree.
