@@ -54,6 +54,20 @@ func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string,
 		return JoinToken{}, errors.New("db: a join token that never expires, and one only has to survive the minutes between an administrator copying it and a machine presenting it")
 	}
 
+	// A token draws its labels from its pool, which is where somebody wrote them down. A
+	// token permitting a label the pool does not carry would be a way of granting a label
+	// without ever having created it, and the subset check at join time would then be
+	// checking against nothing.
+	p, err := w.RunnerPoolNamed(ctx, pool)
+	if err != nil {
+		return JoinToken{}, err
+	}
+	for _, claimed := range labels {
+		if !slices.Contains(p.Labels, claimed) {
+			return JoinToken{}, fmt.Errorf("db: pool %s does not carry the label %s", pool, claimed)
+		}
+	}
+
 	clear, hashed, err := token.New(token.Join, "")
 	if err != nil {
 		return JoinToken{}, fmt.Errorf("db: %w", err)
@@ -76,12 +90,14 @@ type Joining struct {
 	Token  string
 	Labels []string
 
-	AcceptedNamespaces []string
-	CPU                int
-	MemoryBytes        int64
-	DiskBytes          int64
-	Architecture       string
-	AgentVersion       string
+	// What a machine says about itself is what only the machine knows. What it is allowed
+	// is its pool's: "the labels it claims, its capacity in vCPU, memory and disk, its
+	// architecture and its agent version" is the whole of what registration carries.
+	CPU          int
+	MemoryBytes  int64
+	DiskBytes    int64
+	Architecture string
+	AgentVersion string
 }
 
 // Joined is what it gets back: an identity, and a credential that exists once.
@@ -142,10 +158,10 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 	rotate := now.Add(rotateAfter)
 
 	if _, err := w.tx.Exec(ctx,
-		`insert into runners (id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		`insert into runners (id, pool, labels, cpu, memory_bytes, disk_bytes,
 		                      architecture, agent_version, credential_hash, rotate_by, joined_with)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		runner, pool, orEmptyStrings(j.Labels), orEmptyStrings(j.AcceptedNamespaces),
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		runner, pool, orEmptyStrings(j.Labels),
 		j.CPU, j.MemoryBytes, j.DiskBytes, j.Architecture, j.AgentVersion,
 		credential, rotate, id); err != nil {
 		return Joined{}, fmt.Errorf("db: the runner could not be created: %w", err)
@@ -164,12 +180,11 @@ type Runner struct {
 	Pool   string   `json:"pool"`
 	Labels []string `json:"labels"`
 
-	AcceptedNamespaces []string `json:"accepted_namespaces"`
-	CPU                int      `json:"cpu"`
-	MemoryBytes        int64    `json:"memory_bytes"`
-	DiskBytes          int64    `json:"disk_bytes"`
-	Architecture       string   `json:"architecture"`
-	AgentVersion       string   `json:"agent_version"`
+	CPU          int    `json:"cpu"`
+	MemoryBytes  int64  `json:"memory_bytes"`
+	DiskBytes    int64  `json:"disk_bytes"`
+	Architecture string `json:"architecture"`
+	AgentVersion string `json:"agent_version"`
 
 	State       string    `json:"state"`
 	DrainReason string    `json:"drain_reason,omitempty"`
@@ -190,10 +205,10 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 	var reason *string
 	var seen, rotate *time.Time
 	err := w.tx.QueryRow(ctx, `
-		select id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		select id, pool, labels, cpu, memory_bytes, disk_bytes,
 		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
 		from runners where credential_hash = $1`, token.Hash(credential)).
-		Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+		Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
 			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNoRunner
@@ -228,10 +243,10 @@ func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at
 	var seen, rotate *time.Time
 	err := w.tx.QueryRow(ctx, `
 		update runners set last_heartbeat_at = $2 where id = $1 and state <> 'revoked'
-		returning id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		returning id, pool, labels, cpu, memory_bytes, disk_bytes,
 		          architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by`,
 		runner, at).
-		Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+		Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
 			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNoRunner
@@ -291,7 +306,7 @@ func (w *Wide) Revoke(ctx context.Context, runner, why string) error {
 // Runners is the inventory.
 func (w *Wide) Runners(ctx context.Context) ([]Runner, error) {
 	rows, err := w.tx.Query(ctx, `
-		select id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		select id, pool, labels, cpu, memory_bytes, disk_bytes,
 		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
 		from runners order by pool, id`)
 	if err != nil {
@@ -304,7 +319,7 @@ func (w *Wide) Runners(ctx context.Context) ([]Runner, error) {
 		var r Runner
 		var reason *string
 		var seen, rotate *time.Time
-		if err := rows.Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes,
+		if err := rows.Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes,
 			&r.DiskBytes, &r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate); err != nil {
 			return nil, err
 		}

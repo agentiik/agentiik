@@ -20,6 +20,16 @@ func withRunners(t *testing.T) (http.Handler, *db.Pool) {
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
 		t.Fatal(err)
 	}
+
+	// What an administrator creates before any machine exists.
+	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateRunnerPool(ctx, db.RunnerPool{
+			Name: "dmz", Labels: []string{"zone=dmz", "arch=amd64"}, CreatedBy: "admin",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	rt, err := api.NewRouter(everything{who: "admin"}, bearer)
 	if err != nil {
 		t.Fatal(err)

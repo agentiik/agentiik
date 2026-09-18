@@ -73,9 +73,25 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		}
 	}
 
-	// And the inventory, which is the installation's rather than a runner's: "A user never
-	// learns which host executed a task beyond its runner name and labels."
-	return s, rt.Handle("GET", "/api/v1/runners", Needs{Permission: GrantManage, Scope: Installation}, s.inventory)
+	// And the administrator's half: the inventory, which is the installation's rather than a
+	// runner's ("A user never learns which host executed a task beyond its runner name and
+	// labels"), the pools, and the tokens that let a machine into one.
+	admin := Needs{Permission: GrantManage, Scope: Installation}
+	for _, r := range []struct {
+		method  string
+		pattern string
+		handler Handler
+	}{
+		{"GET", "/api/v1/runners", s.inventory},
+		{"POST", "/api/v1/runner-pools", s.createPool},
+		{"GET", "/api/v1/runner-pools", s.pools},
+		{"POST", "/api/v1/runner-pools/{pool}/join-tokens", s.issue},
+	} {
+		if err := rt.Handle(r.method, r.pattern, admin, r.handler); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // Runner says which runner a credential belongs to. It fills the router's Runners.
@@ -100,12 +116,14 @@ type Join struct {
 	Token  string   `json:"token"`
 	Labels []string `json:"labels,omitempty"`
 
-	AcceptedNamespaces []string `json:"accepted_namespaces,omitempty"`
-	CPU                int      `json:"cpu"`
-	MemoryBytes        int64    `json:"memory_bytes"`
-	DiskBytes          int64    `json:"disk_bytes"`
-	Architecture       string   `json:"architecture"`
-	AgentVersion       string   `json:"agent_version"`
+	// "the labels it claims, its capacity in vCPU, memory and disk, its architecture and
+	// its agent version". What work the machine will accept is not in that list and is not
+	// the machine's to say: it is its pool's.
+	CPU          int    `json:"cpu"`
+	MemoryBytes  int64  `json:"memory_bytes"`
+	DiskBytes    int64  `json:"disk_bytes"`
+	Architecture string `json:"architecture"`
+	AgentVersion string `json:"agent_version"`
 }
 
 func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
@@ -119,7 +137,7 @@ func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		joined, err = wide.Join(ctx, db.Joining{
-			Token: j.Token, Labels: j.Labels, AcceptedNamespaces: j.AcceptedNamespaces,
+			Token: j.Token, Labels: j.Labels,
 			CPU: j.CPU, MemoryBytes: j.MemoryBytes, DiskBytes: j.DiskBytes,
 			Architecture: j.Architecture, AgentVersion: j.AgentVersion,
 		}, s.rotation, s.now())
