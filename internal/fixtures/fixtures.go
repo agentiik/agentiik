@@ -26,7 +26,7 @@ import (
 // Version is the agentiik/schemas release the tree under testdata was taken from. The
 // same value is written in testdata/SCHEMAS_VERSION, where a person updating the corpus
 // finds it, and a test holds the two together.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 //go:embed testdata
 var vendored embed.FS
@@ -96,6 +96,16 @@ type index struct {
 		Envelope corpus `json:"envelope"`
 		Workflow corpus `json:"workflow"`
 		Brick    corpus `json:"brick"`
+
+		// The wire is one document holding several messages, so the index names each
+		// message separately and so does this.
+		TaskMessage        corpus `json:"task-message"`
+		TaskResult         corpus `json:"task-result"`
+		RunnerRegistration corpus `json:"runner-registration"`
+		RunnerHeartbeat    corpus `json:"runner-heartbeat"`
+		GrantRedemption    corpus `json:"grant-redemption"`
+		LogShipment        corpus `json:"log-shipment"`
+		RunnerPool         corpus `json:"runner-pool"`
 	} `json:"fixtures"`
 }
 
@@ -111,6 +121,22 @@ func Workflows() ([]Case, error) { return read(func(i index) corpus { return i.F
 // Bricks returns the brick manifest corpus, valid documents first, in the order the
 // index lists them.
 func Bricks() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Brick }) }
+
+// TaskMessages returns the task message corpus, which is what the controller publishes and what
+// a runner reads. Nothing checked it until the bus was built and turned out to be putting a
+// document on the queue that the schema refuses in sixteen places, one of which was the input
+// envelopes' items.
+func TaskMessages() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.TaskMessage })
+}
+
+// TaskResults returns the result corpus, which is what a runner sends back.
+func TaskResults() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.TaskResult })
+}
+
+// Wire is the schema document every message above is held to.
+func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 
 // read returns one corpus of the index as cases, and refuses an index that names a file
 // the vendored tree does not carry: a corpus that has drifted from its index is a test

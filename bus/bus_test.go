@@ -69,13 +69,26 @@ func aTask(step agk.Step, runsOn ...string) graph.Task {
 		ID:        agk.NewTaskID(aRun, step, 1, agk.Shard{}),
 		Run:       aRun,
 		Namespace: "finance",
-		Workflow:  "monthly-invoicing@a3f9c1e",
+		Workflow:  "monthly-invoicing",
 		Commit:    "a3f9c1e",
 		Step:      step,
 		Attempt:   1,
 		Image:     "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
 		Outputs:   []agk.Port{"ok"},
+		Resources: graph.Resources{CPU: "1", Memory: "512Mi", PIDs: 256},
 		RunsOn:    runsOn,
+		Deadline:  time.Date(2026, 9, 10, 6, 12, 0, 0, time.UTC),
+	}
+}
+
+// dispatch is a task with the three things only the controller can add.
+func dispatch(step agk.Step, runsOn ...string) controller.Dispatch {
+	return controller.Dispatch{
+		Task: aTask(step, runsOn...),
+		Row:  "01M2AAZ9G62NQXFAFCXKRPJEH5",
+		Grant: "agkgrant_01M2AAZ9G62NQXFAFCXKRPJEH5_" +
+			"dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
+		Inputs: map[agk.Port]controller.InputRef{},
 	}
 }
 
@@ -84,7 +97,7 @@ func aTask(step agk.Step, runsOn ...string) graph.Task {
 func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	b := open(t)
 
-	if err := b.Publish(t.Context(), aTask(step(t), "pool=dmz", "arch=amd64")); err != nil {
+	if err := b.Publish(t.Context(), dispatch(step(t), "pool=dmz", "arch=amd64")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,8 +118,11 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 		t.Fatalf("the dmz pool took %d tasks", len(taken))
 	}
 	got := taken[0].Task
-	if got.ID != aTask(step(t)).ID || got.Namespace != "finance" || got.Image == "" {
+	if got.IdempotencyKey != string(aTask(step(t)).ID) || got.Namespace != "finance" || got.Image == "" {
 		t.Errorf("the task came back as %+v", got)
+	}
+	if got.Grant == "" {
+		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
 	}
 	if err := taken[0].Done(); err != nil {
 		t.Fatal(err)
@@ -126,7 +142,7 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 // for.
 func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 	b := open(t)
-	if err := b.Publish(t.Context(), aTask(step(t))); err != nil {
+	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
 		t.Fatal(err)
 	}
 	taken, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
@@ -142,7 +158,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 // A runner that took work it cannot run puts it back, and somebody else gets it.
 func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	b := open(t)
-	if err := b.Publish(t.Context(), aTask(step(t))); err != nil {
+	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
 		t.Fatal(err)
 	}
 	first, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
@@ -157,7 +173,7 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second) != 1 || second[0].Task.ID != first[0].Task.ID {
+	if len(second) != 1 || second[0].Task.IdempotencyKey != first[0].Task.IdempotencyKey {
 		t.Fatalf("a task put back came round as %+v", second)
 	}
 	second[0].Done()
@@ -167,9 +183,8 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 // duplicate window is one message rather than two: the key is what makes a retry free.
 func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	b := open(t)
-	task := aTask(step(t))
 	for range 3 {
-		if err := b.Publish(t.Context(), task); err != nil {
+		if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -1,16 +1,25 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
     "brick": "../brick.schema.json",
-    "envelope": "../envelope.schema.json"
+    "envelope": "../envelope.schema.json",
+    "task-message": "../wire.schema.json",
+    "task-result": "../wire.schema.json",
+    "runner-registration": "../wire.schema.json",
+    "runner-heartbeat": "../wire.schema.json",
+    "grant-redemption": "../wire.schema.json",
+    "log-shipment": "../wire.schema.json",
+    "runner-pool": "../wire.schema.json"
   },
   "notes": [
     "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
     "Digests are written out in full. The documentation elides them in the middle, as 9f2c1d...b7e0, which is a typographic elision and not a value; the fixtures keep the first and last characters and fill the rest so that each one is a well formed sha256.",
     "A fixture carrying a manifest key is checked against a brick manifest that lives elsewhere in this corpus. The rule it pins is about the two documents together, so neither file alone shows it.",
-    "A fixture carrying a role key is not an entry point. mcp-in-included-file.yaml is the included file itself, which is where the rule it pins can be seen at all."
+    "A fixture carrying a role key is not an entry point. mcp-in-included-file.yaml is the included file itself, which is where the rule it pins can be seen at all.",
+    "The wire is one document holding several messages, because they share a vocabulary and a $ref may not leave a document here. A group therefore names the document and the member inside it that its fixtures pin, so a fixture still pins one message rather than something the wire allows somewhere.",
+    "A valid fixture is taken from the documentation's own printed message wherever the documentation prints one. The wire's first version was built from its own examples instead and refused the page's task message in four places, which is the failure this fixture exists to make impossible."
   ],
   "fixtures": {
     "workflow": {
@@ -569,6 +578,157 @@
           "rule": "An attached file with no digest. The digest is also the artifact's address: it is what the physical key sha256/<digest> is built from, and what a consumer checks its transfer against.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#data"
+        }
+      ]
+    },
+    "task-message": {
+      "valid": [
+        {
+          "file": "wire/valid/task-message.json",
+          "covers": "the whole message: the run and the step, the image resolved to a digest, the parameters with the secret material taken out, the secrets by name and mount point, the inputs by digest, the ports, the ceilings, the posture, the labels, the deadline and the grant"
+        },
+        {
+          "file": "wire/valid/task-message-fanned-out.json",
+          "covers": "shard, the five-segment idempotency key it produces, and egress_allow beside network: egress"
+        },
+        {
+          "file": "wire/valid/task-message-as-the-page-prints-it.json",
+          "covers": "the message the documentation prints, identifiers and all: it elides them to fifteen and twelve characters, and a schema that imposed the twenty-six a ULID is minted at would refuse the page it was written from"
+        },
+        {
+          "file": "wire/valid/task-message-script-step.json",
+          "covers": "script, before_script, after_script, shell, files, timeout, idempotent and cache_key: what a runner needs for a step whose image is a base image rather than a brick",
+          "source": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/task-message-secret-value.json",
+          "rule": "a secret entry is a name and a mount point and never a value: the message names what a step mounts and carries none of it, and the entry is closed so that a value has no key to be written under",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-message-input-url.json",
+          "rule": "an input is named by port, digest and count; the URLs come from redeeming the grant, so a copy of the message is worth nothing on its own",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-message-image-by-tag.json",
+          "rule": "a tag is resolved once for the whole run, so what reaches a runner is a digest: two tasks of one run cannot end up on two builds because a tag moved between them",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-message-attempt-zero.json",
+          "rule": "an attempt is counted from one, so an idempotency key naming attempt zero names no attempt",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-message-without-grant.json",
+          "rule": "the grant is what turns the names in the message into values, and a message without one asks a runner to do work it cannot fetch the inputs for",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "task-result": {
+      "valid": [
+        {
+          "file": "wire/valid/task-result.json",
+          "covers": "a task that ran: the state, the exit code, the instants, the ports it published, the artifacts, the log and the usage"
+        },
+        {
+          "file": "wire/valid/task-result-lost.json",
+          "covers": "a task declared lost, which carries no exit code and no result of its own, because it is the absence of three heartbeats that declares it"
+        },
+        {
+          "file": "wire/valid/task-result-timed-out.json",
+          "covers": "a task stopped at its deadline, which carries no exit code because nothing decided anything: the ending the wire could not express until the page named all nine states"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/task-result-run-state.json",
+          "rule": "a result is terminal: running is a state a task passes through and never one it ends in, and the heartbeat is what says a task is still running",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-result-state-of-a-run.json",
+          "rule": "cancelled is a run state, not a task state, and the two vocabularies are separate on purpose",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "runner-registration": {
+      "valid": [
+        {
+          "file": "wire/valid/runner-registration.json",
+          "covers": "the join exchange: the token, the public key, the labels claimed, the capacity and the architecture, answered with a runner identifier and a long-lived credential"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/runner-registration-private-key.json",
+          "rule": "the runner generates a keypair locally and sends the public key; the private key never leaves the machine, so the request is closed against one",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "runner-heartbeat": {
+      "valid": [
+        {
+          "file": "wire/valid/runner-heartbeat.json",
+          "covers": "the ten second heartbeat: the idempotency keys the host holds, answered with what it is to stop and whether it is draining"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/runner-heartbeat-key-without-attempt.json",
+          "rule": "a heartbeat lists idempotency keys, and a key without its attempt names no attempt at anything",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "grant-redemption": {
+      "valid": [
+        {
+          "file": "wire/valid/grant-redemption.json",
+          "covers": "redeeming one task's grant: the input URLs, the secret values, the upload URLs and the repository tree the step will see"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/grant-redemption-mode-not-octal.json",
+          "rule": "a file mode is octal, written the way the workflow file writes it, because the wire echoes a value that file wrote",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "log-shipment": {
+      "valid": [
+        {
+          "file": "wire/valid/log-shipment.json",
+          "covers": "one chunk of a running task's captured standard error, with what makes two chunks orderable and a redelivered one harmless"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/log-shipment-token-in-the-body.json",
+          "rule": "the credential and the grant authenticate the call and are members of neither half: a token written into a body is a token that ends up in the very log this message carries",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "runner-pool": {
+      "valid": [
+        {
+          "file": "wire/valid/runner-pool.json",
+          "covers": "a pool and the token issued from it: the labels, the namespaces it accepts, the ceilings, the single use and the expiry"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/runner-pool-label-without-value.json",
+          "rule": "a label is key=value, and a runner may only ever claim labels its token allowed, so a half written one is refused before it can be claimed",
+          "refused_by": "schema"
         }
       ]
     }

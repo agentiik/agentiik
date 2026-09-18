@@ -1,0 +1,55 @@
+{
+  "task_id": "01M2BBZ9G62NQXFAFCXKRPJEH6",
+  "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/build/1",
+  "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+  "namespace": "finance",
+  "workflow": "monthly-invoicing@a3f9c1e",
+  "step": "build",
+  "attempt": 1,
+  "image": "docker.io/library/alpine@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+  "script": [
+    "set -eu",
+    "make build",
+    "cp dist/report.pdf /agk/out/ports/ok/"
+  ],
+  "before_script": [
+    "apk add --no-cache make"
+  ],
+  "after_script": [
+    "cat /tmp/build.log || true"
+  ],
+  "shell": [
+    "/bin/sh",
+    "-eu",
+    "-c"
+  ],
+  "files": [
+    {
+      "from": "config/rates.json",
+      "to": "/agk/files/rates.json",
+      "mode": "0444"
+    }
+  ],
+  "params": {
+    "currency": "EUR"
+  },
+  "secrets": [],
+  "inputs": [],
+  "outputs": [
+    "ok"
+  ],
+  "resources": {
+    "cpu": "1",
+    "memory": "512Mi",
+    "pids": 256
+  },
+  "network": "none",
+  "runs_on": [
+    "arch=amd64"
+  ],
+  "timeout": "10m",
+  "idempotent": true,
+  "cache_key": "finance/sha256:1ab74e66/9f2c1d07",
+  "deadline": "2026-09-10T06:10:00Z",
+  "grant": "agkgrant_01M2BBZ9G62NQXFAFCXKRPJEH6_dGFza2dyYW50ZXhhbXBsZTAy"
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -124,12 +125,17 @@ func (b *Bus) Close() { b.conn.Close() }
 // runner is what makes that safe, but a publish retried by this process inside the duplicate
 // window is a retry this process knows about and there is no reason to make somebody else pay
 // for it.
-func (b *Bus) Publish(ctx context.Context, t graph.Task) error {
+func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
+	t := d.Task
 	pool, err := PoolOf(t.RunsOn)
 	if err != nil {
 		return fmt.Errorf("bus: task %s: %w", t.ID, err)
 	}
-	body, err := json.Marshal(t)
+	m, err := messageOf(d)
+	if err != nil {
+		return fmt.Errorf("bus: %w", err)
+	}
+	body, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("bus: task %s could not be written: %w", t.ID, err)
 	}

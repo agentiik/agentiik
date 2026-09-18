@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/controller"
-	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -26,7 +25,7 @@ const Results = "AGENTIIK_RESULTS"
 // ResultSubject is where a result goes.
 const ResultSubject = "agentiik.results"
 
-// Taken is one task a runner pulled, and the two things it can say about it afterwards.
+// Taken is one task message a runner pulled, and the two things it can say about it afterwards.
 //
 // Acknowledging is what removes it from the queue, and under WorkQueue retention that is what
 // removes it from the stream: "a message is removed as soon as it has been consumed". So a
@@ -34,7 +33,7 @@ const ResultSubject = "agentiik.results"
 // holding one has the task redelivered, which is what at-least-once means and what the
 // idempotency key makes survivable.
 type Taken struct {
-	Task graph.Task
+	Task TaskMessage
 
 	msg jetstream.Msg
 }
@@ -106,7 +105,7 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 
 	var out []Taken
 	for msg := range msgs.Messages() {
-		var t graph.Task
+		var t TaskMessage
 		if err := json.Unmarshal(msg.Data(), &t); err != nil {
 			// A message nobody can read is not work and will never become work, so it
 			// is taken off the queue rather than redelivered for ever. Losing it costs

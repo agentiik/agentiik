@@ -84,6 +84,6 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	// The stops go after the commit, like everything else that leaves this process. A stop
 	// that never arrives costs a container that runs to its deadline and is then stopped
 	// anyway, which is why this is reported rather than retried.
-	co.hand(ctx, run, plan)
+	co.hand(ctx, e.Namespace, run, plan)
 	return nil
 }

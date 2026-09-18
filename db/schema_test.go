@@ -218,7 +218,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	namespaced := map[string]bool{
 		"workflows": true, "workflow_versions": true, "runs": true, "steps": true,
 		"tasks": true, "approvals": true, "artifacts": true, "artifact_objects": true,
-		"notification_events": true,
+		"notification_events": true, "task_grants": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace

@@ -1,0 +1,31 @@
+{
+  "request": {
+    "token": "agkjoin_lYd41PgjnpmnYTZ1KB2FvzKYJA7GgyKSqukAh9n7h9s",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+    "labels": [
+      "zone=dmz",
+      "arch=amd64",
+      "gpu=true"
+    ],
+    "capacity": {
+      "vcpu": 8,
+      "memory": "64Gi",
+      "disk": "1Ti"
+    },
+    "architecture": "amd64",
+    "agent_version": "0.2.0",
+    "namespaces": [
+      "finance"
+    ],
+    "containment": {
+      "runtime": "runc",
+      "userns_remap": true
+    }
+  },
+  "response": {
+    "runner": "runner-dmz-02",
+    "pool": "dmz",
+    "credential": "agkrunner_3pH6tmJeTcfeByb7K0tEslQFoToW_FOdBCZMVnot_Rk",
+    "rotate_by": "2026-12-09T06:12:00Z"
+  }
+}

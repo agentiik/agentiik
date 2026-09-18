@@ -1,0 +1,30 @@
+{
+  "request": {
+    "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+    "seq": 7,
+    "first_line": 389,
+    "final": false,
+    "lines": [
+      {
+        "at": "2026-09-10T06:42:31.882Z",
+        "text": "charging order C-1042"
+      },
+      {
+        "at": "2026-09-10T06:42:32.014Z",
+        "text": "billing API answered 402 for C-1043"
+      },
+      {
+        "at": "2026-09-10T06:42:32.101Z",
+        "text": "authorization: Bearer ***"
+      }
+    ],
+    "grant": "agkgrant_01JMZ8V1P9C4XQ7K2N4D6F8H0A_Zm9vYmFyYmF6cXV4MTIzNA"
+  },
+  "response": {
+    "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+    "accepted": 3,
+    "next_seq": 8,
+    "lines": 391,
+    "truncated": false
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+  "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+  "runner": "runner-dmz-02",
+  "state": "running",
+  "exit_code": 108,
+  "started_at": "2026-09-10T06:41:09.104Z",
+  "finished_at": "2026-09-10T06:42:32.117Z",
+  "outputs": [
+    {
+      "port": "out",
+      "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
+      "items": 0
+    },
+    {
+      "port": "error",
+      "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+      "items": 3
+    }
+  ],
+  "artifacts": [
+    {
+      "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
+      "bytes": 1284
+    }
+  ],
+  "log": {
+    "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+    "lines": 412,
+    "truncated": false
+  },
+  "usage": {
+    "cpu_seconds": 12.4,
+    "max_rss_bytes": 198443008,
+    "image_pull_ms": 0
+  }
+}
