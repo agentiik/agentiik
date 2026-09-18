@@ -186,12 +186,13 @@ func TestTheTableAndTheDispatchCannotDisagree(t *testing.T) {
 	}
 
 	// A verb of the table that reaches an installation refuses by name, and it is exit 1
-	// and not exit 2: the command line was right.
+	// and not exit 2: the command line was right. push used to be one of these and is not
+	// any more, so the one asked about here is one that still waits for something.
 	e, _, errs = reading(t)
-	if code := run(t.Context(), e, []string{"push"}); code != exitRefused {
-		t.Errorf("agk push leaves with %d and a verb that reaches an installation leaves with %d", code, exitRefused)
+	if code := run(t.Context(), e, []string{"login"}); code != exitRefused {
+		t.Errorf("agk login leaves with %d and a verb that reaches an installation leaves with %d", code, exitRefused)
 	}
-	if !strings.Contains(errs.String(), "push") {
+	if !strings.Contains(errs.String(), "login") {
 		t.Errorf("the refusal does not name the verb: %s", errs)
 	}
 }

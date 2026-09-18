@@ -27,8 +27,13 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 	// no the brick templates" is the same mistake made with a definite article.
 	doubled := []string{"no a ", "no an ", "no the "}
 
+	// The verbs that do something here rather than waiting for an installation. push joined
+	// them when the API arrived: it no longer names what is missing, it goes and does it.
+	built := map[string]bool{
+		"validate": true, "graph": true, "run": true, "brick test": true, "push": true,
+	}
 	for _, c := range commands {
-		if c.name == "validate" || c.name == "graph" || c.name == "run" || c.name == "brick test" {
+		if built[c.name] {
 			continue
 		}
 		t.Run(c.name, func(t *testing.T) {

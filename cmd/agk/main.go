@@ -72,7 +72,7 @@ var commands = []command{
 	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "there is no installation to ask who you are", withTheAPI)},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
-	{"push", "Registers the workflow in a namespace on a server.", absent("push", "there is no server to register the workflow with", withTheAPI)},
+	{"push", "Registers the workflow in a namespace on a server.", push},
 	{"share", "Grants or revokes access.", absent("share", "there is no server holding the grants", withTheAPI)},
 	{"grants", "Shows who can do what on a workflow, and which scope each permission comes from.", absent("grants", "there is no server holding the grants", withTheAPI)},
 	{"logs", "Follows the logs of a run.", absent("logs", "there is no server holding the run", withTheAPI)},

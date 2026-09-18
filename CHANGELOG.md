@@ -8,6 +8,12 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**`agk push` does something.** It was one of seven verbs that named what was missing and refused; it now assembles a version out of the working tree and sends it. What it sends is what the server stores: the entry point, every file it includes, and the manifest of every image it names.
+
+**A dirty tree is refused.** "A version is a commit", so pushing the bytes in the working copy under the name of a commit whose tree differs makes a version that says it is one thing and is another, for ever, and nothing downstream can ever notice because the digests match what was pushed. The refusal names the files that differ. `--allow-dirty` exists for somebody who knows what they are doing and says so out loud.
+
+**The credential is never a flag.** It comes from `AGENTIIK_TOKEN`, because an argument is in the shell history, in the process list and in whatever recorded the terminal.
+
 **The first four routes, and what they deliberately do not do.** A version is pushed, a run is started, runs are listed and one is read. None of them decides anything: the API writes a row and issues the notification in the same transaction, so the row and the wake-up are one fact rather than two, and what happens next is the controller's. A test checks that starting a run creates no task, because a route here that started one would be a second scheduler.
 
 **A version that cannot be rebuilt is refused at the push.** It is built before it is written, so a workflow whose manifests are missing or whose edges name a step nobody declared fails in front of the person pushing it rather than at three in the morning in front of nobody.

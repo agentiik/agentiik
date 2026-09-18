@@ -1,0 +1,241 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/agentiik/agentiik/api"
+	versions "github.com/agentiik/agentiik/version"
+)
+
+// agk push: "Registers the workflow in a namespace on a server."
+//
+// What it sends is what the server stores: the entry point, every file it includes, and the
+// manifest of every image it names. The server rebuilds it before writing it, so a push that
+// would not come back is refused in front of the person pushing rather than at the first run.
+//
+// # Why the tree has to be clean
+//
+// "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
+// because that is what a commit already is." Pushing the bytes in the working copy under the name
+// of a commit whose tree differs is a version that says it is one thing and is another, for ever,
+// and nothing downstream can ever notice: the digests match what was pushed. So a dirty tree is
+// refused, and --allow-dirty exists for somebody who knows what they are doing and says so.
+
+const (
+	// tokenVariable is where the credential comes from. Never a flag: an argument is in the
+	// shell history, in the process list and in whatever recorded the terminal.
+	tokenVariable = "AGENTIIK_TOKEN"
+
+	// serverVariable is the installation, so that a repository does not carry one and a
+	// person working against two does not edit a file between pushes.
+	serverVariable = "AGENTIIK_SERVER"
+)
+
+func push(ctx context.Context, e Env, args []string) int {
+	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <sha>] [--allow-dirty]")
+	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
+	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
+	server := fs.String("server", "", "The installation to push to. Defaults to "+serverVariable+".")
+	commit := fs.String("commit", "", "The commit this version is. Defaults to what git says HEAD is.")
+	dirty := fs.Bool("allow-dirty", false, "Push although the working tree differs from the commit. A version is a commit, so this makes one that says it is a tree it is not.")
+	if code, ok := parse(fs, args); !ok {
+		return code
+	}
+
+	if *namespace == "" {
+		fmt.Fprintln(e.Err, "--namespace is required: a workflow belongs to exactly one namespace")
+		return exitUsage
+	}
+	where := *server
+	if where == "" {
+		where = e.Getenv(serverVariable)
+	}
+	if where == "" {
+		fmt.Fprintf(e.Err, "no installation to push to: pass --server or set %s\n", serverVariable)
+		return exitUsage
+	}
+	token := e.Getenv(tokenVariable)
+	if token == "" {
+		fmt.Fprintf(e.Err, "no credential: set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
+		return exitUsage
+	}
+
+	wf, tree, dir, err := load(e, *entry)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	if _, err := declaredInputs(wf, tree); err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+
+	sha := *commit
+	if sha == "" {
+		sha, err = headOf(ctx, dir)
+		if err != nil {
+			fmt.Fprintf(e.Err, "%s\n", err)
+			return exitRefused
+		}
+	}
+	if !*dirty {
+		if changed, err := dirtyTree(ctx, dir); err != nil {
+			fmt.Fprintf(e.Err, "%s\n", err)
+			return exitRefused
+		} else if len(changed) > 0 {
+			fmt.Fprintf(e.Err, "the working tree differs from %s in %s, so what this would push is not what that commit names: commit it, or pass --allow-dirty and know that the version will say it is a tree it is not\n",
+				short(sha), counted(len(changed), "file", "files"))
+			for _, f := range changed {
+				fmt.Fprintf(e.Err, "  %s\n", f)
+			}
+			return exitRefused
+		}
+	}
+
+	// The manifests are read the way validate reads them, because a version the server
+	// cannot build is a version it will refuse, and finding that out here is cheaper.
+	read, code := readManifests(ctx, e, references(wf))
+	if code != exitSucceeded {
+		return code
+	}
+
+	// load answers the tree and the directory it was rooted at; the entry point inside it is
+	// what Capture is given, because a version names a path in a tree rather than on a disk.
+	base := entryPoint
+	if *entry != "" {
+		base = filepath.Base(*entry)
+	}
+	captured, err := versions.Capture(tree, base, read)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+
+	body := api.Push{
+		Entry: captured.Entry, Document: captured.Document,
+		Includes: captured.Includes, Manifests: captured.Manifests,
+		Branch: branchOf(ctx, dir),
+	}
+	name := string(wf.Metadata.Name)
+	url := fmt.Sprintf("%s/api/v1/%s/workflows/%s/versions/%s",
+		strings.TrimRight(where, "/"), *namespace, name, sha)
+	if err := put(ctx, url, token, body); err != nil {
+		fmt.Fprintf(e.Err, "%s\n", err)
+		return exitRefused
+	}
+
+	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s\n", *namespace, name, short(sha), where)
+	fmt.Fprintf(e.Out, "%s, %s, %s\n",
+		counted(len(wf.Steps), "step", "steps"),
+		counted(len(captured.Includes), "included file", "included files"),
+		counted(len(captured.Manifests), "manifest", "manifests"))
+	return exitSucceeded
+}
+
+// put sends the version and reads whatever the server says about it.
+func put(ctx context.Context, url, token string, body api.Push) error {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("the version could not be written: %w", err)
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(encoded))
+	if err != nil {
+		return fmt.Errorf("%s: %w", url, err)
+	}
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Content-Type", "application/json")
+
+	answer, err := (&http.Client{Timeout: 2 * time.Minute}).Do(r)
+	if err != nil {
+		return fmt.Errorf("%s could not be reached: %w", url, err)
+	}
+	defer answer.Body.Close()
+	if answer.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	var said struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(answer.Body).Decode(&said)
+	if said.Error == "" {
+		said.Error = answer.Status
+	}
+	switch answer.StatusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
+	case http.StatusNotFound:
+		// The same answer an inaccessible workflow gets, which is the point: there is
+		// nothing here to tell the two apart with, and saying so is more honest than
+		// guessing.
+		return fmt.Errorf("no such namespace or workflow, or not yours")
+	}
+	return fmt.Errorf("the installation refused the version: %s", said.Error)
+}
+
+// headOf is what git says the current commit is.
+func headOf(ctx context.Context, dir string) (string, error) {
+	out, err := git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("the commit could not be read from git: %w. A version is a commit, so pass --commit if this is not a repository", err)
+	}
+	return out, nil
+}
+
+// dirtyTree is what differs between the working copy and the commit, which is what makes a push
+// of that commit a lie.
+func dirtyTree(ctx context.Context, dir string) ([]string, error) {
+	out, err := git(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("the working tree could not be read from git: %w", err)
+	}
+	var changed []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			changed = append(changed, strings.TrimSpace(line))
+		}
+	}
+	return changed, nil
+}
+
+// branchOf is the branch the push came from, and is empty where git cannot say: it is what the
+// workflow's default branch is set to on the first push and is not worth failing over.
+func branchOf(ctx context.Context, dir string) string {
+	out, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || out == "HEAD" {
+		return ""
+	}
+	return out
+}
+
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	var out, errs bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errs
+	if err := cmd.Run(); err != nil {
+		if said := strings.TrimSpace(errs.String()); said != "" {
+			return "", fmt.Errorf("%s", said)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// short is a commit as a person writes it.
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
