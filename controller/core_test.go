@@ -1020,20 +1020,30 @@ func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
 
 	// And it can be redeemed once, by its own value and for its own task, and by nothing else.
 	if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
-		ns, err := w.Redeem(ctx, d.Grant, d.Task.ID, core.now())
+		got, err := w.Redeem(ctx, d.Grant, d.Task.ID, "runner-1", core.now())
 		if err != nil {
 			t.Errorf("the grant was refused for its own task: %s", err)
-		} else if ns != "finance" {
-			t.Errorf("the grant resolved to namespace %q", ns)
+		} else if got.Namespace != "finance" {
+			t.Errorf("the grant resolved to namespace %q", got.Namespace)
 		}
-		if _, err := w.Redeem(ctx, d.Grant, "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1", core.now()); !errors.Is(err, db.ErrNoGrant) {
+		// And it says what the task was dispatched with, which is what the redemption
+		// will be allowed to answer.
+		if got.Scope.Run != d.Task.Run || got.Scope.Step != d.Task.Step {
+			t.Errorf("the scope names run %s step %s", got.Scope.Run, got.Scope.Step)
+		}
+		if _, err := w.Redeem(ctx, d.Grant, "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1", "runner-1", core.now()); !errors.Is(err, db.ErrNoGrant) {
 			t.Errorf("a grant redeemed for another task answered %v", err)
 		}
-		if _, err := w.Redeem(ctx, d.Grant, d.Task.ID, expires.Add(time.Second)); !errors.Is(err, db.ErrNoGrant) {
+		if _, err := w.Redeem(ctx, d.Grant, d.Task.ID, "runner-1", expires.Add(time.Second)); !errors.Is(err, db.ErrNoGrant) {
 			t.Errorf("a grant past its expiry answered %v", err)
 		}
-		if _, err := w.Redeem(ctx, d.Grant+"x", d.Task.ID, core.now()); !errors.Is(err, db.ErrNoGrant) {
+		if _, err := w.Redeem(ctx, d.Grant+"x", d.Task.ID, "runner-1", core.now()); !errors.Is(err, db.ErrNoGrant) {
 			t.Errorf("a grant that is nearly right answered %v", err)
+		}
+		// The task is held by the machine that redeemed it, and a second machine is
+		// told so rather than starting a container for it.
+		if _, err := w.Redeem(ctx, d.Grant, d.Task.ID, "runner-2", core.now()); !errors.Is(err, db.ErrTaskHeld) {
+			t.Errorf("a second runner redeeming the same grant answered %v", err)
 		}
 		return nil
 	}); err != nil {
