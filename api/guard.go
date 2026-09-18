@@ -1,0 +1,116 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+)
+
+// What a route needs before its handler runs.
+//
+// A guard is not something a handler calls. It is what a route is registered with, and the
+// router is what asks: a handler that forgot the check is a handler that cannot be registered.
+
+// Guard is what stands in front of one route.
+//
+// The interface is closed: the only two things that implement it are Needs and Public, because
+// its one method is unexported. A third kind of guard is therefore a change to this file, which
+// is a change somebody reads, rather than a struct somebody writes in a handler package.
+type Guard interface {
+	guards() guard
+}
+
+// guard is what the router actually reads.
+type guard struct {
+	permission Permission
+	scope      Scope
+	public     bool
+	why        string
+}
+
+// Needs is a route that requires one permission at one scope.
+type Needs struct {
+	Permission Permission
+	Scope      Scope
+}
+
+func (n Needs) guards() guard {
+	return guard{permission: n.Permission, scope: n.Scope}
+}
+
+// Public is a route that is not authorised by a principal, and says what authorises it instead.
+//
+// There are three of these in the whole design and each has its own answer: registration is
+// authenticated "by the join token in its body and by nothing else", a webhook is authenticated
+// "per trigger", and a health check answers nothing worth having. Why is required and is checked
+// for being a sentence rather than a shrug, because "public" with no reason beside it is how a
+// route that should have been guarded stops being guarded.
+type Public struct {
+	Why string
+}
+
+func (p Public) guards() guard {
+	return guard{public: true, why: p.Why}
+}
+
+// check refuses a guard that says nothing.
+func (g guard) check(method, pattern string) error {
+	if g.public {
+		if len(g.why) < 20 {
+			return fmt.Errorf("api: %s %s is public and says %q: a route outside the authorisation hook says what authorises it instead, at length, because that sentence is what a reviewer reads", method, pattern, g.why)
+		}
+		return nil
+	}
+	if !g.permission.Valid() {
+		return fmt.Errorf("api: %s %s needs %q, which is not one of the permissions the documentation names", method, pattern, g.permission)
+	}
+	return nil
+}
+
+// Principal is who is asking.
+//
+// It is a string here and a row in v0.3.0. What matters at this milestone is that every route
+// has one or is explicitly public, and that the empty one is nobody: an unauthenticated caller
+// gets "Deny by default at the API".
+type Principal string
+
+// Target is what is being asked about, resolved from the request before anything is authorised.
+//
+// It is what a namespaced permission is checked against, and it is filled by the router from the
+// path rather than by a handler, because a handler that read its own namespace out of the path
+// would be a handler that could read a different one.
+type Target struct {
+	Namespace string
+	Workflow  string
+}
+
+// Authorizer answers whether one principal holds one permission over one target.
+//
+// This is the seam v0.3.0 fills: grants, roles, groups and the union recomputed per request all
+// live behind it. What this milestone fixes is the question, and that the answer is asked once
+// per request by the router rather than anywhere else.
+//
+// An error is not a refusal. A refusal is (false, nil) and means the caller may not; an error
+// means the question could not be answered, which is a 500 and not a 404, because telling a
+// caller they may not have something on the strength of a database being down is telling them
+// something untrue.
+type Authorizer interface {
+	Allow(ctx context.Context, who Principal, what Permission, over Target) (bool, error)
+}
+
+// DenyAll refuses everything, and is what an installation with no access model has.
+//
+// It is the default rather than a thing to remember to replace. "Deny by default" with nothing
+// to grant yet is not a placeholder standing in for a decision: it is the decision, and an
+// installation that shipped with an authorizer nobody configured should refuse rather than
+// admit.
+type DenyAll struct{}
+
+// Allow refuses.
+func (DenyAll) Allow(context.Context, Principal, Permission, Target) (bool, error) {
+	return false, nil
+}
+
+// ErrNoAuthorizer is a router built without one, which is refused at construction rather than
+// discovered at the first request.
+var ErrNoAuthorizer = errors.New("api: no authorizer, and every request is authorised at the API boundary")

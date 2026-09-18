@@ -1,0 +1,195 @@
+package api
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+)
+
+// The router, which is the thing that makes the rule structural.
+//
+// Handle takes a guard and a handler and wraps the one in the other. There is no method that
+// takes a handler alone, and the ServeMux inside is not reachable, so a route that skips the
+// check is not something somebody forgets to write: it is something they cannot write.
+
+// Handler is a route's own work, run only after the guard let it through.
+//
+// It is given the principal and the target the router already resolved, so a handler never reads
+// a namespace out of a path. A handler that did could read a different one from the one that was
+// authorised, which is the oldest way to lose an access check that is otherwise correct.
+type Handler func(w http.ResponseWriter, r *http.Request, who Principal, over Target)
+
+// Identify says who is asking, from the request alone.
+//
+// It answers the empty principal for a caller it does not recognise rather than an error, because
+// an unauthenticated caller is not a failure: it is a caller who gets what an unauthenticated
+// caller gets, which is "Deny by default at the API". An error is for a credential that could not
+// be checked, which is a 500.
+type Identify func(r *http.Request) (Principal, error)
+
+// Router is the API's surface.
+type Router struct {
+	mux      *http.ServeMux
+	auth     Authorizer
+	identify Identify
+
+	// routes is what was registered, in registration order, for the test that reads the
+	// list back and for an installation that wants to print its own surface.
+	routes []Route
+}
+
+// Route is one registered route and what stands in front of it.
+type Route struct {
+	Method  string
+	Pattern string
+
+	Permission Permission
+	Scope      Scope
+
+	// Public and Why are set where the route is outside the authorisation hook.
+	Public bool
+	Why    string
+}
+
+// NewRouter builds one. An authorizer is required, and the deny-everything one is a legitimate
+// answer rather than a stand-in: see DenyAll.
+func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
+	if auth == nil {
+		return nil, ErrNoAuthorizer
+	}
+	if identify == nil {
+		return nil, errors.New("api: no way to say who is asking, and a request with no principal is not the same as a request from nobody")
+	}
+	return &Router{mux: http.NewServeMux(), auth: auth, identify: identify}, nil
+}
+
+// Handle registers one route behind one guard.
+//
+// The pattern is net/http's own, so a path parameter is written {namespace} and read back by
+// name. The two the router reads are namespace and workflow, and a route whose scope needs one it
+// does not carry is refused here rather than at the first request: a workflow-scoped route with
+// no {workflow} in its pattern would be a route authorised against an empty workflow, which any
+// authorizer would either always allow or always refuse.
+func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
+	if h == nil {
+		return fmt.Errorf("api: %s %s has no handler", method, pattern)
+	}
+	if g == nil {
+		return fmt.Errorf("api: %s %s has no guard, and every request is authorised at the API boundary", method, pattern)
+	}
+	guard := g.guards()
+	if err := guard.check(method, pattern); err != nil {
+		return err
+	}
+	if !guard.public {
+		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
+			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
+		}
+		if guard.scope == Workflow && !strings.Contains(pattern, "{workflow}") {
+			return fmt.Errorf("api: %s %s is scoped to a workflow and its pattern names no {workflow}", method, pattern)
+		}
+	}
+
+	rt.routes = append(rt.routes, Route{
+		Method: method, Pattern: pattern,
+		Permission: guard.permission, Scope: guard.scope,
+		Public: guard.public, Why: guard.why,
+	})
+	rt.mux.HandleFunc(method+" "+pattern, func(w http.ResponseWriter, r *http.Request) {
+		rt.serve(w, r, guard, h)
+	})
+	return nil
+}
+
+// MustHandle is Handle for a caller that builds its routes at start-up, where a refusal is a
+// programming fault rather than a condition to recover from.
+func (rt *Router) MustHandle(method, pattern string, g Guard, h Handler) {
+	if err := rt.Handle(method, pattern, g, h); err != nil {
+		panic(err.Error())
+	}
+}
+
+// Routes is what was registered. The slice is a copy: a caller reading the surface cannot edit it.
+func (rt *Router) Routes() []Route {
+	out := append([]Route(nil), rt.routes...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Pattern != out[j].Pattern {
+			return out[i].Pattern < out[j].Pattern
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out
+}
+
+// ServeHTTP answers a request, or refuses it.
+//
+// A route nobody registered is a 404 from the mux, which is the same answer an inaccessible one
+// gets, and that is the right accident: an installation's surface is not a thing to enumerate by
+// asking.
+func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) { rt.mux.ServeHTTP(w, r) }
+
+// serve is the hook every guarded route passes through.
+func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handler) {
+	target := Target{
+		Namespace: r.PathValue("namespace"),
+		Workflow:  r.PathValue("workflow"),
+	}
+
+	if g.public {
+		h(w, r, "", target)
+		return
+	}
+
+	who, err := rt.identify(r)
+	if err != nil {
+		// A credential that could not be checked is not a credential that failed. Saying
+		// no here would tell a caller their token is bad when the database is down.
+		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
+		return
+	}
+	if who == "" {
+		// "An unauthenticated caller: Deny by default at the API." It is a 401 rather than
+		// the scope's own answer, because a caller with no credential has learned nothing
+		// about what exists by being told to present one.
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		refuse(w, http.StatusUnauthorized, "this request carries no credential")
+		return
+	}
+
+	allowed, err := rt.auth.Allow(r.Context(), who, g.permission, target)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
+	if !allowed {
+		rt.deny(w, g.scope)
+		return
+	}
+	h(w, r, who, target)
+}
+
+// deny answers a refusal in the shape the scope calls for.
+//
+// "An inaccessible workflow answering the same 404 as an absent one, so that probing yields
+// nothing." A 403 at a namespaced scope would be an oracle: ask for every name, and the ones
+// that answer 403 are the ones that exist.
+func (rt *Router) deny(w http.ResponseWriter, scope Scope) {
+	if scope.Hides() {
+		refuse(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	refuse(w, http.StatusForbidden, "you do not hold what this needs")
+}
+
+// refuse writes one refusal, and says nothing a caller could learn from.
+func refuse(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	// Written by hand rather than marshalled, because the only variable is a constant
+	// string this package chose and a refusal that failed to encode would be worse than one
+	// that is plain.
+	fmt.Fprintf(w, "{\"error\":%q}\n", message)
+}
