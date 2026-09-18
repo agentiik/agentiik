@@ -1,0 +1,379 @@
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/token"
+	"github.com/agentiik/agentiik/internal/ulid"
+	"github.com/jackc/pgx/v5"
+)
+
+// The runner inventory, which belongs to the installation.
+//
+// A runner serves several namespaces, its inventory is administrator only, and a heartbeat
+// "covers every in-flight task on that host", which is one host across however many namespaces it
+// is working for. So all of this is on the installation door.
+
+// ErrNoRunner is nothing of that identifier, or nothing that credential opens. One error for
+// both, for the reason ErrNoGrant is one error for three.
+var ErrNoRunner = errors.New("db: no runner of that identifier")
+
+// ErrNoJoinToken is a join token that is wrong, spent or expired.
+var ErrNoJoinToken = errors.New("db: that join token cannot be redeemed")
+
+// JoinToken is what an administrator hands to a machine that is about to become a runner.
+type JoinToken struct {
+	ID     string
+	Pool   string
+	Labels []string
+
+	// Clear exists once, in the answer to the request that created it.
+	Clear     string
+	IssuedBy  string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+}
+
+// IssueJoinToken mints one, bound to one pool and one set of labels.
+//
+// "bound both to that pool and to the exact set of labels a runner may claim with it", because
+// "a machine cannot add zone=lan to itself and start receiving the steps that were kept off the
+// internet".
+func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string, by string, until time.Time) (JoinToken, error) {
+	switch {
+	case pool == "":
+		return JoinToken{}, errors.New("db: a join token for no pool")
+	case by == "":
+		return JoinToken{}, errors.New("db: a join token nobody issued")
+	case until.IsZero():
+		return JoinToken{}, errors.New("db: a join token that never expires, and one only has to survive the minutes between an administrator copying it and a machine presenting it")
+	}
+
+	clear, hashed, err := token.New(token.Join, "")
+	if err != nil {
+		return JoinToken{}, fmt.Errorf("db: %w", err)
+	}
+	t := JoinToken{
+		ID: ulid.New(), Pool: pool, Labels: labels, Clear: clear,
+		IssuedBy: by, IssuedAt: time.Now().UTC(), ExpiresAt: until,
+	}
+	if _, err := w.tx.Exec(ctx,
+		`insert into join_tokens (id, pool, labels, hash, issued_by, expires_at)
+		 values ($1, $2, $3, $4, $5, $6)`,
+		t.ID, pool, orEmptyStrings(labels), hashed, by, until); err != nil {
+		return JoinToken{}, fmt.Errorf("db: the join token could not be recorded: %w", err)
+	}
+	return t, nil
+}
+
+// Joining is what a machine says about itself when it presents a token.
+type Joining struct {
+	Token  string
+	Labels []string
+
+	AcceptedNamespaces []string
+	CPU                int
+	MemoryBytes        int64
+	DiskBytes          int64
+	Architecture       string
+	AgentVersion       string
+}
+
+// Joined is what it gets back: an identity, and a credential that exists once.
+type Joined struct {
+	Runner     string
+	Pool       string
+	Credential string
+	RotateBy   time.Time
+}
+
+// Join redeems a token and creates the runner.
+//
+// Everything about it is checked against the token rather than believed: the pool is the token's,
+// and the labels have to be a subset of what the token permits. A machine that claimed more is
+// refused rather than trimmed, because trimming would let it join with less than it asked for and
+// then wonder why it is being offered nothing.
+func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, now time.Time) (Joined, error) {
+	switch {
+	case j.CPU < 1 || j.MemoryBytes < 1 || j.DiskBytes < 1:
+		return Joined{}, errors.New("db: a runner declares its own capacity, and this one declares none")
+	case j.Architecture == "" || j.AgentVersion == "":
+		return Joined{}, errors.New("db: a runner says what it is and what it runs")
+	}
+
+	var id, pool, hashed string
+	var permitted []string
+	var expires time.Time
+	var redeemed *time.Time
+	err := w.tx.QueryRow(ctx,
+		`select id, pool, labels, hash, expires_at, redeemed_at from join_tokens
+		 where hash = $1 for update`, token.Hash(j.Token)).
+		Scan(&id, &pool, &permitted, &hashed, &expires, &redeemed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Joined{}, ErrNoJoinToken
+	}
+	if err != nil {
+		return Joined{}, fmt.Errorf("db: the join token could not be read: %w", err)
+	}
+	switch {
+	case redeemed != nil:
+		// Spent. "one machine, one token, and a reimaged host joins again."
+		return Joined{}, ErrNoJoinToken
+	case !now.Before(expires):
+		return Joined{}, ErrNoJoinToken
+	}
+
+	for _, claimed := range j.Labels {
+		if !slices.Contains(permitted, claimed) {
+			return Joined{}, fmt.Errorf("%w: it claims %s, which its token does not permit", ErrNoJoinToken, claimed)
+		}
+	}
+
+	runner := ulid.New()
+	clear, credential, err := token.New(token.Runner, "")
+	if err != nil {
+		return Joined{}, fmt.Errorf("db: %w", err)
+	}
+	rotate := now.Add(rotateAfter)
+
+	if _, err := w.tx.Exec(ctx,
+		`insert into runners (id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		                      architecture, agent_version, credential_hash, rotate_by, joined_with)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		runner, pool, orEmptyStrings(j.Labels), orEmptyStrings(j.AcceptedNamespaces),
+		j.CPU, j.MemoryBytes, j.DiskBytes, j.Architecture, j.AgentVersion,
+		credential, rotate, id); err != nil {
+		return Joined{}, fmt.Errorf("db: the runner could not be created: %w", err)
+	}
+	if _, err := w.tx.Exec(ctx,
+		`update join_tokens set redeemed_at = $2, redeemed_by = $3 where id = $1`,
+		id, now, runner); err != nil {
+		return Joined{}, fmt.Errorf("db: the join token could not be spent: %w", err)
+	}
+	return Joined{Runner: runner, Pool: pool, Credential: clear, RotateBy: rotate}, nil
+}
+
+// Runner is one host, as the inventory holds it.
+type Runner struct {
+	ID     string   `json:"runner"`
+	Pool   string   `json:"pool"`
+	Labels []string `json:"labels"`
+
+	AcceptedNamespaces []string `json:"accepted_namespaces"`
+	CPU                int      `json:"cpu"`
+	MemoryBytes        int64    `json:"memory_bytes"`
+	DiskBytes          int64    `json:"disk_bytes"`
+	Architecture       string   `json:"architecture"`
+	AgentVersion       string   `json:"agent_version"`
+
+	State       string    `json:"state"`
+	DrainReason string    `json:"drain_reason,omitempty"`
+	JoinedAt    time.Time `json:"joined_at"`
+	LastSeenAt  time.Time `json:"last_seen_at,omitzero"`
+	RotateBy    time.Time `json:"rotate_by,omitzero"`
+}
+
+// Authenticate answers which runner a credential belongs to, and refuses a revoked one.
+//
+// "revoking it from the console stops the runner at its next heartbeat", so a revoked credential
+// is refused here rather than left to a check somewhere else.
+func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, error) {
+	if kind, ok := token.KindOf(credential); !ok || kind != token.Runner {
+		return Runner{}, ErrNoRunner
+	}
+	var r Runner
+	var reason *string
+	var seen, rotate *time.Time
+	err := w.tx.QueryRow(ctx, `
+		select id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
+		from runners where credential_hash = $1`, token.Hash(credential)).
+		Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, ErrNoRunner
+	}
+	if err != nil {
+		return Runner{}, fmt.Errorf("db: the runner could not be read: %w", err)
+	}
+	if r.State == "revoked" {
+		return Runner{}, ErrNoRunner
+	}
+	if reason != nil {
+		r.DrainReason = *reason
+	}
+	if seen != nil {
+		r.LastSeenAt = *seen
+	}
+	if rotate != nil {
+		r.RotateBy = *rotate
+	}
+	return r, nil
+}
+
+// Beat records that a runner is there and says what it is holding.
+//
+// "A runner posts one heartbeat every 10 seconds to the API, listing the idempotency keys it
+// currently holds. One request covers every in-flight task on that host." What it writes is the
+// moment against every task it named, which is what a lost-task sweep compares against, and what
+// it answers is whether the runner should be draining.
+func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at time.Time) (Runner, error) {
+	var r Runner
+	var reason *string
+	var seen, rotate *time.Time
+	err := w.tx.QueryRow(ctx, `
+		update runners set last_heartbeat_at = $2 where id = $1 and state <> 'revoked'
+		returning id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		          architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by`,
+		runner, at).
+		Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, ErrNoRunner
+	}
+	if err != nil {
+		return Runner{}, fmt.Errorf("db: the heartbeat could not be recorded: %w", err)
+	}
+	if reason != nil {
+		r.DrainReason = *reason
+	}
+	if seen != nil {
+		r.LastSeenAt = *seen
+	}
+	if rotate != nil {
+		r.RotateBy = *rotate
+	}
+
+	if len(holding) > 0 {
+		keys := make([]string, len(holding))
+		for i, k := range holding {
+			keys[i] = string(k)
+		}
+		// Only the tasks this runner is actually holding. A heartbeat naming somebody
+		// else's task is a heartbeat keeping somebody else's task alive, which is the one
+		// thing a liveness report must not be able to do.
+		if _, err := w.tx.Exec(ctx, `
+			update tasks set last_heartbeat_at = $3
+			where runner = $1 and idempotency_key = any($2)
+			  and state in ('dispatched', 'running', 'publishing')`,
+			runner, keys, at); err != nil {
+			return Runner{}, fmt.Errorf("db: what the runner is holding could not be recorded: %w", err)
+		}
+	}
+	return r, nil
+}
+
+// Drain tells a runner to stop taking work and finish what it holds.
+func (w *Wide) Drain(ctx context.Context, runner, why string) error {
+	if _, err := w.tx.Exec(ctx,
+		`update runners set state = 'draining', drain_reason = $2 where id = $1 and state = 'ready'`,
+		runner, nilIfEmpty(why)); err != nil {
+		return fmt.Errorf("db: runner %s could not be drained: %w", runner, err)
+	}
+	return nil
+}
+
+// Revoke stops a runner's credential being accepted at all.
+func (w *Wide) Revoke(ctx context.Context, runner, why string) error {
+	if _, err := w.tx.Exec(ctx,
+		`update runners set state = 'revoked', drain_reason = $2 where id = $1`,
+		runner, nilIfEmpty(why)); err != nil {
+		return fmt.Errorf("db: runner %s could not be revoked: %w", runner, err)
+	}
+	return nil
+}
+
+// Runners is the inventory.
+func (w *Wide) Runners(ctx context.Context) ([]Runner, error) {
+	rows, err := w.tx.Query(ctx, `
+		select id, pool, labels, accepted_namespaces, cpu, memory_bytes, disk_bytes,
+		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
+		from runners order by pool, id`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the runners could not be read: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Runner{}
+	for rows.Next() {
+		var r Runner
+		var reason *string
+		var seen, rotate *time.Time
+		if err := rows.Scan(&r.ID, &r.Pool, &r.Labels, &r.AcceptedNamespaces, &r.CPU, &r.MemoryBytes,
+			&r.DiskBytes, &r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate); err != nil {
+			return nil, err
+		}
+		if reason != nil {
+			r.DrainReason = *reason
+		}
+		if seen != nil {
+			r.LastSeenAt = *seen
+		}
+		if rotate != nil {
+			r.RotateBy = *rotate
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func orEmptyStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// Lost moves the tasks of runners that stopped reporting.
+//
+// "Three missed intervals move a task to lost, which is the state whose consequences Lifecycle and
+// replay describes." A task is lost rather than failed, and the distinction is the whole of why
+// this exists: "A failed task is charged to the brick and follows the retry policy; a lost task is
+// charged to the infrastructure and is requeued only when the step is declared idempotent, since
+// it may well have completed without the result coming back."
+//
+// after is three heartbeat intervals. It is an argument rather than a constant because the
+// interval is what an installation configures and thirty seconds is only the default's default.
+//
+// A task whose runner has not reported since it was dispatched counts from the dispatch: a runner
+// that took work and was never heard from again is exactly the case this is for, and it has no
+// heartbeat to have missed.
+func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, error) {
+	batch, err := batchOf(batch)
+	if err != nil {
+		return 0, err
+	}
+	var lost int
+	err = p.Installation(ctx, Heartbeat, func(ctx context.Context, w *Wide) error {
+		return w.tx.QueryRow(ctx, `
+			with gone as (
+			  update tasks set state = 'lost', finished_at = now()
+			  where (namespace, id) in (
+			    select t.namespace, t.id from tasks t
+			    where t.state in ('dispatched', 'running', 'publishing')
+			      and coalesce(t.last_heartbeat_at, t.dispatched_at) < now() - ($1::bigint * interval '1 second')
+			    order by coalesce(t.last_heartbeat_at, t.dispatched_at)
+			    limit $2
+			    for update skip locked
+			  )
+			  returning namespace, run_id
+			), woken as (
+			  update runs r set wake_at = now()
+			  from (select distinct namespace, run_id from gone) g
+			  where r.namespace = g.namespace and r.id = g.run_id
+			    and r.state in ('queued', 'running', 'waiting')
+			  returning 1
+			)
+			select (select count(*) from gone)::int`,
+			int64(after/time.Second), batch).Scan(&lost)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("db: the lost tasks could not be found: %w", err)
+	}
+	return lost, nil
+}

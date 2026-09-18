@@ -8,6 +8,12 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**A machine joins, and cannot claim what its token did not permit.** A join token is bound to one pool and to the exact set of labels a runner may claim with it, so a machine that asks for `zone=lan` when its token said `zone=dmz` is refused rather than trimmed: trimming would let it join with less than it asked for and then wonder why it is being offered nothing. A token is spent by being used, because one good for several machines is a credential worth stealing and a reimaged host joins again. What comes back is an identity and a credential that exists once and is stored hashed.
+
+**Liveness lives beside the task state.** A runner posts one heartbeat listing the keys it holds, and what that writes is the moment against each of those tasks. A heartbeat naming somebody else's task keeps nothing alive, which is the one thing a liveness report must not be able to do, and there is a test for exactly that.
+
+**A task whose runner stopped reporting is lost, not failed.** Three missed intervals, and the distinction is the whole reason the state exists: a failed task is charged to the brick and follows the retry policy, a lost one is charged to the infrastructure and is requeued only where the step is idempotent, since it may well have completed without the result coming back. A task nobody has reported since it was dispatched counts from the dispatch, because a runner that took work and was never heard from again is exactly the case this is for and has no heartbeat to have missed. The run is woken in the same statement, because nothing else would tell the controller.
+
 **`agk push` does something.** It was one of seven verbs that named what was missing and refused; it now assembles a version out of the working tree and sends it. What it sends is what the server stores: the entry point, every file it includes, and the manifest of every image it names.
 
 **A dirty tree is refused.** "A version is a commit", so pushing the bytes in the working copy under the name of a commit whose tree differs makes a version that says it is one thing and is another, for ever, and nothing downstream can ever notice because the digests match what was pushed. The refusal names the files that differ. `--allow-dirty` exists for somebody who knows what they are doing and says so out loud.
