@@ -68,6 +68,39 @@ func TestAnObjectRouteIsAuthorisedByItsURLAndByNothingElse(t *testing.T) {
 	}
 }
 
+// What the store refuses, and what each refusal reads as over HTTP.
+func TestWhatAnObjectRouteAnswers(t *testing.T) {
+	h, signed := withObjects(t)
+	sum := sha256.Sum256([]byte("an invoice nobody stored"))
+	key := artifact.Key("finance", hex.EncodeToString(sum[:]))
+	until := time.Now().UTC().Add(time.Hour)
+
+	get, err := signed.Presign(context.Background(), "GET", key, "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A signed URL for an object that is not there says so. The caller already knew the
+	// key, since it is in the URL it was handed, so there is no oracle in saying it.
+	if w := follow(t, h, "GET", get, ""); w.Code != http.StatusNotFound {
+		t.Errorf("fetching an absent object answered %d", w.Code)
+	}
+
+	put, err := signed.Presign(context.Background(), "PUT", key, "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, h, "PUT", put, "bytes that are not that object"); w.Code != http.StatusBadRequest {
+		t.Errorf("storing the wrong bytes answered %d", w.Code)
+	}
+
+	// Nothing a refusal writes is worth caching, and none of them carries a body: the
+	// caller is a machine following a URL.
+	w := follow(t, h, "GET", "https://agentiik.example.com/api/v1/objects/"+key, "")
+	if w.Header().Get("Cache-Control") != "no-store" || w.Body.Len() != 0 {
+		t.Errorf("a refusal says %q and writes %q", w.Header().Get("Cache-Control"), w.Body)
+	}
+}
+
 // The route says out loud what authorises it, which is what the guard demands of a public one.
 func TestTheObjectRoutesSayWhatAuthorisesThem(t *testing.T) {
 	rt, err := api.NewRouter(api.DenyAll{}, bearer)

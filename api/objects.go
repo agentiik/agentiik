@@ -2,6 +2,8 @@ package api
 
 import (
 	"errors"
+	"io"
+	"io/fs"
 	"net/http"
 
 	"github.com/agentiik/agentiik/artifact"
@@ -46,5 +48,62 @@ func NewObjects(rt *Router, signed *artifact.Signed) (*ObjectAPI, error) {
 }
 
 func (s *ObjectAPI) object(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
-	s.signed.Serve(w, r, r.PathValue("key"))
+	key := r.PathValue("key")
+	if _, err := s.signed.Check(r.Method, key, r.URL.Query()); err != nil {
+		// One answer for a signature that is wrong, one that expired, and one minted for
+		// something else. A refusal that said which is a refusal somebody tunes a forgery
+		// against, and the caller here is a machine following a URL it was handed: every
+		// one of them means the same thing to it.
+		nothing(w, http.StatusForbidden)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.fetch(w, r, key)
+	case http.MethodPut:
+		s.store(w, r, key)
+	}
+}
+
+func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
+	rc, err := s.signed.Fetch(r.Context(), key)
+	if errors.Is(err, fs.ErrNotExist) {
+		nothing(w, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		nothing(w, http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	// An object is bytes, and its media type lives on the envelope entry that names it. A
+	// store that guessed one would be deciding how a browser treats content it was handed a
+	// digest for.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, rc)
+}
+
+func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string) {
+	err := s.signed.Store(r.Context(), key, r.Body)
+	switch {
+	case errors.Is(err, artifact.ErrWrongDigest):
+		nothing(w, http.StatusBadRequest)
+	case errors.Is(err, artifact.ErrTooLarge):
+		nothing(w, http.StatusRequestEntityTooLarge)
+	case err != nil:
+		nothing(w, http.StatusInternalServerError)
+	default:
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+// nothing answers with a status and no body. There is nothing worth writing: the caller is a
+// machine following a URL, and a body it would not read is a body that only helps somebody
+// probing.
+func nothing(w http.ResponseWriter, status int) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
 }

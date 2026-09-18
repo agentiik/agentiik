@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,9 +26,20 @@ import (
 // it is given is a URL that does one thing, to one object, for one run, until one instant.
 //
 // An object store that mints its own is used through Presigner. The built-in store has no signing
-// authority of its own, so the API is it: Signed mints the URL and serves what it names, and the
-// two live in one type because a minter and a checker that disagree by one byte is a store that
-// refuses everything or accepts anything.
+// authority of its own, so the API is it: Signed mints the URL, checks one back and moves the
+// bytes, and the three live in one type because a minter and a checker that disagree by one byte
+// is a store that refuses everything or accepts anything.
+//
+// What is not here is the HTTP. The evaluator imports this package and is importable with no
+// server behind it, which is what keeps agk run --local the same code path as a server run, so the
+// route and the status codes belong to whoever is serving.
+
+// The two methods a presigned URL does. Spelled out rather than taken from net/http, which this
+// package may not import.
+const (
+	MethodGet = "GET"
+	MethodPut = "PUT"
+)
 
 // signDomain separates these signatures from every other use of the installation's key. A
 // signature that could be replayed into another context would be one that means something
@@ -101,7 +110,7 @@ func NewSigned(o Objects, opt SignedOptions) (*Signed, error) {
 // Presign answers the URL.
 func (s *Signed) Presign(_ context.Context, method, key string, run agk.RunID, until time.Time) (string, error) {
 	switch {
-	case method != http.MethodGet && method != http.MethodPut:
+	case method != MethodGet && method != MethodPut:
 		return "", fmt.Errorf("artifact: %s is not something a presigned URL does", method)
 	case run == "":
 		return "", errors.New("artifact: a presigned URL for no run, and one is scoped to a run")
@@ -139,21 +148,23 @@ func (s *Signed) sign(method, key, run string, expires int64) string {
 
 // ErrNotSigned is a request carrying no signature of ours, one that expired, or one for something
 // other than what it asks for. One error for all of them, because a refusal that says which is a
-// refusal somebody tunes against.
+// refusal somebody tunes a forgery against.
 var ErrNotSigned = errors.New("artifact: this request is not signed for what it asks")
 
-// Check answers the run a request is signed for, and refuses everything else.
-func (s *Signed) Check(r *http.Request, key string) (agk.RunID, error) {
+// Check answers the run a signed request is for, and refuses everything else.
+//
+// The method and the key come from the caller because only the caller knows how it routes; the
+// rest comes out of the query the URL carries.
+func (s *Signed) Check(method, key string, q url.Values) (agk.RunID, error) {
 	if err := checkKey(key); err != nil {
 		return "", ErrNotSigned
 	}
-	q := r.URL.Query()
 	run, signature := q.Get("run"), q.Get("signature")
 	expires, err := strconv.ParseInt(q.Get("expires"), 10, 64)
 	if err != nil || run == "" || signature == "" {
 		return "", ErrNotSigned
 	}
-	if !hmac.Equal([]byte(signature), []byte(s.sign(r.Method, key, run, expires))) {
+	if !hmac.Equal([]byte(signature), []byte(s.sign(method, key, run, expires))) {
 		return "", ErrNotSigned
 	}
 	if !s.now().Before(time.Unix(expires, 0)) {
@@ -162,87 +173,35 @@ func (s *Signed) Check(r *http.Request, key string) (agk.RunID, error) {
 	return agk.RunID(run), nil
 }
 
-// Serve honours a signed request, and refuses an unsigned one without saying what is there.
+// Fetch opens an object. The caller has already checked the signature, which is the only thing
+// standing between this and every object in the store.
+func (s *Signed) Fetch(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.objects.Open(ctx, key)
+}
+
+// Store writes one, and only the one the key names.
 //
-// The key comes from the caller rather than from the path, because the route that mounts this
-// knows its own prefix and a handler that stripped one by hand is a handler that can strip the
-// wrong number of segments.
-func (s *Signed) Serve(w http.ResponseWriter, r *http.Request, key string) {
-	if _, err := s.Check(r, key); err != nil {
-		// One answer for a signature that is wrong, one that expired, and one that was
-		// minted for something else. A refusal that said which is a refusal somebody
-		// tunes a forgery against, and the caller here is a machine following a URL it
-		// was handed: every one of them means the same thing to it.
-		refuse(w, http.StatusForbidden)
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		s.get(w, r, key)
-	case http.MethodPut:
-		s.put(w, r, key)
-	default:
-		refuse(w, http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *Signed) get(w http.ResponseWriter, r *http.Request, key string) {
-	rc, err := s.objects.Open(r.Context(), key)
-	if errors.Is(err, fs.ErrNotExist) {
-		refuse(w, http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		refuse(w, http.StatusInternalServerError)
-		return
-	}
-	defer rc.Close()
-
-	// An object is bytes and its media type lives on the envelope entry that names it, not
-	// here: a store that guessed one would be a store deciding how a browser treats content
-	// it was handed a digest for.
-	w.Header().Set("Content-Type", defaultMediaType)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, rc)
-}
-
-func (s *Signed) put(w http.ResponseWriter, r *http.Request, key string) {
+// The key is the digest of the content, so the bytes are checked against it as they arrive.
+// Without this a URL for one object stores any bytes at all under a digest somebody else's
+// envelope already names, which is the one write content addressing must not allow.
+func (s *Signed) Store(ctx context.Context, key string, r io.Reader) error {
 	want, ok := digestOf(key)
 	if !ok {
-		refuse(w, http.StatusForbidden)
-		return
+		return ErrNotSigned
 	}
-
-	// The key is the digest of the content, so the bytes are checked against it as they
-	// arrive. Without this a URL for one object stores any bytes at all under a digest
-	// somebody else's envelope already names, which is the one write content addressing
-	// must not allow.
-	body := io.Reader(r.Body)
 	if s.limits.ArtifactMaxBytes > 0 {
-		body = io.LimitReader(body, s.limits.ArtifactMaxBytes+1)
+		r = io.LimitReader(r, s.limits.ArtifactMaxBytes+1)
 	}
-	checked := &digestChecked{r: body, want: want, sum: sha256.New(), limit: s.limits.ArtifactMaxBytes}
-
-	err := s.objects.Put(r.Context(), key, checked)
-	switch {
-	case errors.Is(err, errWrongDigest):
-		refuse(w, http.StatusBadRequest)
-		return
-	case errors.Is(err, errTooLarge):
-		refuse(w, http.StatusRequestEntityTooLarge)
-		return
-	case err != nil:
-		refuse(w, http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
+	return s.objects.Put(ctx, key, &digestChecked{
+		r: r, want: want, sum: sha256.New(), limit: s.limits.ArtifactMaxBytes,
+	})
 }
 
-var (
-	errWrongDigest = errors.New("artifact: the bytes are not the object this URL names")
-	errTooLarge    = errors.New("artifact: above artifact_max_bytes")
-)
+// ErrWrongDigest is bytes that are not the object the key names.
+var ErrWrongDigest = errors.New("artifact: the bytes are not the object this URL names")
+
+// ErrTooLarge is an object above artifact_max_bytes.
+var ErrTooLarge = errors.New("artifact: above artifact_max_bytes")
 
 // digestChecked fails the write rather than the check: Put is all or nothing, so a reader that
 // errors at the last byte leaves nothing behind for anyone to fetch.
@@ -261,11 +220,11 @@ func (d *digestChecked) Read(p []byte) (int, error) {
 		d.sum.Write(p[:n])
 	}
 	if d.limit > 0 && d.read > d.limit {
-		return n, errTooLarge
+		return n, ErrTooLarge
 	}
 	if errors.Is(err, io.EOF) {
 		if hex.EncodeToString(d.sum.Sum(nil)) != d.want {
-			return n, errWrongDigest
+			return n, ErrWrongDigest
 		}
 	}
 	return n, err
@@ -281,11 +240,4 @@ func digestOf(key string) (string, bool) {
 		return "", false
 	}
 	return rest, true
-}
-
-// refuse answers with a status and nothing else. There is no body worth writing: the caller is a
-// runner following a URL it was handed, and every failure here means the same thing to it.
-func refuse(w http.ResponseWriter, status int) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
 }
