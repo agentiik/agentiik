@@ -13,9 +13,10 @@ import (
 
 // Guard is what stands in front of one route.
 //
-// The interface is closed: the only two things that implement it are Needs and Public, because
-// its one method is unexported. A third kind of guard is therefore a change to this file, which
-// is a change somebody reads, rather than a struct somebody writes in a handler package.
+// The interface is closed: the only things that implement it are Needs, Public and ForRunner,
+// because its one method is unexported. A further kind of guard is therefore a change to this
+// file, which is a change somebody reads, rather than a struct somebody writes in a handler
+// package.
 type Guard interface {
 	guards() guard
 }

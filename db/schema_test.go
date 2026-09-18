@@ -226,6 +226,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	// the installation's too: there is one active controller across all of them.
 	installation := map[string]bool{
 		"namespaces": true, "runners": true, "controller_term": true, "join_tokens": true,
+		"runner_pools": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

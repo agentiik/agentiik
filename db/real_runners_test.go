@@ -22,7 +22,29 @@ func joining(t *testing.T) (*Pool, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	pooled(t, pool)
 	return pool, super
+}
+
+// pooled creates what an administrator creates before any of this exists: "An administrator
+// creates a runner pool with its labels, its accepted namespaces and its resource ceilings, then
+// issues a join token."
+func pooled(t *testing.T, p *Pool) {
+	t.Helper()
+	err := p.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		for _, made := range []RunnerPool{
+			{Name: "dmz", Labels: []string{"zone=dmz", "arch=amd64"}, CreatedBy: "admin"},
+			{Name: "default", Labels: []string{"arch=amd64"}, CreatedBy: "admin"},
+		} {
+			if err := w.CreateRunnerPool(ctx, made); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // "The API verifies the token, checks that the claimed labels are a subset of what the token
