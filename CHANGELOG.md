@@ -8,6 +8,12 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**The routes a runner sees, and no others.** A runner is not a principal and holds no permission, so the authorisation hook every other route passes through has nothing to ask about it. The alternative was to mark those routes public and check the credential inside each handler, which is the shape of every access check that has ever been forgotten, so there is a third kind of guard instead: a route registered with it is handed the runner the router already resolved, and registering one against a router with nothing to check a credential against is refused outright.
+
+**Every way in that does not work answers the same thing.** A credential that never existed, one that was revoked, and a principal's token presented at a runner route are one 401, and a machine that gets it joins again rather than retrying. The same holds a level up: a join token that is wrong, spent, expired or claiming a label it may not answers one body, byte for byte, because a machine that gets a different answer for each is a machine somebody is using to find out which tokens exist.
+
+**Draining is told in the heartbeat, and revocation is not told at all.** There is no separate liveness channel to keep in sync, so the heartbeat answer carries the drain and the reason somebody typed. A revoked credential stops authenticating, which is the door rather than a polite request.
+
 **A machine joins, and cannot claim what its token did not permit.** A join token is bound to one pool and to the exact set of labels a runner may claim with it, so a machine that asks for `zone=lan` when its token said `zone=dmz` is refused rather than trimmed: trimming would let it join with less than it asked for and then wonder why it is being offered nothing. A token is spent by being used, because one good for several machines is a credential worth stealing and a reimaged host joins again. What comes back is an identity and a credential that exists once and is stored hashed.
 
 **Liveness lives beside the task state.** A runner posts one heartbeat listing the keys it holds, and what that writes is the moment against each of those tasks. A heartbeat naming somebody else's task keeps nothing alive, which is the one thing a liveness report must not be able to do, and there is a test for exactly that.
