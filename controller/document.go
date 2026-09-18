@@ -1,10 +1,7 @@
 package controller
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -163,48 +160,17 @@ func Rehydrate(ctx context.Context, d Document, namespace string, objects artifa
 }
 
 // put writes one envelope and answers what names it.
-//
-// Content addressed like everything else in the store, so two steps publishing identical bytes
-// publish one object and a replay that recomputes the same content writes nothing.
 func put(ctx context.Context, namespace string, objects artifact.Objects, e agk.Envelope) (EnvelopeRef, error) {
-	var buf bytes.Buffer
-	size, err := e.Encode(&buf)
+	digest, size, err := artifact.PutEnvelope(ctx, objects, namespace, e)
 	if err != nil {
 		return EnvelopeRef{}, err
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	digest := hex.EncodeToString(sum[:])
-
-	key := artifact.Key(namespace, digest)
-	held, err := objects.Has(ctx, key)
-	if err != nil {
-		return EnvelopeRef{}, err
-	}
-	if !held {
-		if err := objects.Put(ctx, key, bytes.NewReader(buf.Bytes())); err != nil {
-			return EnvelopeRef{}, err
-		}
 	}
 	return EnvelopeRef{Digest: digest, Size: size}, nil
 }
 
 // get reads one back, and refuses bytes that are not the bytes the digest names.
 func get(ctx context.Context, namespace string, objects artifact.Objects, ref EnvelopeRef, l agk.Limits) (agk.Envelope, error) {
-	r, err := objects.Open(ctx, artifact.Key(namespace, ref.Digest))
-	if err != nil {
-		return agk.Envelope{}, err
-	}
-	defer r.Close()
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
-		return agk.Envelope{}, err
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	if got := hex.EncodeToString(sum[:]); got != ref.Digest {
-		return agk.Envelope{}, fmt.Errorf("the object under sha256/%s holds sha256/%s", ref.Digest, got)
-	}
-	return agk.Decode(&buf, l)
+	return artifact.GetEnvelope(ctx, objects, namespace, ref.Digest, l)
 }
 
 // hollow is an envelope with its items taken out and its Meta left alone.

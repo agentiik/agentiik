@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -28,6 +29,15 @@ type RunnerOptions struct {
 	// days is what this installs with and what an installation overrides.
 	JoinRotation time.Duration
 
+	// What a redemption answers with. Objects and URLs go together: one reads the input
+	// envelopes so that the artifacts they name can be resolved, the other mints the URLs
+	// that fetch them. Without both there is nothing for a runner to redeem into, and the
+	// route says so rather than answering an empty object.
+	Objects artifact.Objects
+	URLs    artifact.Presigner
+	Secrets Secrets
+	Limits  agk.Limits
+
 	Now func() time.Time
 }
 
@@ -35,6 +45,10 @@ type RunnerOptions struct {
 type RunnerAPI struct {
 	pool     *db.Pool
 	rotation time.Duration
+	objects  artifact.Objects
+	urls     artifact.Presigner
+	secrets  Secrets
+	limits   agk.Limits
 	now      func() time.Time
 }
 
@@ -52,7 +66,17 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &RunnerAPI{pool: o.Pool, rotation: o.JoinRotation, now: o.Now}
+	if o.Secrets == nil {
+		o.Secrets = NoSecrets{}
+	}
+	if o.Limits == (agk.Limits{}) {
+		o.Limits = agk.DefaultLimits()
+	}
+	s := &RunnerAPI{
+		pool: o.Pool, rotation: o.JoinRotation,
+		objects: o.Objects, urls: o.URLs, secrets: o.Secrets, limits: o.Limits,
+		now: o.Now,
+	}
 	rt.ServeRunners(s)
 
 	// Registration is the one route outside both hooks, and it says why.
@@ -67,6 +91,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		handler RunnerHandler
 	}{
 		{"POST", "/api/v1/runners/heartbeat", s.beat},
+		{"POST", "/api/v1/tasks/redeem", s.redeem},
 	} {
 		if err := rt.HandleRunner(r.method, r.pattern, ForRunner{}, r.handler); err != nil {
 			return nil, err

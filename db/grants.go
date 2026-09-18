@@ -28,12 +28,52 @@ type Granted struct {
 	ExpiresAt time.Time
 }
 
+// GrantScope is what one grant may be turned into, and the whole of it.
+//
+// It is what the task was dispatched with, written by the controller at the moment it decided:
+// the envelopes on each input port, named by digest, and the secrets the step asked for, named
+// and never valued. A redemption answers from this and from nothing else, which is what makes
+// "refusing anything the task does not name" a comparison rather than a promise.
+type GrantScope struct {
+	Run  agk.RunID `json:"run,omitempty"`
+	Step agk.Step  `json:"step,omitempty"`
+
+	Inputs  []GrantInput `json:"inputs,omitempty"`
+	Secrets []string     `json:"secrets,omitempty"`
+}
+
+// GrantInput is one input port's envelope, named by digest.
+type GrantInput struct {
+	Port   agk.Port `json:"port"`
+	Digest string   `json:"digest"`
+	Items  int      `json:"items"`
+}
+
+// Redeemed is what a grant turned out to be for.
+type Redeemed struct {
+	Namespace string
+	Task      agk.TaskID
+	Scope     GrantScope
+
+	// ExpiresAt is the grant's own expiry, which is the task's deadline. Anything the
+	// redemption hands out is minted to end with it: a URL that outlived the task it was
+	// fetched for would be the standing credential the grant exists to avoid.
+	ExpiresAt time.Time
+}
+
+// ErrTaskHeld is a task another runner is already working on.
+//
+// Separate from ErrNoGrant because the caller is an authenticated runner rather than somebody
+// guessing: it presented a valid grant for a real task, and what it needs to know is that the
+// work is somebody else's and it should stop rather than retry.
+var ErrTaskHeld = errors.New("db: that task is held by another runner")
+
 // IssueGrant mints the grant for one task and records what it takes to check it.
 //
 // The row is written by the controller inside the decision that planned the task, so a task that
 // exists has a grant and a grant belongs to a task that exists. The clear value is answered here
 // and nowhere else: it goes into the message and is then unrecoverable.
-func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID, id string, until time.Time) (Granted, error) {
+func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID, id string, scope GrantScope, until time.Time) (Granted, error) {
 	if namespace == "" {
 		return Granted{}, errors.New("db: a grant with no namespace")
 	}
@@ -49,57 +89,89 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 		return Granted{}, fmt.Errorf("db: %w", err)
 	}
 	if _, err := w.tx.Exec(ctx,
-		`insert into task_grants (namespace, task_id, hash, expires_at)
-		 values ($1, $2, $3, $4)
+		`insert into task_grants (namespace, task_id, hash, expires_at, scope)
+		 values ($1, $2, $3, $4, $5)
 		 on conflict (namespace, task_id) do update
-		 set hash = excluded.hash, expires_at = excluded.expires_at, redeemed_at = null`,
-		namespace, id, hashed, until); err != nil {
+		 set hash = excluded.hash, expires_at = excluded.expires_at,
+		     scope = excluded.scope, redeemed_at = null`,
+		namespace, id, hashed, until, scope); err != nil {
 		return Granted{}, fmt.Errorf("db: the grant for %s could not be recorded: %w", task, err)
 	}
 	return Granted{Task: task, Clear: clear, ExpiresAt: until}, nil
 }
 
-// Redeem checks a grant and answers what it is for.
+// Redeem checks a grant, binds the task to the runner redeeming it, and answers what it is for.
 //
 // The value names the task inside its own text and the caller names one too, and both are checked
 // against the row: "the API refuses a redemption where the two disagree rather than believing
 // either alone". A grant past its expiry is refused like one that never existed, because a
 // credential that says how it failed is a credential that helps somebody find the next one.
-func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, now time.Time) (string, error) {
+//
+// Binding the task here is what makes at-least-once delivery safe on the way in. A message may be
+// delivered twice and to two machines; the second one to redeem is told the work is somebody
+// else's rather than starting a container for it. The binding is never released, because a task
+// whose runner was lost is moved to lost and retried as a new row with a grant of its own.
+func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner string, now time.Time) (Redeemed, error) {
 	id, ok := token.TaskOf(clear)
 	if !ok {
-		return "", ErrNoGrant
+		return Redeemed{}, ErrNoGrant
 	}
 
 	var namespace, hashed string
+	var scope GrantScope
 	var expires time.Time
 	var key agk.TaskID
+	var state string
+	var holder *string
 	err := w.tx.QueryRow(ctx, `
-		select g.namespace, g.hash, g.expires_at, t.idempotency_key
+		select g.namespace, g.hash, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
 		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
-		where g.task_id = $1`, id).Scan(&namespace, &hashed, &expires, &key)
+		where g.task_id = $1 for update of t`, id).
+		Scan(&namespace, &hashed, &expires, &scope, &key, &state, &holder)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNoGrant
+		return Redeemed{}, ErrNoGrant
 	}
 	if err != nil {
-		return "", fmt.Errorf("db: the grant could not be read: %w", err)
+		return Redeemed{}, fmt.Errorf("db: the grant could not be read: %w", err)
 	}
 
 	switch {
 	case !token.Same(clear, hashed):
-		return "", ErrNoGrant
+		return Redeemed{}, ErrNoGrant
 	case !now.Before(expires):
-		return "", ErrNoGrant
+		return Redeemed{}, ErrNoGrant
 	case task != "" && task != key:
 		// The body named one task and the grant names another, which is a request
 		// somebody assembled out of two and neither half is evidence about the other.
-		return "", ErrNoGrant
+		return Redeemed{}, ErrNoGrant
+	}
+
+	var where agk.TaskState
+	if err := where.UnmarshalText([]byte(state)); err != nil {
+		return Redeemed{}, fmt.Errorf("db: the task is in state %q: %w", state, err)
+	}
+
+	switch {
+	case runner == "":
+		return Redeemed{}, errors.New("db: a redemption by no runner, and a task is held by the machine that redeemed it")
+	case holder != nil && *holder != runner:
+		return Redeemed{}, ErrTaskHeld
+	case where.Terminal():
+		// "the runner refuses to start a container for a key that has already
+		// completed", and refusing the grant is the same rule applied where it cannot
+		// be forgotten.
+		return Redeemed{}, ErrTaskHeld
 	}
 
 	if _, err := w.tx.Exec(ctx,
 		`update task_grants set redeemed_at = $3 where namespace = $1 and task_id = $2`,
 		namespace, id, now); err != nil {
-		return "", fmt.Errorf("db: the redemption could not be recorded: %w", err)
+		return Redeemed{}, fmt.Errorf("db: the redemption could not be recorded: %w", err)
 	}
-	return namespace, nil
+	if _, err := w.tx.Exec(ctx,
+		`update tasks set runner = $3 where namespace = $1 and id = $2`,
+		namespace, id, runner); err != nil {
+		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
+	}
+	return Redeemed{Namespace: namespace, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }

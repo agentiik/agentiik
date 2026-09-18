@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -403,7 +404,7 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 			return err
 		}
 		d.Row = row
-		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, t.Deadline)
+		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, scopeOf(t, d.Inputs), t.Deadline)
 		if err != nil {
 			return err
 		}
@@ -414,6 +415,33 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 		return Dispatch{}, err
 	}
 	return d, nil
+}
+
+// scopeOf is what the grant may be turned into, which only the controller can say.
+//
+// "the controller names which secret a task may have and never sees its value", and the same is
+// true of every other thing a task is allowed to fetch: what is written here is the whole of what
+// the redemption will answer, so a runner holding a grant reaches the envelopes on this task's
+// input ports, the secrets this step declared, and nothing else in the namespace.
+func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
+	scope := db.GrantScope{Run: t.Run, Step: t.Step}
+	ports := make([]agk.Port, 0, len(inputs))
+	for port := range inputs {
+		ports = append(ports, port)
+	}
+	// Ordered, because the scope is written as a document and two dispatches of one task
+	// that differ only in map iteration order would be two different documents.
+	slices.Sort(ports)
+	for _, port := range ports {
+		ref := inputs[port]
+		scope.Inputs = append(scope.Inputs, db.GrantInput{
+			Port: port, Digest: ref.Digest, Items: ref.Items,
+		})
+	}
+	for _, m := range t.Secrets {
+		scope.Secrets = append(scope.Secrets, m.Name)
+	}
+	return scope
 }
 
 // project turns a state into the rows everything that queries reads.

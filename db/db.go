@@ -126,6 +126,13 @@ const (
 	// one host across however many namespaces it is working for.
 	Heartbeat Reason = "a runner's heartbeat"
 
+	// Redemption is a runner turning a grant into what the task it names was given.
+	// The namespace is what the grant answers rather than what the caller claims: a
+	// runner works for several and knows which one this task belongs to only because
+	// the grant said so, and a request that carried a namespace of its own would be a
+	// request choosing the scope its own credential is checked in.
+	Redemption Reason = "a grant redemption"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"
