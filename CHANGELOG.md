@@ -8,6 +8,14 @@ Every repository of the project carries the same version and is tagged at the sa
 
 ## Unreleased
 
+**A bus credential that expires, and reaches one pool.** "Bus credentials are therefore never at rest on a runner host, which is what lets a runner sit in a zone where a stolen disk must not yield a working queue consumer." A runner asks the API for one, gets an hour, and renews well ahead of it. What it may do is written out subject by subject: take work from its own pool's consumer, acknowledge it, say what happened, and listen for a stop. It cannot publish a task, cannot reach another pool's consumer, and cannot create or delete anything.
+
+**The permission set is held by a real server rather than by its own JSON.** Asserting the claims this module writes would be asserting what it just wrote. The first version of that set allowed `$JS.API.>` in one line, and a test running an actual NATS server used it to create a stream, which is why the list is now six explicit subjects and why the server is a test dependency.
+
+**The pool a runner asks for is not a thing it can ask for.** It comes from the runner credential the request arrived with, and there is nothing in the body that names one. A machine choosing its own pool is the self-asserted label again, reaching further: a label decides what a runner is offered, and the pool decides which queue it drains.
+
+**The durable consumer belongs to the pool, and the control plane makes it.** One per pool rather than one per machine, because "a runner asks for a batch of tasks when it has room, which makes distribution naturally proportional to each host's real capacity" is what a shared pull consumer does; one per machine would put the modelling of load back in the bus. A runner cannot create one, which is the point: a machine able to create a consumer is a machine able to create one with no filter.
+
 **A grant turns into something.** "The runner obtains the value at the last moment, by redeeming at the API the per-task grant the controller issued for that one task and that one secret." There was nothing to redeem it at, and nothing to redeem it into: a grant row held a hash and an expiry, so the only way to answer "refusing anything the task does not name" would have been to evaluate the workflow a second time, in the wrong component. The grant now carries what its task was dispatched with, written by the only thing that knows, and the redemption answers from that and from nothing else.
 
 **The artifacts are resolved by the API rather than asked for by the runner.** A runner is handed URLs for the envelopes on its input ports and for the artifacts those envelopes name, worked out here by reading them. Letting it ask for a digest of its own would have been simpler and would have meant a runner reaching every object in its namespace, which is the whole of what the scoping is for.

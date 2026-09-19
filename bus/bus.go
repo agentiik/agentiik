@@ -54,16 +54,43 @@ func (b *Bus) report(subject string, err error) {
 	b.Trouble(subject, err)
 }
 
+// Options are how a connection is opened.
+type Options struct {
+	URL string
+
+	// Name is what this connection calls itself, which is what an operator reads in the
+	// server's own connection list.
+	Name string
+
+	// Credentials are what the control plane authenticates with, where the bus asks for
+	// any. Nil is a bus that takes none.
+	Credentials *Credentials
+}
+
 // Open connects, and makes sure the stream is there.
 //
 // Creating it here rather than in a deployment step is deliberate: the stream's retention is part
 // of what the engine promises, not part of how an operator chose to install it. An installation
 // that had configured a different retention would have a bus that kept work after it was done.
-func Open(ctx context.Context, url string) (*Bus, error) {
-	conn, err := nats.Connect(url,
-		nats.Name("agentiik"),
+func Open(ctx context.Context, o Options) (*Bus, error) {
+	if o.URL == "" {
+		return nil, errors.New("bus: no bus address")
+	}
+	options := []nats.Option{
+		nats.Name(o.Name),
 		nats.MaxReconnects(-1),
-		nats.ReconnectWait(time.Second))
+		nats.ReconnectWait(time.Second),
+	}
+	if o.Name == "" {
+		options[0] = nats.Name("agentiik")
+	}
+	if o.Credentials != nil {
+		// A credential rather than a password, and one that expires. An installation
+		// whose bus takes no credential at all is profile A, where the bus is on the
+		// same host and reachable by nothing else.
+		options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
+	}
+	conn, err := nats.Connect(o.URL, options...)
 	if err != nil {
 		return nil, fmt.Errorf("bus: the bus at that address could not be reached: %w", err)
 	}
@@ -117,6 +144,35 @@ func Open(ctx context.Context, url string) (*Bus, error) {
 
 // Close releases the connection.
 func (b *Bus) Close() { b.conn.Close() }
+
+// Consumer makes sure the one durable consumer a pool's runners share is there.
+//
+// The control plane creates it because a runner's credential cannot, and that is the point: a
+// machine able to create a consumer is a machine able to create one with no filter and take every
+// pool's work.
+func (b *Bus) Consumer(ctx context.Context, pool string) error {
+	if err := validPool(pool); err != nil {
+		return fmt.Errorf("bus: %w", err)
+	}
+	_, err := b.js.CreateOrUpdateConsumer(ctx, Stream, jetstream.ConsumerConfig{
+		Durable:       Durable(pool),
+		FilterSubject: Subject(pool),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		// A runner acknowledges when it has taken a task and written that down, not when
+		// the container finishes: "Liveness therefore lives in the database beside the
+		// task state, rather than as traffic on a work queue that exists to distribute
+		// work." So this bounds the seconds between a message being handed over and being
+		// recorded, and a task that runs for an hour is not redelivered halfway through
+		// it. What notices a host that died is the heartbeat, and what it produces is
+		// lost rather than a second delivery.
+		AckWait:       time.Minute,
+		MaxAckPending: -1,
+	})
+	if err != nil {
+		return fmt.Errorf("bus: the consumer for pool %s could not be created: %w", pool, err)
+	}
+	return nil
+}
 
 // Publish puts one task on the queue its labels select.
 //
