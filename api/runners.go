@@ -38,18 +38,25 @@ type RunnerOptions struct {
 	Secrets Secrets
 	Limits  agk.Limits
 
+	// What a runner reaches the task bus with, and what makes sure its pool has
+	// somewhere to pull from.
+	BusIssuer    BusIssuer
+	BusConsumers BusConsumers
+
 	Now func() time.Time
 }
 
 // RunnerAPI is the runner half of the API.
 type RunnerAPI struct {
-	pool     *db.Pool
-	rotation time.Duration
-	objects  artifact.Objects
-	urls     artifact.Presigner
-	secrets  Secrets
-	limits   agk.Limits
-	now      func() time.Time
+	pool      *db.Pool
+	rotation  time.Duration
+	objects   artifact.Objects
+	urls      artifact.Presigner
+	secrets   Secrets
+	limits    agk.Limits
+	issuer    BusIssuer
+	consumers BusConsumers
+	now       func() time.Time
 }
 
 // NewRunners registers the runner routes on a router and answers what checks their credentials.
@@ -75,6 +82,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	s := &RunnerAPI{
 		pool: o.Pool, rotation: o.JoinRotation,
 		objects: o.Objects, urls: o.URLs, secrets: o.Secrets, limits: o.Limits,
+		issuer: o.BusIssuer, consumers: o.BusConsumers,
 		now: o.Now,
 	}
 	rt.ServeRunners(s)
@@ -92,6 +100,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	}{
 		{"POST", "/api/v1/runners/heartbeat", s.beat},
 		{"POST", "/api/v1/tasks/redeem", s.redeem},
+		{"POST", "/api/v1/bus/token", s.busToken},
 	} {
 		if err := rt.HandleRunner(r.method, r.pattern, ForRunner{}, r.handler); err != nil {
 			return nil, err

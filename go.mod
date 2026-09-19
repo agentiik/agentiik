@@ -28,6 +28,19 @@ require (
 	// the next caller; this driver pins one. It also takes parameters natively, which is
 	// what keeps a namespace a parameter and never a string interpolated into SQL.
 	github.com/jackc/pgx/v5 v5.11.0
+	// NATS credentials, used by package bus alone, to mint the "short-lived token minted by
+	// the API" that a runner reaches the bus with. This is the library the server verifies
+	// with, so the claims this module writes and the claims the far end reads are the same
+	// structure rather than two readings of a specification. Hand-rolling a JWT for somebody
+	// else's verifier is the kind of clever that is wrong once and wrong for ever.
+	github.com/nats-io/jwt/v2 v2.8.2
+	// The NATS server, used by package bus in tests alone, and never linked into anything
+	// this module ships. What a runner credential may do is a permission set an installation
+	// depends on, and asserting the claims this module writes would be asserting its own
+	// JSON: the property that matters is what a server does with them. The first version of
+	// that set allowed $JS.API.> and let a runner create a stream, which is how this
+	// dependency came to be here.
+	github.com/nats-io/nats-server/v2 v2.15.0
 	// NATS, used by package bus alone. The documentation names the broker and names the two
 	// properties it is chosen for: "NATS JetStream, with WorkQueue retention, where a
 	// message is removed as soon as it has been consumed, which is precisely what work
@@ -37,6 +50,10 @@ require (
 	// subject or a database table gives, and the deployment chapter substitutes SQS on one
 	// profile precisely because the contract this fills is narrow enough to state.
 	github.com/nats-io/nats.go v1.53.1
+	// The NATS key pairs, used by package bus alone. A user credential is an Ed25519 key
+	// pair and a JWT naming its public half, and this is what mints one and what signs with
+	// an account key. It was already here as an indirect dependency of the client.
+	github.com/nats-io/nkeys v0.4.16
 	// JSON Schema 2020-12, used by package schema alone and by nothing else in this module.
 	// The workflow language defines an input's schema as a 2020-12 document, and this
 	// implementation is the draft itself rather than an older one; it takes a custom
@@ -48,21 +65,23 @@ require (
 
 require (
 	cel.dev/expr v0.25.1 // indirect
+	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/kr/text v0.2.0 // indirect
-	github.com/nats-io/nkeys v0.4.15 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
+	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect

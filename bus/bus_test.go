@@ -26,7 +26,7 @@ func open(t *testing.T) *Bus {
 	if url == "" {
 		t.Skip("no NATS on this machine: set AGENTIIK_TEST_BUS_URL")
 	}
-	b, err := Open(t.Context(), url)
+	b, err := Open(t.Context(), Options{URL: url})
 	if err != nil {
 		t.Skipf("the bus at AGENTIIK_TEST_BUS_URL could not be reached: %s", err)
 	}
