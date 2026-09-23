@@ -30,13 +30,13 @@ func TestARedemptionReadsSecretsFromTwoProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	environment := map[string]string{"AGENTIIK_SECRET_FINANCE_LEDGER": "gl_live_notreal"}
+	environment := map[string]string{"AGK_DEV_FINANCE_LEDGER": "gl_live_notreal"}
 
 	declarations := api.DeclarationOptions{Pool: g.pool}
 	runners := api.RunnerOptions{Pool: g.pool, Objects: g.objects, URLs: g.signed}
 	if err := secret.Attach(secret.Options{
 		Pool: g.pool, Keys: keys,
-		Environment: api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_"},
+		Environment: api.Environment{"finance": "AGK_DEV_FINANCE_"},
 		Lookup: func(name string) (string, bool) {
 			value, set := environment[name]
 			return value, set
@@ -59,7 +59,7 @@ func TestARedemptionReadsSecretsFromTwoProviders(t *testing.T) {
 	for name, body := range map[string]string{
 		"billing":  `{"provider":"builtin","value":"bk_live_notreal"}`,
 		"keystore": `{"provider":"builtin","value":"//4A","encoding":"base64"}`,
-		"ledger":   `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_LEDGER"}`,
+		"ledger":   `{"provider":"env","path":"AGK_DEV_FINANCE_LEDGER"}`,
 	} {
 		w := sent(t, rt, "PUT", "/api/v1/finance/secrets/"+name, "admin", body)
 		if w.Code != http.StatusCreated {
@@ -121,7 +121,7 @@ func TestAProcessWithNoKeyringStillForgetsAValue(t *testing.T) {
 		runners := api.RunnerOptions{Pool: g.pool, Objects: g.objects, URLs: g.signed}
 		if err := secret.Attach(secret.Options{
 			Pool: g.pool, Keys: keys,
-			Environment: api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_"},
+			Environment: api.Environment{"finance": "AGK_DEV_FINANCE_"},
 			Lookup:      func(string) (string, bool) { return "", false },
 		}, &declarations, &runners); err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestAProcessWithNoKeyringStillForgetsAValue(t *testing.T) {
 		want               int
 	}{
 		{"removed", "DELETE", "", http.StatusNoContent},
-		{"moved to a variable", "PUT", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING"}`, http.StatusOK},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGK_DEV_FINANCE_BILLING"}`, http.StatusOK},
 	} {
 		if w := sent(t, keyed, "PUT", "/api/v1/finance/secrets/billing", "admin", `{"provider":"builtin","value":"bk_live_meant_to_be_gone"}`); w.Code != http.StatusCreated && w.Code != http.StatusOK {
 			t.Fatalf("writing billing answered %d: %s", w.Code, w.Body)

@@ -58,19 +58,30 @@ const (
 //
 // Prefixes the installation writes rather than one derived from the namespace's name, because no
 // derivation confines: a variable's name is letters, digits and underscores, a namespace's may
-// hold hyphens and underscores too, so AGENTIIK_SECRET_TEAM_OPS_ would be the prefix of both
-// team-ops and team_ops, and the prefix of team, AGENTIIK_SECRET_TEAM_, would begin it. Written
-// out, two prefixes of which one begins the other are refused when the routes are built, and when
-// the reader of the environment is, so no namespace reaches another's variables, and none reaches
-// the API's own unless somebody writes a prefix that does.
+// hold hyphens and underscores too, so AGK_DEV_TEAM_OPS_ would be the prefix of both team-ops and
+// team_ops, and the prefix of team, AGK_DEV_TEAM_, would begin it. Written out, two prefixes of
+// which one begins the other are refused when the routes are built, and when the reader of the
+// environment is, so no namespace reaches another's variables. And every prefix begins with
+// DevelopmentPrefix, so none reaches a variable the API reads for itself.
 type Environment map[string]string
+
+// DevelopmentPrefix is what every prefix an Environment gives begins with, and a beginning under
+// which the API reads nothing for itself.
+//
+// "No two prefixes nest and none reaches a variable or a path the API reads for itself." The
+// variables the API reads are not a list this package could hold and check a prefix against: its
+// database's address, its master key, and whatever a library it links reads, PGPASSWORD or
+// AWS_SECRET_ACCESS_KEY, whichever the deployment sets. So the prefixes live under one beginning
+// that the API keeps for them instead, and any of its own configuration is named elsewhere.
+const DevelopmentPrefix = "AGK_DEV_"
 
 // variableName is what an environment variable is named on: letters, digits and underscores, not
 // beginning with a digit, which is what a shell or a Compose file can set.
 var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Check refuses an environment that could not confine a namespace: a prefix that is no variable's
-// beginning, or two namespaces of which one's prefix begins the other's.
+// beginning, one that does not begin with DevelopmentPrefix, or two namespaces of which one's
+// prefix begins the other's.
 //
 // Exported, as Confines is, for the reader of the environment, which is built apart from the
 // routes and has to refuse what they refuse.
@@ -83,6 +94,9 @@ func (e Environment) Check() error {
 	for _, a := range namespaces {
 		if !variableName.MatchString(e[a]) {
 			return fmt.Errorf("api: the environment prefix of %s is %q, and a prefix is the beginning of a variable's name: letters, digits and underscores, not beginning with a digit", a, e[a])
+		}
+		if !strings.HasPrefix(e[a], DevelopmentPrefix) {
+			return fmt.Errorf("api: the environment prefix of %s is %q, and a prefix begins with %s, under which the API reads nothing for itself, so that no namespace reaches its database, its master key or anything else it is configured with", a, e[a], DevelopmentPrefix)
 		}
 		for _, b := range namespaces {
 			if a != b && strings.HasPrefix(e[b], e[a]) {

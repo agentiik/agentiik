@@ -47,7 +47,7 @@ func TestASecretIsReadFromTheStoreItsDeclarationNames(t *testing.T) {
 	secrets, values := attached(t, pool, keyring(t, master(t, "2026-09")), lookup)
 
 	declared(t, pool, "finance", db.Declaration{Name: "billing", Provider: api.ProviderBuiltin})
-	declared(t, pool, "finance", db.Declaration{Name: "ledger", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_LEDGER"})
+	declared(t, pool, "finance", db.Declaration{Name: "ledger", Provider: api.ProviderEnv, Path: "AGK_DEV_FINANCE_LEDGER"})
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return values.Write(ctx, ns, "billing", []byte("bk_live_notreal"))
 	}); err != nil {
@@ -68,7 +68,7 @@ func TestASecretIsReadFromTheStoreItsDeclarationNames(t *testing.T) {
 		}
 	}
 
-	declared(t, pool, "finance", db.Declaration{Name: "billing", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_LEDGER"})
+	declared(t, pool, "finance", db.Declaration{Name: "billing", Provider: api.ProviderEnv, Path: "AGK_DEV_FINANCE_LEDGER"})
 	if got, err := secrets.Value(t.Context(), "finance", "billing"); err != nil || string(got) != "gl_live_notreal" {
 		t.Errorf("billing, moved to a variable, read as %q, %v", got, err)
 	}
@@ -85,7 +85,7 @@ func TestAStoreTheInstallationDoesNotReadIsRefusedNamingTheSecret(t *testing.T) 
 	both, values := attached(t, pool, keys, lookup)
 
 	declared(t, pool, "finance", db.Declaration{Name: "billing", Provider: api.ProviderBuiltin})
-	declared(t, pool, "finance", db.Declaration{Name: "ledger", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_LEDGER"})
+	declared(t, pool, "finance", db.Declaration{Name: "ledger", Provider: api.ProviderEnv, Path: "AGK_DEV_FINANCE_LEDGER"})
 	declared(t, pool, "finance", db.Declaration{Name: "pager", Provider: api.ProviderVault, Path: "kv/data/finance/pager"})
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return values.Write(ctx, ns, "billing", []byte("bk_live_notreal"))
@@ -130,7 +130,7 @@ func TestAStoreTheInstallationDoesNotReadIsRefusedNamingTheSecret(t *testing.T) 
 		if !strings.Contains(said, c.says) || !strings.Contains(said, "finance") || !strings.Contains(said, c.name) {
 			t.Errorf("the refusal of %s reads %q", c.what, said)
 		}
-		for _, value := range append([]string{"bk_live_notreal"}, variables["AGENTIIK_SECRET_FINANCE_LEDGER"], variables["AGENTIIK_DATABASE_URL"]) {
+		for _, value := range append([]string{"bk_live_notreal"}, variables["AGK_DEV_FINANCE_LEDGER"], variables["AGENTIIK_DATABASE_URL"]) {
 			if strings.Contains(said, value) {
 				t.Errorf("the refusal of %s carries a value: %q", c.what, said)
 			}
@@ -190,7 +190,7 @@ func TestAttachingFillsBothHalvesOrNeither(t *testing.T) {
 	}
 	// Refused before any store is built, and after the built-in one has been: the second is
 	// where a half attached installation would come from.
-	confinesNobody := api.Environment{"finance": "AGENTIIK_", "team-ops": "AGENTIIK_SECRET_"}
+	confinesNobody := api.Environment{"finance": "AGK_DEV_", "team-ops": "AGK_DEV_TEAM_OPS_"}
 	for what, o := range map[string]secret.Options{
 		"no database":                         {Keys: keyring(t, master(t, "2026-09"))},
 		"an environment that confines nobody": {Pool: pool, Environment: confinesNobody},

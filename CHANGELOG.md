@@ -71,6 +71,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A `builtin` declaration's `PUT` may carry its value, `base64` when it is not text, handed to the built-in store in the declaration's transaction and never answered. With no store attached it is a 503. Removing a secret, or moving it out of the store, forgets its value.
 - Removing a secret, or moving it out of the built-in store, forgets its value with no store attached too, since another process of the installation may have written it.
 - A declaration is confined to its namespace when it is written. `env` is refused unless the installation opts in, and then takes only a variable under the prefix it gives that namespace; `vault` is refused until its provider arrives.
+- Every `env` prefix begins with `AGK_DEV_`, under which the API reads nothing for itself, so no namespace reaches the API's own variables.
 - A secret's name is at most 255 characters, since a step is given its value in a file named after it, and a path at most 1 KiB.
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
 

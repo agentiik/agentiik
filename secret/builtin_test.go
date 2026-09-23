@@ -256,7 +256,7 @@ func TestABuiltinSecretWithNoValueIsNotHeld(t *testing.T) {
 	// holds a value under that name, and the refusal names the secret and not the value.
 	written(t, pool, b, "finance", "billing", "bk_live_notreal")
 	for _, d := range []db.Declaration{
-		{Name: "billing", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_BILLING"},
+		{Name: "billing", Provider: api.ProviderEnv, Path: "AGK_DEV_FINANCE_BILLING"},
 		{Name: "billing", Provider: api.ProviderBuiltin, Path: "finance/billing"},
 	} {
 		got, err := b.Read(t.Context(), "finance", d)
