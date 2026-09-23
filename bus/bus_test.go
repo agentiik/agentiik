@@ -222,8 +222,13 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 }
 
 // A pool's consumer waits AckWait for a runner to acknowledge what it was handed before handing it
-// to another, which is the bound on a take and a redemption and not on a task.
+// to another, which is the bound on a take and a redemption and not on a task. AckWait is the
+// figure the documentation gives, "The pool consumer's AckWait, one minute", and not whatever the
+// constant happens to hold.
 func TestAPoolWaitsAckWaitForARunnerToAcknowledge(t *testing.T) {
+	if AckWait != time.Minute {
+		t.Errorf("AckWait is %s, and the documentation gives the pool consumer's AckWait as one minute", AckWait)
+	}
 	b := open(t)
 	for _, pool := range []string{DefaultPool, "dmz"} {
 		consumer, err := b.js.Consumer(t.Context(), Stream, Durable(pool))
