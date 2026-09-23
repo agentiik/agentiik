@@ -78,6 +78,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
 - A workflow's `secrets` block is a list of names, `secrets: [billing]`. Where a value lives is the namespace's declaration, and a block still writing a provider or a path is refused.
 - A test sends a request to every API route but the redemption, with a secret store that fails if it is read.
+- `secret.Builtin` keeps a `builtin` value in `secret_values`: sealed on the declaration's `PUT` at the next version, opened as bytes under whichever key of the ring sealed it. A row copied into another namespace, another name or over a later write does not open.
 
 ### Command line
 
