@@ -97,7 +97,7 @@
 // What is left to redelivery is a message nobody acknowledged, and the requeue of a lost task,
 // which is a message of its own. A message nobody acknowledged is redeemed by whichever runner
 // takes it where nobody had redeemed it, and refused to every runner but the holder where somebody
-// had; the holder, redeeming again, finds the key in flight on its host. So a confirmed
+// had; the holder, writing the key down again, finds it in flight on its host. So a confirmed
 // acknowledgement is not what a runner waits for before it starts: the redemption already said
 // nobody else will run the task. The requeue can come back to the host that ran the key, and so can
 // a message whose holder's acknowledgement never arrived, and the host's record is what refuses a
@@ -107,4 +107,12 @@
 // that message, so the ending on the result stream is what answers for it when the bus lets go. The
 // requeue of a lost task is waiting on that answer, and without it the run would wait for its own
 // timeout.
+//
+// A key the host is still running is refused as it is written down too, driver.ErrTaskInFlight, and
+// the message left unacknowledged to come round until the key has ended and the record answers it.
+// That is the requeue of a task declared lost while its host was only cut off, reaching the host
+// whose container still runs it, and redeeming it there would cost a second requeue: bound to a
+// runner whose one ending goes to the dispatch that was lost, it would be declared lost in its turn
+// once the key was let go of. Left unredeemed it binds nobody, so no sweep declares it lost for the
+// wait, and a key cut off once spends one requeue of max_requeues.
 package bus

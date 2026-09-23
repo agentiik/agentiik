@@ -96,6 +96,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
 - `Docker.Hold` also holds the task in memory, so a stop that lands between the redemption and `Run` is kept and its container is never started. `Docker.Release` lets go of a key the runner will not run.
+- `Docker.Hold` refuses a key its host still has in flight with `driver.ErrTaskInFlight`, before anything is redeemed. A requeue reaching the host still running its key waits unredeemed and is answered from the record, where it was bound, never answered and lost a second time, so one cut spent two of `max_requeues`.
 - A secret the source cannot give fails saying the value comes from the redemption, made before the pull, rather than at the last moment.
 - A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
 - The record of a key's ending keeps what it left by reference and never a payload: each port's envelope by digest and count, each artifact by digest and size, the log's address and length.

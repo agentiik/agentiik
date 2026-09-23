@@ -970,8 +970,8 @@ func TestAStopBetweenTheHoldAndTheRunStartsNothing(t *testing.T) {
 
 // A runner that holds a key and does not go on to run it, its redemption refused or the message
 // put back, lets go of it, and a stop for the key afterwards is one for a task this driver does
-// not hold. A key a Run has taken is let go of by that Run alone, since the stop that reaches the
-// task goes through it, and a key two deliveries hold stays held until both have let go.
+// not hold, while the next delivery of the key may hold it again. A key a Run has taken is let go
+// of by that Run alone, since the stop that reaches the task goes through it.
 func TestAKeyIsLetGoOfOnlyByWhatHeldIt(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
@@ -988,16 +988,9 @@ func TestAKeyIsLetGoOfOnlyByWhatHeldIt(t *testing.T) {
 	if err := r.Hold(task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Hold(task.ID); err != nil {
-		t.Fatal(err)
-	}
-	r.Release(task.ID)
-	if r.lookup(task.ID) == nil {
-		t.Fatal("one of two deliveries let go and the key is no longer held for the other")
-	}
 	r.Release(task.ID)
 	if r.lookup(task.ID) != nil {
-		t.Fatal("both deliveries let go and the key is still held")
+		t.Fatal("the delivery holding the key let go and the key is still held")
 	}
 
 	if err := r.Hold(task.ID); err != nil {

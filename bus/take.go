@@ -41,8 +41,11 @@ const resultPrefix = "agentiik.results."
 // Held where the task is now its own, or Refused where the redemption refused it the task. It says
 // Again where it cannot take the task at all, which is only ever before the redemption, and Ended
 // where its host had already carried the key to an ending, which writing the key down finds before
-// anything is redeemed. Where the redemption failed without saying whose the task is, it says
-// nothing, and the message comes round once AckWait has passed. The package documentation says why
+// anything is redeemed. Where writing the key down finds it still in flight on its host,
+// driver.ErrTaskInFlight, it redeems nothing and says nothing, and the message comes round once
+// AckWait has passed, to be answered with Ended once the key has ended there. Where the redemption
+// failed without saying whose the task is, it says nothing, and the message comes round once
+// AckWait has passed. The package documentation says why
 // the acknowledgement follows the redemption and never the container: from the redemption on, the
 // task is bound to one runner and is that runner's to answer for, through its heartbeat, and
 // nothing is left to tell the bus while the container runs.
@@ -69,11 +72,11 @@ type Taken struct {
 // does not decide whether the task runs, though, because the redemption decided that. A message
 // whose acknowledgement never arrived comes round again once AckWait has passed. Any other runner
 // that takes it is refused it at the redemption, the task being bound to this one, and says Refused
-// and starts nothing. This runner finds the key ended on its host as it writes it down again,
-// driver.Completed, and answers with Ended before redeeming anything, or redeems it again as its
-// holder and finds it in flight there, driver.ErrTaskInFlight. So a runner goes on with a task
-// whose Held answered an error, and says so. A ctx with no deadline waits as long as JetStream's
-// own default.
+// and starts nothing. This runner, writing the key down again, finds it ended on its host,
+// driver.Completed, and answers with Ended, or finds it still in flight there,
+// driver.ErrTaskInFlight, and leaves the message to come round until the key has ended; either way
+// before redeeming anything. So a runner goes on with a task whose Held answered an error, and says
+// so. A ctx with no deadline waits as long as JetStream's own default.
 func (t Taken) Held(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")
