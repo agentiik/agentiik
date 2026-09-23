@@ -425,6 +425,87 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 	}
 }
 
+// A decision takes its run's row and then writes each of that run's tasks. A sweep that took a
+// task and then waited on its run would be the other half of a deadlock, and PostgreSQL would end
+// one of the two, so the sweep takes the run first and passes over one a decision holds: it moves
+// nothing of that run, the decision goes through, and the next sweep finds the loss.
+func TestASweepPassesOverARunADecisionHolds(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// A task its runner redeemed five minutes ago and has said nothing of since, which is ten
+	// times the bound.
+	const row = "01M2HNAAAAAAAAAAAAAAAAAAAA"
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state, runner, dispatched_at)
+		values ('finance', $1, $2, 'render', 1, 'running', 'runner-dmz-02', now() - interval '5 minutes')`,
+		row, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A decision on the run holds its row, as SaveDecision does before it writes the tasks.
+	deciding, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deciding.Close(ctx)
+	decision, err := deciding.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decision.Rollback(context.WithoutCancel(ctx))
+	if _, err := decision.Exec(ctx,
+		`update runs set seq = seq where namespace = 'finance' and id = $1`, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	type sweep struct {
+		lost int
+		err  error
+	}
+	swept := make(chan sweep, 1)
+	go func() {
+		lost, err := declaredLost(t, pool, time.Now().UTC())
+		swept <- sweep{lost, err}
+	}()
+
+	// The sweep is given a moment to reach the run, and the decision then writes the task.
+	var first *sweep
+	select {
+	case s := <-swept:
+		first = &s
+	case <-time.After(time.Second):
+	}
+	if _, err := decision.Exec(ctx,
+		`update tasks set log_lines = 0 where namespace = 'finance' and id = $1`, row); err != nil {
+		t.Errorf("a decision writing its task beside a sweep answered %v", err)
+	}
+	if err := decision.Commit(ctx); err != nil {
+		t.Errorf("a decision beside a sweep could not commit: %v", err)
+	}
+	if first == nil {
+		select {
+		case s := <-swept:
+			first = &s
+		case <-time.After(10 * time.Second):
+			t.Fatal("the sweep never came back")
+		}
+	}
+	if first.err != nil || first.lost != 0 {
+		t.Errorf("a sweep beside a decision on the run moved %d tasks, answering %v", first.lost, first.err)
+	}
+
+	// The decision is over, and the next sweep finds the task it passed over.
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 1 {
+		t.Errorf("the sweep after the decision moved %d tasks, answering %v", lost, err)
+	}
+}
+
 // declaredLost is the controller's sweep for silence as of now, on the door the controller's fence
 // opens.
 func declaredLost(t *testing.T, pool *Pool, now time.Time) (int, error) {

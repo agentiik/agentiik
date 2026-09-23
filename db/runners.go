@@ -395,6 +395,20 @@ func orEmptyStrings(s []string) []string {
 // of its grants', since a task may have been issued several and a runner redeems one: joined on
 // each, the one nobody redeemed would count the task from its dispatch.
 //
+// The runs are locked before their tasks, which is the order a decision takes them in:
+// SaveDecision updates the run and then writes each of its tasks. Taken the other way round, a
+// sweep holding a task and waiting on its run, while a decision held the run and reached the task,
+// would be a deadlock, and PostgreSQL would end one of the two. Neither is waited on where somebody
+// else holds it: a run being decided is passed over with its tasks, a task that a redemption, a
+// heartbeat or a runner's own loss holds is passed over alone, and each is judged again on the next
+// sweep. A sweep that waited would wait on whatever that was, and every run behind it with it.
+//
+// The tasks are locked by one statement and judged by the next. PostgreSQL rechecks a row that
+// changed before it could be locked against the row as it now stands and every other table as it
+// stood, so a redemption that committed in between would be judged with its binding and without its
+// grant, and counted from the dispatch. Judged once they are locked, a task redeemed before the
+// lock counts from its redemption, and a redemption after it waits and finds the task lost.
+//
 // What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
 // the task is handed out again is the evaluator's to say, and the controller hears of the loss
 // through Losses on the pass the wake brings round.
@@ -403,34 +417,84 @@ func (w *Wide) Lost(ctx context.Context, now time.Time, batch int) (int, error) 
 	if err != nil {
 		return 0, err
 	}
+	cutoff := now.Add(-LostAfter)
+
+	namespaces, runs, err := w.pairs(ctx, `
+		select r.namespace, r.id from runs r
+		where (r.namespace, r.id) in (
+		  select t.namespace, t.run_id from tasks t
+		  where `+held+` and `+heardFrom+` < $1
+		  order by `+heardFrom+`
+		  limit $2)
+		for update of r skip locked`, cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("db: the runs of the lost tasks could not be locked: %w", err)
+	}
+	if len(runs) == 0 {
+		return 0, nil
+	}
+
+	namespaces, ids, err := w.pairs(ctx, `
+		select t.namespace, t.id from tasks t
+		where (t.namespace, t.run_id) in (select * from unnest($1::text[], $2::text[]))
+		  and `+held+` and `+heardFrom+` < $3
+		order by `+heardFrom+`
+		limit $4
+		for update of t skip locked`, namespaces, runs, cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("db: the lost tasks could not be found: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
 	var lost int
 	if err := w.tx.QueryRow(ctx, `
 		with gone as (
-		  update tasks set state = 'lost', finished_at = $1
-		  where (namespace, id) in (
-		    select t.namespace, t.id from tasks t
-		    cross join lateral (
-		      select max(g.redeemed_at) as at from task_grants g
-		      where g.namespace = t.namespace and g.task_id = t.id
-		    ) redeemed
-		    where t.state in ('dispatched', 'running', 'publishing')
-		      and t.runner is not null
-		      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at) < $2
-		    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
-		    limit $3
-		    for update of t skip locked
-		  )
-		  returning namespace, run_id
+		  update tasks t set state = 'lost', finished_at = $3
+		  where (t.namespace, t.id) in (select * from unnest($1::text[], $2::text[]))
+		    and `+held+` and `+heardFrom+` < $4
+		  returning t.namespace, t.run_id
 		), woken as (
-		  update runs r set wake_at = $1
+		  update runs r set wake_at = $3
 		  from (select distinct namespace, run_id from gone) g
 		  where r.namespace = g.namespace and r.id = g.run_id
 		    and r.state in ('queued', 'running', 'waiting')
 		  returning 1
 		)
 		select (select count(*) from gone)::int`,
-		now, now.Add(-LostAfter), batch).Scan(&lost); err != nil {
-		return 0, fmt.Errorf("db: the lost tasks could not be found: %w", err)
+		namespaces, ids, now, cutoff).Scan(&lost); err != nil {
+		return 0, fmt.Errorf("db: the lost tasks could not be moved: %w", err)
 	}
 	return lost, nil
+}
+
+// held is a task in flight that a runner is bound to, which is the only kind Lost moves.
+const held = `t.state in ('dispatched', 'running', 'publishing') and t.runner is not null`
+
+// heardFrom is the last moment the runner holding a task said anything of it, which is what Lost
+// counts from: its last heartbeat, or its latest redemption where none has named it yet, and the
+// dispatch only where neither is recorded.
+const heardFrom = `coalesce(greatest(t.last_heartbeat_at,
+	(select max(g.redeemed_at) from task_grants g
+	 where g.namespace = t.namespace and g.task_id = t.id)),
+	t.dispatched_at)`
+
+// pairs reads a query answering a namespace and an identifier per row, as the two arrays the next
+// statement takes them back as.
+func (w *Wide) pairs(ctx context.Context, query string, args ...any) ([]string, []string, error) {
+	rows, err := w.tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var namespaces, ids []string
+	for rows.Next() {
+		var namespace, id string
+		if err := rows.Scan(&namespace, &id); err != nil {
+			return nil, nil, err
+		}
+		namespaces, ids = append(namespaces, namespace), append(ids, id)
+	}
+	return namespaces, ids, rows.Err()
 }
