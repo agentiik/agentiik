@@ -737,6 +737,19 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	}
 	// The row is compared as text, because a runner wrote it and the column's domain would
 	// refuse a value that is not a ULID with an error rather than find nothing.
+	//
+	// The run's row is locked before the task's, which is the order a decision takes them in. A
+	// loss reported while its run is being decided then waits for the decision, where holding the
+	// task the decision is about to write would be a deadlock, and PostgreSQL would end one of
+	// the two. A dispatch that is not there locks nothing, and is refused below.
+	if _, err := w.tx.Exec(ctx,
+		`select 1 from runs
+		 where namespace = $1
+		   and id = (select run_id from tasks where namespace = $1 and id = $2::text)
+		 for update`,
+		namespace, row); err != nil {
+		return false, fmt.Errorf("db: the run of task %s could not be locked: %w", key, err)
+	}
 	var run string
 	err := w.tx.QueryRow(ctx,
 		`update tasks set state = 'lost', finished_at = $5

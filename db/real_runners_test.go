@@ -506,6 +506,76 @@ func TestASweepPassesOverARunADecisionHolds(t *testing.T) {
 	}
 }
 
+// A loss a runner reports takes the run's row before the task's, as a decision does, so one
+// reported while its run is being decided waits for the decision rather than holding the task the
+// decision is about to write.
+func TestALossReportedWhileItsRunIsDecidedWaitsForTheDecision(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	const row = "01M2HRAAAAAAAAAAAAAAAAAAAA"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state, runner, dispatched_at, published_at)
+		values ('finance', $1, $2, 'render', 1, 'running', 'runner-1', now(), now())`,
+		row, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	deciding, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deciding.Close(ctx)
+	decision, err := deciding.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decision.Rollback(context.WithoutCancel(ctx))
+	if _, err := decision.Exec(ctx,
+		`update runs set seq = seq where namespace = 'finance' and id = $1`, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	type loss struct {
+		moved bool
+		err   error
+	}
+	reported := make(chan loss, 1)
+	go func() {
+		var moved bool
+		err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			moved, err = w.Lose(ctx, "finance", key, row, "runner-1", time.Now().UTC())
+			return err
+		})
+		reported <- loss{moved, err}
+	}()
+
+	// The loss is given a moment to reach the run, and the decision then writes the task.
+	time.Sleep(time.Second)
+	if _, err := decision.Exec(ctx,
+		`update tasks set log_lines = 0 where namespace = 'finance' and id = $1`, row); err != nil {
+		t.Errorf("a decision writing its task beside a reported loss answered %v", err)
+	}
+	if err := decision.Commit(ctx); err != nil {
+		t.Errorf("a decision beside a reported loss could not commit: %v", err)
+	}
+	select {
+	case l := <-reported:
+		if l.err != nil || !l.moved {
+			t.Errorf("a loss reported beside a decision moved %v, answering %v", l.moved, l.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reported loss never came back")
+	}
+}
+
 // declaredLost is the controller's sweep for silence as of now, on the door the controller's fence
 // opens.
 func declaredLost(t *testing.T, pool *Pool, now time.Time) (int, error) {

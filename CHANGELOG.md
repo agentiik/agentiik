@@ -37,6 +37,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A requeue that comes back to the host which already ended its key is answered with that ending, reported under the requeue's `task_id`. Where nobody has redeemed the requeue, the controller takes it from a runner that redeemed an earlier dispatch of the key and binds that runner as the ending is written, so the run no longer waits for its timeout.
 - The sweep declares lost every task whose runner has said nothing of it for three heartbeat intervals, then decides the runs it woke on the same pass. Nothing ran that check before, so a silent runner's tasks were never lost.
 - The sweep locks a run before its tasks, as a decision does, and passes over a run or a task somebody else holds rather than wait on it, so it never deadlocks with a decision.
+- A loss a runner reports locks its run before its task, as a decision does, and waits for a decision on the run rather than deadlocking with it.
 
 ### State
 
