@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -26,9 +27,17 @@ import (
 
 func withObjects(t *testing.T) (http.Handler, *artifact.Signed) {
 	t.Helper()
+	return withObjectsUnder(t, agk.Limits{})
+}
+
+// withObjectsUnder is withObjects under the limits an installation sets, which are the defaults
+// when they are the zero value.
+func withObjectsUnder(t *testing.T, limits agk.Limits) (http.Handler, *artifact.Signed) {
+	t.Helper()
 	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
-		Key:  []byte("0123456789abcdef0123456789abcdef"),
-		Base: "https://agentiik.example.com/objects",
+		Key:    []byte("0123456789abcdef0123456789abcdef"),
+		Base:   "https://agentiik.example.com/objects",
+		Limits: limits,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +150,45 @@ func TestAPostedObjectIsHashedAsItArrives(t *testing.T) {
 	}
 	if _, err := signed.Fetch(t.Context(), other); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a refused post left something behind: %v", err)
+	}
+}
+
+// What bounds a posted file is artifact_max_bytes and nothing else. What comes before the file is
+// read before any signature is checked and is bounded far below that, and a file held to the same
+// bound would be an output of a few dozen kilobytes at most, where an artifact may be gigabytes.
+func TestAPostedFileIsBoundedByArtifactMaxBytesAndNotByTheFormAroundIt(t *testing.T) {
+	limits := agk.DefaultLimits()
+	limits.ArtifactMaxBytes = 1 << 20
+	h, signed := withObjectsUnder(t, limits)
+	until := time.Now().UTC().Add(time.Hour)
+	policy, err := signed.Policy(t.Context(), "finance", "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A file of exactly artifact_max_bytes, many times what may come before it, is stored whole.
+	largest := strings.Repeat("x", int(limits.ArtifactMaxBytes))
+	key := artifact.Key("finance", digestOf([]byte(largest)))
+	if w := posted(t, h, policy.URL, policy.Fields, key, largest); w.Code != http.StatusCreated {
+		t.Fatalf("posting a file of artifact_max_bytes answered %d: %s", w.Code, w.Body)
+	}
+	get, err := signed.Presign(t.Context(), "GET", key, "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, h, "GET", get, ""); w.Code != http.StatusOK || w.Body.String() != largest {
+		t.Errorf("fetching what was posted answered %d with %d bytes", w.Code, w.Body.Len())
+	}
+
+	// One byte more is refused as too large, although it is the object its key names, and
+	// nothing is left under the key.
+	larger := largest + "x"
+	key = artifact.Key("finance", digestOf([]byte(larger)))
+	if w := posted(t, h, policy.URL, policy.Fields, key, larger); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("posting a file above artifact_max_bytes answered %d", w.Code)
+	}
+	if _, err := signed.Fetch(t.Context(), key); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a post refused as too large left something behind: %v", err)
 	}
 }
 
