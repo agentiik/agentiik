@@ -157,9 +157,8 @@ func TestPushSendsWhatTheVersionIs(t *testing.T) {
 	}
 }
 
-// "A version is a commit." Pushing the bytes in the working copy under the name of a commit whose
-// tree differs is a version that says it is one thing and is another, for ever, and nothing
-// downstream can notice: the digests match what was pushed.
+// "A version is a commit", so an uncommitted edit is never pushed, and a working copy holding one
+// is refused all the same: somebody pushing it most likely believes the edit goes with the push.
 func TestAModifiedTreeIsRefused(t *testing.T) {
 	dir := repository(t)
 	write(t, dir, "agentiik.yaml", scriptWorkflow+`
@@ -176,20 +175,38 @@ func TestAModifiedTreeIsRefused(t *testing.T) {
 	if got != nil {
 		t.Error("it reached the server anyway")
 	}
-	if !strings.Contains(errs, "not what that commit names") {
+	if !strings.Contains(errs, "uncommitted changes") {
 		t.Errorf("the refusal reads %q", errs)
 	}
 	if !strings.Contains(errs, "agentiik.yaml") {
 		t.Errorf("the refusal does not name what differs: %q", errs)
 	}
+}
 
-	// And somebody who knows what they are doing says so.
-	code, _, _, got = pushing(t, dir, http.StatusOK, "--allow-dirty")
+// --allow-dirty says the edits are meant to stay behind, and they do: what arrives is the commit as
+// it was committed, in the graph and in the tree alike, and a file nobody committed is in neither.
+func TestAllowDirtyPushesTheCommitAndNotTheEdits(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", scriptWorkflow+`
+  sneaky:
+    image: docker.io/library/alpine@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: ["true"]
+    outputs: [ok]
+`)
+	write(t, dir, "notes/draft.txt", "never committed")
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
 	if code != exitSucceeded {
-		t.Errorf("--allow-dirty answered %d", code)
+		t.Fatalf("--allow-dirty answered %d: %s%s", code, out, errs)
 	}
-	if got == nil || !strings.Contains(string(got.Document), "sneaky") {
-		t.Error("what arrived is not the modified tree")
+	if strings.Contains(string(got.Document), "sneaky") {
+		t.Error("the uncommitted edit arrived as the entry point the graph is rebuilt from")
+	}
+	if f := got.Tree["agentiik.yaml"]; string(f.Content) != scriptWorkflow {
+		t.Errorf("the entry point arrived in the tree as\n%s", f.Content)
+	}
+	if _, held := got.Tree["notes/draft.txt"]; held {
+		t.Errorf("a file nobody committed travelled: %v", keysOf(got.Tree))
 	}
 }
 
@@ -344,6 +361,47 @@ func TestACommitIsPushedUnderItsWholeHash(t *testing.T) {
 		if !strings.Contains(errs, c.reads) {
 			t.Errorf("the refusal of --commit %s reads %q", c.named, errs)
 		}
+	}
+}
+
+// --commit names a commit the repository holds, and what is pushed is that commit: its entry
+// point, its tree and its name, whatever HEAD has become since.
+func TestACommitOtherThanHeadPushesItsOwnTree(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "scripts/old.sh", "#!/bin/sh\necho old\n")
+	commitAll(t, dir, "the old script")
+	earlier := gitIn(t, dir, "rev-parse", "HEAD")
+
+	write(t, dir, "agentiik.yaml", scriptWorkflow+`
+  later:
+    image: docker.io/library/alpine@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
+    script: ["true"]
+    outputs: [ok]
+`)
+	if err := os.Remove(filepath.Join(dir, "scripts/old.sh")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "scripts/new.sh", "#!/bin/sh\necho new\n")
+	commitAll(t, dir, "a later step and a new script")
+
+	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if !strings.HasSuffix(path, "/versions/"+earlier) {
+		t.Errorf("the version was sent to %s", path)
+	}
+	if strings.Contains(string(got.Document), "later") {
+		t.Error("the entry point the graph is rebuilt from is the one of HEAD")
+	}
+	if f := got.Tree["agentiik.yaml"]; string(f.Content) != scriptWorkflow {
+		t.Errorf("the entry point travelled in the tree as\n%s", f.Content)
+	}
+	if _, held := got.Tree["scripts/old.sh"]; !held {
+		t.Errorf("a file the commit holds was left out: %v", keysOf(got.Tree))
+	}
+	if _, held := got.Tree["scripts/new.sh"]; held {
+		t.Errorf("a file of HEAD travelled: %v", keysOf(got.Tree))
 	}
 }
 

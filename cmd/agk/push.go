@@ -8,32 +8,45 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"testing/fstest"
 	"time"
 	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/graph"
 	versions "github.com/agentiik/agentiik/version"
 )
 
 // agk push: "Registers the workflow in a namespace on a server."
 //
-// What it sends is what the server stores: the entry point, every file it includes, and the
-// manifest of every image it names. The server rebuilds it before writing it, so a push that
-// would not come back is refused in front of the person pushing rather than at the first run.
+// What it sends is what the server stores: the entry point, every file it includes, the manifest
+// of every image it names, and the tree every step sees under /agk/repo. The server rebuilds it
+// before writing it, so a push that would not come back is refused in front of the person pushing
+// rather than at the first run.
 //
-// # Why the tree has to be clean
+// # Why everything is read out of the commit
 //
 // "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
-// because that is what a commit already is." Pushing the bytes in the working copy under the name
-// of a commit whose tree differs is a version that says it is one thing and is another, for ever,
-// and nothing downstream can ever notice: the digests match what was pushed. So a dirty tree is
-// refused, and --allow-dirty exists for somebody who knows what they are doing and says so.
+// because that is what a commit already is." So every byte a push sends is read out of git's
+// objects for that commit, and none of it off the disk: the entry point the graph is rebuilt from,
+// the files it includes and the tree a container is given are one set of bytes, and a version
+// cannot say it is one tree and be another. The bytes of the working copy under the name of a
+// commit whose tree differs would be exactly that, for ever, and nothing downstream could ever
+// notice: the digests match what was pushed.
+//
+// # Why a dirty tree is refused all the same
+//
+// An edit that was never committed is therefore never pushed. A working copy holding one is
+// refused anyway, because somebody pushing it most likely believes the edit goes with the push,
+// and finding out otherwise at the first run is the surprise this saves them. --allow-dirty says
+// the edit is meant to stay behind: the commit is pushed as it was committed, and nothing else.
 
 const (
 	// tokenVariable is where the credential comes from. Never a flag: an argument is in the
@@ -51,7 +64,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
 	server := fs.String("server", "", "The installation to push to. Defaults to "+serverVariable+".")
 	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
-	dirty := fs.Bool("allow-dirty", false, "Push although the working tree differs from the commit. A version is a commit, so this makes one that says it is a tree it is not.")
+	dirty := fs.Bool("allow-dirty", false, "Push although the working tree has uncommitted changes. The commit is pushed as it was committed either way, so this says the changes are meant to stay behind.")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -74,16 +87,11 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitUsage
 	}
 
-	wf, tree, dir, err := load(e, *entry)
+	dir, base, err := entryOf(e, *entry)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
-	if _, err := declaredInputs(wf, tree); err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
-
 	sha, err := commitOf(ctx, dir, *commit)
 	if err != nil {
 		refusal(e.Err, err)
@@ -94,13 +102,35 @@ func push(ctx context.Context, e Env, args []string) int {
 			fmt.Fprintf(e.Err, "%s\n", err)
 			return exitRefused
 		} else if len(changed) > 0 {
-			fmt.Fprintf(e.Err, "the working tree differs from %s in %s, so what this would push is not what that commit names: commit it, or pass --allow-dirty and know that the version will say it is a tree it is not\n",
-				short(sha), counted(len(changed), "file", "files"))
+			fmt.Fprintf(e.Err, "the working tree has uncommitted changes in %s, and what is pushed is %s as it was committed, without them: commit them, or pass --allow-dirty to push %s and leave them behind\n",
+				counted(len(changed), "file", "files"), short(sha), short(sha))
 			for _, f := range changed {
 				fmt.Fprintf(e.Err, "  %s\n", f)
 			}
 			return exitRefused
 		}
+	}
+
+	// The whole tree, because "every step of every run sees it, mounted read-only at
+	// /agk/repo", and the installation holds no clone of the repository to read it out of.
+	files, err := repositoryOf(ctx, dir, sha)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+
+	// And the workflow is read out of those same bytes rather than off the disk, so that the
+	// closure the version is rebuilt from and the tree a container is given cannot disagree
+	// about any file both of them hold.
+	tree := committed(files)
+	wf, err := loadCommitted(tree, base, dir, sha)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	if _, err := declaredInputs(wf, tree); err != nil {
+		refusal(e.Err, err)
+		return exitRefused
 	}
 
 	// The manifests are read the way validate reads them, because a version the server
@@ -110,21 +140,9 @@ func push(ctx context.Context, e Env, args []string) int {
 		return code
 	}
 
-	// load answers the tree and the directory it was rooted at; the entry point inside it is
-	// what Capture is given, because a version names a path in a tree rather than on a disk.
-	base := entryPoint
-	if *entry != "" {
-		base = filepath.Base(*entry)
-	}
+	// The entry point is named by its path inside the tree, because a version names a path in
+	// a commit rather than on a disk.
 	captured, err := versions.Capture(tree, base, read)
-	if err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
-
-	// The whole tree, because "every step of every run sees it, mounted read-only at
-	// /agk/repo", and the installation holds no clone of the repository to read it out of.
-	files, err := repositoryOf(ctx, dir, sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -151,6 +169,26 @@ func push(ctx context.Context, e Env, args []string) int {
 		counted(len(captured.Includes), "included file", "included files"),
 		counted(len(captured.Manifests), "manifest", "manifests"))
 	return exitSucceeded
+}
+
+// entryOf is where the entry point is: the directory git is asked about, and the name inside it.
+//
+// The working copy is consulted for where and never for what, since every byte is read out of the
+// commit. So what is said here are the two mistakes of -f that no commit could put right, in the
+// words load says them in.
+func entryOf(e Env, entry string) (string, string, error) {
+	if entry == "" {
+		entry = entryPoint
+	}
+	path := e.path(entry)
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return "", "", fmt.Errorf("%s is a directory: -f names the entry point itself, which is %s inside it", path, entryPoint)
+	}
+	dir := filepath.Dir(path)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", "", fmt.Errorf("there is no workflow at %s: one is read from %s in the directory the command is run in, or from the path -f names", path, entryPoint)
+	}
+	return dir, filepath.Base(path), nil
 }
 
 // repositoryOf is the tree of one commit as a container will see it, read out of git's objects.
@@ -321,6 +359,35 @@ func oneObject(r *bufio.Reader, object string, size int64) ([]byte, error) {
 	return content[:size], nil
 }
 
+// committed is the tree as an fs.FS, which is what the loader, the schema compiler and Capture
+// read: the bytes that travel as the tree, and no others.
+func committed(files map[string]api.PushFile) fstest.MapFS {
+	tree := make(fstest.MapFS, len(files))
+	for path, f := range files {
+		tree[path] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
+	}
+	return tree
+}
+
+// loadCommitted is load, reading the commit rather than the disk: the same graph.Load and the same
+// graph.Check, over the tree that travels.
+func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
+	if info, err := fs.Stat(tree, base); err != nil || info.IsDir() {
+		return nil, fmt.Errorf("%s holds no %s in %s: what is pushed is the commit, so the entry point has to be committed", short(sha), base, dir)
+	}
+	wf, err := graph.Load(tree, base, nil)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w. The tree read was %s at %s", err, dir, short(sha))
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := graph.Check(wf); err != nil {
+		return nil, err
+	}
+	return wf, nil
+}
+
 // put sends the version and reads whatever the server says about it.
 func put(ctx context.Context, url, token string, body api.Push) error {
 	encoded, err := json.Marshal(body)
@@ -396,8 +463,8 @@ func commitOf(ctx context.Context, dir, named string) (string, error) {
 	return "", fmt.Errorf("the repository at %s holds no commit %s", dir, named)
 }
 
-// dirtyTree is what differs between the working copy and the commit, which is what makes a push
-// of that commit a lie.
+// dirtyTree is what the working copy holds that the commit does not: the edits somebody pushing
+// may believe go with the push, and which do not.
 func dirtyTree(ctx context.Context, dir string) ([]string, error) {
 	out, err := git(ctx, dir, "status", "--porcelain")
 	if err != nil {
