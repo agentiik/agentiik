@@ -7,10 +7,11 @@
 //
 // "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
 // because that is what a commit already is." A run pins one, and a branch that moves afterwards
-// has to change nothing about it. So a version is stored as what it takes to rebuild: the entry
+// has to change nothing about it. So a version stores what its graph is rebuilt from: the entry
 // point as it was at that commit, the files it included, and the manifest of every image it
-// names. Rebuilding reaches no tree and no registry, which is what makes a run of a two year old
-// commit evaluate the same way today as it did then.
+// names. Rebuilding reaches no repository, no object store and no registry, which is what makes a
+// run of a two year old commit evaluate the same way today as it did then. The version names its
+// whole tree as well, which is what a container is given at /agk/repo and plays no part here.
 //
 // # Why it is cached
 //
@@ -109,9 +110,10 @@ func (s *Store) Graph(ctx context.Context, namespace, workflow, commit string) (
 
 // Build turns a stored version back into a graph, reaching nothing.
 //
-// The tree is the one the version carries, which is the whole point: a run of a commit whose
-// branch has since moved, or whose repository has since been deleted, evaluates exactly as it did
-// when it started.
+// The entry point and the includes are the ones the version carries, which is the whole point: a
+// run of a commit whose branch has since moved, or whose repository has since been deleted,
+// evaluates exactly as it did when it started. Version.Tree is what a container is given, and
+// plays no part here.
 func Build(v db.Version) (*graph.Graph, error) {
 	if v.Entry == "" || len(v.Document) == 0 {
 		return nil, fmt.Errorf("version: %s@%s carries no entry point", v.Workflow, v.Commit)
@@ -142,11 +144,14 @@ func Build(v db.Version) (*graph.Graph, error) {
 	return g, nil
 }
 
-// Capture is what a push records: the tree as it is now, reduced to what the workflow actually
-// reaches, plus the manifest of every image it names.
+// Capture is the half of a push that the graph is rebuilt from: the tree as it is now, reduced to
+// what the workflow actually reaches, plus the manifest of every image it names. The whole tree
+// travels beside it in the push, as what a container is given, and is not this function's.
 //
-// Reduced rather than whole, because a repository holds a great deal a workflow does not name and
-// a version that stored all of it would grow with the repository rather than with the workflow.
+// Reduced rather than whole, because this is what a run is decided from, read back every time a
+// graph is rebuilt and required to rebuild it with nothing else in reach. Holding every file of
+// the repository would make it grow with the repository rather than with the workflow, when the
+// files a step sees are already named by the version's tree and held as objects.
 //
 // What it keeps is what graph.Load read, recorded as it read it. That is exact by construction
 // and it is the only way to be exact: an include may itself include, a fragment is opaque from

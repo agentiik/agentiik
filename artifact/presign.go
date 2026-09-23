@@ -72,7 +72,7 @@ type SignedOptions struct {
 	Key []byte
 
 	// Base is the URL the objects route is served at, for example
-	// https://agentiik.example.com/api/v1/objects. It is written down rather than worked
+	// https://agentiik.example.com/objects. It is written down rather than worked
 	// out from a request, because a URL minted from the Host header is a URL an attacker
 	// chooses the host of.
 	Base string

@@ -577,7 +577,7 @@ func (w *Wide) setEnvelopes(ctx context.Context, namespace string, run agk.RunID
 
 	for digest, count := range now {
 		for range count - before[digest] {
-			if _, err := raise(ctx, w.tx, namespace, "sha256:"+digest, after[digest].Size, envelopeMediaType); err != nil {
+			if _, _, err := raise(ctx, w.tx, namespace, "sha256:"+digest, after[digest].Size, envelopeMediaType); err != nil {
 				return err
 			}
 		}

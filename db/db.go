@@ -130,7 +130,8 @@ const (
 	// The namespace is what the grant answers rather than what the caller claims: a
 	// runner works for several and knows which one this task belongs to only because
 	// the grant said so, and a request that carried a namespace of its own would be a
-	// request choosing the scope its own credential is checked in.
+	// request choosing the scope its own credential is checked in. What it reads is the
+	// grant, the task it names, and the tree of the one version the grant's scope names.
 	Redemption Reason = "a grant redemption"
 
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,

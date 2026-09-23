@@ -135,6 +135,13 @@ func TaskResults() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.TaskResult })
 }
 
+// GrantRedemptions returns the redemption corpus: what a runner sends to turn a grant into the
+// values its task was given, and what the API answers, the repository tree among them. Each
+// document is the pair, request and response, because neither half is legible without the other.
+func GrantRedemptions() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.GrantRedemption })
+}
+
 // Wire is the schema document every message above is held to.
 func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 

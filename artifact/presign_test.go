@@ -15,7 +15,7 @@ import (
 
 // A presigned URL does one thing, to one object, for one run, until one instant.
 
-const base = "https://agentiik.example.com/api/v1/objects"
+const base = "https://agentiik.example.com/objects"
 
 var signingKey = []byte("0123456789abcdef0123456789abcdef")
 
@@ -37,7 +37,7 @@ func parts(t *testing.T, raw string) (string, url.Values) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.TrimPrefix(u.Path, "/api/v1/objects/"), u.Query()
+	return strings.TrimPrefix(u.Path, "/objects/"), u.Query()
 }
 
 func TestAPresignedURLStoresWhatItNamesAndThenHandsItBack(t *testing.T) {
@@ -195,7 +195,7 @@ func TestWhatCannotBePresigned(t *testing.T) {
 	}{
 		{"a short key", artifact.SignedOptions{Key: []byte("too short"), Base: base}},
 		{"no base", artifact.SignedOptions{Key: signingKey}},
-		{"a base that is not a URL", artifact.SignedOptions{Key: signingKey, Base: "/api/v1/objects"}},
+		{"a base that is not a URL", artifact.SignedOptions{Key: signingKey, Base: "/objects"}},
 	} {
 		if _, err := artifact.NewSigned(artifact.Dir(t.TempDir()), c.o); err == nil {
 			t.Errorf("%s was accepted", c.name)
