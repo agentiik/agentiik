@@ -69,11 +69,16 @@ func (t Taken) Working() error {
 
 // Take pulls up to batch tasks for one pool, waiting up to wait for them.
 //
-// The consumer is durable and named after the pool, which is what makes several runners of one
-// pool share the work: they are one consumer with many clients, so a task goes to whichever asks
-// first. It is a pull consumer because "a runner asks for a batch of tasks when it has room,
-// which makes distribution naturally proportional to each host's real capacity without the
-// controller having to model load".
+// From the one durable consumer the control plane created for the pool, which this binds to and
+// never creates. Several runners of one pool are one consumer with many clients, so a task goes
+// to whichever asks first. It is a pull consumer because "a runner asks for a batch of tasks when
+// it has room, which makes distribution naturally proportional to each host's real capacity
+// without the controller having to model load".
+//
+// Creating one here would fail twice over. A runner's credential reaches this consumer and no
+// other and creates nothing, for the reason Consumer gives, and a WorkQueue stream refuses a
+// second consumer on a subject one already filters on. So AckWait and MaxDeliver are what
+// Consumer set, and nothing on this side restates them.
 func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Duration) ([]Taken, error) {
 	if err := validPool(pool); err != nil {
 		return nil, fmt.Errorf("bus: %w", err)
@@ -81,21 +86,12 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 	if batch < 1 {
 		return nil, fmt.Errorf("bus: a runner asking for %d tasks", batch)
 	}
-	consumer, err := b.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "pool-" + pool,
-		Description:   "Every runner of the " + pool + " pool, sharing one queue.",
-		FilterSubject: Subject(pool),
-		// Explicit, because acknowledging is what says the work is over rather than
-		// what says it arrived.
-		AckPolicy: jetstream.AckExplicitPolicy,
-		// How long a task may be held before the bus decides the runner holding it is
-		// gone. A container runs for as long as its step's timeout allows, so this is
-		// held off by Working rather than set to the longest a step may take.
-		AckWait:    time.Minute,
-		MaxDeliver: -1,
-	})
+	consumer, err := b.js.Consumer(ctx, Stream, Durable(pool))
+	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
+		return nil, fmt.Errorf("bus: pool %s has no consumer to take work from: the control plane creates it when a runner of the pool asks for its bus credential, and a runner creates none", pool)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("bus: the consumer for pool %s could not be created: %w", pool, err)
+		return nil, fmt.Errorf("bus: the consumer of pool %s could not be reached: %w", pool, err)
 	}
 
 	msgs, err := consumer.Fetch(batch, jetstream.FetchMaxWait(wait))
@@ -159,6 +155,9 @@ func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
+	}
+	if b.results == nil {
+		return errors.New("bus: a runner's connection takes no results back: the controller opens the bus with Open, which is what makes sure the result stream is there")
 	}
 	consumer, err := b.results.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:     "controller",

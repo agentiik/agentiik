@@ -42,6 +42,25 @@ func open(t *testing.T) *Bus {
 	if err := b.results.Purge(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+
+	// And from the consumers the control plane makes and no others. A NATS kept running
+	// between suites still holds whatever consumers the code of an earlier day created, and a
+	// WorkQueue stream refuses a second consumer on a subject one already filters on, so one
+	// left behind under another name is a pool nobody can take from.
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if err := b.stream.DeleteConsumer(t.Context(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		if err := b.Consumer(t.Context(), pool); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return b
 }
 
@@ -338,6 +357,31 @@ func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
 	case err := <-trouble:
 		t.Errorf("it was said twice, the second time as %q", err)
 	case <-time.After(2 * time.Second):
+	}
+}
+
+// A pool the control plane made no consumer for has nothing to take from, and Take says so
+// rather than making one. A runner able to create a consumer could create one with no filter,
+// and the credential a runner holds is refused the attempt anyway.
+func TestTakingFromAPoolWithNoConsumerSaysSo(t *testing.T) {
+	b := open(t)
+
+	_, err := b.Take(t.Context(), "nobody", 8, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("a pool with no consumer was taken from")
+	}
+	if !strings.Contains(err.Error(), "pool nobody has no consumer") {
+		t.Errorf("the refusal reads %q, and it names the pool", err)
+	}
+
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if name != Durable(DefaultPool) && name != Durable("dmz") {
+			t.Errorf("taking from a pool with no consumer created %s", name)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
