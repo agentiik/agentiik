@@ -41,10 +41,11 @@ import (
 //
 // Prefixes the installation writes rather than one derived from the namespace's name, because no
 // derivation confines: a variable's name is letters, digits and underscores, a namespace's may
-// hold hyphens and underscores too, and AGENTIIK_SECRET_TEAM_OPS_ would be the prefix of both
-// team-ops and team_ops, and would begin with the prefix of team. Written out, two prefixes of
-// which one begins the other are refused when the routes are built, so no namespace reaches
-// another's variables, and none reaches the API's own unless somebody writes a prefix that does.
+// hold hyphens and underscores too, so AGENTIIK_SECRET_TEAM_OPS_ would be the prefix of both
+// team-ops and team_ops, and the prefix of team, AGENTIIK_SECRET_TEAM_, would begin it. Written
+// out, two prefixes of which one begins the other are refused when the routes are built, so no
+// namespace reaches another's variables, and none reaches the API's own unless somebody writes a
+// prefix that does.
 type Environment map[string]string
 
 // variableName is what an environment variable is named on: letters, digits and underscores, not
@@ -404,8 +405,8 @@ func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, _ Pri
 // check refuses a declaration that names no store this installation reads, or says where its
 // value is in a way that store cannot read or this namespace may not name.
 //
-// A declaration names one of three stores: builtin, the encrypted store, env, the API's
-// environment for development, and vault, HashiCorp Vault. Naming one is not being given it. "A
+// A declaration names one of three stores: builtin (the encrypted store), env (the API's
+// environment, for development) or vault (HashiCorp Vault). Naming one is not being given it. "A
 // namespace is confined to its own paths", so a declaration is taken only where the path it gives
 // can be held to its namespace when it is written: builtin always, since that store keys a value
 // by the namespace and the name and takes no path at all; env where the installation has opted in
@@ -430,7 +431,7 @@ func (s *DeclarationAPI) check(namespace string, d Declare) error {
 	case "vault":
 		return errors.New("vault is not a store this installation reads secrets from: a namespace is confined to its own paths, nothing gives a namespace its prefix in Vault until that provider arrives, and a path taken before then could name any namespace's secret")
 	}
-	return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin, the encrypted store, env, the API's environment for development, or vault", d.Provider)
+	return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin (the encrypted store), env (the API's environment, for development) or vault", d.Provider)
 }
 
 // valueOf is the value a declaration carries, as the bytes a step will be given, or nil where it
