@@ -241,7 +241,8 @@ func TestAValueOpensUnderWhicheverKeyOfTheRingSealedIt(t *testing.T) {
 }
 
 // A secret declared in the built-in store with nothing written to it, or whose value was forgotten,
-// is a secret the store does not hold, and the refusal says which.
+// is a secret the store does not hold, and the refusal says which. One declared elsewhere is not
+// the store's to read, whatever it holds.
 func TestABuiltinSecretWithNoValueIsNotHeld(t *testing.T) {
 	pool, _ := stored(t)
 	b := builtin(t, pool, keyring(t, master(t, "2026-09")))
@@ -251,7 +252,23 @@ func TestABuiltinSecretWithNoValueIsNotHeld(t *testing.T) {
 		t.Errorf("a value never written answered %v", err)
 	}
 
+	// A declaration that is not the built-in store's is not read from it, although the store
+	// holds a value under that name, and the refusal names the secret and not the value.
 	written(t, pool, b, "finance", "billing", "bk_live_notreal")
+	for _, d := range []db.Declaration{
+		{Name: "billing", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_BILLING"},
+		{Name: "billing", Provider: api.ProviderBuiltin, Path: "finance/billing"},
+	} {
+		got, err := b.Read(t.Context(), "finance", d)
+		if err == nil {
+			t.Errorf("the built-in store read %+v, as %q", d, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "finance/billing") || strings.Contains(err.Error(), "bk_live_notreal") {
+			t.Errorf("the refusal of %+v reads %q", d, err)
+		}
+	}
+
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return b.Forget(ctx, ns, "billing")
 	}); err != nil {
@@ -260,16 +277,6 @@ func TestABuiltinSecretWithNoValueIsNotHeld(t *testing.T) {
 	_, err = b.Read(t.Context(), "finance", inTheStore("billing"))
 	if !errors.Is(err, api.ErrNoSecret) || strings.Contains(err.Error(), "bk_live_notreal") {
 		t.Errorf("a forgotten value answered %v", err)
-	}
-
-	// And a declaration that is not the built-in store's is not read from it.
-	for _, d := range []db.Declaration{
-		{Name: "billing", Provider: api.ProviderEnv, Path: "AGENTIIK_SECRET_FINANCE_BILLING"},
-		{Name: "billing", Provider: api.ProviderBuiltin, Path: "finance/billing"},
-	} {
-		if _, err := b.Read(t.Context(), "finance", d); err == nil {
-			t.Errorf("the built-in store read %+v", d)
-		}
 	}
 }
 
