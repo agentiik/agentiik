@@ -1,186 +1,87 @@
 # Changelog
 
-The releases of `agentiik`.
-
-Every repository of the project carries the same version and is tagged at the same moment, even where nothing changed, so an entry here may say that nothing was built. [Versioning](https://agentiik.github.io/docs#versioning) sets out why, and what a version promises before and after `1.0.0`.
-
-`0.y.z` promises nothing beyond itself: what a release here describes may be gone in the next one.
+The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
 ## Unreleased
 
-**A bus credential that expires, and reaches one pool.** "Bus credentials are therefore never at rest on a runner host, which is what lets a runner sit in a zone where a stolen disk must not yield a working queue consumer." A runner asks the API for one, gets an hour, and renews well ahead of it. What it may do is written out subject by subject: take work from its own pool's consumer, acknowledge it, say what happened, and listen for a stop. It cannot publish a task, cannot reach another pool's consumer, and cannot create or delete anything.
-
-**The permission set is held by a real server rather than by its own JSON.** Asserting the claims this module writes would be asserting what it just wrote. The first version of that set allowed `$JS.API.>` in one line, and a test running an actual NATS server used it to create a stream, which is why the list is now six explicit subjects and why the server is a test dependency.
-
-**The pool a runner asks for is not a thing it can ask for.** It comes from the runner credential the request arrived with, and there is nothing in the body that names one. A machine choosing its own pool is the self-asserted label again, reaching further: a label decides what a runner is offered, and the pool decides which queue it drains.
-
-**The durable consumer belongs to the pool, and the control plane makes it.** One per pool rather than one per machine, because "a runner asks for a batch of tasks when it has room, which makes distribution naturally proportional to each host's real capacity" is what a shared pull consumer does; one per machine would put the modelling of load back in the bus. A runner cannot create one, which is the point: a machine able to create a consumer is a machine able to create one with no filter.
-
-**A grant turns into something.** "The runner obtains the value at the last moment, by redeeming at the API the per-task grant the controller issued for that one task and that one secret." There was nothing to redeem it at, and nothing to redeem it into: a grant row held a hash and an expiry, so the only way to answer "refusing anything the task does not name" would have been to evaluate the workflow a second time, in the wrong component. The grant now carries what its task was dispatched with, written by the only thing that knows, and the redemption answers from that and from nothing else.
-
-**The artifacts are resolved by the API rather than asked for by the runner.** A runner is handed URLs for the envelopes on its input ports and for the artifacts those envelopes name, worked out here by reading them. Letting it ask for a digest of its own would have been simpler and would have meant a runner reaching every object in its namespace, which is the whole of what the scoping is for.
-
-**A task is held by the machine that redeemed its grant.** At-least-once delivery means a message can arrive twice and at two machines. The second to redeem is told the work is somebody else's, and so is one redeeming for a task that has already finished: "the runner refuses to start a container for a key that has already completed", applied where it cannot be forgotten. The binding is never released, because a task whose runner was lost is moved to `lost` and retried as a new row with a grant of its own.
-
-**An installation with no secret provider holds nothing.** A task naming a secret fails in front of somebody and the refusal says which secret, rather than mounting an empty file and failing three layers away from the cause. That is the same decision `DenyAll` is: the default is the answer, not a placeholder.
-
-**A URL that carries its own authorisation.** A runner reaches the object store with "presigned URL only, no standing credential", and there was nothing to mint one with. There is now: a URL names one method, one object, one run and one instant, and the signature covers all four, so a URL that fetches is not a URL that stores and one leaked from a finished run is worth nothing. Where an installation has a real object store the runner goes straight to it; where it has the built-in one there is no other signing authority, so the API is the object store, which is what deployment profile A already says a single node is.
-
-**The evaluator still imports no server.** Signing and serving started out in one type, which put `net/http` in the closure of a package the evaluator imports, and the boundary test said so within the minute. The signing, the checking and the bytes stay in `artifact`; the route, the status codes and the query parsing are the API's. That boundary is what keeps `agk run --local` the same code path as a server run rather than a second implementation that drifts.
-
-**A presigned write stores only the object it names.** The key is the digest of the content, so the bytes are hashed as they arrive and a write that does not match is failed at its last byte rather than committed. Without it a URL for one object is a way to put arbitrary bytes under a digest somebody else's envelope already names, which is the one write content addressing must not allow. The store's own promise that a write is all or nothing is what makes failing late safe: nothing is left behind for the next reader to fetch and reject.
-
-**A runner pool is something an administrator creates, not a string a machine arrives carrying.** "An administrator creates a runner pool with its labels, its accepted namespaces and its resource ceilings, then issues a join token", and until now none of those three existed anywhere: a pool was a column on a runner row, so nothing held the policy and nothing could enforce it. A pool is a row of its own now, a join token names one that exists, and the listing says what each holds, because a namespace writing `allowed_runner_pools` against a pool with no ready runner is a namespace that will queue for ever and never be told why.
-
-**A label reaches a machine only where somebody wrote it on a pool first.** A token may permit only labels its pool carries, a machine may claim only labels its token permits. The subset check at join time was checking against a set nobody had bounded, so a token could have invented `zone=lan` and the chain that makes "Labels are not self-asserted" true ended in mid-air.
-
-**A machine no longer says what work it will accept.** Registration carries "the labels it claims, its capacity in vCPU, memory and disk, its architecture and its agent version", and the accepted namespaces were being read out of that same body: a machine declaring which namespaces it would run was a machine opting itself into work it was never meant to see. They belong to the pool, where an administrator wrote them, and where changing them reaches the runners already in it rather than waiting for each to be rebuilt.
-
-**The routes a runner sees, and no others.** A runner is not a principal and holds no permission, so the authorisation hook every other route passes through has nothing to ask about it. The alternative was to mark those routes public and check the credential inside each handler, which is the shape of every access check that has ever been forgotten, so there is a third kind of guard instead: a route registered with it is handed the runner the router already resolved, and registering one against a router with nothing to check a credential against is refused outright.
-
-**Every way in that does not work answers the same thing.** A credential that never existed, one that was revoked, and a principal's token presented at a runner route are one 401, and a machine that gets it joins again rather than retrying. The same holds a level up: a join token that is wrong, spent, expired or claiming a label it may not answers one body, byte for byte, because a machine that gets a different answer for each is a machine somebody is using to find out which tokens exist.
-
-**Draining is told in the heartbeat, and revocation is not told at all.** There is no separate liveness channel to keep in sync, so the heartbeat answer carries the drain and the reason somebody typed. A revoked credential stops authenticating, which is the door rather than a polite request.
-
-**A machine joins, and cannot claim what its token did not permit.** A join token is bound to one pool and to the exact set of labels a runner may claim with it, so a machine that asks for `zone=lan` when its token said `zone=dmz` is refused rather than trimmed: trimming would let it join with less than it asked for and then wonder why it is being offered nothing. A token is spent by being used, because one good for several machines is a credential worth stealing and a reimaged host joins again. What comes back is an identity and a credential that exists once and is stored hashed.
-
-**Liveness lives beside the task state.** A runner posts one heartbeat listing the keys it holds, and what that writes is the moment against each of those tasks. A heartbeat naming somebody else's task keeps nothing alive, which is the one thing a liveness report must not be able to do, and there is a test for exactly that.
-
-**A task whose runner stopped reporting is lost, not failed.** Three missed intervals, and the distinction is the whole reason the state exists: a failed task is charged to the brick and follows the retry policy, a lost one is charged to the infrastructure and is requeued only where the step is idempotent, since it may well have completed without the result coming back. A task nobody has reported since it was dispatched counts from the dispatch, because a runner that took work and was never heard from again is exactly the case this is for and has no heartbeat to have missed. The run is woken in the same statement, because nothing else would tell the controller.
-
-**`agk push` does something.** It was one of seven verbs that named what was missing and refused; it now assembles a version out of the working tree and sends it. What it sends is what the server stores: the entry point, every file it includes, and the manifest of every image it names.
-
-**A dirty tree is refused.** "A version is a commit", so pushing the bytes in the working copy under the name of a commit whose tree differs makes a version that says it is one thing and is another, for ever, and nothing downstream can ever notice because the digests match what was pushed. The refusal names the files that differ. `--allow-dirty` exists for somebody who knows what they are doing and says so out loud.
-
-**The credential is never a flag.** It comes from `AGENTIIK_TOKEN`, because an argument is in the shell history, in the process list and in whatever recorded the terminal.
-
-**The first four routes, and what they deliberately do not do.** A version is pushed, a run is started, runs are listed and one is read. None of them decides anything: the API writes a row and issues the notification in the same transaction, so the row and the wake-up are one fact rather than two, and what happens next is the controller's. A test checks that starting a run creates no task, because a route here that started one would be a second scheduler.
-
-**A version that cannot be rebuilt is refused at the push.** It is built before it is written, so a workflow whose manifests are missing or whose edges name a step nobody declared fails in front of the person pushing it rather than at three in the morning in front of nobody.
-
-**A run answers 202 rather than 201.** The run exists and nothing has happened yet, which is what `queued` means: "Created, waiting on a concurrency lock or on namespace quota."
-
-**A body carrying a field nobody knows is refused rather than half understood**, and a push carries no timestamp of its own, because a caller that could name its own creation time could make a version look older than the one it replaced.
-
-**A version is a commit, and now something can store one.** `workflow_versions.graph` was declared not null and described as "the resolved graph", and nothing in the engine could write one: a graph holds unexported state, a workflow holds the document it was parsed from so a refusal can name a line, and neither has a serialised form. What a version actually has to be is reconstructible without the repository, for ever, because a branch that moves afterwards must change nothing about a run already pinned to that commit. So what is stored is what it takes to rebuild: the entry point as it was, every file it included, and the manifest of every image it names. Rebuilding reaches no tree and no registry.
-
-**What a version holds is what the loader read, recorded as it read it.** A repository holds a great deal a workflow does not name, and a version that stored all of it would grow with the repository rather than with the workflow. Working out the closure by parsing the include blocks again would be this package reimplementing resolution in order to agree with resolution, and an include may itself include. So the tree is wrapped in something that remembers, the loader is asked to resolve, and what it touched is the version. It records the bytes rather than the paths, so a capture and a later read of the same tree cannot disagree.
-
-**Pushing one commit twice leaves it as it was.** The same commit is the same version, so a second push that overwrote it would make a run pinned to that commit mean something other than it did when it started.
-
-**Deny by default, made structural.** "Every request is authorised at the API boundary, deny by default: the API decides explicitly to permit or refuse, and no check is ever delegated to a client." That is easy to say and easy to lose, because it is lost the first time somebody adds a route and forgets the check, and it is lost quietly: a route with no check works perfectly for whoever is testing it. So the check is not something a handler calls. A route is registered with what it needs, the router is what asks, and there is no method that takes a handler without a guard. A route that needs nothing has to say so out loud and say why, at length, and the surface can be read back so a test can assert about every route at once.
-
-**What is refused looks like what is absent.** "An inaccessible workflow answering the same 404 as an absent one, so that probing yields nothing." A 403 at a namespaced scope is an oracle: ask for every name and the ones answering 403 are the ones that exist. So a refusal at a namespace or a workflow is a 404 with the same body as an absence, and 403 is kept for the installation scope, where the caller already knows the installation is there. A question the authorizer could not answer is a 500 and never a refusal, because telling a caller they may not have something on the strength of a database being down is telling them something untrue.
-
-**An installation with no access model refuses everything.** Principals, groups, grants and roles are v0.3.0. What ships now is the shape they arrive into, and the default answer until they do. That is not a placeholder standing in for a decision: an installation that shipped with an authorizer nobody configured should refuse rather than admit.
-
-**A master key can be retired.** The page says "rotation is a write, never a read-then-write" about a secret's value and about what the API hands a role, and says nothing about the key that wraps everything. Reading the first sentence as covering the second would leave an installation unable to retire a key at all: a value written two years ago and never touched again would keep the key that sealed it in service for ever, and a rotation that can be started and never finished is not a rotation. A keyring holds what everything new is sealed under and the older keys it can still open with, and resealing moves one value between them without the value leaving the package. Running the sweep twice is free, a value already moved is left alone, and the version does not change, because a maintenance pass that bumped it would look like a rotation in every audit that counts versions.
-
-**The built-in secret store.** Envelope encryption, as the page fixes it: a fresh AES-256-GCM data key on every write, wrapped by a master key held outside the database and read from a file the API user alone can open, which is refused at any other mode rather than warned about. Everything the page leaves open is decided here and written beside the code that decides it, because inventing it quietly would have been worse than inventing it out loud.
-
-**Four of those decisions were wrong, and the tests that found them are kept.** The version was read out of the record it was meant to authenticate, so the only anti-rollback element in the binding arrived with the bytes: a row restored from before a rotation opened cleanly and undid the rotation. The binding was a JSON document, which looked unambiguous and is not, since Go's encoder replaces every invalid byte with one replacement character, so two names differing in an invalid byte bound identically and one secret's ciphertext opened as another's. A nonce from a database column went into GCM without a length check, and GCM panics rather than refusing, so one truncated column would take the process down on every request touching that secret. And the wrapping layer used the master key directly, which is one long-lived key across every secret of every namespace, bounded by the birthday paradox where a repeat leaks enough to forge. Each is fixed, and each is now a test named after the attack.
-
-**A boundary the documentation states and nothing checked.** "The API is the only component that reads one." The package said a test held that and no such test existed, which is a worse kind of wrong than the absence: it told the next reader not to look. It exists now, walks the module, and was proved to fail by being given an importer to find.
-
-**What goes on the bus is what the wire describes, and there is now a test that says so.** The first version of the bus put `graph.Task` on the queue, which is a document the schema refuses in sixteen places. One of them mattered more than the rest: `graph.Task` carries whole input envelopes, items and all, because that is what an evaluator hands a driver in one process, so every task message was carrying the business payload the page forbids in as many words. The others were spellings and dropped zeros: `Name` for `name`, `CPU` for `cpu`, an integer where the network posture is a word, `exit_code` disappearing whenever it was nought. Nothing saw any of it, because `wire.schema.json` was not vendored into the module and nothing validated what went out. It is vendored now, with its fixture corpus, and four tests hold what this package publishes to it.
-
-**The grant.** A task message turns on it: "the only thing that turns the names in this message into values", and the message could not carry one because nothing minted one. `internal/token` mints the three credentials the installation hands out, each with 256 bits of entropy, stored hashed, shown once. A grant names its task inside its own text so the API can refuse a redemption whose body names a different one "rather than believing either alone", and it expires with its task. Redeeming answers one error for a value that is wrong, a task that does not match and a grant that has expired, because telling a caller which of the three it was is telling somebody guessing what they got right.
-
-**An input is a name, and somebody has to have written the bytes down.** The controller writes each task's input envelopes to the object store before publishing and carries their digests, which is what lets the message name what `graph.Task` carries. That is why `Queue.Publish` takes a dispatch rather than a task: the row, the grant and the digests are three things only the controller can supply.
-
-**A task nothing bounded gets the installation's ceiling.** A message requires a deadline and a grant expires with its task, so a task with neither cannot be published and would hold a credential that never stops working. The evaluator computes a deadline from the step's `timeout` or the run's root one, and a workflow declaring neither leaves it zero; nothing on the page fixes a default for that case. An hour, settable, applied only where the evaluator left it empty.
-
-**The bus.** Package `bus` fills `controller.Queue` over NATS JetStream and nothing in the controller knows it exists, which is the arrangement `graph.Driver` and package `driver` already have and the reason the deployment chapter can substitute SQS on one profile. One stream with WorkQueue retention, so a message is removed as soon as it has been consumed; one subject per runner pool, so a runner's durable pull consumer filters on the work it can take; results on a stream of their own, because tasks are taken by many runners and results by the one active controller. Nothing deduplicates: at-least-once is what the bus promises, the idempotency key is what makes a second delivery harmless, and a bus that tried to promise more would be a bus promising what it cannot keep and a runner that had stopped checking.
-
-**A stop is not work.** It goes to whoever is holding the task rather than onto the queue, where it would be invisible to the holder and would look like work to everybody else.
-
-**A task with no log can be read back.** `agk.LogURI`'s zero value travelled as `agk://log//` and came back refused, so a result for a task that wrote nothing could not be decoded at all: the one case that has to work is the one where nothing happened. It travels as null now. What hid it was worse than the bug: a message nobody could read was taken off the queue silently, which is how a wire that stopped matching becomes a queue that quietly eats everything on it. It is said out loud now, and there is a test that it is.
-
-**What is worth waking somebody for.** The controller emits an event when a run ends, and the API is what turns it into a push message: the two share the database and nothing else, so the handover is a row. A run that failed or ran out of time emits a failure and a completion, in that order, because a person told a run completed before being told it failed has been told two true things in the order that makes the second one confusing. A run somebody cancelled emits a completion alone: they know, because they asked. Emitting is part of the decision that makes a run terminal, and a run becomes terminal in exactly one committed decision, so emitting once is a property of the design rather than a discipline.
-
-**An event carries an identifier and a state and nothing else.** That is the rule the push message is held to and the reason it is held to it: a message carries no payload, no log line and no workflow name from a namespace the device may have lost access to, because the application fetches the detail afterwards and a revoked grant takes effect in between. An event that carried a workflow name would put that name past the grant check, in a row, before anybody had asked. Who receives one is not decided here either: that is the preferences and the grants behind them, and both belong to the group that owns principals.
-
-**Queued means something now.** It was a word a run passed through on its way to running without ever waiting for anything, which is a state machine with a state in it that means nothing. A run now waits on the two things the page says it waits on. A concurrency group holds at most one started run, and a second run of the same workflow queues behind it in creation order, because a group that admitted the newest arrival would starve the first one for as long as triggers kept firing. Where the workflow declared `cancel_in_progress`, the run in progress is cancelled instead, and the new one is admitted on the pass after rather than the same one: two runs holding one group for as long as a cancellation takes to reach the runners is the thing a group exists to prevent.
-
-**A namespace at its ceiling slows down rather than failing.** `max_concurrent_tasks` arrives on the namespace and bounds what leaves the controller, counted over the tasks that hold a runner or are on their way to one. A task held back is not refused: it stays pending in the evaluator's state, so the next pass hands it out again, and the run stays actionable because its message never went. The quota is about tasks and not about runs, so a second run still starts; it simply hands out nothing until a slot frees.
-
-**The lock is not a row.** A group holds at most one started run, so what holds it is that run, and asking which one is a query rather than a record to keep in step. The one thing worse than a lock nobody releases is a lock that says it is held by a run that ended.
-
-**A run ends the ways it can end, and the controller carries each of them.** A step that fails without `continue_on_error` fails the run; one that declares it does not, and the step downstream sees the failure through `when` and runs anyway. A failure with attempts left waits out its backoff rather than going straight back on the queue, and the run writes down when to come back so the sweep finds it then and not before, with `max: 2` being three attempts because the number counts further ones. A task carries the deadline its step's timeout lands on, the row carries it too, and past the run's own root timeout the run is `timed_out` and what it was holding is asked to stop. Cancelling does the same, with the reason that says which of the two it was.
-
-**Cancelling has a path of its own.** It makes the run terminal, and the loop leaves a terminal run alone because a finished run has nothing to decide, so the one pass that must still happen is the pass that names what to stop. Cancelling twice is not an error, and a result that arrives after the stop reached the runner changes nothing.
-
-**A deadline is stamped from the plan and not from the state.** It is computed from the step's timeout and the moment the work became somebody's, so the evaluator puts it on the task it hands out rather than on the shard it hands out from. The row wants it all the same: it is what a person reading a stuck run looks at.
-
-**What a result carries.** A result comes back off the bus and the controller writes down everything in it: the new step and task state, who held the task, where its log went and how many lines there were, what the attempt cost, the digest of every port the step published, and the artifacts those envelopes reference. Then it decides the run again, because a result is the only thing that makes a step downstream of it runnable. Recording one twice is free, which it has to be: a bus is allowed to deliver twice, and the evaluator answers a duplicate by counting no decision, so there is nothing to write.
-
-**An artifact lives as long as the workflow said.** `retain` is declared on a workflow output or in `defaults` and never on a step, so what an artifact on a port lives by depends on whether that port is a declared output. The controller is what knows, because it is what has the graph: a runner does not, and the API does not read it. The reference it records is what expiry acts on, and until it exists nothing expires and nothing is counted.
-
-**One door publishes a port.** There were two, a namespaced one and the decision, and they disagreed: one wrote `steps.ports` and counted the object, the other wrote the run's document, and the envelope purge could only see one of them. Publication is something the evaluator decides, so it travels in a decision and nowhere else. The purge now acts on the envelopes a run's document references, published and per shard alike, which closes a leak worth naming: the controller was writing shard envelopes into the object store with no row anywhere, and an object with no row is one the collector never sees and never deletes.
-
-**The loop that decides.** The controller evaluates a run through the v0.1.0 evaluator and not through a scheduler of its own. Every rule behind "finds the steps whose every declared input port is satisfied" belongs to package `graph` and is already written: the barrier, the fan-out, the merge strategies, retry, `fail_fast`, the run verdict. The loop reads a state, hands it to the evaluator, and writes down what came back. That is the point rather than an economy, because a controller with a scheduler inside it is the second implementation `agk run --local` exists to avoid.
-
-**A task is dispatched when its message goes, not when it is planned.** The state a task is in says "handed out", and a task whose message the bus refused was handed out to nobody. Recording the dispatch after the publish is also what closes the outbox: a task the evaluator has not seen dispatched is one it plans again on the next pass, so a message that never went is resent by the thing that decided it rather than by a second mechanism that would have to rebuild a task message out of rows. A test holds it, with a queue that refuses and then comes back.
-
-**An envelope lives in the object store and a digest lives in the column.** A run's document is the evaluator's state with every envelope lifted out and replaced by a hollow one: the same metadata, no items. Hollow is recognisable rather than merely small, because the count says how many items there were and `agk.Envelope.Validate` refuses one whose count and items disagree, so nothing can hand the evaluator a state that was never put back together and have it schedule against an empty batch. Eliding twice writes the same bytes twice, and a resume whose object is gone is an error and not an empty batch.
-
-**Two clocks cannot be ordered, so the schema stops trying.** `runs` checked that a run started at or after the row recording it was created. Those are two clocks: `created_at` is the database's `now()` and `started_at` is the controller's, which the evaluator takes as an argument on purpose so that evaluation is pure and a replay is exact. A constraint ordering them refuses a legitimate run the moment they disagree by a millisecond.
-
-**Where a decision lives.** A run now carries the evaluator's own state, so that "failover is a state resume, never a rebuild" is literal rather than aspirational: the next controller loads the document, calls `Next` and gets the plan the instance that died would have got. The envelopes are lifted out of it and replaced by their digests before it is written, because the database "keeps only their digests and URIs" and a ten thousand shard fan-out would otherwise be forty gigabytes in a column rewritten on every pass. Beside it sits the sequence the evaluator counts decisions with: every write carries the number it was read at and is refused if the row has moved, which is what makes two writers of one run detectable rather than silent. The `runs`, `steps` and `tasks` rows are written in the same transaction as a projection of it, for everything that queries rather than decides.
-
-**The bus is a courier and the database is the record.** A task row carries when its message was published, and nothing else may set it: the order is commit, then publish, then stamp. Publishing first would put a task on a queue that no row accounts for and that nothing can recall; committing first leaves a row whose message never went, which the sweep finds and sends again, and which the idempotency key makes free to send twice. So the sweep looks for three things, and finding everything a notification would have found is what makes it the correctness guarantee: a run nothing has decided, a run whose clock has come round, and a run holding a task whose message never left.
-
-**A log is addressed by the task that wrote it.** `agk.LogURI` and `agk.ParseLogURI` arrive beside `agk.URI`, because a log is the scheme's second kind: `agk://log/<run>/<task>` rather than `agk://run/<run>/<step>/<port>/<name>`. A log belongs to one task and not to one port, and the shape the page used to print could not tell eight shards of one step apart. The task identifier carries slashes, so it is escaped as a path segment and the round trip is tested rather than assumed. The two kinds refuse each other in both directions, so a reader knows what it holds without asking what it points at.
-
-**A step is not a task, and now the column knows it.** `steps.state` was declared on the `task_state` domain, which cannot hold `skipped`: a step whose `if` condition is false moves to `skipped` and publishes empty envelopes on all its ports, and no container ran, so there is nothing for a task state to describe. The reverse is just as wrong, since no step is ever `dispatched` or `publishing`. A step holds a verdict, which is `agk.Verdict`'s six values, and the schema now has a domain of its own for them. The test that holds the run and task vocabularies against the engine holds this third one too, and checks that `skipped` is in one list and not the other.
-
-**Seven trigger kinds, spelled the way the page spells them.** `agk.TriggerKind` had four and called the schedule kind `cron`. The Triggers table names seven: `schedule`, `webhook` and `event` are blocks a workflow declares, and `manual`, `mcp`, `terraform` and `workflow` are ways a run begins that no block describes. The page keeps `terraform` apart from `manual` and says why, that a run started by an apply is reproducible from a configuration and a person reading the run list wants to know that, and the same reasoning keeps `mcp` and `workflow` apart. So the three missing kinds arrive rather than being folded into `manual`. And `cron` becomes `schedule`, because the language writes `on.schedule`, the workflow schema declares `scheduleTrigger`, and `cron` is the five-field expression inside it: two spellings for one thing is the rule about identifiers being broken. The database check held six, one of which, `api`, nothing could ever write. A test now holds the column against the Go vocabulary, so neither can move alone.
-
-**The idempotency key in the database is the one on the wire.** The generated column built `run/step/attempt/index` and `agk.NewTaskID` builds `run/step/attempt/index/of`, because a shard is an index and a cardinality and `AGK_SHARD` carries `3/8`. Two different strings, each enforced somewhere: the uniqueness rule in the database was over one and "a runner refuses to start a container for a key that has already completed" compares the other, so both would have been right about their own key while the pair let a container start twice. The column now carries the cardinality, and the test compares it against what `agk` mints rather than against a literal.
-
-**The checks run against a real PostgreSQL.** Thirty tests hold the namespace rule, the reference counting and the election, and every one of them skipped in continuous integration because no database was there. They skip so that a laptop with nothing installed still runs the rest, not so that nobody ever runs them, and a policy nothing exercises is a policy nobody knows is there. The workflow now brings up the version the deployment profiles name.
-
-**One decider, elected and fenced.** Package `controller` is the instance that decides, and the first thing it settles is which instance that is. The active one holds a session-level advisory lock rather than a lease with an expiry, so there is no timeout to invent and no clock to trust: the lock frees itself when the process exits or when the server notices the connection is gone, and standbys try the non-blocking variant on a loop and take over the instant it succeeds. Election alone is not safe, because a partitioned former holder does not know it has lost, so taking the lock raises a counter and every controller write carries it. A write bearing an older counter is refused before it reads anything. This package opens a write transaction in exactly one place, and a test counts them, since a fencing token is only as good as the number of writes that carry it.
-
-**Woken, and sweeping anyway.** The API signals a new run with a `NOTIFY` carrying the identifier and nothing else, delivered only when the transaction that wrote the run commits. A controller that was restarting hears none of them, so it also sweeps on a fixed interval, and the first thing it does on taking the term is sweep. The asymmetry is the point: a notification that never arrives costs latency, and a sweep that never runs costs a run.
-
-**A real database in the tests of every package that touches one.** `internal/dbtest` opens a database of the test's own, migrates it, and hands back a pool connected as an unprivileged role created the way a deployment profile creates it. The role is named after the database rather than shared, which two packages testing at once found the hard way.
-
-**Where the state lives.** Package `db` is the PostgreSQL half of the engine: ten tables, the migration tool that applies them, and a handle that makes the namespace structurally impossible to forget. A `Pool` has no `Query` and no `Exec`. It hands out three doors: `In` binds one namespace for the transaction, `Installation` steps past it for one of six named reasons, and `Session` pins a connection for the two things a transaction cannot hold, the controller's advisory lock and its `LISTEN`. Row level security on every namespaced table reads what the door bound, so a query somebody forgot to filter reads that namespace's rows rather than everybody's, and a query with nothing bound reads none at all. `Open` refuses a superuser connection, since a policy a superuser walks through is a policy that protects nothing.
-
-**Artifacts, envelopes and logs.** The reference half of the store. A logical `agk://run/<run>/<step>/<port>/<name>` resolves to a physical `<namespace>/sha256/<digest>`, deduplication is scoped per namespace, and a reference carries its own size and media type because it has to outlive the object it names: expiry drops the reference, and the object goes only when nothing references it. A fetch budget is spent by a response that completed, the last one retires the reference on the spot, and what comes after is gone rather than absent. An envelope is counted in the same place as an artifact, because two steps publishing identical bytes publish one object. The three purges and the collector are there, each through the installation door with its reason named.
-
-**A boundary test for the driver.** The root says the evaluator and the container driver are both importable with no controller, no task bus and no database behind them, and only the evaluator was being checked. The driver's closure is now read the same way, with a list that allows it the daemon it exists to drive and refuses it the database beside it.
+### Controller
+
+- One active controller, elected by a PostgreSQL advisory lock. Every write carries a fencing counter, so a partitioned former holder is refused.
+- Woken by `NOTIFY` when the API writes a run, and sweeping on an interval anyway.
+- Decides through the v0.1.0 evaluator rather than a scheduler of its own. The run stores the evaluator's state, so failover is a resume, and each write is refused if the row moved since it was read.
+- Envelopes are lifted out of that state into the object store and replaced by their digests.
+- A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
+- Results are recorded idempotently: states, holder, log, usage, the digest of every port and the artifacts they reference.
+- `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
+- `max_concurrent_tasks` holds tasks back rather than failing them.
+- Retries wait out their backoff. A task carries the deadline of its step's timeout, and a run past its root timeout is `timed_out` and stops what it holds. Cancelling twice is not an error.
+- A task no timeout bounds gets the installation's ceiling, an hour by default.
+- A run that ends emits a completion carrying an identifier and a state and nothing else, preceded by a failure when it `failed` or `timed_out`.
+- `retain` is resolved by the controller and recorded on the artifact reference.
+
+### State
+
+- Package `db`: the schema, its migrations, and row level security on every namespaced table. A `Pool` has no `Query`, only three doors: `In` binds a namespace, `Installation` steps past it for a named reason, `Session` pins a connection. A superuser connection is refused.
+- Artifact and envelope references with reference counting, log URIs on their tasks, the three purges and the collector.
+- `steps.state` has a domain of its own, since the task one cannot hold `skipped`.
+- The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
+- `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
+- `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
+
+### Bus
+
+- Package `bus` fills `controller.Queue` over NATS JetStream: one WorkQueue stream, one subject per runner pool, results on a stream of their own.
+- A task message matches `wire.schema.json`, vendored with its fixtures, and carries names and digests rather than the input envelopes.
+- A message nobody can decode is taken off the queue and reported, never dropped silently.
+- A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
+- A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
+
+### API
+
+- Deny by default is structural: a route is registered with the permission it needs and the router checks it.
+- A refusal at a namespace or a workflow is the same 404 as an absence. 403 is for the installation scope, and a failure to decide is a 500.
+- Until access control arrives in v0.3.0, every route that needs a permission is refused.
+- Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field is refused.
+- A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
+- A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
+- A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
+- Runner routes have a guard of their own, and every bad runner credential is the same 401. Draining is told in the heartbeat; a revoked credential just stops working.
+- A heartbeat keeps alive only the runner's own tasks. A runner silent for three intervals leaves its tasks `lost`, not `failed`.
+- Grants, join tokens and runner credentials carry 256 bits, are stored hashed and are shown once.
+- A grant carries what its task was dispatched with. Redeeming it returns URLs for the input envelopes and the artifacts they name, the secret values and the upload URLs, and binds the task to that runner.
+- A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects.
+- An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
+
+### Secrets
+
+- Package `secret`, the built-in store: a fresh AES-256-GCM data key per value, wrapped by a master key read from a file only the API user can open.
+- Master keys rotate through a keyring. Resealing is idempotent and does not change a value's version.
+- A test holds that the API is the only component reading a secret value.
+
+### Command line
+
+- `agk push` sends a version built from the working tree. A dirty tree is refused unless `--allow-dirty`, and the credential comes from `AGENTIIK_TOKEN`, never a flag.
+
+### Tests
+
+- The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
+- `driver` has a boundary test, like `graph`.
 
 ## v0.1.2, 2026-09-13
 
-Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.
-
-The release is documentation: a [Get started](https://agentiik.github.io/docs#get-started) chapter at the top of the site, written from a run against `v0.1.1` rather than from what the rest of the page promises, and a recorded session of the command line on the home page.
+Nothing changed here. The release is documentation: a [Get started](https://agentiik.github.io/docs#get-started) chapter and a recorded session of the command line on the home page.
 
 ## v0.1.1, 2026-09-13
 
-This file, and nothing else.
-
-`v0.1.0` was tagged before its changelog was written, and the fix for that is not to move the tag. Within minutes of the push, `sum.golang.org` had recorded the tagged commit of `agentiik` and `bricks` in a public append-only log and `proxy.golang.org` had cached it, so moving `v0.1.0` would have left `go get` serving the old code for ever and made a direct fetch fail with a checksum mismatch that reads as a supply-chain attack. A tag is a name somebody else pins, and a name that quietly comes to mean something else is worse than a second name.
-
-So `v0.1.0` stays exactly where it is, describing exactly what it shipped, and this release adds the description. Every repository gets it at the same version on the same day, as every release here does. From now on a version's entry is merged before its tag is placed, which is written down in the conventions the documentation fixes.
+This file. `v0.1.0` was tagged before its changelog was written, and a Go module tag cannot be moved once the checksum database has recorded it, so this release adds the description instead. A version's entry is now merged before its tag.
 
 ## v0.1.0, 2026-09-12
 
-The engine, as one Go module, and the first release in which a workflow runs.
+The first release in which a workflow runs.
 
-**What it does.** `agk run --local` runs a whole workflow against the Docker daemon of the machine it is typed on, with no controller, no task bus and no database. A multi-step workflow with a fan-out and a merge runs end to end, and running it again on the same inputs produces the same envelopes. That sentence is the milestone, and it is a test rather than a claim: `cmd/agk/milestone_test.go` builds three images, runs six containers twice against the real daemon, and compares what came back.
-
-**The libraries.**
-
-- `agk` is the vocabulary the documentation uses and the rules it states about it: the envelope and its metadata, items, files, ports, steps, run identifiers, the `agk://` URI, the four size limits, the two refusals they produce, and the exit-code table read off the code a container exited with.
-- `artifact` is the content-addressed store. A logical `agk://run/<run>/<step>/<port>/<name>` resolves to `sha256/<digest>`, identical bytes are stored once, and deduplication is scoped per namespace so that two namespaces never share an object.
-- `brick` is the two edges of the container as directories: what a step is given under `/agk/in/`, what it leaves under `/agk/out/`, the spill of a value above `inline_max_bytes` into the store, and the manifest an image carries at `/agk/brick.yaml`.
-- `schema` validates a workflow's declared inputs as JSON Schema 2020-12, with references resolved against the repository tree the run pinned and never against the network.
-- `graph` is the evaluator: it reads the entry point, resolves includes, `extends` and `defaults`, refuses cycles and edges onto ports no step declares, and then answers what may run next. The barrier, the four merge strategies, the fan-out under `max_parallel` and `fail_fast`, `if` and `when`, `retry` and `continue_on_error`, and the run verdict all live here rather than in the driver.
-- `driver` runs the container and is the only package that may reach a daemon. One task is one container: resolve and pull, read the manifest, refuse a root user before anything is created, prepare the mounts and the `AGK_*` environment, apply the settings every container gets, give the task a network of its own, open the wait before the start so an exit cannot fall between two calls, enforce the timeout as SIGTERM then SIGKILL, read the exit code against the table, and collect one envelope per declared port with artifacts uploaded and secrets masked out of the log.
-
-**The command line.** `agk validate`, `agk graph`, `agk run --local` and `agk brick test` do their work; `login`, `whoami`, `push`, `share`, `grants`, `logs` and `brick init` each refuse naming what is missing, because a verb the documentation lists and the binary does not know is a binary that looks broken. Five exit codes, each a different thing to do next. `/agk/bin/agk` is a static helper mounted read-only into every container, with `agk items`, `agk emit` and `agk attach`, and it is a convenience rather than a requirement.
-
-**What it deliberately does not have yet.** No controller, no bus, no database, no HTTP API, no runner and no identity: a run is local or it does not happen. `network: egress` is refused rather than opened, because the proxy that would enforce a step's `egress.allow` list does not exist and opening the network and calling it filtered would be worse than refusing. On a platform with no tmpfs the runner can reach, a secret value is written into the task's working directory and removed with the container, and the run says so out loud.
+- `agk run --local` runs a whole workflow against the local Docker daemon, with no controller, bus or database. `cmd/agk/milestone_test.go` runs one with a fan-out and a merge twice and gets the same envelopes.
+- The libraries: `agk` (the vocabulary), `artifact` (the content-addressed store, per namespace), `brick` (the container's two edges), `schema` (JSON Schema 2020-12), `graph` (the evaluator) and `driver` (one task as one container).
+- `agk validate`, `agk graph`, `agk run --local` and `agk brick test` work. `login`, `whoami`, `push`, `share`, `grants`, `logs` and `brick init` refuse and say why.
+- `/agk/bin/agk`, a static helper for script steps: `agk items`, `agk emit` and `agk attach`.
+- `network: egress` is refused until the proxy that enforces `egress.allow` exists.
+- Where the host has no tmpfs, as on a Mac, a secret value is written into the task's working directory, removed with the container, and the run says so.
