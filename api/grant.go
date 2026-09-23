@@ -239,15 +239,15 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
 	}
 
-	for _, name := range got.Scope.Secrets {
-		value, err := s.secrets.Value(ctx, got.Namespace, name)
+	for _, secret := range got.Scope.Secrets {
+		value, err := s.secrets.Value(ctx, got.Namespace, secret.Name)
 		if err != nil {
 			// Named by the step and missing from the store is a task that cannot run,
 			// and saying so is better than mounting an empty file and failing three
 			// layers away from the cause.
-			return Grant{}, errors.New("the secret " + name + " is not held for this namespace")
+			return Grant{}, errors.New("the secret " + secret.Name + " is not held for this namespace")
 		}
-		out.Secrets = append(out.Secrets, Secret{Name: name, Value: string(value)})
+		out.Secrets = append(out.Secrets, Secret{Name: secret.Name, Value: string(value)})
 	}
 
 	for _, digest := range upload {

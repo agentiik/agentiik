@@ -154,9 +154,14 @@ func (g grants) joined(t *testing.T) string {
 }
 
 // dispatched writes what the controller writes: an input envelope naming an artifact, the
-// artifact itself, and the grant that says the task may have both.
+// artifact itself, and the grant that says the task may have both, with each secret at the path
+// its name puts it.
 func (g grants) dispatched(t *testing.T, secrets []string) (clear, envelope, file string) {
 	t.Helper()
+	mounts := make([]db.GrantSecret, 0, len(secrets))
+	for _, name := range secrets {
+		mounts = append(mounts, db.GrantSecret{Name: name, Mount: "/agk/secrets/" + name})
+	}
 	const content = "the whole of an invoice"
 	sum := sha256.Sum256([]byte(content))
 	file = hex.EncodeToString(sum[:])
@@ -189,7 +194,7 @@ func (g grants) dispatched(t *testing.T, secrets []string) (clear, envelope, fil
 				Run: grantRun, Step: "render",
 				Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 				Inputs:  []db.GrantInput{{Port: "in", Digest: envelope, Items: 1}},
-				Secrets: secrets,
+				Secrets: mounts,
 			}, time.Now().UTC().Add(time.Hour))
 		return err
 	}); err != nil {

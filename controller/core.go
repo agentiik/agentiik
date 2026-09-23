@@ -441,8 +441,11 @@ func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
 			Port: port, Digest: ref.Digest, Items: ref.Items,
 		})
 	}
+	// Each with the mount the evaluator resolved from the manifest, which is the one the task
+	// message carries: a redemption that derived the path from the name would put a value
+	// where the brick is not looking for it.
 	for _, m := range t.Secrets {
-		scope.Secrets = append(scope.Secrets, m.Name)
+		scope.Secrets = append(scope.Secrets, db.GrantSecret{Name: m.Name, Mount: m.Mount})
 	}
 	return scope
 }
