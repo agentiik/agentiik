@@ -317,6 +317,19 @@ func TestARequeueIsAnsweredByTheRunnerThatRedeemedADispatchBeforeIt(t *testing.T
 	}
 	dispatch(boundRequeue, 2, 1)
 
+	// Attempt 3 is lost before anybody took it, and its requeue is redeemed by runner-dmz-04.
+	const unredeemed, laterRedeemed = "01M2GHEEEEEEEEEEEEEEEEEEEE", "01M2GHFFFFFFFFFFFFFFFFFFFF"
+	third := agk.NewTaskID(financeRun, "render", 3, agk.Shard{})
+	dispatch(unredeemed, 3, 0)
+	lose(unredeemed)
+	laterClear := dispatch(laterRedeemed, 3, 1)
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, laterClear, third, "runner-dmz-04", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, c := range []struct {
 		why    string
 		key    agk.TaskID
@@ -329,6 +342,7 @@ func TestARequeueIsAnsweredByTheRunnerThatRedeemedADispatchBeforeIt(t *testing.T
 		{"the dispatch that runner redeemed, which nothing came before", first, redeemed, "runner-dmz-01", false},
 		{"a runner bound to the dispatch before without redeeming it", second, boundRequeue, "runner-dmz-03", false},
 		{"the requeue under the key of another attempt", second, requeue, "runner-dmz-01", false},
+		{"a dispatch before the one that runner redeemed", third, unredeemed, "runner-dmz-04", false},
 		{"a row that is not an identifier at all", first, "not a ulid; drop table tasks", "runner-dmz-01", false},
 		{"no runner", first, requeue, "", false},
 	} {

@@ -132,6 +132,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
+- `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 
 ## v0.1.2, 2026-09-13
 
