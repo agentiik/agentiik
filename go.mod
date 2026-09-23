@@ -54,12 +54,13 @@ require (
 	// pair and a JWT naming its public half, and this is what mints one and what signs with
 	// an account key. It was already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
-	// JSON Schema 2020-12, used by package schema alone and by nothing else in this module.
-	// The workflow language defines an input's schema as a 2020-12 document, and this
-	// implementation is the draft itself rather than an older one; it takes a custom
-	// loader, which is how a $ref is resolved against the commit's tree and refused when it
-	// leaves it; and it returns a structured error whose keyword and instance location are
-	// what a refusal message names.
+	// JSON Schema 2020-12, used by package schema, and in tests by packages bus and api,
+	// which hold what they put on the wire to the vendored wire.schema.json rather than to a
+	// copy of it written in Go. The workflow language defines an input's schema as a 2020-12
+	// document, and this implementation is the draft itself rather than an older one; it
+	// takes a custom loader, which is how a $ref is resolved against the commit's tree and
+	// refused when it leaves it; and it returns a structured error whose keyword and
+	// instance location are what a refusal message names.
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )
 

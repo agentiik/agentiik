@@ -21,6 +21,12 @@ import (
 // the grant", which is what makes a copy of one worth nothing on its own. This is the other half:
 // the one route that turns those names into values, and it answers from what the controller wrote
 // beside the grant and from nothing else.
+//
+// The repository is one of those values. "A runner still never speaks git and never holds a
+// credential, because the controller resolves a commit to a tree and the runner fetches
+// content-addressed objects with the task's grant, exactly as it fetches an artifact." So the
+// commit is in the scope the controller wrote, the files of that commit are named here with a URL
+// each, and the runner can reach the tree of the one version its task runs and of no other.
 
 // Secrets is where a secret value comes from.
 //
@@ -68,9 +74,20 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	}
 
 	var got db.Redeemed
+	var tree []db.TreeFile
 	err := s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		got, err = wide.Redeem(ctx, ask.Grant, ask.Task, runner.ID, s.now())
+		if err != nil {
+			return err
+		}
+		// The version the scope names and no other, read in the same transaction, so a
+		// refusal here also leaves the task unbound: a runner told there is no tree has
+		// not taken a task it cannot run.
+		if got.Scope.Workflow == "" || got.Scope.Commit == "" {
+			return errNoCommit
+		}
+		tree, err = wide.Tree(ctx, got.Namespace, got.Scope.Workflow, got.Scope.Commit)
 		return err
 	})
 	switch {
@@ -83,12 +100,25 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		// else's or already over. A runner that gets this stops rather than retrying.
 		fail(w, http.StatusConflict, "that task is not this runner's to work on")
 		return
+	case errors.Is(err, errNoCommit):
+		// This and the two below are the installation's rather than the runner's: the
+		// grant was real and what it was written with cannot be answered. Each says so
+		// rather than handing over an empty /agk/repo, which would start a step on a
+		// directory that looks like a repository and is not one.
+		fail(w, http.StatusInternalServerError, "this task was dispatched without the commit its run pinned, so there is no repository to give it")
+		return
+	case errors.Is(err, db.ErrNoTree):
+		fail(w, http.StatusInternalServerError, "the version this task runs was recorded without its tree, so there is nothing to lay out at /agk/repo")
+		return
+	case errors.Is(err, db.ErrNoVersion):
+		fail(w, http.StatusInternalServerError, "the version this task runs is not recorded, so there is nothing to lay out at /agk/repo")
+		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the grant could not be redeemed")
 		return
 	}
 
-	answer, err := s.whatTheGrantIsFor(r.Context(), got, ask.Upload)
+	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree, ask.Upload)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -104,6 +134,19 @@ type Fetch struct {
 	Digest string   `json:"digest"`
 	Items  int      `json:"items,omitempty"`
 	URL    string   `json:"url"`
+}
+
+// TreeEntry is one file of the repository, where it goes under /agk/repo, and the URL that fetches
+// it.
+//
+// The shape is the wire's, entry for entry. It carries no to, the relocation the long form of a
+// step's files asks for, because narrowing and relocating are not served yet and every file here
+// goes where its path says.
+type TreeEntry struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	SHA256 string `json:"sha256"`
+	URL    string `json:"url"`
 }
 
 // Secret is a name and its value, which exists in this answer and nowhere else on the way to the
@@ -124,18 +167,28 @@ type Grant struct {
 	Inputs    []Fetch  `json:"inputs"`
 	Artifacts []Fetch  `json:"artifacts"`
 	Secrets   []Secret `json:"secrets"`
-	Uploads   []Fetch  `json:"uploads,omitempty"`
+
+	// Tree is the whole of the commit's tree, which is what a step that says nothing about
+	// files is given. Narrowing it by a step's files is the controller's to add, and until it
+	// does every task of a version is handed the same list.
+	Tree []TreeEntry `json:"tree"`
+
+	Uploads []Fetch `json:"uploads,omitempty"`
 }
+
+// errNoCommit is a scope naming no version, which is a scope written by a controller from before
+// a scope named one.
+var errNoCommit = errors.New("api: the grant's scope names no commit")
 
 // whatTheGrantIsFor turns the names the controller wrote into values, and refuses to go beyond
 // them. Every URL here is minted for one object and ends with the grant, so nothing the runner
 // holds outlives the task it was given for.
-func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, upload []string) (Grant, error) {
+func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile, upload []string) (Grant, error) {
 	out := Grant{
 		Task: got.Task, Namespace: got.Namespace,
 		Run: got.Scope.Run, Step: got.Scope.Step,
 		ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		Inputs:    []Fetch{}, Artifacts: []Fetch{}, Secrets: []Secret{},
+		Inputs:    []Fetch{}, Artifacts: []Fetch{}, Secrets: []Secret{}, Tree: []TreeEntry{},
 	}
 
 	// The envelopes on this task's input ports, and then the artifacts those envelopes
@@ -167,6 +220,23 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, uplo
 				out.Artifacts = append(out.Artifacts, Fetch{Digest: f.SHA256, URL: url})
 			}
 		}
+	}
+
+	// The files of the version the scope names, each minted exactly as an artifact's URL is,
+	// and one URL per blob: two files with the same bytes are one object, and a runner that
+	// holds a digest already writes it from its own cache and fetches nothing.
+	minted := map[string]string{}
+	for _, f := range tree {
+		url, held := minted[f.SHA256]
+		if !held {
+			var err error
+			url, err = s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, f.SHA256), got.Scope.Run, got.ExpiresAt)
+			if err != nil {
+				return Grant{}, err
+			}
+			minted[f.SHA256] = url
+		}
+		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
 	}
 
 	for _, name := range got.Scope.Secrets {

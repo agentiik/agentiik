@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -40,8 +42,10 @@ type ServerOptions struct {
 	Versions *version.Store
 
 	// Objects is where a pushed tree is written. "every step of every run sees it,
-	// mounted read-only at /agk/repo", and what a container is given is fetched from
-	// here rather than carried in the version row.
+	// mounted read-only at /agk/repo", and a runner fetches it from here with its task's
+	// grant, exactly as it fetches an artifact, rather than from the version row. Without
+	// one a push is answered 503, because a tree with nowhere to go is the installation's
+	// to fix and not the caller's.
 	Objects artifact.Objects
 
 	// Now is the clock, an argument so that a test has one.
@@ -95,17 +99,18 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 // a commit": pushing the same commit twice is the same version and has to be the same request.
 type Push struct {
 	// Entry is the path of the entry point in the tree, Document is what it holds, and
-	// Includes are the files it pulls in. Together they are what the version is: enough to
-	// rebuild it with no tree in reach.
+	// Includes are the files it pulls in. Together they are what the graph is rebuilt from,
+	// with no repository and no object store in reach.
 	Entry     string            `json:"entry"`
 	Document  []byte            `json:"document"`
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 
-	// Tree is the repository as every step will see it under /agk/repo. It travels in the
-	// push because there is nowhere else it could come from: a version is a commit, and the
-	// installation holds no clone of the repository to read that commit out of.
-	Tree map[string]PushFile `json:"tree,omitempty"`
+	// Tree is the commit's tree, every file of it, as every step will see it under /agk/repo.
+	// It travels in the push because there is nowhere else it could come from yet: a version
+	// is a commit, and until the installation hosts the repository itself it holds no copy
+	// of that commit to read the files out of.
+	Tree map[string]PushFile `json:"tree"`
 
 	Parent string `json:"parent,omitempty"`
 	Branch string `json:"branch,omitempty"`
@@ -115,33 +120,89 @@ type Push struct {
 type PushFile struct {
 	Content []byte `json:"content"`
 
-	// Mode is 0755 where the file is executable and absent otherwise, which is the one bit
-	// git tracks and the one bit a container needs.
-	Mode string `json:"mode,omitempty"`
+	// Mode is git's, 0644 or 0755 where the file is executable, and it is always written.
+	// Git tracks that one bit and a container needs it: an entry point that arrives 0644 is
+	// a step that will not run, and a mode left to a default is a mode somebody guessed.
+	Mode string `json:"mode"`
 }
 
-// TreeMaxBytes is the largest repository this accepts.
+// TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
 //
-// A workflow repository is an entry point, the fragments it includes and the scripts its steps
-// run: "The rest of the tree is yours to arrange, and every step of every run sees it." Four
-// mebibytes is a great deal of that. A repository above it is carrying something that belongs in
-// an image or in an artifact, and the refusal says so rather than storing a copy of it against
-// every commit.
+// It is a limit of this push rather than a rule about repositories. The tree travels inline, in
+// one JSON document and in base64, until the installation hosts the repository and a push is
+// git's own smart HTTP, which v0.4.0 brings and which takes the limit away with the transport that
+// needed it. Until then the whole request is held in memory on its way through, and four
+// mebibytes of entry point, fragments and scripts is a great deal of workflow. A tree above it is
+// usually carrying something that belongs in an image or in an artifact, and the refusal says so.
+//
+// The paths count because they are the part of a tree that is paid for again after the push:
+// every redemption of every task of the version names every file, and a tree of long names and
+// no content would otherwise cost nothing here and a great deal there.
 const TreeMaxBytes = 4 << 20
 
+// TreeMaxFiles is the most files a push carries, and a limit of the same push for the same reason.
+//
+// Bytes alone do not bound a tree: three hundred thousand empty files fit in a push, and each of
+// them is an entry with a URL of a few hundred bytes in every redemption of every task that
+// version runs, held in the API's memory while it is answered. At TreeMaxBytes this many files is
+// a kibibyte each on average, which is smaller than a script usually is, so a workflow reaches it
+// only by carrying a dependency tree, and that belongs in an image.
+const TreeMaxFiles = 4096
+
+// commitName is a commit as the version table holds one, and a push is held to it before anything
+// is written. Left to the table's own check, a commit that is not one was refused only by the
+// insert, after the tree was already in the store with nothing counting it, and answered 500 for
+// what was the caller's mistake.
+var commitName = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// pushMaxBytes is how large a push body may be, which is larger than any other body the API
+// reads because a push carries the tree.
+//
+// The arithmetic is the reason for the number. A tree at TreeMaxBytes is five and a third
+// mebibytes once base64 has had it, and the entry point and its includes are files of that same
+// tree carried a second time, so up to as much again. Sixteen leaves over five mebibytes for the
+// brick manifests, the paths and the JSON around them, which is more than a workflow has.
+const pushMaxBytes = 16 << 20
+
 func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	if s.objects == nil {
+		// Before the body is read, because nothing in it could change the answer: the tree
+		// has nowhere to go, and that is the installation's to fix rather than the caller's.
+		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and a pushed tree has nowhere to go")
+		return
+	}
 	var p Push
-	if err := read(r, &p); err != nil {
+	if err := readAtMost(r, &p, pushMaxBytes); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a push is at most %d bytes, and this one is larger: the tree it carries is limited to %d until the installation hosts the repository and a push is a git push", pushMaxBytes, TreeMaxBytes))
+			return
+		}
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	commit := r.PathValue("commit")
 
-	tree, err := s.storeTree(r.Context(), over.Namespace, p.Tree)
-	if err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	// Everything that can be refused without writing anything is refused first, so that a
+	// push that fails leaves no object behind it.
+	if !commitName.MatchString(commit) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a commit, and a version is one: a commit is named by seven to forty lowercase hexadecimal characters", commit))
 		return
 	}
+	if p.Parent != "" && !commitName.MatchString(p.Parent) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("the parent %q is not a commit: a commit is named by seven to forty lowercase hexadecimal characters", p.Parent))
+		return
+	}
+	paths, status, err := checkTree(p.Tree)
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	if err := checkAgreement(p); err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	tree, blobs := manifestOf(paths, p.Tree)
 
 	v := db.Version{
 		Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Parent: p.Parent,
@@ -154,72 +215,188 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	otherTree := fmt.Sprintf("%s was already pushed at %s with other files, and a version is a commit: one commit names exactly one tree, permanently", over.Workflow, commit)
 
+	// And compared with what is recorded under that commit, if anything is. Refused by
+	// SaveVersion instead, a commit pushed again with other files had already put them in the
+	// store, where nothing counts them, as often as anybody cared to push it.
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		return ns.CheckVersion(ctx, v)
+	})
+	if errors.Is(err, db.ErrOtherTree) {
+		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the version could not be read")
+		return
+	}
+
+	// The bytes before the row, so that a version that exists names objects that exist. A
+	// push that dies between the two leaves objects nothing references, which the collector
+	// never sees and which the next push of the same files reuses; the other order would
+	// leave a version whose /agk/repo cannot be fetched.
+	if err := s.storeTree(r.Context(), over.Namespace, blobs, false); err != nil {
+		fail(w, http.StatusInternalServerError, "the tree could not be stored")
+		return
+	}
+
+	var saved db.Saved
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
-		return ns.SaveVersion(ctx, v)
+		var err error
+		saved, err = ns.SaveVersion(ctx, v)
+		return err
 	})
+	if errors.Is(err, db.ErrOtherTree) {
+		// Two pushes of one commit that both compared before either recorded, and this one
+		// lost. What it stored is uncounted, as it is for a push that dies before its row.
+		fail(w, http.StatusConflict, otherTree)
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the version could not be recorded")
 		return
 	}
+
+	// And again for any object a sweep had claimed while this version was raising its
+	// reference onto it: the reference is safe, and the bytes may be what the sweep is about
+	// to delete.
+	again := make(map[string][]byte, len(saved.MustWriteBytes))
+	for _, digest := range saved.MustWriteBytes {
+		again[digest] = blobs[digest]
+	}
+	if err := s.storeTree(r.Context(), over.Namespace, again, true); err != nil {
+		fail(w, http.StatusInternalServerError, "the tree could not be stored")
+		return
+	}
+
 	write(w, http.StatusOK, map[string]any{
 		"namespace": over.Namespace, "workflow": over.Workflow, "commit": commit,
 	})
 }
 
-// storeTree writes every file of the tree as an object and answers the manifest.
+// checkTree refuses a tree that could not be laid out under /agk/repo, and answers its paths in
+// order along with the status a refusal is answered with.
 //
-// Content addressed like everything else, so a file that did not change between two commits is one
-// object and a version costs what changed. The manifest is sorted, because two pushes of one
-// commit have to produce the same version and a map has no order.
-func (s *Server) storeTree(ctx context.Context, namespace string, files map[string]PushFile) ([]db.TreeFile, error) {
+// Sorted, because two pushes of one commit have to produce the same version and a map has no
+// order.
+func checkTree(files map[string]PushFile) ([]string, int, error) {
 	if len(files) == 0 {
-		return nil, nil
+		return nil, http.StatusBadRequest, errors.New("a push carries the tree of its commit and this one carries none: every step of every run sees the repository under /agk/repo, and a version without it would start containers on an empty directory")
 	}
-	if s.objects == nil {
-		return nil, errors.New("this installation has no object store, and a tree has nowhere to go")
+	if len(files) > TreeMaxFiles {
+		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree has %d files and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree of this many is usually carrying dependencies that belong in an image", len(files), TreeMaxFiles)
 	}
-
 	paths := make([]string, 0, len(files))
 	var total int64
-	for path, f := range files {
-		if err := checkTreePath(path); err != nil {
-			return nil, err
+	for p, f := range files {
+		if err := checkTreePath(p); err != nil {
+			return nil, http.StatusBadRequest, err
 		}
-		if f.Mode != "" && f.Mode != "0644" && f.Mode != "0755" {
-			return nil, fmt.Errorf("%s is pushed with mode %s, and a tree carries one bit: 0644 or 0755", path, f.Mode)
+		if f.Mode != "0644" && f.Mode != "0755" {
+			return nil, http.StatusBadRequest, fmt.Errorf("%s is pushed with mode %q, and a tree carries git's two, written out: 0644, or 0755 where the file is executable", p, f.Mode)
 		}
-		total += int64(len(f.Content))
-		paths = append(paths, path)
+		total += int64(len(p) + len(f.Content))
+		paths = append(paths, p)
 	}
 	if total > TreeMaxBytes {
-		return nil, fmt.Errorf("this tree is %d bytes and the limit is %d: a workflow repository is an entry point, its fragments and its scripts, and something this size belongs in an image or in an artifact", total, TreeMaxBytes)
+		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree is %d bytes with its paths and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree this size is usually carrying something that belongs in an image or in an artifact", total, TreeMaxBytes)
 	}
 	sort.Strings(paths)
 
-	tree := make([]db.TreeFile, 0, len(paths))
-	for _, path := range paths {
-		f := files[path]
-		sum := sha256.Sum256(f.Content)
-		digest := hex.EncodeToString(sum[:])
-		key := artifact.Key(namespace, digest)
-		held, err := s.objects.Has(ctx, key)
-		if err != nil {
-			return nil, fmt.Errorf("%s could not be stored: %w", path, err)
-		}
-		if !held {
-			if err := s.objects.Put(ctx, key, bytes.NewReader(f.Content)); err != nil {
-				return nil, fmt.Errorf("%s could not be stored: %w", path, err)
+	// A path that is a file and also the directory of another cannot be laid out: one of the
+	// two would have to lose, and which one would depend on the order the runner wrote them.
+	for _, p := range paths {
+		for i := range len(p) {
+			if p[i] != '/' {
+				continue
+			}
+			if _, file := files[p[:i]]; file {
+				return nil, http.StatusBadRequest, fmt.Errorf("%s is both a file and the directory %s is in, and a tree laid out on a disk can hold only one of the two", p[:i], p)
 			}
 		}
-		tree = append(tree, db.TreeFile{
-			Path: path, Digest: digest, Size: int64(len(f.Content)), Mode: f.Mode,
-		})
 	}
-	return tree, nil
+	return paths, 0, nil
+}
+
+// checkAgreement refuses a push whose version and tree are not one commit.
+//
+// The entry point and its includes travel twice, once as what the graph is rebuilt from and once
+// as files of the tree, and the two have to be the same bytes. A version whose document said one
+// thing while /agk/repo/agentiik.yaml said another would be a run decided from a file no step can
+// see, which is precisely what "a version is a commit" is there to rule out.
+func checkAgreement(p Push) error {
+	entry, held := p.Tree[p.Entry]
+	switch {
+	case !held:
+		return fmt.Errorf("the entry point %q is not in the tree, and a version is the commit the tree is", p.Entry)
+	case !bytes.Equal(entry.Content, p.Document):
+		return fmt.Errorf("the entry point %s differs from the file of the same path in the tree, and a version is one commit rather than two", p.Entry)
+	}
+	includes := make([]string, 0, len(p.Includes))
+	for name := range p.Includes {
+		includes = append(includes, name)
+	}
+	sort.Strings(includes)
+	for _, name := range includes {
+		f, held := p.Tree[name]
+		switch {
+		case !held:
+			return fmt.Errorf("%s is included and is not in the tree, and a version is the commit the tree is", name)
+		case !bytes.Equal(f.Content, p.Includes[name]):
+			return fmt.Errorf("%s is included with other bytes than the tree holds at that path, and a version is one commit rather than two", name)
+		}
+	}
+	return nil
+}
+
+// manifestOf names every file by the digest of its bytes, and answers each distinct blob once.
+//
+// Content addressed like everything else, so a file that did not change between two commits is
+// one object and a version costs what changed, and two identical files in one tree are one blob.
+func manifestOf(paths []string, files map[string]PushFile) ([]db.TreeFile, map[string][]byte) {
+	tree := make([]db.TreeFile, 0, len(paths))
+	blobs := map[string][]byte{}
+	for _, p := range paths {
+		f := files[p]
+		sum := sha256.Sum256(f.Content)
+		digest := hex.EncodeToString(sum[:])
+		blobs[digest] = f.Content
+		tree = append(tree, db.TreeFile{Path: p, SHA256: digest, Size: int64(len(f.Content)), Mode: f.Mode})
+	}
+	return tree, blobs
+}
+
+// storeTree writes blobs as objects of the namespace.
+//
+// An object already held is skipped, since its key is the digest of its bytes, unless again says
+// the object is one a sweep had claimed: then being held now says nothing about being held in a
+// minute, and the bytes are written whatever the store says.
+func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[string][]byte, again bool) error {
+	digests := make([]string, 0, len(blobs))
+	for digest := range blobs {
+		digests = append(digests, digest)
+	}
+	sort.Strings(digests)
+	for _, digest := range digests {
+		key := artifact.Key(namespace, digest)
+		if !again {
+			held, err := s.objects.Has(ctx, key)
+			if err != nil {
+				return err
+			}
+			if held {
+				continue
+			}
+		}
+		if err := s.objects.Put(ctx, key, bytes.NewReader(blobs[digest])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkTreePath refuses a path a container could not be given, and one that leaves the tree.
@@ -231,6 +408,8 @@ func checkTreePath(p string) error {
 	switch {
 	case p == "":
 		return errors.New("a tree file with no path")
+	case p == ".":
+		return errors.New("a tree file named ., which is the root of the repository and a directory rather than a file")
 	case path.IsAbs(p):
 		return fmt.Errorf("%s is absolute, and a tree path is relative to the root of the repository", p)
 	case path.Clean(p) != p:
@@ -239,6 +418,22 @@ func checkTreePath(p string) error {
 		return fmt.Errorf("%s leaves the repository", p)
 	case strings.ContainsRune(p, 0):
 		return fmt.Errorf("%q carries a null byte", p)
+	case !utf8.ValidString(p) || strings.ContainsRune(p, utf8.RuneError):
+		// Git names a file with any bytes, and JSON carries UTF-8 only: a name that is not
+		// arrives with U+FFFD where its bytes were, so the file would be laid out under a
+		// name the commit does not give it, and two such names would arrive as one. The
+		// character is what is left to see, and one that was really in a name cannot be told
+		// from one that was not.
+		return fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8: until the installation hosts the repository a push carries UTF-8 names only, and this file would be laid out under a name its commit does not give it", p)
+	}
+	// Any segment spelt .git, in any case. A commit's tree never holds one, since git refuses
+	// it, and one laid out under /agk/repo would be a repository configuration, hooks and all,
+	// that any git a step runs there obeys. In any case because the filesystem a runner lays
+	// the tree out on may fold it, and .GIT is .git on such a disk.
+	for _, segment := range strings.Split(p, "/") {
+		if strings.EqualFold(segment, ".git") {
+			return fmt.Errorf("%s has a segment named .git, which is git's own and never part of a commit's tree", p)
+		}
 	}
 	return nil
 }
@@ -339,7 +534,14 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 // read decodes a body, closed: a request carrying a field this does not know is refused rather
 // than half understood.
 func read(r *http.Request, into any) error {
-	d := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
+	return readAtMost(r, into, 8<<20)
+}
+
+// readAtMost is read with a limit of the caller's, for the one route whose body is larger than
+// the rest. Past the limit the error wraps *http.MaxBytesError, which is how a caller tells a
+// request that is too large from one that is malformed.
+func readAtMost(r *http.Request, into any, limit int64) error {
+	d := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(into); err != nil {
 		return fmt.Errorf("the request body: %w", err)

@@ -30,8 +30,10 @@ type Config struct {
 	Store func(namespace string) (*artifact.Store, error)
 
 	// Repo answers with the path of the workflow repository tree at one commit,
-	// which is what gets bound read-only at /agk/repo. A server runner has a
-	// checkout of the commit; agk run --local has the working tree.
+	// which is what gets bound read-only at /agk/repo. A server runner lays that
+	// directory out itself from the files its grant redemption names, one
+	// content-addressed object per file, and holds no checkout and no credential
+	// for the repository; agk run --local has the working tree.
 	Repo func(ctx context.Context, namespace, workflow, commit string) (string, error)
 
 	// Runs answers with the run a task belongs to, which is what /agk/run.json

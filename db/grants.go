@@ -31,12 +31,21 @@ type Granted struct {
 // GrantScope is what one grant may be turned into, and the whole of it.
 //
 // It is what the task was dispatched with, written by the controller at the moment it decided:
-// the envelopes on each input port, named by digest, and the secrets the step asked for, named
-// and never valued. A redemption answers from this and from nothing else, which is what makes
-// "refusing anything the task does not name" a comparison rather than a promise.
+// the version whose tree the task sees under /agk/repo, the envelopes on each input port, named by
+// digest, and the secrets the step asked for, named and never valued. A redemption answers from
+// this and from nothing else, which is what makes "refusing anything the task does not name" a
+// comparison rather than a promise.
 type GrantScope struct {
 	Run  agk.RunID `json:"run,omitempty"`
 	Step agk.Step  `json:"step,omitempty"`
+
+	// Workflow and Commit are the version the task runs, which is what names its tree: "the
+	// controller resolves a commit to a tree and the runner fetches content-addressed objects
+	// with the task's grant". Written here rather than read off the run at redemption, so that
+	// what a runner is handed is what the controller decided and not what a second lookup
+	// found, and so that a runner holding a grant can reach one version's files and no other.
+	Workflow string `json:"workflow,omitempty"`
+	Commit   string `json:"commit,omitempty"`
 
 	Inputs  []GrantInput `json:"inputs,omitempty"`
 	Secrets []string     `json:"secrets,omitempty"`
