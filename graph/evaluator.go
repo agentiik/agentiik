@@ -59,6 +59,12 @@ type Options struct {
 	// value is the documented defaults, because a caller that says nothing about them
 	// means the rules and not their absence.
 	Limits agk.Limits
+
+	// MaxRequeues is the installation's max_requeues: how many times one key is handed
+	// out again after a loss. The zero value is DefaultMaxRequeues, for the reason the
+	// zero Limits are the defaults, so an installation that requeues nothing says so with
+	// a negative number.
+	MaxRequeues int
 }
 
 // Evaluator is a handle over a Graph and a State. It holds no progress of its own: the
@@ -68,6 +74,10 @@ type Evaluator struct {
 	g      *Graph
 	s      *State
 	limits agk.Limits
+
+	// maxRequeues is the bound New resolved, never zero by accident: zero here is an
+	// installation that asked for no requeue at all.
+	maxRequeues int
 
 	// templates is a memo and not progress. The same expression is read once per shard
 	// and again on every attempt, and compiling CEL is the expensive half of evaluating
@@ -110,12 +120,16 @@ func Start(g *Graph, run agk.Run, o Options, at time.Time) (*Evaluator, error) {
 	for _, name := range g.Steps() {
 		s.Steps[name] = StepState{}
 	}
-	return New(g, s, o.Limits)
+	return New(g, s, o.Limits, o.MaxRequeues)
 }
 
 // New resumes a run from a state. "Failover is a state resume and never a rebuild": load
 // the State, call Next, get the Plan the instance that died would have got.
-func New(g *Graph, s *State, l agk.Limits) (*Evaluator, error) {
+//
+// The size rules and max_requeues are arguments, read as Options reads them, and not
+// state, because neither is the run's: they are the namespace's and the installation's,
+// and a pass is decided under the ones that hold when it is taken.
+func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) {
 	switch {
 	case g == nil:
 		return nil, fmt.Errorf("graph: there is no graph to evaluate the run against")
@@ -130,7 +144,13 @@ func New(g *Graph, s *State, l agk.Limits) (*Evaluator, error) {
 	if l == (agk.Limits{}) {
 		l = agk.DefaultLimits()
 	}
-	return &Evaluator{g: g, s: s, limits: l, templates: map[templateKey]*expr.Template{}}, nil
+	switch {
+	case maxRequeues == 0:
+		maxRequeues = DefaultMaxRequeues
+	case maxRequeues < 0:
+		maxRequeues = 0
+	}
+	return &Evaluator{g: g, s: s, limits: l, maxRequeues: maxRequeues, templates: map[templateKey]*expr.Template{}}, nil
 }
 
 // State is the run as a value: what a caller persists, and what New takes back.
@@ -263,12 +283,17 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	if r.State.Terminal() && shardVerdict(r.State, r.ExitCode) == agk.VerdictFailed {
 		if st, ok := e.g.Step(name); ok {
 			var when time.Time
-			again := requeued(st.Retry, st.Idempotent, sh)
+			again := requeued(st.Retry, st.Idempotent, sh, e.maxRequeues)
 			if again {
 				// A requeue is the same attempt handed out again, so the
 				// attempt number and the key built from it stay as they were
 				// and the dispatch is what moves. It is due at once.
 				sh.Requeue++
+			} else if requeueable(st.Retry, st.Idempotent, sh) {
+				// The file asked for a requeue and the installation's bound
+				// refused it. Nothing in the file explains a step failing on a
+				// loss it said to requeue, so the step says why.
+				ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
 			} else if when, again = nextAttempt(st.Retry, sh); again {
 				// A further attempt is a new key, handed out for the first
 				// time.

@@ -659,7 +659,7 @@ func TestTheStateLeftBehindIsOneASecondProcessCouldResumeFrom(t *testing.T) {
 	// "Failover is a state resume and never a rebuild": the file on disk is a state the
 	// evaluator takes back. Resuming is not claimed at v0.1.0, and the file being one a
 	// second process could resume from is why it is written at all.
-	again, err := graph.New(g, &state, agk.DefaultLimits())
+	again, err := graph.New(g, &state, agk.DefaultLimits(), graph.DefaultMaxRequeues)
 	if err != nil {
 		t.Fatalf("the state is not one the evaluator takes back: %s", err)
 	}

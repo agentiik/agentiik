@@ -44,6 +44,7 @@ type Core struct {
 	objects  artifact.Objects
 	limits   agk.Limits
 	ceiling  time.Duration
+	requeues int
 	now      func() time.Time
 }
 
@@ -72,6 +73,17 @@ type Options struct {
 	// default for that case, and refusing to run such a workflow would be inventing a
 	// rule rather than filling a gap. The zero value is an hour.
 	Ceiling time.Duration
+
+	// MaxRequeues is the installation's max_requeues: how many times one key is handed
+	// out again after a loss before the loss stands and fails its step.
+	//
+	// Nothing else bounds a requeue. A loss uses up no retry.max attempt, since it is
+	// charged to the infrastructure, so a step whose container takes down every host it
+	// lands on would otherwise be requeued until the run's timeout, and for ever where
+	// there is none. It reaches the evaluator as an argument on every pass, as the size
+	// rules do, and the evaluator counts it against the key. The zero value is
+	// graph.DefaultMaxRequeues, three, and a negative number requeues nothing.
+	MaxRequeues int
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -100,7 +112,7 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 	return &Core{
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
-		limits: o.Limits, ceiling: o.Ceiling, now: o.Now,
+		limits: o.Limits, ceiling: o.Ceiling, requeues: o.MaxRequeues, now: o.Now,
 	}, nil
 }
 
@@ -367,7 +379,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Limits: co.limits}, now)
+		}, graph.Options{Inputs: e.Inputs, Limits: co.limits, MaxRequeues: co.requeues}, now)
 	}
 
 	var doc Document
@@ -378,7 +390,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	if err != nil {
 		return nil, err
 	}
-	ev, err := graph.New(g, state, co.limits)
+	ev, err := graph.New(g, state, co.limits, co.requeues)
 	if err != nil {
 		return nil, fmt.Errorf("controller: run %s could not be resumed: %w", e.Run, err)
 	}

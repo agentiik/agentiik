@@ -94,7 +94,8 @@ type ShardState struct {
 	// lost, from 0 for the first time it was handed out. A requeue keeps the attempt
 	// and so the idempotency key, which leaves this as the one thing that tells two
 	// dispatches of one key apart: the controller keeps a row for each, and an ending is
-	// news only about the dispatch the shard is on.
+	// news only about the dispatch the shard is on. It is also what max_requeues is
+	// counted against, which is why the bound is per key.
 	Requeue int `json:"requeue,omitempty"`
 
 	// Task and ExitCode are what the driver reported, and they are read together:
