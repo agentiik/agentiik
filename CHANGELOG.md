@@ -82,6 +82,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Taken.Refused` acknowledges a task whose redemption was refused, another runner's or one that is over, and starts nothing.
 - A runner no longer holds back a task it redeemed because `Taken.Held` failed: every other runner is refused the message that comes round again.
 - `bus.AckWait` is a minute, sized for a take and a redemption rather than a task.
+- `Bus.Ended` publishes the recorded ending before it acknowledges the message, so a requeue whose report did not go out stays on the queue. Acknowledged first, it left the queue bound to nobody, out of any sweep's reach.
+- A redemption that failed without refusing the task, the runner's own credential refused or the API failing on its side, is not acknowledged, and the message comes round after `bus.AckWait`.
 
 ### Driver
 

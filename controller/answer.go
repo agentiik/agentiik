@@ -126,13 +126,13 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // heartbeat declares a task lost when its host stops reporting, and a host only cut off may have
 // run it to its end and reported that ending into the same silence. The requeue is likeliest to
 // come back to that host, and certain to where it is its pool's only runner, and the host refuses
-// to run the key again, acknowledges the message, and reports the ending it recorded under the
-// requeue's task_id. Nobody redeems the requeue, so nobody else will ever answer it, and the run
-// would wait on it until its own timeout, or for ever where it has none. So an ending of a dispatch
-// nobody holds is also taken from a runner that redeemed an earlier dispatch of the same key, and
-// binds it the same way. Its reach is still the tasks in its hands: it was given that key, and a
-// machine that never was is refused as before. An ending that is not news writes nothing and binds
-// nobody.
+// to run the key again, reports the ending it recorded under the requeue's task_id, and
+// acknowledges the message once that is published. Nobody redeems the requeue, so nobody else will
+// ever answer it, and the run would wait on it until its own timeout, or for ever where it has
+// none. So an ending of a dispatch nobody holds is also taken from a runner that redeemed an
+// earlier dispatch of the same key, and binds it the same way. Its reach is still the tasks in its
+// hands: it was given that key, and a machine that never was is refused as before. An ending that
+// is not news writes nothing and binds nobody.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {

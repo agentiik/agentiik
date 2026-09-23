@@ -378,11 +378,15 @@ func orEmptyStrings(s []string) []string {
 // redeemed is a message waiting on the queue for a runner with room, or one a runner took and has
 // not redeemed yet, and so has not acknowledged either, since a runner acknowledges only once it
 // has redeemed: should it die there, the bus hands the message to another runner of the pool once
-// AckWait has passed. Either way the task is the bus's until it is redeemed, and a busy pool or an
-// empty one keeps it waiting as long as it likes; it is not lost, because "lost: The runner holding
-// it stopped reporting" and nothing holds it. Declared lost, it would be requeued into the queue it
-// was already waiting on, one row and one message on every sweep for as long as the pool stayed
-// full, and a step that does not requeue would fail for having waited.
+// AckWait has passed. Or it is a requeue that came back to the host which had already ended its
+// key, which nobody redeems: that host publishes the ending it recorded before it acknowledges the
+// message, so the ending is on the result stream by the time the message leaves the queue, and
+// binds the host's runner as it is written. Either way the task is the bus's until it is redeemed
+// or answered, and a busy pool or an empty one keeps it waiting as long as it likes; it is not
+// lost, because "lost: The runner holding it stopped reporting" and nothing holds it. Declared
+// lost, it would be requeued into the queue it was already waiting on, one row and one message on
+// every sweep for as long as the pool stayed full, and a step that does not requeue would fail for
+// having waited.
 //
 // Held is read as bound to a runner, and a task in flight is bound by a redemption and by nothing
 // else. A runner is also bound to a task it reports never reached a container, and that binding
