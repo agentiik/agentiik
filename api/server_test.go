@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -65,6 +66,11 @@ func (e everything) Allow(_ context.Context, who api.Principal, _ api.Permission
 }
 
 func serving(t *testing.T) (http.Handler, *db.Pool, string) {
+	h, pool, super, _ := servingWithObjects(t)
+	return h, pool, super
+}
+
+func servingWithObjects(t *testing.T) (http.Handler, *db.Pool, string, artifact.Objects) {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
@@ -80,10 +86,11 @@ func serving(t *testing.T) (http.Handler, *db.Pool, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store}); err != nil {
+	objects := artifact.Dir(t.TempDir())
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: objects}); err != nil {
 		t.Fatal(err)
 	}
-	return rt, pool, super
+	return rt, pool, super, objects
 }
 
 func call(t *testing.T, h http.Handler, method, path, as string, body any) (*httptest.ResponseRecorder, map[string]any) {

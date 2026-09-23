@@ -35,8 +35,29 @@ type Version struct {
 	Includes  map[string][]byte
 	Manifests map[string][]byte
 
+	// Tree is the repository as the runner will see it, named rather than carried: "every
+	// step of every run sees it, mounted read-only at /agk/repo". The bytes are objects in
+	// the namespace's store, addressed by digest like everything else, so a file that did
+	// not change between two commits is one object and a version costs what changed.
+	//
+	// Deliberately not the same thing as Includes. Those are what it takes to rebuild the
+	// graph with nothing in reach, and that has to keep working when the object store is
+	// unreachable or the objects are long collected. This is what a container is given.
+	Tree []TreeFile
+
 	Author    string
 	CreatedAt time.Time
+}
+
+// TreeFile is one file of the repository, at the path the container sees it under /agk/repo.
+type TreeFile struct {
+	Path   string `json:"path"`
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
+
+	// Mode is the one bit a tree carries that matters to a container: 0755 where the file
+	// is executable, absent otherwise. Git tracks no more than that and neither does this.
+	Mode string `json:"mode,omitempty"`
 }
 
 // stored is the shape the column holds. Written out rather than reusing Version so that adding a
@@ -46,6 +67,7 @@ type stored struct {
 	Document  []byte            `json:"document"`
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
+	Tree      []TreeFile        `json:"tree,omitempty"`
 }
 
 // ErrNoVersion is nothing of that commit.
@@ -86,7 +108,7 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) error {
 
 	body, err := json.Marshal(stored{
 		Entry: v.Entry, Document: v.Document,
-		Includes: v.Includes, Manifests: v.Manifests,
+		Includes: v.Includes, Manifests: v.Manifests, Tree: v.Tree,
 	})
 	if err != nil {
 		return fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
@@ -138,5 +160,6 @@ func readVersion(ctx context.Context, tx pgx.Tx, namespace, workflow, commit str
 		return Version{}, fmt.Errorf("db: version %s@%s could not be read: %w", workflow, commit, err)
 	}
 	v.Entry, v.Document, v.Includes, v.Manifests = s.Entry, s.Document, s.Includes, s.Manifests
+	v.Tree = s.Tree
 	return v, nil
 }

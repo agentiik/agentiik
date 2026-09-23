@@ -120,9 +120,18 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitRefused
 	}
 
+	// The whole tree, because "every step of every run sees it, mounted read-only at
+	// /agk/repo", and the installation holds no clone of the repository to read it out of.
+	files, err := repositoryOf(ctx, dir)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+
 	body := api.Push{
 		Entry: captured.Entry, Document: captured.Document,
 		Includes: captured.Includes, Manifests: captured.Manifests,
+		Tree:   files,
 		Branch: branchOf(ctx, dir),
 	}
 	name := string(wf.Metadata.Name)
@@ -134,11 +143,84 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 
 	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s\n", *namespace, name, short(sha), where)
-	fmt.Fprintf(e.Out, "%s, %s, %s\n",
+	fmt.Fprintf(e.Out, "%s, %s, %s, %s\n",
 		counted(len(wf.Steps), "step", "steps"),
+		counted(len(files), "file", "files"),
 		counted(len(captured.Includes), "included file", "included files"),
 		counted(len(captured.Manifests), "manifest", "manifests"))
 	return exitSucceeded
+}
+
+// repositoryOf is the repository as a container will see it.
+//
+// What git tracks, rather than what is on the disk: a version is a commit, and a commit holds
+// tracked files. Reading the directory instead would put whatever an editor, a build or a virtual
+// environment left behind into every run of every version, and an ignored file is ignored because
+// somebody said it is not part of the repository.
+//
+// Where there is no git repository at all, which is a push naming its commit by hand, the
+// directory is walked instead and .git is the only thing skipped.
+func repositoryOf(ctx context.Context, dir string) (map[string]api.PushFile, error) {
+	files := map[string]api.PushFile{}
+	var total int64
+
+	add := func(rel string) error {
+		info, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// A submodule, or a directory git lists for some other reason. The tree
+			// is files.
+			return nil
+		}
+		content, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			return err
+		}
+		total += int64(len(content))
+		if total > api.TreeMaxBytes {
+			return fmt.Errorf("this repository is above the %d bytes a tree may be: a workflow repository is an entry point, its fragments and its scripts, and something this size belongs in an image or in an artifact", api.TreeMaxBytes)
+		}
+		f := api.PushFile{Content: content}
+		if info.Mode().Perm()&0o111 != 0 {
+			f.Mode = "0755"
+		}
+		files[filepath.ToSlash(rel)] = f
+		return nil
+	}
+
+	if listed, err := git(ctx, dir, "ls-files", "-z"); err == nil {
+		for _, rel := range strings.Split(listed, "\x00") {
+			if rel == "" {
+				continue
+			}
+			if err := add(rel); err != nil {
+				return nil, err
+			}
+		}
+		return files, nil
+	}
+
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && d.Name() == ".git":
+			return filepath.SkipDir
+		case d.IsDir():
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		return add(rel)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // put sends the version and reads whatever the server says about it.

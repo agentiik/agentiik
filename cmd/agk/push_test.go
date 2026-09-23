@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -219,4 +220,70 @@ func TestANamespaceIsRequired(t *testing.T) {
 	if !strings.Contains(errs.String(), "exactly one namespace") {
 		t.Errorf("it said %q", errs)
 	}
+}
+
+// "The rest of the tree is yours to arrange, and every step of every run sees it, mounted
+// read-only at /agk/repo." So the whole of it travels, and what travels is what git tracks.
+func TestThePushCarriesTheTreeGitTracks(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "scripts/render.sh", "#!/bin/sh\necho hello\n")
+	if err := os.Chmod(filepath.Join(dir, "scripts/render.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, ".gitignore", "build/\n")
+	write(t, dir, "build/leftover.o", "not part of the repository")
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "a script"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if _, held := got.Tree["agentiik.yaml"]; !held {
+		t.Errorf("the tree holds %v", keysOf(got.Tree))
+	}
+	script, held := got.Tree["scripts/render.sh"]
+	if !held {
+		t.Fatalf("the tree holds %v", keysOf(got.Tree))
+	}
+	if script.Mode != "0755" {
+		t.Errorf("the script travels with mode %q, and a container has to be able to run it", script.Mode)
+	}
+	// An ignored file is ignored because somebody said it is not part of the repository,
+	// and putting it in every run of every version would be this command deciding otherwise.
+	if _, held := got.Tree["build/leftover.o"]; held {
+		t.Errorf("an ignored file travelled: %v", keysOf(got.Tree))
+	}
+	if !strings.Contains(out, "files") {
+		t.Errorf("it said %q", out)
+	}
+}
+
+// Where there is no git repository, the directory is walked and .git is the only thing skipped.
+func TestATreeWithNoRepositoryBehindIt(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "agentiik.yaml", scriptWorkflow)
+	write(t, dir, "scripts/render.sh", "#!/bin/sh\n")
+
+	files, err := repositoryOf(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Errorf("the tree holds %v", keysOf(files))
+	}
+}
+
+func keysOf(m map[string]api.PushFile) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -1,14 +1,21 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/version"
 )
@@ -23,6 +30,7 @@ import (
 type Server struct {
 	pool     *db.Pool
 	versions *version.Store
+	objects  artifact.Objects
 	now      func() time.Time
 }
 
@@ -30,6 +38,11 @@ type Server struct {
 type ServerOptions struct {
 	Pool     *db.Pool
 	Versions *version.Store
+
+	// Objects is where a pushed tree is written. "every step of every run sees it,
+	// mounted read-only at /agk/repo", and what a container is given is fetched from
+	// here rather than carried in the version row.
+	Objects artifact.Objects
 
 	// Now is the clock, an argument so that a test has one.
 	Now func() time.Time
@@ -52,7 +65,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &Server{pool: o.Pool, versions: o.Versions, now: o.Now}
+	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, now: o.Now}
 
 	for _, r := range []struct {
 		method  string
@@ -89,9 +102,32 @@ type Push struct {
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 
+	// Tree is the repository as every step will see it under /agk/repo. It travels in the
+	// push because there is nowhere else it could come from: a version is a commit, and the
+	// installation holds no clone of the repository to read that commit out of.
+	Tree map[string]PushFile `json:"tree,omitempty"`
+
 	Parent string `json:"parent,omitempty"`
 	Branch string `json:"branch,omitempty"`
 }
+
+// PushFile is one file of the tree.
+type PushFile struct {
+	Content []byte `json:"content"`
+
+	// Mode is 0755 where the file is executable and absent otherwise, which is the one bit
+	// git tracks and the one bit a container needs.
+	Mode string `json:"mode,omitempty"`
+}
+
+// TreeMaxBytes is the largest repository this accepts.
+//
+// A workflow repository is an entry point, the fragments it includes and the scripts its steps
+// run: "The rest of the tree is yours to arrange, and every step of every run sees it." Four
+// mebibytes is a great deal of that. A repository above it is carrying something that belongs in
+// an image or in an artifact, and the refusal says so rather than storing a copy of it against
+// every commit.
+const TreeMaxBytes = 4 << 20
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	var p Push
@@ -101,10 +137,16 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 	commit := r.PathValue("commit")
 
+	tree, err := s.storeTree(r.Context(), over.Namespace, p.Tree)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	v := db.Version{
 		Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Parent: p.Parent,
 		Entry: p.Entry, Document: p.Document, Includes: p.Includes, Manifests: p.Manifests,
-		Author: string(who), CreatedAt: s.now(),
+		Tree: tree, Author: string(who), CreatedAt: s.now(),
 	}
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
 	// push rather than discovered by the first run of it.
@@ -113,7 +155,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		return
 	}
 
-	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
@@ -126,6 +168,79 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	write(w, http.StatusOK, map[string]any{
 		"namespace": over.Namespace, "workflow": over.Workflow, "commit": commit,
 	})
+}
+
+// storeTree writes every file of the tree as an object and answers the manifest.
+//
+// Content addressed like everything else, so a file that did not change between two commits is one
+// object and a version costs what changed. The manifest is sorted, because two pushes of one
+// commit have to produce the same version and a map has no order.
+func (s *Server) storeTree(ctx context.Context, namespace string, files map[string]PushFile) ([]db.TreeFile, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	if s.objects == nil {
+		return nil, errors.New("this installation has no object store, and a tree has nowhere to go")
+	}
+
+	paths := make([]string, 0, len(files))
+	var total int64
+	for path, f := range files {
+		if err := checkTreePath(path); err != nil {
+			return nil, err
+		}
+		if f.Mode != "" && f.Mode != "0644" && f.Mode != "0755" {
+			return nil, fmt.Errorf("%s is pushed with mode %s, and a tree carries one bit: 0644 or 0755", path, f.Mode)
+		}
+		total += int64(len(f.Content))
+		paths = append(paths, path)
+	}
+	if total > TreeMaxBytes {
+		return nil, fmt.Errorf("this tree is %d bytes and the limit is %d: a workflow repository is an entry point, its fragments and its scripts, and something this size belongs in an image or in an artifact", total, TreeMaxBytes)
+	}
+	sort.Strings(paths)
+
+	tree := make([]db.TreeFile, 0, len(paths))
+	for _, path := range paths {
+		f := files[path]
+		sum := sha256.Sum256(f.Content)
+		digest := hex.EncodeToString(sum[:])
+		key := artifact.Key(namespace, digest)
+		held, err := s.objects.Has(ctx, key)
+		if err != nil {
+			return nil, fmt.Errorf("%s could not be stored: %w", path, err)
+		}
+		if !held {
+			if err := s.objects.Put(ctx, key, bytes.NewReader(f.Content)); err != nil {
+				return nil, fmt.Errorf("%s could not be stored: %w", path, err)
+			}
+		}
+		tree = append(tree, db.TreeFile{
+			Path: path, Digest: digest, Size: int64(len(f.Content)), Mode: f.Mode,
+		})
+	}
+	return tree, nil
+}
+
+// checkTreePath refuses a path a container could not be given, and one that leaves the tree.
+//
+// The mount is /agk/repo, so a path escaping it is a path writing somewhere else on the host that
+// prepares the directory. It is refused here rather than there because here is where somebody is
+// watching.
+func checkTreePath(p string) error {
+	switch {
+	case p == "":
+		return errors.New("a tree file with no path")
+	case path.IsAbs(p):
+		return fmt.Errorf("%s is absolute, and a tree path is relative to the root of the repository", p)
+	case path.Clean(p) != p:
+		return fmt.Errorf("%s is not in its cleaned form", p)
+	case p == ".." || strings.HasPrefix(p, "../"):
+		return fmt.Errorf("%s leaves the repository", p)
+	case strings.ContainsRune(p, 0):
+		return fmt.Errorf("%q carries a null byte", p)
+	}
+	return nil
 }
 
 // Start is a manual run: the inputs, and nothing else. What version it runs is the workflow's
