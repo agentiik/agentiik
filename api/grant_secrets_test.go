@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
@@ -163,6 +165,84 @@ func TestASecretIsReadOnlyOnceNothingElseCanRefuse(t *testing.T) {
 	}
 	if reads := store.read(); len(reads) != 1 {
 		t.Errorf("refusing a task that is not the runner's to work on read %v", reads[1:])
+	}
+}
+
+// meeting is a store whose reads wait for one another until as many have arrived as it expects:
+// runners redeeming at once are then all past their check before any of them is bound. The wait is
+// bounded, so that a redemption reading under the task's lock, which makes the others wait for it
+// rather than meet it, slows the test down instead of hanging it.
+type meeting struct {
+	*rotated
+	expected int32
+	arrived  atomic.Int32
+	all      chan struct{}
+}
+
+func (m *meeting) Value(ctx context.Context, namespace, name string) ([]byte, error) {
+	if m.arrived.Add(1) == m.expected {
+		close(m.all)
+	}
+	select {
+	case <-m.all:
+	case <-time.After(2 * time.Second):
+	}
+	return m.rotated.Value(ctx, namespace, name)
+}
+
+// Runners redeeming one task at the same moment are each checked and may each read its secret
+// before any of them is bound, and the binding decides: one is given the task, and every other is
+// told the task is not its own and given no value. The one given it is the one it is bound to, so
+// asking again is answered for it and refused for the rest.
+func TestOfRunnersRedeemingATaskAtOnceOneTakesIt(t *testing.T) {
+	const runners = 6
+	store := &meeting{rotated: &rotated{}, expected: runners, all: make(chan struct{})}
+	store.holds("finance/stripe", "sk_live_notreal")
+	g := withGrants(t, store)
+	clear, _, _ := g.dispatched(t, []string{"stripe"})
+	credentials := make([]string, runners)
+	for i := range credentials {
+		credentials[i] = g.joined(t)
+	}
+
+	codes := make([]int, len(credentials))
+	bodies := make([]string, len(credentials))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, credential := range credentials {
+		wg.Go(func() {
+			<-start
+			w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+			codes[i], bodies[i] = w.Code, w.Body.String()
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	taken := -1
+	for i, code := range codes {
+		switch {
+		case code == http.StatusOK && taken < 0:
+			taken = i
+		case code == http.StatusOK:
+			t.Errorf("runners %d and %d were both given the task", taken, i)
+		case code != http.StatusConflict:
+			t.Errorf("runner %d answered %d: %s", i, code, bodies[i])
+		case strings.Contains(bodies[i], "sk_live_notreal"):
+			t.Errorf("runner %d was refused the task and given its secret: %s", i, bodies[i])
+		}
+	}
+	if taken < 0 {
+		t.Fatalf("no runner was given the task: %v", codes)
+	}
+	for i, credential := range credentials {
+		want := http.StatusConflict
+		if i == taken {
+			want = http.StatusOK
+		}
+		if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear)); w.Code != want {
+			t.Errorf("runner %d, asking again, answered %d", i, w.Code)
+		}
 	}
 }
 
