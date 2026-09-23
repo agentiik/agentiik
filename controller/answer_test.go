@@ -280,3 +280,77 @@ func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 		t.Errorf("archive is handed the items %+v", got)
 	}
 }
+
+// "Its reach is the tasks in its hands." A task is in a runner's hands once it redeemed the task's
+// grant, and a result is taken from that runner and from no other: not from another machine of the
+// pool, which holds the same bus credential and could otherwise settle a task it was never given,
+// and not from anybody before a redemption, when nobody holds it. Each is refused, with an error
+// the bus takes off the queue and reports, and the run is left as it was.
+func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+	result := succeeded(t, d.Task, core.now())
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	refused := func(why string, a Answer, holder bool) {
+		t.Helper()
+		err := core.Answer(t.Context(), a)
+		if !errors.Is(err, ErrNotAResult) {
+			t.Errorf("%s answered %v, and it is the same on every delivery", why, err)
+		}
+		if errors.Is(err, ErrNotTheHolder) != holder {
+			t.Errorf("%s answered %v", why, err)
+		}
+	}
+
+	// Nobody has redeemed it yet, so the answer is written by hand rather than by answerOf,
+	// which would redeem it.
+	early := Answer{Result: result, Row: d.Row, Runner: theRunner}
+	early.Result.Outputs = nil
+	refused("a result for a task nobody redeemed", early, true)
+
+	// runner-dmz-02 redeems it, and the task is in its hands.
+	answer := core.answerOf(t, result)
+	if answer.Runner != theRunner {
+		t.Fatalf("the task is held by %s", answer.Runner)
+	}
+	other := answer
+	other.Runner = "runner-lan-01"
+	refused("a result from another runner of the pool", other, true)
+	elsewhere := answer
+	elsewhere.Row = "01M2ZZZZZZZZZZZZZZZZZZZZZZ"
+	refused("a result naming a dispatch that is not this task's", elsewhere, false)
+
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("refused results took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("refused results published %+v", got)
+	}
+	var state, runner string
+	if err := conn.QueryRow(t.Context(),
+		`select state, runner from tasks where idempotency_key = $1`, string(d.Task.ID)).
+		Scan(&state, &runner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "dispatched" || runner != theRunner {
+		t.Errorf("the task reads %s, held by %s, after results from runners that do not hold it", state, runner)
+	}
+
+	// And the runner that holds it is heard.
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("the result of the runner holding the task was refused: %s", err)
+	}
+	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
+		t.Errorf("the holder's result published %+v, want archive", got)
+	}
+}

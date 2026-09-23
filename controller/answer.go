@@ -31,8 +31,14 @@ import (
 type Answer struct {
 	Result graph.Result
 
-	// Runner is the name of the host that held it. "A user never learns which host executed
-	// a task beyond its runner name and labels."
+	// Row is the task_id of the dispatch the answer is about, carried back unchanged from the
+	// task message. The key in Result says which unit of work this is and the row says which
+	// dispatch of it, which is what a grant was issued for and so what a runner was bound to.
+	Row string
+
+	// Runner is the runner that published it. "A user never learns which host executed a task
+	// beyond its runner name and labels." It is also who the answer is taken from: the runner
+	// the dispatch was bound to at redemption, and no other.
 	Runner string
 
 	// Outputs are the envelopes the task published, one per port, named rather than carried.
@@ -67,6 +73,16 @@ type Output struct {
 // delivery, so a consumer that delivered it again would deliver it for ever.
 var ErrNotAResult = errors.New("controller: not a result any controller could record")
 
+// ErrNotTheHolder is a result published by a runner other than the one its task was bound to when
+// its grant was redeemed, or about a task nobody redeemed.
+//
+// It always comes wrapped with ErrNotAResult, since no delivery would change it: a binding is never
+// released. It has a name of its own because it points somewhere else. A result that is not an
+// ending is a runner that misread the wire; this is a machine of the pool speaking for work it was
+// never given, which is what a compromised host does, and the security model's "Its reach is the
+// tasks in its hands" holds only because something refuses it.
+var ErrNotTheHolder = errors.New("controller: a result from a runner that does not hold the task")
+
 // Answer records one result and decides the run again.
 //
 // It is called before the message is acknowledged and never after, so that a controller dying
@@ -80,6 +96,12 @@ var ErrNotAResult = errors.New("controller: not a result any controller could re
 // be taken as news on every delivery, and each would be a decision. So an answer is refused
 // with ErrNotAResult before anything is read: "a heartbeat is what says a task is still
 // running, and a result saying so would be a result for work that has not finished."
+//
+// And taken from one runner. Any machine holding its pool's bus credential can publish a result,
+// and the first ending recorded for an attempt stands, so an answer is matched on its key and then
+// held to the runner its dispatch was bound to at redemption. Another runner's answer is refused
+// with ErrNotTheHolder before the run is decided, and so is one about a dispatch nobody redeemed:
+// no runner holds that one, so none can have run it.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
@@ -88,17 +110,37 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	if !a.Result.State.Terminal() {
 		return fmt.Errorf("%w: %s is %s, which is not one of the five endings a result reports", ErrNotAResult, a.Result.Task, a.Result.State)
 	}
-	if len(a.Result.Outputs) > 0 {
+	switch {
+	case a.Row == "":
+		return fmt.Errorf("%w: %s names no dispatch, and a runner is bound to a dispatch rather than to a key", ErrNotAResult, a.Result.Task)
+	case a.Runner == "":
+		return fmt.Errorf("%w: %s names no runner, and a result is taken from the runner its task is bound to and from no other", ErrNotAResult, a.Result.Task)
+	case len(a.Result.Outputs) > 0:
 		return fmt.Errorf("%w: %s carries its envelopes, and a result names them by digest", ErrNotAResult, a.Result.Task)
 	}
 
 	var e db.Evaluation
+	var holder string
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		e, err = w.Run(ctx, run)
+		if e, err = w.Run(ctx, run); err != nil {
+			return err
+		}
+		holder, err = w.HeldBy(ctx, e.Namespace, a.Result.Task, a.Row)
 		return err
 	}); err != nil {
+		// A run nobody holds and a dispatch nobody wrote are the same on every delivery:
+		// rows are written before a message leaves, so a result naming none is not early.
+		if errors.Is(err, db.ErrNoRun) || errors.Is(err, db.ErrNoDispatch) {
+			return fmt.Errorf("%w: %w", ErrNotAResult, err)
+		}
 		return err
+	}
+	switch {
+	case holder == "":
+		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which no runner has redeemed", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task)
+	case holder != a.Runner:
+		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which is bound to %s", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task, holder)
 	}
 	if e.State.Terminal() {
 		// A run that has ended has nothing to learn. The answer is late rather than
@@ -221,16 +263,16 @@ func isDigest(s string) bool {
 }
 
 // stamp writes onto the projected row of the task the answer is about the things only the answer
-// knows: who held it, where its log went, and what it cost.
+// knows: where its log went, and what it cost.
 //
 // Only that row. A result says nothing about the other shards of its step, and a projection that
-// spread one runner's name across them would be inventing.
+// spread one runner's log across them would be inventing. Who held it is not written here: the
+// redemption wrote it, and the answer was taken because it named the same runner.
 func stamp(tasks []db.TaskRow, a Answer) {
 	for i := range tasks {
 		if tasks[i].ID != a.Result.Task {
 			continue
 		}
-		tasks[i].Runner = a.Runner
 		tasks[i].Log = a.Log
 		tasks[i].LogLines = a.LogLines
 		tasks[i].LogCut = a.LogCut

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -86,8 +87,15 @@ func (q *fakeQueue) Publish(_ context.Context, d Dispatch) error {
 		return q.refuse
 	}
 	q.published = append(q.published, d)
+	issued.Store(d.Row, d.Grant)
 	return nil
 }
+
+// issued is every grant that went out, by the row it was issued for, which is what a runner taking
+// the message has in its hands. Kept outside any one queue because a failover hands the answer to
+// a controller that did not publish the task, and by row because a row is minted once and never
+// shared between two tests.
+var issued sync.Map
 
 func (q *fakeQueue) Stop(_ context.Context, s graph.Stop) error {
 	q.mu.Lock()
@@ -316,7 +324,13 @@ func (co *Core) answer(t *testing.T, r graph.Result) {
 	}
 }
 
-// answerOf is what a runner says about r, as the bus hands it on: its envelopes are uploaded
+// theRunner is the machine these tests have holding their tasks.
+const theRunner = "runner-dmz-02"
+
+// answerOf is what the runner holding a task says about r, as the bus hands it on.
+//
+// The runner holds it because it redeemed its grant, and redeems it here as theRunner where nobody
+// has yet; a task somebody else redeemed is answered by whoever did. Its envelopes are uploaded
 // first and named by digest, and the instant it was handed out is left out, since that is the
 // controller's to know and not the runner's to say.
 func (co *Core) answerOf(t *testing.T, r graph.Result) Answer {
@@ -327,7 +341,7 @@ func (co *Core) answerOf(t *testing.T, r graph.Result) Answer {
 		t.Fatal(err)
 	}
 	a := Answer{
-		Runner: "runner-dmz-02",
+		Runner: theRunner,
 		Log:    log, LogLines: 412,
 		Usage: map[string]any{"cpu_seconds": 12.4, "max_rss_bytes": 198443008, "image_pull_ms": 0},
 	}
@@ -341,6 +355,27 @@ func (co *Core) answerOf(t *testing.T, r graph.Result) Answer {
 	}
 	r.Outputs, r.DispatchedAt = nil, time.Time{}
 	a.Result = r
+
+	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		row, err := w.TaskRow(ctx, "finance", r.Task)
+		if err != nil {
+			return err
+		}
+		a.Row = row
+		holder, err := w.HeldBy(ctx, "finance", r.Task, row)
+		if err != nil || holder != "" {
+			a.Runner = holder
+			return err
+		}
+		grant, ok := issued.Load(row)
+		if !ok {
+			return fmt.Errorf("no grant went out for %s, so no runner can hold it", r.Task)
+		}
+		_, err = w.Redeem(ctx, grant.(string), r.Task, theRunner, co.now())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return a
 }
 
