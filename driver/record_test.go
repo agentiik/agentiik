@@ -370,6 +370,56 @@ func TestAnEntryThatDoesNotReadRefusesItsKey(t *testing.T) {
 	}
 }
 
+// An entry that does not read is judged by the age of its file instead, so that it is
+// forgotten in its turn rather than refusing its key for as long as the host runs. One
+// written within the week still refuses: it may be the entry of a key that ran, cut short
+// by the crash it was written for.
+func TestAnEntryThatDoesNotReadIsForgottenByItsOwnAge(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+
+	old, recent := stepTask(ref, "old"), stepTask(ref, "recent")
+	paths := map[agk.Step]string{}
+	for _, task := range []graph.Task{old, recent} {
+		path, err := r.keys.path(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"idempotency_key":"01JMZ8V1P9C4/`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths[task.Step] = path
+	}
+	long := time.Now().Add(-KeysKept - time.Hour)
+	if err := os.Chtimes(paths["old"], long, long); err != nil {
+		t.Fatal(err)
+	}
+
+	// The record is pruned when an ending is written, the first one a driver writes
+	// included.
+	if _, err := r.Run(t.Context(), stepTask(ref, "another")); err != nil {
+		t.Fatalf("running another key: %s", err)
+	}
+
+	if _, err := os.Stat(paths["old"]); !os.IsNotExist(err) {
+		t.Errorf("an entry that does not read and was last written %s ago is still there", KeysKept+time.Hour)
+	}
+	if _, err := r.Run(t.Context(), old); err != nil {
+		t.Errorf("the key whose unreadable entry was forgotten is refused: %s", err)
+	}
+	if _, err := r.Run(t.Context(), recent); err == nil {
+		t.Error("a key whose entry does not read and was written within the week was started")
+	}
+	if old, recent := bricks.times("old"), bricks.times("recent"); old != 1 || recent != 0 {
+		t.Errorf("the bricks ran %d and %d times", old, recent)
+	}
+}
+
 // storeGone is an object store the network has gone from, which is the outage that also
 // silences a heartbeat.
 type storeGone struct{}
