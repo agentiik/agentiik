@@ -332,6 +332,33 @@ func TestAPushWithNoRepositoryBehindItIsRefused(t *testing.T) {
 	}
 }
 
+// A repository git will not read is not the absence of one. Git refuses a checkout another user
+// owns, which is every CI container that mounts one, and says what to do about it: that sentence
+// reaches the person pushing, rather than one telling them to go and find the repository they are
+// standing in.
+func TestARepositoryGitWillNotReadIsNotCalledNoRepository(t *testing.T) {
+	dir := repository(t)
+	// Git's own test switch for "owned by somebody else", with no configuration of this
+	// machine's that could mark every directory safe.
+	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a repository git will not read answered %d", code)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if strings.Contains(errs, "not in a git repository") {
+		t.Errorf("the refusal says there is no repository: %q", errs)
+	}
+	if !strings.Contains(errs, "dubious ownership") || !strings.Contains(errs, "safe.directory") {
+		t.Errorf("the refusal does not pass on what git said and what it said to do: %q", errs)
+	}
+}
+
 // A commit is resolved before anything is read: one commit typed three ways is one version rather
 // than three, and a name the repository does not hold is refused rather than pushed under.
 func TestACommitIsPushedUnderItsWholeHash(t *testing.T) {

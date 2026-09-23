@@ -440,10 +440,18 @@ func put(ctx context.Context, url, token string, body api.Push) error {
 // instead would send whatever it holds under a hash nobody can check it against, which is the one
 // lie this command exists to refuse, and would leave it guessing what a repository is made of: a
 // virtual environment, a build, the .agk a local run leaves behind.
+//
+// That is said only where git says it, though. Anything else git refuses a repository over, one
+// owned by somebody else, a configuration it cannot parse, a HEAD it cannot follow, is passed on
+// in git's words: they name the cause and usually the remedy, and telling somebody standing in a
+// repository that there is none sends them looking for the wrong thing.
 func commitOf(ctx context.Context, dir, named string) (string, error) {
 	if _, err := git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
 			return "", errors.New("git is not installed, and agk push reads what it sends out of a git commit")
+		case !notARepository(err):
+			return "", fmt.Errorf("the repository at %s could not be read from git: %w", dir, err)
 		}
 		return "", fmt.Errorf("%s is not in a git repository, and a version is a commit: agk push reads what it sends out of one, so it runs inside the repository the workflow is committed to", dir)
 	}
@@ -461,6 +469,18 @@ func commitOf(ctx context.Context, dir, named string) (string, error) {
 		return "", fmt.Errorf("the repository at %s has no commit yet, and a version is a commit: commit the workflow, then push it", dir)
 	}
 	return "", fmt.Errorf("the repository at %s holds no commit %s", dir, named)
+}
+
+// notARepository is whether git refused because it found no repository at all, which it says in
+// the two sentences its discovery dies with: "not a git repository (or any of the parent
+// directories)" and "not a git repository (or any parent up to mount point". Its other "not a git
+// repository", which names a path, is about a .git file or a GIT_DIR pointing at something broken,
+// and that is a repository git could not read rather than the absence of one.
+//
+// A git that speaks another language says neither, and what it said is passed on instead, which is
+// still the truth in its own words.
+func notARepository(err error) bool {
+	return strings.Contains(err.Error(), "not a git repository (or any")
 }
 
 // dirtyTree is what the working copy holds that the commit does not: the edits somebody pushing
