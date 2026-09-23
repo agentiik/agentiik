@@ -423,18 +423,23 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 }
 
 // An installation with no secret provider holds nothing, and a task naming a secret fails in
-// front of somebody rather than mounting an empty file.
+// front of somebody rather than mounting an empty file. That is also what an installation that
+// attached no store at all gets, since the runner half's options default to holding nothing.
 func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
-	g := withGrants(t, api.NoSecrets{})
-	credential := g.joined(t)
-	clear, _, _ := g.dispatched(t, []string{"stripe"})
+	for what, secrets := range map[string]api.Secrets{"NoSecrets": api.NoSecrets{}, "nothing attached": nil} {
+		t.Run(what, func(t *testing.T) {
+			g := withGrants(t, secrets)
+			credential := g.joined(t)
+			clear, _, _ := g.dispatched(t, []string{"stripe"})
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("a secret nobody holds answered %d: %s", w.Code, w.Body)
-	}
-	if said, _ := answer["error"].(string); said == "" || !strings.Contains(said, "stripe") {
-		t.Errorf("the refusal does not name the secret: %v", answer)
+			w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("a secret nobody holds answered %d: %s", w.Code, w.Body)
+			}
+			if said, _ := answer["error"].(string); said == "" || !strings.Contains(said, "stripe") {
+				t.Errorf("the refusal does not name the secret: %v", answer)
+			}
+		})
 	}
 }
 

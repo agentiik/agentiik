@@ -36,6 +36,10 @@ import (
 // One method, because that is the whole of what the API does with a store: read one value, for one
 // namespace, at the last moment. There is no write here and no listing, which is not an omission:
 // "No role reads a secret value through the API. Rotation is a write, never a read-then-write."
+//
+// secret.Providers fills it, reading the namespace's declaration of the name and then the store
+// the declaration names. It is wired in by secret.Attach rather than built here, for the reason
+// Values is: this package is linked by the command line, and what reads a store is not.
 type Secrets interface {
 	Value(ctx context.Context, namespace, name string) ([]byte, error)
 }

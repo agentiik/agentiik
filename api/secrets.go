@@ -192,8 +192,9 @@ const secretsDir = "/agk/secrets/"
 //
 // An interface here and filled elsewhere, because sealing is package secret and cmd/agk imports
 // this package: the boundary test holds that only the API reaches the store, and the command line
-// reaching it through this package would be the command line linking it. What fills it is wired
-// in by the server's own main package, once there is one, which nothing else imports.
+// reaching it through this package would be the command line linking it. secret.Builtin fills it,
+// and secret.Attach wires it in beside the reader of the same store, called by the server's own
+// main package, which nothing else imports.
 type Values interface {
 	// Write seals value as the one the namespace's secret of that name holds, replacing
 	// whatever it held before.

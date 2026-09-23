@@ -80,6 +80,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test sends a request to every API route but the redemption, with a secret store that fails if it is read.
 - `secret.Builtin` keeps a `builtin` value in `secret_values`: sealed on the declaration's `PUT` at the next version, opened as bytes under whichever key of the ring sealed it. A row copied into another namespace, another name or over a later write does not open.
 - `secret.Env` reads the API's environment for development: only for a namespace the installation opts in, only under the prefix it gives that namespace, held again at every read. A variable set to nothing is not a value.
+- `secret.Providers` fills `api.Secrets`: it reads a secret through the namespace's declaration, from the store the declaration names, as bytes. A store the installation does not read, or does not know, is refused naming the secret and never a value.
+- `secret.Attach` wires both stores into the API's options from one configuration, so the routes and the redemption cannot disagree. `api` holds only the interfaces, and `cmd/agk` links none of it.
 
 ### Command line
 
