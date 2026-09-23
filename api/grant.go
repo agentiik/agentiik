@@ -11,6 +11,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/token"
 )
 
 // What a grant turns into.
@@ -90,6 +91,16 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		fail(w, http.StatusBadRequest, "a redemption names the attempt that is asking, and this one has no idempotency_key")
 		return
 	}
+	// The row is held against the task the grant names inside its own text before anything
+	// is read, so that a body disagreeing with its grant has one refusal whatever the task is
+	// doing. Compared once the task was read, a wrong task_id would be told the work is
+	// somebody else's where a wrong idempotency_key is told nothing, and the two halves of
+	// one rule would answer differently.
+	if row, named := token.TaskOf(ask.Grant); !named || row != ask.TaskID {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		fail(w, http.StatusUnauthorized, "that grant cannot be redeemed")
+		return
+	}
 
 	var got db.Redeemed
 	var tree []db.TreeFile
@@ -99,9 +110,9 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		if err != nil {
 			return err
 		}
-		// The row is compared here, inside the transaction that bound the task, so a
-		// request naming another task's row is refused as a grant that opens nothing
-		// and the binding Redeem wrote is rolled back with it.
+		// And again with the row Redeem read, inside the transaction that bound the
+		// task, so that should the two ever come apart the request is refused as a
+		// grant that opens nothing and the binding is rolled back with it.
 		if got.Row != ask.TaskID {
 			return db.ErrNoGrant
 		}

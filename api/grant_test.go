@@ -398,6 +398,21 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Errorf("a machine redeeming a grant another has redeemed answered %d", w.Code)
 	}
+
+	// But only when the body agrees with the grant. One that names another row or another
+	// attempt is the refusal above whatever the task is doing, and neither half of it is told
+	// whose the work is.
+	for _, c := range []struct {
+		name string
+		ask  api.Redemption
+	}{
+		{"another task's row", api.Redemption{Grant: clear, TaskID: "01M2ZZZZZZZZZZZZZZZZZZZZZZ", IdempotencyKey: grantKey}},
+		{"another attempt", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantRun + "/render/2"}},
+	} {
+		if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.ask); w.Code != http.StatusUnauthorized {
+			t.Errorf("a grant another machine holds, redeemed for %s, answered %d", c.name, w.Code)
+		}
+	}
 }
 
 // An installation with no secret provider holds nothing, and a task naming a secret fails in
