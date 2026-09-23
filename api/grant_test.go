@@ -192,6 +192,13 @@ func (g grants) dispatchedWith(t *testing.T, secrets []db.GrantSecret) (clear, e
 // controller finds them when it dispatches, and answers the digest of each.
 func (g grants) enveloped(t *testing.T, step agk.Step, port agk.Port, content string) (envelope, file string) {
 	t.Helper()
+	return g.envelopedAs(t, step, port, content, "invoice.pdf")
+}
+
+// envelopedAs is enveloped with one item for each name, every item attaching the same bytes
+// under the name it is given.
+func (g grants) envelopedAs(t *testing.T, step agk.Step, port agk.Port, content string, names ...string) (envelope, file string) {
+	t.Helper()
 	sum := sha256.Sum256([]byte(content))
 	file = hex.EncodeToString(sum[:])
 	if err := g.objects.Put(t.Context(), artifact.Key("finance", file), readerOf(content)); err != nil {
@@ -199,16 +206,16 @@ func (g grants) enveloped(t *testing.T, step agk.Step, port agk.Port, content st
 	}
 
 	e := agk.Envelope{
-		Meta: agk.Meta{RunID: grantRun, Step: step, Port: port, Attempt: 1, Count: 1, ProducedAt: time.Now().UTC()},
-		Items: []agk.Item{{
-			ID:   "01M2ITEMAAAAAAAAAAAAAAAAAA",
-			Data: map[string]any{"total": 42},
-			Files: []agk.File{{
-				Name:      "invoice.pdf",
-				URI:       agk.URI{Run: grantRun, Step: step, Port: port, Name: "invoice.pdf"},
-				MediaType: "application/pdf", Size: int64(len(content)), SHA256: file,
-			}},
-		}},
+		Meta: agk.Meta{RunID: grantRun, Step: step, Port: port, Attempt: 1, Count: len(names), ProducedAt: time.Now().UTC()},
+	}
+	for _, name := range names {
+		item := agk.NewItem(map[string]any{"total": 42})
+		item.Files = []agk.File{{
+			Name:      name,
+			URI:       agk.URI{Run: grantRun, Step: step, Port: port, Name: name},
+			MediaType: "application/pdf", Size: int64(len(content)), SHA256: file,
+		}}
+		e.Items = append(e.Items, item)
 	}
 	envelope, _, err := artifact.PutEnvelope(t.Context(), g.objects, "finance", e)
 	if err != nil {
@@ -531,6 +538,39 @@ func TestEachPortCarriesTheArtifactsItsEnvelopeNames(t *testing.T) {
 		if res := follow(t, g.handler, "GET", a.URL, ""); res.Code != http.StatusOK || res.Body.String() != content {
 			t.Errorf("following the artifact on %s answered %d: %q", want.port, res.Code, res.Body)
 		}
+	}
+}
+
+// The same holds inside one envelope: an envelope may attach one content under two names, and the
+// runner looks each name up by its URI. So each name is an entry of its own, both fetching the
+// same bytes, and a name that two items attach is still one entry.
+func TestTheSameBytesUnderTwoNamesAreListedUnderBoth(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	const content = "the whole of an invoice"
+	envelope, file := g.envelopedAs(t, "collect", "out", content, "a.pdf", "b.pdf", "a.pdf")
+	clear := g.granted(t, db.GrantScope{
+		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Inputs: []db.GrantInput{{Port: "in", Digest: envelope, Items: 3}},
+	})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	if len(answer.Inputs) != 1 {
+		t.Fatalf("the grant answered %d inputs: %+v", len(answer.Inputs), answer.Inputs)
+	}
+	var listed []string
+	for _, a := range answer.Inputs[0].Artifacts {
+		listed = append(listed, a.URI.String())
+		if a.SHA256 != file {
+			t.Errorf("%s is named by %s", a.URI, a.SHA256)
+		}
+		if res := follow(t, g.handler, "GET", a.URL, ""); res.Code != http.StatusOK || res.Body.String() != content {
+			t.Errorf("following %s answered %d: %q", a.URI, res.Code, res.Body)
+		}
+	}
+	under := "agk://run/" + grantRun + "/collect/out/"
+	if got, want := strings.Join(listed, ", "), under+"a.pdf, "+under+"b.pdf"; got != want {
+		t.Errorf("the port lists %s, want %s", got, want)
 	}
 }
 
