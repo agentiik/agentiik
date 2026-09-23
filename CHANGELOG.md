@@ -44,6 +44,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret_values` keeps the built-in store's values sealed, one row per secret behind the namespace policy. A write takes the next version under a row lock, nothing lowers one, and a forgotten value keeps its count.
 - `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
 - `db.NewRun.Inputs` is the JSON object a run was started with, written down as it arrived rather than decoded and encoded again.
+- `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 
 ### Bus
 

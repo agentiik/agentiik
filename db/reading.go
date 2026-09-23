@@ -128,6 +128,26 @@ func (n *NS) Runs(ctx context.Context, q RunQuery) ([]RunSummary, error) {
 	return out, rows.Err()
 }
 
+// WorkflowOf answers which workflow a run of this namespace is of.
+//
+// It is what a route about one run is authorised against. A permission such as workflow:run can be
+// held on a single workflow, and the path of such a route names the run and not its workflow. The
+// identifier is compared as text, because it comes from a path and the column's domain would
+// refuse one that is not a ULID with an error rather than find nothing.
+func (n *NS) WorkflowOf(ctx context.Context, run agk.RunID) (string, error) {
+	var workflow string
+	err := n.tx.QueryRow(ctx,
+		`select workflow from runs where namespace = $1 and id = $2::text`,
+		n.namespace, string(run)).Scan(&workflow)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: run %s could not be read: %w", run, err)
+	}
+	return workflow, nil
+}
+
 // RunDetail reads one run whole.
 func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	var d RunDetail

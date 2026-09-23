@@ -97,6 +97,43 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	return nil
 }
 
+// RequestCancel records that a run is to be cancelled, and answers the state it is in.
+//
+// It asks and decides nothing. Ending a run and stopping what it holds is one decision, and it is
+// the controller's, which reads the request on its next pass: the API writes down the moment it
+// was asked and notifies, as it does for a run it starts. A run that has already ended is left as
+// it is and answered in the state it ended in, so that somebody asking about a run that finished
+// while they were asking learns how it finished. Asking again keeps the first moment.
+//
+// The identifier is compared as text, because it comes from a path and the column's domain would
+// refuse one that is not a ULID with an error rather than find nothing.
+func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, error) {
+	var state string
+	err := n.tx.QueryRow(ctx,
+		`update runs set cancel_requested_at = coalesce(cancel_requested_at, $3)
+		 where namespace = $1 and id = $2::text and state in ('queued', 'running', 'waiting')
+		 returning state`,
+		n.namespace, string(run), at).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Over, or never there. A run that has ended stays ended, so the state read here
+		// is the one the update was refused for.
+		err = n.tx.QueryRow(ctx,
+			`select state from runs where namespace = $1 and id = $2::text`,
+			n.namespace, string(run)).Scan(&state)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("db: run %s could not be asked to cancel: %w", run, err)
+	}
+	var s agk.RunState
+	if err := s.UnmarshalText([]byte(state)); err != nil {
+		return 0, fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
+	}
+	return s, nil
+}
+
 // Evaluation is a run as the controller picks it up.
 type Evaluation struct {
 	Namespace string
@@ -115,6 +152,11 @@ type Evaluation struct {
 	Inputs  map[string]any
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
+
+	// CancelRequestedAt is when somebody asked through the API for this run to be cancelled, and
+	// zero while nobody has. The request is the API's to write and the cancellation is the
+	// controller's to carry out, so a run holding one is a run the next pass ends.
+	CancelRequestedAt time.Time
 }
 
 // Run reads one run for deciding.
@@ -130,12 +172,13 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	// database holds is exactly the case UnmarshalText exists for.
 	var state, trigger string
 	var inputs []byte
-	var wake *time.Time
+	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
-		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at
+		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
+		        cancel_requested_at
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake)
+			&inputs, &trigger, &wake, &cancel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -155,6 +198,9 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	}
 	if wake != nil {
 		e.WakeAt = *wake
+	}
+	if cancel != nil {
+		e.CancelRequestedAt = *cancel
 	}
 	return e, nil
 }
@@ -676,8 +722,9 @@ func (w *Wide) Published(ctx context.Context, namespace string, keys []agk.TaskI
 // "A controller that was restarting therefore misses notifications, so it also sweeps for
 // actionable work on a fixed interval. The notification is a latency optimisation; the sweep is
 // the correctness guarantee." So this has to find everything a notification would have, which
-// is three things: a run that has never been decided, a run whose clock has come round, and a
-// run holding a task whose message never went.
+// is four things: a run that has never been decided, a run whose clock has come round, a run
+// holding a task whose message never went, and a run somebody has asked to cancel, whose clock
+// says nothing about when that was.
 func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.RunID, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -687,11 +734,12 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 		select id from runs
 		where state in ('queued', 'running', 'waiting')
 		  and (wake_at is null or wake_at <= $1
+		       or cancel_requested_at is not null
 		       or exists (select 1 from tasks t
 		                  where t.namespace = runs.namespace and t.run_id = runs.id
 		                    and t.published_at is null
 		                    and t.state in ('pending', 'dispatched')))
-		order by coalesce(wake_at, created_at)
+		order by coalesce(least(wake_at, cancel_requested_at), created_at)
 		limit $2`, now, batch)
 	if err != nil {
 		return nil, fmt.Errorf("db: the actionable runs could not be read: %w", err)
