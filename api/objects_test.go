@@ -1,11 +1,17 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io/fs"
+	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +109,141 @@ func TestWhatAnObjectRouteAnswers(t *testing.T) {
 	}
 }
 
+// A policy stores whatever the task made under its prefix, and the bytes are still held to the
+// digest the key names, exactly as a presigned PUT holds them: a policy that stored any bytes under
+// any digest would let a task write under a digest somebody else's envelope already names.
+func TestAPostedObjectIsHashedAsItArrives(t *testing.T) {
+	h, signed := withObjects(t)
+	policy, err := signed.Policy(t.Context(), "finance", "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const content = "the whole of an invoice"
+	key := artifact.Key("finance", digestOf([]byte(content)))
+	if w := posted(t, h, policy.URL, policy.Fields, key, content); w.Code != http.StatusCreated {
+		t.Fatalf("posting what the key names answered %d: %s", w.Code, w.Body)
+	}
+	// And what is stored is those bytes, fetched back through a URL of their own.
+	get, err := signed.Presign(t.Context(), "GET", key, "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, h, "GET", get, ""); w.Code != http.StatusOK || w.Body.String() != content {
+		t.Errorf("fetching what was posted answered %d: %q", w.Code, w.Body)
+	}
+
+	// Bytes that are not the object their key names are refused, and nothing is left under the
+	// key for the next reader to fetch and reject.
+	other := artifact.Key("finance", digestOf([]byte("an invoice nobody made")))
+	if w := posted(t, h, policy.URL, policy.Fields, other, "something else entirely"); w.Code != http.StatusBadRequest {
+		t.Errorf("posting bytes that are not the object answered %d", w.Code)
+	}
+	if _, err := signed.Fetch(t.Context(), other); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a refused post left something behind: %v", err)
+	}
+}
+
+// What a posted form is refused for, and what each refusal reads as over HTTP.
+func TestWhatAPostedFormIsRefused(t *testing.T) {
+	h, signed := withObjects(t)
+	policy, err := signed.Policy(t.Context(), "finance", "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const content = "the whole of an invoice"
+	digest := digestOf([]byte(content))
+
+	// Anything the policy does not allow is the one answer a URL gets when it is not signed
+	// for what it asks.
+	for _, c := range []struct {
+		name   string
+		to     string
+		fields map[string]string
+		key    string
+	}{
+		{"a key in another namespace", policy.URL, policy.Fields, artifact.Key("ops", digest)},
+		{"a form posted to another namespace", "https://agentiik.example.com/objects/ops", policy.Fields, artifact.Key("ops", digest)},
+		{"a key that is the prefix and not a digest", policy.URL, policy.Fields, policy.KeyPrefix + "invoice.pdf"},
+		{"a form with no policy in it", policy.URL, nil, artifact.Key("finance", digest)},
+		{"a form with no key", policy.URL, policy.Fields, ""},
+	} {
+		w := posted(t, h, c.to, c.fields, c.key, content)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s answered %d", c.name, w.Code)
+		}
+		if w.Header().Get("Cache-Control") != "no-store" || w.Body.Len() != 0 {
+			t.Errorf("%s says %q and writes %q", c.name, w.Header().Get("Cache-Control"), w.Body)
+		}
+	}
+
+	// And a form that is not one, or that is one with nothing to store, is a bad request.
+	var fields bytes.Buffer
+	form := multipart.NewWriter(&fields)
+	for _, name := range slices.Sorted(maps.Keys(policy.Fields)) {
+		form.WriteField(name, policy.Fields[name])
+	}
+	form.WriteField("key", artifact.Key("finance", digest))
+	form.Close()
+
+	var padded bytes.Buffer
+	crowded := multipart.NewWriter(&padded)
+	crowded.WriteField("padding", strings.Repeat("x", 128<<10))
+	crowded.WriteField("key", artifact.Key("finance", digest))
+	file, _ := crowded.CreateFormFile("file", "object")
+	file.Write([]byte(content))
+	crowded.Close()
+
+	for _, c := range []struct {
+		name        string
+		contentType string
+		body        []byte
+	}{
+		{"a body that is not a form", "application/octet-stream", []byte(content)},
+		{"a form with no file", form.FormDataContentType(), fields.Bytes()},
+		{"a form carrying more before its file than a policy and a key", crowded.FormDataContentType(), padded.Bytes()},
+	} {
+		r := httptest.NewRequest("POST", policy.URL, bytes.NewReader(c.body))
+		r.Header.Set("Content-Type", c.contentType)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d", c.name, w.Code)
+		}
+	}
+}
+
+// posted is a form as a runner posts it with a policy: the fields as they were given, then the key,
+// then the file, last.
+func posted(t *testing.T, h http.Handler, to string, fields map[string]string, key, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		if err := form.WriteField(name, fields[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := form.WriteField("key", key); err != nil {
+		t.Fatal(err)
+	}
+	file, err := form.CreateFormFile("file", "object")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", to, &body)
+	r.Header.Set("Content-Type", form.FormDataContentType())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
 // The route says out loud what authorises it, which is what the guard demands of a public one.
 func TestTheObjectRoutesSayWhatAuthorisesThem(t *testing.T) {
 	rt, err := api.NewRouter(api.DenyAll{}, bearer)
@@ -118,13 +259,22 @@ func TestTheObjectRoutesSayWhatAuthorisesThem(t *testing.T) {
 	if _, err := api.NewObjects(rt, signed); err != nil {
 		t.Fatal(err)
 	}
+	served := 0
 	for _, r := range rt.Routes() {
 		if !strings.HasPrefix(r.Pattern, "/objects") {
 			continue
 		}
-		if !r.Public || !strings.Contains(r.Why, "presigned URL") {
+		served++
+		says := "presigned URL"
+		if r.Method == "POST" {
+			says = "signed policy"
+		}
+		if !r.Public || !strings.Contains(r.Why, says) {
 			t.Errorf("%s %s says %q", r.Method, r.Pattern, r.Why)
 		}
+	}
+	if served != 3 {
+		t.Errorf("the store serves %d object routes, and a URL's GET and PUT and a policy's POST are three", served)
 	}
 
 	// A presigner is not optional: an object route with nothing to check a signature
@@ -175,6 +325,14 @@ func TestTheObjectRoutesShareARouterWithTheRestOfTheAPI(t *testing.T) {
 	}
 	if w := follow(t, rt, "PUT", put, content); w.Code != http.StatusCreated {
 		t.Errorf("storing through the shared router answered %d: %s", w.Code, w.Body)
+	}
+	policy, err := signed.Policy(t.Context(), "finance", "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const made = "a file the task made"
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("finance", digestOf([]byte(made))), made); w.Code != http.StatusCreated {
+		t.Errorf("posting through the shared router answered %d: %s", w.Code, w.Body)
 	}
 	if w, _ := call(t, rt, "GET", "/api/v1/objects/runs", "alice", nil); w.Code != http.StatusOK {
 		t.Errorf("the runs of a namespace named objects answered %d: %s", w.Code, w.Body)
