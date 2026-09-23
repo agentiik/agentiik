@@ -440,6 +440,26 @@ func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 			t.Errorf("%s survived the delivery that collected its container", left.root)
 		}
 	}
+
+	// The adoption writes each ending down as a delivery that created the container does.
+	// The container is gone now, so the record is the only thing left to refuse the key,
+	// and a restarted runner that adopts what it held when it died is the case it is for.
+	for _, c := range []struct {
+		task  graph.Task
+		ended agk.TaskState
+	}{{fetch, agk.TaskSucceeded}, {check, agk.TaskFailed}} {
+		if e, found, err := r.keys.read(c.task.ID); err != nil || !found || e.State != c.ended {
+			t.Errorf("the record of %s reads %+v, %v, %v, and its adopted container ended %s", c.task.ID, e, found, err, c.ended)
+		}
+		if _, err := r.Run(t.Context(), c.task); !errors.Is(err, ErrCompleted) {
+			t.Errorf("%s was delivered again after its adopted container was collected and answered %v", c.task.ID, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if ran["fetch"] != 1 || ran["check"] != 1 {
+		t.Errorf("the bricks ran %v times after a further delivery of each", ran)
+	}
 }
 
 // A container its deadline stopped is timed_out, whichever way the redelivery finds it. The
