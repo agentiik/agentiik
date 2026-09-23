@@ -174,6 +174,18 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 	}
 }
 
+// "A runner posts one heartbeat every 10 seconds to the API", and "three missed intervals move a
+// task to lost". The tests that follow count in these two constants, so this one holds them to the
+// figures the page gives.
+func TestAHeartbeatIsTenSecondsAndThreeMissedAreALoss(t *testing.T) {
+	if HeartbeatInterval != 10*time.Second {
+		t.Errorf("a runner is told to report every %s, and the page says every 10 seconds", HeartbeatInterval)
+	}
+	if LostAfter != 3*HeartbeatInterval {
+		t.Errorf("a task is lost after %s of silence, and the page says three intervals of %s", LostAfter, HeartbeatInterval)
+	}
+}
+
 // "Three missed intervals move a task to lost", and a lost task is not a failed one: one is
 // charged to the infrastructure and the other to the brick.
 func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {

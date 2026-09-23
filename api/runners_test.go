@@ -87,8 +87,8 @@ func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("the heartbeat answered %d: %s", w.Code, w.Body)
 	}
-	if answer["interval_seconds"] == nil {
-		t.Errorf("the answer does not say how often to come back: %v", answer)
+	if answer["interval_seconds"] != float64(10) {
+		t.Errorf("the answer says to come back every %v seconds, and the page says every 10: %v", answer["interval_seconds"], answer)
 	}
 	if answer["drain"] != nil {
 		t.Errorf("a runner that just joined was told to drain: %v", answer)
