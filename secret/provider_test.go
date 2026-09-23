@@ -188,9 +188,15 @@ func TestAttachingFillsBothHalvesOrNeither(t *testing.T) {
 			t.Errorf("%s were given a second store", what)
 		}
 	}
+	// Refused before any store is built, and after the built-in one has been: the second is
+	// where a half attached installation would come from.
+	confinesNobody := api.Environment{"finance": "AGENTIIK_", "team-ops": "AGENTIIK_SECRET_"}
 	for what, o := range map[string]secret.Options{
 		"no database":                         {Keys: keyring(t, master(t, "2026-09"))},
-		"an environment that confines nobody": {Pool: pool, Environment: api.Environment{"finance": "AGENTIIK_", "team-ops": "AGENTIIK_SECRET_"}},
+		"an environment that confines nobody": {Pool: pool, Environment: confinesNobody},
+		"a keyring and an environment that confines nobody": {
+			Pool: pool, Keys: keyring(t, master(t, "2026-09")), Environment: confinesNobody,
+		},
 	} {
 		var declarations api.DeclarationOptions
 		var runners api.RunnerOptions
