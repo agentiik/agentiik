@@ -263,13 +263,11 @@ func TestAMessageWithoutItsGrantIsNotPublished(t *testing.T) {
 
 // outgrown names the fixtures the corpus calls invalid and its own schema accepts, and says why.
 //
-// One is here because the schema moved and the fixture did not: "cancelled" joined the endings a
-// result reports when the page named all nine task states, and the fixture still pins the rule from
-// before. Such a fixture is held to the schema rather than to its own label, and the test fails the
-// day the schema refuses it again, which is the day the entry has to go.
-var outgrown = map[string]string{
-	"fixtures/wire/invalid/task-result-state-of-a-run.json": "cancelled is one of the five endings a result reports, so a cancelled result is one the schema accepts",
-}
+// A fixture lands here when the schema moves and the fixture does not. It is held to the schema
+// rather than to its own label, and the test fails the day the schema refuses it again, which is
+// the day the entry has to go. It is empty: the one it held, a cancelled result filed as a run's
+// state, was rewritten around a state only a run has when the schemas caught up.
+var outgrown = map[string]string{}
 
 // Every result in the corpus is read the way the corpus says it is: a valid one is handed on as
 // what it says, whole and with its outputs as digests, and an invalid one is refused. A valid one
