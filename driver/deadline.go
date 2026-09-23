@@ -246,6 +246,26 @@ func (w *watch) await(ctx context.Context, waited <-chan docker.Waited) (exit, e
 	}
 }
 
+// stoppedAtDeadline says whether a container that ended at finished, with nobody watching
+// it any more, ended the way the stop at its deadline ends one.
+//
+// That is an end at the deadline or after it, and no later than a watch lets a container
+// outlive its deadline: the grace the daemon's stop gives it, the slack before the kill
+// that backs it, and the inspect after that. Inside that window the watch would have
+// fired, whatever ended the container, so the end reads as timed_out as it would have read
+// to the delivery that died watching it, and a redelivery reports the same state whether
+// it reached the container a moment before its end or a moment after. An end past the
+// window is a container nobody stopped, and it is read by its code.
+func stoppedAtDeadline(deadline, finished time.Time, grace time.Duration) bool {
+	if deadline.IsZero() || finished.Before(deadline) {
+		return false
+	}
+	if grace <= 0 {
+		grace = DefaultPolicy().StopGrace
+	}
+	return !finished.After(deadline.Add(grace + killSlack + sweepInterval))
+}
+
 // finish reads the outcome, with what this side knows about why.
 func (w *watch) finish(code int, oom bool, source string) exit {
 	w.mu.Lock()
