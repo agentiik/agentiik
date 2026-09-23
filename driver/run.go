@@ -437,7 +437,10 @@ func over(s docker.State) bool {
 // off the mount it was given. Nothing is waited on, attached to or started.
 //
 // A stop that arrived while this delivery was on its way changes nothing here. There was
-// no process left to signal, and what the container did is what it did.
+// no process left to signal, and what the container did is what it did. A deadline is
+// another matter, because it is a moment and not a message: the delivery that watched the
+// container stopped it there and died before it reported, and the end is read as that
+// watch would have read it.
 func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, values [][]byte, out string, dispatched time.Time, s docker.State) (graph.Result, error) {
 	mask := newMasker(values...)
 
@@ -458,6 +461,10 @@ func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store
 	}
 
 	e := exit{Code: s.ExitCode, OOM: s.OOMKilled, Source: "an inspect"}
+	if stoppedAtDeadline(deadlineOf(t, dispatched), s.FinishedAt, d.cfg.Policy.StopGrace) {
+		log.note("the step's timeout had passed when the container ended, inside the time the stop at the deadline takes, so it is read as stopped at its deadline")
+		e.TimedOut = true
+	}
 	return d.conclude(ctx, t, store, container, image, log, mask, stdout, e, out, dispatched)
 }
 

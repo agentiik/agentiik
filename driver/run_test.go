@@ -436,6 +436,72 @@ func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 	}
 }
 
+// A container its deadline stopped is timed_out, whichever way the redelivery finds it. The
+// delivery that was watching it stopped it and died before it reported: a redelivery that
+// reaches the container while the stop is still under way stops it itself and reports
+// timed_out, and one that reaches it a moment later reads the same thing off the daemon
+// rather than a failure for the code the stop left.
+func TestAContainerStoppedAtItsDeadlineIsTimedOutHoweverTheRedeliveryFindsIt(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		// The brick takes its term and goes, which is what a stop at the deadline
+		// asks of it.
+		<-c.Signalled()
+		return 143, nil
+	})
+
+	for _, exited := range []bool{false, true} {
+		task := oneTask(ref)
+		step := map[bool]agk.Step{false: "still-running", true: "exited"}[exited]
+		task.ID, task.Step = agk.NewTaskID("01JMZ8V1P9C4", step, 1, agk.Shard{}), step
+
+		container, _ := stageFirstDelivery(t, r, task)
+		if err := r.cli.ContainerStart(t.Context(), container); err != nil {
+			t.Fatalf("starting the first delivery's container: %s", err)
+		}
+		task.Deadline = time.Now()
+		if exited {
+			// The stop the first delivery's watch sent at the deadline, carried
+			// through before the redelivery arrives.
+			if err := r.cli.ContainerStop(t.Context(), container, time.Second); err != nil {
+				t.Fatalf("stopping the first delivery's container: %s", err)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		result, err := r.Run(ctx, task)
+		cancel()
+		if err != nil {
+			t.Fatalf("the redelivery that found the container %s: %s", step, err)
+		}
+		if result.State != agk.TaskTimedOut {
+			t.Errorf("the redelivery that found the container %s reports %s with code %d, and the container was stopped at its deadline", step, result.State, result.ExitCode)
+		}
+	}
+}
+
+// A container that ended before its deadline is read by its own code when it is collected,
+// however little time was left: the deadline is a stop that did not have to happen.
+func TestAContainerThatEndedInsideItsDeadlineIsReadByItsCode(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 3, nil })
+
+	task := oneTask(ref)
+	exitedFirstDelivery(t, r, task)
+	task.Deadline = time.Now().Add(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivery: %s", err)
+	}
+	if result.State != agk.TaskFailed || result.ExitCode != 3 {
+		t.Errorf("the redelivery reports %s with code %d, and the container exited 3 before its deadline", result.State, result.ExitCode)
+	}
+}
+
 // What a container that had already exited wrote is read back off the daemon's log, into
 // the task's log and into the standard output a script step publishes, and it is masked on
 // the way as a watched container's output is. The values are the redelivery's own, redeemed
