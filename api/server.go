@@ -6,9 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -71,6 +71,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, now: o.Now}
+	rt.ServeRuns(runsIn{o.Pool})
 
 	for _, r := range []struct {
 		method  string
@@ -86,6 +87,8 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: RunRead, Scope: Namespace}, s.list},
 		{"GET", "/api/v1/{namespace}/runs/{run}",
 			Needs{Permission: RunRead, Scope: Namespace}, s.detail},
+		{"POST", "/api/v1/runs/{run}/cancel",
+			OnRun{Permission: WorkflowRun}, s.cancel},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return nil, err
@@ -117,6 +120,67 @@ type Push struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+func (p *Push) field(b *body, name string) error {
+	switch name {
+	case "entry":
+		return text(b, &p.Entry)
+	case "document":
+		return b.bytes(&p.Document)
+	case "includes":
+		// Every include is a file of the tree as well, which checkAgreement holds it to, so
+		// a push carrying more of them than a tree holds files is refused either way, and
+		// here before they have been decoded.
+		return files(b, &p.Includes, TreeMaxFiles, "the include", fmt.Sprintf("this push includes more files than the %d a tree holds, and every include is a file of the tree", TreeMaxFiles))
+	case "manifests":
+		// One per image the workflow names, and bounded as the files of the tree are: a
+		// workflow is a few files naming a few images, one naming thousands is not a workflow
+		// anybody reviews, and without a count a push of a million empty manifests cost a
+		// million entries of a map before anything could refuse it.
+		return files(b, &p.Manifests, TreeMaxFiles, "the manifest of", fmt.Sprintf("this push carries more image manifests than the %d it may, one per image the workflow names", TreeMaxFiles))
+	case "tree":
+		// Counted as the files arrive, so that a tree of too many is refused at the first
+		// one past the limit rather than once every one of them is an entry of a map.
+		tooMany := fmt.Sprintf("this tree has more files than the %d a push carries until the installation hosts the repository and a push is a git push: a tree of this many is usually carrying dependencies that belong in an image", TreeMaxFiles)
+		return b.object(TreeMaxFiles, tooMany, func(path string) error {
+			if _, held := p.Tree[path]; held {
+				return twice("the tree file", path)
+			}
+			var f PushFile
+			if err := b.fields(&f); err != nil {
+				return err
+			}
+			if p.Tree == nil {
+				p.Tree = map[string]PushFile{}
+			}
+			p.Tree[path] = f
+			return nil
+		})
+	case "parent":
+		return text(b, &p.Parent)
+	case "branch":
+		return text(b, &p.Branch)
+	}
+	return unknown(name)
+}
+
+// files reads an object of paths to bytes, as a push carries its includes and its manifests.
+func files(b *body, into *map[string][]byte, most int, what, tooMany string) error {
+	return b.object(most, tooMany, func(path string) error {
+		if _, held := (*into)[path]; held {
+			return twice(what, path)
+		}
+		var content []byte
+		if err := b.bytes(&content); err != nil {
+			return err
+		}
+		if *into == nil {
+			*into = map[string][]byte{}
+		}
+		(*into)[path] = content
+		return nil
+	})
+}
+
 // PushFile is one file of the tree.
 type PushFile struct {
 	Content []byte `json:"content"`
@@ -125,6 +189,16 @@ type PushFile struct {
 	// Git tracks that one bit and a container needs it: an entry point that arrives 0644 is
 	// a step that will not run, and a mode left to a default is a mode somebody guessed.
 	Mode string `json:"mode"`
+}
+
+func (f *PushFile) field(b *body, name string) error {
+	switch name {
+	case "content":
+		return b.bytes(&f.Content)
+	case "mode":
+		return text(b, &f.Mode)
+	}
+	return unknown(name)
 }
 
 // TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
@@ -147,7 +221,8 @@ const TreeMaxBytes = 4 << 20
 // them is an entry with a URL of a few hundred bytes in every redemption of every task that
 // version runs, held in the API's memory while it is answered. At TreeMaxBytes this many files is
 // a kibibyte each on average, which is smaller than a script usually is, so a workflow reaches it
-// only by carrying a dependency tree, and that belongs in an image.
+// only by carrying a dependency tree, and that belongs in an image. It is counted as the push is
+// read, so a tree of more is refused before its files are decoded.
 const TreeMaxFiles = 4096
 
 // TreeNameMaxBytes is the longest one segment of a tree path may be, which is NAME_MAX: 255 bytes is
@@ -177,6 +252,13 @@ const TreePathMaxBytes = 2048
 // git gives agk push anyway.
 var commitName = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// workflowName is the grammar a workflow is named on, which is the one every name of the workflow
+// file is written on, and a push is held to it and to agk.IdentifierMaxBytes before anything is
+// written for the reason it is held to commitName: the table's domain refuses a name off either
+// too, but only at the insert, after the tree was already in the store with nothing counting it,
+// and answered 500 for what was the caller's mistake.
+var workflowName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
 // pushMaxBytes is how large a push body may be, which is larger than any other body the API
 // reads because a push carries the tree.
 //
@@ -195,18 +277,25 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 	var p Push
 	if err := readAtMost(r, &p, pushMaxBytes); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if errors.As(err, new(*http.MaxBytesError)) {
 			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a push is at most %d bytes, and this one is larger: the tree it carries is limited to %d until the installation hosts the repository and a push is a git push", pushMaxBytes, TreeMaxBytes))
 			return
 		}
-		fail(w, http.StatusBadRequest, err.Error())
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 	commit := r.PathValue("commit")
 
 	// Everything that can be refused without writing anything is refused first, so that a
 	// push that fails leaves no object behind it.
+	if len(over.Workflow) > agk.IdentifierMaxBytes {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("a workflow name is at most %d characters and this one is %d: one name has to survive a URL, a directory and a tool list unchanged, and no directory holds a longer one", agk.IdentifierMaxBytes, len(over.Workflow)))
+		return
+	}
+	if !workflowName.MatchString(over.Workflow) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a workflow name: a workflow is named the way the workflow file names everything, letters, digits, hyphens and underscores beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", over.Workflow))
+		return
+	}
 	if !commitName.MatchString(commit) {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a commit, and a version is one: a version is pushed under the whole of its commit's hash, forty lowercase hexadecimal characters, since an abbreviation is a name another commit can come to share", commit))
 		return
@@ -315,11 +404,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 // Sorted, because two pushes of one commit have to produce the same version and a map has no
 // order.
 func checkTree(files map[string]PushFile) ([]string, int, error) {
+	// Of at most TreeMaxFiles, which Push.field counts as the push is read.
 	if len(files) == 0 {
 		return nil, http.StatusBadRequest, errors.New("a push carries the tree of its commit and this one carries none: every step of every run sees the repository under /agk/repo, and a version without it would start containers on an empty directory")
-	}
-	if len(files) > TreeMaxFiles {
-		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree has %d files and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree of this many is usually carrying dependencies that belong in an image", len(files), TreeMaxFiles)
 	}
 	paths := make([]string, 0, len(files))
 	var total int64
@@ -526,24 +613,78 @@ func hfsIgnores(r rune) bool {
 }
 
 // Start is a manual run: the inputs, and nothing else. What version it runs is the workflow's
-// default branch resolved to a commit, which whoever pushed it named.
+// default branch resolved to a commit, which whoever pushed it named. It is what a client writes,
+// and the API reads it as a starting.
 type Start struct {
 	Commit string         `json:"commit"`
 	Inputs map[string]any `json:"inputs,omitempty"`
 }
 
+// starting is a Start as the API reads one, with its inputs kept as the JSON they were written in.
+//
+// Kept rather than decoded, because the API does nothing with them but write them down, and what
+// decoding a document costs is set by how many values it holds rather than by its bytes: three
+// bytes of {} are a map, and 8 MiB of inputs written [{},{},...] was 508 MiB once decoded. So
+// they are counted, held to inputsMaxValues, and written to the run as they came.
+type starting struct {
+	commit string
+	inputs jsontext.Value
+}
+
+// startMaxBytes is how large the body starting a run may be, which is what its inputs may weigh.
+//
+// The weight of one envelope, envelope_max_bytes at its default, because that is what they are:
+// an input reaches a step as the envelope of a port it feeds, and the controller carries the
+// inputs in the state it writes at every decision it takes on the run. The documentation lets the
+// controller read an envelope's weight of payload and nothing larger, and a run started with more
+// than that is one whose data belongs in an artifact.
+const startMaxBytes = agk.DefaultEnvelopeMaxBytes
+
+// inputsMaxValues is how many values the inputs of a run may hold, counting every object, array,
+// string, number, boolean and null at any depth, and it is max_items at its default.
+//
+// Counted as well as weighed, because whoever decodes the inputs pays for their values rather than
+// their bytes, a map for three bytes of {}, and the controller decodes them at every decision it
+// takes on the run. An envelope is what the documentation lets the controller read, and max_items
+// is how many items one carries, each of them several values: inputs held to that many values
+// cost the controller no more than an envelope it may already read.
+const inputsMaxValues = agk.DefaultMaxItems
+
+func (s *starting) field(b *body, name string) error {
+	switch name {
+	case "commit":
+		return text(b, &s.commit)
+	case "inputs":
+		// An object naming each input, told apart before it is read, so that a document that is
+		// not one is refused before it is counted rather than after.
+		switch k := b.d.PeekKind(); k {
+		case jsontext.KindNull:
+			_, err := b.d.ReadToken()
+			return malformed(err)
+		case jsontext.KindBeginObject:
+		default:
+			b.d.SkipValue()
+			return b.mistyped(k, "an object naming each input")
+		}
+		var err error
+		s.inputs, err = b.document(inputsMaxValues, fmt.Sprintf("the inputs hold more than the %d values a run's inputs may hold, as many as one envelope may carry items: a run's data belongs in an artifact", inputsMaxValues))
+		return err
+	}
+	return unknown(name)
+}
+
 func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
-	var start Start
-	if err := read(r, &start); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	var start starting
+	if err := readAtMost(r, &start, startMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
-	if start.Commit == "" {
+	if start.commit == "" {
 		fail(w, http.StatusBadRequest, "a run is pinned to a commit and this one names none")
 		return
 	}
 
-	g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, start.Commit)
+	g, err := s.versions.Graph(r.Context(), over.Namespace, over.Workflow, start.commit)
 	if err != nil {
 		if errors.Is(err, db.ErrNoVersion) {
 			// The same answer an inaccessible one gets, for the same reason.
@@ -557,9 +698,9 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 	run := agk.NewRunID()
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CreateRun(ctx, db.NewRun{
-			ID: run, Workflow: over.Workflow, Commit: start.Commit,
+			ID: run, Workflow: over.Workflow, Commit: start.commit,
 			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: start.Inputs, Steps: g.Steps(),
+			Inputs: json.RawMessage(start.inputs), Steps: g.Steps(),
 		}); err != nil {
 			return err
 		}
@@ -618,35 +759,82 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 	write(w, http.StatusOK, detail)
 }
 
-// read decodes a body, closed: a request carrying a field this does not know is refused rather
-// than half understood, and so is one carrying anything after its document.
-func read(r *http.Request, into any) error {
-	return readAtMost(r, into, 8<<20)
+// cancel asks for a run to be cancelled, and answers that it was asked.
+//
+// "Cancels pending tasks and sends SIGTERM to running containers." Neither happens here. The API
+// writes the request on the run and notifies, in one transaction as it does for a run it starts,
+// and the controller, which reads it there, ends the run and stops what it holds: the two share
+// the database and nothing else, and a route that stopped a container would be a second
+// controller. So the answer is 202, pointing at the run.
+//
+// It says nothing of how the run stands, and its status is the same whether the run is going or
+// has ended. The route is guarded by workflow:run, and a run's state is what run:read guards: "See
+// run state, per-step state, timings and log lines". operator holds the one and not the other, as
+// does anybody denied run:read, and an answer saying how the run stood, or a status that changed
+// once it had ended, would hand them what GET refuses them, at any moment and with no side effect
+// on a run that has ended. Somebody holding both reads the state where run:read guards it.
+//
+// Asking again is asking once, and asking about a run that has ended changes nothing: "a
+// principal asking twice, or asking about a run that finished while they were asking, has got
+// what they wanted either way", as controller.Cancel puts it.
+//
+// Nothing is written to the audit log yet, since there is none: "manual trigger, approval,
+// cancellation" are recorded there once #160 builds it, in the transaction that writes the
+// request.
+func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	// Nothing to say beyond which run, which the path names, so no body is the ordinary
+	// request. One carrying a field nobody knows, a reason for one, is refused rather than
+	// half understood, however it was sent.
+	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+
+	// The run the router found, in the namespace and of the workflow it authorised.
+	run := agk.RunID(r.PathValue("run"))
+	var state agk.RunState
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil || state.Terminal() {
+			return err
+		}
+		// In the same transaction, for the reason starting a run gives: the request and the
+		// wake-up are one fact rather than two.
+		return ns.NotifyRun(ctx, run)
+	})
+	if errors.Is(err, db.ErrNoRun) {
+		// Found by the router a moment ago and not there now, as a run is once its workflow
+		// has been deleted in between, and answered as the absence it is.
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the run could not be asked to cancel")
+		return
+	}
+
+	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/runs/%s", over.Namespace, run))
+	write(w, http.StatusAccepted, map[string]any{"run": string(run)})
 }
 
-// readAtMost is read with a limit of the caller's, for the routes whose body is larger or smaller
-// than the rest. Past the limit the error wraps *http.MaxBytesError, which is how a caller tells a
-// request that is too large from one that is malformed.
+// runsIn finds the namespace and workflow of a run for the router, from its identifier alone.
 //
-// A decoder reads one document and stops, so a body is read on to its end as well: a second
-// document after the first would otherwise be accepted and dropped, and a declaration followed by
-// a value would tell whoever sent it the value had been kept. The refusal does not repeat what
-// followed, which may be that value.
-func readAtMost(r *http.Request, into any, limit int64) error {
-	d := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
-	d.DisallowUnknownFields()
-	if err := d.Decode(into); err != nil {
-		return fmt.Errorf("the request body: %w", err)
+// Across the installation, for the one reason db.RunRoute names: the path of a route about a run
+// names nothing else, and what is found goes to the authorizer and nowhere else. The handler then
+// reads and writes through In, in the namespace that was authorised.
+type runsIn struct{ pool *db.Pool }
+
+func (f runsIn) RunOf(ctx context.Context, run string) (Target, error) {
+	var of Target
+	err := f.pool.Installation(ctx, db.RunRoute, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		of.Namespace, of.Workflow, err = w.Locate(ctx, agk.RunID(run))
+		return err
+	})
+	if errors.Is(err, db.ErrNoRun) {
+		return Target{}, ErrNoRun
 	}
-	var after json.RawMessage
-	switch err := d.Decode(&after); {
-	case errors.Is(err, io.EOF):
-		return nil
-	case errors.As(err, new(*http.MaxBytesError)):
-		return fmt.Errorf("the request body: %w", err)
-	default:
-		return errors.New("the request body is one JSON document, and this one carries something after it")
-	}
+	return of, err
 }
 
 func write(w http.ResponseWriter, status int, body any) {

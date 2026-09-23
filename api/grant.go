@@ -76,14 +76,26 @@ type Redemption struct {
 	IdempotencyKey agk.TaskID `json:"idempotency_key"`
 }
 
+func (ask *Redemption) field(b *body, name string) error {
+	switch name {
+	case "grant":
+		return text(b, &ask.Grant)
+	case "task_id":
+		return text(b, &ask.TaskID)
+	case "idempotency_key":
+		return text(b, &ask.IdempotencyKey)
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner) {
 	if s.objects == nil || s.urls == nil {
 		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached")
 		return
 	}
 	var ask Redemption
-	if err := read(r, &ask); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 	// Both are required rather than checked when present, because a comparison with nothing
@@ -107,65 +119,101 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		return
 	}
 
+	// Checked, answered, and only then bound, each in that order for a reason.
+	//
+	// The grant is checked first, and the version its scope names read in the same
+	// transaction, so that a grant that would not redeem reads nothing else.
 	var got db.Redeemed
 	var tree []db.TreeFile
 	err := s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		got, err = wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
+		got, err = wide.Redeemable(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
 		if err != nil {
 			return err
 		}
-		// And again with the row Redeem read, inside the transaction that bound the
-		// task, so that should the two ever come apart the request is refused as a
-		// grant that opens nothing and the binding is rolled back with it.
+		// And again with the row the grant was found by, so that should the two ever
+		// come apart the request is refused as a grant that opens nothing.
 		if got.Row != ask.TaskID {
 			return db.ErrNoGrant
 		}
-		// The version the scope names and no other, read in the same transaction, so a
-		// refusal here also leaves the task unbound: a runner told there is no tree has
-		// not taken a task it cannot run.
 		if got.Scope.Workflow == "" || got.Scope.Commit == "" {
 			return errNoCommit
 		}
 		tree, err = wide.Tree(ctx, got.Namespace, got.Scope.Workflow, got.Scope.Commit)
 		return err
 	})
+	if err != nil {
+		refuseRedemption(w, err)
+		return
+	}
+
+	// Then the answer, the secret values last: "the runner obtains the value at the last
+	// moment", and the last moment is once everything else the task is given is ready, so
+	// that a redemption refused for anything else never reads one. They are read outside any
+	// transaction. A store reads a declaration, and the built-in one its value, on connections
+	// of its own, and does not always answer from this database at all: a transaction held
+	// open around the read would hold the task's row for as long as the store takes, and hold
+	// a connection while waiting for another, which enough redemptions at once turn into
+	// every connection held and none to be had.
+	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// And the task is bound once there is an answer to give. A redemption that cannot answer
+	// refuses and binds nothing, as a missing tree always did: a runner told there is no tree,
+	// or no secret, has not taken a task it cannot run. It reports that no container ran, and
+	// that report binds it and ends the dispatch (db.Wide.BindUnreached). No other runner is
+	// handed the task, which was acknowledged on take, unless the bus delivered it twice. So a
+	// runner that dies between the refusal and its report leaves a dispatch nobody redeemed,
+	// which db.Pool.Lost does not look at: the sweep of dispatches nobody redeemed ends it, and
+	// until that is built the run's own timeout does. Bound here, the heartbeat would have found
+	// it lost instead. Redeem checks again under the row's lock, so a task another runner bound
+	// in between is refused here and the values read for it go nowhere.
+	err = s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
+		bound, err := wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
+		if err != nil {
+			return err
+		}
+		if bound.Row != ask.TaskID {
+			return db.ErrNoGrant
+		}
+		return nil
+	})
+	if err != nil {
+		refuseRedemption(w, err)
+		return
+	}
+	// Not cached anywhere, by anything: what is in it is every value the task was given.
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, answer)
+}
+
+// refuseRedemption answers a redemption the grant, the task or the version would not allow, the
+// same way whether the check refused it or the binding did.
+func refuseRedemption(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, db.ErrNoGrant):
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "that grant cannot be redeemed")
-		return
 	case errors.Is(err, db.ErrTaskHeld):
 		// Not a refusal of the credential: the grant was real and the task is somebody
 		// else's or already over. A runner that gets this stops rather than retrying.
 		fail(w, http.StatusConflict, "that task is not this runner's to work on")
-		return
 	case errors.Is(err, errNoCommit):
 		// This and the two below are the installation's rather than the runner's: the
 		// grant was real and what it was written with cannot be answered. Each says so
 		// rather than handing over an empty /agk/repo, which would start a step on a
 		// directory that looks like a repository and is not one.
 		fail(w, http.StatusInternalServerError, "this task was dispatched without the commit its run pinned, so there is no repository to give it")
-		return
 	case errors.Is(err, db.ErrNoTree):
 		fail(w, http.StatusInternalServerError, "the version this task runs was recorded without its tree, so there is nothing to lay out at /agk/repo")
-		return
 	case errors.Is(err, db.ErrNoVersion):
 		fail(w, http.StatusInternalServerError, "the version this task runs is not recorded, so there is nothing to lay out at /agk/repo")
-		return
-	case err != nil:
+	default:
 		fail(w, http.StatusInternalServerError, "the grant could not be redeemed")
-		return
 	}
-
-	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
-	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// Not cached anywhere, by anything: what is in it is every value the task was given.
-	w.Header().Set("Cache-Control", "no-store")
-	write(w, http.StatusOK, answer)
 }
 
 // Input is one input port: where its envelope is fetched from, and every artifact that envelope
@@ -330,6 +378,19 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
 	}
 
+	// Signed for the namespace the grant was issued in, never one the runner names, and expiring
+	// with the grant, so that what it may write is bounded by what it was given to run.
+	policy, err := s.urls.Policy(ctx, got.Namespace, got.Scope.Run, got.ExpiresAt)
+	if err != nil {
+		return Grant{}, err
+	}
+	out.Uploads = Uploads{URL: policy.URL, Fields: policy.Fields, KeyPrefix: policy.KeyPrefix}
+
+	// And the values last, once nothing else can refuse, each read from the store at every
+	// redemption and kept by nothing on the way. That answers asking again with whatever the
+	// store holds by then, which is not settled: the documentation says asking again after a
+	// lost answer gets the same answer while the grant lives, and a runner adopting its
+	// container redeems again for the values its masker matches.
 	for _, secret := range got.Scope.Secrets {
 		value, err := s.secrets.Value(ctx, got.Namespace, secret.Name)
 		if err != nil {
@@ -346,14 +407,6 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		}
 		out.Secrets = append(out.Secrets, secretOf(secret, value))
 	}
-
-	// Signed for the namespace the grant was issued in, never one the runner names, and expiring
-	// with the grant, so that what it may write is bounded by what it was given to run.
-	policy, err := s.urls.Policy(ctx, got.Namespace, got.Scope.Run, got.ExpiresAt)
-	if err != nil {
-		return Grant{}, err
-	}
-	out.Uploads = Uploads{URL: policy.URL, Fields: policy.Fields, KeyPrefix: policy.KeyPrefix}
 	return out, nil
 }
 

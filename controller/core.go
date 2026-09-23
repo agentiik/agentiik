@@ -163,6 +163,13 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// after the fact.
 		return nil
 	}
+	if !e.CancelRequestedAt.IsZero() {
+		// Somebody holding workflow:run asked, through the API, which wrote the request on
+		// the run and nothing else: ending a run and stopping what it holds is one decision,
+		// and it is this loop's. Before admission, so that a run queued behind a group is
+		// not let in only to be called off.
+		return co.Cancel(ctx, run)
+	}
 
 	g, err := co.versions.Graph(ctx, e.Namespace, e.Workflow, e.Commit)
 	if err != nil {

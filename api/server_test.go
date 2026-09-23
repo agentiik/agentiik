@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -217,6 +218,103 @@ func TestAVersionIsPushedAndARunIsStarted(t *testing.T) {
 	}
 	if tasks != 0 {
 		t.Errorf("the API created %d tasks, and it decides nothing", tasks)
+	}
+}
+
+// The inputs of a run are written down as they were sent, counted and never decoded, and inputs
+// holding more values than an envelope carries items are refused with 413 before any run exists.
+func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+
+	body := `{"commit":"` + aCommit + `","inputs":{"orders":[{"customer_id":"C-1042","amount":12.50}],"cycle":"2026-09"}}`
+	w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	var started map[string]any
+	json.Unmarshal(w.Body.Bytes(), &started)
+	_, detail := call(t, h, "GET", "/api/v1/finance/runs/"+started["run"].(string), "alice", nil)
+	inputs, _ := detail["inputs"].(map[string]any)
+	orders, _ := inputs["orders"].([]any)
+	if inputs["cycle"] != "2026-09" || len(orders) != 1 || orders[0].(map[string]any)["amount"] != 12.5 {
+		t.Errorf("the run holds the inputs %v", detail["inputs"])
+	}
+
+	var many strings.Builder
+	many.WriteString(`{"commit":"` + aCommit + `","inputs":{"orders":[`)
+	for i := range agk.DefaultMaxItems {
+		if i > 0 {
+			many.WriteByte(',')
+		}
+		many.WriteByte('0')
+	}
+	many.WriteString(`]}}`)
+	w = sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", many.String())
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "values") {
+		t.Errorf("inputs of more values than an envelope carries items answered %d: %s", w.Code, w.Body)
+	}
+	var runs int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(), `select count(*) from runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Errorf("%d runs exist, and one start was taken", runs)
+	}
+}
+
+// A number in the inputs is one a 64-bit float holds, written no further from the point than a
+// float reaches, because PostgreSQL keeps a number at the scale it was written with and writes it
+// back in full at every read of the run. Each number at the edge starts a run and is read back no
+// more than 340 bytes longer than it was sent; each past it is a 400 in front of whoever sent it,
+// where it was a 500, or a run whose eight bytes of 1e-16383 were read back as 16 KB each time.
+func TestNoNumberInTheInputsIsReadBackFarLongerThanItWasSent(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+
+	edges := []string{`1e308`, `-1.7976931348623157e308`, `5e-324`, `4.9406564584124654e-324`, `0e-340`, `1.` + strings.Repeat("0", 340), `-0.0e-3`, `12.50`}
+	body := `{"commit":"` + aCommit + `","inputs":{"edges":[` + strings.Join(edges, ",") + `]}}`
+	if w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body); w.Code != http.StatusAccepted {
+		t.Fatalf("inputs at the edges answered %d: %s", w.Code, w.Body)
+	}
+	conn := dbtest.Superuser(t, super)
+	rows, err := conn.Query(t.Context(), `select length(e::text) from runs, jsonb_array_elements(inputs->'edges') with ordinality as x(e, i) order by i`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		back = append(back, n)
+	}
+	if err := rows.Err(); err != nil || len(back) != len(edges) {
+		t.Fatalf("%d of %d numbers read back: %v", len(back), len(edges), err)
+	}
+	for i, number := range edges {
+		if back[i] > len(number)+340 {
+			t.Errorf("%.24s is read back in %d bytes", number, back[i])
+		}
+	}
+
+	for _, number := range []string{`1e-400`, `1e-16383`, `0e-16383`, `1e-16384`, `0e999999999999`, `1.` + strings.Repeat("0", 17000), `"\u0000"`} {
+		body := `{"commit":"` + aCommit + `","inputs":{"n":` + number + `}}`
+		if w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body); w.Code != http.StatusBadRequest {
+			t.Errorf("inputs holding %.24s answered %d: %s", number, w.Code, w.Body)
+		}
+	}
+	var runs int
+	if err := conn.QueryRow(t.Context(), `select count(*) from runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Errorf("%d runs exist, and one start was taken", runs)
 	}
 }
 

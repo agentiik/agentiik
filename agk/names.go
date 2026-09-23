@@ -11,6 +11,17 @@ import (
 // schema writes it so that an error prints the rule rather than a paraphrase of it.
 const identifierPattern = `^[A-Za-z0-9][A-Za-z0-9_-]*$`
 
+// IdentifierMaxBytes is the longest an identifier may be, which is NAME_MAX: 255 bytes
+// is what the filesystems a runner lays a task out on hold a name to, and the grammar
+// is one "so that one name survives a URL, a directory and a tool list unchanged". A
+// step is a directory of its task's work directory, a port a directory under /agk/in/
+// and a file under /agk/out/ports/, a secret a file under /agk/secrets/, so a longer
+// name is one no runner could lay out, and a version holding one is a version every run
+// of which fails. It is refused where the name is written instead, and the database's
+// identifier domain holds the same bound. The grammar is ASCII, so this is characters
+// as well as bytes.
+const IdentifierMaxBytes = 255
+
 // RunID is the identifier of a run, carried as the run's ULID. It is the value the
 // container reads as AGK_RUN_ID and the first path segment of every artifact URI.
 type RunID string
@@ -54,6 +65,9 @@ func (p Port) Validate() error { return identifier(string(p), "a port name") }
 func identifier(v, what string) error {
 	if v == "" {
 		return fmt.Errorf("%s is never empty: it matches %s", what, identifierPattern)
+	}
+	if len(v) > IdentifierMaxBytes {
+		return fmt.Errorf("%.64s... is %d characters long, and %s is at most %d: it becomes a file or a directory name, and no filesystem holds a longer one", v, len(v), what, IdentifierMaxBytes)
 	}
 	for i := 0; i < len(v); i++ {
 		c := v[i]

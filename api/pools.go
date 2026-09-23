@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -36,10 +37,28 @@ type Pool struct {
 	MaxDiskBytes       int64    `json:"max_disk_bytes,omitempty"`
 }
 
+func (p *Pool) field(b *body, name string) error {
+	switch name {
+	case "pool":
+		return text(b, &p.Name)
+	case "labels":
+		return texts(b, &p.Labels, namesMax, fmt.Sprintf("a pool carries at most %d labels", namesMax))
+	case "accepted_namespaces":
+		return texts(b, &p.AcceptedNamespaces, namesMax, fmt.Sprintf("a pool lists at most %d namespaces it accepts, and one listing none accepts every namespace", namesMax))
+	case "max_cpu":
+		return integer(b, &p.MaxCPU)
+	case "max_memory_bytes":
+		return integer(b, &p.MaxMemoryBytes)
+	case "max_disk_bytes":
+		return integer(b, &p.MaxDiskBytes)
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) createPool(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var p Pool
-	if err := read(r, &p); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &p, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 
@@ -87,10 +106,20 @@ type Issue struct {
 	ExpiresInSeconds int      `json:"expires_in_seconds,omitempty"`
 }
 
+func (i *Issue) field(b *body, name string) error {
+	switch name {
+	case "labels":
+		return texts(b, &i.Labels, namesMax, fmt.Sprintf("a join token permits at most %d labels, all of them its pool's", namesMax))
+	case "expires_in_seconds":
+		return integer(b, &i.ExpiresInSeconds)
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var ask Issue
-	if err := read(r, &ask); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 	life := time.Hour

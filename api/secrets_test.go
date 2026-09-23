@@ -60,6 +60,22 @@ func sent(t *testing.T, h http.Handler, method, path, as, body string) *httptest
 	return w
 }
 
+// streamed is sent with a body declaring no length, as one sent in chunks or over HTTP/2 with no
+// content-length is.
+func streamed(t *testing.T, h http.Handler, method, path, as, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.ContentLength = -1
+	r.TransferEncoding = []string{"chunked"}
+	r.Header.Set("Content-Type", "application/json")
+	if as != "" {
+		r.Header.Set("Authorization", "Bearer "+as)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
 // The whole of what a namespace does with a declaration: writes it, reads it, moves it and takes
 // it away, one secret at a time.
 func TestADeclarationIsWrittenAndReadBack(t *testing.T) {

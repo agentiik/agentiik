@@ -107,6 +107,9 @@ func TestARunnerAsksForABusCredentialAndCannotChooseItsPool(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("a body naming a pool answered %d", w.Code)
 	}
+	if w := streamed(t, h, "POST", "/api/v1/bus/token", credential, `{"pool":"lan"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("a body naming a pool, declaring no length, answered %d", w.Code)
+	}
 	if len(issuer.pools) != 1 {
 		t.Errorf("a refused request still minted something: %v", issuer.pools)
 	}

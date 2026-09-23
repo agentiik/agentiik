@@ -39,6 +39,11 @@ type BusConsumers interface {
 // afterwards is worth nothing, long enough that renewal is a background chore rather than traffic.
 const BusLife = time.Hour
 
+// nothingAsked is the body of a request for a bus credential, which has no field.
+type nothingAsked struct{}
+
+func (nothingAsked) field(_ *body, name string) error { return unknown(name) }
+
 func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runner) {
 	if s.issuer == nil {
 		fail(w, http.StatusServiceUnavailable, "this installation mints no bus credentials")
@@ -46,12 +51,10 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 	}
 	// A runner asking for a credential has nothing to say beyond who it is, so no body is
 	// the ordinary request. One carrying a field nobody knows is still refused rather than
-	// half understood.
-	if r.ContentLength > 0 {
-		if err := read(r, &struct{}{}); err != nil {
-			fail(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	// half understood, however it was sent.
+	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
 	}
 
 	// The pool comes from the runner the credential opened, never from the request. A

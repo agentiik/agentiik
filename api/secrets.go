@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"maps"
@@ -167,6 +168,30 @@ type Declare struct {
 	// text, as a redemption answers it, since JSON carries no arbitrary bytes and a keystore is
 	// a secret too.
 	Encoding string `json:"encoding,omitempty"`
+}
+
+func (d *Declare) field(b *body, name string) error {
+	switch name {
+	case "provider":
+		return text(b, &d.Provider)
+	case "path":
+		return text(b, &d.Path)
+	case "value":
+		// A pointer, set only where a string is written: null, as encoding/json reads it, is
+		// a PUT that carries no value.
+		var value *string
+		if b.d.PeekKind() != jsontext.KindNull {
+			value = new(string)
+		}
+		if err := text(b, value); err != nil {
+			return err
+		}
+		d.Value = value
+		return nil
+	case "encoding":
+		return text(b, &d.Encoding)
+	}
+	return unknown(name)
 }
 
 // valueMaxBytes is the largest value a PUT writes, the bound package secret seals to, repeated
@@ -364,12 +389,11 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 	}
 	var d Declare
 	if err := readAtMost(r, &d, declareMaxBytes); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if errors.As(err, new(*http.MaxBytesError)) {
 			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a declaration is a provider, a path and a value of at most %d bytes, and this body is larger than %d", valueMaxBytes, declareMaxBytes))
 			return
 		}
-		fail(w, http.StatusBadRequest, err.Error())
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 	if err := s.check(over.Namespace, d); err != nil {

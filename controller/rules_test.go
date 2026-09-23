@@ -269,9 +269,15 @@ func TestCancellingARunStopsWhatItHolds(t *testing.T) {
 	if err := core.Decide(t.Context(), decidedRun); err != nil {
 		t.Fatal(err)
 	}
-	taken := q.taken()
-	if len(taken) != 1 {
-		t.Fatalf("the first pass published %d tasks", len(taken))
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(sent))
+	}
+	taken := []graph.Task{sent[0].Task}
+	// Taken by a runner before the run is called off, as a runner still finishing when the
+	// stop reaches it took it.
+	if err := core.redeem(t, sent[0], theRunner); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := core.Cancel(t.Context(), decidedRun); err != nil {
