@@ -1031,6 +1031,12 @@ func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
 		if got.Scope.Run != d.Task.Run || got.Scope.Step != d.Task.Step {
 			t.Errorf("the scope names run %s step %s", got.Scope.Run, got.Scope.Step)
 		}
+		// Including the version the run pinned, which is what names the tree the task
+		// sees under /agk/repo: the runner is handed that commit's files and cannot ask
+		// for another's.
+		if got.Scope.Workflow != "monthly-invoicing" || got.Scope.Commit != "a3f9c1e" {
+			t.Errorf("the scope names version %s@%s, and the run pinned monthly-invoicing@a3f9c1e", got.Scope.Workflow, got.Scope.Commit)
+		}
 		if _, err := w.Redeem(ctx, d.Grant, "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1", "runner-1", core.now()); !errors.Is(err, db.ErrNoGrant) {
 			t.Errorf("a grant redeemed for another task answered %v", err)
 		}
