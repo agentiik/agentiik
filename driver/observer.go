@@ -72,7 +72,15 @@ func (u Usage) IsZero() bool { return u == Usage{} }
 
 // observe tells the observer, where there is one. A nil observer is the ordinary case
 // for a library: agk brick test has nothing to tell.
+//
+// An ending is kept on the task in flight first, whoever is listening, because what the
+// observer is told then is what the record of the ending keeps beside the Result.
 func (d *Docker) observe(ctx context.Context, e Event) {
+	if e.State.Terminal() {
+		if h := d.lookup(e.Task); h != nil {
+			h.end(e)
+		}
+	}
 	if d.cfg.Observer == nil {
 		return
 	}
