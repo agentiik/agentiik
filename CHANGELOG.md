@@ -69,6 +69,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- The `secret` boundary test follows imports transitively from every package, the module root included, and allows `api` but nothing under it.
 
 ## v0.1.2, 2026-09-13
 
