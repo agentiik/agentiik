@@ -206,3 +206,36 @@ func TestARunAskedToCancelBeforeItStartedStartsNothing(t *testing.T) {
 		t.Errorf("a run cancelled from queued reads started at %s and finished at %s", d.StartedAt, d.FinishedAt)
 	}
 }
+
+// A queued run somebody asked to cancel is cancelled before admission is asked about it, and the
+// order is what keeps the run holding its group alive. Admitted first, a run of a workflow with
+// cancel_in_progress would cancel the holder to make way, and a principal calling off a run that
+// had not started would end the unrelated one that had.
+func TestCancellingAQueuedRunLeavesTheRunHoldingItsGroupAlone(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, impatientWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.taken(); len(got) != 1 {
+		t.Fatalf("the run holding the group published %d tasks", len(got))
+	}
+
+	createSecond(t, pool)
+	askedToCancel(t, pool, core, second)
+	if err := core.Decide(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if got := runState(t, core, decidedRun); got != agk.Running {
+		t.Errorf("the run holding the group is %s once a queued run behind it was called off", got)
+	}
+	if got := runState(t, core, second); got != agk.Cancelled {
+		t.Errorf("the queued run somebody asked to cancel is %s", got)
+	}
+	if got := q.stops(); len(got) != 0 {
+		t.Errorf("cancelling a queued run stopped %+v", got)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("cancelling a queued run published %+v", got)
+	}
+}
