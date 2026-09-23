@@ -313,3 +313,35 @@ func TestTheDeadlineIsTheMomentOrTheDispatchPlusTheTimeout(t *testing.T) {
 		t.Errorf("the deadline is %s, and the evaluator fixed one at %s", got, fixed.Deadline)
 	}
 }
+
+// An end with nobody watching is read as stopped at its deadline only inside the time the
+// stop at the deadline takes: from the deadline itself to the grace, the slack before the
+// kill that backs it and the inspect after that. Before the deadline the container ended on
+// its own, and past the window nobody stopped it.
+func TestAnEndIsStoppedAtItsDeadlineOnlyInsideTheTimeTheStopTakes(t *testing.T) {
+	deadline := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	grace := 10 * time.Second
+	window := grace + killSlack + sweepInterval
+
+	for _, c := range []struct {
+		deadline time.Time
+		finished time.Time
+		want     bool
+	}{
+		{time.Time{}, deadline, false},
+		{deadline, deadline.Add(-time.Millisecond), false},
+		{deadline, deadline, true},
+		{deadline, deadline.Add(grace), true},
+		{deadline, deadline.Add(window), true},
+		{deadline, deadline.Add(window + time.Millisecond), false},
+	} {
+		if got := stoppedAtDeadline(c.deadline, c.finished, grace); got != c.want {
+			t.Errorf("an end %s from a deadline at %s reads as stopped at it: %v, want %v", c.finished.Sub(c.deadline), c.deadline, got, c.want)
+		}
+	}
+
+	// A policy with no grace is given the default one, as the watch is.
+	if !stoppedAtDeadline(deadline, deadline.Add(DefaultPolicy().StopGrace), 0) {
+		t.Error("an end one default grace past the deadline, under a policy with no grace, is not read as stopped at it")
+	}
+}

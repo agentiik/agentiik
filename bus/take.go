@@ -152,9 +152,10 @@ func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 //
 // One durable consumer, because there is one active controller. fn is called before the message
 // is acknowledged and never after, so a controller dying in the middle gets the result again
-// rather than losing it, and fn returning an error leaves the message for the next delivery.
-// Nothing deduplicates: "the same result delivered twice writes the same thing" is the
-// controller's promise, made good by the evaluator answering a duplicate with no decision.
+// rather than losing it, and fn returning an error leaves the message for the next delivery,
+// unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
+// deduplicates: "the same result delivered twice writes the same thing" is the controller's
+// promise, made good by the evaluator answering a duplicate with no decision.
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
@@ -186,6 +187,16 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 				continue
 			}
 			if err := fn(ctx, a); err != nil {
+				if errors.Is(err, controller.ErrNotAResult) {
+					// Readable, and still nothing a controller could ever
+					// record: it would be the same on every delivery, and
+					// this consumer delivers without limit. So it goes the
+					// way of a message nobody can read, off the queue and
+					// said out loud.
+					b.report(ResultSubject, err)
+					msg.Term()
+					continue
+				}
 				// Left for the next delivery, which is the whole of what
 				// at-least-once buys: a controller that could not record a
 				// result gets it again rather than losing it.

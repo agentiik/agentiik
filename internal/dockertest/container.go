@@ -89,13 +89,27 @@ type live struct {
 
 	rec *recorder
 
+	mu sync.Mutex
+
+	// runs counts the starts, and names the run under way. A kill ends a run where it
+	// stands while the function standing in for its process may still be going, so
+	// whatever acts on a run says which one it found, and nothing acts on a run that is
+	// no longer the current one: a killed run's function that returns after the next
+	// start does not end that one.
+	runs int
+
+	// stdinR and stdinW are the standard input of the run under way, and signal is
+	// what it is signalled on. A container started again after it exited is given a
+	// fresh set, as a daemon gives it.
 	stdinR *io.PipeReader
 	stdinW *io.PipeWriter
-
 	signal chan string
-	done   chan struct{}
 
-	mu         sync.Mutex
+	// done is the end of the run under way, or of the next one where none is: it is
+	// replaced as it closes, so a wait taken on a container that has exited waits for
+	// the run a start would begin, which is what next-exit means to a daemon.
+	done *ending
+
 	started    bool
 	exited     bool
 	code       int
@@ -137,7 +151,7 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 		stdinR: pr,
 		stdinW: pw,
 		signal: make(chan string, 8),
-		done:   make(chan struct{}),
+		done:   newEnding(),
 	}
 	d.seq++
 	d.containers[l.id] = l
@@ -148,6 +162,12 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // containerStart starts the container, which is to say it calls the test's function.
+//
+// A container that is running answers 304 and nothing happens. A container that has
+// exited runs again, with the same configuration, the same mounts and a fresh standard
+// input, and its log carries both runs: that is what a daemon does with POST /start on an
+// exited container, and a fake that answered 304 there would let a driver starting a
+// container that already did its work pass every test while running the brick twice.
 func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	l := d.container(r.PathValue("id"))
 	if l == nil {
@@ -166,13 +186,21 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.mu.Lock()
-	if l.started {
+	if l.started && !l.exited {
 		l.mu.Unlock()
 		writeError(w, http.StatusNotModified, "container already started")
 		return
 	}
+	if l.exited {
+		l.exited, l.code, l.oom = false, 0, false
+		l.stdinR, l.stdinW = io.Pipe()
+		l.signal = make(chan string, 8)
+		l.rec.reopen()
+	}
 	l.started = true
 	l.startedAt = time.Now().UTC()
+	l.runs++
+	run, c := l.runs, l.containerLocked()
 	l.mu.Unlock()
 
 	d.emit(docker.Event{
@@ -185,22 +213,23 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 		// The container runs to completion before the answer to the start, and
 		// nothing it wrote reaches the attached stream. What it wrote is in the
 		// daemon's log, which is the reason AutoRemove is false.
-		d.run(l)
-		l.rec.close()
+		d.run(l, run, c)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	go d.run(l)
+	go d.run(l, run, c)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// run calls the test's function and records what became of it.
-func (d *Daemon) run(l *live) {
+// run calls the test's function for one run and records what became of it, where that run
+// is still the one under way: a run that was killed has already ended, and a container
+// started again since belongs to the next one.
+func (d *Daemon) run(l *live, run int, c Container) {
 	code := 0
 	var err error
 	if d.opts.Run != nil {
-		code, err = d.opts.Run(l.container())
+		code, err = d.opts.Run(c)
 	}
 	if err != nil {
 		// A function that failed is a container that could not run, which a
@@ -211,27 +240,25 @@ func (d *Daemon) run(l *live) {
 			code = 1
 		}
 	}
+	oom := false
 	if d.opts.oomKills {
 		// 137 is 128 plus SIGKILL, which is what the kernel's out-of-memory
 		// killer leaves behind and what the die event carries.
-		l.exit(137, true)
-	} else {
-		l.exit(code, false)
+		code, oom = 137, true
 	}
+	ended := l.exit(run, code, oom)
 	// A real daemon closes the attached stream when the container exits, which is
 	// what gives a reader of it an end. The log is what survives afterwards.
-	l.rec.close()
-	d.emitExit(l)
+	l.closeStream(run)
+	if ended {
+		d.emitExit(l, code, oom)
+	}
 }
 
 // emitExit writes the events an exit produces: an oom before the die where there was one,
 // because the oom is the only place the reason is written and the wait never carries it.
-func (d *Daemon) emitExit(l *live) {
+func (d *Daemon) emitExit(l *live, code int, oom bool) {
 	now := time.Now()
-	l.mu.Lock()
-	oom, code := l.oom, l.code
-	l.mu.Unlock()
-
 	if oom {
 		d.emit(docker.Event{
 			Type: docker.EventTypeContainer, Action: docker.ActionOOM,
@@ -269,9 +296,12 @@ func (d *Daemon) containerAttach(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("stdin") == "true" {
 		// Standard input arrives raw on the same connection, and its end is the
 		// client half-closing, which reaches this side as an ordinary EOF.
+		l.mu.Lock()
+		stdin := l.stdinW
+		l.mu.Unlock()
 		go func() {
-			_, err := io.Copy(l.stdinW, conn)
-			l.stdinW.CloseWithError(err)
+			_, err := io.Copy(stdin, conn)
+			stdin.CloseWithError(err)
 		}()
 	}
 }
@@ -281,12 +311,22 @@ func (d *Daemon) containerAttach(w http.ResponseWriter, r *http.Request) {
 // Answering the header before the container has exited is the behaviour the whole
 // ordering depends on: a caller that has read it knows the wait is registered and may
 // start the container, which is what makes the exit-during-attach race unrepresentable.
+//
+// The condition is read as a daemon reads it. next-exit on a container that has already
+// exited waits for the run a start would begin, and not-running, the default, answers at
+// once on a container that is not running.
 func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 	l := d.container(r.PathValue("id"))
 	if l == nil {
 		writeError(w, http.StatusNotFound, "No such container: "+r.PathValue("id"))
 		return
 	}
+	condition := r.URL.Query().Get("condition")
+
+	l.mu.Lock()
+	running := l.started && !l.exited
+	done, code := l.done, l.code
+	l.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -294,8 +334,13 @@ func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 
+	if !running && (condition == "" || condition == docker.WaitNotRunning) {
+		json.NewEncoder(w).Encode(docker.Waited{StatusCode: code})
+		return
+	}
+
 	select {
-	case <-l.done:
+	case <-done.closed:
 	case <-r.Context().Done():
 		return
 	}
@@ -306,10 +351,7 @@ func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l.mu.Lock()
-	code := l.code
-	l.mu.Unlock()
-	json.NewEncoder(w).Encode(docker.Waited{StatusCode: code})
+	json.NewEncoder(w).Encode(docker.Waited{StatusCode: done.code})
 }
 
 // containerLogs answers with everything the container wrote, framed as the attach frames
@@ -403,6 +445,7 @@ func (d *Daemon) containerStop(w http.ResponseWriter, r *http.Request) {
 
 	l.mu.Lock()
 	running := l.started && !l.exited
+	run, done := l.runs, l.done
 	l.mu.Unlock()
 	// A container the daemon has not started has no process to signal, and a real
 	// daemon answers a stop on one with 304 Not Modified and remembers nothing about
@@ -421,13 +464,14 @@ func (d *Daemon) containerStop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	l.deliver("SIGTERM")
+	l.deliver(run, "SIGTERM")
 	select {
-	case <-l.done:
+	case <-done.closed:
 	case <-time.After(grace):
-		l.deliver("SIGKILL")
-		l.exit(137, false)
-		d.emitExit(l)
+		l.deliver(run, "SIGKILL")
+		if l.exit(run, 137, false) {
+			d.emitExit(l, 137, false)
+		}
 	case <-r.Context().Done():
 		return
 	}
@@ -445,10 +489,13 @@ func (d *Daemon) containerKill(w http.ResponseWriter, r *http.Request) {
 	if signal == "" {
 		signal = "SIGKILL"
 	}
-	l.deliver(signal)
+	l.mu.Lock()
+	run := l.runs
+	l.mu.Unlock()
+	l.deliver(run, signal)
 	if signal == "SIGKILL" || signal == "KILL" || signal == "9" {
-		if l.exit(137, false) {
-			d.emitExit(l)
+		if l.exit(run, 137, false) {
+			d.emitExit(l, 137, false)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -619,9 +666,13 @@ func (d *Daemon) container(id string) *live {
 // container is the value the test's function is given.
 func (l *live) container() Container {
 	l.mu.Lock()
-	signals := append([]string(nil), l.signals...)
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	return l.containerLocked()
+}
 
+// containerLocked is container with the lock already held, which is how a start takes the
+// value for the run it begins: that run's standard input and signals, and no later run's.
+func (l *live) containerLocked() Container {
 	work := ""
 	for _, m := range l.host.Mounts {
 		if m.Target == "/agk/out" {
@@ -635,35 +686,60 @@ func (l *live) container() Container {
 		Stdin:   l.stdinR,
 		Stdout:  l.rec.writer(docker.Stdout),
 		Stderr:  l.rec.writer(docker.Stderr),
-		Signals: signals,
+		Signals: append([]string(nil), l.signals...),
 		signal:  l.signal,
 	}
 }
 
-// exit records the end of a container, once, and says whether this call was the one that
-// did it.
-func (l *live) exit(code int, oom bool) bool {
+// ending is the end of one run. Its code is written before it closes, so a wait reads the
+// code of the run it waited for, even where the container has been started again since.
+type ending struct {
+	closed chan struct{}
+	code   int
+}
+
+func newEnding() *ending { return &ending{closed: make(chan struct{})} }
+
+// exit records the end of one run, once, and says whether this call was the one that did
+// it. A run that is not the one under way is over already, and nothing is recorded for it.
+func (l *live) exit(run int, code int, oom bool) bool {
 	l.mu.Lock()
-	if l.exited {
-		l.mu.Unlock()
+	defer l.mu.Unlock()
+	if run != l.runs || l.exited {
 		return false
 	}
 	l.exited, l.code, l.oom = true, code, oom
 	l.finishedAt = time.Now().UTC()
-	l.mu.Unlock()
 
 	l.stdinR.Close()
-	close(l.done)
+	l.done.code = code
+	close(l.done.closed)
+	l.done = newEnding()
 	return true
 }
 
-// deliver records a signal and hands it to the container.
-func (l *live) deliver(signal string) {
+// closeStream ends the attached stream of one run, where that run is still the current
+// one: the stream of a container started again since is the next run's.
+func (l *live) closeStream(run int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if run == l.runs {
+		l.rec.close()
+	}
+}
+
+// deliver records a signal and hands it to one run, where that run is still the one under
+// way.
+func (l *live) deliver(run int, signal string) {
 	l.mu.Lock()
 	l.signals = append(l.signals, signal)
+	signalled, current := l.signal, run == l.runs
 	l.mu.Unlock()
+	if !current {
+		return
+	}
 	select {
-	case l.signal <- signal:
+	case signalled <- signal:
 	default:
 		// A container that is not listening is a container the grace runs out
 		// on, which is the case the escalation exists for.
@@ -740,6 +816,14 @@ func (r *recorder) close() {
 		r.conn.Close()
 		r.conn = nil
 	}
+}
+
+// reopen takes a container started again: an attach carries the new run, and the frames
+// of the first stay, because a daemon's log of a container is every run it has had.
+func (r *recorder) reopen() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed, r.dropped = false, false
 }
 
 // streamWriter is one of a container's two output streams.

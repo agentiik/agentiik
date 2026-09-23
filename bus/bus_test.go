@@ -3,6 +3,8 @@ package bus
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -281,6 +283,61 @@ func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatalf("delivery %d never arrived, so a result the controller refused was lost", want)
 		}
+	}
+}
+
+// A result no controller could ever record is taken off the queue and said out loud, as a
+// message nobody can read is. Left for the next delivery it would come round for ever, since
+// this consumer delivers without limit and nothing about the result changes in between.
+func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
+	b := open(t)
+	trouble := make(chan error, 8)
+	b.Trouble = func(_ string, err error) { trouble <- err }
+
+	task := aTask(step(t))
+	if err := b.Report(t.Context(), controller.Answer{
+		Result: graph.Result{Task: task.ID, State: agk.TaskRunning},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
+	defer stop()
+	seen := make(chan controller.Answer, 8)
+	go func() {
+		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
+			seen <- a
+			// Wrapped, as Core.Answer wraps it.
+			return fmt.Errorf("%w: %s is %s", controller.ErrNotAResult, a.Result.Task, a.Result.State)
+		})
+	}()
+
+	select {
+	case a := <-seen:
+		if a.Result.Task != task.ID {
+			t.Fatalf("the controller was handed %s", a.Result.Task)
+		}
+	case <-ctx.Done():
+		t.Fatal("the result never reached the controller")
+	}
+	select {
+	case err := <-trouble:
+		if !errors.Is(err, controller.ErrNotAResult) {
+			t.Errorf("what was said reads %q", err)
+		}
+	case a := <-seen:
+		t.Fatalf("it was delivered again rather than taken off the queue: %+v", a)
+	case <-ctx.Done():
+		t.Fatal("nothing was said about a result taken off the queue")
+	}
+
+	// And it is off the queue rather than coming round for ever.
+	select {
+	case a := <-seen:
+		t.Errorf("it came round again: %+v", a)
+	case err := <-trouble:
+		t.Errorf("it was said twice, the second time as %q", err)
+	case <-time.After(2 * time.Second):
 	}
 }
 

@@ -636,6 +636,131 @@ func TestARedeliveredTaskAdoptsTheRealContainerItAlreadyStarted(t *testing.T) {
 	}
 }
 
+// TestARealExitedContainerIsCollectedNotStartedAgain, against the daemon: a container
+// carrying this task's label that has already exited is collected as it stands. A daemon
+// runs an exited container again on a start, so the counter it keeps on a bind mount is
+// what says whether the script ran once or twice.
+func TestARealExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
+	d, image := realDriver(t)
+
+	id := agk.NewTaskID("01JMZ8V1P9C4XQ7K2N4D6F8H0A", "collected", 1, agk.Shard{})
+	task := graph.Task{
+		ID:        id,
+		Run:       "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+		Namespace: "finance",
+		Step:      "collected",
+		Attempt:   1,
+		Image:     image,
+		Script:    []string{"true"},
+		Outputs:   []agk.Port{"out"},
+		Network:   graph.NetworkNone,
+	}
+
+	// The first delivery's container, run to its end and left there, exactly as one a
+	// runner that died between the exit and the tidying would have left behind.
+	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := t.TempDir()
+	script := `n=$(cat /counter/runs 2>/dev/null || echo 0); echo $((n+1)) > /counter/runs; printf '{"meta":{"run_id":"01JMZ8V1P9C4XQ7K2N4D6F8H0A","step":"collected","port":"out","attempt":1,"count":1,"produced_at":"2026-01-01T00:00:00Z"},"items":[{"id":"01JMZ8V1P9C4XQ7K2N4D6F8H0C","data":{"first":"delivery"},"files":[]}]}' > /agk/out/ports/out.json`
+	started, err := exec.Command("docker", "run", "-d",
+		"--label", LabelTask+"="+string(id),
+		"--mount", "type=bind,source="+w.Out+",target=/agk/out",
+		"--mount", "type=bind,source="+counter+",target=/counter",
+		image, "/bin/sh", "-e", "-c", script).Output()
+	if err != nil {
+		t.Skipf("could not start the first delivery's container: %v", err)
+	}
+	container := strings.TrimSpace(string(started))
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
+	if code, err := exec.Command("docker", "wait", container).Output(); err != nil || strings.TrimSpace(string(code)) != "0" {
+		t.Fatalf("the first delivery's container exited %q (%v)", strings.TrimSpace(string(code)), err)
+	}
+
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivered task: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	out := result.Outputs["out"]
+	if len(out.Items) != 1 || out.Items[0].Data["first"] != "delivery" {
+		t.Fatalf("the exited container's own output was not collected: %+v", out)
+	}
+
+	runs, err := os.ReadFile(filepath.Join(counter, "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.TrimSpace(string(runs)); n != "1" {
+		t.Errorf("the script ran %s times, and a container that has exited is collected rather than started again", n)
+	}
+
+	listed, err := exec.Command("docker", "ps", "-a", "--filter", "label="+LabelTask+"="+string(id), "--format", "{{.ID}}").Output()
+	if err != nil {
+		t.Skipf("docker ps: %v", err)
+	}
+	if left := strings.TrimSpace(string(listed)); left != "" {
+		t.Errorf("a container carrying the task label outlived the redelivery: %s", left)
+	}
+}
+
+// TestARealExitedContainersOutputIsReadBackOffItsLog, against the daemon: what a container
+// that has already exited wrote is read back off the daemon's log, so a script step whose
+// output is its standard output publishes what the first delivery's container printed.
+func TestARealExitedContainersOutputIsReadBackOffItsLog(t *testing.T) {
+	d, image := realDriver(t)
+	logs := &memLogs{}
+	d.cfg.Logs = logs
+
+	id := agk.NewTaskID("01JMZ8V1P9C4XQ7K2N4D6F8H0A", "replayed", 1, agk.Shard{})
+	task := graph.Task{
+		ID:        id,
+		Run:       "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+		Namespace: "finance",
+		Step:      "replayed",
+		Attempt:   1,
+		Image:     image,
+		Script:    []string{"echo hello-from-first"},
+		Outputs:   []agk.Port{"out"},
+		Network:   graph.NetworkNone,
+	}
+
+	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := exec.Command("docker", "run", "-d",
+		"--label", LabelTask+"="+string(id),
+		"--mount", "type=bind,source="+w.Out+",target=/agk/out",
+		image, "/bin/sh", "-e", "-c", "echo hello-from-first").Output()
+	if err != nil {
+		t.Skipf("could not start the first delivery's container: %v", err)
+	}
+	container := strings.TrimSpace(string(started))
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
+	if code, err := exec.Command("docker", "wait", container).Output(); err != nil || strings.TrimSpace(string(code)) != "0" {
+		t.Fatalf("the first delivery's container exited %q (%v)", strings.TrimSpace(string(code)), err)
+	}
+
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivered task: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	out := result.Outputs["out"]
+	if len(out.Items) != 1 || out.Items[0].Data[StdoutField] != "hello-from-first\n" {
+		t.Errorf("out carries %+v, and a script step that wrote no port file publishes what it printed", out)
+	}
+	if got := logText(t, logs.String()); !strings.Contains(got, "hello-from-first") {
+		t.Errorf("the log does not carry what the container printed:\n%s", got)
+	}
+}
+
 // TestAStopEndsARealTaskInFlight, against the daemon: the container is stopped and the
 // Run that was blocked on it comes back cancelled.
 func TestAStopEndsARealTaskInFlight(t *testing.T) {

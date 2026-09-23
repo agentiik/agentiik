@@ -148,13 +148,18 @@ type WaitError struct {
 	Message string `json:"Message"`
 }
 
-// The wait conditions. next-exit is the one this product uses, and the reason it is
-// opened before the container is started: the daemon writes the response header as soon
-// as the wait is registered, so a caller that has read the header knows the exit cannot
-// be missed.
+// The wait conditions. next-exit is the one this product uses for a container it starts,
+// and the reason it is opened before the start: the daemon writes the response header as
+// soon as the wait is registered, so a caller that has read the header knows the exit
+// cannot be missed.
+//
+// not-running is for a container somebody else started. It answers at once on one that is
+// already over, where next-exit would wait for an exit after the one that has happened:
+// on a container nothing starts again, that wait never ends.
 const (
-	WaitNextExit = "next-exit"
-	WaitRemoved  = "removed"
+	WaitNextExit   = "next-exit"
+	WaitNotRunning = "not-running"
+	WaitRemoved    = "removed"
 )
 
 // Image is the image as the daemon holds it, which is where the digest a reference
