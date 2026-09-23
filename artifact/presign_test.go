@@ -166,6 +166,99 @@ func TestAPresignedURLStopsWorking(t *testing.T) {
 	}
 }
 
+// A policy is one form for everything a task makes: it writes any object under its namespace's
+// prefix, for its run, until its instant, and nothing anywhere else.
+func TestAPolicyAllowsItsPrefixAndNothingElse(t *testing.T) {
+	objects := artifact.Dir(t.TempDir())
+	now := time.Now().UTC()
+	s, err := artifact.NewSigned(objects, artifact.SignedOptions{
+		Key: signingKey, Base: base, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Policy(context.Background(), "finance", "01K5RUNIDENTIFIER", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.URL != base+"/finance" || p.KeyPrefix != "finance/sha256/" {
+		t.Errorf("the policy is posted to %s under %s", p.URL, p.KeyPrefix)
+	}
+	fields := url.Values{}
+	for name, value := range p.Fields {
+		fields.Set(name, value)
+	}
+
+	// Any object under the prefix, because none of them existed when the policy was signed.
+	for _, content := range []string{"the whole of an invoice", "another invoice"} {
+		key := artifact.Key("finance", digestOf([]byte(content)))
+		run, err := s.CheckPolicy("finance", key, fields)
+		if err != nil {
+			t.Fatalf("the policy it signed was refused for %s: %s", key, err)
+		}
+		if run != "01K5RUNIDENTIFIER" {
+			t.Errorf("the policy is signed for run %q", run)
+		}
+		if err := s.Store(context.Background(), key, strings.NewReader(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	digest := digestOf([]byte("the whole of an invoice"))
+	key := artifact.Key("finance", digest)
+	edited := func(name, value string) url.Values {
+		q := url.Values{}
+		for k, v := range fields {
+			q[k] = append([]string(nil), v...)
+		}
+		q.Set(name, value)
+		return q
+	}
+	for _, c := range []struct {
+		name      string
+		namespace string
+		key       string
+		fields    url.Values
+	}{
+		{"a key outside the prefix", "finance", "finance/other/" + digest, fields},
+		{"a key in another namespace", "finance", artifact.Key("ops", digest), fields},
+		{"the form posted for another namespace", "ops", artifact.Key("ops", digest), fields},
+		{"a key that is more than a digest", "finance", key + "/x", fields},
+		{"a key that is less than a digest", "finance", artifact.Key("finance", digest[:63]), fields},
+		{"a digest written in capitals", "finance", artifact.Key("finance", strings.ToUpper(digest)), fields},
+		{"a key that climbs out of the prefix", "finance", "finance/sha256/../../ops/sha256/" + digest, fields},
+		{"a form claiming another run", "finance", key, edited("run", "01K5OTHERRUN")},
+		{"a form whose expiry somebody moved", "finance", key, edited("expires", "9999999999")},
+		{"a signature somebody edited", "finance", key, edited("signature", strings.Repeat("0", 64))},
+		{"a form with no signature at all", "finance", key, url.Values{}},
+	} {
+		if _, err := s.CheckPolicy(c.namespace, c.key, c.fields); !errors.Is(err, artifact.ErrNotSigned) {
+			t.Errorf("%s answered %v", c.name, err)
+		}
+	}
+
+	// A URL is not a policy and a policy is not a URL, although both are signed with one key.
+	put, err := s.Presign(context.Background(), artifact.MethodPut, key, "01K5RUNIDENTIFIER", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, query := parts(t, put)
+	if _, err := s.CheckPolicy("finance", path, query); !errors.Is(err, artifact.ErrNotSigned) {
+		t.Errorf("a URL's query posted as a policy answered %v", err)
+	}
+	for _, method := range []string{artifact.MethodPut, artifact.MethodPost} {
+		if _, err := s.Check(method, key, fields); !errors.Is(err, artifact.ErrNotSigned) {
+			t.Errorf("a policy followed as a %s URL answered %v", method, err)
+		}
+	}
+
+	// And it stops working with the grant it was answered with.
+	now = now.Add(2 * time.Minute)
+	if _, err := s.CheckPolicy("finance", key, fields); !errors.Is(err, artifact.ErrNotSigned) {
+		t.Errorf("an expired policy answered %v", err)
+	}
+}
+
 func TestWhatCannotBePresigned(t *testing.T) {
 	s, _ := signed(t)
 	key := artifact.Key("finance", digestOf([]byte("the whole of an invoice")))
@@ -184,6 +277,24 @@ func TestWhatCannotBePresigned(t *testing.T) {
 		{"a key that leaves its root", artifact.MethodGet, "finance/../other/sha256/x", "01K5RUNIDENTIFIER", until},
 	} {
 		if _, err := s.Presign(context.Background(), c.method, c.key, c.run, c.until); err == nil {
+			t.Errorf("%s was signed", c.name)
+		}
+	}
+
+	// A policy is refused for the same reasons, and for a namespace that could not be the first
+	// segment of a key, since its prefix would reach into another namespace's.
+	for _, c := range []struct {
+		name      string
+		namespace string
+		run       agk.RunID
+		until     time.Time
+	}{
+		{"a policy for no run", "finance", "", until},
+		{"a policy with no expiry", "finance", "01K5RUNIDENTIFIER", time.Time{}},
+		{"a policy for no namespace", "", "01K5RUNIDENTIFIER", until},
+		{"a policy for a namespace carrying a separator", "finance/sha256/..", "01K5RUNIDENTIFIER", until},
+	} {
+		if _, err := s.Policy(context.Background(), c.namespace, c.run, c.until); err == nil {
 			t.Errorf("%s was signed", c.name)
 		}
 	}
