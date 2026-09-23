@@ -35,6 +35,23 @@ import (
 // the one route that does read a value is the redemption, which only a runner holding a task's
 // grant reaches. A test walks every route with a store that fails if anything else asks it.
 
+// The stores a declaration may name, by the identifiers the routes, the secret_declarations table
+// and agentiik_secret share. Naming one is not being given it: which of them an installation
+// reads is its configuration, and check says what each needs before a declaration is taken.
+const (
+	// ProviderBuiltin is the built-in store, which keeps a value sealed in the database under
+	// the namespace and the name it is declared by.
+	ProviderBuiltin = "builtin"
+
+	// ProviderEnv is the API's own environment, for development, read at a variable the
+	// declaration names under a prefix the installation gives the namespace.
+	ProviderEnv = "env"
+
+	// ProviderVault is HashiCorp Vault, which no installation reads from until its provider
+	// arrives.
+	ProviderVault = "vault"
+)
+
 // Environment opts an installation in to the env provider, which reads a value out of the API's
 // own environment and is for development only. It gives each namespace that may use it the
 // prefix its variables begin with, and a namespace it does not name may not declare one.
@@ -43,18 +60,21 @@ import (
 // derivation confines: a variable's name is letters, digits and underscores, a namespace's may
 // hold hyphens and underscores too, so AGENTIIK_SECRET_TEAM_OPS_ would be the prefix of both
 // team-ops and team_ops, and the prefix of team, AGENTIIK_SECRET_TEAM_, would begin it. Written
-// out, two prefixes of which one begins the other are refused when the routes are built, so no
-// namespace reaches another's variables, and none reaches the API's own unless somebody writes a
-// prefix that does.
+// out, two prefixes of which one begins the other are refused when the routes are built, and when
+// the reader of the environment is, so no namespace reaches another's variables, and none reaches
+// the API's own unless somebody writes a prefix that does.
 type Environment map[string]string
 
 // variableName is what an environment variable is named on: letters, digits and underscores, not
 // beginning with a digit, which is what a shell or a Compose file can set.
 var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// confining refuses an environment that could not confine a namespace: a prefix that is no
-// variable's beginning, or two namespaces of which one's prefix begins the other's.
-func (e Environment) confining() error {
+// Check refuses an environment that could not confine a namespace: a prefix that is no variable's
+// beginning, or two namespaces of which one's prefix begins the other's.
+//
+// Exported, as Confines is, for the reader of the environment, which is built apart from the
+// routes and has to refuse what they refuse.
+func (e Environment) Check() error {
 	namespaces := make([]string, 0, len(e))
 	for namespace := range e {
 		namespaces = append(namespaces, namespace)
@@ -239,7 +259,7 @@ func NewDeclarations(rt *Router, o DeclarationOptions) (*DeclarationAPI, error) 
 	case o.Pool == nil:
 		return nil, errors.New("api: no database, and a declaration is a row")
 	}
-	if err := o.Environment.confining(); err != nil {
+	if err := o.Environment.Check(); err != nil {
 		return nil, err
 	}
 	if o.Values == nil {
@@ -359,7 +379,7 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 		switch {
 		case value != nil:
 			return s.values.Write(ctx, ns, name, value)
-		case d.Provider != "builtin":
+		case d.Provider != ProviderBuiltin:
 			return s.values.Forget(ctx, ns, name)
 		}
 		return nil
@@ -418,17 +438,17 @@ func (s *DeclarationAPI) check(namespace string, d Declare) error {
 		return fmt.Errorf("a path is at most %d bytes, more than a variable's name or a key in a store needs, and this one is %d", pathMax, len(d.Path))
 	}
 	switch d.Provider {
-	case "builtin":
+	case ProviderBuiltin:
 		if d.Path != "" {
 			return errors.New("the built-in store keeps a value under the namespace and the name it is declared by, so a declaration naming it carries no path: one would name something that store does not have")
 		}
 		return nil
-	case "env":
+	case ProviderEnv:
 		if d.Path == "" {
 			return errors.New("a secret kept in env is read from a variable, and this declaration names none")
 		}
 		return s.environment.Confines(namespace, d.Path)
-	case "vault":
+	case ProviderVault:
 		return errors.New("vault is not a store this installation reads secrets from: a namespace is confined to its own paths, nothing gives a namespace its prefix in Vault until that provider arrives, and a path taken before then could name any namespace's secret")
 	}
 	return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin (the encrypted store), env (the API's environment, for development) or vault", d.Provider)
@@ -443,7 +463,7 @@ func valueOf(d Declare) ([]byte, error) {
 		}
 		return nil, nil
 	}
-	if d.Provider != "builtin" {
+	if d.Provider != ProviderBuiltin {
 		return nil, fmt.Errorf("a value is written only into the built-in store, and a secret kept in %s is read where %s keeps it, which is where to set it", d.Provider, d.Provider)
 	}
 	var value []byte
