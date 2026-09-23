@@ -148,6 +148,58 @@ func TestATreeObjectASweepHadClaimedIsWrittenAgain(t *testing.T) {
 	}
 }
 
+// Two pushes of two commits at once, sharing a file the namespace has never held: both are
+// recorded, and the object counts both. A CI job pushing two branches together is the ordinary
+// way to arrive here, and one of the two used to fail on the object's primary key.
+//
+// The first is held open until the second is waiting on it, which is the moment the two used to
+// collide, so the test does not depend on the scheduler happening to interleave them.
+func TestTwoVersionsReachingOneNewObjectAtOnceAreBothRecorded(t *testing.T) {
+	pool, super := opened(t)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+
+	shared := []TreeFile{{Path: "agentiik.yaml", SHA256: digestOf("e"), Size: 7, Mode: "0644"}}
+	second := make(chan error, 1)
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		if _, err := ns.SaveVersion(ctx, aVersion("b4a0d2f", shared)); err != nil {
+			return err
+		}
+		go func() {
+			_, err := saveVersion(t, pool, aVersion("c5b1e3a", shared))
+			second <- err
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var waiting int
+			if err := conn.QueryRow(t.Context(),
+				`select count(*) from pg_stat_activity
+				 where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+				return err
+			}
+			if waiting > 0 {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return errors.New("the second push never waited on the first")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("the second of two pushes sharing a new file was refused: %s", err)
+	}
+	if got := refsOf(t, pool, "finance", digestOf("e")); got != 2 {
+		t.Errorf("an object two versions name is referenced %d times", got)
+	}
+}
+
 // "A version is a commit": the same commit again with the same files changes nothing, and the
 // same commit with other files is refused rather than quietly left as it was.
 func TestASecondPushOfOneCommitIsComparedByItsTree(t *testing.T) {
