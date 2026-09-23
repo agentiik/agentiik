@@ -19,8 +19,10 @@ create table secret_declarations (
   -- The name a workflow writes in its secrets block and a step mounts it by, on the one
   -- grammar every name in the file is written on. Written out rather than typed with the name
   -- domain of 0001, because a column typed name is resolved to PostgreSQL's own identifier
-  -- type, which pg_catalog holds and finds first, and which checks nothing.
-  name        text not null check (name ~ '^[A-Za-z0-9][A-Za-z0-9_-]*$'),
+  -- type, which pg_catalog holds and finds first, and which checks nothing. At most 255
+  -- characters, because the runner names the file a step reads the value from after it and no
+  -- file name is longer, and a name no step could mount is not one to keep.
+  name        text not null check (name ~ '^[A-Za-z0-9][A-Za-z0-9_-]*$' and length(name) <= 255),
 
   -- Which store holds the value. The three identifiers the installation knows; whether this
   -- installation has configured the one named is a question for the moment a value is read,

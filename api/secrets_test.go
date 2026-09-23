@@ -148,6 +148,8 @@ func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
 		"a variable with no name":                  {"billing", `{"provider":"env"}`, http.StatusBadRequest},
 		"a path carrying an escape sequence":       {"billing", `{"provider":"vault","path":"kv/\u001b[2Jbilling"}`, http.StatusBadRequest},
 		"a name the workflow file cannot write":    {"bill.ing", `{"provider":"builtin"}`, http.StatusBadRequest},
+		"a name no file could be named after":      {strings.Repeat("a", 256), `{"provider":"builtin"}`, http.StatusBadRequest},
+		"a name longer than an index row can hold": {strings.Repeat("q7-Z", 1500), `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a body far larger than a declaration is":  {"billing", `{"provider":"vault","path":"` + strings.Repeat("a", 64<<10) + `"}`, http.StatusRequestEntityTooLarge},
 		"a body that is not a declaration at all":  {"billing", `["builtin"]`, http.StatusBadRequest},
 		"a body that says nothing about the store": {"billing", ``, http.StatusBadRequest},

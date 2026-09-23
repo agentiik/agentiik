@@ -191,6 +191,7 @@ func TestTheDeclarationsTableHoldsNoValue(t *testing.T) {
 		"the built-in store with a path":            {Name: "billing", Provider: "builtin", Path: "finance/billing", DeclaredBy: "alice"},
 		"an environment variable with no name":      {Name: "billing", Provider: "env", DeclaredBy: "alice"},
 		"a name that is a path":                     {Name: "kv/billing", Provider: "builtin", DeclaredBy: "alice"},
+		"a name longer than a file name can be":     {Name: strings.Repeat("a", 256), Provider: "builtin", DeclaredBy: "alice"},
 	} {
 		if _, err := declare(t, pool, "finance", d); err == nil {
 			t.Errorf("%s was declared", what)

@@ -77,6 +77,11 @@ const declareMaxBytes = 8 << 10
 // under a name the file cannot write is a declaration nothing can use.
 var secretName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
+// secretNameMax is how long a secret's name may be, which the grammar does not bound and a file
+// name does: a step is given the value at /agk/secrets/<name>, and the runner names the file it
+// binds there after it, so a longer name is a secret nothing could ever mount.
+const secretNameMax = 255
+
 // secretsDir is where a step is given its secrets, "/agk/secrets/<name>", written here rather
 // than imported from the driver so that the API links no part of what runs a container.
 const secretsDir = "/agk/secrets/"
@@ -173,6 +178,10 @@ func (s *DeclarationAPI) one(w http.ResponseWriter, r *http.Request, _ Principal
 
 func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := r.PathValue("name")
+	if len(name) > secretNameMax {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("a secret name is at most %d characters and this one is %d: a step is given the value in a file named after it, and no file name is longer", secretNameMax, len(name)))
+		return
+	}
 	if !secretName.MatchString(name) {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a secret name: a secret is named the way the workflow file names it, letters, digits, hyphens and underscores beginning with a letter or a digit, because a workflow names it by that and a step mounts it at /agk/secrets/<name>", name))
 		return
