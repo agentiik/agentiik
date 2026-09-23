@@ -680,6 +680,52 @@ func TestAnOversizedTreeIsRefusedBeforeItsContentIsRead(t *testing.T) {
 	}
 }
 
+// A partial clone fetches a blob it lacks the moment it is asked about, one request per file and
+// all of them before a size could be added up. So a commit whose files the clone lacks is refused
+// by name, with a way to fetch them at once, and nothing is fetched behind the person's back.
+func TestAPartialCloneIsRefusedRatherThanFetchedFileByFile(t *testing.T) {
+	origin := repository(t)
+	write(t, origin, "scripts/render.sh", "#!/bin/sh\necho earlier\n")
+	commitAll(t, origin, "a script")
+	earlier := gitIn(t, origin, "rev-parse", "HEAD")
+	lacking := gitIn(t, origin, "rev-parse", "HEAD:scripts/render.sh")
+	write(t, origin, "scripts/render.sh", "#!/bin/sh\necho later\n")
+	commitAll(t, origin, "a later script")
+	// What a server has to allow for a clone to filter blobs out and fetch them later.
+	gitIn(t, origin, "config", "uploadpack.allowFilter", "true")
+	gitIn(t, origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	// Checking HEAD out fetches HEAD's files, which leaves the earlier script as the one blob
+	// the clone lacks.
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitIn(t, origin, "clone", "-q", "--filter=blob:none", "file://"+origin, clone)
+	if !lacks(clone, lacking) {
+		t.Skip("this clone holds every blob, which is a git before 2.45 fetching whatever it is asked about, or one that did not filter")
+	}
+
+	code, out, errs, got := pushing(t, clone, http.StatusOK, "--commit", earlier)
+	if code != exitRefused {
+		t.Fatalf("a commit whose files the clone lacks answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "holds scripts/render.sh, which this clone lacks") || !strings.Contains(errs, "git backfill") {
+		t.Errorf("the refusal does not name the file and say how to fetch it: %q", errs)
+	}
+	if !lacks(clone, lacking) {
+		t.Error("the blob was fetched on the way to the refusal")
+	}
+}
+
+// lacks is whether the clone at dir lacks an object, asked without letting git fetch it.
+func lacks(dir, object string) bool {
+	cmd := exec.Command("git", "cat-file", "-e", object)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1")
+	return cmd.Run() != nil
+}
+
 // Git reading an object it cannot inflate dies partway through its answer, and what it said on
 // the way out is the refusal, rather than the end of a stream that stopped early.
 func TestWhatGitSaysOfAnObjectItCannotReadIsPassedOn(t *testing.T) {

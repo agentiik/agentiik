@@ -302,14 +302,21 @@ func (r place) holds(ctx context.Context, sha, path string) error {
 // holds none.
 //
 // Every size is added up before any content is read, out of the listing git makes from object
-// headers, so that a tree above the limit is refused having read nothing. The limit belongs to how
-// the tree travels rather than to what a repository may be: until the installation serves the
-// repository over git smart HTTP, which is v0.4.0, all of it rides inside one JSON request.
+// headers, so that a tree above the limit is refused having read none of its files. The limit
+// belongs to how the tree travels rather than to what a repository may be: until the installation
+// serves the repository over git smart HTTP, which is v0.4.0, all of it rides inside one JSON
+// request.
+//
+// That holds in a partial clone only because git is told to fetch nothing. A clone that filtered
+// blobs out fetches one the moment anything asks about it, with a request of its own, so listing
+// the sizes would be a round trip per file, every one of them made before the first size could be
+// added up, and a tree far above the limit downloaded whole in order to be refused. A blob the
+// clone lacks is refused by name instead, with a way to fetch them all at once.
 func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.PushFile, error) {
 	// sha: is the commit's root, and sha:billing the tree at billing/ inside it. Either is
 	// listed with paths relative to itself, because git runs at the top, where a listing is
 	// not narrowed to the directory it runs in.
-	listed, err := gitOutput(ctx, repo.top, "ls-tree", "-r", "-z", "-l", sha+":"+strings.TrimSuffix(repo.prefix, "/"))
+	listed, err := output(fetchingNothing(gitCommand(ctx, repo.top, "ls-tree", "-r", "-z", "-l", sha+":"+strings.TrimSuffix(repo.prefix, "/"))))
 	if err != nil {
 		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
 	}
@@ -319,6 +326,7 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		size               int64
 	}
 	var entries []entry
+	var missing []string
 	var total int64
 	for _, record := range strings.Split(string(listed), "\x00") {
 		if record == "" {
@@ -349,6 +357,12 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 			return nil, fmt.Errorf("%s is committed with mode %s, and a tree carries a file as 100644 or 100755 and nothing else", path, fields[0])
 		}
 
+		if fields[3] == "BAD" {
+			// What ls-tree writes for a size it could not read, which with fetching turned
+			// off is a blob this clone does not hold.
+			missing = append(missing, path)
+			continue
+		}
 		size, err := strconv.ParseInt(fields[3], 10, 64)
 		if err != nil || size < 0 {
 			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
@@ -357,7 +371,19 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		entries = append(entries, entry{path: path, mode: mode, object: fields[2], size: size})
 	}
 	if total > api.TreeMaxBytes {
-		return nil, fmt.Errorf("the tree of %s is %d bytes, and a push carries at most %d until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), total, api.TreeMaxBytes)
+		// Where blobs are missing, the sizes added up are a floor, and already too much.
+		size := strconv.FormatInt(total, 10) + " bytes"
+		if len(missing) > 0 {
+			size = "at least " + size
+		}
+		return nil, fmt.Errorf("the tree of %s is %s, and a push carries a tree of at most %d bytes until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), size, api.TreeMaxBytes)
+	}
+	if len(missing) > 0 {
+		held := missing[0]
+		if len(missing) > 1 {
+			held += " and " + counted(len(missing)-1, "other file", "other files")
+		}
+		return nil, fmt.Errorf("the tree of %s holds %s, which this clone lacks: a partial clone fetches a file it lacks with a request of its own, one file at a time, and every one of them before the size of the tree can be checked. Fetch them first, with git backfill or by checking %s out, then push", short(sha), held, short(sha))
 	}
 
 	sizes := make(map[string]int64, len(entries))
@@ -396,7 +422,7 @@ func contentsOf(ctx context.Context, dir string, sizes map[string]int64) (map[st
 		asked.WriteString(object + "\n")
 	}
 
-	cmd := gitCommand(ctx, dir, "cat-file", "--batch")
+	cmd := fetchingNothing(gitCommand(ctx, dir, "cat-file", "--batch"))
 	cmd.Stdin = strings.NewReader(asked.String())
 	var errs bytes.Buffer
 	cmd.Stderr = &errs
@@ -610,10 +636,23 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// fetchingNothing is a git command that answers out of what this clone holds and never fetches
+// what it lacks, which is what repositoryOf needs of a partial clone and says why.
+// GIT_NO_LAZY_FETCH is read by git from 2.45 on. An older git ignores it and fetches as it always
+// has, which is slow and still reads the right bytes.
+func fetchingNothing(cmd *exec.Cmd) *exec.Cmd {
+	cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1")
+	return cmd
+}
+
 // gitOutput is what git wrote, exactly as it wrote it. A -z listing is read through this rather
 // than through git, since a name may begin or end with a space and trimming it is renaming it.
 func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := gitCommand(ctx, dir, args...)
+	return output(gitCommand(ctx, dir, args...))
+}
+
+// output runs a git command and answers what it wrote, or what it said where it failed.
+func output(cmd *exec.Cmd) ([]byte, error) {
 	var out, errs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errs
 	if err := cmd.Run(); err != nil {
