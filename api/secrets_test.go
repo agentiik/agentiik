@@ -108,20 +108,27 @@ func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
 }
 
 // A value has nowhere to go here: a body carrying one is refused rather than accepted and dropped,
-// which would tell its author the value had been kept, and nothing is written.
+// which would tell its author the value had been kept, and nothing is written. That holds for a
+// value sent after the declaration as a second document, which a decoder reading one document and
+// stopping would never see.
 func TestADeclarationWithAValueIsRefused(t *testing.T) {
 	h, _ := withDeclarations(t, everything{who: "alice"})
 
 	const value = "sk_live_notreal"
-	w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin","value":"`+value+`"}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("a declaration carrying a value answered %d: %s", w.Code, w.Body)
-	}
-	if strings.Contains(w.Body.String(), value) {
-		t.Errorf("the refusal repeats the value: %s", w.Body)
-	}
-	if w, _ := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusNotFound {
-		t.Errorf("a declaration refused for its value was written anyway, and reads %d", w.Code)
+	for what, body := range map[string]string{
+		"a value in the declaration":    `{"provider":"builtin","value":"` + value + `"}`,
+		"a value after the declaration": `{"provider":"builtin"} {"value":"` + value + `"}`,
+	} {
+		w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s answered %d: %s", what, w.Code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), value) {
+			t.Errorf("the refusal of %s repeats the value: %s", what, w.Body)
+		}
+		if w, _ := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusNotFound {
+			t.Errorf("a declaration refused for %s was written anyway, and reads %d", what, w.Code)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -618,21 +619,34 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 }
 
 // read decodes a body, closed: a request carrying a field this does not know is refused rather
-// than half understood.
+// than half understood, and so is one carrying anything after its document.
 func read(r *http.Request, into any) error {
 	return readAtMost(r, into, 8<<20)
 }
 
-// readAtMost is read with a limit of the caller's, for the one route whose body is larger than
-// the rest. Past the limit the error wraps *http.MaxBytesError, which is how a caller tells a
+// readAtMost is read with a limit of the caller's, for the routes whose body is larger or smaller
+// than the rest. Past the limit the error wraps *http.MaxBytesError, which is how a caller tells a
 // request that is too large from one that is malformed.
+//
+// A decoder reads one document and stops, so a body is read on to its end as well: a second
+// document after the first would otherwise be accepted and dropped, and a declaration followed by
+// a value would tell whoever sent it the value had been kept. The refusal does not repeat what
+// followed, which may be that value.
 func readAtMost(r *http.Request, into any, limit int64) error {
 	d := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(into); err != nil {
 		return fmt.Errorf("the request body: %w", err)
 	}
-	return nil
+	var after json.RawMessage
+	switch err := d.Decode(&after); {
+	case errors.Is(err, io.EOF):
+		return nil
+	case errors.As(err, new(*http.MaxBytesError)):
+		return fmt.Errorf("the request body: %w", err)
+	default:
+		return errors.New("the request body is one JSON document, and this one carries something after it")
+	}
 }
 
 func write(w http.ResponseWriter, status int, body any) {

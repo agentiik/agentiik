@@ -260,16 +260,24 @@ func TestARunOfACommitNobodyPushedIsNotFound(t *testing.T) {
 	}
 }
 
-// A body carrying a field nobody knows is refused rather than half understood.
+// A body carrying a field nobody knows is refused rather than half understood, and so is one
+// carrying a second document after the first, which would otherwise be read up to the end of the
+// first and the rest dropped.
 func TestABodyWithAFieldNobodyKnowsIsRefused(t *testing.T) {
 	h, _, _ := serving(t)
-	r := httptest.NewRequest("POST", "/api/v1/finance/workflows/monthly-invoicing/runs",
-		bytes.NewReader([]byte(`{"commit":"`+aCommit+`","priority":"urgent"}`)))
-	r.Header.Set("Authorization", "Bearer alice")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("a body carrying a field nobody knows answered %d: %s", w.Code, w.Body)
+	for what, body := range map[string]string{
+		"a field nobody knows":            `{"commit":"` + aCommit + `","priority":"urgent"}`,
+		"a second document after its own": `{"commit":"` + aCommit + `"} {"priority":"urgent"}`,
+		"a stray brace after its own":     `{"commit":"` + aCommit + `"}}`,
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/finance/workflows/monthly-invoicing/runs",
+			bytes.NewReader([]byte(body)))
+		r.Header.Set("Authorization", "Bearer alice")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("a body carrying %s answered %d: %s", what, w.Code, w.Body)
+		}
 	}
 }
 
