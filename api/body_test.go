@@ -260,6 +260,17 @@ func TestABodyIsReadClosed(t *testing.T) {
 		"inputs that are a list":                 {`{"inputs":[1,2]}`, new(starting)},
 		"inputs holding a number no float holds": {`{"inputs":{"n":1e400}}`, new(starting)},
 		"inputs that stop":                       {`{"inputs":{"n":[1,2}}`, new(starting)},
+
+		// Every number a float holds but zero, and nothing that reaches further from the point
+		// than a float does, which PostgreSQL would write back in full or refuse to hold.
+		"inputs holding a number a float holds as zero":   {`{"inputs":{"n":1e-400}}`, new(starting)},
+		"inputs holding one written 16,383 digits out":    {`{"inputs":{"n":1e-16383}}`, new(starting)},
+		"inputs holding a zero written 16,383 digits out": {`{"inputs":{"n":0e-16383}}`, new(starting)},
+		"inputs holding a zero written 341 digits out":    {`{"inputs":{"n":0e-341}}`, new(starting)},
+		"inputs holding a zero past any exponent":         {`{"inputs":{"n":0e999999999999999999999}}`, new(starting)},
+		"inputs holding 341 digits after the point":       {`{"inputs":{"n":1.` + strings.Repeat("0", 341) + `}}`, new(starting)},
+		"inputs holding U+0000 in a string":               {`{"inputs":{"n":["a\u0000"]}}`, new(starting)},
+		"inputs holding U+0000 in a name":                 {`{"inputs":{"n":{"\u0000":1}}}`, new(starting)},
 	} {
 		err := readAtMost(httptest.NewRequest("POST", "/", strings.NewReader(c.body)), c.into, smallMaxBytes)
 		if err == nil {
@@ -476,5 +487,13 @@ func TestTheInputsAreKeptAsTheyWereWritten(t *testing.T) {
 		if string(s.inputs) != want {
 			t.Errorf("%s keeps the inputs %q, want %q", body, s.inputs, want)
 		}
+	}
+
+	// And every number a float holds, as far from the point as a float reaches, and the six
+	// characters \u0000 written with their backslash escaped, which are not U+0000.
+	edges := `{"n":[1e308,-1.7976931348623157e308,5e-324,4.9406564584124654e-324,0e-340,-0.0,"\\u0000"]}`
+	var s starting
+	if err := readAtMost(httptest.NewRequest("POST", "/", strings.NewReader(`{"inputs":`+edges+`}`)), &s, startMaxBytes); err != nil || string(s.inputs) != edges {
+		t.Errorf("the inputs %s are kept as %s: %v", edges, s.inputs, err)
 	}
 }

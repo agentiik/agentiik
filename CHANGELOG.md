@@ -109,6 +109,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run's inputs are counted, at most 100,000 values, and written down as they were sent rather than decoded. A number no 64-bit float holds is refused.
 - A field, a tree file, an include or a manifest written twice is refused, and so are a field named in another case and text that is not UTF-8.
 - A body is held as it arrives, not as it declares: a push declared and never sent holds 4 KiB rather than 16 MiB. A body sent in chunks costs what one declaring its length does, where it cost up to five times its cap.
+- A number in a run's inputs that a 64-bit float holds only as zero, or that reaches more than 340 digits from the point, is refused with 400. PostgreSQL writes a number back at the scale it was sent with, so `0e-16383` was read back as 16 KB at every decision, and `1e-16384` was a 500.
+- Inputs holding U+0000 in a string or a name are refused with 400, where PostgreSQL refused them with a 500.
 
 ### Secrets
 

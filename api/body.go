@@ -395,23 +395,36 @@ func (b *body) bytes(into *[]byte) error {
 // written, a slice of the body, and what a document costs to decode is paid by whoever decodes it.
 // The count is what bounds that, here and wherever the document is read again.
 func (b *body) document(most int, tooMany string) (jsontext.Value, error) {
-	// Where the value begins: after the name just read, the colon and whatever whitespace
-	// surrounds it.
 	from := b.d.InputOffset()
-	for ; from < int64(len(b.raw)); from++ {
-		if c := b.raw[from]; c != ' ' && c != '\t' && c != '\r' && c != '\n' && c != ':' {
-			break
-		}
-	}
 	b.values = most
 	if err := b.skim(tooMany); err != nil {
 		return nil, err
 	}
-	return jsontext.Value(b.raw[from:b.d.InputOffset()]), nil
+	return jsontext.Value(b.written(from)), nil
 }
+
+// written is what was read since the offset from, as it is written in the body: less the
+// whitespace, the colon or the comma before it, which belong to the value before it.
+func (b *body) written(from int64) []byte {
+	return bytes.TrimLeft(b.raw[from:b.d.InputOffset()], " \t\r\n:,")
+}
+
+// numberMaxDigits is how far from the point a number in a document may reach: how many digits
+// after it PostgreSQL writes it back with, and how large its exponent may be either way.
+//
+// A document is written down as jsonb, which keeps a number at the scale it was written with and
+// writes it back in full at every read: 0e-16383 is eight bytes sent and 16,385 read back, each
+// time the controller decides on the run, and one digit further is a number PostgreSQL refuses to
+// hold at all. 340 is as far as a 64-bit float reaches, since the smallest of them written the
+// shortest way, 4.9406564584124654e-324, has 340 digits after the point. So every number whoever
+// decodes the inputs can hold is taken, and none is read back more than 340 bytes longer than it
+// was sent, which is 34 MB for all the values a run's inputs may hold: about what storing every
+// number as a 64-bit float cost when encoding/json wrote them, 5e-324 being read back in 326.
+const numberMaxDigits = 340
 
 // skim reads one value and everything in it, counting each against b.values.
 func (b *body) skim(tooMany string) error {
+	from := b.d.InputOffset()
 	t, err := b.d.ReadToken()
 	if err != nil {
 		return malformed(err)
@@ -422,13 +435,9 @@ func (b *body) skim(tooMany string) error {
 	b.values--
 	switch t.Kind() {
 	case jsontext.KindNumber:
-		// Held to what whoever decodes it can hold, which is a 64-bit float: kept as written,
-		// 1e400 would be refused by the controller's own decoding at every pass on the run
-		// rather than by this request in front of whoever sent it.
-		if _, err := t.Float(); err != nil {
-			return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and a value is decoded into one", b.d.StackPointer())
-		}
-		return nil
+		return b.number(t, b.written(from))
+	case jsontext.KindString:
+		return b.storable(b.written(from))
 	case jsontext.KindBeginArray:
 		for b.d.PeekKind() != jsontext.KindEndArray {
 			if err := b.skim(tooMany); err != nil {
@@ -438,8 +447,12 @@ func (b *body) skim(tooMany string) error {
 		_, err = b.d.ReadToken()
 	case jsontext.KindBeginObject:
 		for b.d.PeekKind() != jsontext.KindEndObject {
+			name := b.d.InputOffset()
 			if _, err := b.d.ReadToken(); err != nil {
 				return malformed(err)
+			}
+			if err := b.storable(b.written(name)); err != nil {
+				return err
 			}
 			if err := b.skim(tooMany); err != nil {
 				return err
@@ -448,6 +461,61 @@ func (b *body) skim(tooMany string) error {
 		_, err = b.d.ReadToken()
 	}
 	return malformed(err)
+}
+
+// number refuses a number of a document that whoever decodes it cannot hold, or that reaches
+// further from the point than numberMaxDigits.
+//
+// Whoever decodes it holds it in a 64-bit float, so 1e400, which no float holds, would be refused
+// by the controller's own decoding at every pass on the run rather than by this request in front
+// of whoever sent it, and 1e-400, which is not zero but which a float holds only as zero, would be
+// read as zero with nobody told.
+func (b *body) number(t jsontext.Token, written []byte) error {
+	mantissa, exponent := written, 0
+	if e := bytes.IndexAny(written, "eE"); e >= 0 {
+		// The grammar has at least one digit after the e, and at most one sign before them.
+		digits := written[e+1:]
+		mantissa = written[:e]
+		for _, c := range bytes.TrimLeft(digits, "+-") {
+			// Held short of overflowing, since an exponent past numberMaxDigits is refused
+			// however far past it is.
+			exponent = min(exponent*10+int(c-'0'), numberMaxDigits+1)
+		}
+		if digits[0] == '-' {
+			exponent = -exponent
+		}
+	}
+	if f, err := t.Float(); err != nil || f == 0 && bytes.ContainsAny(mantissa, "123456789") {
+		return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and a value is decoded into one", b.d.StackPointer())
+	}
+	scale := 0
+	if _, fraction, ok := bytes.Cut(mantissa, []byte(".")); ok {
+		scale = len(fraction)
+	}
+	if scale-exponent > numberMaxDigits || exponent > numberMaxDigits || exponent < -numberMaxDigits {
+		return fmt.Errorf("the request body holds a number at %.100q written to more than %d digits from the point, and no 64-bit float needs more", b.d.StackPointer(), numberMaxDigits)
+	}
+	return nil
+}
+
+// storable refuses a string or a name of a document that holds U+0000, which JSON writes \u0000
+// and jsonb refuses to hold: kept as written, it would be refused by PostgreSQL, as a failure of
+// the API's own, rather than by this request in front of whoever sent it.
+func (b *body) storable(quoted []byte) error {
+	if bytes.IndexByte(quoted, '\\') < 0 {
+		return nil
+	}
+	for i := 0; i < len(quoted); i++ {
+		if quoted[i] != '\\' {
+			continue
+		}
+		if bytes.HasPrefix(quoted[i+1:], []byte("u0000")) {
+			return fmt.Errorf("the request body holds U+0000 in a string at %.100q, which PostgreSQL does not keep in JSON", b.d.StackPointer())
+		}
+		// What follows a backslash is escaped, so \\u0000 is a backslash and five characters.
+		i++
+	}
+	return nil
 }
 
 // mistyped refuses a value of the wrong kind, saying where it is and what is written there.

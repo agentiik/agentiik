@@ -265,6 +265,59 @@ func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
 	}
 }
 
+// A number in the inputs is one a 64-bit float holds, written no further from the point than a
+// float reaches, because PostgreSQL keeps a number at the scale it was written with and writes it
+// back in full at every read of the run. Each number at the edge starts a run and is read back no
+// more than 340 bytes longer than it was sent; each past it is a 400 in front of whoever sent it,
+// where it was a 500, or a run whose eight bytes of 1e-16383 were read back as 16 KB each time.
+func TestNoNumberInTheInputsIsReadBackFarLongerThanItWasSent(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+
+	edges := []string{`1e308`, `-1.7976931348623157e308`, `5e-324`, `4.9406564584124654e-324`, `0e-340`, `1.` + strings.Repeat("0", 340), `-0.0e-3`, `12.50`}
+	body := `{"commit":"` + aCommit + `","inputs":{"edges":[` + strings.Join(edges, ",") + `]}}`
+	if w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body); w.Code != http.StatusAccepted {
+		t.Fatalf("inputs at the edges answered %d: %s", w.Code, w.Body)
+	}
+	conn := dbtest.Superuser(t, super)
+	rows, err := conn.Query(t.Context(), `select length(e::text) from runs, jsonb_array_elements(inputs->'edges') with ordinality as x(e, i) order by i`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		back = append(back, n)
+	}
+	if err := rows.Err(); err != nil || len(back) != len(edges) {
+		t.Fatalf("%d of %d numbers read back: %v", len(back), len(edges), err)
+	}
+	for i, number := range edges {
+		if back[i] > len(number)+340 {
+			t.Errorf("%.24s is read back in %d bytes", number, back[i])
+		}
+	}
+
+	for _, number := range []string{`1e-400`, `1e-16383`, `0e-16383`, `1e-16384`, `0e999999999999`, `1.` + strings.Repeat("0", 17000), `"\u0000"`} {
+		body := `{"commit":"` + aCommit + `","inputs":{"n":` + number + `}}`
+		if w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body); w.Code != http.StatusBadRequest {
+			t.Errorf("inputs holding %.24s answered %d: %s", number, w.Code, w.Body)
+		}
+	}
+	var runs int
+	if err := conn.QueryRow(t.Context(), `select count(*) from runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Errorf("%d runs exist, and one start was taken", runs)
+	}
+}
+
 // A version that cannot be rebuilt is refused at the push rather than found by the first run of
 // it, which is the difference between failing in front of somebody and failing at three in the
 // morning.
