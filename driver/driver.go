@@ -44,18 +44,22 @@ type Docker struct {
 	keys *keys
 }
 
-// held is one task this process is running.
+// held is one task this process holds or is running.
 //
-// It exists so that a stop is fast, and never so that a stop is possible: the container
-// is resolved by its dev.agentiik.task label when it is not here, which is what lets
-// Stop reach a container this process did not start.
+// It exists so that a stop is fast, and so that a stop lands before there is a container
+// to find: the container is resolved by its dev.agentiik.task label when it is not here,
+// which is what lets Stop reach a container this process did not start, and a label is
+// there only once the container is.
 //
-// A task is held from the moment Run takes it and not from the moment its container
-// exists, because the window between the two is the image pull and it is minutes wide on
-// a cold registry. A stop that arrived in that window and changed nothing would leave the
-// container to be created afterwards and to run to its deadline, which is the shard
-// fail_fast existed to stop. So a stop that finds no watch is recorded here, and the
-// watch takes it as soon as there is a container to watch.
+// A task is held from the moment Hold writes its key down, or from the moment Run takes
+// it where nothing held it first, as agk run --local does, and not from the moment its
+// container exists. A runner redeems the task's grant between Hold and Run, and from the
+// redemption on the task is bound to it, so a cancel names it and the controller sends it
+// one stop and never a second. After that come the acknowledgement and the image pull, and
+// the pull is minutes wide on a cold registry. A stop that arrived in that window and
+// changed nothing would leave the container to be created afterwards and to run to its
+// deadline, which is the shard fail_fast existed to stop. So a stop that finds no watch is
+// recorded here, and the watch takes it as soon as there is a container to watch.
 type held struct {
 	mu        sync.Mutex
 	container string
@@ -70,6 +74,12 @@ type held struct {
 	// it put in the store, which graph.Result has nowhere to carry and the record of the
 	// ending keeps.
 	told Event
+
+	// running says a Run has taken the task, and holds counts the deliveries Hold wrote
+	// the key down for that no Run has taken and no Release has let go of. Both are the
+	// registry's, and read and written under Docker.mu rather than under mu.
+	running bool
+	holds   int
 }
 
 // end keeps what the observer is told of the task's ending.
@@ -246,22 +256,62 @@ func (d *Docker) dispatch(e docker.Event) {
 // first delivery is the one that reports.
 var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
 
-// register records a task as being in flight, and answers with what to call when it is
-// not. A task already in flight is refused and nothing is recorded, which leaves the
-// first delivery holding it: a stop still reaches it through the registry, and its own
-// done is what lets it go.
-func (d *Docker) register(id agk.TaskID, h *held) (func(), bool) {
+// register records a task as being run, and answers with what to call when it is not.
+//
+// A task Hold wrote down is taken over as it stands, with any stop that landed on it since,
+// and a task nothing held is recorded here. A task another Run already has is refused and
+// nothing changes, which leaves the first delivery holding it: a stop still reaches it
+// through the registry, and its own done is what lets it go.
+func (d *Docker) register(id agk.TaskID) (func(), bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, taken := d.inflight[id]; taken {
+	h := d.inflight[id]
+	switch {
+	case h == nil:
+		h = &held{}
+		d.inflight[id] = h
+	case h.running:
 		return nil, false
 	}
-	d.inflight[id] = h
+	h.running, h.holds = true, 0
 	return func() {
 		d.mu.Lock()
 		delete(d.inflight, id)
 		d.mu.Unlock()
 	}, true
+}
+
+// hold records a key Hold wrote down, so that a stop landing before Run takes the task is
+// kept rather than answered nil and forgotten. A key a Run already has is left to it.
+func (d *Docker) hold(id agk.TaskID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	h := d.inflight[id]
+	if h == nil {
+		h = &held{}
+		d.inflight[id] = h
+	}
+	if !h.running {
+		h.holds++
+	}
+}
+
+// Release lets go of a key Hold wrote down and no Run has taken, which is what a runner
+// does with a task it is not going to run after all: its redemption was refused or
+// failed, or it puts the message back with Again. A key a Run has is left alone, since
+// that Run lets go of it when it returns, and so is a key another delivery still holds,
+// since a stop that landed on it is that delivery's. The record under the work root keeps
+// the key as taken and not ended, which refuses nothing.
+func (d *Docker) Release(id agk.TaskID) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	h := d.inflight[id]
+	if h == nil || h.running {
+		return
+	}
+	if h.holds--; h.holds <= 0 {
+		delete(d.inflight, id)
+	}
 }
 
 // lookup answers with the task in flight, where this process is holding it.
@@ -301,9 +351,10 @@ func (d *Docker) Stop(ctx context.Context, s graph.Stop) error {
 		}
 		// The task is held and its container does not exist yet, so the stop is
 		// recorded rather than sent: there is nothing to signal, and the Run that is
-		// preparing it will not start what has been called off. The label lookup
-		// below still runs, because a container created a moment ago and not yet
-		// joined carries the label whether or not this side has reached it.
+		// preparing it, or that a runner which held it and has not run it yet will
+		// call, does not start what has been called off. The label lookup below
+		// still runs, because a container created a moment ago and not yet joined
+		// carries the label whether or not this side has reached it.
 	}
 
 	found, err := d.containerOf(ctx, s.Task)

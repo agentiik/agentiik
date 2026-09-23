@@ -937,6 +937,100 @@ func TestStoppingATaskNobodyHoldsIsNotAnError(t *testing.T) {
 	}
 }
 
+// A runner holds a key, redeems its grant and acknowledges its message before it calls Run, and
+// from the redemption on a cancel names the task and the controller sends its one stop. A stop
+// that lands in between, while the runner is still acknowledging, is kept: Run, when it comes,
+// starts no container for the task, the brick never runs, and the task is reported cancelled.
+func TestAStopBetweenTheHoldAndTheRunStartsNothing(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	task := oneTask(ref)
+
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Stop(t.Context(), graph.Stop{Task: task.ID, Reason: graph.StopCancelled}); err != nil {
+		t.Fatalf("stopping a task that was held and not yet run: %s", err)
+	}
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running a task stopped while it was held: %s", err)
+	}
+	if n := bricks.times("fetch"); n != 0 {
+		t.Errorf("the brick ran %d times for a task stopped before Run began", n)
+	}
+	if result.State != agk.TaskCancelled {
+		t.Errorf("the state is %s, and a stop that landed is cancelled", result.State)
+	}
+	if r.lookup(task.ID) != nil {
+		t.Error("the task is still held once Run has returned")
+	}
+}
+
+// A runner that holds a key and does not go on to run it, its redemption refused or the message
+// put back, lets go of it, and a stop for the key afterwards is one for a task this driver does
+// not hold. A key a Run has taken is let go of by that Run alone, since the stop that reaches the
+// task goes through it, and a key two deliveries hold stays held until both have let go.
+func TestAKeyIsLetGoOfOnlyByWhatHeldIt(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) {
+		once.Do(func() { close(running) })
+		<-release
+		return 0, nil
+	})
+	task := oneTask(ref)
+
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	r.Release(task.ID)
+	if r.lookup(task.ID) == nil {
+		t.Fatal("one of two deliveries let go and the key is no longer held for the other")
+	}
+	r.Release(task.ID)
+	if r.lookup(task.ID) != nil {
+		t.Fatal("both deliveries let go and the key is still held")
+	}
+
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Run(context.Background(), task)
+		done <- err
+	}()
+	select {
+	case <-running:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held task's container never ran")
+	}
+	r.Release(task.ID)
+	if r.lookup(task.ID) == nil {
+		t.Error("a release let go of a task a Run had taken, which is what a stop reaches it through")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("running: %s", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run never came back")
+	}
+	if r.lookup(task.ID) != nil {
+		t.Error("the task is still held once Run has returned")
+	}
+}
+
 // The version is negotiated with the daemon and not compiled in.
 func TestTheDriverSpeaksTheVersionTheDaemonOffers(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest

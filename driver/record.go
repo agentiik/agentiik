@@ -330,9 +330,18 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 // secret values for a brick that is not going to run. The message is not put back for that
 // either: another runner of the pool has no record of the key and would start it, which is
 // the second run the refusal exists to prevent. It is answered instead. The refusal carries
-// the ending the record holds, and the runner acknowledges the message and reports that
-// ending under the message's own task_id: a key comes back to the host that ended it as the
-// requeue of a task declared lost, and the run is waiting on the requeue's answer.
+// the ending the record holds, and the runner reports that ending under the message's own
+// task_id and then acknowledges the message: a key comes back to the host that ended it as
+// the requeue of a task declared lost, and the run is waiting on the requeue's answer.
+//
+// A key written down is also held in memory, as Run holds the task it runs, so that a stop
+// is kept from here on. The redemption that follows binds the task to this runner, and from
+// then a cancel names it and the controller sends its one stop, which can arrive while the
+// runner is still acknowledging and before Run has begun: answered nil and forgotten, it
+// would leave Run to start a brick for a run already called off. Recorded here, it is what
+// Run finds, and the container is never started. A runner that does not go on to Run the
+// task, its redemption refused or failed or the message put back, lets go of it with
+// Release.
 func (d *Docker) Hold(id agk.TaskID) error {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
@@ -343,7 +352,11 @@ func (d *Docker) Hold(id agk.TaskID) error {
 	if found && e.State.Terminal() {
 		return &Completed{Ending: e}
 	}
-	return d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()})
+	if err := d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()}); err != nil {
+		return err
+	}
+	d.hold(id)
+	return nil
 }
 
 // refuseCompleted is the refusal Run makes of a key this host has already carried to an
