@@ -835,6 +835,83 @@ func TestAnExitedContainerStartsAgainAndARunningOneDoesNot(t *testing.T) {
 	}
 }
 
+// A kill ends a run where it stands, and the function standing in for its process can still
+// be going when the container is started again. What that function does when it returns
+// belongs to the run that was killed: the run under way is not ended by it, is not given
+// its code, and does not have its attach closed under it.
+func TestAKilledRunThatReturnsLateDoesNotEndTheNextOne(t *testing.T) {
+	var runs atomic.Int32
+	late, returned, second := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	_, c := start(t, dockertest.With(dockertest.Options{
+		Images: anImage(),
+		Run: func(container dockertest.Container) (int, error) {
+			if runs.Add(1) == 1 {
+				// The first run takes no notice of the kill, and returns only
+				// once the second has started.
+				defer close(returned)
+				<-late
+				return 0, nil
+			}
+			<-second
+			io.WriteString(container.Stdout, "the second run\n")
+			return 7, nil
+		},
+	}))
+
+	ctx := t.Context()
+	cfg, host := aTask(t.TempDir())
+	created, err := c.ContainerCreate(ctx, "", cfg, host, docker.NetworkingConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerKill(ctx, created.ID, "SIGKILL"); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	next, err := c.ContainerWait(ctx, created.ID, docker.WaitNextExit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatalf("starting the killed container: %v", err)
+	}
+	stream, err := c.ContainerAttach(ctx, created.ID, docker.AttachOptions{Stdout: true, Stderr: true, Stream: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	close(late)
+	<-returned
+	select {
+	case exit := <-next:
+		t.Fatalf("the next exit answered %d while the second run was still going, and it was the killed run's function that returned", exit.StatusCode)
+	case <-time.After(200 * time.Millisecond):
+	}
+	in, err := c.ContainerInspect(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !in.State.Running {
+		t.Errorf("the inspect reads %s with code %d, and the second run is still going", in.State.Status, in.State.ExitCode)
+	}
+
+	close(second)
+	select {
+	case exit := <-next:
+		if exit.StatusCode != 7 {
+			t.Errorf("next-exit answered %d, and the second run exited 7", exit.StatusCode)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second run never ended")
+	}
+	if out, _ := drain(t, stream); out != "the second run\n" {
+		t.Errorf("the attach carried %q, and it is the second run's until that run ends", out)
+	}
+}
+
 func TestANetworkIsCreatedFoundByItsLabelAndRemoved(t *testing.T) {
 	d, c := start(t)
 	ctx := t.Context()
