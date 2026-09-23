@@ -342,6 +342,17 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		if !utf8.ValidString(path) {
 			return nil, fmt.Errorf("%q is not a UTF-8 name, and a push carries every name as JSON text, where it would arrive as some other name", path)
 		}
+		if strings.ContainsRune(path, utf8.RuneError) {
+			// Valid UTF-8, and refused by the installation all the same: U+FFFD is what JSON
+			// leaves where a name was not, and one really in a name looks exactly like that.
+			return nil, fmt.Errorf("%s holds U+FFFD, which the installation cannot tell apart from what JSON leaves in a name that was not UTF-8: rename the file, commit the rename, then push", path)
+		}
+		// And every other rule the installation holds a name to, by its own code rather than
+		// a copy of it, so that a name it would refuse is refused here, before any of the
+		// tree is read, rather than there, after all of it was read and sent.
+		if err := api.CheckTreePath(path); err != nil {
+			return nil, fmt.Errorf("the installation would refuse a name in the tree of %s: %w", short(sha), err)
+		}
 
 		var mode string
 		switch fields[0] {

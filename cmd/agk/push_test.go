@@ -678,6 +678,76 @@ func TestANameThatIsNotUTF8IsRefused(t *testing.T) {
 	}
 }
 
+// A name that is UTF-8 and holds U+FFFD is refused as well, and in words that are true of it: the
+// installation refuses it because it cannot tell it from a name JSON mangled, and saying the name
+// was not UTF-8 would be saying something false. Refused before any content is read, rather than
+// by the installation after every file had been read and sent.
+func TestANameHoldingTheReplacementCharacterIsRefusedBeforeTheTreeIsRead(t *testing.T) {
+	dir := repository(t)
+	blob := gitIn(t, dir, "hash-object", "-w", "agentiik.yaml")
+	gitIn(t, dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+",notes/r\uFFFDsum\u00e9.txt")
+	gitIn(t, dir, "commit", "-qm", "a name holding U+FFFD")
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
+	if code != exitRefused {
+		t.Fatalf("a name holding U+FFFD answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "U+FFFD") || !strings.Contains(errs, "rename") || strings.Contains(errs, "not a UTF-8 name") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+	readNoContent(t, trace)
+}
+
+// Every other name the installation refuses is refused here by the installation's own rule, before
+// any content is read: a name a runner could not lay out, or would lay out somewhere else.
+func TestANameTheInstallationRefusesIsRefusedBeforeTheTreeIsRead(t *testing.T) {
+	for _, c := range []struct{ name, path, says string }{
+		{"a backslash", `scripts\render.sh`, "backslash"},
+		{"a name longer than a filesystem holds", "data/" + strings.Repeat("n", api.TreeNameMaxBytes+1), fmt.Sprint(api.TreeNameMaxBytes)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := repository(t)
+			blob := gitIn(t, dir, "hash-object", "-w", "agentiik.yaml")
+			gitIn(t, dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+c.path)
+			gitIn(t, dir, "commit", "-qm", c.name)
+
+			trace := filepath.Join(t.TempDir(), "trace")
+			t.Setenv("GIT_TRACE", trace)
+			code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
+			if code != exitRefused {
+				t.Fatalf("%s answered %d: %s%s", c.name, code, out, errs)
+			}
+			if got != nil {
+				t.Error("it reached the server anyway")
+			}
+			if !strings.Contains(errs, c.says) {
+				t.Errorf("the refusal reads %q", errs)
+			}
+			readNoContent(t, trace)
+		})
+	}
+}
+
+// readNoContent says whether git, traced into trace, listed the tree and read none of it.
+func readNoContent(t *testing.T, trace string) {
+	t.Helper()
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(said), "ls-tree") {
+		t.Fatalf("git was not traced listing the tree, so this proves nothing:\n%s", said)
+	}
+	if strings.Contains(string(said), "cat-file") {
+		t.Error("git was asked for content before the name refused the tree")
+	}
+}
+
 // The mode is git's and not the disk's. A file committed executable travels as 0755 whatever its
 // bits are on this machine, and an ordinary one travels as 0644, said rather than left out.
 func TestTheModeOfAFileIsWhatGitSays(t *testing.T) {
