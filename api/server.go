@@ -252,6 +252,13 @@ const TreePathMaxBytes = 2048
 // git gives agk push anyway.
 var commitName = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// workflowName is the grammar a workflow is named on, which is the one every name of the workflow
+// file is written on, and a push is held to it and to agk.IdentifierMaxBytes before anything is
+// written for the reason it is held to commitName: the table's domain refuses a name off either
+// too, but only at the insert, after the tree was already in the store with nothing counting it,
+// and answered 500 for what was the caller's mistake.
+var workflowName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
 // pushMaxBytes is how large a push body may be, which is larger than any other body the API
 // reads because a push carries the tree.
 //
@@ -281,6 +288,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 
 	// Everything that can be refused without writing anything is refused first, so that a
 	// push that fails leaves no object behind it.
+	if len(over.Workflow) > agk.IdentifierMaxBytes {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("a workflow name is at most %d characters and this one is %d: one name has to survive a URL, a directory and a tool list unchanged, and no directory holds a longer one", agk.IdentifierMaxBytes, len(over.Workflow)))
+		return
+	}
+	if !workflowName.MatchString(over.Workflow) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a workflow name: a workflow is named the way the workflow file names everything, letters, digits, hyphens and underscores beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", over.Workflow))
+		return
+	}
 	if !commitName.MatchString(commit) {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a commit, and a version is one: a version is pushed under the whole of its commit's hash, forty lowercase hexadecimal characters, since an abbreviation is a name another commit can come to share", commit))
 		return

@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,10 +12,14 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// What the schema says about itself, held without a database, so that the part of this
-// package that can be wrong on a laptop with nothing installed still fails there.
+// What the schema says about itself, held without a database wherever the files are enough,
+// so that the part of this package that can be wrong on a laptop with nothing installed still
+// fails there. What only PostgreSQL can answer, which type a name in a file resolves to, is
+// asked of one, and skips without it as every other real test of this package does.
 
 // A vocabulary written twice is a vocabulary that drifts, and this one is written three
 // times over: in package agk, in agentiik/schemas on the wire, and in a check constraint
@@ -142,8 +148,6 @@ func TestTheTriggerKindsAreTheEngineOwn(t *testing.T) {
 // the wire, and a generated column for the uniqueness rule. They have to agree exactly, or
 // each is right about its own key while the pair let a container start twice.
 func TestTheIdempotencyKeyIsTheOneOnTheWire(t *testing.T) {
-	sql := readMigration(t, "0001_state.sql")
-
 	for _, c := range []struct {
 		run     agk.RunID
 		step    agk.Step
@@ -160,15 +164,31 @@ func TestTheIdempotencyKeyIsTheOneOnTheWire(t *testing.T) {
 	}
 
 	// The column concatenates the same four columns in the same order, cardinality
-	// included. Read from the file rather than from a live database, so the disagreement is
-	// caught on a laptop with nothing installed.
-	for _, want := range []string{
-		`run_id || '/' || step || '/' || attempt`,
-		`'/' || shard_index || '/' || shard_of`,
-	} {
-		if !strings.Contains(sql, want) {
-			t.Errorf("the generated key does not build %s, so the key in the database is not the key on the wire", want)
+	// included. Read from the files rather than from a live database, so the disagreement is
+	// caught on a laptop with nothing installed; and from every file that writes the column,
+	// since 0017 wrote it again to retype the step it reads, and the last one written is the
+	// one the database holds.
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := regexp.MustCompile(`(?s)idempotency_key\s+text generated always as \((.*?)\)\s*stored`)
+	var written int
+	for _, m := range all {
+		for _, expr := range generated.FindAllStringSubmatch(m.SQL, -1) {
+			written++
+			for _, want := range []string{
+				`run_id || '/' || step || '/' || attempt`,
+				`'/' || shard_index || '/' || shard_of`,
+			} {
+				if !strings.Contains(expr[1], want) {
+					t.Errorf("the generated key %s writes does not build %s, so the key in the database is not the key on the wire", m.Name, want)
+				}
+			}
 		}
+	}
+	if written == 0 {
+		t.Fatal("no migration writes the generated key, so the uniqueness rule is over nothing")
 	}
 }
 
@@ -309,6 +329,276 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)
 		}
 	}
+}
+
+// The Names table's grammar, as the documentation prints it, which the identifier domain is
+// held to below.
+const identifierPattern = `^[A-Za-z0-9][A-Za-z0-9_-]*$`
+
+// Every column holding a name the workflow file writes is the identifier domain, and no column
+// at all is PostgreSQL's own name type. 0001 typed seven columns name meaning its domain, and
+// pg_catalog, which is searched first, answered with the type PostgreSQL names its catalog
+// with: one that checks nothing and cuts a value at 63 bytes without saying so. Which type a
+// bare name resolves to is PostgreSQL's to say and not the file's, so this asks a database.
+func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
+	super, _ := database(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// The cause before the symptom: a type of ours sharing its name with one of PostgreSQL's
+	// is a type no column written with it bare is ever given.
+	rows, err := conn.Query(ctx,
+		`select t.typname from pg_type t
+		 join pg_namespace n on n.oid = t.typnamespace
+		 where n.nspname = current_schema() and t.typrelid = 0 and t.typcategory <> 'A'
+		   and exists (select 1 from pg_type p
+		               where p.typnamespace = 'pg_catalog'::regnamespace and p.typname = t.typname)
+		 order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shadowed, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range shadowed {
+		t.Errorf("the schema defines a type called %s, and so does pg_catalog, which is searched first: a column typed %s is given PostgreSQL's and never this one", name, name)
+	}
+
+	// And the domain is the grammar the Names table prints and the length a directory holds a
+	// name to, not a neighbour of either.
+	rows, err = conn.Query(ctx,
+		`select pg_get_constraintdef(c.oid) from pg_constraint c
+		 join pg_type t on t.oid = c.contypid
+		 join pg_namespace n on n.oid = t.typnamespace
+		 where n.nspname = current_schema() and t.typname = 'identifier'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var grammar, bound bool
+	for _, check := range checks {
+		grammar = grammar || strings.Contains(check, "'"+identifierPattern+"'")
+		bound = bound || strings.Contains(check, "length(") && strings.Contains(check, fmt.Sprintf("<= %d)", agk.IdentifierMaxBytes))
+	}
+	if len(checks) != 2 || !grammar || !bound {
+		t.Errorf("the identifier domain checks %q, and what it should check is the Names table's grammar, %s, and a length of at most %d, and those alone", checks, identifierPattern, agk.IdentifierMaxBytes)
+	}
+
+	// A column called after one of the things the Names table lists holds that thing's name,
+	// whichever table it is on: "A workflow name and namespace, each half of
+	// <namespace>/<name>, a step, an input, an output, a port, a variable, a secret, a
+	// published tool name." Namespace is on the list and not here, because every column
+	// called namespace names a row of namespaces through a foreign key, and that row is held
+	// to a narrower grammar of its own, lowercase and hyphenated, which lies inside this one.
+	named := map[string]bool{
+		"workflow": true, "step": true, "input": true, "output": true, "port": true,
+		"variable": true, "secret": true, "tool": true,
+	}
+	// A column called name is the name of what its row is, and whether the workflow file
+	// writes it depends on the row, so every table with one is decided about here.
+	fileNames := map[string]bool{"workflows": true, "secret_declarations": true, "secret_values": true}
+	otherNames := map[string]string{
+		"namespaces":        "a namespace is held to a narrower grammar of its own",
+		"runner_pools":      "a pool is named by an administrator, not by the workflow file",
+		"artifacts":         "an artifact is named after the file it is, dot and all, and held to one segment of its URI",
+		"schema_migrations": "a migration is named after its file, dot and all",
+	}
+
+	identifiers := map[string]bool{}
+	for _, c := range schemaColumns(t, conn) {
+		where := c.table + "." + c.column
+		postgres := c.typeSchema == "pg_catalog" && c.typeName == "name"
+		if postgres {
+			t.Errorf("%s is PostgreSQL's own name type, which checks nothing and cuts a value at 63 bytes without saying so", where)
+		}
+		holds := named[c.column]
+		if c.column == "name" {
+			if _, decided := otherNames[c.table]; !fileNames[c.table] && !decided {
+				t.Errorf("%s is a name nobody decided about: it is one the workflow file writes and an identifier, or it is something else and says why here", where)
+				continue
+			}
+			holds = fileNames[c.table]
+		}
+		if !holds {
+			continue
+		}
+		identifiers[where] = true
+		if !postgres && c.typeName != "identifier" {
+			t.Errorf("%s holds a name the workflow file writes and is %s.%s rather than an identifier", where, c.typeSchema, c.typeName)
+		}
+	}
+
+	// The seven 0001 typed name and the two 0015 and 0016 wrote out by hand, so that a query
+	// which stopped seeing columns cannot pass everything above by seeing nothing.
+	for _, want := range []string{
+		"workflows.name", "workflow_versions.workflow", "runs.workflow", "steps.step",
+		"tasks.step", "artifacts.step", "artifacts.port", "secret_declarations.name",
+		"secret_values.name",
+	} {
+		if !identifiers[want] {
+			t.Errorf("%s was not found among the columns holding a name the workflow file writes", want)
+		}
+	}
+}
+
+// A name longer than PostgreSQL's own is kept whole by every column holding one, and a name off
+// the grammar is refused by every one of them. While those columns were PostgreSQL's name, two
+// workflow names sharing their first 63 bytes were one workflow, and a step called "two words"
+// was stored as written. A name longer than a directory holds is refused by every one of them
+// too, as it is everywhere a name is written: left to the index a name is also a key of, one of
+// a few kilobytes was refused there, as a failure of the database and at every run.
+func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
+	super, _ := database(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// Every one past 63 bytes, and the two workflows alike for the whole of the first 63. The
+	// step and the port are as long as a name may be.
+	stem := strings.Repeat("a", 63)
+	workflow, twin := stem+"-monthly", stem+"-weekly"
+	step := "normalize-" + strings.Repeat("s", agk.IdentifierMaxBytes-len("normalize-"))
+	port := "rejected-" + strings.Repeat("p", agk.IdentifierMaxBytes-len("rejected-"))
+	secret := "billing-" + strings.Repeat("k", 60)
+	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+
+	for _, s := range []struct {
+		sql  string
+		args []any
+	}{
+		{`insert into namespaces (name) values ('finance')`, nil},
+		{`insert into workflows (namespace, name) values ('finance', $1), ('finance', $2)`, []any{workflow, twin}},
+		{`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
+		  values ('finance', $1, 'a3f9c1e', '{}', 'alice', now())`, []any{workflow}},
+		{`insert into runs (namespace, id, workflow, commit, trigger)
+		  values ('finance', $1, $2, 'a3f9c1e', 'manual')`, []any{run, workflow}},
+		{`insert into steps (namespace, run_id, step) values ('finance', $1, $2)`, []any{run, step}},
+		{`insert into tasks (namespace, id, run_id, step, attempt)
+		  values ('finance', '01JMZ8V1PC7K3M0', $1, $2, 1)`, []any{run, step}},
+		{`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
+		  values ('finance', $1, $2, $3, 'orders.csv', $4, 1, 'text/csv', now() + interval '1 day')`,
+			[]any{run, step, port, "sha256:" + strings.Repeat("0", 64)}},
+		{`insert into secret_declarations (namespace, name, provider, declared_by)
+		  values ('finance', $1, 'builtin', 'alice')`, []any{secret}},
+		{`insert into secret_values (namespace, name, version) values ('finance', $1, 0)`, []any{secret}},
+	} {
+		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
+			t.Fatalf("%s: %s", s.sql, err)
+		}
+	}
+
+	written := map[string][]string{
+		"workflows.name":             {workflow, twin},
+		"workflow_versions.workflow": {workflow},
+		"runs.workflow":              {workflow},
+		"steps.step":                 {step},
+		"tasks.step":                 {step},
+		"artifacts.step":             {step},
+		"artifacts.port":             {port},
+		"secret_declarations.name":   {secret},
+		"secret_values.name":         {secret},
+	}
+	for _, c := range schemaColumns(t, conn) {
+		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {
+			t.Errorf("%s.%s is an identifier and this test writes nothing into it, so it holds nothing about it: give it a row above", c.table, c.column)
+		}
+	}
+
+	for where, want := range written {
+		table, column, _ := strings.Cut(where, ".")
+		rows, err := conn.Query(ctx, fmt.Sprintf(`select %s::text from %s order by 1`,
+			pgx.Identifier{column}.Sanitize(), pgx.Identifier{table}.Sanitize()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s holds %q, and what was written is %q", where, got, want)
+		}
+
+		// Refused by the domain itself, and not by whatever else the row happens to check.
+		_, err = conn.Exec(ctx, fmt.Sprintf(`update %s set %s = 'two words'`,
+			pgx.Identifier{table}.Sanitize(), pgx.Identifier{column}.Sanitize()))
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != checkViolation || pg.DataTypeName != "identifier" {
+			t.Errorf("%s took a name with a space in it and answered %v, where the identifier domain refuses it", where, err)
+		}
+		_, err = conn.Exec(ctx, fmt.Sprintf(`update %s set %s = $1`,
+			pgx.Identifier{table}.Sanitize(), pgx.Identifier{column}.Sanitize()),
+			strings.Repeat("n", agk.IdentifierMaxBytes+1))
+		if !errors.As(err, &pg) || pg.Code != checkViolation || pg.DataTypeName != "identifier" {
+			t.Errorf("%s took a name of %d characters and answered %v, where the identifier domain refuses it", where, agk.IdentifierMaxBytes+1, err)
+		}
+	}
+
+	// The key a task is known by carries the step whole too, since it is built from the column.
+	var key string
+	if err := conn.QueryRow(ctx, `select idempotency_key from tasks`).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if want := run + "/" + step + "/1"; key != want {
+		t.Errorf("the idempotency key is %q, and the task's is %q", key, want)
+	}
+}
+
+// checkViolation is PostgreSQL's code for a value a check refused, which is what a domain's
+// check raises.
+const checkViolation = "23514"
+
+// column is one column of a table of the schema, with the type it was given as PostgreSQL
+// resolved it.
+type column struct {
+	table, column        string
+	typeSchema, typeName string
+}
+
+// schemaColumns reads every column of every table in the schema the migrations ran in.
+func schemaColumns(t *testing.T, conn *pgx.Conn) []column {
+	t.Helper()
+	rows, err := conn.Query(t.Context(),
+		`select c.relname::text, a.attname::text, tn.nspname::text, ty.typname::text
+		 from pg_attribute a
+		 join pg_class c on c.oid = a.attrelid
+		 join pg_namespace cn on cn.oid = c.relnamespace
+		 join pg_type ty on ty.oid = a.atttypid
+		 join pg_namespace tn on tn.oid = ty.typnamespace
+		 where cn.nspname = current_schema() and c.relkind in ('r', 'p')
+		   and a.attnum > 0 and not a.attisdropped
+		 order by 1, 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []column
+	for rows.Next() {
+		var c column
+		if err := rows.Scan(&c.table, &c.column, &c.typeSchema, &c.typeName); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		out = append(out, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 {
+		t.Fatal("the schema has no column at all, so nothing here holds anything")
+	}
+	return out
 }
 
 func readMigration(t *testing.T, name string) string {

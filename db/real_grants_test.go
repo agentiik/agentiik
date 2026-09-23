@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -239,5 +240,123 @@ func TestADispatchNobodyRedeemedIsBoundToTheFirstRunnerToEndIt(t *testing.T) {
 	}
 	if _, err := bind(second, unredeemed, "runner-dmz-03"); !errors.Is(err, ErrNoDispatch) {
 		t.Errorf("a dispatch named by the row of one task and the key of another answered %v", err)
+	}
+}
+
+// A redemption is checked, answered and only then bound, so the check has to refuse everything the
+// binding refuses and bind nothing: a runner told it may have the task, and then refused an answer,
+// has not taken it.
+func TestAGrantIsCheckedWithoutBindingItsTask(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx,
+		`insert into steps (namespace, run_id, step) values ('finance', $1, 'render')`, financeRun); err != nil {
+		t.Fatalf("seeding: %s", err)
+	}
+	const row = "01M2GHAAAAAAAAAAAAAAAAAAAA"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', $1, $2, 'render', 1, 'dispatched')`, row, financeRun); err != nil {
+		t.Fatalf("seeding the task: %s", err)
+	}
+
+	now := time.Now().UTC()
+	scope := GrantScope{Run: financeRun, Step: "render", Secrets: []GrantSecret{{Name: "billing", Mount: "/agk/secrets/billing"}}}
+	var granted Granted
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		var err error
+		granted, err = w.IssueGrant(ctx, "finance", key, row, scope, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checked := func(clear string, key agk.TaskID, runner string, at time.Time) (Redeemed, error) {
+		var got Redeemed
+		err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			var err error
+			got, err = w.Redeemable(ctx, clear, key, runner, at)
+			return err
+		})
+		return got, err
+	}
+	bound := func() string {
+		t.Helper()
+		var runner, redeemed *string
+		if err := conn.QueryRow(ctx, `
+			select t.runner, g.redeemed_at::text from tasks t join task_grants g on g.task_id = t.id
+			where t.id = $1`, row).Scan(&runner, &redeemed); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case runner != nil:
+			return *runner
+		case redeemed != nil:
+			return "nobody, redeemed at " + *redeemed
+		}
+		return ""
+	}
+
+	// It answers what Redeem would, and twice, since nothing it does changes what it reads.
+	for range 2 {
+		got, err := checked(granted.Clear, key, "runner-dmz-01", now)
+		if err != nil {
+			t.Fatalf("a grant a redemption would take was refused: %s", err)
+		}
+		if got.Namespace != "finance" || got.Row != row || got.Task != key || !slices.Equal(got.Scope.Secrets, scope.Secrets) {
+			t.Errorf("the check answered %+v", got)
+		}
+		if holder := bound(); holder != "" {
+			t.Fatalf("checking a grant bound its task to %s", holder)
+		}
+	}
+
+	// And it refuses what Redeem refuses, for the same reasons.
+	for _, c := range []struct {
+		why    string
+		clear  string
+		key    agk.TaskID
+		runner string
+		at     time.Time
+		want   error
+	}{
+		{"a value that opens nothing", granted.Clear + "x", key, "runner-dmz-01", now, ErrNoGrant},
+		{"the key of another attempt", granted.Clear, agk.NewTaskID(financeRun, "render", 2, agk.Shard{}), "runner-dmz-01", now, ErrNoGrant},
+		{"a grant past its expiry", granted.Clear, key, "runner-dmz-01", granted.ExpiresAt, ErrNoGrant},
+	} {
+		if _, err := checked(c.clear, c.key, c.runner, c.at); !errors.Is(err, c.want) {
+			t.Errorf("checking %s answered %v", c.why, err)
+		}
+	}
+
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, granted.Clear, key, "runner-dmz-01", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checked(granted.Clear, key, "runner-dmz-02", now); !errors.Is(err, ErrTaskHeld) {
+		t.Errorf("checking a grant another runner redeemed answered %v", err)
+	}
+	if _, err := checked(granted.Clear, key, "runner-dmz-01", now); err != nil {
+		t.Errorf("checking a grant again for the runner that holds its task answered %v", err)
+	}
+	if _, err := conn.Exec(ctx, `update tasks set state = 'succeeded' where id = $1`, row); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checked(granted.Clear, key, "runner-dmz-01", now); !errors.Is(err, ErrTaskHeld) {
+		t.Errorf("checking the grant of a task that has ended answered %v", err)
 	}
 }

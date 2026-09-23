@@ -380,6 +380,9 @@ func secretsOf(spec map[string]any) ([]Secret, error) {
 		if s.Name, err = text(b, "name", where, true); err != nil {
 			return nil, err
 		}
+		if len(s.Name) > agk.IdentifierMaxBytes {
+			return nil, fmt.Errorf("%s names the secret %.64s..., which is %d characters long: it is the name the workflow gives the secret, and a name is at most %d, since a step is given the value in a file of that name wherever the brick says nothing else", where, s.Name, len(s.Name), agk.IdentifierMaxBytes)
+		}
 		if !identifier.MatchString(s.Name) {
 			return nil, fmt.Errorf("%s names the secret %q, which is not an identifier: the brick says what it needs and the workflow decides which secret of its namespace answers to it, so it is the same name written on the same grammar", where, s.Name)
 		}
