@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -592,6 +593,43 @@ func TestAnOversizedTreeIsRefusedBeforeItsContentIsRead(t *testing.T) {
 	}
 	if strings.Contains(string(said), "cat-file") {
 		t.Error("git was asked for content before the size refused the tree")
+	}
+}
+
+// Git reading an object it cannot inflate dies partway through its answer, and what it said on
+// the way out is the refusal, rather than the end of a stream that stopped early.
+func TestWhatGitSaysOfAnObjectItCannotReadIsPassedOn(t *testing.T) {
+	dir := repository(t)
+	// Bytes zlib cannot shrink, so that the object on the disk is long enough to be cut in
+	// half past its header: the listing still reads the size, and only the content breaks.
+	noise := make([]byte, 200<<10)
+	rand.NewChaCha8([32]byte{}).Read(noise)
+	if err := os.WriteFile(filepath.Join(dir, "fixtures.bin"), noise, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, dir, "a fixture")
+	blob := gitIn(t, dir, "rev-parse", "HEAD:fixtures.bin")
+	object := filepath.Join(dir, ".git", "objects", blob[:2], blob[2:])
+	stored, err := os.ReadFile(object)
+	if err != nil {
+		t.Fatalf("the fixture is not a loose object, so this proves nothing: %v", err)
+	}
+	if err := os.Chmod(object, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(object, stored[:len(stored)/2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a corrupt object answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if strings.Contains(errs, "EOF") || !strings.Contains(errs, blob) {
+		t.Errorf("the refusal is not what git said of %s: %q", blob, errs)
 	}
 }
 

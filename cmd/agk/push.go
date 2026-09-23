@@ -327,11 +327,17 @@ func contentsOf(ctx context.Context, dir string, sizes map[string]int64) (map[st
 		cancel()
 	}
 	err = cmd.Wait()
+	said := strings.TrimSpace(errs.String())
 	switch {
+	case failed != nil && said != "" && (errors.Is(failed, io.EOF) || errors.Is(failed, io.ErrUnexpectedEOF)):
+		// An answer that stops short is git dying, over a corrupt pack or an object gone
+		// from under it, and why is what it said on the way out rather than where its
+		// answer broke off.
+		return nil, errors.New(said)
 	case failed != nil:
 		return nil, failed
 	case err != nil:
-		if said := strings.TrimSpace(errs.String()); said != "" {
+		if said != "" {
 			return nil, errors.New(said)
 		}
 		return nil, err
