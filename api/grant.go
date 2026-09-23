@@ -2,13 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/token"
 )
 
 // What a grant turns into.
@@ -50,10 +53,16 @@ type NoSecrets struct{}
 // Value holds nothing.
 func (NoSecrets) Value(context.Context, string, string) ([]byte, error) { return nil, ErrNoSecret }
 
-// Redemption is what a runner presents.
+// Redemption is what a runner presents: the grant, and the task it claims the grant is for.
 type Redemption struct {
-	Grant string     `json:"grant"`
-	Task  agk.TaskID `json:"task"`
+	Grant string `json:"grant"`
+
+	// TaskID is the task's row, which the grant also names inside its own text, and
+	// IdempotencyKey is which attempt and which shard is asking. Both are compared with what
+	// the grant was issued for, and "the API refuses a redemption where the two disagree
+	// rather than believing either alone".
+	TaskID         string     `json:"task_id"`
+	IdempotencyKey agk.TaskID `json:"idempotency_key"`
 
 	// Upload names the digests the runner has computed and wants somewhere to put. It is
 	// empty at the start of a task, when the runner is asking what to fetch, and full at
@@ -72,14 +81,40 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Both are required rather than checked when present, because a comparison with nothing
+	// is no comparison: a request that left one out would be believed on the other alone.
+	switch {
+	case ask.TaskID == "":
+		fail(w, http.StatusBadRequest, "a redemption names the task it is for, and this one has no task_id")
+		return
+	case ask.IdempotencyKey == "":
+		fail(w, http.StatusBadRequest, "a redemption names the attempt that is asking, and this one has no idempotency_key")
+		return
+	}
+	// The row is held against the task the grant names inside its own text before anything
+	// is read, so that a body disagreeing with its grant has one refusal whatever the task is
+	// doing. Compared once the task was read, a wrong task_id would be told the work is
+	// somebody else's where a wrong idempotency_key is told nothing, and the two halves of
+	// one rule would answer differently.
+	if row, named := token.TaskOf(ask.Grant); !named || row != ask.TaskID {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		fail(w, http.StatusUnauthorized, "that grant cannot be redeemed")
+		return
+	}
 
 	var got db.Redeemed
 	var tree []db.TreeFile
 	err := s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		got, err = wide.Redeem(ctx, ask.Grant, ask.Task, runner.ID, s.now())
+		got, err = wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
 		if err != nil {
 			return err
+		}
+		// And again with the row Redeem read, inside the transaction that bound the
+		// task, so that should the two ever come apart the request is refused as a
+		// grant that opens nothing and the binding is rolled back with it.
+		if got.Row != ask.TaskID {
+			return db.ErrNoGrant
 		}
 		// The version the scope names and no other, read in the same transaction, so a
 		// refusal here also leaves the task unbound: a runner told there is no tree has
@@ -128,12 +163,37 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	write(w, http.StatusOK, answer)
 }
 
-// Fetch is one object and the URL that fetches it.
-type Fetch struct {
-	Port   agk.Port `json:"port,omitempty"`
-	Digest string   `json:"digest"`
-	Items  int      `json:"items,omitempty"`
-	URL    string   `json:"url"`
+// Upload is one digest the runner named, and the URL that stores those bytes under it.
+type Upload struct {
+	Digest string `json:"digest"`
+	URL    string `json:"url"`
+}
+
+// Input is one input port: where its envelope is fetched from, and every artifact that envelope
+// names, given together so that the runner never has to come back for what it finds by reading.
+//
+// Each port carries the artifacts of its own envelope, the same bytes under each port that names
+// them, because the runner pairs an entry with the file entry it read by the URI, and the URI is
+// the envelope's own.
+type Input struct {
+	Port      agk.Port   `json:"port"`
+	Envelope  Envelope   `json:"envelope"`
+	Artifacts []Artifact `json:"artifacts"`
+}
+
+// Envelope is where one port's batch is fetched from, and the digest it has to hash to, written
+// as the task message writes it so that the runner can hold one against the other.
+type Envelope struct {
+	URL    string `json:"url"`
+	Digest string `json:"digest"`
+}
+
+// Artifact is one file an envelope names, by the logical URI the envelope writes it with, and the
+// URL that fetches its bytes. The URI is the name; the URL beside it is a credential.
+type Artifact struct {
+	URI    agk.URI `json:"uri"`
+	SHA256 string  `json:"sha256"`
+	URL    string  `json:"url"`
 }
 
 // TreeEntry is one file of the repository, where it goes under /agk/repo, and the URL that fetches
@@ -149,31 +209,38 @@ type TreeEntry struct {
 	URL    string `json:"url"`
 }
 
-// Secret is a name and its value, which exists in this answer and nowhere else on the way to the
-// machine that will mount it.
+// Secret is a name, the path the value goes at, and the value, which exists in this answer and
+// nowhere else on the way to the machine that will mount it.
 type Secret struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name     string `json:"name"`
+	Mount    string `json:"mount"`
+	Encoding string `json:"encoding"`
+	Value    string `json:"value"`
 }
+
+// The two ways a value is written, said on every entry rather than left to a default: "a reader
+// that had to guess would guess wrong exactly once, on the day a value stops being text".
+const (
+	EncodingUTF8   = "utf-8"
+	EncodingBase64 = "base64"
+)
 
 // Grant is the whole of what one grant is for.
 type Grant struct {
-	Task      agk.TaskID `json:"task"`
-	Namespace string     `json:"namespace"`
-	Run       agk.RunID  `json:"run"`
-	Step      agk.Step   `json:"step"`
-	ExpiresAt string     `json:"expires_at"`
+	// TaskID is the row the grant was issued for, echoed back, because a runner holding
+	// several tasks has to know which container a document of secret values belongs to.
+	TaskID    string `json:"task_id"`
+	ExpiresAt string `json:"expires_at"`
 
-	Inputs    []Fetch  `json:"inputs"`
-	Artifacts []Fetch  `json:"artifacts"`
-	Secrets   []Secret `json:"secrets"`
+	Inputs  []Input  `json:"inputs"`
+	Secrets []Secret `json:"secrets"`
 
 	// Tree is the whole of the commit's tree, which is what a step that says nothing about
 	// files is given. Narrowing it by a step's files is the controller's to add, and until it
 	// does every task of a version is handed the same list.
 	Tree []TreeEntry `json:"tree"`
 
-	Uploads []Fetch `json:"uploads,omitempty"`
+	Uploads []Upload `json:"uploads,omitempty"`
 }
 
 // errNoCommit is a scope naming no version, which is a scope written by a controller from before
@@ -185,69 +252,81 @@ var errNoCommit = errors.New("api: the grant's scope names no commit")
 // holds outlives the task it was given for.
 func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile, upload []string) (Grant, error) {
 	out := Grant{
-		Task: got.Task, Namespace: got.Namespace,
-		Run: got.Scope.Run, Step: got.Scope.Step,
+		TaskID:    got.Row,
 		ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		Inputs:    []Fetch{}, Artifacts: []Fetch{}, Secrets: []Secret{}, Tree: []TreeEntry{},
+		Inputs:    []Input{}, Secrets: []Secret{}, Tree: []TreeEntry{},
+	}
+
+	// One URL per object, whoever names it: two files with the same bytes are one object,
+	// and a runner that holds a digest already writes it from its own cache and fetches
+	// nothing.
+	minted := map[string]string{}
+	fetch := func(digest string) (string, error) {
+		if url, held := minted[digest]; held {
+			return url, nil
+		}
+		url, err := s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, digest), got.Scope.Run, got.ExpiresAt)
+		if err != nil {
+			return "", err
+		}
+		minted[digest] = url
+		return url, nil
 	}
 
 	// The envelopes on this task's input ports, and then the artifacts those envelopes
 	// name. The API resolves them rather than letting the runner ask for a digest of its
 	// own, because a runner that could name what it wanted would reach every object in the
 	// namespace and "refusing anything the task does not name" would mean nothing.
-	seen := map[string]bool{}
 	for _, in := range got.Scope.Inputs {
-		url, err := s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, in.Digest), got.Scope.Run, got.ExpiresAt)
+		url, err := fetch(in.Digest)
 		if err != nil {
 			return Grant{}, err
 		}
-		out.Inputs = append(out.Inputs, Fetch{Port: in.Port, Digest: in.Digest, Items: in.Items, URL: url})
+		port := Input{
+			Port:      in.Port,
+			Envelope:  Envelope{URL: url, Digest: "sha256:" + in.Digest},
+			Artifacts: []Artifact{},
+		}
 
 		envelope, err := artifact.GetEnvelope(ctx, s.objects, got.Namespace, in.Digest, s.limits)
 		if err != nil {
 			return Grant{}, err
 		}
+		listed := map[Artifact]bool{}
 		for _, item := range envelope.Items {
 			for _, f := range item.Files {
-				if f.SHA256 == "" || seen[f.SHA256] {
+				a := Artifact{URI: f.URI, SHA256: f.SHA256}
+				if f.SHA256 == "" || listed[a] {
 					continue
 				}
-				seen[f.SHA256] = true
-				url, err := s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, f.SHA256), got.Scope.Run, got.ExpiresAt)
-				if err != nil {
+				listed[a] = true
+				if a.URL, err = fetch(f.SHA256); err != nil {
 					return Grant{}, err
 				}
-				out.Artifacts = append(out.Artifacts, Fetch{Digest: f.SHA256, URL: url})
+				port.Artifacts = append(port.Artifacts, a)
 			}
 		}
+		out.Inputs = append(out.Inputs, port)
 	}
 
-	// The files of the version the scope names, each minted exactly as an artifact's URL is,
-	// and one URL per blob: two files with the same bytes are one object, and a runner that
-	// holds a digest already writes it from its own cache and fetches nothing.
-	minted := map[string]string{}
+	// The files of the version the scope names, each minted exactly as an artifact's URL is.
 	for _, f := range tree {
-		url, held := minted[f.SHA256]
-		if !held {
-			var err error
-			url, err = s.urls.Presign(ctx, http.MethodGet, artifact.Key(got.Namespace, f.SHA256), got.Scope.Run, got.ExpiresAt)
-			if err != nil {
-				return Grant{}, err
-			}
-			minted[f.SHA256] = url
+		url, err := fetch(f.SHA256)
+		if err != nil {
+			return Grant{}, err
 		}
 		out.Tree = append(out.Tree, TreeEntry{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, URL: url})
 	}
 
-	for _, name := range got.Scope.Secrets {
-		value, err := s.secrets.Value(ctx, got.Namespace, name)
+	for _, secret := range got.Scope.Secrets {
+		value, err := s.secrets.Value(ctx, got.Namespace, secret.Name)
 		if err != nil {
 			// Named by the step and missing from the store is a task that cannot run,
 			// and saying so is better than mounting an empty file and failing three
 			// layers away from the cause.
-			return Grant{}, errors.New("the secret " + name + " is not held for this namespace")
+			return Grant{}, errors.New("the secret " + secret.Name + " is not held for this namespace")
 		}
-		out.Secrets = append(out.Secrets, Secret{Name: name, Value: string(value)})
+		out.Secrets = append(out.Secrets, secretOf(secret, value))
 	}
 
 	for _, digest := range upload {
@@ -256,7 +335,21 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		if err != nil {
 			return Grant{}, err
 		}
-		out.Uploads = append(out.Uploads, Fetch{Digest: digest, URL: url})
+		out.Uploads = append(out.Uploads, Upload{Digest: digest, URL: url})
 	}
 	return out, nil
+}
+
+// secretOf writes one value for the wire.
+//
+// A secret is a file's worth of bytes and not always text: a PEM key is UTF-8 and a keystore is
+// not. A JSON string cannot carry bytes that are not UTF-8, and encoding one anyway replaces each
+// of them with U+FFFD, so a keystore sent as a string arrives as a different file. Text travels as
+// itself and anything else as base64, and the entry says which.
+func secretOf(secret db.GrantSecret, value []byte) Secret {
+	out := Secret{Name: secret.Name, Mount: secret.Mount, Encoding: EncodingUTF8, Value: string(value)}
+	if !utf8.Valid(value) {
+		out.Encoding, out.Value = EncodingBase64, base64.StdEncoding.EncodeToString(value)
+	}
+	return out
 }

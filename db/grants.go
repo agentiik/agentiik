@@ -32,9 +32,9 @@ type Granted struct {
 //
 // It is what the task was dispatched with, written by the controller at the moment it decided:
 // the version whose tree the task sees under /agk/repo, the envelopes on each input port, named by
-// digest, and the secrets the step asked for, named and never valued. A redemption answers from
-// this and from nothing else, which is what makes "refusing anything the task does not name" a
-// comparison rather than a promise.
+// digest, and the secrets the step asked for, named with where they go and never valued. A
+// redemption answers from this and from nothing else, which is what makes "refusing anything the
+// task does not name" a comparison rather than a promise.
 type GrantScope struct {
 	Run  agk.RunID `json:"run,omitempty"`
 	Step agk.Step  `json:"step,omitempty"`
@@ -47,8 +47,8 @@ type GrantScope struct {
 	Workflow string `json:"workflow,omitempty"`
 	Commit   string `json:"commit,omitempty"`
 
-	Inputs  []GrantInput `json:"inputs,omitempty"`
-	Secrets []string     `json:"secrets,omitempty"`
+	Inputs  []GrantInput  `json:"inputs,omitempty"`
+	Secrets []GrantSecret `json:"secrets,omitempty"`
 }
 
 // GrantInput is one input port's envelope, named by digest.
@@ -58,11 +58,27 @@ type GrantInput struct {
 	Items  int      `json:"items"`
 }
 
+// GrantSecret is one secret the step asked for, by name, and the path the value is written at.
+//
+// The mount travels with the name because it is not always /agk/secrets/<name>: a brick manifest
+// may ask for a secret somewhere else under /agk/secrets/, and the value and the path it belongs at
+// have to reach the runner as one entry. Only the controller read the manifest, so only the
+// controller can write it down.
+type GrantSecret struct {
+	Name  string `json:"name"`
+	Mount string `json:"mount"`
+}
+
 // Redeemed is what a grant turned out to be for.
 type Redeemed struct {
 	Namespace string
-	Task      agk.TaskID
-	Scope     GrantScope
+
+	// Row is the task's own identifier, the one the grant names inside its text, and Task is
+	// the idempotency key that says which unit of work it is. A redemption is asked with both
+	// and answers the row.
+	Row   string
+	Task  agk.TaskID
+	Scope GrantScope
 
 	// ExpiresAt is the grant's own expiry, which is the task's deadline. Anything the
 	// redemption hands out is minted to end with it: a URL that outlived the task it was
@@ -182,5 +198,5 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 		namespace, id, runner); err != nil {
 		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
 	}
-	return Redeemed{Namespace: namespace, Task: key, Scope: scope, ExpiresAt: expires}, nil
+	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }

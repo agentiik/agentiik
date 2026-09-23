@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,13 @@ import (
 
 const grantRun = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 const grantTaskRow = "01M2T1AAAAAAAAAAAAAAAAAAAA"
+const grantKey agk.TaskID = grantRun + "/render/1"
+
+// asking is the redemption a runner holding the grant sends: the grant, the row it names, and the
+// key of the attempt it was dispatched for.
+func asking(clear string) api.Redemption {
+	return api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantKey}
+}
 
 // held is a secret store holding exactly what a test put in it.
 type held map[string]string
@@ -154,10 +163,42 @@ func (g grants) joined(t *testing.T) string {
 }
 
 // dispatched writes what the controller writes: an input envelope naming an artifact, the
-// artifact itself, and the grant that says the task may have both.
+// artifact itself, and the grant that says the task may have both, with each secret at the path
+// its name puts it.
 func (g grants) dispatched(t *testing.T, secrets []string) (clear, envelope, file string) {
 	t.Helper()
-	const content = "the whole of an invoice"
+	mounts := make([]db.GrantSecret, 0, len(secrets))
+	for _, name := range secrets {
+		mounts = append(mounts, db.GrantSecret{Name: name, Mount: "/agk/secrets/" + name})
+	}
+	return g.dispatchedWith(t, mounts)
+}
+
+// dispatchedWith is dispatched with each secret's mount said rather than derived, which is what a
+// brick manifest asking for a secret somewhere else under /agk/secrets/ comes to.
+func (g grants) dispatchedWith(t *testing.T, secrets []db.GrantSecret) (clear, envelope, file string) {
+	t.Helper()
+	envelope, file = g.enveloped(t, "collect", "out", "the whole of an invoice")
+	clear = g.granted(t, db.GrantScope{
+		Run: grantRun, Step: "render",
+		Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Inputs:  []db.GrantInput{{Port: "in", Digest: envelope, Items: 1}},
+		Secrets: secrets,
+	})
+	return clear, envelope, file
+}
+
+// enveloped stores a file and the envelope a step published on one port naming it, as the
+// controller finds them when it dispatches, and answers the digest of each.
+func (g grants) enveloped(t *testing.T, step agk.Step, port agk.Port, content string) (envelope, file string) {
+	t.Helper()
+	return g.envelopedAs(t, step, port, content, "invoice.pdf")
+}
+
+// envelopedAs is enveloped with one item for each name, every item attaching the same bytes
+// under the name it is given.
+func (g grants) envelopedAs(t *testing.T, step agk.Step, port agk.Port, content string, names ...string) (envelope, file string) {
+	t.Helper()
 	sum := sha256.Sum256([]byte(content))
 	file = hex.EncodeToString(sum[:])
 	if err := g.objects.Put(t.Context(), artifact.Key("finance", file), readerOf(content)); err != nil {
@@ -165,49 +206,31 @@ func (g grants) dispatched(t *testing.T, secrets []string) (clear, envelope, fil
 	}
 
 	e := agk.Envelope{
-		Meta: agk.Meta{RunID: grantRun, Step: "collect", Port: "out", Attempt: 1, Count: 1, ProducedAt: time.Now().UTC()},
-		Items: []agk.Item{{
-			ID:   "01M2ITEMAAAAAAAAAAAAAAAAAA",
-			Data: map[string]any{"total": 42},
-			Files: []agk.File{{
-				Name:      "invoice.pdf",
-				URI:       agk.URI{Run: grantRun, Step: "collect", Port: "out", Name: "invoice.pdf"},
-				MediaType: "application/pdf", Size: int64(len(content)), SHA256: file,
-			}},
-		}},
+		Meta: agk.Meta{RunID: grantRun, Step: step, Port: port, Attempt: 1, Count: len(names), ProducedAt: time.Now().UTC()},
+	}
+	for _, name := range names {
+		item := agk.NewItem(map[string]any{"total": 42})
+		item.Files = []agk.File{{
+			Name:      name,
+			URI:       agk.URI{Run: grantRun, Step: step, Port: port, Name: name},
+			MediaType: "application/pdf", Size: int64(len(content)), SHA256: file,
+		}}
+		e.Items = append(e.Items, item)
 	}
 	envelope, _, err := artifact.PutEnvelope(t.Context(), g.objects, "finance", e)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	var granted db.Granted
-	if err := g.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
-		var err error
-		granted, err = w.IssueGrant(ctx, "finance", agk.TaskID(grantRun+"/render/1"), grantTaskRow,
-			db.GrantScope{
-				Run: grantRun, Step: "render",
-				Workflow: "monthly-invoicing", Commit: "a3f9c1e",
-				Inputs:  []db.GrantInput{{Port: "in", Digest: envelope, Items: 1}},
-				Secrets: secrets,
-			}, time.Now().UTC().Add(time.Hour))
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return granted.Clear, envelope, file
+	return envelope, file
 }
 
-// grantedFor issues the task's grant again, naming one version and nothing else, which is what a
-// controller does when it writes the scope. What the version is decides what the runner is given.
-func (g grants) grantedFor(t *testing.T, workflow, commit string) string {
+// granted issues the task's grant with the scope a controller wrote, and answers its clear value.
+func (g grants) granted(t *testing.T, scope db.GrantScope) string {
 	t.Helper()
 	var granted db.Granted
 	if err := g.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		granted, err = w.IssueGrant(ctx, "finance", agk.TaskID(grantRun+"/render/1"), grantTaskRow,
-			db.GrantScope{Run: grantRun, Step: "render", Workflow: workflow, Commit: commit},
-			time.Now().UTC().Add(time.Hour))
+		granted, err = w.IssueGrant(ctx, "finance", grantKey, grantTaskRow, scope, time.Now().UTC().Add(time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -215,58 +238,87 @@ func (g grants) grantedFor(t *testing.T, workflow, commit string) string {
 	return granted.Clear
 }
 
+// grantedFor issues the task's grant again, naming one version and nothing else, which is what a
+// controller does when it writes the scope. What the version is decides what the runner is given.
+func (g grants) grantedFor(t *testing.T, workflow, commit string) string {
+	t.Helper()
+	return g.granted(t, db.GrantScope{Run: grantRun, Step: "render", Workflow: workflow, Commit: commit})
+}
+
+// redeemed is a redemption that has to succeed, read into the shape the API answers.
+func (g grants) redeemed(t *testing.T, credential string, ask api.Redemption) api.Grant {
+	t.Helper()
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	}
+	var answer api.Grant
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	return answer
+}
+
+// bound is the runner a task is held by, or nothing when no redemption has taken it.
+func (g grants) bound(t *testing.T) *string {
+	t.Helper()
+	var runner *string
+	if err := dbtest.Superuser(t, g.super).QueryRow(t.Context(),
+		`select runner from tasks where id = $1`, grantTaskRow).Scan(&runner); err != nil {
+		t.Fatal(err)
+	}
+	return runner
+}
+
 func TestAGrantTurnsIntoTheInputsTheArtifactsAndTheSecrets(t *testing.T) {
 	g := withGrants(t, held{"finance/stripe": "sk_live_notreal"})
 	credential := g.joined(t)
 	clear, envelope, file := g.dispatched(t, []string{"stripe"})
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1")})
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
 	}
-	if answer["namespace"] != "finance" || answer["run"] != grantRun || answer["step"] != "render" {
-		t.Fatalf("the grant answered %v", answer)
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("an answer carrying every value the task was given says %q", w.Header().Get("Cache-Control"))
+	}
+	var answer api.Grant
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	// The row the grant was issued for, echoed back, so that a runner holding several
+	// tasks knows which container this document belongs to.
+	if answer.TaskID != grantTaskRow {
+		t.Errorf("the grant answered for task %q", answer.TaskID)
 	}
 
-	inputs, _ := answer["inputs"].([]any)
-	if len(inputs) != 1 {
-		t.Fatalf("the grant answered %d inputs", len(inputs))
+	if len(answer.Inputs) != 1 {
+		t.Fatalf("the grant answered %d inputs", len(answer.Inputs))
 	}
-	first, _ := inputs[0].(map[string]any)
-	if first["port"] != "in" || first["digest"] != envelope {
-		t.Errorf("the input reads %v", first)
+	in := answer.Inputs[0]
+	if in.Port != "in" || in.Envelope.Digest != "sha256:"+envelope {
+		t.Errorf("the input reads %+v", in)
 	}
 
 	// The artifacts the envelope names are resolved here, because a runner that could name
 	// a digest of its own would reach every object in the namespace.
-	artifacts, _ := answer["artifacts"].([]any)
-	if len(artifacts) != 1 {
-		t.Fatalf("the grant answered %d artifacts: %v", len(artifacts), answer)
+	if len(in.Artifacts) != 1 {
+		t.Fatalf("the input carries %d artifacts: %+v", len(in.Artifacts), in)
 	}
-	named, _ := artifacts[0].(map[string]any)
-	if named["digest"] != file {
-		t.Errorf("the artifact reads %v", named)
+	if in.Artifacts[0].SHA256 != file {
+		t.Errorf("the artifact reads %+v", in.Artifacts[0])
 	}
 
 	// And the URLs are the whole of the authorisation: they work, on their own.
-	for _, u := range []any{first["url"], named["url"]} {
-		raw, _ := u.(string)
+	for _, raw := range []string{in.Envelope.URL, in.Artifacts[0].URL} {
 		if res := follow(t, g.handler, "GET", raw, ""); res.Code != http.StatusOK {
 			t.Errorf("following %s answered %d", raw, res.Code)
 		}
 	}
 
-	secrets, _ := answer["secrets"].([]any)
-	if len(secrets) != 1 {
-		t.Fatalf("the grant answered %d secrets", len(secrets))
-	}
-	one, _ := secrets[0].(map[string]any)
-	if one["name"] != "stripe" || one["value"] != "sk_live_notreal" {
-		t.Errorf("the secret reads %v", one)
-	}
-	if w.Header().Get("Cache-Control") != "no-store" {
-		t.Errorf("an answer carrying every value the task was given says %q", w.Header().Get("Cache-Control"))
+	want := []api.Secret{{Name: "stripe", Mount: "/agk/secrets/stripe", Encoding: "utf-8", Value: "sk_live_notreal"}}
+	if !slices.Equal(answer.Secrets, want) {
+		t.Errorf("the secrets read %+v", answer.Secrets)
 	}
 }
 
@@ -281,17 +333,13 @@ func TestARunnerAsksForSomewhereToPutWhatItMade(t *testing.T) {
 	sum := sha256.Sum256([]byte(produced))
 	digest := hex.EncodeToString(sum[:])
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1"), Upload: []string{digest}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	ask := asking(clear)
+	ask.Upload = []string{digest}
+	answer := g.redeemed(t, credential, ask)
+	if len(answer.Uploads) != 1 {
+		t.Fatalf("the grant answered %d upload URLs", len(answer.Uploads))
 	}
-	uploads, _ := answer["uploads"].([]any)
-	if len(uploads) != 1 {
-		t.Fatalf("the grant answered %d upload URLs", len(uploads))
-	}
-	one, _ := uploads[0].(map[string]any)
-	url, _ := one["url"].(string)
+	url := answer.Uploads[0].URL
 	if res := follow(t, g.handler, "PUT", url, produced); res.Code != http.StatusCreated {
 		t.Fatalf("storing what the task made answered %d", res.Code)
 	}
@@ -305,37 +353,72 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, nil)
-	key := agk.TaskID(grantRun + "/render/1")
 
-	// A value that is not a grant, and a grant for another task.
+	// A body naming its task by anything less than both the row and the key is refused before
+	// anything is read, and so is the shape this route took before it took the wire's: the
+	// grant is checked against both, and a comparison with nothing is no comparison.
+	for _, c := range []struct {
+		name string
+		body any
+	}{
+		{"a body naming its task as task", map[string]any{"grant": clear, "task": grantKey}},
+		{"a body with no task_id", api.Redemption{Grant: clear, IdempotencyKey: grantKey}},
+		{"a body with no idempotency_key", api.Redemption{Grant: clear, TaskID: grantTaskRow}},
+	} {
+		if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d", c.name, w.Code)
+		}
+	}
+
+	// A value that is not a grant, and a grant presented for another task, by its row or by
+	// the key of another attempt, are one refusal, and none of them takes the task.
 	for _, c := range []struct {
 		name string
 		ask  api.Redemption
 	}{
-		{"a value that opens nothing", api.Redemption{Grant: "agkgrant_notarealgrantatallbutlongenoughtopass", Task: key}},
-		{"a grant redeemed for another task", api.Redemption{Grant: clear, Task: "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1"}},
+		{"a value that opens nothing", api.Redemption{Grant: "agkgrant_notarealgrantatallbutlongenoughtopass", TaskID: grantTaskRow, IdempotencyKey: grantKey}},
+		{"a grant redeemed for another task's row", api.Redemption{Grant: clear, TaskID: "01M2ZZZZZZZZZZZZZZZZZZZZZZ", IdempotencyKey: grantKey}},
+		{"a grant redeemed for another attempt", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantRun + "/render/2"}},
+		{"a grant redeemed for another task", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1"}},
 	} {
 		w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.ask)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s answered %d", c.name, w.Code)
 		}
+		if runner := g.bound(t); runner != nil {
+			t.Fatalf("%s bound the task to %s", c.name, *runner)
+		}
 	}
 
 	// It is a runner route, so a principal's token reaches nothing.
-	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", "admin", api.Redemption{Grant: clear, Task: key})
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", "admin", asking(clear))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("an administrator redeeming a grant answered %d", w.Code)
 	}
 
-	// The first machine to redeem holds the task, and a second is told so rather than
-	// starting a container for it.
-	if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key}); w.Code != http.StatusOK {
-		t.Fatalf("the first redemption answered %d", w.Code)
-	}
+	// So the task is still there for the first machine to redeem it properly, and the one
+	// refused above is then told the work is somebody else's rather than starting a
+	// container for it.
 	second := g.joined(t)
-	w, _ = call(t, g.handler, "POST", "/api/v1/tasks/redeem", second, api.Redemption{Grant: clear, Task: key})
+	g.redeemed(t, second, asking(clear))
+	w, _ = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusConflict {
-		t.Errorf("a second machine redeeming the same grant answered %d", w.Code)
+		t.Errorf("a machine redeeming a grant another has redeemed answered %d", w.Code)
+	}
+
+	// But only when the body agrees with the grant. One that names another row or another
+	// attempt is the refusal above whatever the task is doing, and neither half of it is told
+	// whose the work is.
+	for _, c := range []struct {
+		name string
+		ask  api.Redemption
+	}{
+		{"another task's row", api.Redemption{Grant: clear, TaskID: "01M2ZZZZZZZZZZZZZZZZZZZZZZ", IdempotencyKey: grantKey}},
+		{"another attempt", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantRun + "/render/2"}},
+	} {
+		if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.ask); w.Code != http.StatusUnauthorized {
+			t.Errorf("a grant another machine holds, redeemed for %s, answered %d", c.name, w.Code)
+		}
 	}
 }
 
@@ -346,13 +429,148 @@ func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, []string{"stripe"})
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1")})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("a secret nobody holds answered %d: %s", w.Code, w.Body)
 	}
 	if said, _ := answer["error"].(string); said == "" || !strings.Contains(said, "stripe") {
 		t.Errorf("the refusal does not name the secret: %v", answer)
+	}
+}
+
+// A secret is a file's worth of bytes and not always text, and a JSON string cannot carry bytes
+// that are not UTF-8: a keystore sent as one would arrive as a different file. So a value that is
+// not text travels as base64 and says so, and one that is travels as itself.
+func TestASecretThatIsNotTextTravelsAsBase64(t *testing.T) {
+	// Four bytes, which do not fill whole groups of three, so that the value is padded: a
+	// runner decoding with the standard alphabet refuses one that is not, and the task would
+	// stop with its secret unmounted.
+	keystore := []byte{0xff, 0xfe, 0x00, 0x01}
+	const pem = "-----BEGIN PRIVATE KEY-----\nbm90IGEga2V5\n-----END PRIVATE KEY-----\n"
+	g := withGrants(t, held{"finance/keystore": string(keystore), "finance/tls-key": pem})
+	credential := g.joined(t)
+	clear, _, _ := g.dispatched(t, []string{"keystore", "tls-key"})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	secrets := map[string]api.Secret{}
+	for _, s := range answer.Secrets {
+		secrets[s.Name] = s
+	}
+
+	binary := secrets["keystore"]
+	if binary.Encoding != "base64" || binary.Value != "//4AAQ==" {
+		t.Errorf("a value that is not text travels as %q %q", binary.Encoding, binary.Value)
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(binary.Value); err != nil || !bytes.Equal(decoded, keystore) {
+		t.Errorf("a value that is not text decodes to %x (%v), and the store holds %x", decoded, err, keystore)
+	}
+
+	text := secrets["tls-key"]
+	if text.Encoding != "utf-8" || text.Value != pem {
+		t.Errorf("a value that is text travels as %q %q", text.Encoding, text.Value)
+	}
+}
+
+// A brick manifest may ask for a secret somewhere other than where its name would put it, and only
+// the controller read the manifest. So a value arrives with the mount the grant was written with,
+// and never with one the API worked out from the name.
+func TestASecretArrivesWithTheMountItWasDispatchedWith(t *testing.T) {
+	g := withGrants(t, held{"finance/billing": "bk_live_notreal"})
+	credential := g.joined(t)
+	clear, _, _ := g.dispatchedWith(t, []db.GrantSecret{{Name: "billing", Mount: "/agk/secrets/api-key"}})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	want := []api.Secret{{Name: "billing", Mount: "/agk/secrets/api-key", Encoding: "utf-8", Value: "bk_live_notreal"}}
+	if !slices.Equal(answer.Secrets, want) {
+		t.Errorf("the secrets read %+v", answer.Secrets)
+	}
+}
+
+// The runner pairs an artifact with the file entry it read by the URI the envelope writes, so each
+// port carries the artifacts of its own envelope. The same bytes named from two ports are listed
+// under both, each by the name that port's envelope gives them.
+func TestEachPortCarriesTheArtifactsItsEnvelopeNames(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	const content = "the whole of an invoice"
+	collected, file := g.enveloped(t, "collect", "out", content)
+	split, _ := g.enveloped(t, "split", "ok", content)
+	clear := g.granted(t, db.GrantScope{
+		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Inputs: []db.GrantInput{
+			{Port: "in", Digest: collected, Items: 1},
+			{Port: "orders", Digest: split, Items: 1},
+		},
+	})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	if len(answer.Inputs) != 2 {
+		t.Fatalf("the grant answered %d inputs: %+v", len(answer.Inputs), answer.Inputs)
+	}
+	for i, want := range []struct {
+		port     agk.Port
+		envelope string
+		uri      string
+	}{
+		{"in", collected, "agk://run/" + grantRun + "/collect/out/invoice.pdf"},
+		{"orders", split, "agk://run/" + grantRun + "/split/ok/invoice.pdf"},
+	} {
+		in := answer.Inputs[i]
+		if in.Port != want.port || in.Envelope.Digest != "sha256:"+want.envelope {
+			t.Errorf("input %d reads %+v", i, in)
+			continue
+		}
+		// The envelope is the one the digest names, which is what the runner holds the
+		// transfer against.
+		res := follow(t, g.handler, "GET", in.Envelope.URL, "")
+		if sum := sha256.Sum256(res.Body.Bytes()); res.Code != http.StatusOK || hex.EncodeToString(sum[:]) != want.envelope {
+			t.Errorf("the envelope on %s answered %d and hashes to %x", want.port, res.Code, sum)
+		}
+
+		if len(in.Artifacts) != 1 {
+			t.Errorf("%s carries %d artifacts: %+v", want.port, len(in.Artifacts), in.Artifacts)
+			continue
+		}
+		a := in.Artifacts[0]
+		if a.URI.String() != want.uri || a.SHA256 != file {
+			t.Errorf("%s carries %s %s", want.port, a.URI, a.SHA256)
+		}
+		if res := follow(t, g.handler, "GET", a.URL, ""); res.Code != http.StatusOK || res.Body.String() != content {
+			t.Errorf("following the artifact on %s answered %d: %q", want.port, res.Code, res.Body)
+		}
+	}
+}
+
+// The same holds inside one envelope: an envelope may attach one content under two names, and the
+// runner looks each name up by its URI. So each name is an entry of its own, both fetching the
+// same bytes, and a name that two items attach is still one entry.
+func TestTheSameBytesUnderTwoNamesAreListedUnderBoth(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	const content = "the whole of an invoice"
+	envelope, file := g.envelopedAs(t, "collect", "out", content, "a.pdf", "b.pdf", "a.pdf")
+	clear := g.granted(t, db.GrantScope{
+		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Inputs: []db.GrantInput{{Port: "in", Digest: envelope, Items: 3}},
+	})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	if len(answer.Inputs) != 1 {
+		t.Fatalf("the grant answered %d inputs: %+v", len(answer.Inputs), answer.Inputs)
+	}
+	var listed []string
+	for _, a := range answer.Inputs[0].Artifacts {
+		listed = append(listed, a.URI.String())
+		if a.SHA256 != file {
+			t.Errorf("%s is named by %s", a.URI, a.SHA256)
+		}
+		if res := follow(t, g.handler, "GET", a.URL, ""); res.Code != http.StatusOK || res.Body.String() != content {
+			t.Errorf("following %s answered %d: %q", a.URI, res.Code, res.Body)
+		}
+	}
+	under := "agk://run/" + grantRun + "/collect/out/"
+	if got, want := strings.Join(listed, ", "), under+"a.pdf, "+under+"b.pdf"; got != want {
+		t.Errorf("the port lists %s, want %s", got, want)
 	}
 }
 
@@ -409,6 +627,112 @@ func TestTheVendoredRedemptionCorpusIsWhatItSaysItIs(t *testing.T) {
 	}
 }
 
+// conforms says whether a value, as it would be written on the wire, is what one definition of the
+// vendored wire schema describes.
+func conforms(t *testing.T, pointer string, value any) error {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire(t, pointer).Validate(v)
+}
+
+// A redemption is held to the wire whole, because the wire is what a runner is written against:
+// what a runner sends, and every part of what it is answered, each against its own definition. The
+// uploads are the one part left out, because they do not take the wire's shape yet.
+func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
+	// A runner written from the wire is understood: the request of every valid fixture reads
+	// as a redemption, with no field in it the API does not know.
+	cases, err := fixtures.GrantRedemptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		if !c.Valid {
+			continue
+		}
+		body, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pair struct {
+			Request json.RawMessage `json:"request"`
+		}
+		if err := json.Unmarshal(body, &pair); err != nil {
+			t.Fatal(err)
+		}
+		d := json.NewDecoder(bytes.NewReader(pair.Request))
+		d.DisallowUnknownFields()
+		var ask api.Redemption
+		if err := d.Decode(&ask); err != nil {
+			t.Errorf("the request of %s is not a redemption the API reads: %s", c.File, err)
+			continue
+		}
+		if ask.Grant == "" || ask.TaskID == "" || ask.IdempotencyKey == "" {
+			t.Errorf("the request of %s reads as %+v", c.File, ask)
+		}
+	}
+
+	g := withGrants(t, held{"finance/billing": "bk_live_notreal"})
+	credential := g.joined(t)
+	clear, _, _ := g.dispatched(t, []string{"billing"})
+
+	ask := asking(clear)
+	if err := conforms(t, "/$defs/grantRedemption/properties/request", ask); err != nil {
+		t.Errorf("the request is not what the wire describes: %s", err)
+	}
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	}
+	for _, key := range []string{"task_id", "expires_at", "inputs", "secrets", "tree"} {
+		part, present := answer[key]
+		if !present {
+			t.Errorf("the answer has no %s", key)
+			continue
+		}
+		if err := conforms(t, "/$defs/grantRedemption/properties/response/properties/"+key, part); err != nil {
+			t.Errorf("%s is not what the wire describes: %s", key, err)
+		}
+	}
+
+	// And nothing beside what the wire names, read from the schema itself rather than from a
+	// list written here, since the response is closed and a runner reading it strictly would
+	// refuse the document.
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			GrantRedemption struct {
+				Properties struct {
+					Response struct {
+						Properties map[string]json.RawMessage `json:"properties"`
+					} `json:"response"`
+				} `json:"properties"`
+			} `json:"grantRedemption"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(doc, &schema); err != nil {
+		t.Fatal(err)
+	}
+	described := schema.Defs.GrantRedemption.Properties.Response.Properties
+	if len(described) == 0 {
+		t.Fatal("the vendored wire describes no redemption response")
+	}
+	for key := range answer {
+		if _, named := described[key]; !named {
+			t.Errorf("the answer carries %s, which the wire does not describe", key)
+		}
+	}
+}
+
 // "A runner still never speaks git and never holds a credential, because the controller resolves a
 // commit to a tree and the runner fetches content-addressed objects with the task's grant, exactly
 // as it fetches an artifact." So the tree a redemption answers is the one version the scope names:
@@ -417,7 +741,6 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, nil)
-	key := agk.TaskID(grantRun + "/render/1")
 
 	// Another version of the same workflow, whose files the task must never be handed.
 	other := map[string]api.PushFile{
@@ -429,26 +752,18 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	// And the runner has no way to ask for it: the version is what the controller wrote, and
 	// a body naming one of its own is refused rather than half understood.
 	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		map[string]any{"grant": clear, "task": key, "commit": "b4a0d2f"})
+		map[string]any{"grant": clear, "task_id": grantTaskRow, "idempotency_key": grantKey, "commit": "b4a0d2f"})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("a redemption naming its own commit answered %d", w.Code)
 	}
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
 	}
 
 	// The shape is the wire's, held to the schema the schemas repository publishes.
-	encoded, err := json.Marshal(answer["tree"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := wire(t, "/$defs/grantRedemption/properties/response/properties/tree").Validate(v); err != nil {
+	if err := conforms(t, "/$defs/grantRedemption/properties/response/properties/tree", answer["tree"]); err != nil {
 		t.Errorf("the tree is not what the wire describes: %s", err)
 	}
 
@@ -503,7 +818,7 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	// And a grant whose scope names the other version is handed that version's tree: what
 	// decides is the scope, and only the scope.
 	again := g.grantedFor(t, "monthly-invoicing", "b4a0d2f")
-	w, answer = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: again, Task: key})
+	w, answer = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(again))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming the second grant answered %d: %s", w.Code, w.Body)
 	}
@@ -525,7 +840,6 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
-	key := agk.TaskID(grantRun + "/render/1")
 
 	conn := dbtest.Superuser(t, g.super)
 	if _, err := conn.Exec(t.Context(),
@@ -544,7 +858,7 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 		{"a version nobody recorded", "monthly-invoicing", "deadbee", "/agk/repo"},
 	} {
 		clear := g.grantedFor(t, c.workflow, c.commit)
-		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key})
+		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
 			continue
@@ -556,11 +870,7 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 			t.Errorf("%s answered a tree anyway", c.name)
 		}
 
-		var runner *string
-		if err := conn.QueryRow(t.Context(), `select runner from tasks where id = $1`, grantTaskRow).Scan(&runner); err != nil {
-			t.Fatal(err)
-		}
-		if runner != nil {
+		if runner := g.bound(t); runner != nil {
 			t.Errorf("%s bound the task to %s, and a runner told there is no tree has not taken it", c.name, *runner)
 		}
 	}
