@@ -256,6 +256,46 @@ func TestASecondPushOfOneCommitIsComparedByItsTree(t *testing.T) {
 	}
 }
 
+// A push asks before it writes a byte whether its commit is recorded with other files, and the
+// asking records nothing: a commit nobody pushed is still nobody's afterwards.
+func TestAVersionIsComparedWithoutBeingRecorded(t *testing.T) {
+	pool, _ := opened(t)
+	check := func(v Version) error {
+		t.Helper()
+		return pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			return ns.CheckVersion(ctx, v)
+		})
+	}
+
+	if err := check(aVersion("b4a0d2f", aTree())); err != nil {
+		t.Fatalf("a commit nobody recorded answered %v", err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		_, err := ns.Version(ctx, "monthly-invoicing", "b4a0d2f")
+		return err
+	}); !errors.Is(err, ErrNoVersion) {
+		t.Fatalf("checking a version recorded it: %v", err)
+	}
+
+	if _, err := saveVersion(t, pool, aVersion("b4a0d2f", aTree())); err != nil {
+		t.Fatal(err)
+	}
+	reordered := aTree()
+	slices.Reverse(reordered)
+	if err := check(aVersion("b4a0d2f", reordered)); err != nil {
+		t.Errorf("the same tree again answered %v", err)
+	}
+	changed := aTree()
+	changed[0].SHA256 = digestOf("d")
+	if err := check(aVersion("b4a0d2f", changed)); !errors.Is(err, ErrOtherTree) {
+		t.Errorf("another tree answered %v", err)
+	}
+	// The seeded version, recorded before a version carried its tree.
+	if err := check(aVersion("a3f9c1e", aTree())); !errors.Is(err, ErrOtherTree) {
+		t.Errorf("a tree for a version recorded without one answered %v", err)
+	}
+}
+
 // The redemption reads the tree through the installation door and reads nothing else, and it can
 // tell a version that is not there from one recorded without its tree: neither of them is an
 // empty directory.

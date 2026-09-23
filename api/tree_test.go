@@ -309,7 +309,7 @@ func TestAPushWhoseStoreFailsSaysSoAndNothingMore(t *testing.T) {
 // and changes nothing, and the same commit with other files is a conflict, said out loud rather
 // than answered 200 while nothing was recorded.
 func TestPushingOneCommitWithOtherFilesIsAConflict(t *testing.T) {
-	h, pool, super, _ := servingWithObjects(t)
+	h, pool, super, objects := servingWithObjects(t)
 	first := pushed(t, map[string]api.PushFile{
 		"scripts/render.sh": {Content: []byte("#!/bin/sh\necho hello\n"), Mode: "0755"},
 	})
@@ -371,15 +371,19 @@ func TestPushingOneCommitWithOtherFilesIsAConflict(t *testing.T) {
 	}
 
 	// Other files under the same commit: 409, with a sentence, and the version is as it was.
-	other := pushed(t, map[string]api.PushFile{
-		"scripts/render.sh": {Content: []byte("#!/bin/sh\necho something else\n"), Mode: "0755"},
-	})
+	// Refused before the files were written, too: a refused push that stored them would leave
+	// objects nothing counts, as many times as anybody cared to push it.
+	elsewise := []byte("#!/bin/sh\necho something else\n")
+	other := pushed(t, map[string]api.PushFile{"scripts/render.sh": {Content: elsewise, Mode: "0755"}})
 	w, answer := call(t, h, "PUT", pushTo, "alice", other)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("the same commit with other files answered %d: %s", w.Code, w.Body)
 	}
 	if said, _ := answer["error"].(string); !strings.Contains(said, "a3f9c1e") {
 		t.Errorf("the conflict does not name the commit: %q", said)
+	}
+	if held, err := objects.Has(t.Context(), keyOf("finance", elsewise)); err != nil || held {
+		t.Errorf("a refused push left its file in the store: %v %v", held, err)
 	}
 	if after := counts(); !sameCounts(before, after) {
 		t.Errorf("a refused push moved the counts from %v to %v", before, after)

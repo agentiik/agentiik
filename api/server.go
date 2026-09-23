@@ -201,6 +201,22 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	otherTree := fmt.Sprintf("%s was already pushed at %s with other files, and a version is a commit: one commit names exactly one tree, permanently", over.Workflow, commit)
+
+	// And compared with what is recorded under that commit, if anything is. Refused by
+	// SaveVersion instead, a commit pushed again with other files had already put them in the
+	// store, where nothing counts them, as often as anybody cared to push it.
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		return ns.CheckVersion(ctx, v)
+	})
+	if errors.Is(err, db.ErrOtherTree) {
+		fail(w, http.StatusConflict, otherTree)
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the version could not be read")
+		return
+	}
 
 	// The bytes before the row, so that a version that exists names objects that exist. A
 	// push that dies between the two leaves objects nothing references, which the collector
@@ -221,7 +237,9 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		return err
 	})
 	if errors.Is(err, db.ErrOtherTree) {
-		fail(w, http.StatusConflict, fmt.Sprintf("%s was already pushed at %s with other files, and a version is a commit: one commit names exactly one tree, permanently", over.Workflow, commit))
+		// Two pushes of one commit that both compared before either recorded, and this one
+		// lost. What it stored is uncounted, as it is for a push that dies before its row.
+		fail(w, http.StatusConflict, otherTree)
 		return
 	}
 	if err != nil {

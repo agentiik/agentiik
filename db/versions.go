@@ -188,18 +188,10 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	}
 
 	if tag.RowsAffected() == 0 {
-		// Already there. Compared by tree and by nothing else: the tree is the commit, and
-		// the rest of the row is either read out of it or resolved around it, like the
-		// manifests of the images it names, which may have moved since without the commit
-		// having changed.
-		held, err := readTree(ctx, n.tx, n.namespace, v.Workflow, v.Commit)
-		if err != nil && !errors.Is(err, ErrNoTree) {
-			return Saved{}, err
-		}
-		if !slices.Equal(held, tree) {
-			return Saved{}, fmt.Errorf("%w: %s/%s@%s", ErrOtherTree, n.namespace, v.Workflow, v.Commit)
-		}
-		return Saved{}, nil
+		// Already there, which CheckVersion had usually said before anything was written.
+		// Asked again here because two pushes of one commit can both have asked before
+		// either recorded, and this is the answer the second of them gets.
+		return Saved{}, compareTree(ctx, n.tx, n.namespace, v.Workflow, v.Commit, tree)
 	}
 
 	out := Saved{New: true}
@@ -225,6 +217,45 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 		}
 	}
 	return out, nil
+}
+
+// CheckVersion answers what SaveVersion would refuse a version for, and records nothing.
+//
+// ErrOtherTree is the answer that matters. SaveVersion gives it too, and gives it too late for a
+// push: by then the files of the tree are in the store, and a push refused there has left objects
+// behind it that nothing counts and the collector therefore never sees, as often as anybody cares
+// to push one commit with other files. So a push asks here first, before it writes a byte. A
+// commit not recorded yet is nil, since the version is new, and so is one recorded with this
+// same tree, since pushing it again changes nothing.
+func (n *NS) CheckVersion(ctx context.Context, v Version) error {
+	tree, err := sortedTree(v.Tree)
+	if err != nil {
+		return fmt.Errorf("db: version %s@%s: %w", v.Workflow, v.Commit, err)
+	}
+	err = compareTree(ctx, n.tx, n.namespace, v.Workflow, v.Commit, tree)
+	if errors.Is(err, ErrNoVersion) {
+		return nil
+	}
+	return err
+}
+
+// compareTree answers ErrOtherTree where the commit is recorded with a tree other than this one,
+// and ErrNoVersion where it is not recorded.
+//
+// Compared by tree and by nothing else: the tree is the commit, and the rest of the row is either
+// read out of it or resolved around it, like the manifests of the images it names, which may have
+// moved since without the commit having changed. A version recorded without its tree differs
+// from every tree a push carries, because a version is written once, and a second push is not how
+// it acquires the files it was recorded without.
+func compareTree(ctx context.Context, tx pgx.Tx, namespace, workflow, commit string, tree []TreeFile) error {
+	held, err := readTree(ctx, tx, namespace, workflow, commit)
+	if err != nil && !errors.Is(err, ErrNoTree) {
+		return err
+	}
+	if !slices.Equal(held, tree) {
+		return fmt.Errorf("%w: %s/%s@%s", ErrOtherTree, namespace, workflow, commit)
+	}
+	return nil
 }
 
 // sortedTree checks a tree and answers a copy in path order.
