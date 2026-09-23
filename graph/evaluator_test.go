@@ -802,8 +802,10 @@ func TestAKeyLostPastMaxRequeuesFailsItsStep(t *testing.T) {
 }
 
 // The bound is the installation's, handed to the evaluator rather than read from anywhere:
-// one requeue under max_requeues: 1, none under a negative number, and a resumed run
-// decides under the bound it is resumed with, since a bound is not the run's.
+// one requeue under max_requeues: 1, and none under max_requeues: 0, which says none and
+// not the default the setting takes where it is not written. A negative bound counts no
+// number of times and is refused. A resumed run decides under the bound it is resumed
+// with, since a bound is not the run's.
 func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -811,10 +813,10 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 		requeues int
 	}{
 		{"one", 1, 1},
-		{"none", -1, 0},
+		{"none", 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			e := started(t, requeueing, Options{MaxRequeues: c.most})
+			e := started(t, requeueing, Options{MaxRequeues: new(c.most)})
 			task := next(t, e, runAt).Start[0]
 			for requeue := range c.requeues + 1 {
 				lose(t, e, task, requeue, runAt)
@@ -829,10 +831,18 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 		})
 	}
 
+	g := built(t, requeueing, evaluatorManifest)
+	if _, err := Start(g, agk.Run{ID: "01HZXRUN", Namespace: "finance"}, Options{MaxRequeues: new(-1)}, runAt); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a run started under max_requeues: -1, which is no number of times, answering %v", err)
+	}
+
 	e := started(t, requeueing, Options{})
 	task := next(t, e, runAt).Start[0]
 	lose(t, e, task, 0, runAt)
 	next(t, e, runAt)
+	if _, err := New(e.Graph(), e.State(), agk.DefaultLimits(), -1); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a run resumed under max_requeues: -1, which is no number of times, answering %v", err)
+	}
 	resumed, err := New(e.Graph(), e.State(), agk.DefaultLimits(), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -867,7 +877,7 @@ steps:
       - { step: slow,  port: ok, as: orders }
     merge: first
     outputs: [ok]
-`, Options{MaxRequeues: -1})
+`, Options{MaxRequeues: new(0)})
 
 	plan := next(t, e, runAt)
 	slow := taskOf(t, plan, "slow")
@@ -893,7 +903,7 @@ steps:
 // The count is per key. A further attempt is a new key, granted by max for a failure the
 // brick reported, so it is handed out again after a loss as often as the first was.
 func TestAFurtherAttemptIsRequeuedAsOftenAsTheFirst(t *testing.T) {
-	e := started(t, requeueing, Options{MaxRequeues: 1})
+	e := started(t, requeueing, Options{MaxRequeues: new(1)})
 	first := next(t, e, runAt).Start[0]
 	lose(t, e, first, 0, runAt)
 	next(t, e, runAt)

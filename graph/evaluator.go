@@ -61,10 +61,13 @@ type Options struct {
 	Limits agk.Limits
 
 	// MaxRequeues is the installation's max_requeues: how many times one key is handed
-	// out again after a loss. The zero value is DefaultMaxRequeues, for the reason the
-	// zero Limits are the defaults, so an installation that requeues nothing says so with
-	// a negative number.
-	MaxRequeues int
+	// out again after a loss. Nil is DefaultMaxRequeues, for the reason the zero Limits
+	// are the defaults, and zero is an installation that requeues nothing, which is what
+	// max_requeues: 0 says. A pointer, because the two are different settings, as a hint
+	// a file does not write is not one written false: read as an int, the zero a caller
+	// left unset and the zero an installation wrote would be one value, and one of them
+	// would be read as the other.
+	MaxRequeues *int
 }
 
 // Evaluator is a handle over a Graph and a State. It holds no progress of its own: the
@@ -75,8 +78,8 @@ type Evaluator struct {
 	s      *State
 	limits agk.Limits
 
-	// maxRequeues is the bound New resolved, never zero by accident: zero here is an
-	// installation that asked for no requeue at all.
+	// maxRequeues is the bound New was given, and zero is an installation that asked for
+	// no requeue at all.
 	maxRequeues int
 
 	// templates is a memo and not progress. The same expression is read once per shard
@@ -120,21 +123,31 @@ func Start(g *Graph, run agk.Run, o Options, at time.Time) (*Evaluator, error) {
 	for _, name := range g.Steps() {
 		s.Steps[name] = StepState{}
 	}
-	return New(g, s, o.Limits, o.MaxRequeues)
+	most := DefaultMaxRequeues
+	if o.MaxRequeues != nil {
+		most = *o.MaxRequeues
+	}
+	return New(g, s, o.Limits, most)
 }
 
 // New resumes a run from a state. "Failover is a state resume and never a rebuild": load
 // the State, call Next, get the Plan the instance that died would have got.
 //
-// The size rules and max_requeues are arguments, read as Options reads them, and not
-// state, because neither is the run's: they are the namespace's and the installation's,
-// and a pass is decided under the ones that hold when it is taken.
+// The size rules and max_requeues are arguments and not state, because neither is the
+// run's: they are the namespace's and the installation's, and a pass is decided under the
+// ones that hold when it is taken. The size rules are read as Options reads them. The bound
+// is the number itself, zero requeuing nothing, since a caller resuming a run has already
+// read the installation's setting and has nothing left unset to fill in. A negative bound
+// is refused: it counts no number of times, and reading it as none or as the default would
+// be guessing which the installation meant.
 func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) {
 	switch {
 	case g == nil:
 		return nil, fmt.Errorf("graph: there is no graph to evaluate the run against")
 	case s == nil:
 		return nil, fmt.Errorf("graph: there is no state to resume")
+	case maxRequeues < 0:
+		return nil, fmt.Errorf("graph: max_requeues is how many times one key is handed out again after a loss, and %d is no number of times: zero is what requeues nothing", maxRequeues)
 	case s.Version != StateVersion:
 		return nil, fmt.Errorf("graph: the state was written at version %d and this package reads version %d: a state is resumed and never guessed at, so a field whose meaning has moved is refused rather than read", s.Version, StateVersion)
 	}
@@ -143,12 +156,6 @@ func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) 
 	}
 	if l == (agk.Limits{}) {
 		l = agk.DefaultLimits()
-	}
-	switch {
-	case maxRequeues == 0:
-		maxRequeues = DefaultMaxRequeues
-	case maxRequeues < 0:
-		maxRequeues = 0
 	}
 	return &Evaluator{g: g, s: s, limits: l, maxRequeues: maxRequeues, templates: map[templateKey]*expr.Template{}}, nil
 }

@@ -81,8 +81,10 @@ type Options struct {
 	// charged to the infrastructure, so a step whose container takes down every host it
 	// lands on would otherwise be requeued until the run's timeout, and for ever where
 	// there is none. It reaches the evaluator as an argument on every pass, as the size
-	// rules do, and the evaluator counts it against the key. The zero value is
-	// graph.DefaultMaxRequeues, three, and a negative number requeues nothing.
+	// rules do, and the evaluator counts it against the key. Nil is
+	// graph.DefaultMaxRequeues, three, and zero requeues nothing, as max_requeues: 0 reads
+	// wherever the setting is written; graph.Options says why it is a pointer. A negative
+	// number is refused.
 	//
 	// Only a loss counts, and only a dispatch a runner redeemed can be lost: the heartbeat's
 	// sweep declares it once that runner goes quiet, or the runner reports it. A message the
@@ -90,7 +92,7 @@ type Options struct {
 	// dispatch delivered again, under its row and its grant, and a task waiting on the queue
 	// of a full pool is not lost however long it waits. Neither is handed out again, so
 	// neither spends a requeue, and a pool slow to take its work never fails a step for it.
-	MaxRequeues int
+	MaxRequeues *int
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -106,6 +108,8 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		return nil, errors.New("controller: a core with no object store, and the envelopes live there")
 	case term.Token < 1:
 		return nil, errors.New("controller: a core outside a term: deciding is what the election decides who may do")
+	case o.MaxRequeues != nil && *o.MaxRequeues < 0:
+		return nil, fmt.Errorf("controller: max_requeues is how many times one key is handed out again after a loss, and %d is no number of times: zero is what requeues nothing", *o.MaxRequeues)
 	}
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
@@ -116,10 +120,14 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 	if o.Ceiling <= 0 {
 		o.Ceiling = time.Hour
 	}
+	requeues := graph.DefaultMaxRequeues
+	if o.MaxRequeues != nil {
+		requeues = *o.MaxRequeues
+	}
 	return &Core{
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
-		limits: o.Limits, ceiling: o.Ceiling, requeues: o.MaxRequeues, now: o.Now,
+		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
 	}, nil
 }
 
@@ -386,7 +394,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Limits: co.limits, MaxRequeues: co.requeues}, now)
+		}, graph.Options{Inputs: e.Inputs, Limits: co.limits, MaxRequeues: new(co.requeues)}, now)
 	}
 
 	var doc Document

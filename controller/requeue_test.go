@@ -422,19 +422,21 @@ func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
 }
 
 // A key is handed out again after a loss as often as the installation's max_requeues allows, three
-// where it sets nothing, and no more. Each dispatch is redeemed by a runner of its own, which then
-// goes quiet, as a container that takes down every host it lands on would leave it, and the
-// heartbeat declares it lost. The loss past the bound stands: the key goes out no more, its last
-// grant opens nothing even to the runner it was bound to, and the run fails on it rather than
-// spending the attempt max: 1 has left, since the brick never failed.
+// where it sets nothing and none where it sets zero, and no more. Each dispatch is redeemed by a
+// runner of its own, which then goes quiet, as a container that takes down every host it lands on
+// would leave it, and the heartbeat declares it lost. The loss past the bound stands: the key goes
+// out no more, its last grant opens nothing even to the runner it was bound to, and the run fails
+// on it rather than spending the attempt max: 1 has left, since the brick never failed. A negative
+// bound counts no number of times, and no core is built on one.
 func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
 	for _, c := range []struct {
 		name       string
-		set        int
+		set        *int
 		dispatches []string
 	}{
-		{"the default", 0, []string{"0 lost runner-1", "1 lost runner-2", "2 lost runner-3", "3 lost runner-4"}},
-		{"one", 1, []string{"0 lost runner-1", "1 lost runner-2"}},
+		{"the default", nil, []string{"0 lost runner-1", "1 lost runner-2", "2 lost runner-3", "3 lost runner-4"}},
+		{"one", new(1), []string{"0 lost runner-1", "1 lost runner-2"}},
+		{"none", new(0), []string{"0 lost runner-1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			deciding, q, pool, super := decidingOn(t, requeueingWorkflow)
@@ -485,6 +487,14 @@ func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
 				t.Errorf("the run is %s after its one step lost a key past max_requeues", got)
 			}
 		})
+	}
+
+	deciding, q, _, _ := decidingOn(t, requeueingWorkflow)
+	if _, err := NewCore(deciding.controller, deciding.term, Options{
+		Queue: q, Versions: deciding.versions, Objects: deciding.objects, Now: deciding.now,
+		MaxRequeues: new(-1),
+	}); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a core was built under max_requeues: -1, which is no number of times, answering %v", err)
 	}
 }
 
