@@ -65,8 +65,9 @@ type Options struct {
 	// server's own connection list.
 	Name string
 
-	// Credentials are what the control plane authenticates with, where the bus asks for
-	// any. Nil is a bus that takes none.
+	// Credentials are what this side authenticates with, where the bus asks for any: the
+	// control plane's for Open, the one the API minted for a runner's pool for OpenRunner.
+	// Nil is a bus that takes none.
 	Credentials *Credentials
 }
 
@@ -76,31 +77,9 @@ type Options struct {
 // of what the engine promises, not part of how an operator chose to install it. An installation
 // that had configured a different retention would have a bus that kept work after it was done.
 func Open(ctx context.Context, o Options) (*Bus, error) {
-	if o.URL == "" {
-		return nil, errors.New("bus: no bus address")
-	}
-	options := []nats.Option{
-		nats.Name(o.Name),
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(time.Second),
-	}
-	if o.Name == "" {
-		options[0] = nats.Name("agentiik")
-	}
-	if o.Credentials != nil {
-		// A credential rather than a password, and one that expires. An installation
-		// whose bus takes no credential at all is profile A, where the bus is on the
-		// same host and reachable by nothing else.
-		options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
-	}
-	conn, err := nats.Connect(o.URL, options...)
+	conn, js, err := connect(o)
 	if err != nil {
-		return nil, fmt.Errorf("bus: the bus at that address could not be reached: %w", err)
-	}
-	js, err := jetstream.New(conn)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("bus: JetStream could not be reached: %w", err)
+		return nil, err
 	}
 
 	// Both streams, here rather than where each is first used. A result published to a
@@ -145,6 +124,51 @@ func Open(ctx context.Context, o Options) (*Bus, error) {
 	return &Bus{conn: conn, js: js, stream: stream, results: results}, nil
 }
 
+// OpenRunner connects as a runner, which takes work from its pool and says what became of it.
+//
+// It creates nothing and makes sure of nothing, which is not a courtesy: the credential a runner
+// holds cannot create a stream or a consumer, and is refused the request that would ask whether
+// one is there. The streams are Open's and the pool's consumer is Consumer's, both on the control
+// plane, and a runner finds them there or finds out at its first Take that they are missing.
+func OpenRunner(o Options) (*Bus, error) {
+	conn, js, err := connect(o)
+	if err != nil {
+		return nil, err
+	}
+	return &Bus{conn: conn, js: js}, nil
+}
+
+// connect opens the connection both sides share.
+func connect(o Options) (*nats.Conn, jetstream.JetStream, error) {
+	if o.URL == "" {
+		return nil, nil, errors.New("bus: no bus address")
+	}
+	options := []nats.Option{
+		nats.Name(o.Name),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(time.Second),
+	}
+	if o.Name == "" {
+		options[0] = nats.Name("agentiik")
+	}
+	if o.Credentials != nil {
+		// A credential rather than a password, and one that expires. An installation
+		// whose bus takes no credential at all is profile A, where the bus is on the
+		// same host and reachable by nothing else.
+		options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
+	}
+	conn, err := nats.Connect(o.URL, options...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bus: the bus at that address could not be reached: %w", err)
+	}
+	js, err := jetstream.New(conn)
+	if err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("bus: JetStream could not be reached: %w", err)
+	}
+	return conn, js, nil
+}
+
 // Close releases the connection.
 func (b *Bus) Close() { b.conn.Close() }
 
@@ -159,16 +183,20 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 	}
 	_, err := b.js.CreateOrUpdateConsumer(ctx, Stream, jetstream.ConsumerConfig{
 		Durable:       Durable(pool),
+		Description:   "Every runner of the " + pool + " pool, sharing one queue.",
 		FilterSubject: Subject(pool),
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		// A runner acknowledges when it has taken a task and written that down, not when
-		// the container finishes: "Liveness therefore lives in the database beside the
-		// task state, rather than as traffic on a work queue that exists to distribute
-		// work." So this bounds the seconds between a message being handed over and being
-		// recorded, and a task that runs for an hour is not redelivered halfway through
-		// it. What notices a host that died is the heartbeat, and what it produces is
-		// lost rather than a second delivery.
-		AckWait:       time.Minute,
+		// A runner acknowledges on take, once it has written the task down, and not
+		// when the container finishes: the package documentation says why. So this
+		// bounds the seconds between a message being handed over and being recorded,
+		// and a task that runs for an hour is not redelivered halfway through it. What
+		// notices a host that died after that is the heartbeat, and what it produces
+		// is lost rather than a second delivery.
+		AckWait: time.Minute,
+		// Without limit, because a message comes round again only when a runner took
+		// it and never wrote it down, or put it back, and neither is a reason to give
+		// up on the task.
+		MaxDeliver:    -1,
 		MaxAckPending: -1,
 	})
 	if err != nil {
@@ -180,10 +208,15 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 // Publish puts one task on the queue its labels select.
 //
 // This is controller.Queue's half. The message carries the task as the wire describes it, and
-// the identifier is given to JetStream as its deduplication key: a bus is at-least-once and the
+// the task_id is given to JetStream as its deduplication key: a bus is at-least-once and the
 // runner is what makes that safe, but a publish retried by this process inside the duplicate
 // window is a retry this process knows about and there is no reason to make somebody else pay
 // for it.
+//
+// The task_id and not the idempotency key, because "a requeue after loss keeps the idempotency
+// key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being
+// published would be requeued into a stream that answers it was already there, and the requeue
+// would go nowhere while the controller recorded it as handed out.
 func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
 	t := d.Task
 	pool, err := PoolOf(t.RunsOn)
@@ -202,7 +235,7 @@ func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
 		Subject: Subject(pool),
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{string(t.ID)},
+			jetstream.MsgIDHeader: []string{d.Row},
 			"Agentiik-Namespace":  []string{t.Namespace},
 			"Agentiik-Run":        []string{string(t.Run)},
 		},

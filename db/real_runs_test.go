@@ -229,6 +229,149 @@ func TestATaskIsOneRowHoweverOftenItIsWritten(t *testing.T) {
 	}
 }
 
+// "A requeue after loss keeps the idempotency key and takes a new task_id." The dispatch that was
+// lost stays as it was, and the requeue is a row of its own under the same key; in between, a
+// decision that has not yet heard of the loss does not write over it.
+func TestARequeueIsARowOfItsOwnUnderTheSameKey(t *testing.T) {
+	pool, _ := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{Index: 3, Of: 8})
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	seq := 0
+	decide := func(wake time.Time, task TaskRow) {
+		t.Helper()
+		task.ID, task.Step, task.Attempt, task.Shard = key, "invoice", 1, agk.Shard{Index: 3, Of: 8}
+		if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			return w.SaveDecision(ctx, Decision{
+				Namespace: "finance", Run: theRun, Was: seq, Seq: seq + 1,
+				Document: json.RawMessage(`{"version":1}`), State: agk.Running, StartedAt: now,
+				WakeAt: wake, Tasks: []TaskRow{task},
+			})
+		}); err != nil {
+			t.Fatalf("pass %d: %s", seq+1, err)
+		}
+		seq++
+	}
+	wide := func(fn func(ctx context.Context, w *Wide) error) {
+		t.Helper()
+		if err := pool.Installation(t.Context(), ControllerSweep, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	decide(now.Add(time.Hour), TaskRow{State: agk.TaskPending})
+	decide(now.Add(time.Hour), TaskRow{State: agk.TaskDispatched, Runner: "runner-1", DispatchedAt: now})
+	var first string
+	wide(func(ctx context.Context, w *Wide) error {
+		var err error
+		if first, err = w.TaskRow(ctx, "finance", key); err != nil {
+			return err
+		}
+		_, err = w.Published(ctx, "finance", []agk.TaskID{key}, now)
+		return err
+	})
+	if swept(t, pool, now) {
+		t.Fatal("a run waiting on its clock with its one task handed out was swept, so the sweep below proves nothing")
+	}
+
+	// Only the runner holding the dispatch can say it lost it, and saying so twice moves
+	// nothing the second time.
+	wide(func(ctx context.Context, w *Wide) error {
+		if _, err := w.Lose(ctx, "finance", key, first, "runner-2", now); !errors.Is(err, ErrNotHeld) {
+			t.Errorf("a runner that never held the task declared it lost, answering %v", err)
+		}
+		if _, err := w.Lose(ctx, "finance", key, "not-a-row", "runner-1", now); !errors.Is(err, ErrNotHeld) {
+			t.Errorf("a loss naming no dispatch of the key answered %v", err)
+		}
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || !moved {
+			t.Errorf("the runner holding the task could not declare it lost: moved %v, %v", moved, err)
+		}
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || moved {
+			t.Errorf("a loss declared twice moved %v the second time, answering %v", moved, err)
+		}
+		return nil
+	})
+	if !swept(t, pool, now) {
+		t.Error("a run whose task was declared lost waits for its clock, and nothing hears of the loss until then")
+	}
+
+	// A decision read before the loss still has the dispatch running. The loss stands, and
+	// the run is left for the next sweep, which is what hears of it.
+	decide(now.Add(time.Hour), TaskRow{State: agk.TaskRunning, StartedAt: now})
+	var losses []Loss
+	wide(func(ctx context.Context, w *Wide) error {
+		var err error
+		losses, err = w.Losses(ctx, "finance", theRun)
+		return err
+	})
+	if len(losses) != 1 || losses[0].Task != key || losses[0].Requeue != 0 || losses[0].At.IsZero() {
+		t.Fatalf("the losses read %+v, want the first dispatch of %s", losses, key)
+	}
+	if !swept(t, pool, now) {
+		t.Error("a run holding a loss its last decision wrote over is not swept until the clock that decision set")
+	}
+
+	// Heard, and requeued: a row of its own, under the same key.
+	decide(time.Time{}, TaskRow{State: agk.TaskPending, Requeue: 1})
+	var second string
+	wide(func(ctx context.Context, w *Wide) error {
+		var err error
+		if second, err = w.TaskRow(ctx, "finance", key); err != nil {
+			return err
+		}
+		losses, err = w.Losses(ctx, "finance", theRun)
+		return err
+	})
+	if second == first {
+		t.Errorf("the requeue is row %s, which is the row that was lost", second)
+	}
+	if len(losses) != 0 {
+		t.Errorf("a loss already requeued is still named: %+v", losses)
+	}
+
+	var rows []string
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		r, err := ns.tx.Query(ctx,
+			`select id || ' ' || requeue || ' ' || state || ' ' || coalesce(runner, '-') from tasks
+			 where idempotency_key = $1 order by requeue`, string(key))
+		if err != nil {
+			return err
+		}
+		rows, err = pgx.CollectRows(r, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{first + " 0 lost runner-1", second + " 1 pending -"}
+	if len(rows) != 2 || rows[0] != want[0] || rows[1] != want[1] {
+		t.Errorf("the key holds %q, want %q", rows, want)
+	}
+
+	// The runner that lost the first dispatch takes the requeue, and its loss of the first
+	// comes round again. It names the first, which is lost already, and the requeue that
+	// runner now holds is left as it is.
+	decide(time.Time{}, TaskRow{State: agk.TaskDispatched, Runner: "runner-1", Requeue: 1, DispatchedAt: now})
+	wide(func(ctx context.Context, w *Wide) error {
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || moved {
+			t.Errorf("a loss of the first dispatch moved %v once the same runner held the requeue, answering %v", moved, err)
+		}
+		return nil
+	})
+	var requeue string
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.tx.QueryRow(ctx, `select state::text from tasks where id = $1`, second).Scan(&requeue)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if requeue != "dispatched" {
+		t.Errorf("the requeue reads %s after a loss of the dispatch before it", requeue)
+	}
+}
+
 // The sweep finds what a notification would have found, and the three cases it exists for.
 func TestTheSweepFindsWhatANotificationWouldHave(t *testing.T) {
 	pool, super := created(t)

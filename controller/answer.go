@@ -26,6 +26,12 @@ import (
 type Answer struct {
 	Result graph.Result
 
+	// Row is the task_id of the dispatch the answer is about, carried back unchanged from the
+	// task message. A requeue after loss keeps the idempotency key and takes a new task_id, so
+	// the key in Result says which unit of work this is and only the row says which dispatch
+	// of it.
+	Row string
+
 	// Runner is the name of the host that held it. "A user never learns which host executed
 	// a task beyond its runner name and labels."
 	Runner string
@@ -63,20 +69,36 @@ var ErrNotAResult = errors.New("controller: not a result any controller could re
 // with ErrNotAResult before anything is read: "a heartbeat is what says a task is still
 // running, and a result saying so would be a result for work that has not finished."
 func (co *Core) Answer(ctx context.Context, a Answer) error {
-	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
+	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
 		return fmt.Errorf("%w: it names no task: %w", ErrNotAResult, err)
 	}
 	if !a.Result.State.Terminal() {
 		return fmt.Errorf("%w: %s is %s, which is not one of the five endings a result reports", ErrNotAResult, a.Result.Task, a.Result.State)
 	}
+	if a.Row == "" {
+		return fmt.Errorf("%w: %s names no dispatch, and a requeue keeps the key, so the key alone cannot say which dispatch ended", ErrNotAResult, a.Result.Task)
+	}
+	if a.Result.State == agk.TaskLost {
+		return co.lose(ctx, run, a)
+	}
 
+	// The dispatch is read with the run, because the evaluator counts dispatches and the
+	// answer names a row. Which one it is decides whether the answer is news: an ending of a
+	// dispatch the key was requeued past after it was lost is the late report of a runner the
+	// attempt stopped waiting on, and the requeue it was replaced by is still owed its own.
 	var e db.Evaluation
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		e, err = w.Run(ctx, run)
+		if e, err = w.Run(ctx, run); err != nil || e.State.Terminal() || len(e.Document) == 0 {
+			return err
+		}
+		a.Result.Requeue, err = w.RequeueOf(ctx, e.Namespace, a.Result.Task, a.Row)
 		return err
 	}); err != nil {
+		if errors.Is(err, db.ErrNoDispatch) {
+			return fmt.Errorf("%w: %w", ErrNotAResult, err)
+		}
 		return err
 	}
 	if e.State.Terminal() {
@@ -97,6 +119,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	if err != nil {
 		return err
 	}
+	before, _ := shardOf(ev.State(), step, shard)
 	if err := ev.Record(a.Result, now); err != nil {
 		return fmt.Errorf("controller: the result of %s could not be recorded: %w", a.Result.Task, err)
 	}
@@ -111,6 +134,9 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		return fmt.Errorf("controller: the document of run %s could not be written: %w", run, err)
 	}
 	steps, tasks := project(state)
+	if after, _ := shardOf(state, step, shard); after.Attempt != before.Attempt {
+		tasks = append(tasks, passed(run, step, before, a.Result))
+	}
 	stamp(tasks, a)
 
 	// "A result for an attempt that is over changes nothing", and the evaluator says so by
@@ -142,14 +168,79 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	return co.Decide(ctx, run)
 }
 
+// lose takes a loss a runner reported, which "travels on a result only where a runner recovers
+// one it had already lost".
+//
+// It is written where the heartbeat writes its own and heard the way those are, on the pass that
+// follows, rather than recorded here. A loss is about one dispatch, and a requeue keeps the key,
+// so the key alone cannot say which dispatch a runner means, and neither can the key and the
+// runner together, since the runner that lost a dispatch may be the one holding its requeue. The
+// row can. The same loss delivered twice, or delivered late, then finds its dispatch already
+// lost, moves nothing, and decides nothing, where recording it would requeue the key a second
+// time. A loss naming a dispatch that was never bound to the runner it names is speaking for
+// somebody else's task, and that answer is the same on every delivery. The runner it names is
+// the answer's own word, which Lose says more about.
+func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
+	moved := false
+	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		e, err := w.Run(ctx, run)
+		if err != nil || e.State.Terminal() {
+			return err
+		}
+		moved, err = w.Lose(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner, co.now().UTC())
+		return err
+	})
+	if errors.Is(err, db.ErrNotHeld) {
+		return fmt.Errorf("%w: %w", ErrNotAResult, err)
+	}
+	if err != nil || !moved {
+		return err
+	}
+	return co.Decide(ctx, run)
+}
+
+// shardOf is one shard of one step as a state holds it.
+func shardOf(s *graph.State, step agk.Step, shard agk.Shard) (graph.ShardState, bool) {
+	for _, sh := range s.Steps[step].Shards {
+		if sh.Shard == shard {
+			return sh, true
+		}
+	}
+	return graph.ShardState{}, false
+}
+
+// passed is the row of the attempt an answer ended, where the evaluator has already moved its
+// shard on to the next one.
+//
+// The projection is the state, and the state holds the attempt a shard is on and nothing of the
+// ones before it. A further attempt is a new key, so the row the answer was about drops out of
+// what project writes the moment the retry is granted, and left there it would read as
+// dispatched for ever: a row counted against max_concurrent_tasks, a grant still honoured for a
+// key that has completed, and a task the heartbeat would declare lost once its runner stopped
+// listing it. So the ending the answer reported is written on it, from the shard as it stood
+// before, and stamp then writes on it who held it as it does for any other row.
+func passed(run agk.RunID, step agk.Step, before graph.ShardState, r graph.Result) db.TaskRow {
+	ended := before
+	ended.Task, ended.ExitCode = r.State, r.ExitCode
+	if !r.StartedAt.IsZero() {
+		ended.StartedAt = r.StartedAt.UTC()
+	}
+	if !r.FinishedAt.IsZero() {
+		ended.FinishedAt = r.FinishedAt.UTC()
+	}
+	return taskOf(run, step, ended)
+}
+
 // stamp writes onto the projected row of the task the answer is about the things only the answer
 // knows: who held it, where its log went, and what it cost.
 //
-// Only that row. A result says nothing about the other shards of its step, and a projection that
-// spread one runner's name across them would be inventing.
+// Only that row, and only the dispatch of it the answer named. A result says nothing about the
+// other shards of its step, and a projection that spread one runner's name across them would be
+// inventing; nor about the other dispatches of its key, where a runner's name would be a binding
+// no redemption made.
 func stamp(tasks []db.TaskRow, a Answer) {
 	for i := range tasks {
-		if tasks[i].ID != a.Result.Task {
+		if tasks[i].ID != a.Result.Task || tasks[i].Requeue != a.Result.Requeue {
 			continue
 		}
 		tasks[i].Runner = a.Runner
