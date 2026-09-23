@@ -31,8 +31,8 @@ type RunnerOptions struct {
 
 	// What a redemption answers with. Objects and URLs go together: one reads the input
 	// envelopes so that the artifacts they name can be resolved, the other mints the URLs
-	// that fetch them. Without both there is nothing for a runner to redeem into, and the
-	// route says so rather than answering an empty object.
+	// that fetch them and the files of the task's tree. Without both there is nothing for a
+	// runner to redeem into, and the route says so rather than answering an empty object.
 	Objects artifact.Objects
 	URLs    artifact.Presigner
 	Secrets Secrets

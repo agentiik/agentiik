@@ -44,6 +44,29 @@ func TestEnvelopesCarriesTheWholeCorpus(t *testing.T) {
 	}
 }
 
+func TestGrantRedemptionsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := GrantRedemptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	// One exchange that must be accepted, and one whose tree carries a mode that is not
+	// octal.
+	if valid != 1 || invalid != 1 {
+		t.Fatalf("the corpus holds %d valid and %d invalid redemptions, want 1 and 1", valid, invalid)
+	}
+}
+
 func TestTheEnvelopeSchemaIsVendoredWithIt(t *testing.T) {
 	b, err := fs.ReadFile(FS, "envelope.schema.json")
 	if err != nil {
