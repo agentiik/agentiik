@@ -409,6 +409,35 @@ func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (s
 	return id, nil
 }
 
+// ErrNoDispatch is a task_id that names no dispatch of the key it came with.
+var ErrNoDispatch = errors.New("db: that task_id is no dispatch of that task")
+
+// HeldBy answers which runner one dispatch of a task was bound to when its grant was redeemed, and
+// the empty string where nobody has redeemed it.
+//
+// It is the binding Redeem made, read on the way out: a result is taken from the runner its task
+// was bound to and from no other. The dispatch is named twice, by its row and by its key, and both
+// are compared with what is recorded, for the reason Redeem compares them on the way in: a row of
+// one task and the key of another is an answer somebody assembled out of two, and neither half is
+// evidence about the other. The row is compared as text, because a runner wrote it and the
+// column's domain would refuse a value that is not a ULID with an error rather than find nothing.
+func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row string) (string, error) {
+	var runner *string
+	err := w.tx.QueryRow(ctx,
+		`select runner from tasks where namespace = $1 and id = $2::text and idempotency_key = $3`,
+		namespace, row, string(key)).Scan(&runner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s is no dispatch of %s", ErrNoDispatch, row, key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: dispatch %s of task %s could not be read: %w", row, key, err)
+	}
+	if runner == nil {
+		return "", nil
+	}
+	return *runner, nil
+}
+
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what
