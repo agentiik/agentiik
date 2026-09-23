@@ -502,6 +502,59 @@ func TestARunningContainerIsWaitedOnNotStartedAgain(t *testing.T) {
 	}
 }
 
+// A container that was created and never started is the one an adoption starts: the
+// delivery that created it died before the start, so nothing has run in it and nothing was
+// written on its standard input. It runs once, is given its envelope there as that delivery
+// would have given it, and is collected and removed like any other.
+func TestACreatedContainerIsStartedWhenAdopted(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var mu sync.Mutex
+	ran, onStdin := 0, ""
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		b, err := io.ReadAll(c.Stdin)
+		mu.Lock()
+		ran++
+		onStdin = string(b)
+		mu.Unlock()
+		if err != nil {
+			return 1, err
+		}
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"from": "the adopted container"}))
+	})
+
+	task := oneTask(ref)
+	container, root := stageFirstDelivery(t, r, task)
+
+	// Bounded, because a brick reading a standard input that nobody writes to or
+	// closes waits on it for as long as the task is given.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result, err := r.Run(ctx, task)
+	if err != nil {
+		t.Fatalf("the redelivered task: %s", err)
+	}
+	if out := result.Outputs["out"]; result.State != agk.TaskSucceeded || len(out.Items) != 1 || out.Items[0].Data["from"] != "the adopted container" {
+		t.Errorf("the redelivery reports %s with %+v, and the container it started wrote one item", result.State, out)
+	}
+
+	mu.Lock()
+	if ran != 1 {
+		t.Errorf("the brick ran %d times, and a container that never started is started once", ran)
+	}
+	if !strings.Contains(onStdin, "https://example.test") {
+		t.Errorf("standard input carried %q, and the envelope goes on it", onStdin)
+	}
+	mu.Unlock()
+
+	if !slices.Contains(r.daemon.Removed(), container) {
+		t.Errorf("the adopted container %s was never removed", container[:12])
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("%s survived the delivery that adopted its container", root)
+	}
+}
+
 // A task delivered again while its first delivery is still in hand is refused, before it
 // looks for anything or creates anything: two Runs carrying one container would each
 // collect it and each remove it.

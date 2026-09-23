@@ -180,9 +180,9 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 // carry is the half of Run that a container exists for: wait, attach, start, read, exit,
 // collect. It is separate so that the adoption path joins it at the same point.
 //
-// fresh says the container was created by this delivery and has never run, which decides
-// two things at once: the envelope goes on its standard input, and a stop that landed
-// before it existed means it is never started at all.
+// fresh says the container has never run, whichever delivery created it, which decides two
+// things at once: the envelope goes on its standard input, and a stop that landed before it
+// ran means it is never started at all.
 //
 // running says the container was adopted while it was already running, which also
 // decides two things: it is not started, and its wait is opened with condition=not-running
@@ -369,7 +369,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 // already done: a runner that dies between the exit and the tidying leaves exactly that
 // behind, and a daemon answers a start on an exited container by running it a second
 // time. Only one that was created and never started is started, since nothing has run in
-// it yet.
+// it yet, and it is carried as one this delivery created.
 func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved) (graph.Result, error) {
 	in, err := d.cli.ContainerInspect(ctx, container)
 	if err != nil {
@@ -408,12 +408,21 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 	if over(in.State) {
 		return d.settle(ctx, t, store, container, image, values, out, dispatched, in.State)
 	}
-	// The envelope was written on standard input by the delivery that started this
-	// container, and its write half was closed after it. A second attach asking for
-	// standard input would have nothing to write and an already closed pipe to write
-	// it to.
+	// The envelope of a running container was written on standard input by the delivery
+	// that started it, and its write half was closed after it: a second attach asking
+	// for standard input would have nothing to write and an already closed pipe to write
+	// it to. One that never started had nothing written, because the delivery that
+	// created it died before the start, and its standard input stays open until a writer
+	// closes it. It is given its envelope there now, as that delivery would have given
+	// it, or a brick reading standard input waits on it until the deadline.
 	running := in.State.Running || in.State.Restarting
-	return d.carry(ctx, t, store, container, image, &given{Values: values}, out, dispatched, false, running)
+	g := &given{Values: values}
+	if !running {
+		if g.Stdin, err = stdinBytes(t); err != nil {
+			return graph.Result{}, err
+		}
+	}
+	return d.carry(ctx, t, store, container, image, g, out, dispatched, !running, running)
 }
 
 // over says whether a container has run to its end: started once, and neither running nor
