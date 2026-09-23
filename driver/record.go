@@ -6,15 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/graph"
 )
 
@@ -46,10 +43,11 @@ import (
 // long it is. The host answers the requeue with that, and the brick never runs twice.
 //
 // By reference and never a payload. The envelopes and the artifacts are in the object
-// store already, uploaded before the ending was first reported, so a reference is all a
-// second report needs. And a working directory is "removed with the container, so no
-// residue of one namespace survives into the next task on that host": a record that kept
-// the envelopes would be exactly that residue.
+// store before the ending is written down, since the collection writes them there first
+// and names each by the digest the store answered, so a reference is all a second report
+// needs. And a working directory is "removed with the container, so no residue of one
+// namespace survives into the next task on that host": a record that kept the envelopes
+// would be exactly that residue.
 
 // KeysDir is where the record sits under the work root.
 //
@@ -121,9 +119,9 @@ type Ending struct {
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 
-	// Outputs names the envelope of every port the Result carried, and of a success it is
-	// never absent, the empty list included: that is how a result tells a step that
-	// published nothing from a runner that said nothing.
+	// Outputs names the envelope of every port the Result carried, as the observer was
+	// told them, and of a success it is never absent, the empty list included: that is how
+	// a result tells a step that published nothing from a runner that said nothing.
 	Outputs []EndedPort `json:"outputs,omitzero"`
 
 	// Artifacts are the objects the task put in the store, as the observer was told them.
@@ -142,7 +140,8 @@ type EndedPort struct {
 	Port agk.Port `json:"port"`
 
 	// Digest is sha256: and sixty-four lowercase hexadecimal characters, as a result writes
-	// an envelope's, and it is the digest the envelope was uploaded under.
+	// an envelope's, and it is the digest the store answered when the envelope was written
+	// to it, before the ending was.
 	Digest string `json:"digest"`
 	Items  int    `json:"items"`
 }
@@ -416,14 +415,13 @@ func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
 }
 
 // ending is what the record keeps of a Result: how it ended and when, and by reference
-// what it left, which is its envelopes, and what the observer was told of it beside the
-// Result, which is its artifacts and its log.
+// what it left, which is what the observer was told of it beside the Result: the digests
+// its ports were published under, its artifacts and its log.
 //
-// The envelopes are named by the digest artifact.EnvelopeDigest answers, which is the one
-// they are uploaded under, so that a report made from the record names what the store
-// holds. One that cannot be named, which an envelope the collection read and validated
-// never is, is left out and said: the ending is still the ending, and still refuses the
-// key.
+// The ports are named as the collection published them, by the digest the store answered
+// for each write, and never worked out again here. A report made from the record is read
+// back by that digest, so the one worth recording is the one the store holds the envelope
+// under, and only the write can say that.
 //
 // The log is addressed as agk.NewLogURI addresses a task's log, where this runner keeps
 // logs at all. The sink knows where its bytes went; the address a result carries is the
@@ -434,24 +432,13 @@ func (d *Docker) ending(r graph.Result) Ending {
 		code := r.ExitCode
 		e.ExitCode = &code
 	}
-	if r.State == agk.TaskSucceeded || r.Outputs != nil {
-		e.Outputs = make([]EndedPort, 0, len(r.Outputs))
-	}
-	for _, port := range slices.Sorted(maps.Keys(r.Outputs)) {
-		envelope := r.Outputs[port]
-		digest, _, err := artifact.EnvelopeDigest(envelope)
-		if err != nil {
-			d.say(fmt.Sprintf("driver: task %s: the envelope of port %s could not be named for the record of its ending, which a report made from it will not name: %v", r.Task, port, err))
-			continue
-		}
-		e.Outputs = append(e.Outputs, EndedPort{Port: port, Digest: "sha256:" + digest, Items: envelope.Meta.Count})
-	}
 
 	h := d.lookup(r.Task)
 	if h == nil {
 		return e
 	}
 	told := h.ended()
+	e.Outputs = told.Outputs
 	for _, f := range told.Artifacts {
 		e.Artifacts = append(e.Artifacts, EndedArtifact{SHA256: f.SHA256, Bytes: f.Size})
 	}

@@ -99,7 +99,8 @@ func (t Taken) Again() error {
 // of the pool with no record of the key, which would run it. So it is acknowledged, as every take
 // is, and the ending the record holds is reported under the task_id this message carries. The
 // controller takes it from the runner that redeemed the dispatch the host ended, as the requeue's
-// answer, and the brick never runs twice.
+// answer, and the brick never runs twice. It reads the envelopes back by the digests the ending
+// names, and the store holds them: the host wrote each there before it wrote the ending down.
 //
 // The ending is the record's and only the dispatch is this message's, so an ending of another key
 // is refused before anything is said: a result under a task_id is about that task_id's key, and

@@ -565,81 +565,189 @@ func TestAnExitedContainerThatCannotBeCollectedStillEndsItsKey(t *testing.T) {
 // task lost while the host was only cut off, and the run waits on the requeue's answer.
 // The host answers it from the record rather than by running the brick again, so the
 // record keeps what the ending left, by reference and as a result names it: each port's
-// envelope by the digest it is uploaded under and its count, each artifact by digest and
-// size, and the log by its address and length. It is read back after a restart, whole, on
-// the refusal the next delivery of the key meets.
+// envelope by the digest the store holds it under and its count, each artifact by digest
+// and size, and the log by its address and length. It is read back after a restart, whole,
+// on the refusal the next delivery of the key meets, and whether or not anybody was
+// listening to the driver when the task ended.
+//
+// A digest in the record is one the store already holds, because the answer is read back
+// by it: one recorded ahead of the write would be a result the controller could never read,
+// redelivered for ever, and a key this host would refuse for a week.
 func TestAnEndingIsAnsweredFromTheRecordAfterARestart(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 	receipt := []byte("%PDF-1.7 a charge was made")
 	sum := sha256.Sum256(receipt)
 
+	for _, c := range []struct {
+		name     string
+		observed bool
+	}{
+		{"told to an observer", true},
+		{"with nobody listening", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bricks := &counting{}
+			r := newRunner(t, oneImage(ref, goodManifest), func(ctr dockertest.Container) (int, error) {
+				bricks.run(func(string) int { return 0 })(ctr)
+				fmt.Fprintln(ctr.Stderr, "charging")
+				if err := os.WriteFile(filepath.Join(ctr.Work, "files", "receipt.pdf"), receipt, 0o644); err != nil {
+					return 1, err
+				}
+				item := agk.NewItem(map[string]any{"charged": true})
+				item.Files = []agk.File{{
+					Name:      "receipt.pdf",
+					URI:       agk.URI{Run: agk.RunID(ctr.Labels[LabelRun]), Step: agk.Step(ctr.Labels[LabelStep]), Port: "out", Name: "receipt.pdf"},
+					MediaType: "application/pdf",
+					Size:      int64(len(receipt)),
+					SHA256:    hex.EncodeToString(sum[:]),
+				}}
+				return 0, wrote(ctr, "out", item)
+			})
+			objects := artifact.Dir(t.TempDir())
+			store, err := artifact.New(objects, "finance", agk.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink := &strings.Builder{}
+			observed := &recorder{}
+			logging := reopen(t, r, func(cfg *Config) {
+				cfg.Logs = &sinkFor{b: sink}
+				cfg.Store = func(string) (*artifact.Store, error) { return store, nil }
+				cfg.Observer = nil
+				if c.observed {
+					cfg.Observer = observed
+				}
+			})
+			task := oneTask(ref)
+
+			result, err := logging.Run(t.Context(), task)
+			if err != nil {
+				t.Fatalf("running: %s", err)
+			}
+			lines := strings.Count(sink.String(), "\n")
+			if lines == 0 {
+				t.Fatalf("the sink holds %d lines of log, so this is not the case under test", lines)
+			}
+			if c.observed {
+				var told Event
+				observed.mu.Lock()
+				for _, e := range observed.es {
+					if e.Task == task.ID && e.State.Terminal() {
+						told = e
+					}
+				}
+				observed.mu.Unlock()
+				if told.Log.Lines != lines || len(told.Outputs) != 1 {
+					t.Errorf("the observer was told of %d lines and the ports %+v, and the sink holds %d lines of one port", told.Log.Lines, told.Outputs, lines)
+				}
+			}
+			log, err := agk.NewLogURI(task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = reopen(t, r, nil).Hold(task.ID)
+			var done *Completed
+			if !errors.As(err, &done) || !errors.Is(err, ErrCompleted) {
+				t.Fatalf("holding a key that ended before the restart answered %v, and it is refused with its ending", err)
+			}
+			if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+				t.Errorf("the refusal is charged to %s, and a key refused is not the brick's failure", charge)
+			}
+			e := done.Ending
+			if e.Key != task.ID || e.State != agk.TaskSucceeded || e.ExitCode == nil || *e.ExitCode != 0 {
+				t.Errorf("the ending reads %s %s exiting %v, and %s succeeded with 0", e.Key, e.State, e.ExitCode, task.ID)
+			}
+			if !e.StartedAt.Equal(result.StartedAt) || !e.FinishedAt.Equal(result.FinishedAt) || e.StartedAt.IsZero() {
+				t.Errorf("the ending ran from %s to %s, and the container from %s to %s", e.StartedAt, e.FinishedAt, result.StartedAt, result.FinishedAt)
+			}
+			if len(e.Outputs) != 1 || e.Outputs[0].Port != "out" || e.Outputs[0].Items != 1 {
+				t.Fatalf("the ending names the outputs %+v, and the brick published one item on out", e.Outputs)
+			}
+			digest, found := strings.CutPrefix(e.Outputs[0].Digest, "sha256:")
+			if !found {
+				t.Fatalf("the ending names out as %q, which a result does not write", e.Outputs[0].Digest)
+			}
+			back, err := artifact.GetEnvelope(t.Context(), objects, "finance", digest, agk.DefaultLimits())
+			if err != nil {
+				t.Fatalf("the ending names out as %s, and the store does not hold it: %s", digest, err)
+			}
+			published := result.Outputs["out"]
+			if back.Meta.Port != "out" || len(back.Items) != 1 || back.Items[0].ID != published.Items[0].ID {
+				t.Errorf("the store holds under %s port %s with %d items, and the brick published %s on out", digest, back.Meta.Port, len(back.Items), published.Items[0].ID)
+			}
+			if want := []EndedArtifact{{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(receipt))}}; !slices.Equal(e.Artifacts, want) {
+				t.Errorf("the ending names the artifacts %+v, want %+v", e.Artifacts, want)
+			}
+			if want := (EndedLog{URI: log, Lines: lines}); e.Log == nil || *e.Log != want {
+				t.Errorf("the ending names the log %+v, want %+v", e.Log, want)
+			}
+			if n := bricks.times("fetch"); n != 1 {
+				t.Errorf("the brick ran %d times", n)
+			}
+		})
+	}
+}
+
+// A success names every port it published, and one that published none says so with an
+// empty list rather than with nothing: a result that says nothing of its ports is not a
+// success the controller would take, so a requeue answered with it would be refused.
+func TestASuccessThatPublishedNoPortIsAnsweredWithNone(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
+	task := oneTask(ref)
+	task.Outputs = nil
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("running: %s", err)
+	}
+
+	err := reopen(t, r, nil).Hold(task.ID)
+	var done *Completed
+	if !errors.As(err, &done) {
+		t.Fatalf("holding a key that ended before the restart answered %v, and it is refused with its ending", err)
+	}
+	if e := done.Ending; e.State != agk.TaskSucceeded || e.Outputs == nil || len(e.Outputs) != 0 {
+		t.Errorf("the ending reads %s naming the ports %#v, and a success that published none names an empty list", e.State, e.Outputs)
+	}
+}
+
+// An envelope the store would not take is a success nobody can report: its result would
+// name a digest the store never received. It is an error after the exit like any other,
+// charged to the platform since the brick did what it was asked, and the key is written
+// down failed and naming nothing, which is what a requeue that comes back is answered with.
+func TestAnEnvelopeTheStoreRefusedEndsTheKeyNamingNothing(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
 	bricks := &counting{}
 	r := newRunner(t, oneImage(ref, goodManifest), func(ctr dockertest.Container) (int, error) {
 		bricks.run(func(string) int { return 0 })(ctr)
-		fmt.Fprintln(ctr.Stderr, "charging")
-		if err := os.WriteFile(filepath.Join(ctr.Work, "files", "receipt.pdf"), receipt, 0o644); err != nil {
-			return 1, err
-		}
-		item := agk.NewItem(map[string]any{"charged": true})
-		item.Files = []agk.File{{
-			Name:      "receipt.pdf",
-			URI:       agk.URI{Run: agk.RunID(ctr.Labels[LabelRun]), Step: agk.Step(ctr.Labels[LabelStep]), Port: "out", Name: "receipt.pdf"},
-			MediaType: "application/pdf",
-			Size:      int64(len(receipt)),
-			SHA256:    hex.EncodeToString(sum[:]),
-		}}
-		return 0, wrote(ctr, "out", item)
+		return 0, wrote(ctr, "out", agk.NewItem(map[string]any{"charged": true}))
 	})
-	logging := reopen(t, r, func(cfg *Config) { cfg.Logs = &sinkFor{b: &strings.Builder{}} })
+	s, err := artifact.New(storeGone{}, "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := reopen(t, r, func(cfg *Config) {
+		cfg.Store = func(string) (*artifact.Store, error) { return s, nil }
+	})
 	task := oneTask(ref)
 
-	result, err := logging.Run(t.Context(), task)
-	if err != nil {
-		t.Fatalf("running: %s", err)
+	_, err = cut.Run(t.Context(), task)
+	if err == nil || !strings.Contains(err.Error(), "the object store could not be reached") {
+		t.Fatalf("the delivery answered %v, and the envelope of out could not be written", err)
 	}
-	var told Event
-	r.observed.mu.Lock()
-	for _, e := range r.observed.es {
-		if e.Task == task.ID && e.State.Terminal() {
-			told = e
-		}
-	}
-	r.observed.mu.Unlock()
-	if told.Log.Lines == 0 {
-		t.Fatalf("the observer was told of %d lines of log, so this is not the case under test", told.Log.Lines)
-	}
-	digest, _, err := artifact.EnvelopeDigest(result.Outputs["out"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	log, err := agk.NewLogURI(task.ID)
-	if err != nil {
-		t.Fatal(err)
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the envelope the store refused is charged to %s, and the brick did what it was asked", charge)
 	}
 
 	err = reopen(t, r, nil).Hold(task.ID)
 	var done *Completed
-	if !errors.As(err, &done) || !errors.Is(err, ErrCompleted) {
-		t.Fatalf("holding a key that ended before the restart answered %v, and it is refused with its ending", err)
+	if !errors.As(err, &done) {
+		t.Fatalf("holding a key whose container ran to its end answered %v, and it is refused with its ending", err)
 	}
-	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
-		t.Errorf("the refusal is charged to %s, and a key refused is not the brick's failure", charge)
-	}
-	e := done.Ending
-	if e.Key != task.ID || e.State != agk.TaskSucceeded || e.ExitCode == nil || *e.ExitCode != 0 {
-		t.Errorf("the ending reads %s %s exiting %v, and %s succeeded with 0", e.Key, e.State, e.ExitCode, task.ID)
-	}
-	if !e.StartedAt.Equal(result.StartedAt) || !e.FinishedAt.Equal(result.FinishedAt) || e.StartedAt.IsZero() {
-		t.Errorf("the ending ran from %s to %s, and the container from %s to %s", e.StartedAt, e.FinishedAt, result.StartedAt, result.FinishedAt)
-	}
-	if want := []EndedPort{{Port: "out", Digest: "sha256:" + digest, Items: 1}}; !slices.Equal(e.Outputs, want) {
-		t.Errorf("the ending names the outputs %+v, want %+v", e.Outputs, want)
-	}
-	if want := []EndedArtifact{{SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(receipt))}}; !slices.Equal(e.Artifacts, want) {
-		t.Errorf("the ending names the artifacts %+v, want %+v", e.Artifacts, want)
-	}
-	if want := (EndedLog{URI: log, Lines: told.Log.Lines, Truncated: told.Log.Truncated}); e.Log == nil || *e.Log != want {
-		t.Errorf("the ending names the log %+v, want %+v", e.Log, want)
+	if e := done.Ending; e.State != agk.TaskFailed || e.ExitCode != nil || e.Outputs != nil {
+		t.Errorf("the ending reads %s exiting %v naming %+v, and a port the store never received is named nowhere", e.State, e.ExitCode, e.Outputs)
 	}
 	if n := bricks.times("fetch"); n != 1 {
 		t.Errorf("the brick ran %d times", n)

@@ -120,24 +120,27 @@
 // standard output for the shorthand and passing standard error through the masker into
 // the log. Take the exit code from the wait that was already open. Take the log from the
 // daemon, which is why AutoRemove is false and why nothing is lost on a fast exit.
-// Collect, upload, spill. Write the ending down under the work root, before anything is
-// removed, so that no moment passes in which the work is done and the record does not say
-// so. Then remove the container, the network and the working directory, in a defer that
-// runs on every path.
+// Collect, upload, spill, and write each port's envelope to the store. Write the ending
+// down under the work root, after the store has everything it names and before anything
+// is removed, so that no moment passes in which the work is done and the record does not
+// say so, and none in which the record names what the store does not hold. Then remove
+// the container, the network and the working directory, in a defer that runs on every
+// path.
 //
-// The record is what a container is not. Adoption finds a container that is still there;
-// the record answers for a key whose container was collected and removed, which is the
-// key at-least-once delivery hands back after a restart or a requeue. It sits under the
-// work root and outside every task's directory, it holds the key, its state, a moment and
-// what the ending left by reference, each envelope and artifact by digest and the log by
-// its address, and never a payload, and it keeps a key for KeysKept, the task stream's
-// own retention. A container that ran to its end ends its key even when what it left
-// cannot be collected, an output that is not an envelope or a store that refused the
-// upload: the brick ran, and the key is written down failed. Hold writes a key down on
-// take, which is what a runner does before it acknowledges the task message, and refuses
-// one that has ended with a *Completed holding the recorded Ending, which the runner
-// reports under the task_id of the message it took: that is how the requeue of a task
-// declared lost is answered by the host that had already ended it.
+// The record is what a container is not. Adoption finds a container that is still
+// there; the record answers for a key whose container was collected and removed, which
+// is the key at-least-once delivery hands back after a restart or a requeue. It sits
+// under the work root and outside every task's directory, it holds the key, its state,
+// a moment and what the ending left by reference, each envelope and artifact by the
+// digest the store holds it under and the log by its address, and never a payload, and
+// it keeps a key for KeysKept, the task stream's own retention. A container that ran to
+// its end ends its key even when what it left cannot be collected, an output that is
+// not an envelope or a store that refused an artifact or an envelope: the brick ran,
+// and the key is written down failed. Hold writes a key down on take, which is what a
+// runner does before it acknowledges the task message, and refuses one that has ended
+// with a *Completed holding the recorded Ending, which the runner reports under the
+// task_id of the message it took: that is how the requeue of a task declared lost is
+// answered by the host that had already ended it.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this

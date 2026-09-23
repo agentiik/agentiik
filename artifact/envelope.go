@@ -18,51 +18,41 @@ import (
 // An envelope is content like anything else here, so it is stored the same way and addressed the
 // same way: two steps publishing identical bytes publish one object, and a replay that recomputes
 // the same content writes nothing. It lives in this package rather than in the controller because
-// the controller writes them and the API reads them back, and a digest check written twice is a
-// digest check that eventually differs in one of the two places.
+// the runner and the controller write them and the API reads them back, and a digest check written
+// twice is a digest check that eventually differs in one of the two places.
 
 // PutEnvelope writes one and answers what names it.
 func PutEnvelope(ctx context.Context, objects Objects, namespace string, e agk.Envelope) (digest string, size int64, err error) {
-	body, digest, err := encodeEnvelope(e)
+	var buf bytes.Buffer
+	size, err = e.Encode(&buf)
 	if err != nil {
 		return "", 0, err
 	}
+	sum := sha256.Sum256(buf.Bytes())
+	digest = hex.EncodeToString(sum[:])
+
 	key := Key(namespace, digest)
 	held, err := objects.Has(ctx, key)
 	if err != nil {
 		return "", 0, err
 	}
 	if !held {
-		if err := objects.Put(ctx, key, bytes.NewReader(body)); err != nil {
+		if err := objects.Put(ctx, key, bytes.NewReader(buf.Bytes())); err != nil {
 			return "", 0, err
 		}
 	}
-	return digest, int64(len(body)), nil
+	return digest, size, nil
 }
 
-// EnvelopeDigest answers what names one envelope and how long it is, which is what PutEnvelope
-// would store it under, without storing it.
+// PutEnvelope writes one envelope into the store of the namespace it was opened for, and answers
+// what names it.
 //
-// A runner records how a task ended, envelopes by digest, before it has uploaded any of them, and
-// the digest it records is only worth anything if it is the one the upload then writes. So both
-// are computed here, from the one encoding, and never twice.
-func EnvelopeDigest(e agk.Envelope) (digest string, size int64, err error) {
-	body, digest, err := encodeEnvelope(e)
-	if err != nil {
-		return "", 0, err
-	}
-	return digest, int64(len(body)), nil
-}
-
-// encodeEnvelope is an envelope's bytes as an object holds them, and the digest they are stored
-// under.
-func encodeEnvelope(e agk.Envelope) ([]byte, string, error) {
-	var buf bytes.Buffer
-	if _, err := e.Encode(&buf); err != nil {
-		return nil, "", err
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
+// It is how a runner publishes a port. The driver holds a Store for each task and no Objects, and
+// the digest a result names has to be the one the store answered for the write, not one worked
+// out beside it: a result is read back by that digest, and a digest nothing wrote reads back as an
+// envelope that could not be read, on every delivery, for ever.
+func (s *Store) PutEnvelope(ctx context.Context, e agk.Envelope) (digest string, size int64, err error) {
+	return PutEnvelope(ctx, s.objects, s.namespace, e)
 }
 
 // ErrNotAnEnvelope is what an object read back under a digest is when it is not the envelope that

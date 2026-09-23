@@ -32,8 +32,8 @@ const drainGrace = 5 * time.Second
 // input from its own goroutine and half-close. Read the demultiplexed stream, keeping
 // standard output for the shorthand and passing standard error through the masker into
 // the log. Take the exit code from the wait that was already open, or from the event
-// stream where the wait missed it, or from an inspect under both. Collect, upload, spill.
-// Write the ending down under the work root. Then remove the container, the network and
+// stream where the wait missed it, or from an inspect under both. Collect, upload, spill,
+// and write each port's envelope to the store. Write the ending down under the work root. Then remove the container, the network and
 // the working directory, in defers that run on every path.
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
@@ -340,6 +340,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 	result.StartedAt, result.FinishedAt = d.moments(ctx, container)
 
 	var artifacts []agk.File
+	var ports []EndedPort
 	if state == agk.TaskSucceeded {
 		got, err := collect(ctx, store, collection{
 			Task:       t,
@@ -353,6 +354,16 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		if err != nil {
 			return graph.Result{}, exited(t.ID, fault(t.Step, ErrContractBroken, ChargeBrick, "%v", err))
 		}
+		// The ports go into the store here, before ended writes the ending down, which is
+		// the runner's order: it "posts the outputs under the upload policy, and records
+		// the key's ending". The record names each envelope by the digest this answers,
+		// and a requeue that comes back to this host is answered from the record, so a
+		// digest recorded before the store had it would be a result the controller could
+		// never read back. One that cannot be written is an error after the exit, and the
+		// key is written down failed, naming nothing.
+		if ports, err = publishPorts(ctx, store, t.Step, got.Outputs); err != nil {
+			return graph.Result{}, exited(t.ID, err)
+		}
 		result.Outputs, artifacts = got.Outputs, got.Artifacts
 	}
 
@@ -364,7 +375,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 	}
 	d.observe(ctx, Event{
 		Task: t.ID, State: state, Container: container,
-		Log: ref, Artifacts: artifacts,
+		Log: ref, Outputs: ports, Artifacts: artifacts,
 		Usage: Usage{ImagePullMS: image.PullMillis},
 	})
 	return result, nil

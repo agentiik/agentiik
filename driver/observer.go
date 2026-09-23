@@ -8,10 +8,11 @@ import (
 
 // Observer is told what graph.Result has nowhere to carry.
 //
-// The documented result message carries a log reference, an artifact list and a usage
-// block, and graph.Result carries none of the three. Adding them there would be changing
-// the evaluator's contract to suit its executor, so they leave through an interface this
-// package owns instead. It is also how a runner gets the dispatched, running and
+// The documented result message carries its ports by digest, a log reference, an artifact
+// list and a usage block, and graph.Result carries none of the four: it holds the
+// envelopes themselves and not what names them in the store. Adding them there would be
+// changing the evaluator's contract to suit its executor, so they leave through an
+// interface this package owns instead. It is also how a runner gets the dispatched, running and
 // publishing transitions its heartbeat needs while a task is still in flight, which are
 // states agk.TaskState already names and which no Result is ever returned for.
 //
@@ -37,6 +38,12 @@ type Event struct {
 
 	// Log is where the task's log went, filled in on the terminal event.
 	Log LogRef `json:"log,omitzero"`
+
+	// Outputs names the envelope of every port a success published, by the digest the
+	// store holds it under and its count, which is how the result message names them and
+	// what a Result, carrying the envelopes themselves, cannot say. Of a success it is
+	// never absent, the empty list included, and on every other event it is.
+	Outputs []EndedPort `json:"outputs,omitzero"`
 
 	// Artifacts are what this task put in the store, which the result message
 	// carries and a Result does not.

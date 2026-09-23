@@ -96,27 +96,31 @@ func TestWhatIsNotTheEnvelopeADigestNamesIsToldApartFromWhatCouldNotBeRead(t *te
 	}
 }
 
-// A runner names its envelopes by digest before it uploads them, so the name it records is only
-// worth anything if it is the one the upload writes. EnvelopeDigest answers what PutEnvelope then
-// stores the envelope under, and the same length.
-func TestAnEnvelopeIsNamedBeforeItIsStoredAsItIsStored(t *testing.T) {
+// A runner publishes a port through the store of the task's namespace, and the digest it answers
+// is the one the result then names: the envelope is under that namespace's key for it, and reads
+// back as itself.
+func TestAStorePublishesAnEnvelopeUnderTheDigestItAnswers(t *testing.T) {
 	envelope := agk.Empty("01JMZ8W4K2R7Q0E3N5T9", "normalize", "ok", 1, time.Date(2026, 9, 10, 6, 0, 0, 0, time.UTC))
 	envelope.Items = []agk.Item{agk.NewItem(map[string]any{"invoice": "INV-2026-0917"})}
 	envelope.Meta.Count = 1
 
-	named, size, err := artifact.EnvelopeDigest(envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
 	objects := newMemory()
-	stored, storedSize, err := artifact.PutEnvelope(t.Context(), objects, "acme", envelope)
+	s, err := artifact.New(objects, "acme", agk.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if named != stored || size != storedSize {
-		t.Errorf("the envelope was named %s of %d bytes and stored as %s of %d", named, size, stored, storedSize)
+	digest, size, err := s.PutEnvelope(t.Context(), envelope)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if b := objects.blobs[artifact.Key("acme", named)]; digestOf(b) != named || int64(len(b)) != size {
-		t.Errorf("the store holds %d bytes under %s, and they are not what that digest names", len(b), named)
+	if b := objects.blobs[artifact.Key("acme", digest)]; digestOf(b) != digest || int64(len(b)) != size {
+		t.Errorf("the store holds %d bytes under %s, and they are not the %d that digest names", len(b), digest, size)
+	}
+	back, err := artifact.GetEnvelope(t.Context(), objects, "acme", digest, agk.DefaultLimits())
+	if err != nil {
+		t.Fatalf("the envelope published as %s does not read back: %s", digest, err)
+	}
+	if back.Meta.Port != "ok" || back.Meta.Count != 1 {
+		t.Errorf("the envelope published as %s reads back as port %s of %d items", digest, back.Meta.Port, back.Meta.Count)
 	}
 }
