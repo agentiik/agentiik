@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,11 +17,145 @@ import (
 	"github.com/agentiik/agentiik/agk"
 )
 
-// What reading a request body takes, and that it is refused where it should be.
+// What reading a request body costs, and that it is refused where it should be.
 //
 // These are internal tests because the reader is: a route is a handler in front of a database, and
-// what is tested here is the part before either, turning a body into the request a handler is
-// given.
+// what is measured here is the part before either, the bytes allocated to turn a body into the
+// request a handler is given.
+
+const mib = 1 << 20
+
+// filled is a body of prefix and suffix around as many entries as fit in limit bytes, written by
+// each and separated by commas.
+func filled(prefix, suffix string, limit int64, each func(i int) string) []byte {
+	var b bytes.Buffer
+	b.WriteString(prefix)
+	for i := 0; ; i++ {
+		e := each(i)
+		if int64(b.Len()+1+len(e)+len(suffix)) > limit {
+			break
+		}
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(e)
+	}
+	b.WriteString(suffix)
+	return b.Bytes()
+}
+
+// named is the i-th of a run of distinct short names, quoted.
+func named(i int) string { return `"` + strconv.FormatInt(int64(i), 36) + `"` }
+
+// spent is what reading one body allocates: the least of three readings, so that whatever else
+// the process allocates meanwhile is not counted against it.
+func spent(body []byte, into func() request, limit int64) (uint64, error) {
+	least := uint64(math.MaxUint64)
+	var err error
+	for range 3 {
+		r := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		err = readAtMost(r, into(), limit)
+		runtime.ReadMemStats(&after)
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
+	}
+	return least, err
+}
+
+// Every route's body, shaped to cost as much as that route lets it, at its route's cap. A body of
+// many small values is the expensive one, since decoding pays for each value whatever it weighs
+// on the wire, so each collection a route reads is filled with the smallest entries it takes.
+//
+// Before is what encoding/json spent reading the same shape at the cap the route had then, 8 MiB
+// for every route but a push (16 MiB) and a secret's declaration (2 MiB); after is what this
+// reader spends at the route's cap now. Both were measured with go1.27.1 on darwin/arm64, without
+// the race detector, as bytes allocated. Nothing asserts either number, which move with the
+// toolchain and the platform. What is asserted is the ceiling: no body costs more than
+// costsAtMost times its route's cap to read.
+//
+// The object store's routes are not here: they read no JSON, the form before a file is held to
+// 64 KiB, and the file is hashed as it streams.
+func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
+	const costsAtMost = 2.5
+
+	empty := func(int) string { return `""` }
+	for _, c := range []struct {
+		name  string
+		into  func() request
+		limit int64
+		body  func(limit int64) []byte
+
+		was, before, after float64 // the cap then, what it cost then, what it costs now, in MiB
+	}{
+		{"a push of empty tree entries", func() request { return new(Push) }, pushMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"tree":{`, `}}`, l, func(i int) string { return named(i) + `:{}` })
+			}, 16, 295.2, 17.201},
+		{"a push of tree entries written out", func() request { return new(Push) }, pushMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"tree":{`, `}}`, l, func(i int) string { return named(i) + `:{"content":"","mode":"0644"}` })
+			}, 16, 142.1, 17.461},
+		{"a push of empty includes", func() request { return new(Push) }, pushMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"includes":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
+			}, 16, 231.3, 16.758},
+		{"a push of empty manifests", func() request { return new(Push) }, pushMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"manifests":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
+			}, 16, 231.2, 16.758},
+		{"a push of one file as large as the body", func() request { return new(Push) }, pushMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"tree":{"big.bin":{"mode":"0644","content":"` + strings.Repeat("A", int(l-60)/4*4) + `"}}}`)
+			}, 16, 44.0, 28.003},
+		{"inputs of zeros", func() request { return new(starting) }, startMaxBytes,
+			func(l int64) []byte { return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `0` }) },
+			8, 402.4, 4.002},
+		{"inputs of empty objects", func() request { return new(starting) }, startMaxBytes,
+			func(l int64) []byte { return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `{}` }) },
+			8, 508.5, 4.002},
+		{"inputs of objects of one member", func() request { return new(starting) }, startMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `{"a":0}` })
+			},
+			8, 491.9, 4.002},
+		{"inputs of one object of many members", func() request { return new(starting) }, startMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"inputs":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
+			}, 8, 176.8, 4.002},
+		{"a pool of empty labels", func() request { return new(Pool) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+		{"a pool of empty namespaces", func() request { return new(Pool) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"accepted_namespaces":[`, `]}`, l, empty) }, 8, 273.8, 0.122},
+		{"a join token of empty labels", func() request { return new(Issue) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+		{"a join of empty labels, from anybody", func() request { return new(Join) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+		{"a heartbeat of empty keys", func() request { return new(Beat) }, beatMaxBytes,
+			func(l int64) []byte { return filled(`{"tasks":[`, `]}`, l, empty) }, 8, 273.8, 1.231},
+		{"a redemption of one long grant", func() request { return new(Redemption) }, smallMaxBytes,
+			func(l int64) []byte { return []byte(`{"grant":"` + strings.Repeat("A", int(l)-12) + `"}`) }, 8, 24.0, 0.126},
+		{"a request for a bus credential naming one long field", func() request { return nothingAsked{} }, smallMaxBytes,
+			func(l int64) []byte { return []byte(`{"` + strings.Repeat("A", int(l)-7) + `":0}`) }, 8, 159.6, 0.127},
+		{"a declaration of one long value", func() request { return new(Declare) }, declareMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"provider":"builtin","value":"` + strings.Repeat("A", int(l)-33) + `"}`)
+			}, 2, 6.0, 4.001},
+	} {
+		body := c.body(c.limit)
+		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {
+			t.Fatalf("%s is %d bytes, and it is meant to fill its cap of %d", c.name, len(body), c.limit)
+		}
+		n, _ := spent(body, c.into, c.limit)
+		cost := float64(n) / float64(c.limit)
+		t.Logf("%s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; encoding/json spent %.1f MiB at %v MiB (x%.1f)",
+			c.name, float64(n)/mib, float64(c.limit)/mib, cost, c.after, c.before, c.was, c.before/c.was)
+		if cost > costsAtMost {
+			t.Errorf("%s costs %.1f MiB to read, %.1f times its cap of %.3f MiB", c.name, float64(n)/mib, cost, float64(c.limit)/mib)
+		}
+	}
+}
 
 // Every request reads back what encoding/json writes of it, field for field, so that the reader
 // and the types a client encodes cannot drift apart: a field added to a type and not to its reader

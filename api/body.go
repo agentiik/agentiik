@@ -26,7 +26,8 @@ import (
 // more than the route reads. Each request type reads its own fields, every collection is counted
 // as its entries are read and refused at the first one past what the route takes, and a document
 // whose shape is the caller's, as the inputs of a run are, is counted value by value. What is left
-// is the body itself and the values the route keeps, whose number is bounded.
+// is the body itself and the values the route keeps, whose number is bounded, and body_test.go
+// measures both for every route, beside the numbers they replaced.
 //
 // Every route also has a cap of its own on the bytes, with its reason beside it where the request
 // type is declared, rather than one cap that fits the largest body and is ten thousand times what
