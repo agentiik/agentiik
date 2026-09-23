@@ -39,10 +39,13 @@ type Bus struct {
 	stream  jetstream.Stream
 	results jetstream.Stream
 
-	// Trouble is where a message nobody can read goes. Such a message is taken off the
-	// queue, because it will never become readable and redelivering it for ever would cost
-	// the pool, and that is exactly why it has to be said out loud: a wire that stopped
-	// matching would otherwise be a queue that quietly swallowed everything on it.
+	// Trouble is where a message goes that no delivery would ever change: one nobody can
+	// read, and a result that reads well and that no controller could ever record, which
+	// arrives wrapping controller.ErrNotAResult. Such a message is taken off the queue,
+	// because redelivering it for ever would cost the pool, and that is exactly why it has
+	// to be said out loud: a queue that quietly swallowed it would hide a wire that stopped
+	// matching, or a runner answering with what is not a result. The two point at different
+	// components, and errors.Is is what tells them apart.
 	Trouble func(subject string, err error)
 }
 
