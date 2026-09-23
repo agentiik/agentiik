@@ -4,7 +4,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 
 	"github.com/agentiik/agentiik/artifact"
 )
@@ -21,7 +24,8 @@ type ObjectAPI struct {
 	signed *artifact.Signed
 }
 
-// NewObjects registers the two object routes.
+// NewObjects registers the object routes: the GET and the PUT a presigned URL does, and the POST a
+// policy does.
 func NewObjects(rt *Router, signed *artifact.Signed) (*ObjectAPI, error) {
 	switch {
 	case rt == nil:
@@ -50,6 +54,14 @@ func NewObjects(rt *Router, signed *artifact.Signed) (*ObjectAPI, error) {
 			return nil, err
 		}
 	}
+
+	// A form is posted to its namespace, as a real store's is posted to its bucket, and names
+	// its key in its body. The namespace is read out of the path by the router, as every
+	// namespace a handler is given is, and the policy then has to have been signed for it.
+	policy := Public{Why: "a signed policy is itself the authorisation: it names one namespace's prefix, one run and one instant, and it is signed by the installation, so asking for a credential here as well would mean the runner holding a standing object-store credential. It travels in the form rather than in the URL because the key it stores under is the digest of bytes that did not exist when it was signed"}
+	if err := rt.Handle("POST", "/objects/{namespace}", policy, s.post); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -67,8 +79,84 @@ func (s *ObjectAPI) object(w http.ResponseWriter, r *http.Request, _ Principal, 
 	case http.MethodGet:
 		s.fetch(w, r, key)
 	case http.MethodPut:
-		s.store(w, r, key)
+		s.store(w, r, key, r.Body)
 	}
+}
+
+// formMaxBytes is how much of a posted form may come before its file. What comes first is the
+// fields of a policy and a key, a few hundred bytes the API minted, and it is read before anything
+// about the caller is known, because the policy is inside it: a route that read an unbounded form
+// before checking a signature would hold whatever anybody cared to send it.
+const formMaxBytes = 64 << 10
+
+// errPreamble is a form carrying more than formMaxBytes before its file.
+var errPreamble = errors.New("api: a form carrying more than it may before its file")
+
+// post stores one object from a form, taken the way a store honouring a POST policy takes one: the
+// signed fields and the key, then the file, which is the last part and the only one whose bytes
+// are stored. A field the store does not read is ignored rather than refused, because the fields
+// are passed through by a runner that does not interpret them.
+func (s *ObjectAPI) post(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+	media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "multipart/form-data" || params["boundary"] == "" {
+		nothing(w, http.StatusBadRequest)
+		return
+	}
+	body := &preamble{r: r.Body, left: formMaxBytes}
+	form := multipart.NewReader(body, params["boundary"])
+	fields := url.Values{}
+	for {
+		part, err := form.NextPart()
+		if err != nil {
+			// Whatever stopped the form, its end included: a form with no file has
+			// nothing to store.
+			nothing(w, http.StatusBadRequest)
+			return
+		}
+		if part.FormName() != "file" {
+			value, err := io.ReadAll(part)
+			if err != nil {
+				nothing(w, http.StatusBadRequest)
+				return
+			}
+			fields.Add(part.FormName(), string(value))
+			continue
+		}
+
+		key := fields.Get("key")
+		if _, err := s.signed.CheckPolicy(over.Namespace, key, fields); err != nil {
+			// One answer for every way a form is not signed for what it asks, as a URL
+			// gets, and for the same reason.
+			nothing(w, http.StatusForbidden)
+			return
+		}
+		body.lifted = true
+		s.store(w, r, key, part)
+		return
+	}
+}
+
+// preamble bounds what a form carries before its file, and is lifted once the file begins, since
+// Store bounds the file by artifact_max_bytes.
+type preamble struct {
+	r      io.Reader
+	left   int64
+	lifted bool
+}
+
+func (p *preamble) Read(b []byte) (int, error) {
+	if p.lifted {
+		return p.r.Read(b)
+	}
+	if p.left <= 0 {
+		return 0, errPreamble
+	}
+	if int64(len(b)) > p.left {
+		b = b[:p.left]
+	}
+	n, err := p.r.Read(b)
+	p.left -= int64(n)
+	return n, err
 }
 
 func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
@@ -92,8 +180,8 @@ func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
 	io.Copy(w, rc)
 }
 
-func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string) {
-	err := s.signed.Store(r.Context(), key, r.Body)
+func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, body io.Reader) {
+	err := s.signed.Store(r.Context(), key, body)
 	switch {
 	case errors.Is(err, artifact.ErrWrongDigest):
 		nothing(w, http.StatusBadRequest)
