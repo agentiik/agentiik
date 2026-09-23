@@ -174,7 +174,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		d.cli.ContainerRemove(tidy, created.ID, true)
 	}()
 
-	return d.carry(ctx, t, store, created.ID, image, given, w.Out, dispatched, true)
+	return d.carry(ctx, t, store, created.ID, image, given, w.Out, dispatched, true, false)
 }
 
 // carry is the half of Run that a container exists for: wait, attach, start, read, exit,
@@ -183,7 +183,13 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 // fresh says the container was created by this delivery and has never run, which decides
 // two things at once: the envelope goes on its standard input, and a stop that landed
 // before it existed means it is never started at all.
-func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, given *given, out string, dispatched time.Time, fresh bool) (graph.Result, error) {
+//
+// running says the container was adopted while it was already running, which also
+// decides two things: it is not started, and its wait is opened with condition=not-running
+// rather than next-exit. A container can exit between the inspect that found it running
+// and the wait. next-exit would then wait for a further exit that only a start brings, and
+// a start runs the brick a second time; not-running answers with the exit that happened.
+func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, given *given, out string, dispatched time.Time, fresh, running bool) (graph.Result, error) {
 	mask := newMasker(given.Values...)
 
 	sink, closeSink, err := d.openLog(ctx, t)
@@ -198,7 +204,11 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 	// The wait is opened before the start. With condition=next-exit the daemon
 	// registers it and answers the header at once, so an exit cannot fall between
 	// the two calls.
-	waited, err := d.cli.ContainerWait(ctx, container, docker.WaitNextExit)
+	condition := docker.WaitNextExit
+	if running {
+		condition = docker.WaitNotRunning
+	}
+	waited, err := d.cli.ContainerWait(ctx, container, condition)
 	if err != nil {
 		return graph.Result{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "opening the wait on the container: %v", err)
 	}
@@ -234,11 +244,13 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 		return graph.Result{Task: t.ID, State: state, DispatchedAt: dispatched}, nil
 	}
 
-	if err := d.cli.ContainerStart(ctx, container); err != nil {
-		if docker.IsUnreachable(err) {
-			return graph.Result{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "starting the container: %v", err)
+	if !running {
+		if err := d.cli.ContainerStart(ctx, container); err != nil {
+			if docker.IsUnreachable(err) {
+				return graph.Result{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "starting the container: %v", err)
+			}
+			return graph.Result{}, fault(t.Step, ErrContractBroken, ChargePlatform, "the container could not be started: %v", err)
 		}
-		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargePlatform, "the container could not be started: %v", err)
 	}
 	if stoppedBefore {
 		// The container was adopted and is running already, so the stop recorded
@@ -290,6 +302,13 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 		d.replay(ctx, container, log, stdout)
 	}
 
+	return d.conclude(ctx, t, store, container, image, log, mask, stdout, e, out, dispatched)
+}
+
+// conclude is the end every container this driver carries comes to, whether it was watched
+// to its exit or found already over: the exit read as a task state, the ports collected off
+// the mount where it succeeded, the log closed and the observer told.
+func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, log *taskLog, mask *masker, stdout *capture, e exit, out string, dispatched time.Time) (graph.Result, error) {
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskPublishing, Container: container})
 
 	state := readExit(log, e.Code)
@@ -337,13 +356,20 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 	return result, nil
 }
 
-// rejoin re-attaches to a container this driver already started, which a redelivered
-// task finds by its label.
+// rejoin re-attaches to the container an earlier delivery of this task left behind, which
+// a redelivered task finds by its label, and never starts it a second time.
 //
 // It does not prepare anything: the working directory, the envelope and the secret files
 // are the first delivery's and are still there. Where they are is read off the container
 // itself, which is the one place that cannot disagree with what the container was
 // actually given.
+//
+// What becomes of the container is read off the same inspect. One that is running is
+// waited on. One that has exited is collected as it stands, because it is the work
+// already done: a runner that dies between the exit and the tidying leaves exactly that
+// behind, and a daemon answers a start on an exited container by running it a second
+// time. Only one that was created and never started is started, since nothing has run in
+// it yet.
 func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved) (graph.Result, error) {
 	in, err := d.cli.ContainerInspect(ctx, container)
 	if err != nil {
@@ -379,11 +405,51 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 	if dispatched.IsZero() {
 		dispatched = d.now()
 	}
+	if over(in.State) {
+		return d.settle(ctx, t, store, container, image, values, out, dispatched, in.State)
+	}
 	// The envelope was written on standard input by the delivery that started this
 	// container, and its write half was closed after it. A second attach asking for
 	// standard input would have nothing to write and an already closed pipe to write
 	// it to.
-	return d.carry(ctx, t, store, container, image, &given{Values: values}, out, dispatched, false)
+	running := in.State.Running || in.State.Restarting
+	return d.carry(ctx, t, store, container, image, &given{Values: values}, out, dispatched, false, running)
+}
+
+// over says whether a container has run to its end: started once, and neither running nor
+// being restarted now. One that was created and never started is not running either, and
+// it is the one of the two that is still to be started.
+func over(s docker.State) bool {
+	return !s.StartedAt.IsZero() && !s.Running && !s.Restarting
+}
+
+// settle collects a container that was already over when this delivery reached it, as it
+// stands: the exit code off the inspect, what it wrote off the daemon's log and its ports
+// off the mount it was given. Nothing is waited on, attached to or started.
+//
+// A stop that arrived while this delivery was on its way changes nothing here. There was
+// no process left to signal, and what the container did is what it did.
+func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, values [][]byte, out string, dispatched time.Time, s docker.State) (graph.Result, error) {
+	mask := newMasker(values...)
+
+	sink, closeSink, err := d.openLog(ctx, t)
+	if err != nil {
+		return graph.Result{}, err
+	}
+	defer closeSink()
+	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+
+	d.observe(ctx, Event{Task: t.ID, State: agk.TaskDispatched, Container: container})
+
+	log.note("the container had already exited when this delivery of the task reached it, so it is collected as it stands rather than started again, and what it wrote is read back from the daemon")
+	stdout := newCapture(d.limits().EnvelopeMaxBytes, mask)
+	d.replay(ctx, container, log, stdout)
+	if s.OOMKilled {
+		log.note("the container was killed for its memory")
+	}
+
+	e := exit{Code: s.ExitCode, OOM: s.OOMKilled, Source: "an inspect"}
+	return d.conclude(ctx, t, store, container, image, log, mask, stdout, e, out, dispatched)
 }
 
 // writeStdin puts the envelope on standard input and closes the write half after it.

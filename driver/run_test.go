@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -352,6 +353,152 @@ func TestAnAdoptedContainerIsRemovedWithItsWorkingDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("%s is still there after the delivery that adopted the container, and a task's working directory is removed with it", dir)
+	}
+}
+
+// exitedFirstDelivery stages what a runner that died between the exit and the tidying
+// leaves behind: the first delivery's container, run to its end and never removed, under
+// the task's label, beside the working directory it was given.
+func exitedFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, root string) {
+	t.Helper()
+	container, root = stageFirstDelivery(t, r, task)
+	waited, err := r.cli.ContainerWait(t.Context(), container, docker.WaitNextExit)
+	if err != nil {
+		t.Fatalf("opening the wait on the first delivery's container: %s", err)
+	}
+	if err := r.cli.ContainerStart(t.Context(), container); err != nil {
+		t.Fatalf("starting the first delivery's container: %s", err)
+	}
+	if exit := <-waited; exit.Err != nil {
+		t.Fatalf("waiting for the first delivery's container: %s", exit.Err)
+	}
+	return container, root
+}
+
+// An exited container is work already done. The delivery that adopts it collects its exit
+// code and its ports as they stand and does not start it, because a daemon answers a start
+// on an exited container by running the brick a second time.
+func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var mu sync.Mutex
+	ran := map[string]int{}
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		step := c.Labels[LabelStep]
+		mu.Lock()
+		ran[step]++
+		mu.Unlock()
+		if step == "check" {
+			return 3, nil
+		}
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"from": "the first delivery"}))
+	})
+
+	fetch, check := oneTask(ref), oneTask(ref)
+	check.ID, check.Step = agk.NewTaskID("01JMZ8V1P9C4", "check", 1, agk.Shard{}), "check"
+	fetched, fetchedRoot := exitedFirstDelivery(t, r, fetch)
+	checked, checkedRoot := exitedFirstDelivery(t, r, check)
+
+	succeeded, err := r.Run(t.Context(), fetch)
+	if err != nil {
+		t.Fatalf("redelivering the task whose container exited 0: %s", err)
+	}
+	if succeeded.State != agk.TaskSucceeded || succeeded.ExitCode != 0 {
+		t.Errorf("the redelivery reports %s with code %d, and the container exited 0", succeeded.State, succeeded.ExitCode)
+	}
+	if out := succeeded.Outputs["out"]; len(out.Items) != 1 || out.Items[0].Data["from"] != "the first delivery" {
+		t.Errorf("the port carries %+v, and what the container left under /agk/out is collected", out)
+	}
+
+	failed, err := r.Run(t.Context(), check)
+	if err != nil {
+		t.Fatalf("redelivering the task whose container exited 3: %s", err)
+	}
+	if failed.State != agk.TaskFailed || failed.ExitCode != 3 {
+		t.Errorf("the redelivery reports %s with code %d, and the container exited 3", failed.State, failed.ExitCode)
+	}
+
+	mu.Lock()
+	if ran["fetch"] != 1 || ran["check"] != 1 {
+		t.Errorf("the bricks ran %v times, and a container that has exited is collected rather than started again", ran)
+	}
+	mu.Unlock()
+
+	removed := r.daemon.Removed()
+	for _, left := range []struct{ container, root string }{{fetched, fetchedRoot}, {checked, checkedRoot}} {
+		if !slices.Contains(removed, left.container) {
+			t.Errorf("the collected container %s was never removed", left.container[:12])
+		}
+		if _, err := os.Stat(left.root); !os.IsNotExist(err) {
+			t.Errorf("%s survived the delivery that collected its container", left.root)
+		}
+	}
+}
+
+// A container that is still running is waited on and never started: a start that reached
+// it a moment after it exited would run the brick a second time.
+func TestARunningContainerIsWaitedOnNotStartedAgain(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	release := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-release
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"from": "the first delivery"}))
+	})
+
+	task := oneTask(ref)
+	container, _ := stageFirstDelivery(t, r, task)
+	if err := r.cli.ContainerStart(t.Context(), container); err != nil {
+		t.Fatalf("starting the first delivery's container: %s", err)
+	}
+
+	// Every start from here on is counted and answered as a daemon answers one on a
+	// running container.
+	var mu sync.Mutex
+	starts := 0
+	r.daemon.Handle("POST", "/containers/{id}/start", func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		starts++
+		mu.Unlock()
+		w.WriteHeader(http.StatusNotModified)
+	})
+
+	type outcome struct {
+		result graph.Result
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := r.Run(context.Background(), task)
+		done <- outcome{result, err}
+	}()
+
+	// The container is let go once the redelivery is watching it, which is after the
+	// inspect found it running and before anything a start would follow.
+	deadline := time.Now().Add(10 * time.Second)
+	for h := r.lookup(task.ID); h == nil || h.watching() == nil; h = r.lookup(task.ID) {
+		if time.Now().After(deadline) {
+			t.Fatal("the redelivery never joined the running container")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("the redelivery: %s", got.err)
+		}
+		if out := got.result.Outputs["out"]; got.result.State != agk.TaskSucceeded || len(out.Items) != 1 {
+			t.Errorf("the redelivery reports %s with %+v", got.result.State, out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the redelivery never came back")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 0 {
+		t.Errorf("the adopted container was started %d times while it was running", starts)
 	}
 }
 
