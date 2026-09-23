@@ -630,10 +630,50 @@ func TestADuplicateResultChangesNothing(t *testing.T) {
 	plan := next(t, e, runAt)
 	record(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), runAt)
 
-	before := e.State().Steps["invoice"].Shards[0]
-	record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskFailed, ExitCode: 9, FinishedAt: runAt}, runAt)
-	if after := e.State().Steps["invoice"].Shards[0]; !reflect.DeepEqual(before, after) {
-		t.Errorf("a second result for a finished attempt changed the shard:\n%#v\n%#v", before, after)
+	unchanged(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskFailed, ExitCode: 9, FinishedAt: runAt}, "a second result for a finished attempt")
+}
+
+// An attempt a retry replaced is over too, though nothing on its shard says so but the
+// attempt number: the shard is pending again and a guard that read only its state would
+// take the old attempt's result as news about the new one.
+func TestAResultForAnAttemptAlreadyRetriedChangesNothing(t *testing.T) {
+	e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+steps:
+  invoice:
+    image: `+image+`
+    retry: { max: 2, on: [failed] }
+    outputs: [ok]
+`, Options{})
+	plan := next(t, e, runAt)
+	failed := Result{Task: plan.Start[0].ID, State: agk.TaskFailed, ExitCode: 1, FinishedAt: runAt}
+	record(t, e, failed, runAt)
+	if sh := e.State().Steps["invoice"].Shards[0]; sh.Attempt != 2 || sh.Task != agk.TaskPending {
+		t.Fatalf("the shard is attempt %d, %s, and a failure the policy retries leaves attempt 2 pending", sh.Attempt, sh.Task)
+	}
+
+	unchanged(t, e, failed, "a failure delivered again for an attempt already retried")
+	unchanged(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), "a success for an attempt already retried")
+}
+
+// unchanged records a result that should be a duplicate and holds that it was: the shard
+// is as it was, and so is the sequence, which is what the controller reads to decide
+// whether there is anything to write and anything to decide again.
+func unchanged(t *testing.T, e *Evaluator, r Result, what string) {
+	t.Helper()
+	_, name, _, _, err := agk.ParseTaskID(string(r.Task))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, seq := e.State().Steps[name].Shards[0], e.State().Seq
+	record(t, e, r, runAt.Add(time.Minute))
+	if after := e.State().Steps[name].Shards[0]; !reflect.DeepEqual(before, after) {
+		t.Errorf("%s changed the shard:\n%#v\n%#v", what, before, after)
+	}
+	if after := e.State().Seq; after != seq {
+		t.Errorf("%s took the sequence from %d to %d, which the controller writes down as a decision and decides again after", what, seq, after)
 	}
 }
 

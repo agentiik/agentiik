@@ -12,6 +12,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Envelopes are lifted out of that state into the object store and replaced by their digests.
 - A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
 - Results are recorded idempotently: states, holder, log, usage, the digest of every port and the artifacts they reference.
+- A result whose state is not an ending, or whose key names no task, is refused with `controller.ErrNotAResult`; the bus takes it off the queue and reports it rather than redelivering it.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.
 - Retries wait out their backoff. A task carries the deadline of its step's timeout, and a run past its root timeout is `timed_out` and stops what it holds. Cancelling twice is not an error.
@@ -64,7 +65,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - Package `secret`, the built-in store: a fresh AES-256-GCM data key per value, wrapped by a master key read from a file only the API user can open.
 - Master keys rotate through a keyring. Resealing is idempotent and does not change a value's version.
-- A test holds that the API is the only component reading a secret value.
+- A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
 
 ### Command line
 

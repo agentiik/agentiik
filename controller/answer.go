@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/agentiik/agentiik/agk"
@@ -40,6 +41,14 @@ type Answer struct {
 	Usage map[string]any
 }
 
+// ErrNotAResult is an answer no controller could ever record: one whose key names no task, or
+// whose state is not how a task ends.
+//
+// It is an error of its own because the consumer has to tell it apart from a result that could
+// not be recorded yet. That one is worth delivering again; this one is the same on every
+// delivery, so a consumer that delivered it again would deliver it for ever.
+var ErrNotAResult = errors.New("controller: not a result any controller could record")
+
 // Answer records one result and decides the run again.
 //
 // It is called before the message is acknowledged and never after, so that a controller dying
@@ -47,10 +56,19 @@ type Answer struct {
 // for an attempt that is over changes nothing: the task identifier is the idempotency key, a
 // bus is allowed to deliver twice, and a late answer about an attempt already judged is a
 // duplicate rather than news."
+//
+// Free for an ending and for nothing else. The evaluator records any state, because the
+// controller itself records a dispatch through it; a runner's answer that said running would
+// be taken as news on every delivery, and each would be a decision. So an answer is refused
+// with ErrNotAResult before anything is read: "a heartbeat is what says a task is still
+// running, and a result saying so would be a result for work that has not finished."
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
-		return fmt.Errorf("controller: the result names %q: %w", a.Result.Task, err)
+		return fmt.Errorf("%w: it names no task: %w", ErrNotAResult, err)
+	}
+	if !a.Result.State.Terminal() {
+		return fmt.Errorf("%w: %s is %s, which is not one of the five endings a result reports", ErrNotAResult, a.Result.Task, a.Result.State)
 	}
 
 	var e db.Evaluation
