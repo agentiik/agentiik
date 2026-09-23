@@ -186,9 +186,13 @@ func TestAModifiedTreeIsRefused(t *testing.T) {
 
 // --allow-dirty says the edits are meant to stay behind, and they do: what arrives is the commit as
 // it was committed, in the graph and in the tree alike, and a file nobody committed is in neither.
+// Nor is the workflow the command reads, whose name the version is sent under and whose steps it
+// counts: the server takes the name in the path as it comes, so a workflow read off the disk would
+// register the committed document under a name nobody committed.
 func TestAllowDirtyPushesTheCommitAndNotTheEdits(t *testing.T) {
 	dir := repository(t)
-	write(t, dir, "agentiik.yaml", scriptWorkflow+`
+	head := gitIn(t, dir, "rev-parse", "HEAD")
+	write(t, dir, "agentiik.yaml", strings.Replace(scriptWorkflow, "name: monthly-invoicing", "name: renamed-invoicing", 1)+`
   sneaky:
     image: docker.io/library/alpine@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
     script: ["true"]
@@ -196,9 +200,15 @@ func TestAllowDirtyPushesTheCommitAndNotTheEdits(t *testing.T) {
 `)
 	write(t, dir, "notes/draft.txt", "never committed")
 
-	code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
+	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--allow-dirty")
 	if code != exitSucceeded {
 		t.Fatalf("--allow-dirty answered %d: %s%s", code, out, errs)
+	}
+	if want := "/api/v1/finance/workflows/monthly-invoicing/versions/" + head; path != want {
+		t.Errorf("the version was sent to %s, where the commit names %s", path, want)
+	}
+	if !strings.Contains(out, "1 step,") {
+		t.Errorf("it counted the steps of a workflow nobody committed: %q", out)
 	}
 	if strings.Contains(string(got.Document), "sneaky") {
 		t.Error("the uncommitted edit arrived as the entry point the graph is rebuilt from")
@@ -357,6 +367,55 @@ func TestARepositoryGitWillNotReadIsNotCalledNoRepository(t *testing.T) {
 	}
 	if !strings.Contains(errs, "dubious ownership") || !strings.Contains(errs, "safe.directory") {
 		t.Errorf("the refusal does not pass on what git said and what it said to do: %q", errs)
+	}
+}
+
+// A repository with no commit yet has nothing a version could be, and says so rather than that it
+// holds no commit called HEAD.
+func TestAnEmptyRepositoryIsRefused(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	write(t, dir, "agentiik.yaml", scriptWorkflow)
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a push from a repository with no commit answered %d", code)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "has no commit yet") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+}
+
+// A replace ref lives in one clone and in no other, so honouring it would push, under the commit's
+// name, bytes no other clone of that commit holds. What travels is what the commit holds.
+func TestAReplaceRefIsNotPushed(t *testing.T) {
+	dir := repository(t)
+	committed := gitIn(t, dir, "rev-parse", "HEAD:agentiik.yaml")
+	other := filepath.Join(t.TempDir(), "other.yaml")
+	if err := os.WriteFile(other, []byte(strings.Replace(scriptWorkflow, "monthly-invoicing", "replaced-invoicing", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	replacement := gitIn(t, dir, "hash-object", "-w", other)
+	gitIn(t, dir, "replace", committed, replacement)
+	if shown := gitIn(t, dir, "show", "HEAD:agentiik.yaml"); !strings.Contains(shown, "replaced-invoicing") {
+		t.Fatalf("git does not honour the replace ref, so this proves nothing:\n%s", shown)
+	}
+
+	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if string(got.Tree["agentiik.yaml"].Content) != scriptWorkflow || string(got.Document) != scriptWorkflow {
+		t.Errorf("what travelled is the replacement:\n%s", got.Document)
+	}
+	if !strings.Contains(path, "/workflows/monthly-invoicing/") {
+		t.Errorf("the version was sent to %s", path)
 	}
 }
 
