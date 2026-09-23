@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -134,6 +135,12 @@ type PushFile struct {
 // usually carrying something that belongs in an image or in an artifact, and the refusal says so.
 const TreeMaxBytes = 4 << 20
 
+// commitName is a commit as the version table holds one, and a push is held to it before anything
+// is written. Left to the table's own check, a commit that is not one was refused only by the
+// insert, after the tree was already in the store with nothing counting it, and answered 500 for
+// what was the caller's mistake.
+var commitName = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
 // pushMaxBytes is how large a push body may be, which is larger than any other body the API
 // reads because a push carries the tree.
 //
@@ -164,6 +171,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 
 	// Everything that can be refused without writing anything is refused first, so that a
 	// push that fails leaves no object behind it.
+	if !commitName.MatchString(commit) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("%q is not a commit, and a version is one: a commit is named by seven to forty lowercase hexadecimal characters", commit))
+		return
+	}
+	if p.Parent != "" && !commitName.MatchString(p.Parent) {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("the parent %q is not a commit: a commit is named by seven to forty lowercase hexadecimal characters", p.Parent))
+		return
+	}
 	paths, status, err := checkTree(p.Tree)
 	if err != nil {
 		fail(w, status, err.Error())

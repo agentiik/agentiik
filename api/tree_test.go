@@ -149,6 +149,47 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 	}
 }
 
+// A commit that is not one, in the path or as the parent, is the caller's mistake and is refused
+// as one: 400 with a sentence, before a byte of the tree is in the store. Left to the table, it
+// was refused by the insert, answered 500, and left its files behind with nothing counting them.
+func TestACommitThatIsNotOneIsRefusedBeforeItsTreeIsStored(t *testing.T) {
+	h, _, super, objects := servingWithObjects(t)
+
+	for _, c := range []struct {
+		name string
+		to   string
+		push func(*api.Push)
+	}{
+		{"a branch where the commit goes", "/api/v1/finance/workflows/monthly-invoicing/versions/main", func(*api.Push) {}},
+		{"a commit in capitals", "/api/v1/finance/workflows/monthly-invoicing/versions/A3F9C1E", func(*api.Push) {}},
+		{"a parent that is a name for a commit", pushTo, func(p *api.Push) { p.Parent = "HEAD" }},
+	} {
+		lone := []byte("only " + c.name + " carries this file\n")
+		p := pushed(t, map[string]api.PushFile{"scripts/lone.sh": {Content: lone, Mode: "0755"}})
+		c.push(&p)
+		w, answer := call(t, h, "PUT", c.to, "alice", p)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
+			continue
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, "hexadecimal") {
+			t.Errorf("%s was refused with %q", c.name, said)
+		}
+		if held, err := objects.Has(t.Context(), keyOf("finance", lone)); err != nil || held {
+			t.Errorf("%s left its tree in the store: %v %v", c.name, held, err)
+		}
+	}
+
+	var versions int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select count(*) from workflow_versions where namespace = 'finance'`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 0 {
+		t.Errorf("%d versions were recorded from pushes that were all refused", versions)
+	}
+}
+
 // A refusal about size says what the limit is for, because a limit with no rationale is a limit
 // somebody works around rather than reconsiders.
 func TestTheSizeRefusalSaysWhyThereIsALimit(t *testing.T) {
