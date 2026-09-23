@@ -35,7 +35,16 @@
 // allows no other: the subject a result arrives on is the runner that sent it, the reader refuses
 // a result naming anybody else, and the controller holds what is left to the runner the task was
 // bound to when its grant was redeemed. A compromised host's "reach is the tasks in its hands",
-// and this is what keeps it there.
+// and this, with an inbox of its own, is what keeps it there.
+//
+// # Why an inbox per runner
+//
+// JetStream hands a pulled message to the inbox the pull named, and every client's inbox is under
+// _INBOX unless it asks for another. A runner allowed to listen there would hear every task handed
+// to every runner of every pool, grant included, and could redeem a grant before the runner it was
+// handed to: the first redemption binds the task, so the binding would go to whoever listened. So
+// a runner's replies come back under Inbox, its credential listens there and nowhere else, and it
+// acknowledges on its own pool's consumer alone.
 //
 // # What at-least-once costs and who pays it
 //

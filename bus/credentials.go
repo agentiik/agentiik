@@ -68,6 +68,10 @@ func NewIssuer(accountSeed, url string) (*Issuer, error) {
 //
 // What it may do is written out rather than left to a wildcard. `$JS.API.>` would have been one
 // line and would have let a runner create and delete streams, which a test found by doing it.
+// `_INBOX.>` was one line too, and let a runner hear every message JetStream handed to anybody:
+// each task pulled by every runner of every pool, grant included, and each result handed to the
+// controller. So its replies come back under an inbox of its own. `$JS.ACK.>` let it acknowledge
+// or terminate any of those messages, so it acknowledges on its own pool's consumer alone.
 func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, error) {
 	if err := validPool(pool); err != nil {
 		return Credentials{}, fmt.Errorf("bus: %w", err)
@@ -77,9 +81,10 @@ func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, err
 	}
 	return i.mint(name, until, func(c *jwt.UserClaims) {
 		c.Sub.Allow.Add(
-			// Replies to its own requests, and the stop subject, which is the one
-			// thing the bus carries that is not work distribution.
-			"_INBOX.>",
+			// Replies to its own requests, under its own inbox and nobody else's,
+			// and the stop subject, which is the one thing the bus carries that is
+			// not work distribution.
+			Inbox(name)+".>",
 			StopSubject,
 		)
 		c.Pub.Allow.Add(
@@ -88,14 +93,28 @@ func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, err
 			"$JS.API.CONSUMER.INFO."+Stream+"."+Durable(pool),
 			// Acknowledging what it took. A task nobody acks is redelivered, which
 			// is what at-least-once means and what the idempotency key is for.
-			"$JS.ACK.>",
+			// Both of the forms the server writes an acknowledgement subject in:
+			// the first names the stream and the consumer, and the second puts a
+			// domain and an account hash before them, which is the form a later
+			// server will make its default.
+			"$JS.ACK."+Stream+"."+Durable(pool)+".>",
+			"$JS.ACK.*.*."+Stream+"."+Durable(pool)+".>",
 			// Saying what happened, on its own subject and on nobody else's, which
 			// is what makes the runner a result arrives under the one that sent it.
 			ResultSubject(name),
-			"_INBOX.>",
 		)
 	})
 }
+
+// Inbox is the prefix a runner's replies come back under, which OpenRunner connects with.
+//
+// Its own rather than the _INBOX every client shares by default, because JetStream hands a pulled
+// message to the inbox the pull request named. A credential allowed to subscribe to every inbox is
+// one that hears what is handed to every other client, and a grant heard is a grant that can be
+// redeemed before the runner it was handed to gets there: the first redemption binds the task, so
+// the one that heard it would hold it. A runner hears under its own name alone, so what it hears
+// is what it asked for, and "its reach is the tasks in its hands".
+func Inbox(runner string) string { return "_INBOX_" + runner }
 
 // ForControlPlane mints the credential the API and the controller use.
 //
