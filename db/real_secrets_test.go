@@ -128,15 +128,60 @@ func TestADeclarationRoundTrips(t *testing.T) {
 
 // One namespace cannot see, move or remove another's declarations, and cannot plant one in it.
 func TestAnotherNamespacesDeclarationsAreInvisible(t *testing.T) {
-	pool, _ := opened(t)
+	pool, super := opened(t)
 	if _, err := declare(t, pool, "finance", Declaration{Name: "billing", Provider: "vault", Path: "kv/data/finance/billing", DeclaredBy: "alice"}); err != nil {
 		t.Fatal(err)
+	}
+
+	// The methods filter by namespace themselves, so it is past them that the policy shows: a
+	// query that forgot the filter reads nothing of finance's, and an update or a delete that
+	// forgot it touches nothing. Before team-ops declares anything, so that any row is finance's.
+	if err := pool.In(t.Context(), "team-ops", func(ctx context.Context, ns *NS) error {
+		var seen int
+		if err := ns.tx.QueryRow(ctx, `select count(*) from secret_declarations`).Scan(&seen); err != nil {
+			return err
+		}
+		if seen != 0 {
+			t.Errorf("team-ops reads %d declarations with no filter of its own, and it declares none", seen)
+		}
+		for _, stmt := range []string{
+			`update secret_declarations set path = 'kv/data/team-ops/mine'`,
+			`delete from secret_declarations`,
+		} {
+			tag, err := ns.tx.Exec(ctx, stmt)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 0 {
+				t.Errorf("%s from team-ops touched %d of finance's declarations", stmt, tag.RowsAffected())
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// And the policy binds whoever owns the table too, which is what forcing it means: a role
+	// that ran the migrations and serves requests would otherwise walk through it.
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	var enabled, forced bool
+	if err := conn.QueryRow(t.Context(),
+		`select relrowsecurity, relforcerowsecurity from pg_class where relname = 'secret_declarations'`).
+		Scan(&enabled, &forced); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled || !forced {
+		t.Errorf("secret_declarations has row level security enabled %v and forced %v", enabled, forced)
 	}
 
 	if got := declarationsOf(t, pool, "team-ops"); len(got) != 0 {
 		t.Fatalf("team-ops reads %+v, which finance declared", got)
 	}
-	err := pool.In(t.Context(), "team-ops", func(ctx context.Context, ns *NS) error {
+	err = pool.In(t.Context(), "team-ops", func(ctx context.Context, ns *NS) error {
 		_, err := ns.Declaration(ctx, "billing")
 		return err
 	})
