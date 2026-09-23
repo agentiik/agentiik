@@ -235,6 +235,25 @@ func TestWhatCannotBeRegistered(t *testing.T) {
 	}
 }
 
+// Two routes net/http cannot serve together are an error from Handle rather than a panic out of it:
+// each matches a path the other does, /api/v1/objects/runs, and neither is the more specific. The
+// route refused is not part of the surface either, since nothing answers it.
+func TestARouteTheMuxCannotServeBesideAnotherIsAnError(t *testing.T) {
+	rt := router(t, api.DenyAll{})
+	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, ok)
+
+	why := api.Public{Why: "a route that stands in for another one in a test, and is never served to anybody"}
+	if err := rt.Handle("GET", "/api/v1/objects/{key...}", why, ok); err == nil || !strings.Contains(err.Error(), "/api/v1/objects/{key...}") {
+		t.Errorf("a route the mux refuses was answered %v", err)
+	}
+	for _, r := range rt.Routes() {
+		if r.Pattern == "/api/v1/objects/{key...}" {
+			t.Error("a route the mux refused is listed as served")
+		}
+	}
+}
+
 // The surface is readable, which is what lets a test assert about every route at once and what
 // lets an installation print what it serves.
 func TestTheSurfaceCanBeReadBack(t *testing.T) {

@@ -91,10 +91,12 @@ func (rt *Router) HandleRunner(method, pattern string, g ForRunner, h RunnerHand
 	if rt.runners == nil {
 		return fmt.Errorf("api: %s %s is authorised by a runner credential and nothing was given to check one against", method, pattern)
 	}
-	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Runner: true})
-	rt.mux.HandleFunc(method+" "+pattern, func(w http.ResponseWriter, r *http.Request) {
+	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
 		rt.serveRunner(w, r, h)
-	})
+	}); err != nil {
+		return err
+	}
+	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Runner: true})
 	return nil
 }
 
@@ -166,14 +168,34 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		}
 	}
 
+	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+		rt.serve(w, r, guard, h)
+	}); err != nil {
+		return err
+	}
 	rt.routes = append(rt.routes, Route{
 		Method: method, Pattern: pattern,
 		Permission: guard.permission, Scope: guard.scope,
 		Public: guard.public, Why: guard.why,
 	})
-	rt.mux.HandleFunc(method+" "+pattern, func(w http.ResponseWriter, r *http.Request) {
-		rt.serve(w, r, guard, h)
-	})
+	return nil
+}
+
+// register puts one route on the mux, and answers the mux's refusal of it as an error.
+//
+// net/http refuses two patterns that each match a path the other does when neither is the more
+// specific, /api/v1/objects/{key...} and /api/v1/{namespace}/runs for one, and it refuses by
+// panicking. Handle promises an error for a route it cannot serve, and a panic from inside it
+// would take down whatever was registering routes at start-up, with nothing to say which set of
+// routes the other one was. The mux checks before it adds anything, so a refused pattern leaves
+// it as it was.
+func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err error) {
+	defer func() {
+		if refused := recover(); refused != nil {
+			err = fmt.Errorf("api: %s %s cannot be served beside the routes already registered: %v", method, pattern, refused)
+		}
+	}()
+	rt.mux.HandleFunc(method+" "+pattern, h)
 	return nil
 }
 

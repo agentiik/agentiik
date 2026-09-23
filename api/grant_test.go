@@ -90,7 +90,7 @@ func withGrants(t *testing.T, secrets api.Secrets) grants {
 	}
 
 	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{
-		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/api/v1/objects",
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
 	})
 	if err != nil {
 		t.Fatal(err)
