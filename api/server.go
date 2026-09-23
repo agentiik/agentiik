@@ -769,12 +769,10 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	// Nothing to say beyond which run, which the path names, so no body is the ordinary
 	// request. One carrying a field nobody knows, a reason for one, is refused rather than
-	// half understood.
-	if r.ContentLength > 0 {
-		if err := readAtMost(r, nothingAsked{}, smallMaxBytes); err != nil {
-			fail(w, statusOf(err), err.Error())
-			return
-		}
+	// half understood, however it was sent.
+	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
 	}
 
 	// The run the router found, in the namespace and of the workflow it authorised.

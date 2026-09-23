@@ -145,7 +145,8 @@ func TestCancellingARunNobodyCouldHaveMintedIsNoRun(t *testing.T) {
 }
 
 // Asking twice is asking once, and each time the controller is told. A body saying why is refused
-// rather than kept, since nothing keeps it.
+// rather than kept, since nothing keeps it, whether or not it declares its length, and one that
+// declares none and carries nothing is no body.
 func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 	o := withOneRun(t)
 	h := o.servedTo(t, everything{who: "alice"})
@@ -162,8 +163,12 @@ func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 		return err == nil && note.Payload == o.run
 	}
 
-	if w := sent(t, h, "POST", o.cancel(), "alice", `{"reason":"the figures are wrong"}`); w.Code != http.StatusBadRequest {
+	reason := `{"reason":"the figures are wrong"}`
+	if w := sent(t, h, "POST", o.cancel(), "alice", reason); w.Code != http.StatusBadRequest {
 		t.Errorf("a cancellation carrying a reason answered %d: %s", w.Code, w.Body)
+	}
+	if w := streamed(t, h, "POST", o.cancel(), "alice", reason); w.Code != http.StatusBadRequest {
+		t.Errorf("a cancellation carrying a reason in a body declaring no length answered %d: %s", w.Code, w.Body)
 	}
 	if at := o.requested(t); at != nil {
 		t.Fatalf("a refused request asked the run to cancel at %s", at)
@@ -180,8 +185,8 @@ func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 		t.Fatal("the request is not on the run")
 	}
 
-	if w, _ := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusAccepted {
-		t.Errorf("asking a second time answered %d: %s", w.Code, w.Body)
+	if w := streamed(t, h, "POST", o.cancel(), "alice", " \n"); w.Code != http.StatusAccepted {
+		t.Errorf("asking a second time, in a body declaring no length and holding nothing, answered %d: %s", w.Code, w.Body)
 	}
 	if !told() {
 		t.Error("the controller was not told the second time")
