@@ -81,6 +81,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Grants, join tokens and runner credentials carry 256 bits, are stored hashed and are shown once.
 - A grant carries what its task was dispatched with. Redeeming it returns URLs for the input envelopes and the artifacts they name, the secret values and the upload URLs, and binds the task to that runner.
 - The grant of a dispatch that was lost is refused, and so is every grant of a key that has completed. A requeue redeems a grant of its own.
+- A grant is never replaced. A task published again, because the pass that published it could not record the dispatch, gets another grant beside the first, and the message the bus kept still redeems; the first redemption binds the task for both. Before, the message on the queue carried a grant that opened nothing. Migration `0014_grants_kept.sql`.
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.

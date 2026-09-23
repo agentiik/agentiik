@@ -388,6 +388,19 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 		t.Fatalf("a task on the queue and a task taken a moment ago were lost %d times, %v", lost, err)
 	}
 
+	// A pass that could not record the dispatch publishes the task again with a grant of its
+	// own, which nobody redeems, since the task is already taken. The redemption still counts.
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		_, err := w.IssueGrant(ctx, "finance", key, taken,
+			GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+		t.Fatalf("a task taken a moment ago and issued a grant since was lost %d times, %v", lost, err)
+	}
+
 	// The runner that took it says nothing for ten intervals after taking it.
 	if _, err := conn.Exec(ctx,
 		`update task_grants set redeemed_at = now() - interval '5 minutes' where task_id = $1`, taken); err != nil {

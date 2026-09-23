@@ -239,7 +239,9 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 // the task_id is given to JetStream as its deduplication key: a bus is at-least-once and the
 // runner is what makes that safe, but a publish retried by this process inside the duplicate
 // window is a retry this process knows about and there is no reason to make somebody else pay
-// for it.
+// for it. A task a later pass planned again, because the pass that published it could not record
+// the dispatch, is deduplicated the same way, and it carries a grant of its own: the message that
+// stays is the first, which is why a grant once issued is never replaced.
 //
 // The task_id and not the idempotency key, because "a requeue after loss keeps the idempotency
 // key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being

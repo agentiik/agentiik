@@ -367,7 +367,9 @@ func orEmptyStrings(s []string) []string {
 // recorded. Not from the dispatch alone, which is when the message went on the queue: a task
 // redeemed after a long wait would be lost between its redemption and its first heartbeat, and
 // requeued while its container ran. A runner that took work and was never heard from again is
-// still exactly the case this is for, counted from when it took it.
+// still exactly the case this is for, counted from when it took it. The redemption is the latest
+// of its grants', since a task may have been issued several and a runner redeems one: joined on
+// each, the one nobody redeemed would count the task from its dispatch.
 //
 // What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
 // the task is handed out again is the evaluator's to say, and the controller hears of the loss
@@ -384,12 +386,15 @@ func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, e
 			  update tasks set state = 'lost', finished_at = now()
 			  where (namespace, id) in (
 			    select t.namespace, t.id from tasks t
-			    left join task_grants g on g.namespace = t.namespace and g.task_id = t.id
+			    cross join lateral (
+			      select max(g.redeemed_at) as at from task_grants g
+			      where g.namespace = t.namespace and g.task_id = t.id
+			    ) redeemed
 			    where t.state in ('dispatched', 'running', 'publishing')
 			      and t.runner is not null
-			      and coalesce(greatest(t.last_heartbeat_at, g.redeemed_at), t.dispatched_at)
+			      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
 			          < now() - ($1::bigint * interval '1 second')
-			    order by coalesce(greatest(t.last_heartbeat_at, g.redeemed_at), t.dispatched_at)
+			    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
 			    limit $2
 			    for update of t skip locked
 			  )
