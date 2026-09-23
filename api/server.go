@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -417,6 +418,13 @@ func checkTreePath(p string) error {
 		return fmt.Errorf("%s leaves the repository", p)
 	case strings.ContainsRune(p, 0):
 		return fmt.Errorf("%q carries a null byte", p)
+	case !utf8.ValidString(p) || strings.ContainsRune(p, utf8.RuneError):
+		// Git names a file with any bytes, and JSON carries UTF-8 only: a name that is not
+		// arrives with U+FFFD where its bytes were, so the file would be laid out under a
+		// name the commit does not give it, and two such names would arrive as one. The
+		// character is what is left to see, and one that was really in a name cannot be told
+		// from one that was not.
+		return fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8: until the installation hosts the repository a push carries UTF-8 names only, and this file would be laid out under a name its commit does not give it", p)
 	}
 	// Any segment spelt .git, in any case. A commit's tree never holds one, since git refuses
 	// it, and one laid out under /agk/repo would be a repository configuration, hooks and all,

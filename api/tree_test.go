@@ -115,6 +115,9 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 		{"a file inside .git", adding(map[string]api.PushFile{".git/config": file("[core]")}), http.StatusBadRequest},
 		{"a .git segment spelt in another case, further down", adding(map[string]api.PushFile{"vendor/lib/.GIT/hooks/post-checkout": file("x")}), http.StatusBadRequest},
 		{"a path that is a file and a directory", adding(map[string]api.PushFile{"scripts": file("x"), "scripts/render.sh": file("y")}), http.StatusBadRequest},
+		// Two Latin-1 names, which JSON turns into one and the same name before the server
+		// sees either: what arrives is U+FFFD, and a file laid out under it is not the commit's.
+		{"names that were not UTF-8 before JSON had them", adding(map[string]api.PushFile{"caf\xe9.txt": file("acute"), "caf\xe8.txt": file("grave")}), http.StatusBadRequest},
 		{"a mode a tree does not carry", adding(map[string]api.PushFile{"render.sh": {Content: []byte("x"), Mode: "4755"}}), http.StatusBadRequest},
 		{"a mode left out", adding(map[string]api.PushFile{"render.sh": {Content: []byte("x")}}), http.StatusBadRequest},
 		{"a tree without its entry point", func(p *api.Push) {
