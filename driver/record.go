@@ -15,7 +15,8 @@ import (
 	"github.com/agentiik/agentiik/graph"
 )
 
-// The record this host keeps of the keys it has carried to an ending.
+// The record this host keeps of the keys it has taken and of the ones it has carried to
+// an ending.
 //
 // "JetStream guarantees at-least-once delivery, so every task is replayable: it carries
 // the idempotency key run_id/step/attempt/shard, and the runner refuses to start a
@@ -64,7 +65,7 @@ const pruneEvery = time.Hour
 // another attempt and so another key.
 var ErrCompleted = errors.New("the runner refuses to start a container for a key that has already completed")
 
-// keyEntry is what the record says about one key: how it ended.
+// keyEntry is what the record says about one key: taken, or how it ended.
 type keyEntry struct {
 	Key   agk.TaskID    `json:"idempotency_key"`
 	State agk.TaskState `json:"state"`
@@ -77,8 +78,10 @@ type keyEntry struct {
 
 // keys is the record of one work root.
 //
-// Every read and write goes through mu, and so does the prune, which takes away
-// directories a write may be about to use.
+// Every read and write goes through mu, and so does the prune. Hold reads a key and
+// writes it in one step, and an ending written between the two would be overwritten by
+// the hold and the key forgotten; the prune takes away directories a write may be about
+// to use.
 type keys struct {
 	root string
 
@@ -90,7 +93,7 @@ type keys struct {
 // that a person who found the one finds the other.
 func (k *keys) path(id agk.TaskID) (string, error) {
 	if k.root == "" {
-		return "", errors.New("driver: no work root: the record of the keys this host has completed is kept under one")
+		return "", errors.New("driver: no work root: the record of the keys this host has taken and completed is kept under one")
 	}
 	rel, err := taskPath(id)
 	if err != nil {
@@ -221,6 +224,31 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return info.ModTime(), true
+}
+
+// Hold records that this host has taken a task, which is what a runner does before it
+// acknowledges the task message.
+//
+// A runner acknowledges on take, so from the acknowledgement on the bus never delivers
+// that message again and the host is what answers for the key. Writing the key down first
+// is what makes that true, and package bus says why the acknowledgement is not left to
+// the end.
+//
+// A key this host has already carried to an ending is refused here with ErrCompleted,
+// before anything is redeemed, pulled or created. The message is not put back for that:
+// another runner of the pool has no record of the key and would start it, which is the
+// second run the refusal exists to prevent.
+func (d *Docker) Hold(id agk.TaskID) error {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	e, found, err := d.keys.read(id)
+	if err != nil {
+		return err
+	}
+	if found && e.State.Terminal() {
+		return completed(id, e)
+	}
+	return d.keys.write(keyEntry{Key: id, State: agk.TaskDispatched, At: d.now().UTC()})
 }
 
 // refuseCompleted is the refusal Run makes of a key this host has already carried to an

@@ -16,9 +16,9 @@ import (
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
-// The record of the keys a host has carried to an ending, which is what makes "the runner
-// refuses to start a container for a key that has already completed" true once the
-// container is gone.
+// The record of the keys a host has taken and carried to an ending, which is what makes
+// "the runner refuses to start a container for a key that has already completed" true
+// once the container is gone.
 
 // reopen is the same host after its runner process restarted: a second driver on the same
 // daemon and the same work root, holding nothing in memory the first one held. change is
@@ -114,6 +114,46 @@ func TestACompletedKeyIsNeverStartedAgain(t *testing.T) {
 	}
 	if n := len(r.daemon.Created()); n != created {
 		t.Errorf("the restarted driver created %d containers for keys that had completed", n-created)
+	}
+}
+
+// A runner writes the key down on take, before it acknowledges the message, and the key
+// it holds still runs. A key that has completed is refused there already, before anything
+// is redeemed or pulled.
+func TestAKeyIsWrittenDownWhenItIsHeld(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	task := oneTask(ref)
+
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatalf("holding a key nobody has run: %s", err)
+	}
+	e, found, err := r.keys.read(task.ID)
+	if err != nil || !found {
+		t.Fatalf("the held key is not in the record: %v", err)
+	}
+	if e.State != agk.TaskDispatched {
+		t.Errorf("a held key is recorded %s, and it is handed out and not yet anything more", e.State)
+	}
+	if len(r.daemon.Created()) != 0 {
+		t.Errorf("holding a key created %d containers", len(r.daemon.Created()))
+	}
+
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("running a held key: %s", err)
+	}
+	if n := bricks.times("fetch"); n != 1 {
+		t.Errorf("the brick ran %d times", n)
+	}
+
+	err = r.Hold(task.ID)
+	if !errors.Is(err, ErrCompleted) {
+		t.Fatalf("holding a key that has completed answered %v", err)
+	}
+	if e, _, _ := r.keys.read(task.ID); e.State != agk.TaskSucceeded {
+		t.Errorf("the refused hold left the key recorded %s, and it ended succeeded", e.State)
 	}
 }
 
@@ -317,6 +357,9 @@ func TestAnEntryThatDoesNotReadRefusesItsKey(t *testing.T) {
 
 	if _, err := r.Run(t.Context(), task); err == nil {
 		t.Fatal("a key whose entry does not read was started")
+	}
+	if err := r.Hold(task.ID); err == nil {
+		t.Error("a key whose entry does not read was held")
 	}
 	if n := bricks.times("fetch"); n != 0 {
 		t.Errorf("the brick ran %d times", n)

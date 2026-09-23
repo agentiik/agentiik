@@ -130,6 +130,8 @@
 // key at-least-once delivery hands back after a restart or a requeue. It sits under the
 // work root and outside every task's directory, it holds the key, its state and a moment
 // and never a payload, and it keeps a key for KeysKept, the task stream's own retention.
+// Hold writes a key down on take, which is what a runner does before it acknowledges the
+// task message.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this
@@ -241,7 +243,7 @@
 //	container.go  the settings every task gets, as HostConfig writes them
 //	network.go    a network per task, none and internal, egress refused
 //	run.go        the create, wait, attach, start, copy, collect sequence, and adoption by label
-//	record.go     the keys this host has ended, refused once ended, kept for a week
+//	record.go     the keys this host has taken and ended, refused once ended, kept for a week
 //	deadline.go   SIGTERM then SIGKILL after grace, with the event stream as the backstop
 //	script.go     script, before_script, after_script, the shell default, the verdict
 //	collect.go    brick.Collect, the files upload, brick.Spill, the standard output shorthand

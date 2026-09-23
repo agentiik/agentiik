@@ -42,6 +42,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivered task never starts its container a second time: a running one is waited on, an exited one is collected as it stands, and a delivery of a task already in flight on the host is refused.
 - A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
+- `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
 
 ### API
 
