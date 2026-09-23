@@ -592,6 +592,12 @@ func commitOf(ctx context.Context, top, named string) (string, error) {
 	}
 	sha, err := git(ctx, top, "rev-parse", "--verify", "--quiet", named+"^{commit}")
 	switch {
+	case err == nil && sha != "" && len(sha) != 40:
+		// A repository made with --object-format=sha256, which is what Git 3.0 makes by
+		// default. The installation records a version under the forty characters of a SHA-1
+		// commit and would refuse this one, after every file of the tree had been read and
+		// sent; the length of the hash says so before any of it is read.
+		return "", fmt.Errorf("the repository at %s names its commits by SHA-256, %s being %d characters, and an installation records a version under the forty characters of a SHA-1 commit: push from a repository that uses SHA-1", top, short(sha), len(sha))
 	case err == nil && sha != "":
 		return sha, nil
 	case named == "HEAD":

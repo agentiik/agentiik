@@ -748,6 +748,49 @@ func readNoContent(t *testing.T, trace string) {
 	}
 }
 
+// A repository git made with --object-format=sha256 names a commit by sixty-four characters, and an
+// installation records a version under the forty of SHA-1. It is refused before any of the tree is
+// read, rather than by the installation after all of it was read and sent, with the commit called
+// not a commit.
+func TestARepositoryOfSHA256IsRefusedBeforeTheTreeIsRead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	dir := t.TempDir()
+	write(t, dir, "agentiik.yaml", scriptWorkflow)
+	cmd := exec.Command("git", "init", "-q", "--object-format=sha256")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("this git makes no SHA-256 repository: %s", out)
+	}
+	gitIn(t, dir, "config", "user.email", "test@example.com")
+	gitIn(t, dir, "config", "user.name", "Test")
+	commitAll(t, dir, "the workflow")
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a SHA-256 repository answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "SHA-256") || !strings.Contains(errs, "SHA-1") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(said), "rev-parse") {
+		t.Fatalf("git was not traced, so this proves nothing:\n%s", said)
+	}
+	if strings.Contains(string(said), "ls-tree") || strings.Contains(string(said), "cat-file") {
+		t.Error("git was asked for the tree before the hash refused the repository")
+	}
+}
+
 // The mode is git's and not the disk's. A file committed executable travels as 0755 whatever its
 // bits are on this machine, and an ordinary one travels as 0644, said rather than left out.
 func TestTheModeOfAFileIsWhatGitSays(t *testing.T) {
