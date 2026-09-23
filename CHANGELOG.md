@@ -39,6 +39,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Driver
 
 - A redelivered task never starts its container a second time: a running one is waited on, an exited one is collected as it stands, and a delivery of a task already in flight on the host is refused.
+- A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
 
 ### API
 
