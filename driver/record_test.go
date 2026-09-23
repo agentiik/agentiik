@@ -123,9 +123,9 @@ func TestACompletedKeyIsNeverStartedAgain(t *testing.T) {
 	}
 }
 
-// A runner writes the key down on take, before it acknowledges the message, and the key
-// it holds still runs. A key that has completed is refused there already, before anything
-// is redeemed or pulled.
+// A runner writes the key down on take, before it redeems the grant and acknowledges the
+// message, and the key it holds still runs. A key that has completed is refused there
+// already, before anything is redeemed or pulled.
 func TestAKeyIsWrittenDownWhenItIsHeld(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 

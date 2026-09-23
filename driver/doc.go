@@ -137,10 +137,11 @@
 // its end ends its key even when what it left cannot be collected, an output that is
 // not an envelope or a store that refused an artifact or an envelope: the brick ran,
 // and the key is written down failed. Hold writes a key down on take, which is what a
-// runner does before it acknowledges the task message, and refuses one that has ended
-// with a *Completed holding the recorded Ending, which the runner reports under the
-// task_id of the message it took: that is how the requeue of a task declared lost is
-// answered by the host that had already ended it.
+// runner does before it redeems the task's grant and acknowledges its message, and refuses
+// one that has ended with a *Completed holding the recorded Ending, before any grant is
+// redeemed for it, which the runner reports under the task_id of the message it took: that
+// is how the requeue of a task declared lost is answered by the host that had already ended
+// it.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this

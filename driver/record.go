@@ -319,22 +319,20 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 	return info.ModTime(), true
 }
 
-// Hold records that this host has taken a task, which is what a runner does before it
-// acknowledges the task message.
+// Hold records that this host has taken a task, which is the first thing a runner does with
+// a message it took: before it redeems the grant, before it acknowledges the message, and
+// before it pulls or creates anything. Package bus says why the redemption comes before the
+// acknowledgement. This comes before both because of what it refuses.
 //
-// A runner acknowledges on take, so once the bus has confirmed the acknowledgement it
-// never delivers that message again and the host is what answers for the key. Writing the
-// key down first is what makes that true, and package bus says why the acknowledgement is
-// not left to the end, and why nothing starts until the bus has confirmed it.
-//
-// A key this host has already carried to an ending is refused here with a *Completed,
-// which errors.Is reads as ErrCompleted, before anything is redeemed, pulled or created.
-// The message is not put back for that: another runner of the pool has no record of the
-// key and would start it, which is the second run the refusal exists to prevent. It is
-// answered instead. The refusal carries the ending the record holds, and the runner
-// acknowledges the message and reports that ending under the message's own task_id: a key
-// comes back to the host that ended it as the requeue of a task declared lost, and the
-// run is waiting on the requeue's answer.
+// A key this host has already carried to an ending is refused here with a *Completed, which
+// errors.Is reads as ErrCompleted, before anything is redeemed, pulled or created. Not
+// redeemed, because the redemption would bind this runner to the dispatch and read its
+// secret values for a brick that is not going to run. The message is not put back for that
+// either: another runner of the pool has no record of the key and would start it, which is
+// the second run the refusal exists to prevent. It is answered instead. The refusal carries
+// the ending the record holds, and the runner acknowledges the message and reports that
+// ending under the message's own task_id: a key comes back to the host that ended it as the
+// requeue of a task declared lost, and the run is waiting on the requeue's answer.
 func (d *Docker) Hold(id agk.TaskID) error {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()

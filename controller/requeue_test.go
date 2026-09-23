@@ -336,10 +336,11 @@ func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
 
 }
 
-// "lost: The runner holding it stopped reporting." A task no runner has taken is waiting on the
-// queue, however long a busy pool keeps it there, and the heartbeat declares nothing about it: a
-// step that does not requeue is not failed for the wait, and one that does is not sent out again
-// into the queue its task is already waiting on.
+// "lost: The runner holding it stopped reporting." A task no runner has redeemed is waiting on the
+// queue, or on a runner that took it and has not acknowledged it, which the bus hands on should
+// that runner die, and the sweep declares nothing about it however long a busy pool keeps it
+// there: a step that does not requeue is not failed for the wait, and one that does is not sent
+// out again into the queue its task is already waiting on.
 func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 	for _, c := range []struct{ name, workflow string }{
 		{"no retry policy", theWorkflow},

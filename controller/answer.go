@@ -115,12 +115,12 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // decided, and so is a loss of a dispatch nobody redeemed, since a runner cannot lose what it
 // never held, and so is one saying a container ran for such a dispatch, but in the one case below.
 //
-// One saying no container ran is another matter. A runner pulls the image before it redeems the
-// grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,
-// and a runner reports it all the same, having acknowledged the message on take and left nothing
-// on the queue to deliver it again. The first runner to report such an ending is bound to the
-// dispatch as a redemption would have bound it, in the transaction that writes the ending, and
-// the answer is taken from it and from no other.
+// One saying no container ran is another matter. Of "a refused pull or a grant that would not
+// redeem", the second ends a dispatch nobody is bound to: a runner redeems before it pulls, so a
+// refused pull is reported by the runner the redemption bound, but a refused redemption binds
+// nobody, and the runner reports it all the same, and acknowledges the message only then. The first
+// runner to report such an ending is bound to the dispatch as a redemption would have bound it, in
+// the transaction that writes the ending, and the answer is taken from it and from no other.
 //
 // The one case is a requeue that came back to the host which had already ended its key. The
 // heartbeat declares a task lost when its host stops reporting, and a host only cut off may have

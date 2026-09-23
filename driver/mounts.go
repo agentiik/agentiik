@@ -52,12 +52,13 @@ const (
 	TmpDir = "/tmp"
 )
 
-// Secrets is where a value comes from at the last moment.
+// Secrets is where a value comes from when the container is prepared.
 //
 // It is one method because the driver asks one question: what is this secret worth, now,
-// for this task. A server runner answers it "by redeeming at the API the per-task grant
-// the controller issued for that one task and that one secret", and agk run --local
-// answers it off the command line. Neither is this package's business, which is why the
+// for this task. A server runner answers it from what it was given "by redeeming at the
+// API the per-task grant the controller issued for that one task and that one secret",
+// which it did before it pulled the image, and agk run --local answers it off the command
+// line. Neither is this package's business, which is why the
 // source arrives at construction and not in a Task: a Task "carries no secret value at
 // all".
 type Secrets interface {

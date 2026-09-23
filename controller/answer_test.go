@@ -402,7 +402,7 @@ func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
 }
 
 // "A task that never reached a container writes what stopped it", "a refused pull or a grant that
-// would not redeem being the usual reasons", and a runner pulls the image before it redeems, so
+// would not redeem being the usual reasons", and a grant that would not redeem binds nobody, so
 // such an ending is about a dispatch nobody holds. It is taken from the first runner to report it,
 // which is bound to the dispatch as a redemption would have bound it: another runner's word on it
 // is refused, and its grant redeems for nobody.

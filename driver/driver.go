@@ -234,13 +234,16 @@ func (d *Docker) dispatch(e docker.Event) {
 // ErrTaskInFlight is a second Run for a task this driver is already running.
 //
 // At-least-once delivery can hand one task to one host twice while the first delivery is
-// still in hand. Not through the ack window, since a runner acknowledges on take, before it
-// pulls or creates anything, and package bus says why. Through the requeue of a task the
-// heartbeat declared lost, which keeps its key and can reach the host that is still
-// running it: one whose heartbeat was cut off while its container ran. The second is
-// refused rather than run beside the first, because two Runs carrying one container would
-// each collect it and each remove it, and the one that removed it first would take it away
-// under the other. The first delivery is the one that reports.
+// still in hand. Through the ack window, where the runner holding the task acknowledged it
+// and the acknowledgement never arrived: the message comes round again, every other runner
+// is refused it at the redemption, and the runner it is bound to, redeeming it again as its
+// holder, brings it here, since package bus has a runner go on with a task whose
+// acknowledgement it could not confirm. And through the requeue of a task the heartbeat
+// declared lost, which keeps its key and can reach the host that is still running it: one
+// whose heartbeat was cut off while its container ran. The second is refused rather than
+// run beside the first, because two Runs carrying one container would each collect it and
+// each remove it, and the one that removed it first would take it away under the other. The
+// first delivery is the one that reports.
 var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
 
 // register records a task as being in flight, and answers with what to call when it is

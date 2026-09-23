@@ -220,10 +220,30 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	second[0].Held(t.Context())
 }
 
+// A pool's consumer waits AckWait for a runner to acknowledge what it was handed before handing it
+// to another, which is the bound on a take and a redemption and not on a task.
+func TestAPoolWaitsAckWaitForARunnerToAcknowledge(t *testing.T) {
+	b := open(t)
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		consumer, err := b.js.Consumer(t.Context(), Stream, Durable(pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Config.AckWait != AckWait {
+			t.Errorf("the consumer of pool %s waits %s for an acknowledgement, and AckWait is %s", pool, info.Config.AckWait, AckWait)
+		}
+	}
+}
+
 // A task is held once the server says the acknowledgement arrived, and not once it has left
 // this side. A link that drops keeps the acknowledgement in the client's buffer, and the server
-// hands the task to another runner of the pool when its wait runs out, so a runner told it held
-// the task on the strength of the buffer would start the container beside that one.
+// hands the message to another runner of the pool when its wait runs out. That runner is refused
+// the task at its redemption, but the runner holding it is owed the truth: told it held the task
+// on the strength of the buffer, it would not know the message was coming round again.
 func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
 	b := open(t)
 	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {

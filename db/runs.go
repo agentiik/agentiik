@@ -568,15 +568,15 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 // BindUnredeemed binds one dispatch nobody has redeemed to the runner whose ending of it is being
 // written, and answers who holds it once that is done.
 //
-// Two endings come for a dispatch no runner is bound to. A runner pulls a task's image before it
-// redeems the grant, so a refused pull, or a grant that would not redeem, ends a dispatch that
-// never reached a container. And a requeue that comes back to the host which already ended its
-// key is never redeemed at all: the host answers it from its record, through the runner that
-// redeemed an earlier dispatch of the key. The runner reporting either is bound to the dispatch
-// here, as a redemption would have bound it, so that no other runner can report a second ending
-// for it and no redemption can follow. A dispatch somebody already holds keeps its holder, and the
-// answer says who that is; the row is locked by the update, so a redemption racing it binds first
-// or finds it bound.
+// Two endings come for a dispatch no runner is bound to. A grant that would not redeem ends a
+// dispatch that never reached a container and that no redemption bound: a runner redeems before it
+// pulls, so a refused pull is reported by the runner the redemption bound, but a refused redemption
+// binds nobody. And a requeue that comes back to the host which already ended its key is never
+// redeemed at all: the host answers it from its record, through the runner that redeemed an earlier
+// dispatch of the key. The runner reporting either is bound to the dispatch here, as a redemption
+// would have bound it, so that no other runner can report a second ending for it and no redemption
+// can follow. A dispatch somebody already holds keeps its holder, and the answer says who that is;
+// the row is locked by the update, so a redemption racing it binds first or finds it bound.
 //
 // It belongs in the transaction that writes the ending, and never in one of its own. Lost takes a
 // bound dispatch in flight for one a runner redeemed, so a binding committed without its ending

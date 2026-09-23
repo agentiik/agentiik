@@ -78,6 +78,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 - `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
 - `Bus.Ended` answers a task whose key the host already ended: it acknowledges the message and reports the recorded ending under the message's `task_id`. An ending of another key is not sent.
+- A runner redeems a task's grant before it acknowledges the message, and pulls only after, where it acknowledged on take. A host that dies before redeeming leaves the message to another runner once `bus.AckWait` has passed, and one that dies after leaves a bound task the heartbeat's sweep declares lost. Nothing sweeps a task nobody redeemed. Secret values are read before the pull.
+- `Taken.Refused` acknowledges a task whose redemption was refused, another runner's or one that is over, and starts nothing.
+- A runner no longer holds back a task it redeemed because `Taken.Held` failed: every other runner is refused the message that comes round again.
+- `bus.AckWait` is a minute, sized for a take and a redemption rather than a task.
 
 ### Driver
 
@@ -112,7 +116,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A redemption tells the runner whether a secret it names is not held or held and unreadable, and hands the store's reason to `RunnerOptions.Trouble` for whoever runs the installation.
-- A redemption binds its task only once it has an answer to give. A secret the store cannot give, or an input envelope it cannot read, is refused and binds nothing, as a missing tree already did: the refused runner's report that no container ran ends the dispatch, and only a second delivery could redeem it. A runner that dies before that report leaves the task to the run's `timeout` until dispatches nobody redeemed are swept, where the heartbeat found it lost before. The values are read last, once nothing else can refuse, and in no transaction.
+- A redemption binds its task only once it has an answer to give. A secret the store cannot give, or an input envelope it cannot read, is refused and binds nothing, as a missing tree already did: the refused runner's report that no container ran ends the dispatch, and only a second delivery could redeem it. A runner that dies before that report has not acknowledged the message, so the next runner of the pool is handed it, where the heartbeat found it lost before. The values are read last, once nothing else can refuse, and in no transaction.
 - A test has runners redeem one task at once, all of them past the check before any is bound, and holds that one is given the task and the rest are refused with no value.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
 - Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.

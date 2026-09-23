@@ -374,12 +374,15 @@ func orEmptyStrings(s []string) []string {
 // on time, and one behind it declares a loss that much later. Judging by the database's clock
 // would not have removed the pairing, only added a third clock to it.
 //
-// Only a task some runner holds, which is one a runner has redeemed the grant of. A task nobody
-// has redeemed is a message waiting on the queue for a runner with room, and a busy pool or an
-// empty one keeps it waiting as long as it likes; it is not lost, because "lost: The runner
-// holding it stopped reporting" and nothing holds it. Declared lost, it would be requeued into the
-// queue it was already waiting on, one row and one message on every sweep for as long as the pool
-// stayed full, and a step that does not requeue would fail for having waited.
+// Only a task some runner holds, which is one a runner has redeemed the grant of. A task nobody has
+// redeemed is a message waiting on the queue for a runner with room, or one a runner took and has
+// not redeemed yet, and so has not acknowledged either, since a runner acknowledges only once it
+// has redeemed: should it die there, the bus hands the message to another runner of the pool once
+// AckWait has passed. Either way the task is the bus's until it is redeemed, and a busy pool or an
+// empty one keeps it waiting as long as it likes; it is not lost, because "lost: The runner holding
+// it stopped reporting" and nothing holds it. Declared lost, it would be requeued into the queue it
+// was already waiting on, one row and one message on every sweep for as long as the pool stayed
+// full, and a step that does not requeue would fail for having waited.
 //
 // Held is read as bound to a runner, and a task in flight is bound by a redemption and by nothing
 // else. A runner is also bound to a task it reports never reached a container, and that binding
@@ -390,10 +393,11 @@ func orEmptyStrings(s []string) []string {
 // its redemption where no heartbeat has named it yet, and the dispatch only where neither is
 // recorded. Not from the dispatch alone, which is when the message went on the queue: a task
 // redeemed after a long wait would be lost between its redemption and its first heartbeat, and
-// requeued while its container ran. A runner that took work and was never heard from again is
-// still exactly the case this is for, counted from when it took it. The redemption is the latest
-// of its grants', since a task may have been issued several and a runner redeems one: joined on
-// each, the one nobody redeemed would count the task from its dispatch.
+// requeued while its container ran. A runner that redeemed a task and was never heard from again,
+// one that died before it could acknowledge the message included, is still exactly the case this is
+// for, counted from its redemption. The redemption is the latest of its grants', since a task may
+// have been issued several and a runner redeems one: joined on each, the one nobody redeemed would
+// count the task from its dispatch.
 //
 // The runs are locked before their tasks, which is the order a decision takes them in:
 // SaveDecision updates the run and then writes each of its tasks. Taken the other way round, a
