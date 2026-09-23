@@ -70,8 +70,7 @@ const realWorkflow = `
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: monthly-invoicing, namespace: finance }
-secrets:
-  billing_api: { provider: builtin, path: finance/billing-api }
+secrets: [billing_api]
 outputs:
   charged: { from: { step: collect, port: out } }
   signed: { from: { step: sign, port: out } }

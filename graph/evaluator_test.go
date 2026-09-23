@@ -462,8 +462,7 @@ func TestASecretInParamsTravelsAsAReferenceAndNeverAsAValue(t *testing.T) {
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: monthly-invoicing, namespace: finance }
-secrets:
-  billing: { provider: vault, path: kv/data/agentiik/billing }
+secrets: [billing]
 steps:
   invoice:
     image: ` + image + `

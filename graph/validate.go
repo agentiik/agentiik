@@ -46,7 +46,7 @@ func Check(wf *Workflow) error {
 
 // checkSteps applies the rules about one step that need nothing but the file: that it
 // runs something, that a script step declares its ports, and that the secrets it mounts
-// are secrets this workflow declared.
+// are secrets this workflow names.
 func checkSteps(wf *Workflow) error {
 	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
 		st := wf.Steps[name]
@@ -70,8 +70,8 @@ func checkSteps(wf *Workflow) error {
 			return fmt.Errorf("graph: step %s: strategy.fan_out is matrix and the step declares no matrix: a matrix fan-out is the cartesian product of variable lists, every combination is a shard, and a product of no list is a shard of nothing", name)
 		}
 		for _, secret := range st.Secrets {
-			if _, ok := wf.Secrets[secret]; !ok {
-				return refuse(RuleSecretNotDeclared, name, "", fmt.Sprintf("the step mounts %s, which the secrets block does not declare: secrets are mounted by the name the secrets block gives them, and only secrets of the owning namespace can be referenced", secret))
+			if !slices.Contains(wf.Secrets, secret) {
+				return refuse(RuleSecretNotDeclared, name, "", fmt.Sprintf("the step mounts %s, which the secrets block does not name: secrets are mounted by the name the secrets block lists them under, and only secrets the owning namespace declares can be named there", secret))
 			}
 		}
 	}

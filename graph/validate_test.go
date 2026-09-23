@@ -144,8 +144,8 @@ steps:
 }
 
 // TestASecretIsMountedByTheNameTheWorkflowGivesIt holds the rule: "secrets are mounted by
-// the name the secrets block gives them, and only secrets of the owning namespace can be
-// referenced".
+// the name the secrets block lists them under, and only secrets the owning namespace
+// declares can be named there".
 func TestASecretIsMountedByTheNameTheWorkflowGivesIt(t *testing.T) {
 	held(t, checked(t, `
 apiVersion: agentiik.dev/v1
@@ -162,17 +162,14 @@ steps:
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: monthly-invoicing }
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 steps:
   invoice:
     image: b@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc
     secrets: [billing]
     outputs: [out]
 `); err != nil {
-		t.Fatalf("a step mounting a declared secret was refused: %v", err)
+		t.Fatalf("a step mounting a secret the workflow names was refused: %v", err)
 	}
 }
 

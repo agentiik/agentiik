@@ -67,10 +67,7 @@ vars:
   currency: EUR
   dunning_days: 30
 
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 
 defaults:
   timeout: 10m

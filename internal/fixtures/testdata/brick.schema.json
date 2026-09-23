@@ -105,7 +105,7 @@
           ]
         },
         "secrets": {
-          "description": "Secrets the brick needs, under the names it expects to read them by. The workflow maps its own declared secrets onto these names, and the runner mounts each value on tmpfs at the mount point, never as an environment variable, because a process environment is readable by its children and ends up in diagnostic dumps.",
+          "description": "Secrets the brick needs, under the names it expects to read them by. The workflow maps the secrets it names onto these names, and the runner mounts each value on tmpfs at the mount point, never as an environment variable, because a process environment is readable by its children and ends up in diagnostic dumps.",
           "type": "array",
           "items": { "$ref": "#/$defs/secret" },
           "examples": [
@@ -330,7 +330,7 @@
       ],
       "properties": {
         "name": {
-          "description": "Name the brick knows this secret by, on the grammar a workflow secret name is written on, because the two are the same name: the workflow declares a secret under it and the runner mounts the value at /agk/secrets/<name>. A name this accepts and a workflow cannot write would be a requirement no workflow could satisfy. A workflow can only map secrets of the namespace that owns it, so moving a workflow elsewhere breaks the reference at validation rather than silently carrying access along.",
+          "description": "Name the brick knows this secret by, on the grammar a workflow secret name is written on, because the two are the same name: the workflow names a secret by it, and the runner mounts the value at the mount this entry gives or, where it gives none, at /agk/secrets/<name>. A name this accepts and a workflow cannot write would be a requirement no workflow could satisfy. A workflow can only map secrets the namespace that owns it declares, so moving a workflow elsewhere breaks the reference at validation rather than silently carrying access along.",
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
           "examples": ["bearer", "billing"]
@@ -342,10 +342,11 @@
           "examples": [true, false]
         },
         "mount": {
-          "description": "Path the value is mounted at, on tmpfs, for the brick to read as a file. The runner obtains the value at the last moment by redeeming a per-task grant, so the path exists only for the lifetime of the task.",
+          "description": "Path the value is mounted at, on tmpfs, for the brick to read as a file. The runner obtains the value at the last moment by redeeming a per-task grant, so the path exists only for the lifetime of the task. It is one file directly under /agk/secrets/, and a mount elsewhere, /run/secrets/bearer written out of habit, is refused. The file name begins with a letter or a digit and goes on in letters, digits, dots, hyphens and underscores: the dot is kept because a file name naturally carries one, as client.key does, and the first character is what refuses . and .., which name the directory or its parent rather than a file in it. The task message and the grant redemption carry the mount on this same grammar, because a mount the manifest accepts and the wire refuses is a secret the engine dispatches and a strict runner then cannot write.",
+          "$comment": "The same pattern is wire.schema.json $defs/secretMount. A $ref may not leave a document here, so the two are copies, and tools/check.py fails the build when they differ: changing one is changing both.",
           "type": "string",
-          "pattern": "^/agk/secrets/[^/]+$",
-          "examples": ["/agk/secrets/bearer", "/agk/secrets/billing"]
+          "pattern": "^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "examples": ["/agk/secrets/bearer", "/agk/secrets/billing", "/agk/secrets/client.key"]
         }
       }
     },

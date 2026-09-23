@@ -190,11 +190,16 @@
     },
     "secrets": {
       "title": "Secrets",
-      "description": "The secrets steps of this workflow may mount, declared by name and resolved by the API at the last moment. Only secrets of the owning namespace can be named, so moving a workflow elsewhere breaks the reference at validation instead of quietly carrying access along.",
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/identifier" },
-      "additionalProperties": { "$ref": "#/$defs/secret" },
-      "examples": [{ "billing": { "provider": "vault", "path": "kv/data/agentiik/billing" } }]
+      "description": "The secrets of the owning namespace this workflow uses, by name and by nothing else, resolved by the API at the last moment. Where a value lives, its provider and its path, is declared on the namespace through the API or agentiik_secret in Terraform, by a principal holding secret:write, and a namespace is confined to its own paths: a path written in this file would let anyone able to push the workflow aim it at whatever the store holds. Only secrets the owning namespace declares can be named, so moving a workflow elsewhere breaks the reference at validation instead of quietly carrying access along. A step mounts one of them by the same name.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "description": "Name of one secret the owning namespace declares, written as the namespace declares it.",
+        "$ref": "#/$defs/identifier",
+        "examples": ["billing", "ledger"]
+      },
+      "examples": [["billing"], ["billing", "ledger"]]
     },
     "defaults": {
       "$ref": "#/$defs/defaults",
@@ -426,28 +431,6 @@
         }
       ],
       "examples": ["7d", { "for": "7d" }]
-    },
-    "secret": {
-      "title": "Secret declaration",
-      "description": "Where one secret of the owning namespace is read from. The value is never written here and never reaches the controller: the API redeems a per-task grant at the last moment and the runner mounts the value on tmpfs.",
-      "type": "object",
-      "required": ["provider"],
-      "additionalProperties": false,
-      "examples": [{ "provider": "vault", "path": "kv/data/agentiik/billing" }],
-      "properties": {
-        "provider": {
-          "description": "Store the value is held in. An installation carries a built-in encrypted store, HashiCorp Vault, and API environment variables for development use.",
-          "type": "string",
-          "minLength": 1,
-          "examples": ["vault"]
-        },
-        "path": {
-          "description": "Where the value sits inside that store. What it looks like belongs to the provider: a Vault path names a mount and a key.",
-          "type": "string",
-          "minLength": 1,
-          "examples": ["kv/data/agentiik/billing"]
-        }
-      }
     },
     "include": {
       "title": "Include",
@@ -1330,12 +1313,12 @@
     },
     "stepSecrets": {
       "title": "Secrets to mount",
-      "description": "Which of the workflow's declared secrets this step gets, by the name the secrets block gives them. They arrive as files on tmpfs under /agk/secrets/<name> rather than as environment variables, because a process environment is readable by its children and ends up in diagnostic dumps. A secret is never reachable from a condition.",
+      "description": "Which of the secrets the workflow names in its secrets block this step gets, by the same name. They arrive as files on tmpfs under /agk/secrets/, at the mount the brick manifest gives the name or at /agk/secrets/<name> where it gives none, rather than as environment variables, because a process environment is readable by its children and ends up in diagnostic dumps. A secret is never reachable from a condition.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
       "items": {
-        "description": "Name of one secret declared in the workflow secrets block.",
+        "description": "Name of one secret listed in the workflow secrets block.",
         "$ref": "#/$defs/identifier",
         "examples": ["billing"]
       },

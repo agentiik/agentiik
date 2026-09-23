@@ -143,7 +143,7 @@ func Parse(doc []byte) (*Workflow, error) {
 type Fragment struct {
 	include  []Include
 	vars     Vars
-	secrets  map[string]SecretDecl
+	secrets  []string
 	defaults Defaults
 	values   map[agk.Step]stepValues
 	blocks   map[string]stepValues
@@ -780,42 +780,40 @@ func varsOf(root map[string]any) (Vars, error) {
 	return vars, nil
 }
 
-func secretsOf(root map[string]any) (map[string]SecretDecl, error) {
+// secretsOf reads the names of the secrets the workflow uses, and nothing more about them.
+//
+// Where a value lives, its provider and its path, is declared on the namespace, through the
+// API or agentiik_secret, by a principal holding secret:write. A path written in the file would
+// let anybody able to push the workflow aim it at whatever the store holds, so a block carrying
+// one is refused rather than read for its names: accepting it would be telling its author the
+// path had been used.
+func secretsOf(root map[string]any) ([]string, error) {
 	raw, ok := root["secrets"]
 	if !ok {
 		return nil, nil
 	}
-	b, err := mapping(raw, "secrets")
-	if err != nil {
-		return nil, err
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("secrets is written as %s, and it is a list of names: where a value lives, its provider and its path, is declared on the namespace through the API or agentiik_secret, and the file names the secrets it uses and nothing more", kindOf(raw))
 	}
-	secrets := make(map[string]SecretDecl, len(b))
-	for _, name := range keysOf(b) {
-		where := "secrets." + name
+	if len(list) == 0 {
+		return nil, fmt.Errorf("secrets is an empty list, and a block that declares nothing is better left out")
+	}
+	names := make([]string, 0, len(list))
+	for _, v := range list {
+		name, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("secrets carries %v, and every entry of it is the name of a secret the namespace declares", v)
+		}
 		if err := identifier(name, "the secret", "secrets"); err != nil {
 			return nil, err
 		}
-		entry, err := mapping(b[name], where)
-		if err != nil {
-			return nil, err
+		if slices.Contains(names, name) {
+			return nil, fmt.Errorf("secrets names %s twice, and a name is one secret however often it is written", name)
 		}
-		if err := closedTo(entry, where, "provider", "path"); err != nil {
-			return nil, err
-		}
-		var s SecretDecl
-		written := false
-		if s.Provider, written, err = textAt(entry, "provider", where); err != nil {
-			return nil, err
-		}
-		if !written {
-			return nil, fmt.Errorf("%s declares no provider: the value is never written in the file, so the provider is all there is to resolve it by", where)
-		}
-		if s.Path, _, err = textAt(entry, "path", where); err != nil {
-			return nil, err
-		}
-		secrets[name] = s
+		names = append(names, name)
 	}
-	return secrets, nil
+	return names, nil
 }
 
 func concurrencyOf(root map[string]any) (Concurrency, error) {

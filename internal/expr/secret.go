@@ -22,16 +22,16 @@ const secretTypeName = "agentiik.secret"
 // a step that is already running.
 var secretType = cel.OpaqueType(secretTypeName)
 
-// Secret is an opaque reference to a declared secret. It carries the name the workflow
-// declared and never the value behind it, because nothing in this process has the value:
+// Secret is an opaque reference to a secret the workflow names. It carries the name and
+// never the value behind it, because nothing in this process has the value:
 // a secret is resolved by the runner and mounted into the container as a file.
 //
 // It stringifies to nothing, so a secret that reaches a format verb or a log line prints
 // nothing, and it refuses to be marshalled, so a secret that reaches a document is an
 // error rather than a field.
 type Secret struct {
-	// Name is the name the workflow's secrets block declared. It is a reference and
-	// not a credential: what it points at is never read here.
+	// Name is the name the workflow's secrets block lists. It is a reference and not
+	// a credential: what it points at is never read here.
 	Name string
 }
 

@@ -2,7 +2,7 @@
   "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
   "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
   "runner": "runner-dmz-02",
-  "state": "cancelled",
+  "state": "queued",
   "exit_code": 108,
   "started_at": "2026-09-10T06:41:09.104Z",
   "finished_at": "2026-09-10T06:42:32.117Z",

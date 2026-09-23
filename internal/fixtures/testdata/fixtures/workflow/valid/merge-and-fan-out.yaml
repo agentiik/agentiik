@@ -26,10 +26,7 @@ defaults:
     - ./lib/**
   secrets: [ledger]
 
-secrets:
-  ledger:
-    provider: vault
-    path: kv/data/agentiik/ledger
+secrets: [ledger]
 
 steps:
 

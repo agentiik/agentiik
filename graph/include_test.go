@@ -351,6 +351,37 @@ steps:
 	}
 }
 
+// TestAnIncludedFileAndItsIncluderNameSecretsTogether holds what a name is: a secret the
+// workflow uses, and not a value one file overrides in another. Where it lives is the
+// namespace's declaration, so a name written in both files is one secret and nothing collides.
+func TestAnIncludedFileAndItsIncluderNameSecretsTogether(t *testing.T) {
+	wf := loaded(t, map[string]string{
+		"agentiik.yaml": `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: shared-secrets }
+include:
+  - path: ./common.yaml
+secrets: [ledger, billing]
+steps:
+  invoice:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    secrets: [billing, bearer, ledger]
+    outputs: [out]
+`,
+		"common.yaml": `
+secrets: [billing, bearer]
+`,
+	}, nil)
+
+	if got := strings.Join(wf.Secrets, ","); got != "billing,bearer,ledger" {
+		t.Fatalf("the two files named %s, want each secret once in the order it was first named", got)
+	}
+	if err := Check(wf); err != nil {
+		t.Fatalf("a step mounting secrets named across the two files was refused: %v", err)
+	}
+}
+
 // TestTwoFilesMayIncludeAThird is reuse working as it should. A file already included
 // contributes what it contributes once, and reading it a second time would say nothing
 // new; a file that comes back to itself is the other thing, and is refused.

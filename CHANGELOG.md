@@ -68,6 +68,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `secret`, the built-in store: a fresh AES-256-GCM data key per value, wrapped by a master key read from a file only the API user can open.
 - Master keys rotate through a keyring. Resealing is idempotent and does not change a value's version.
 - A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
+- A workflow's `secrets` block is a list of names, `secrets: [billing]`. Where a value lives is the namespace's declaration, and a block still writing a provider or a path is refused.
 
 ### Command line
 

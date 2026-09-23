@@ -44,10 +44,7 @@ outputs:
     from: { step: collect, port: out }
     retain: { for: 24h, fetches: 2 }
 
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 
 steps:
 
