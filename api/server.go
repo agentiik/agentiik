@@ -149,6 +149,20 @@ const TreeMaxBytes = 4 << 20
 // only by carrying a dependency tree, and that belongs in an image.
 const TreeMaxFiles = 4096
 
+// TreeNameMaxBytes is the longest one segment of a tree path may be, which is NAME_MAX: 255 bytes is
+// what the filesystems a runner lays a tree out on hold a name to. A longer name is a file no
+// runner can create, and a version holding one is a version every run of which fails, so it is
+// refused at the push rather than at each of them.
+const TreeNameMaxBytes = 255
+
+// TreePathMaxBytes is the longest a tree path may be.
+//
+// Linux holds a path to PATH_MAX, 4096 bytes with the null that ends it, and a tree is laid out
+// below a directory twice over: the runner's own on the host, and /agk/repo in the container,
+// where a step opens it by name. Half of PATH_MAX leaves the other half to whichever directory
+// that is, and a workflow repository whose paths need more is not one anybody writes by hand.
+const TreePathMaxBytes = 2048
+
 // commitName is a commit as the version table holds one, and a push is held to it before anything
 // is written. Left to the table's own check, a commit that is not one was refused only by the
 // insert, after the tree was already in the store with nothing counting it, and answered 500 for
@@ -293,7 +307,7 @@ func checkTree(files map[string]PushFile) ([]string, int, error) {
 	paths := make([]string, 0, len(files))
 	var total int64
 	for p, f := range files {
-		if err := checkTreePath(p); err != nil {
+		if err := CheckTreePath(p); err != nil {
 			return nil, http.StatusBadRequest, err
 		}
 		if f.Mode != "0644" && f.Mode != "0755" {
@@ -309,14 +323,17 @@ func checkTree(files map[string]PushFile) ([]string, int, error) {
 
 	// A path that is a file and also the directory of another cannot be laid out: one of the
 	// two would have to lose, and which one would depend on the order the runner wrote them.
+	//
+	// Found by searching the sorted paths for each one with a slash after it, rather than by
+	// looking every directory of every path up among the files. That was a hash of the whole
+	// prefix at each slash, so a single path of a few mebibytes, most of them slashes, cost the
+	// square of its length: under a minute of processor for one request, from anybody allowed
+	// to push. The files below p sort together, immediately at or after p+"/", so one search
+	// finds the first of them if there is any.
 	for _, p := range paths {
-		for i := range len(p) {
-			if p[i] != '/' {
-				continue
-			}
-			if _, file := files[p[:i]]; file {
-				return nil, http.StatusBadRequest, fmt.Errorf("%s is both a file and the directory %s is in, and a tree laid out on a disk can hold only one of the two", p[:i], p)
-			}
+		below := p + "/"
+		if i := sort.SearchStrings(paths, below); i < len(paths) && strings.HasPrefix(paths[i], below) {
+			return nil, http.StatusBadRequest, fmt.Errorf("%s is both a file and the directory %s is in, and a tree laid out on a disk can hold only one of the two", p, paths[i])
 		}
 	}
 	return paths, 0, nil
@@ -399,15 +416,19 @@ func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[stri
 	return nil
 }
 
-// checkTreePath refuses a path a container could not be given, and one that leaves the tree.
+// CheckTreePath refuses a path a container could not be given, and one that leaves the tree.
 //
 // The mount is /agk/repo, so a path escaping it is a path writing somewhere else on the host that
 // prepares the directory. It is refused here rather than there because here is where somebody is
-// watching.
-func checkTreePath(p string) error {
+// watching. Exported because agk push applies it to every name of a commit before it reads a byte
+// of the tree, so that a name the installation would refuse is refused before the tree is read
+// and sent rather than after, and by the same rule rather than by a copy of it.
+func CheckTreePath(p string) error {
 	switch {
 	case p == "":
 		return errors.New("a tree file with no path")
+	case len(p) > TreePathMaxBytes:
+		return fmt.Errorf("%.64s... is a path of %d bytes, and a tree path is at most %d: laid out below a runner's directory and below /agk/repo it would be a path the host cannot name", p, len(p), TreePathMaxBytes)
 	case p == ".":
 		return errors.New("a tree file named ., which is the root of the repository and a directory rather than a file")
 	case path.IsAbs(p):
@@ -424,18 +445,63 @@ func checkTreePath(p string) error {
 		// name the commit does not give it, and two such names would arrive as one. The
 		// character is what is left to see, and one that was really in a name cannot be told
 		// from one that was not.
-		return fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8: until the installation hosts the repository a push carries UTF-8 names only, and this file would be laid out under a name its commit does not give it", p)
+		return fmt.Errorf("%q holds U+FFFD, which is what JSON leaves where a name was not UTF-8, and a name that really holds one cannot be told from one that lost its bytes on the way: until the installation hosts the repository a push carries names without it", p)
+	case strings.ContainsRune(p, '\\'):
+		// A separator on Windows, where a\..\..\x is a path out of the tree and C:\x
+		// and \\host\share are somewhere else entirely. A path that names one file on
+		// one host and another on the next is not a path a version can promise.
+		return fmt.Errorf("%q holds a backslash, which Windows reads as a separator: a tree path separates its directories with / alone, so that it names the same file on every host that lays it out", p)
 	}
-	// Any segment spelt .git, in any case. A commit's tree never holds one, since git refuses
-	// it, and one laid out under /agk/repo would be a repository configuration, hooks and all,
-	// that any git a step runs there obeys. In any case because the filesystem a runner lays
-	// the tree out on may fold it, and .GIT is .git on such a disk.
 	for _, segment := range strings.Split(p, "/") {
-		if strings.EqualFold(segment, ".git") {
-			return fmt.Errorf("%s has a segment named .git, which is git's own and never part of a commit's tree", p)
+		if len(segment) > TreeNameMaxBytes {
+			return fmt.Errorf("%.64s... holds a name of %d bytes, and a filesystem holds a name to %d: no runner could create that file", p, len(segment), TreeNameMaxBytes)
+		}
+		// A segment that is .git, which a commit's tree never holds since git refuses it,
+		// and which laid out under /agk/repo would be a repository configuration, hooks
+		// and all, that any git a step runs there obeys.
+		if dotGit(segment) {
+			return fmt.Errorf("%q has a segment that is .git on some filesystem a tree is laid out on, and .git is git's own and never part of a commit's tree", p)
 		}
 	}
 	return nil
+}
+
+// dotGit is whether a segment is .git on some filesystem a runner may lay a tree out on, which is
+// the rule git applies itself, with core.protectNTFS and core.protectHFS, before it writes a name.
+//
+// A filesystem that folds case makes .GIT one. NTFS also drops the dots and spaces a name ends
+// with, reads what follows a colon as a stream of the file before it, and gives .git the short
+// name GIT~1, so .git., .git::$INDEX_ALLOCATION and GIT~1 are each .git there. HFS+ ignores a
+// handful of invisible code points, so .g\u200cit is .git on it. On a Linux disk every one of
+// these is an ordinary name, and a tree is laid out on whatever disk its runner has.
+func dotGit(segment string) bool {
+	s := strings.Map(func(r rune) rune {
+		if hfsIgnores(r) {
+			return -1
+		}
+		return r
+	}, segment)
+	if colon := strings.IndexByte(s, ':'); colon >= 0 {
+		s = s[:colon]
+	}
+	s = strings.TrimRight(s, ". ")
+	if strings.EqualFold(s, ".git") {
+		return true
+	}
+	// GIT~1, and any other number, since which one NTFS gives depends on what the directory
+	// held before.
+	number, short := strings.CutPrefix(strings.ToLower(s), "git~")
+	return short && number != "" && strings.Trim(number, "0123456789") == ""
+}
+
+// hfsIgnores is whether HFS+ leaves a code point out when it compares two names: the ones git's
+// own is_hfs_dotgit skips.
+func hfsIgnores(r rune) bool {
+	switch {
+	case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
+		return true
+	}
+	return false
 }
 
 // Start is a manual run: the inputs, and nothing else. What version it runs is the workflow's

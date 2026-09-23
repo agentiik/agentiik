@@ -115,6 +115,19 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 		{"a file inside .git", adding(map[string]api.PushFile{".git/config": file("[core]")}), http.StatusBadRequest},
 		{"a .git segment spelt in another case, further down", adding(map[string]api.PushFile{"vendor/lib/.GIT/hooks/post-checkout": file("x")}), http.StatusBadRequest},
 		{"a path that is a file and a directory", adding(map[string]api.PushFile{"scripts": file("x"), "scripts/render.sh": file("y")}), http.StatusBadRequest},
+		// A name sorting between the file and what is below it, since - comes before /.
+		{"a file and a directory with a name between them", adding(map[string]api.PushFile{"scripts": file("x"), "scripts-old": file("y"), "scripts/render.sh": file("z")}), http.StatusBadRequest},
+		{"a name longer than a filesystem holds", adding(map[string]api.PushFile{"data/" + strings.Repeat("n", api.TreeNameMaxBytes+1): file("x")}), http.StatusBadRequest},
+		{"a path longer than a runner can lay out", adding(map[string]api.PushFile{strings.Repeat("d/", api.TreePathMaxBytes/2) + "x": file("x")}), http.StatusBadRequest},
+		// What Windows reads as separators, which leave the tree there.
+		{"a backslash climbing out on Windows", adding(map[string]api.PushFile{`scripts\..\..\outside.sh`: file("x")}), http.StatusBadRequest},
+		{"a Windows drive", adding(map[string]api.PushFile{`C:\outside.sh`: file("x")}), http.StatusBadRequest},
+		// And the spellings of .git that NTFS and HFS+ resolve to it.
+		{".git with a dot NTFS drops", adding(map[string]api.PushFile{".git./config": file("[core]")}), http.StatusBadRequest},
+		{".git with a space NTFS drops", adding(map[string]api.PushFile{".git /config": file("[core]")}), http.StatusBadRequest},
+		{"the short name NTFS gives .git", adding(map[string]api.PushFile{"GIT~1/config": file("[core]")}), http.StatusBadRequest},
+		{".git as an NTFS stream", adding(map[string]api.PushFile{".git::$INDEX_ALLOCATION/config": file("[core]")}), http.StatusBadRequest},
+		{".git with a code point HFS+ ignores", adding(map[string]api.PushFile{".g\u200cit/config": file("[core]")}), http.StatusBadRequest},
 		// Two Latin-1 names, which JSON turns into one and the same name before the server
 		// sees either: what arrives is U+FFFD, and a file laid out under it is not the commit's.
 		{"names that were not UTF-8 before JSON had them", adding(map[string]api.PushFile{"caf\xe9.txt": file("acute"), "caf\xe8.txt": file("grave")}), http.StatusBadRequest},
@@ -150,6 +163,34 @@ func TestATreeThatCannotBeGivenToAContainer(t *testing.T) {
 	// of those pushes, and it is not in the store.
 	if held, err := objects.Has(t.Context(), keyOf("finance", []byte(workflowDocument))); err != nil || held {
 		t.Errorf("a refused push left its tree in the store: %v %v", held, err)
+	}
+}
+
+// A path is checked in time proportional to its length. Looking each of its directories up among
+// the files hashed the whole prefix at every slash, so one path of a few mebibytes, nearly all of
+// them slashes, cost a minute of processor and was then accepted, into a version no runner could
+// lay out. It is refused now, by its length, before anything walks it.
+func TestAPathOfMebibytesIsRefusedByItsLength(t *testing.T) {
+	h, _, _, _ := servingWithObjects(t)
+	// Beside a few ordinary files, since a map of eight or fewer is searched without hashing.
+	files := map[string]api.PushFile{}
+	for i := range 10 {
+		files[fmt.Sprintf("scripts/%d.sh", i)] = api.PushFile{Content: []byte("x"), Mode: "0644"}
+	}
+	deep := strings.Repeat("a/", 1<<20) + "z"
+	files[deep] = api.PushFile{Content: []byte("x"), Mode: "0644"}
+	w, answer := call(t, h, "PUT", pushTo, "alice", pushed(t, files))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a path of %d bytes answered %d", len(deep), w.Code)
+	}
+	if said, _ := answer["error"].(string); !strings.Contains(said, fmt.Sprint(api.TreePathMaxBytes)) || len(said) > 1024 {
+		t.Errorf("the refusal reads %.200q, in %d bytes", said, len(said))
+	}
+
+	// And the longest path and the longest name there may be are pushed like any other.
+	longest := strings.Repeat("d/", (api.TreePathMaxBytes-api.TreeNameMaxBytes)/2) + strings.Repeat("n", api.TreeNameMaxBytes)
+	if w, _ := call(t, h, "PUT", pushTo, "alice", pushed(t, map[string]api.PushFile{longest: {Content: []byte("x"), Mode: "0644"}})); w.Code != http.StatusOK {
+		t.Errorf("a path of %d bytes answered %d: %s", len(longest), w.Code, w.Body)
 	}
 }
 
