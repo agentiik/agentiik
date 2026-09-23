@@ -40,6 +40,10 @@ type Router struct {
 	// refused at registration rather than at the first heartbeat.
 	runners IdentifyRunner
 
+	// runs is where a route taking OnRun finds the workflow its run is of, and a route taking
+	// OnRun without it is refused at registration, as a runner route is.
+	runs FindRun
+
 	// routes is what was registered, in registration order, for the test that reads the
 	// list back and for an installation that wants to print its own surface.
 	routes []Route
@@ -54,9 +58,11 @@ type Route struct {
 	Scope      Scope
 
 	// Public and Why are set where the route is outside the authorisation hook, and Runner
-	// where it is authorised by a runner credential instead.
+	// where it is authorised by a runner credential instead. OfRun is set where the workflow the
+	// route is authorised against is the one the run in its path is of.
 	Public bool
 	Runner bool
+	OfRun  bool
 	Why    string
 }
 
@@ -78,6 +84,10 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 // ServeRunners says what a runner credential is checked against. Without it, a route taking
 // ForRunner is refused at registration.
 func (rt *Router) ServeRunners(runners IdentifyRunner) { rt.runners = runners }
+
+// ServeRuns says where the workflow of a run is found. Without it, a route taking OnRun is refused
+// at registration.
+func (rt *Router) ServeRuns(runs FindRun) { rt.runs = runs }
 
 // HandleRunner registers one route a runner reaches.
 //
@@ -147,7 +157,8 @@ func bearerOf(r *http.Request) (string, bool) {
 // name. The two the router reads are namespace and workflow, and a route whose scope needs one it
 // does not carry is refused here rather than at the first request: a workflow-scoped route with
 // no {workflow} in its pattern would be a route authorised against an empty workflow, which any
-// authorizer would either always allow or always refuse.
+// authorizer would either always allow or always refuse. A route taking OnRun carries {run}
+// instead of {workflow}, and never both.
 func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	if h == nil {
 		return fmt.Errorf("api: %s %s has no handler", method, pattern)
@@ -163,8 +174,18 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
 			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
 		}
-		if guard.scope == Workflow && !strings.Contains(pattern, "{workflow}") {
+		if guard.scope == Workflow && !guard.run && !strings.Contains(pattern, "{workflow}") {
 			return fmt.Errorf("api: %s %s is scoped to a workflow and its pattern names no {workflow}", method, pattern)
+		}
+	}
+	if guard.run {
+		switch {
+		case !strings.Contains(pattern, "{run}"):
+			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and its pattern names no {run}", method, pattern)
+		case strings.Contains(pattern, "{workflow}"):
+			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and names a {workflow} as well, which a request could make another one", method, pattern)
+		case rt.runs == nil:
+			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and nothing was given to find one in", method, pattern)
 		}
 	}
 
@@ -176,7 +197,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	rt.routes = append(rt.routes, Route{
 		Method: method, Pattern: pattern,
 		Permission: guard.permission, Scope: guard.scope,
-		Public: guard.public, Why: guard.why,
+		Public: guard.public, OfRun: guard.run, Why: guard.why,
 	})
 	return nil
 }
@@ -252,6 +273,22 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		refuse(w, http.StatusUnauthorized, "this request carries no credential")
 		return
+	}
+
+	if g.run {
+		// Looked up in the namespace the path names, before that namespace is authorised,
+		// and answered to nobody but the authorizer: a run that is not there is refused
+		// exactly as one the caller may not reach is.
+		workflow, err := rt.runs.WorkflowOf(r.Context(), target.Namespace, r.PathValue("run"))
+		switch {
+		case errors.Is(err, ErrNoRun):
+			rt.deny(w, g.scope)
+			return
+		case err != nil:
+			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+			return
+		}
+		target.Workflow = workflow
 	}
 
 	allowed, err := rt.auth.Allow(r.Context(), who, g.permission, target)
