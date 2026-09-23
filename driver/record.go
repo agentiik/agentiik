@@ -30,10 +30,24 @@ import (
 // So the record is on disk, because the redelivery it guards against is what follows a
 // restart, and under the work root, because that is the one directory a runner is given
 // to write in. It sits beside the task directories and in none of them: a task's
-// directory is removed with its container, and the record is what has to outlive it. It
-// holds the key, the state and the moment, and never a payload. A working directory is
-// "removed with the container, so no residue of one namespace survives into the next task
-// on that host", and a record that kept the envelopes would be exactly that residue.
+// directory is removed with its container, and the record is what has to outlive it.
+//
+// Refusing the key is not the whole answer, because the requeue is a task the run is
+// waiting on. The heartbeat declares a task lost when its host stops reporting, and a host
+// only cut off may well have run it to its end and reported that ending into the same
+// silence. The requeue that follows is likeliest to come back to that very host, and
+// certain to where it is its pool's only runner, and refused there and nothing more, it
+// would leave the run waiting on an ending nobody gives. So the record keeps, beside the
+// key, the state and the moment, what the ending left, by reference: each port's envelope
+// by digest and count, each artifact by digest and size, and where the log went and how
+// long it is. The host answers the requeue with that, and the brick never runs twice.
+//
+// By reference and never a payload. The envelopes and the artifacts are in the object
+// store before the ending is written down, since conclude writes them there first and
+// names each by the digest the store answered, so a reference is all a second report
+// needs. And a working directory is "removed with the container, so no residue of one
+// namespace survives into the next task on that host": a record that kept the envelopes
+// would be exactly that residue.
 
 // KeysDir is where the record sits under the work root.
 //
@@ -65,15 +79,94 @@ const pruneEvery = time.Hour
 // another attempt and so another key.
 var ErrCompleted = errors.New("the runner refuses to start a container for a key that has already completed")
 
-// keyEntry is what the record says about one key: taken, or how it ended.
-type keyEntry struct {
+// Completed is the refusal of a key this host has already carried to an ending, holding
+// what the record says of that ending.
+//
+// errors.Is with ErrCompleted is what says a key was refused for having ended, and
+// errors.As with a *Completed is what hands over how it ended. The runner that took the
+// key reports that ending under the task_id of the message it took, which is how the
+// requeue of a task lost while its host was only cut off is answered without the brick
+// running again.
+//
+// The Ending is the whole of it, so a Completed written as a literal, which is how a
+// runner's tests fake this package, is the same refusal as one Hold answered.
+type Completed struct {
+	Ending Ending
+}
+
+// Error is the refusal, naming the key, how and when it ended, and the rule.
+func (c *Completed) Error() string { return c.fault().Error() }
+
+// Unwrap gives up the fault, through which errors.Is reaches ErrCompleted and Charged reads
+// whose it is.
+func (c *Completed) Unwrap() error { return c.fault() }
+
+// fault is the refusal written as every other refusal of this package is, composed from the
+// ending each time rather than kept beside it, since a field only this package could fill
+// would leave every Completed made anywhere else pointing at nothing.
+func (c *Completed) fault() *Fault {
+	_, step, _, _, _ := agk.ParseTaskID(string(c.Ending.Key))
+	return fault(step, ErrCompleted, ChargePlatform, "task %s ended %s on this host at %s", c.Ending.Key, c.Ending.State, c.Ending.At.UTC().Format(time.RFC3339))
+}
+
+// Ending is what the record says about one key: how it ended, when, and what it left, by
+// reference.
+//
+// The references are spelled as a task result spells them, so that a runner answering a
+// requeue from the record forwards them rather than composes them. A key taken and not
+// yet ended is written in the same shape, dispatched, and says nothing else.
+type Ending struct {
 	Key   agk.TaskID    `json:"idempotency_key"`
 	State agk.TaskState `json:"state"`
 
-	// ExitCode is written for the two states that carry one, as graph.Result carries it.
-	ExitCode int `json:"exit_code,omitempty"`
+	// ExitCode is there wherever a container exited and its code was read, which is a
+	// success and a failure, as a result carries one. A failure met after the exit, a
+	// collection or an upload that did not go through, is written with none.
+	ExitCode *int `json:"exit_code,omitempty"`
 
+	// StartedAt and FinishedAt are the daemon's own, as the Result carried them.
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
+
+	// Outputs names the envelope of every port the Result carried, as the observer was
+	// told them, and of a success it is never absent, the empty list included: that is how
+	// a result tells a step that published nothing from a runner that said nothing.
+	Outputs []EndedPort `json:"outputs,omitzero"`
+
+	// Artifacts are the objects the task put in the store, as the observer was told them.
+	Artifacts []EndedArtifact `json:"artifacts,omitzero"`
+
+	// Log is where the task's log went, for a runner that keeps one.
+	Log *EndedLog `json:"log,omitempty"`
+
+	// At is when the entry was written, on this host's clock, which is what the record is
+	// pruned by.
 	At time.Time `json:"at"`
+}
+
+// EndedPort is the envelope one port published, named rather than kept.
+type EndedPort struct {
+	Port agk.Port `json:"port"`
+
+	// Digest is sha256: and sixty-four lowercase hexadecimal characters, as a result writes
+	// an envelope's, and it is the digest the store answered when the envelope was written
+	// to it, before the ending was.
+	Digest string `json:"digest"`
+	Items  int    `json:"items"`
+}
+
+// EndedArtifact is one object the task put in the store, by digest and size.
+type EndedArtifact struct {
+	SHA256 string `json:"sha256"`
+	Bytes  int64  `json:"bytes"`
+}
+
+// EndedLog is where a task's log is addressed from, how many lines it holds and whether a
+// cap cut it short.
+type EndedLog struct {
+	URI       agk.LogURI `json:"uri"`
+	Lines     int        `json:"lines"`
+	Truncated bool       `json:"truncated"`
 }
 
 // keys is the record of one work root.
@@ -103,24 +196,24 @@ func (k *keys) path(id agk.TaskID) (string, error) {
 }
 
 // read answers with what the record says about one key, and false where it says nothing.
-func (k *keys) read(id agk.TaskID) (keyEntry, bool, error) {
+func (k *keys) read(id agk.TaskID) (Ending, bool, error) {
 	path, err := k.path(id)
 	if err != nil {
-		return keyEntry{}, false, err
+		return Ending{}, false, err
 	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return keyEntry{}, false, nil
+		return Ending{}, false, nil
 	}
 	if err != nil {
-		return keyEntry{}, false, fmt.Errorf("driver: task %s: the record of its key could not be read, and a key this host cannot say it has not completed is not started: %w", id, err)
+		return Ending{}, false, fmt.Errorf("driver: task %s: the record of its key could not be read, and a key this host cannot say it has not completed is not started: %w", id, err)
 	}
-	var e keyEntry
+	var e Ending
 	if err := json.Unmarshal(b, &e); err != nil {
-		return keyEntry{}, false, fmt.Errorf("driver: task %s: the record of its key at %s does not read, and a key this host cannot say it has not completed is not started: %w", id, path, err)
+		return Ending{}, false, fmt.Errorf("driver: task %s: the record of its key at %s does not read, and a key this host cannot say it has not completed is not started: %w", id, path, err)
 	}
 	if e.Key != id {
-		return keyEntry{}, false, fmt.Errorf("driver: task %s: the record of its key at %s names %s, and a key this host cannot say it has not completed is not started", id, path, e.Key)
+		return Ending{}, false, fmt.Errorf("driver: task %s: the record of its key at %s names %s, and a key this host cannot say it has not completed is not started", id, path, e.Key)
 	}
 	return e, true, nil
 }
@@ -131,7 +224,7 @@ func (k *keys) read(id agk.TaskID) (keyEntry, bool, error) {
 // place is either the old entry or the new one, where a file written in place can be half
 // of the new one. Synced before the rename, because the host that restarts is the host
 // the entry was written for, and an entry a power cut took back is a brick run twice.
-func (k *keys) write(e keyEntry) error {
+func (k *keys) write(e Ending) error {
 	path, err := k.path(e.Key)
 	if err != nil {
 		return err
@@ -214,7 +307,7 @@ func (k *keys) prune(now time.Time) {
 // one thing nothing here can judge.
 func written(path string, d fs.DirEntry) (time.Time, bool) {
 	if b, err := os.ReadFile(path); err == nil {
-		var e keyEntry
+		var e Ending
 		if json.Unmarshal(b, &e) == nil && !e.At.IsZero() {
 			return e.At, true
 		}
@@ -234,10 +327,14 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 // key down first is what makes that true, and package bus says why the acknowledgement is
 // not left to the end, and why nothing starts until the bus has confirmed it.
 //
-// A key this host has already carried to an ending is refused here with ErrCompleted,
-// before anything is redeemed, pulled or created. The message is not put back for that:
-// another runner of the pool has no record of the key and would start it, which is the
-// second run the refusal exists to prevent.
+// A key this host has already carried to an ending is refused here with a *Completed,
+// which errors.Is reads as ErrCompleted, before anything is redeemed, pulled or created.
+// The message is not put back for that: another runner of the pool has no record of the
+// key and would start it, which is the second run the refusal exists to prevent. It is
+// answered instead. The refusal carries the ending the record holds, and the runner
+// acknowledges the message and reports that ending under the message's own task_id: a key
+// comes back to the host that ended it as the requeue of a task declared lost, and the
+// run is waiting on the requeue's answer.
 func (d *Docker) Hold(id agk.TaskID) error {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
@@ -246,9 +343,9 @@ func (d *Docker) Hold(id agk.TaskID) error {
 		return err
 	}
 	if found && e.State.Terminal() {
-		return completed(id, e)
+		return &Completed{Ending: e}
 	}
-	return d.keys.write(keyEntry{Key: id, State: agk.TaskDispatched, At: d.now().UTC()})
+	return d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()})
 }
 
 // refuseCompleted is the refusal Run makes of a key this host has already carried to an
@@ -279,7 +376,7 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
 		w.remove()
 	}
-	return completed(t.ID, e)
+	return &Completed{Ending: e}
 }
 
 // ended writes down the ending Run is about to return, and returns it.
@@ -301,17 +398,16 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 // instead, because what is lost is the refusal of a later delivery of this key on this
 // host.
 func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
-	e := keyEntry{Key: r.Task, State: r.State}
-	if r.State == agk.TaskSucceeded || r.State == agk.TaskFailed {
-		e.ExitCode = r.ExitCode
-	}
+	var e Ending
 	var late *afterExit
 	switch {
 	case errors.As(err, &late):
-		e = keyEntry{Key: late.task, State: agk.TaskFailed}
+		e = Ending{Key: late.task, State: agk.TaskFailed}
 		r, err = graph.Result{}, late.err
 	case err != nil || !r.State.Terminal():
 		return r, err
+	default:
+		e = d.ending(r)
 	}
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
@@ -325,6 +421,42 @@ func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
 		d.keys.prune(now)
 	}
 	return r, err
+}
+
+// ending is what the record keeps of a Result: how it ended and when, and by reference
+// what it left, which is what the observer was told of it beside the Result: the digests
+// its ports were published under, its artifacts and its log.
+//
+// The ports are named as the collection published them, by the digest the store answered
+// for each write, and never worked out again here. A report made from the record is read
+// back by that digest, so the one worth recording is the one the store holds the envelope
+// under, and only the write can say that.
+//
+// The log is addressed as agk.NewLogURI addresses a task's log, where this runner keeps
+// logs at all. The sink knows where its bytes went; the address a result carries is the
+// task's, whatever the sink.
+func (d *Docker) ending(r graph.Result) Ending {
+	e := Ending{Key: r.Task, State: r.State, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt}
+	if r.State == agk.TaskSucceeded || r.State == agk.TaskFailed {
+		code := r.ExitCode
+		e.ExitCode = &code
+	}
+
+	h := d.lookup(r.Task)
+	if h == nil {
+		return e
+	}
+	told := h.ended()
+	e.Outputs = told.Outputs
+	for _, f := range told.Artifacts {
+		e.Artifacts = append(e.Artifacts, EndedArtifact{SHA256: f.SHA256, Bytes: f.Size})
+	}
+	if d.cfg.Logs != nil {
+		if uri, err := agk.NewLogURI(r.Task); err == nil {
+			e.Log = &EndedLog{URI: uri, Lines: told.Log.Lines, Truncated: told.Log.Truncated}
+		}
+	}
+	return e
 }
 
 // afterExit is an error met once the container of a task had run to its end: an output
@@ -345,10 +477,4 @@ func (e *afterExit) Unwrap() error { return e.err }
 // exited marks err as met after the container of task had run to its end.
 func exited(task agk.TaskID, err error) error {
 	return &afterExit{task: task, err: err}
-}
-
-// completed is the refusal of one key, naming how and when it ended.
-func completed(id agk.TaskID, e keyEntry) error {
-	_, step, _, _, _ := agk.ParseTaskID(string(id))
-	return fault(step, ErrCompleted, ChargePlatform, "task %s ended %s on this host at %s", id, e.State, e.At.UTC().Format(time.RFC3339))
 }

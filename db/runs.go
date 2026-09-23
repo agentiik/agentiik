@@ -565,21 +565,24 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 	return *runner, nil
 }
 
-// BindUnreached binds one dispatch nobody has redeemed to the runner reporting that it never
-// reached a container, and answers who holds it once that is done.
+// BindUnredeemed binds one dispatch nobody has redeemed to the runner whose ending of it is being
+// written, and answers who holds it once that is done.
 //
-// A runner pulls a task's image before it redeems the grant, so a refused pull, or a grant that
-// would not redeem, ends a dispatch no runner is bound to. The first runner to report such an
-// ending is bound to the dispatch here, as a redemption would have bound it, so that no other
-// runner can report a second ending for it and no redemption can follow. A dispatch somebody
-// already holds keeps its holder, and the answer says who that is; the row is locked by the
-// update, so a redemption racing it binds first or finds it bound.
+// Two endings come for a dispatch no runner is bound to. A runner pulls a task's image before it
+// redeems the grant, so a refused pull, or a grant that would not redeem, ends a dispatch that
+// never reached a container. And a requeue that comes back to the host which already ended its
+// key is never redeemed at all: the host answers it from its record, through the runner that
+// redeemed an earlier dispatch of the key. The runner reporting either is bound to the dispatch
+// here, as a redemption would have bound it, so that no other runner can report a second ending
+// for it and no redemption can follow. A dispatch somebody already holds keeps its holder, and the
+// answer says who that is; the row is locked by the update, so a redemption racing it binds first
+// or finds it bound.
 //
 // It belongs in the transaction that writes the ending, and never in one of its own. Pool.Lost
 // takes a bound dispatch in flight for one a runner redeemed, so a binding committed without its
 // ending would be swept lost, counted from the dispatch, as if a container had run and its host
 // gone quiet.
-func (w *Wide) BindUnreached(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
+func (w *Wide) BindUnredeemed(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
 	if runner == "" {
 		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
 	}
@@ -596,6 +599,41 @@ func (w *Wide) BindUnreached(ctx context.Context, namespace string, key agk.Task
 		return "", fmt.Errorf("db: dispatch %s of task %s could not be bound: %w", row, key, err)
 	}
 	return holder, nil
+}
+
+// RedeemedBefore answers whether a runner redeemed a dispatch of a key earlier than the one a row
+// records.
+//
+// It is what a requeue is answered from when it comes back to the host that already ended its key.
+// That host refuses to run the key again and reports the ending it recorded under the requeue's
+// task_id, and nobody redeems the requeue, so its ending cannot be held to a redemption of its own.
+// It is held to the redemption of the dispatch the host ended, which is a dispatch of the same key
+// handed out before it: the runner reporting it was given that work, so it reaches no further
+// than "the tasks in its hands". A binding made by an ending that never reached a container is no
+// redemption, and does not count; nor does a later dispatch, which cannot be what the requeue came
+// back to.
+func (w *Wide) RedeemedBefore(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (bool, error) {
+	if runner == "" {
+		return false, nil
+	}
+	// The row is compared as text, for the reason HeldBy gives.
+	var redeemed bool
+	err := w.tx.QueryRow(ctx, `
+		select exists (
+		  select 1 from tasks this
+		  join tasks earlier
+		    on earlier.namespace = this.namespace
+		   and earlier.idempotency_key = this.idempotency_key
+		   and earlier.requeue < this.requeue
+		  join task_grants g
+		    on g.namespace = earlier.namespace and g.task_id = earlier.id
+		  where this.namespace = $1 and this.id = $2::text and this.idempotency_key = $3
+		    and earlier.runner = $4 and g.redeemed_at is not null)`,
+		namespace, row, string(key), runner).Scan(&redeemed)
+	if err != nil {
+		return false, fmt.Errorf("db: the dispatches of task %s before %s could not be read: %w", key, row, err)
+	}
+	return redeemed, nil
 }
 
 // RequeueOf answers which dispatch of its key a row records, as graph.ShardState counts them.

@@ -34,6 +34,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run cancelled from `queued` ends with no `started_at`, where it read as started at the moment it was called off.
 - Cancelling a run writes every task of it not yet over as `cancelled`, in the pass that ends the run. A message still on the queue then redeems nothing and starts no container, and the run gives back its share of `max_concurrent_tasks` at once. A lost dispatch keeps its loss.
 - Cancelling a run also stops every task whose row a runner has redeemed. A task published by a pass that died before recording the dispatch reads pending in the document, and was left running to its deadline.
+- A requeue that comes back to the host which already ended its key is answered with that ending, reported under the requeue's `task_id`. Where nobody has redeemed the requeue, the controller takes it from a runner that redeemed an earlier dispatch of the key and binds that runner as the ending is written, so the run no longer waits for its timeout.
 
 ### State
 
@@ -42,6 +43,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `steps.state` has a domain of its own, since the task one cannot hold `skipped`.
 - The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
 - `tasks` keeps one row per dispatch of a key, numbered by `requeue`, and at most one of them that is not `lost`.
+- `Wide.RedeemedBefore` says whether a runner redeemed an earlier dispatch of a key, and `Wide.BindUnreached` is now `Wide.BindUnredeemed`, since it also binds a requeue answered from a host's record.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
@@ -70,6 +72,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner takes work from the consumer the control plane created for its pool, and creates none. `bus.OpenRunner` connects with the runner's credential.
 - A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 - `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
+- `Bus.Ended` answers a task whose key the host already ended: it acknowledges the message and reports the recorded ending under the message's `task_id`. An ending of another key is not sent.
 
 ### Driver
 
@@ -78,6 +81,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
 - A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
+- The record of a key's ending keeps what it left by reference and never a payload: each port's envelope by digest and count, each artifact by digest and size, the log's address and length.
+- Each port's envelope is written to the store before the ending is recorded, and the terminal `driver.Event` names it in `Outputs` by the digest the store answered, through `artifact.Store.PutEnvelope`. An envelope the store refuses ends the key `failed`, naming nothing, charged to the platform.
+- A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
+- A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
 
 ### API
@@ -151,6 +158,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
+- `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 
 ## v0.1.2, 2026-09-13
 

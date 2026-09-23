@@ -276,6 +276,27 @@ func upload(ctx context.Context, s *artifact.Store, where string, u agk.URI, med
 	return s.Put(ctx, u, mediaType, f)
 }
 
+// publishPorts writes the envelope of every port to the store, in port order, and names
+// each as a result names it: by the digest the store answered and by its count.
+//
+// After the collection and not inside it, because what is written is the envelope the
+// collection validated, and because a store that refused it is this side's trouble and not
+// the brick's: the brick did what it was asked, and it is charged to the platform.
+func publishPorts(ctx context.Context, s *artifact.Store, step agk.Step, out map[agk.Port]agk.Envelope) ([]EndedPort, error) {
+	ports := make([]EndedPort, 0, len(out))
+	for _, port := range slices.Sorted(maps.Keys(out)) {
+		e := out[port]
+		digest, _, err := s.PutEnvelope(ctx, e)
+		if err != nil {
+			f := fault(step, err, ChargePlatform, "the envelope could not be written to the store, and a result names a port only by what the store holds")
+			f.Port = port
+			return nil, f
+		}
+		ports = append(ports, EndedPort{Port: port, Digest: "sha256:" + digest, Items: e.Meta.Count})
+	}
+	return ports, nil
+}
+
 // typeOf guesses the media type of a file the shorthand attaches, which nothing declared.
 //
 // An envelope requires media_type on every file entry, and the store fills the gap with

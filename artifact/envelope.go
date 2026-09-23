@@ -18,8 +18,8 @@ import (
 // An envelope is content like anything else here, so it is stored the same way and addressed the
 // same way: two steps publishing identical bytes publish one object, and a replay that recomputes
 // the same content writes nothing. It lives in this package rather than in the controller because
-// the controller writes them and the API reads them back, and a digest check written twice is a
-// digest check that eventually differs in one of the two places.
+// the runner and the controller write them and the API reads them back, and a digest check written
+// twice is a digest check that eventually differs in one of the two places.
 
 // PutEnvelope writes one and answers what names it.
 func PutEnvelope(ctx context.Context, objects Objects, namespace string, e agk.Envelope) (digest string, size int64, err error) {
@@ -42,6 +42,17 @@ func PutEnvelope(ctx context.Context, objects Objects, namespace string, e agk.E
 		}
 	}
 	return digest, size, nil
+}
+
+// PutEnvelope writes one envelope into the store of the namespace it was opened for, and answers
+// what names it.
+//
+// It is how a runner publishes a port. The driver holds a Store for each task and no Objects, and
+// the digest a result names has to be the one the store answered for the write, not one worked
+// out beside it: a result is read back by that digest, and a digest nothing wrote reads back as an
+// envelope that could not be read, on every delivery, for ever.
+func (s *Store) PutEnvelope(ctx context.Context, e agk.Envelope) (digest string, size int64, err error) {
+	return PutEnvelope(ctx, s.objects, s.namespace, e)
 }
 
 // ErrNotAnEnvelope is what an object read back under a digest is when it is not the envelope that

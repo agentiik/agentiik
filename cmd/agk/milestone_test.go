@@ -109,7 +109,7 @@ func TestAFanOutAndAMergeRunEndToEndAndASecondRunProducesTheSameEnvelopes(t *tes
 	}
 
 	first := aMilestoneRun(t, tree, helper)
-	objects := storedObjects(t, layout)
+	objects := storedArtifacts(t, layout)
 	second := aMilestoneRun(t, tree, helper)
 
 	// Two runs and not one run read twice. The identifiers are minted per run, so this is
@@ -145,16 +145,16 @@ func TestAFanOutAndAMergeRunEndToEndAndASecondRunProducesTheSameEnvelopes(t *tes
 		t.Fatalf("the default holds item identities aside, and this proof rests on them being compared")
 	}
 
-	// Two runs over the same inputs write the same objects. The store is content addressed
-	// and shared by every run of one working directory, so the second run added nothing:
-	// the three receipts, the summary and the ledger are the same bytes twice.
-	if after := storedObjects(t, layout); after != objects {
-		t.Errorf("the store held %d objects after the first run and %d after the second: two runs over the same inputs produce the same artifacts, and the same artifact is one object", objects, after)
+	// Two runs over the same inputs write the same artifacts. The store is content addressed
+	// and shared by every run of one working directory, so the second run added none: the
+	// three receipts, the summary and the ledger are the same bytes twice.
+	if after := storedArtifacts(t, layout); after != objects {
+		t.Errorf("the store held %d artifacts after the first run and %d after the second: two runs over the same inputs produce the same artifacts, and the same artifact is one object", objects, after)
 	}
 	if objects == 0 {
-		t.Errorf("the store holds nothing, and both runs attach artifacts: a comparison with no digests in it is not the comparison this proves")
+		t.Errorf("the store holds no artifact, and both runs attach artifacts: a comparison with no digests in it is not the comparison this proves")
 	}
-	t.Logf("the object store holds %d objects after both runs", objects)
+	t.Logf("the object store holds %d artifacts after both runs", objects)
 }
 
 // milestoneRun is what one invocation of the command line handed back.
@@ -415,16 +415,25 @@ func theStaticHelper(t *testing.T, ostype, arch string) string {
 	return path
 }
 
-// storedObjects counts what the object store holds, which is how many distinct artifacts both
-// runs between them produced.
-func storedObjects(t *testing.T, layout local.Layout) int {
+// storedArtifacts counts the artifacts the object store holds, which is how many distinct
+// artifacts both runs between them produced.
+//
+// The envelopes are in the store too, one per port each task published, since a runner writes
+// its ports there before it writes a task's ending down, and they are left out of the count. Each
+// names the run it came from, so every run adds its own whatever its inputs, and the sentence
+// holds the two runs' envelopes to being the same by comparing them rather than by counting them.
+func storedArtifacts(t *testing.T, layout local.Layout) int {
 	t.Helper()
 	n := 0
-	err := filepath.WalkDir(layout.Objects(), func(_ string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(layout.Objects(), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() {
+		if _, err := agk.Decode(bytes.NewReader(b), agk.DefaultLimits()); err != nil {
 			n++
 		}
 		return nil

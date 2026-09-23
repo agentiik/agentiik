@@ -50,9 +50,10 @@ type Config struct {
 	// none, which is what agk brick test is.
 	Logs Logs
 
-	// Observer is what graph.Result has nowhere to carry: the log reference, the
-	// artifacts, the usage block, and the dispatched, running and publishing
-	// transitions a heartbeat needs while a task is still in flight.
+	// Observer is what graph.Result has nowhere to carry: the digests the ports were
+	// published under, the log reference, the artifacts, the usage block, and the
+	// dispatched, running and publishing transitions a heartbeat needs while a task is
+	// still in flight.
 	Observer Observer
 
 	// Policy is the runner's own configuration, and its zero value is the floor in

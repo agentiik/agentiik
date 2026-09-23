@@ -36,8 +36,11 @@
 // a result naming anybody else, and the controller holds what is left to the runner the dispatch
 // its task_id names was bound to when its grant was redeemed. The dispatch and not the key, since
 // a requeue after loss keeps the key and is answered by whoever redeems it, which may be the
-// runner that lost the dispatch before it or may not. A compromised host's "reach is the tasks in
-// its hands", and this, with an inbox of its own, is what keeps it there.
+// runner that lost the dispatch before it or may not. Or by nobody's redemption at all, where it
+// came back to the host that had already ended the key: that host answers it from its record, and
+// the controller takes the answer from the runner that redeemed the dispatch the host ended. A
+// compromised host's "reach is the tasks in its hands", and this, with an inbox of its own, is
+// what keeps it there.
 //
 // # Why an inbox per runner
 //
@@ -81,5 +84,8 @@
 // A confirmation is the only thing that tells a runner the bus will not hand the task to anybody
 // else, so a runner starts nothing without one, and the first of the two never runs a key beside
 // itself. Both can hand a host a key it has already run, and the host's record is what refuses
-// one it has already carried to an ending.
+// one it has already carried to an ending, and what answers it: the runner acknowledges the
+// message and reports the ending the record holds under the message's task_id, which is
+// Bus.Ended. The requeue of a lost task is waiting on that answer, and without it the run would
+// wait for its own timeout.
 package bus

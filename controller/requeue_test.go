@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -471,38 +472,41 @@ func TestALateEndingOfARequeuedPastDispatchFromItsOwnRunnerIsNotNews(t *testing.
 }
 
 // A requeue keeps the key and takes a new task_id, and the binding is the task_id's. runner-1 held
-// the dispatch that was lost, which gives it nothing of the requeue, and runner-2 redeems the
-// requeue: an ending from a container runner-1 says ran for the requeue, or a loss of it, is
-// refused as somebody else's, before runner-2 has redeemed it and after, and binds runner-1 to
-// nothing. Only runner-2's ending is taken. An ending that never reached a container is not this
-// case: the first runner to report one is bound by it, whichever dispatch it held before.
+// the dispatch that was lost, which gives it nothing of a requeue runner-2 redeems: once runner-2
+// has, an ending from a container runner-1 says ran for the requeue, or a loss of it, is refused
+// as somebody else's and binds runner-1 to nothing. Before anybody redeemed it, runner-1's loss of
+// it is refused, since a runner cannot lose what it never held, and so is an ending from
+// runner-3, which was never given the key at all. Only runner-2's ending is taken. An ending that
+// never reached a container is not this case, and nor is one runner-1's host answers from its
+// record before anybody redeems the requeue: the first runner to report either is bound by it.
 func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) {
 	core, q, conn, lost, requeued := lostAndRequeued(t)
 	before := seqOf(t, conn)
 
 	ran := failed(requeued.Task, 1, core.now())
 	ran.DispatchedAt = time.Time{}
-	fromRunner1 := []Answer{
-		{Result: ran, Row: requeued.Row, Runner: "runner-1"},
-		{Result: graph.Result{Task: requeued.Task.ID, State: agk.TaskLost}, Row: requeued.Row, Runner: "runner-1"},
-	}
-	refused := func(when string) {
+	loss := graph.Result{Task: requeued.Task.ID, State: agk.TaskLost}
+	refused := func(when string, answers ...Answer) {
 		t.Helper()
-		for _, a := range fromRunner1 {
+		for _, a := range answers {
 			if err := core.Answer(t.Context(), a); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
-				t.Errorf("%s, runner-1 reporting the requeue %s answered %v", when, a.Result.State, err)
+				t.Errorf("%s, %s reporting the requeue %s answered %v", when, a.Runner, a.Result.State, err)
 			}
 		}
 	}
 
-	refused("before anybody redeemed it")
+	refused("before anybody redeemed it",
+		Answer{Result: loss, Row: requeued.Row, Runner: "runner-1"},
+		Answer{Result: ran, Row: requeued.Row, Runner: "runner-3"})
 	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched -"}; !slices.Equal(got, want) {
 		t.Errorf("the key holds %q, want %q", got, want)
 	}
 	if err := core.redeem(t, requeued, "runner-2"); err != nil {
-		t.Fatalf("runner-2 could not redeem the requeue after runner-1's refused reports: %s", err)
+		t.Fatalf("runner-2 could not redeem the requeue after the refused reports: %s", err)
 	}
-	refused("once runner-2 redeemed it")
+	refused("once runner-2 redeemed it",
+		Answer{Result: ran, Row: requeued.Row, Runner: "runner-1"},
+		Answer{Result: loss, Row: requeued.Row, Runner: "runner-1"})
 
 	if after := seqOf(t, conn); after != before {
 		t.Errorf("refused reports took the run from seq %d to %d", before, after)
@@ -515,8 +519,7 @@ func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) 
 	}
 
 	// runner-2's failure is taken, and max: 1 owes the second attempt.
-	mine := fromRunner1[0]
-	mine.Runner = "runner-2"
+	mine := Answer{Result: ran, Row: requeued.Row, Runner: "runner-2"}
 	if err := core.Answer(t.Context(), mine); err != nil {
 		t.Fatalf("the failure of the runner holding the requeue was refused: %s", err)
 	}
@@ -524,6 +527,131 @@ func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) 
 		t.Errorf("after the requeue failed the controller published %+v, want attempt 2", second)
 	}
 	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+}
+
+// fromTheRecord is what a host that ended a key on an earlier dispatch answers when the requeue of
+// that key comes back to it: the ending it recorded, the envelopes named by the digest they were
+// uploaded under the first time, and the log where it went, under the requeue's task_id and from
+// the runner that redeemed the dispatch it ended. Nobody redeems the requeue for it.
+func (co *Core) fromTheRecord(t *testing.T, r graph.Result, row, runner string) Answer {
+	t.Helper()
+	log, err := agk.NewLogURI(r.Task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Answer{Row: row, Runner: runner, Log: log, LogLines: 412}
+	for _, port := range sortedPorts(r.Outputs) {
+		e := r.Outputs[port]
+		digest, _, err := artifact.PutEnvelope(t.Context(), co.objects, "finance", e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Outputs = append(a.Outputs, Output{Port: port, Digest: digest, Items: e.Meta.Count})
+	}
+	r.Outputs, r.DispatchedAt = nil, time.Time{}
+	a.Result = r
+	return a
+}
+
+// runner-1 redeemed the dispatch, ran it to its end and reported the success into a silence, and
+// the heartbeat declared the dispatch lost. The requeue comes back to runner-1's host, which
+// refuses to run the key again and answers with the ending it recorded, under the requeue's
+// task_id. Nobody redeems the requeue, so nobody else would ever answer it: the answer is taken
+// from runner-1, which was given the key, as the requeue's, and binds runner-1 to it. The run goes
+// on, the requeue's grant opens nothing any more, and the same answer delivered again is written
+// once. A runner of the pool that was never given the key is refused the same answer.
+func TestARequeueThatCameBackToTheHostThatEndedItsKeyIsAnsweredFromItsRecord(t *testing.T) {
+	core, q, conn, lost, requeued := lostAndRequeued(t)
+	recorded := core.fromTheRecord(t, succeeded(t, requeued.Task, core.now()), requeued.Row, "runner-1")
+	if len(recorded.Outputs) == 0 {
+		t.Fatal("the recorded success names no envelope, so this is not the case under test")
+	}
+
+	before := seqOf(t, conn)
+	stranger := recorded
+	stranger.Runner = "runner-lan-01"
+	if err := core.Answer(t.Context(), stranger); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("a runner never given the key answering the requeue answered %v", err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("the refused answer took the run from seq %d to %d", before, after)
+	}
+
+	if err := core.Answer(t.Context(), recorded); err != nil {
+		t.Fatalf("the ending runner-1 recorded, reported under the requeue's task_id, was refused: %s", err)
+	}
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Errorf("the run is %s after the requeue was answered from the record", got)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 succeeded runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+	var lines *int
+	if err := conn.QueryRow(t.Context(),
+		`select log_lines from tasks where idempotency_key = $1 and requeue = 1`, string(lost.Task.ID)).
+		Scan(&lines); err != nil {
+		t.Fatal(err)
+	}
+	if lines == nil || *lines != 412 {
+		t.Errorf("the requeue's row counts %v lines of log, and its answer named 412", lines)
+	}
+	if err := core.redeem(t, requeued, "runner-2"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("the grant of a requeue answered from the record was redeemed, answering %v", err)
+	}
+
+	written := seqOf(t, conn)
+	if err := core.Answer(t.Context(), recorded); err != nil {
+		t.Fatalf("the same answer delivered again was refused: %s", err)
+	}
+	if after := seqOf(t, conn); after != written {
+		t.Errorf("the answer delivered again took the run from seq %d to %d", written, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("the run published %+v after its one step succeeded", got)
+	}
+}
+
+// A recorded ending is news the way any ending is. A failure answered from the record is the
+// attempt failing, and max: 1 owes the second, which goes out as a new key.
+func TestAFailureAnsweredFromTheRecordSpendsItsAttempt(t *testing.T) {
+	core, q, conn, lost, requeued := lostAndRequeued(t)
+	ran := failed(requeued.Task, 1, core.now())
+	ran.DispatchedAt = time.Time{}
+	if err := core.Answer(t.Context(), Answer{Result: ran, Row: requeued.Row, Runner: "runner-1"}); err != nil {
+		t.Fatalf("the failure runner-1 recorded, reported under the requeue's task_id, was refused: %s", err)
+	}
+	if second := q.taken(); len(second) != 1 || second[0].Attempt != 2 {
+		t.Errorf("after the requeue was answered failed the controller published %+v, want attempt 2", second)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+}
+
+// A runner may redeem the requeue after a recorded ending was read and before it was written: the
+// requeue went out twice, or its acknowledgement never reached the bus. The redemption bound first,
+// so the recorded ending is somebody else's word on the dispatch, refused as such, and nothing of
+// it is written.
+func TestARecordedEndingIsRefusedOnceARedemptionBoundTheRequeueMeanwhile(t *testing.T) {
+	core, q, conn, lost, requeued := lostAndRequeued(t)
+	racing, err := NewCore(core.controller, core.term, Options{
+		Queue: q, Objects: core.objects, Now: core.now,
+		Versions: &redeemsMeanwhile{Versions: core.versions, redeem: func() error { return core.redeem(t, requeued, "runner-2") }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := seqOf(t, conn)
+	recorded := core.fromTheRecord(t, succeeded(t, requeued.Task, core.now()), requeued.Row, "runner-1")
+	if err := racing.Answer(t.Context(), recorded); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("a recorded ending of a requeue runner-2 redeemed meanwhile answered %v", err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("the refused ending took the run from seq %d to %d", before, after)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched runner-2"}; !slices.Equal(got, want) {
 		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }

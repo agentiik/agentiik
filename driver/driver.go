@@ -65,6 +65,26 @@ type held struct {
 	// case where there was no container to send a signal to yet.
 	stopped bool
 	state   agk.TaskState
+
+	// told is what the observer was told when the task ended: where its log went and what
+	// it put in the store, which graph.Result has nowhere to carry and the record of the
+	// ending keeps.
+	told Event
+}
+
+// end keeps what the observer is told of the task's ending.
+func (h *held) end(e Event) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.told = e
+}
+
+// ended answers with what the observer was told of the task's ending, and the zero Event
+// where it has not ended.
+func (h *held) ended() Event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.told
 }
 
 // stopping records a stop against the task and answers with the watch to send it to,

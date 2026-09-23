@@ -81,12 +81,43 @@ func (t Taken) Held(ctx context.Context) error {
 
 // Again puts it back for somebody else, which is what a runner says when it took a task it
 // cannot run: its labels changed, it is draining, it has no room after all, or the task could
-// not be written down.
+// not be written down. Not a task whose key this host has already ended, which Ended answers.
 func (t Taken) Again() error {
 	if t.msg == nil {
 		return errors.New("bus: returning a task that came from nowhere")
 	}
 	return t.msg.Nak()
+}
+
+// Ended answers a task this host took whose key it had already carried to an ending, with that
+// ending.
+//
+// That is the requeue of a task the heartbeat declared lost while its host was only cut off: the
+// host ran it to its end and reported into the same silence, and the requeue is likeliest to come
+// back to it, and certain to where it is its pool's only runner. The host's record refuses to run
+// the key again, which is driver.Completed, and putting the message back would hand it to a runner
+// of the pool with no record of the key, which would run it. So it is acknowledged, as every take
+// is, and the ending the record holds is reported under the task_id this message carries. The
+// controller takes it from the runner that redeemed the dispatch the host ended, as the requeue's
+// answer, and the brick never runs twice. It reads the envelopes back by the digests the ending
+// names, and the store holds them: the host wrote each there before it wrote the ending down.
+//
+// The ending is the record's and only the dispatch is this message's, so an ending of another key
+// is refused before anything is said: a result under a task_id is about that task_id's key, and
+// the two travel as separate fields. It is reported whether or not the acknowledgement was
+// confirmed. Nothing is started either way, and a message the bus hands out again is refused and
+// answered again, which the result stream drops as the copy it is, or the controller reads as no
+// news.
+func (b *Bus) Ended(ctx context.Context, t Taken, ending TaskResult) error {
+	if ending.IdempotencyKey != t.Task.IdempotencyKey {
+		return fmt.Errorf("bus: task %s is %s, and the ending of %s is no answer to it", t.Task.TaskID, t.Task.IdempotencyKey, ending.IdempotencyKey)
+	}
+	ending.TaskID = t.Task.TaskID
+	held := t.Held(ctx)
+	if err := b.Report(ctx, ending); err != nil {
+		return errors.Join(held, err)
+	}
+	return held
 }
 
 // Take pulls up to batch tasks for one pool, waiting up to wait for them.
