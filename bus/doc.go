@@ -39,18 +39,22 @@
 //
 // On take, once the task is written down on the host, and not when the work is over. The runner
 // records the key under its work root, which is driver.Docker.Hold, and then acknowledges, before
-// it pulls, redeems or creates anything. From that moment the task is the host's to answer for
-// and no longer the bus's to redeliver: "Liveness therefore lives in the database beside the task
-// state, rather than as traffic on a work queue that exists to distribute work." A host that dies
-// holding a task stops heartbeating, the task becomes lost, and an idempotent step is requeued
-// under the same key.
+// it pulls, redeems or creates anything. From the moment the server confirms the acknowledgement,
+// which is when Taken.Held answers nil, the task is the host's to answer for and no longer the
+// bus's to redeliver: "Liveness therefore lives in the database beside the task state, rather
+// than as traffic on a work queue that exists to distribute work." A host that dies holding a
+// task stops heartbeating, the task becomes lost, and an idempotent step is requeued under the
+// same key.
 //
 // Acknowledging at the end would have made the ack wait the longest a step may run. A runner
 // that died would then hold its work for that long before anybody else could take it, and a
 // runner that lived would have to keep telling the bus so for as long as its container ran, which
 // is a second liveness channel beside the heartbeat and one that says less.
 //
-// What is left to redelivery is the minute between a take and its record, which the pool
-// consumer's AckWait bounds, and the requeue of a lost task. Both can hand a host a key it has
-// already run, and the host's record is what refuses one it has already carried to an ending.
+// What is left to redelivery is a task whose acknowledgement the server never confirmed, which
+// comes round again once the pool consumer's AckWait has passed, and the requeue of a lost task.
+// A confirmation is the only thing that tells a runner the bus will not hand the task to anybody
+// else, so a runner starts nothing without one, and the first of the two never runs a key beside
+// itself. Both can hand a host a key it has already run, and the host's record is what refuses
+// one it has already carried to an ending.
 package bus

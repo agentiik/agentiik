@@ -229,10 +229,10 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 // Hold records that this host has taken a task, which is what a runner does before it
 // acknowledges the task message.
 //
-// A runner acknowledges on take, so from the acknowledgement on the bus never delivers
-// that message again and the host is what answers for the key. Writing the key down first
-// is what makes that true, and package bus says why the acknowledgement is not left to
-// the end.
+// A runner acknowledges on take, so once the bus has confirmed the acknowledgement it
+// never delivers that message again and the host is what answers for the key. Writing the
+// key down first is what makes that true, and package bus says why the acknowledgement is
+// not left to the end, and why nothing starts until the bus has confirmed it.
 //
 // A key this host has already carried to an ending is refused here with ErrCompleted,
 // before anything is redeemed, pulled or created. The message is not put back for that:

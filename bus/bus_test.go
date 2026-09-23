@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,7 +148,7 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	if got.Grant == "" {
 		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
 	}
-	if err := taken[0].Held(); err != nil {
+	if err := taken[0].Held(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +176,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("the default pool took %d tasks", len(taken))
 	}
-	taken[0].Held()
+	taken[0].Held(t.Context())
 }
 
 // A runner that took work it cannot run puts it back, and somebody else gets it.
@@ -197,7 +200,85 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	if len(second) != 1 || second[0].Task.IdempotencyKey != first[0].Task.IdempotencyKey {
 		t.Fatalf("a task put back came round as %+v", second)
 	}
-	second[0].Held()
+	second[0].Held(t.Context())
+}
+
+// A task is held once the server says the acknowledgement arrived, and not once it has left
+// this side. A link that drops keeps the acknowledgement in the client's buffer, and the server
+// hands the task to another runner of the pool when its wait runs out, so a runner told it held
+// the task on the strength of the buffer would start the container beside that one.
+func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
+	b := open(t)
+	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
+		t.Fatal(err)
+	}
+
+	link := linkTo(t, b.conn.ConnectedAddr())
+	runner, err := OpenRunner(Options{URL: "nats://" + link.addr(), Name: "runner-cut-off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+	taken, err := runner.Take(t.Context(), DefaultPool, 1, 5*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("taking: %v, %d", err, len(taken))
+	}
+
+	link.cut()
+	short, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := taken[0].Held(short); err == nil {
+		t.Fatal("a task was held whose acknowledgement never reached the server")
+	}
+}
+
+// link is a connection to the bus that can be cut from outside, as a network does it: both
+// directions at once, and nothing listening where the client tries to connect again.
+type link struct {
+	ln net.Listener
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func linkTo(t *testing.T, target string) *link {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &link{ln: ln}
+	t.Cleanup(l.cut)
+	go func() {
+		for {
+			near, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			far, err := net.Dial("tcp", target)
+			if err != nil {
+				near.Close()
+				continue
+			}
+			l.mu.Lock()
+			l.conns = append(l.conns, near, far)
+			l.mu.Unlock()
+			go io.Copy(far, near)
+			go io.Copy(near, far)
+		}
+	}()
+	return l
+}
+
+func (l *link) addr() string { return l.ln.Addr().String() }
+
+func (l *link) cut() {
+	l.ln.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, c := range l.conns {
+		c.Close()
+	}
 }
 
 // "JetStream guarantees at-least-once delivery", so publishing the same task twice inside the
@@ -216,7 +297,7 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("one task published three times was offered %d times", len(taken))
 	}
-	taken[0].Held()
+	taken[0].Held(t.Context())
 }
 
 // A result goes back and the controller takes it, once.

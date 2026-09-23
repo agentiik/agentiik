@@ -45,11 +45,24 @@ type Taken struct {
 // task is off the queue and on no host's record, and a runner that died in it would leave the
 // task for the heartbeat's sweep to find lost, where one that dies before acknowledging has it
 // handed to the next runner of the pool a minute later.
-func (t Taken) Held() error {
+//
+// It answers once the server says the acknowledgement arrived, and not once it has left this
+// side. The client keeps what it sends while its link is down and answers nil for it, and a
+// server that never received the acknowledgement hands the task to another runner of the pool
+// when the consumer's AckWait runs out. So a runner starts nothing for a task whose Held did not
+// answer nil, and does not name it in its heartbeat. The key stays recorded as taken and not
+// ended, and what comes next is the bus redelivering the task where the acknowledgement was
+// lost, or the heartbeat finding it lost where only the answer was. Neither runs it twice, and a
+// step that is not idempotent is not run at all, which is the side to err on. A ctx with no
+// deadline waits as long as JetStream's own default.
+func (t Taken) Held(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")
 	}
-	return t.msg.Ack()
+	if err := t.msg.DoubleAck(ctx); err != nil {
+		return fmt.Errorf("bus: task %s: the server did not confirm the acknowledgement, so the task is not held and nothing is to be started for it: %w", t.Task.IdempotencyKey, err)
+	}
+	return nil
 }
 
 // Again puts it back for somebody else, which is what a runner says when it took a task it
