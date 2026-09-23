@@ -369,7 +369,8 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 		t.Errorf("the schema defines a type called %s, and so does pg_catalog, which is searched first: a column typed %s is given PostgreSQL's and never this one", name, name)
 	}
 
-	// And the domain is the grammar the Names table prints, not a neighbour of it.
+	// And the domain is the grammar the Names table prints and the length a directory holds a
+	// name to, not a neighbour of either.
 	rows, err = conn.Query(ctx,
 		`select pg_get_constraintdef(c.oid) from pg_constraint c
 		 join pg_type t on t.oid = c.contypid
@@ -382,8 +383,13 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(checks) != 1 || !strings.Contains(checks[0], "'"+identifierPattern+"'") {
-		t.Errorf("the identifier domain checks %q, and what it should check is the Names table's grammar, %s, and that alone", checks, identifierPattern)
+	var grammar, bound bool
+	for _, check := range checks {
+		grammar = grammar || strings.Contains(check, "'"+identifierPattern+"'")
+		bound = bound || strings.Contains(check, "length(") && strings.Contains(check, fmt.Sprintf("<= %d)", agk.IdentifierMaxBytes))
+	}
+	if len(checks) != 2 || !grammar || !bound {
+		t.Errorf("the identifier domain checks %q, and what it should check is the Names table's grammar, %s, and a length of at most %d, and those alone", checks, identifierPattern, agk.IdentifierMaxBytes)
 	}
 
 	// A column called after one of the things the Names table lists holds that thing's name,
@@ -446,7 +452,9 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 // A name longer than PostgreSQL's own is kept whole by every column holding one, and a name off
 // the grammar is refused by every one of them. While those columns were PostgreSQL's name, two
 // workflow names sharing their first 63 bytes were one workflow, and a step called "two words"
-// was stored as written.
+// was stored as written. A name longer than a directory holds is refused by every one of them
+// too, as it is everywhere a name is written: left to the index a name is also a key of, one of
+// a few kilobytes was refused there, as a failure of the database and at every run.
 func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 	super, _ := database(t)
 	ctx := t.Context()
@@ -456,11 +464,12 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 
-	// Every one past 63 bytes, and the two workflows alike for the whole of the first 63.
+	// Every one past 63 bytes, and the two workflows alike for the whole of the first 63. The
+	// step and the port are as long as a name may be.
 	stem := strings.Repeat("a", 63)
 	workflow, twin := stem+"-monthly", stem+"-weekly"
-	step := "normalize-" + strings.Repeat("s", 60)
-	port := "rejected-" + strings.Repeat("p", 60)
+	step := "normalize-" + strings.Repeat("s", agk.IdentifierMaxBytes-len("normalize-"))
+	port := "rejected-" + strings.Repeat("p", agk.IdentifierMaxBytes-len("rejected-"))
 	secret := "billing-" + strings.Repeat("k", 60)
 	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 
@@ -527,6 +536,12 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		var pg *pgconn.PgError
 		if !errors.As(err, &pg) || pg.Code != checkViolation || pg.DataTypeName != "identifier" {
 			t.Errorf("%s took a name with a space in it and answered %v, where the identifier domain refuses it", where, err)
+		}
+		_, err = conn.Exec(ctx, fmt.Sprintf(`update %s set %s = $1`,
+			pgx.Identifier{table}.Sanitize(), pgx.Identifier{column}.Sanitize()),
+			strings.Repeat("n", agk.IdentifierMaxBytes+1))
+		if !errors.As(err, &pg) || pg.Code != checkViolation || pg.DataTypeName != "identifier" {
+			t.Errorf("%s took a name of %d characters and answered %v, where the identifier domain refuses it", where, agk.IdentifierMaxBytes+1, err)
 		}
 	}
 
