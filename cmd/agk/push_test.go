@@ -69,8 +69,27 @@ func write(t *testing.T, dir, name, body string) {
 	}
 }
 
+// gitIn runs git in the repository a test made, and answers what it said.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // pushing runs the command against a server that records what arrived.
 func pushing(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push) {
+	t.Helper()
+	code, out, errs, got, _ := pushingTo(t, dir, answer, args...)
+	return code, out, errs, got
+}
+
+// pushingTo is pushing, and the path the version was sent to, which is where its commit is named.
+func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push, string) {
 	t.Helper()
 	var got *api.Push
 	var path string
@@ -107,8 +126,7 @@ func pushing(t *testing.T, dir string, answer int, args ...string) (int, string,
 		},
 	}
 	code := push(context.Background(), e, append([]string{"--namespace", "finance"}, args...))
-	_ = path
-	return code, out.String(), errs.String(), got
+	return code, out.String(), errs.String(), got, path
 }
 
 // The ordinary path: a clean tree, and what arrives is what the version is.
@@ -264,18 +282,67 @@ func TestThePushCarriesTheTreeGitTracks(t *testing.T) {
 	}
 }
 
-// Where there is no git repository, the directory is walked and .git is the only thing skipped.
-func TestATreeWithNoRepositoryBehindIt(t *testing.T) {
+// A version is a commit, and outside a git repository there is none. So the push is refused
+// rather than made of whatever the directory holds, under a hash nobody could check it against,
+// and naming a commit by hand does not change that.
+func TestAPushWithNoRepositoryBehindItIsRefused(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
 	dir := t.TempDir()
-	write(t, dir, "agentiik.yaml", scriptWorkflow)
-	write(t, dir, "scripts/render.sh", "#!/bin/sh\n")
-
-	files, err := repositoryOf(t.Context(), dir)
+	// And git looks no higher than the directory, whatever this machine keeps its
+	// temporary directories inside.
+	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 {
-		t.Errorf("the tree holds %v", keysOf(files))
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(real))
+	write(t, dir, "agentiik.yaml", scriptWorkflow)
+	write(t, dir, "scripts/render.sh", "#!/bin/sh\n")
+
+	for _, args := range [][]string{nil, {"--commit", "a3f9c1e", "--allow-dirty"}} {
+		code, _, errs, got := pushing(t, dir, http.StatusOK, args...)
+		if code != exitRefused {
+			t.Errorf("a push of %v with no repository answered %d", args, code)
+		}
+		if got != nil {
+			t.Errorf("a push of %v with no repository reached the server", args)
+		}
+		if !strings.Contains(errs, "not in a git repository") {
+			t.Errorf("the refusal of %v reads %q", args, errs)
+		}
+	}
+}
+
+// A commit is resolved before anything is read: one commit typed three ways is one version rather
+// than three, and a name the repository does not hold is refused rather than pushed under.
+func TestACommitIsPushedUnderItsWholeHash(t *testing.T) {
+	dir := repository(t)
+	head := gitIn(t, dir, "rev-parse", "HEAD")
+	branch := gitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+
+	for _, args := range [][]string{nil, {"--commit", head[:7]}, {"--commit", branch}} {
+		code, out, errs, _, path := pushingTo(t, dir, http.StatusOK, args...)
+		if code != exitSucceeded {
+			t.Fatalf("a push of %v answered %d: %s%s", args, code, out, errs)
+		}
+		if !strings.HasSuffix(path, "/versions/"+head) {
+			t.Errorf("a push of %v was sent to %s", args, path)
+		}
+	}
+
+	for _, c := range []struct{ named, reads string }{
+		{"deadbeef", "holds no commit deadbeef"},
+		// And a name git would take for an option of its own never reaches it.
+		{"--output=elsewhere", "names no commit"},
+	} {
+		code, _, errs, got := pushing(t, dir, http.StatusOK, "--commit", c.named)
+		if code != exitRefused || got != nil {
+			t.Errorf("--commit %s answered %d", c.named, code)
+		}
+		if !strings.Contains(errs, c.reads) {
+			t.Errorf("the refusal of --commit %s reads %q", c.named, errs)
+		}
 	}
 }
 

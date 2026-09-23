@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -41,11 +42,11 @@ const (
 )
 
 func push(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <sha>] [--allow-dirty]")
+	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <commit>] [--allow-dirty]")
 	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
 	server := fs.String("server", "", "The installation to push to. Defaults to "+serverVariable+".")
-	commit := fs.String("commit", "", "The commit this version is. Defaults to what git says HEAD is.")
+	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
 	dirty := fs.Bool("allow-dirty", false, "Push although the working tree differs from the commit. A version is a commit, so this makes one that says it is a tree it is not.")
 	if code, ok := parse(fs, args); !ok {
 		return code
@@ -79,13 +80,10 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitRefused
 	}
 
-	sha := *commit
-	if sha == "" {
-		sha, err = headOf(ctx, dir)
-		if err != nil {
-			fmt.Fprintf(e.Err, "%s\n", err)
-			return exitRefused
-		}
+	sha, err := commitOf(ctx, dir, *commit)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
 	}
 	if !*dirty {
 		if changed, err := dirtyTree(ctx, dir); err != nil {
@@ -157,9 +155,6 @@ func push(ctx context.Context, e Env, args []string) int {
 // tracked files. Reading the directory instead would put whatever an editor, a build or a virtual
 // environment left behind into every run of every version, and an ignored file is ignored because
 // somebody said it is not part of the repository.
-//
-// Where there is no git repository at all, which is a push naming its commit by hand, the
-// directory is walked instead and .git is the only thing skipped.
 func repositoryOf(ctx context.Context, dir string) (map[string]api.PushFile, error) {
 	files := map[string]api.PushFile{}
 	var total int64
@@ -190,35 +185,17 @@ func repositoryOf(ctx context.Context, dir string) (map[string]api.PushFile, err
 		return nil
 	}
 
-	if listed, err := git(ctx, dir, "ls-files", "-z"); err == nil {
-		for _, rel := range strings.Split(listed, "\x00") {
-			if rel == "" {
-				continue
-			}
-			if err := add(rel); err != nil {
-				return nil, err
-			}
-		}
-		return files, nil
-	}
-
-	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir() && d.Name() == ".git":
-			return filepath.SkipDir
-		case d.IsDir():
-			return nil
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		return add(rel)
-	})
+	listed, err := git(ctx, dir, "ls-files", "-z")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the files of the repository could not be listed from git: %w", err)
+	}
+	for _, rel := range strings.Split(listed, "\x00") {
+		if rel == "" {
+			continue
+		}
+		if err := add(rel); err != nil {
+			return nil, err
+		}
 	}
 	return files, nil
 }
@@ -264,13 +241,38 @@ func put(ctx context.Context, url, token string, body api.Push) error {
 	return fmt.Errorf("the installation refused the version: %s", said.Error)
 }
 
-// headOf is what git says the current commit is.
-func headOf(ctx context.Context, dir string) (string, error) {
-	out, err := git(ctx, dir, "rev-parse", "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("the commit could not be read from git: %w. A version is a commit, so pass --commit if this is not a repository", err)
+// commitOf is the commit a push names, as the whole hash git holds it under.
+//
+// Resolved rather than taken as typed, so that a3f9c1e, the branch it is the tip of and HEAD push
+// one version rather than three, and so that a name this repository does not hold is refused
+// before anything is read. A name beginning with a dash is refused before git sees it, since git
+// would take it for an option of its own.
+//
+// Outside a git repository there is no commit, and so nothing to push. Walking the directory
+// instead would send whatever it holds under a hash nobody can check it against, which is the one
+// lie this command exists to refuse, and would leave it guessing what a repository is made of: a
+// virtual environment, a build, the .agk a local run leaves behind.
+func commitOf(ctx context.Context, dir, named string) (string, error) {
+	if _, err := git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return "", errors.New("git is not installed, and agk push reads what it sends out of a git commit")
+		}
+		return "", fmt.Errorf("%s is not in a git repository, and a version is a commit: agk push reads what it sends out of one, so it runs inside the repository the workflow is committed to", dir)
 	}
-	return out, nil
+	switch {
+	case named == "":
+		named = "HEAD"
+	case strings.HasPrefix(named, "-"):
+		return "", fmt.Errorf("--commit %s names no commit: a commit is a hash, a branch or a tag", named)
+	}
+	sha, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", named+"^{commit}")
+	switch {
+	case err == nil && sha != "":
+		return sha, nil
+	case named == "HEAD":
+		return "", fmt.Errorf("the repository at %s has no commit yet, and a version is a commit: commit the workflow, then push it", dir)
+	}
+	return "", fmt.Errorf("the repository at %s holds no commit %s", dir, named)
 }
 
 // dirtyTree is what differs between the working copy and the commit, which is what makes a push
