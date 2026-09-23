@@ -49,7 +49,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Deny by default is structural: a route is registered with the permission it needs and the router checks it.
 - A refusal at a namespace or a workflow is the same 404 as an absence. 403 is for the installation scope, and a failure to decide is a 500.
 - Until access control arrives in v0.3.0, every route that needs a permission is refused.
-- A ninth permission, `secret:write`, declares and removes a namespace's secrets. The four roles are fixed sets of the nine: viewer and operator as the page's figure has them, editor everything but `grant:manage`, owner everything.
+- A ninth permission, `secret:write`, declares and removes a namespace's secrets.
 - Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field is refused.
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
