@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 	"unicode/utf8"
@@ -325,10 +326,16 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 	for _, secret := range got.Scope.Secrets {
 		value, err := s.secrets.Value(ctx, got.Namespace, secret.Name)
 		if err != nil {
-			// Named by the step and missing from the store is a task that cannot run,
-			// and saying so is better than mounting an empty file and failing three
-			// layers away from the cause.
-			return Grant{}, errors.New("the secret " + secret.Name + " is not held for this namespace")
+			// Named by the step and not given is a task that cannot run, and saying so is
+			// better than mounting an empty file and failing three layers away from the
+			// cause. The runner is told which secret and whether the store holds one; why
+			// is the store's to say, to whoever runs the installation, since they are the
+			// one who can put a key back on the ring or set a variable.
+			s.report(fmt.Errorf("api: task %s was not given %s/%s: %w", got.Row, got.Namespace, secret.Name, err))
+			if errors.Is(err, ErrNoSecret) {
+				return Grant{}, errors.New("the secret " + secret.Name + " is not held for this namespace")
+			}
+			return Grant{}, errors.New("the secret " + secret.Name + " is held for this namespace and could not be read from its store")
 		}
 		out.Secrets = append(out.Secrets, secretOf(secret, value))
 	}

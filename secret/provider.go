@@ -23,8 +23,8 @@ import (
 // text does.
 //
 // Every refusal here names the namespace and the secret and never carries a value. A refusal is
-// read by whoever runs the installation and is written to wherever they keep what went wrong, and
-// a value in one would be a value in a log.
+// read by whoever runs the installation, through api.RunnerOptions.Trouble, and is written to
+// wherever they keep what went wrong, and a value in one would be a value in a log.
 
 // Provider is one store a value is read from.
 type Provider interface {

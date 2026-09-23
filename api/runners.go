@@ -43,6 +43,13 @@ type RunnerOptions struct {
 	BusIssuer    BusIssuer
 	BusConsumers BusConsumers
 
+	// Trouble is where a redemption says why a secret was not given. The runner is told only
+	// which secret, and the reason, which names the namespace, the secret and the store and
+	// never a value, goes to whoever runs the installation, who is the one able to act on it.
+	// A field rather than a package level logger for the reason the controller's Trouble is,
+	// and one with nowhere to put it drops it rather than choosing for the installation.
+	Trouble func(err error)
+
 	Now func() time.Time
 }
 
@@ -56,7 +63,16 @@ type RunnerAPI struct {
 	limits    agk.Limits
 	issuer    BusIssuer
 	consumers BusConsumers
+	trouble   func(error)
 	now       func() time.Time
+}
+
+// report says one thing, through whatever Trouble was given.
+func (s *RunnerAPI) report(err error) {
+	if s.trouble == nil {
+		return
+	}
+	s.trouble(err)
 }
 
 // NewRunners registers the runner routes on a router and answers what checks their credentials.
@@ -83,7 +99,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		pool: o.Pool, rotation: o.JoinRotation,
 		objects: o.Objects, urls: o.URLs, secrets: o.Secrets, limits: o.Limits,
 		issuer: o.BusIssuer, consumers: o.BusConsumers,
-		now: o.Now,
+		trouble: o.Trouble, now: o.Now,
 	}
 	rt.ServeRunners(s)
 

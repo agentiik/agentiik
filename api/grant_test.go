@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"slices"
@@ -438,6 +439,58 @@ func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 			}
 			if said, _ := answer["error"].(string); said == "" || !strings.Contains(said, "stripe") {
 				t.Errorf("the refusal does not name the secret: %v", answer)
+			}
+		})
+	}
+}
+
+// unreadable is a store that holds every secret it is asked for and cannot read one, the way a
+// value sealed under a master key the ring no longer holds is.
+type unreadable struct{}
+
+func (unreadable) Value(_ context.Context, namespace, name string) ([]byte, error) {
+	return nil, fmt.Errorf("secret: %s/%s was sealed under a master key this installation's keyring does not hold", namespace, name)
+}
+
+// A secret the store holds and could not read is told apart from one it does not hold. The runner
+// is told which secret and which of the two, and the store's reason goes to whoever runs the
+// installation, naming the task and the secret, since they are the one who can act on it.
+func TestWhyASecretWasNotGivenGoesToTheInstallation(t *testing.T) {
+	for what, c := range map[string]struct {
+		secrets    api.Secrets
+		says, not  string
+		reasonSays string
+	}{
+		"a secret nobody holds":             {api.NoSecrets{}, "is not held", "could not be read", "no secret of that name"},
+		"a secret held that cannot be read": {unreadable{}, "could not be read", "is not held", "keyring does not hold"},
+	} {
+		t.Run(what, func(t *testing.T) {
+			g := withGrants(t, api.NoSecrets{})
+			var told []error
+			rt := router(t, everything{who: "admin"})
+			if _, err := api.NewRunners(rt, api.RunnerOptions{
+				Pool: g.pool, Objects: g.objects, URLs: g.signed, Secrets: c.secrets,
+				Trouble: func(err error) { told = append(told, err) },
+			}); err != nil {
+				t.Fatal(err)
+			}
+			g.handler = rt
+			credential := g.joined(t)
+			clear, _, _ := g.dispatched(t, []string{"stripe"})
+
+			w, answer := call(t, rt, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("%s answered %d: %s", what, w.Code, w.Body)
+			}
+			said, _ := answer["error"].(string)
+			if !strings.Contains(said, "stripe") || !strings.Contains(said, c.says) || strings.Contains(said, c.not) || strings.Contains(said, c.reasonSays) {
+				t.Errorf("the runner was told %q", said)
+			}
+			if len(told) != 1 {
+				t.Fatalf("the installation was told %v", told)
+			}
+			if reason := told[0].Error(); !strings.Contains(reason, "finance/stripe") || !strings.Contains(reason, grantTaskRow) || !strings.Contains(reason, c.reasonSays) {
+				t.Errorf("the installation was told %q", reason)
 			}
 		})
 	}
