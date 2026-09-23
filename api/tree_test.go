@@ -1,15 +1,18 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
@@ -431,6 +434,102 @@ func TestAPushWhoseStoreFailsSaysSoAndNothingMore(t *testing.T) {
 	said, _ := answer["error"].(string)
 	if said == "" || strings.Contains(said, "10.0.3.7") || strings.Contains(said, "dial") {
 		t.Errorf("the refusal reads %q", said)
+	}
+}
+
+// sweeping is an object store in memory whose one watched object is collected whole, bytes and
+// then row, the moment a push has been told it is held: a sweep finishing between the push asking
+// the store and the version raising its reference, which is the one window a claim cannot close
+// because nothing is left claimed.
+type sweeping struct {
+	mu      sync.Mutex
+	held    map[string][]byte
+	watched string
+	sweep   func(delete func(key string))
+}
+
+func (s *sweeping) Has(_ context.Context, key string) (bool, error) {
+	s.mu.Lock()
+	_, held := s.held[key]
+	sweep := s.sweep
+	if held && key == s.watched {
+		s.sweep = nil
+	}
+	s.mu.Unlock()
+	if held && key == s.watched && sweep != nil {
+		sweep(func(key string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.held, key)
+		})
+	}
+	return held, nil
+}
+
+func (s *sweeping) Put(_ context.Context, key string, r io.Reader) error {
+	content, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held[key] = content
+	return nil
+}
+
+func (s *sweeping) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	content, held := s.held[key]
+	if !held {
+		return nil, fs.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(content)), nil
+}
+
+// "Collection never takes a file a version still needs." A push skips a file whose object the store
+// already holds, and an object nothing references past its grace, an expired artifact of the same
+// bytes, is one a sweep may collect whole while the rest of the tree is written. The version then
+// records the object afresh, and the push writes the bytes it skipped, rather than answering 200
+// for a version whose /agk/repo cannot be fetched.
+func TestATreeObjectASweepCollectedWholeIsWrittenAgain(t *testing.T) {
+	store := &sweeping{held: map[string][]byte{}}
+	h, pool, super := servingOn(t, store)
+
+	script := []byte("#!/bin/sh\necho hello\n")
+	key := keyOf("finance", script)
+	store.held[key] = script
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs, collectable_at)
+		 values ('finance', $1, $2, 'application/octet-stream', 0, now() - interval '2 days')`,
+		"sha256:"+digestOf(script), len(script)); err != nil {
+		t.Fatal(err)
+	}
+	store.watched = key
+	store.sweep = func(delete func(string)) {
+		claimed, err := pool.Collectable(t.Context(), 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range claimed {
+			delete(o.Key)
+		}
+		if removed, err := pool.Collected(t.Context(), claimed); err != nil || removed != 1 {
+			t.Fatalf("the sweep confirmed %d objects gone: %v", removed, err)
+		}
+	}
+
+	w, _ := call(t, h, "PUT", pushTo, "alice", pushed(t, map[string]api.PushFile{
+		"scripts/render.sh": {Content: script, Mode: "0755"},
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	if store.sweep != nil {
+		t.Fatal("the sweep never ran, so this proves nothing")
+	}
+	if held, _ := store.Has(t.Context(), key); !held {
+		t.Error("the version names an object whose bytes a sweep deleted, and the push answered 200")
 	}
 }
 

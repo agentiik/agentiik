@@ -156,7 +156,7 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 	// before the reference is written rather than after: a count that is momentarily too
 	// high keeps an object alive that nothing needed, and a count that is momentarily too
 	// low lets a sweep delete an object something did.
-	mustWrite, err := raise(ctx, tx, namespace, stored, r.Size, r.MediaType)
+	mustWrite, _, err := raise(ctx, tx, namespace, stored, r.Size, r.MediaType)
 	if err != nil {
 		return Written{}, err
 	}

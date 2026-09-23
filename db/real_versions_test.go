@@ -148,6 +148,52 @@ func TestATreeObjectASweepHadClaimedIsWrittenAgain(t *testing.T) {
 	}
 }
 
+// The window MustWriteBytes cannot see: a sweep that claimed an object, deleted its bytes and
+// confirmed it gone, all before a version raised its reference. No row is left to be found
+// claimed, so the version records the object afresh and says so, which is how a caller that skipped
+// writing the bytes, because the store held them when it asked, knows to write them after all.
+func TestATreeObjectASweepCollectedWholeIsRecordedAfresh(t *testing.T) {
+	pool, super := opened(t)
+
+	oneFetchAndGone(t, pool, "script.sh", digestOf("b"), 21)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(),
+		`update artifact_objects set collectable_at = now() - interval '2 days'`); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := pool.Collectable(t.Context(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := pool.Collected(t.Context(), claimed); err != nil || removed != 1 {
+		t.Fatalf("the sweep confirmed %d objects gone: %v", removed, err)
+	}
+
+	saved, err := saveVersion(t, pool, aVersion("b4a0d2f", aTree()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.MustWriteBytes) != 0 {
+		t.Errorf("the version was told to write %v again, and no sweep holds a claim on anything", saved.MustWriteBytes)
+	}
+	if want := slices.Sorted(slices.Values([]string{digestOf("a"), digestOf("b")})); !slices.Equal(saved.Recorded, want) {
+		t.Errorf("the version says it recorded %v afresh, and neither of its objects had a row: %v", saved.Recorded, want)
+	}
+
+	// And a second version onto the rows the first one made records none of them afresh.
+	saved, err = saveVersion(t, pool, aVersion("c5b1e3a", aTree()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Recorded) != 0 {
+		t.Errorf("a version onto objects already held says it recorded %v afresh", saved.Recorded)
+	}
+}
+
 // Two pushes of two commits at once, sharing a file the namespace has never held: both are
 // recorded, and the object counts both. A CI job pushing two branches together is the ordinary
 // way to arrive here, and one of the two used to fail on the object's primary key.

@@ -43,7 +43,13 @@ type port struct {
 // whether the bytes have to be written again: a sweep had taken this object, and the window
 // between a sweep deleting an object and a reference arriving for it is closed by the writer
 // rather than by hoping the two never cross. A brand new object answers false, since nothing
-// can have swept what did not exist.
+// can have swept what did not exist, and so bytes the caller wrote before are there.
+//
+// It also answers whether the row is one this call inserted, for a caller that did not write the
+// bytes because the store said it held them. That answer came before this, and a sweep can have
+// collected the object whole in between, bytes deleted and row confirmed gone, which leaves
+// nothing here to see but a row that is not there. To such a caller a row it created is an
+// object whose bytes it cannot vouch for.
 //
 // The row is made to exist before it is locked, rather than inserted when a lock finds nothing.
 // A lock on a row that is not there is no lock at all, so two writers reaching the same new
@@ -56,18 +62,19 @@ type port struct {
 // Twice at most, because the one row the lock can miss is one a sweep confirmed as collected
 // after the insert saw it. The bytes of such an object are gone, so the second pass inserts it
 // afresh and answers true: whatever the caller wrote before, the sweep may have deleted since.
-func raise(ctx context.Context, tx pgx.Tx, namespace, stored string, size int64, mediaType string) (mustWriteBytes bool, err error) {
+func raise(ctx context.Context, tx pgx.Tx, namespace, stored string, size int64, mediaType string) (mustWriteBytes, created bool, err error) {
 	for pass := range 2 {
-		if _, err := tx.Exec(ctx,
+		inserted, err := tx.Exec(ctx,
 			`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
 			 values ($1, $2, $3, $4, 0)
 			 on conflict (namespace, digest) do nothing`,
-			namespace, stored, size, mediaType); err != nil {
-			return false, fmt.Errorf("db: the object could not be recorded: %w", err)
+			namespace, stored, size, mediaType)
+		if err != nil {
+			return false, false, fmt.Errorf("db: the object could not be recorded: %w", err)
 		}
 		var held int64
 		var collecting *time.Time
-		err := tx.QueryRow(ctx,
+		err = tx.QueryRow(ctx,
 			`select size_bytes, collecting_at from artifact_objects
 			 where namespace = $1 and digest = $2 for update`,
 			namespace, stored).Scan(&held, &collecting)
@@ -75,20 +82,20 @@ func raise(ctx context.Context, tx pgx.Tx, namespace, stored string, size int64,
 		case errors.Is(err, pgx.ErrNoRows):
 			continue
 		case err != nil:
-			return false, fmt.Errorf("db: the object could not be read: %w", err)
+			return false, false, fmt.Errorf("db: the object could not be read: %w", err)
 		}
 		if held != size {
-			return false, fmt.Errorf("db: %s is already held at %d bytes and this one says %d: a digest is computed over the bytes, so two sizes under one digest means one of them was not", stored, held, size)
+			return false, false, fmt.Errorf("db: %s is already held at %d bytes and this one says %d: a digest is computed over the bytes, so two sizes under one digest means one of them was not", stored, held, size)
 		}
 		if _, err := tx.Exec(ctx,
 			`update artifact_objects set refs = refs + 1, collectable_at = null, collecting_at = null
 			 where namespace = $1 and digest = $2`,
 			namespace, stored); err != nil {
-			return false, fmt.Errorf("db: the reference count could not be raised: %w", err)
+			return false, false, fmt.Errorf("db: the reference count could not be raised: %w", err)
 		}
-		return collecting != nil || pass > 0, nil
+		return collecting != nil || pass > 0, inserted.RowsAffected() == 1, nil
 	}
-	return false, fmt.Errorf("db: %s was collected twice while a reference to it was being recorded", stored)
+	return false, false, fmt.Errorf("db: %s was collected twice while a reference to it was being recorded", stored)
 }
 
 // lower counts one fewer thing pointing at an object, and marks it collectable at zero.

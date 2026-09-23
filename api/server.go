@@ -257,7 +257,8 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// push that dies between the two leaves objects nothing references, which the collector
 	// never sees and which the next push of the same files reuses; the other order would
 	// leave a version whose /agk/repo cannot be fetched.
-	if err := s.storeTree(r.Context(), over.Namespace, blobs, false); err != nil {
+	skipped, err := s.storeTree(r.Context(), over.Namespace, blobs, false)
+	if err != nil {
 		fail(w, http.StatusInternalServerError, "the tree could not be stored")
 		return
 	}
@@ -284,12 +285,20 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 
 	// And again for any object a sweep had claimed while this version was raising its
 	// reference onto it: the reference is safe, and the bytes may be what the sweep is about
-	// to delete.
+	// to delete. And for any this push skipped because the store held it and whose row the
+	// version then had to create: a sweep can have collected it whole between the two, bytes
+	// deleted and row confirmed gone, and the store's answer was about bytes that are not
+	// there any more. The version's reference keeps any sweep away from it now.
 	again := make(map[string][]byte, len(saved.MustWriteBytes))
 	for _, digest := range saved.MustWriteBytes {
 		again[digest] = blobs[digest]
 	}
-	if err := s.storeTree(r.Context(), over.Namespace, again, true); err != nil {
+	for _, digest := range saved.Recorded {
+		if skipped[digest] {
+			again[digest] = blobs[digest]
+		}
+	}
+	if _, err := s.storeTree(r.Context(), over.Namespace, again, true); err != nil {
 		fail(w, http.StatusInternalServerError, "the tree could not be stored")
 		return
 	}
@@ -394,33 +403,37 @@ func manifestOf(paths []string, files map[string]PushFile) ([]db.TreeFile, map[s
 	return tree, blobs
 }
 
-// storeTree writes blobs as objects of the namespace.
+// storeTree writes blobs as objects of the namespace, and answers the digests it did not write.
 //
 // An object already held is skipped, since its key is the digest of its bytes, unless again says
-// the object is one a sweep had claimed: then being held now says nothing about being held in a
-// minute, and the bytes are written whatever the store says.
-func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[string][]byte, again bool) error {
+// the object is one a sweep may have taken: then being held now says nothing about being held in
+// a minute, and the bytes are written whatever the store says. What was skipped is answered
+// because the store's word is only as good as the moment it was given, and the push asks again
+// for any of them whose row the version had to create.
+func (s *Server) storeTree(ctx context.Context, namespace string, blobs map[string][]byte, again bool) (map[string]bool, error) {
 	digests := make([]string, 0, len(blobs))
 	for digest := range blobs {
 		digests = append(digests, digest)
 	}
 	sort.Strings(digests)
+	skipped := map[string]bool{}
 	for _, digest := range digests {
 		key := artifact.Key(namespace, digest)
 		if !again {
 			held, err := s.objects.Has(ctx, key)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if held {
+				skipped[digest] = true
 				continue
 			}
 		}
 		if err := s.objects.Put(ctx, key, bytes.NewReader(blobs[digest])); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return skipped, nil
 }
 
 // CheckTreePath refuses a path a container could not be given, and one that leaves the tree.

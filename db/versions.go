@@ -109,6 +109,14 @@ type Saved struct {
 	// not safe is assuming the bytes survived a sweep that had already decided to delete them,
 	// so the caller writes those again. See the collection protocol in purge.go.
 	MustWriteBytes []string
+
+	// Recorded are the digests of tree files whose objects had no row until this version
+	// raised its references onto them. The reference is as safe as any other; the bytes are
+	// whatever the caller wrote. A caller that skipped writing one because the store said it
+	// held it writes it now all the same, because the sweep that collects an object whole,
+	// bytes and then row, leaves exactly this behind when it finishes between the store's
+	// answer and this version, and MustWriteBytes cannot see a row that is gone.
+	Recorded []string
 }
 
 // SaveWorkflow records a workflow, or leaves the one that is there.
@@ -208,12 +216,15 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	}
 	slices.Sort(digests)
 	for _, digest := range digests {
-		again, err := raise(ctx, n.tx, n.namespace, "sha256:"+digest, sizes[digest], treeMediaType)
+		again, created, err := raise(ctx, n.tx, n.namespace, "sha256:"+digest, sizes[digest], treeMediaType)
 		if err != nil {
 			return Saved{}, err
 		}
 		if again {
 			out.MustWriteBytes = append(out.MustWriteBytes, digest)
+		}
+		if created {
+			out.Recorded = append(out.Recorded, digest)
 		}
 	}
 	return out, nil
