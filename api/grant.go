@@ -34,9 +34,11 @@ import (
 //
 // Somewhere to write is the one part the runner could not be told by name, because the key of an
 // output is the digest of bytes that do not exist until the container has exited. So it is told at
-// the first redemption, beside everything else, as one policy for the task's namespace: a task has
-// no reason to redeem a second time, and its secrets are read once rather than again at the end to
-// ask where its outputs go.
+// the first redemption, beside everything else, as one policy for the task's namespace, and a task
+// never comes back at the end to ask where its outputs go, which would read its secrets a second
+// time for nothing. The holder may still redeem again, when a message it redeemed comes round
+// because its acknowledgement never arrived, and it is answered as the first time was, with fresh
+// URLs.
 
 // Secrets is where a secret value comes from.
 //

@@ -19,7 +19,7 @@
 // argument and stays exactly as the evaluator hands it out: Inputs is already the
 // argument brick.WriteInputs takes, Outputs is already the declared argument brick.Collect
 // takes, Params goes to /agk/params.json unexamined, Secrets is names and mount points
-// whose values are redeemed through Config.Secrets at the last moment, and Script,
+// whose values are asked of Config.Secrets as the container is prepared, and Script,
 // BeforeScript, AfterScript and Shell become the container's command. Everything a
 // container needs that a Task deliberately does not carry arrives at construction
 // instead: the socket, the store, the repository tree, the secret source, the log sink,
