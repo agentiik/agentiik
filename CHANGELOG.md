@@ -30,6 +30,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An answer carries the `task_id` of its dispatch. A reported loss moves that dispatch alone, so one delivered late or twice moves nothing, even once the same runner holds the requeue.
 - An ending reported for a dispatch its key was requeued past is not news, since the attempt waits on the requeue, and it writes nothing on the requeue's row. An answer naming no dispatch of its key is refused with `controller.ErrNotAResult`.
 - An attempt a retry moved past is written as it ended, so it no longer reads as dispatched, counts against `max_concurrent_tasks` or redeems its grant.
+- A run somebody asked to cancel is cancelled on the next pass, before admission, so a queued run is never let in to be called off, nor cancels the run holding its group to make way. The sweep finds the request whatever the run's clock says.
+- A run cancelled from `queued` ends with no `started_at`, where it read as started at the moment it was called off.
+- Cancelling a run writes every task of it not yet over as `cancelled`, in the pass that ends the run. A message still on the queue then redeems nothing and starts no container, and the run gives back its share of `max_concurrent_tasks` at once. A lost dispatch keeps its loss.
+- Cancelling a run also stops every task whose row a runner has redeemed. A task published by a pass that died before recording the dispatch reads pending in the document, and was left running to its deadline.
 
 ### State
 
@@ -46,6 +50,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A workflow, step, port or secret name is stored as the `identifier` domain. `0001` had called the domain `name`, so its columns got PostgreSQL's own `name` type, which checked nothing and cut a name at 63 bytes; one of up to 255 characters is now kept whole, and a longer one or one off the grammar is refused.
 - `Wide.Redeemable` makes every check `Wide.Redeem` makes and writes nothing, so a redemption can be checked before it is answered and bound once it is.
 - `db.NewRun.Inputs` is the JSON object a run was started with, written down as it arrived rather than decoded and encoded again.
+- `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
+- `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
+- A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
 
 ### Bus
 
@@ -117,6 +124,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A number in a run's inputs that a 64-bit float holds only as zero, or that reaches more than 340 digits from the point, is refused with 400. PostgreSQL writes a number back at the scale it was sent with, so `0e-16383` was read back as 16 KB at every decision, and `1e-16384` was a 500.
 - Inputs holding U+0000 in a string or a name are refused with 400, where PostgreSQL refused them with a 500.
 - A body that is not JSON is refused saying where it stops being JSON, and no longer repeats the bytes there, which could be part of a secret's value.
+- A route whose body is optional, a bus credential or a cancellation, reads one that declares no length, as a body sent in chunks does. A field it refuses was accepted and dropped that way.
+- `api.OnRun` authorises a route whose path names a run and nothing it is of against the namespace and workflow the run is of, found by its identifier alone. `POST /api/v1/runs/{run}/cancel` is the first to take it. A run that is not there, or an identifier no run was minted with, is the same 404 as a run the caller may not reach, where U+0000 or bytes that are not UTF-8 were a 500.
+- `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
 
 ### Secrets
 

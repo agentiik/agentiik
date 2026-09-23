@@ -121,6 +121,30 @@ func readAtMost(r *http.Request, into request, limit int64) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return errors.New("the request body is empty, and this route reads a JSON object")
 	}
+	return decode(raw, into)
+}
+
+// readIfAny is readAtMost for a route whose body is optional: one that arrives empty, or holding
+// nothing but whitespace, is no body, and anything else is read and refused as readAtMost reads and
+// refuses it.
+//
+// Whether a body arrived is learned by reading it, never from the length it declares. A body sent
+// in chunks, or over HTTP/2 with no content-length, declares -1, and a route that read only a body
+// declaring more than nothing took such a body unread: a field it would have refused was accepted
+// and dropped, and its caller told it had been kept.
+func readIfAny(r *http.Request, into request, limit int64) error {
+	raw, err := slurp(r, limit)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	return decode(raw, into)
+}
+
+// decode reads a body already held into a request, closed, as readAtMost says.
+func decode(raw []byte, into request) error {
 	b := &body{raw: raw, d: jsontext.NewDecoder(bytes.NewBuffer(raw), jsontext.AllowDuplicateNames(true))}
 	if err := b.fields(into); err != nil {
 		return err

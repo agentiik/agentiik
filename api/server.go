@@ -71,6 +71,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, now: o.Now}
+	rt.ServeRuns(runsIn{o.Pool})
 
 	for _, r := range []struct {
 		method  string
@@ -86,6 +87,8 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: RunRead, Scope: Namespace}, s.list},
 		{"GET", "/api/v1/{namespace}/runs/{run}",
 			Needs{Permission: RunRead, Scope: Namespace}, s.detail},
+		{"POST", "/api/v1/runs/{run}/cancel",
+			OnRun{Permission: WorkflowRun}, s.cancel},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return nil, err
@@ -754,6 +757,84 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 		return
 	}
 	write(w, http.StatusOK, detail)
+}
+
+// cancel asks for a run to be cancelled, and answers that it was asked.
+//
+// "Cancels pending tasks and sends SIGTERM to running containers." Neither happens here. The API
+// writes the request on the run and notifies, in one transaction as it does for a run it starts,
+// and the controller, which reads it there, ends the run and stops what it holds: the two share
+// the database and nothing else, and a route that stopped a container would be a second
+// controller. So the answer is 202, pointing at the run.
+//
+// It says nothing of how the run stands, and its status is the same whether the run is going or
+// has ended. The route is guarded by workflow:run, and a run's state is what run:read guards: "See
+// run state, per-step state, timings and log lines". operator holds the one and not the other, as
+// does anybody denied run:read, and an answer saying how the run stood, or a status that changed
+// once it had ended, would hand them what GET refuses them, at any moment and with no side effect
+// on a run that has ended. Somebody holding both reads the state where run:read guards it.
+//
+// Asking again is asking once, and asking about a run that has ended changes nothing: "a
+// principal asking twice, or asking about a run that finished while they were asking, has got
+// what they wanted either way", as controller.Cancel puts it.
+//
+// Nothing is written to the audit log yet, since there is none: "manual trigger, approval,
+// cancellation" are recorded there once #160 builds it, in the transaction that writes the
+// request.
+func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	// Nothing to say beyond which run, which the path names, so no body is the ordinary
+	// request. One carrying a field nobody knows, a reason for one, is refused rather than
+	// half understood, however it was sent.
+	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+
+	// The run the router found, in the namespace and of the workflow it authorised.
+	run := agk.RunID(r.PathValue("run"))
+	var state agk.RunState
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil || state.Terminal() {
+			return err
+		}
+		// In the same transaction, for the reason starting a run gives: the request and the
+		// wake-up are one fact rather than two.
+		return ns.NotifyRun(ctx, run)
+	})
+	if errors.Is(err, db.ErrNoRun) {
+		// Found by the router a moment ago and not there now, as a run is once its workflow
+		// has been deleted in between, and answered as the absence it is.
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the run could not be asked to cancel")
+		return
+	}
+
+	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/runs/%s", over.Namespace, run))
+	write(w, http.StatusAccepted, map[string]any{"run": string(run)})
+}
+
+// runsIn finds the namespace and workflow of a run for the router, from its identifier alone.
+//
+// Across the installation, for the one reason db.RunRoute names: the path of a route about a run
+// names nothing else, and what is found goes to the authorizer and nowhere else. The handler then
+// reads and writes through In, in the namespace that was authorised.
+type runsIn struct{ pool *db.Pool }
+
+func (f runsIn) RunOf(ctx context.Context, run string) (Target, error) {
+	var of Target
+	err := f.pool.Installation(ctx, db.RunRoute, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		of.Namespace, of.Workflow, err = w.Locate(ctx, agk.RunID(run))
+		return err
+	})
+	if errors.Is(err, db.ErrNoRun) {
+		return Target{}, ErrNoRun
+	}
+	return of, err
 }
 
 func write(w http.ResponseWriter, status int, body any) {

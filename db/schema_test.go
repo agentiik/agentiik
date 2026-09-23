@@ -297,10 +297,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, RunRoute, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 7 {
+	if len(declared) != 8 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -323,7 +323,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"ControllerSweep": true, "Purge": true, "Collect": true,
-		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "SchemaUpgrade": true}
+		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "RunRoute": true, "SchemaUpgrade": true}
 	for u := range used {
 		if !names[u] {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)

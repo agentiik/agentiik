@@ -97,6 +97,84 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	return nil
 }
 
+// RequestCancel records that a run is to be cancelled, and answers the state it is in.
+//
+// It asks and decides nothing. Ending a run and stopping what it holds is one decision, and it is
+// the controller's, which reads the request on its next pass: the API writes down the moment it
+// was asked and notifies, as it does for a run it starts. A run that has already ended is left as
+// it is and answered in the state it ended in, so that the API wakes nobody for it; what the API
+// says back is its own to decide, and it says nothing of the state. Asking again keeps the first
+// moment.
+//
+// An identifier outside the alphabet runs are minted in is no run, as it is for Locate.
+func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, error) {
+	if !minted(run) {
+		return 0, fmt.Errorf("%w: %q", ErrNoRun, run)
+	}
+	var state string
+	err := n.tx.QueryRow(ctx,
+		`update runs set cancel_requested_at = coalesce(cancel_requested_at, $3)
+		 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')
+		 returning state`,
+		n.namespace, string(run), at).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Over, or never there. A run that has ended stays ended, so the state read here
+		// is the one the update was refused for.
+		err = n.tx.QueryRow(ctx,
+			`select state from runs where namespace = $1 and id = $2`,
+			n.namespace, string(run)).Scan(&state)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("db: run %s could not be asked to cancel: %w", run, err)
+	}
+	var s agk.RunState
+	if err := s.UnmarshalText([]byte(state)); err != nil {
+		return 0, fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
+	}
+	return s, nil
+}
+
+// Locate says which namespace and workflow a run is of, from its identifier alone.
+//
+// It is what a route about one run is authorised against: the path of such a route names the run
+// and nothing it is of, and a permission such as workflow:run can be held on a single workflow.
+// The identifier comes from a path, so one outside the alphabet runs are minted in is no run,
+// answered without asking PostgreSQL: the column's domain refuses it with an error rather than
+// finding nothing, and so does the protocol for U+0000 or bytes that are not UTF-8, which would
+// have been a 500 for anybody holding a credential.
+func (w *Wide) Locate(ctx context.Context, run agk.RunID) (namespace, workflow string, err error) {
+	if !minted(run) {
+		return "", "", fmt.Errorf("%w: %q", ErrNoRun, run)
+	}
+	err = w.tx.QueryRow(ctx,
+		`select namespace, workflow from runs where id = $1`, string(run)).Scan(&namespace, &workflow)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("db: run %s could not be found: %w", run, err)
+	}
+	return namespace, workflow, nil
+}
+
+// minted says whether an identifier is in the alphabet the ulid domain holds, Crockford base32 of
+// any length, which is every run identifier the engine has minted and the documentation printed.
+func minted(run agk.RunID) bool {
+	if run == "" {
+		return false
+	}
+	for i := 0; i < len(run); i++ {
+		c := run[i]
+		if !('0' <= c && c <= '9' || 'A' <= c && c <= 'Z' && c != 'I' && c != 'L' && c != 'O' && c != 'U') {
+			return false
+		}
+	}
+	return true
+}
+
 // Evaluation is a run as the controller picks it up.
 type Evaluation struct {
 	Namespace string
@@ -115,6 +193,11 @@ type Evaluation struct {
 	Inputs  map[string]any
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
+
+	// CancelRequestedAt is when somebody asked through the API for this run to be cancelled, and
+	// zero while nobody has. The request is the API's to write and the cancellation is the
+	// controller's to carry out, so a run holding one is a run the next pass ends.
+	CancelRequestedAt time.Time
 }
 
 // Run reads one run for deciding.
@@ -130,12 +213,13 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	// database holds is exactly the case UnmarshalText exists for.
 	var state, trigger string
 	var inputs []byte
-	var wake *time.Time
+	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
-		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at
+		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
+		        cancel_requested_at
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake)
+			&inputs, &trigger, &wake, &cancel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -155,6 +239,9 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	}
 	if wake != nil {
 		e.WakeAt = *wake
+	}
+	if cancel != nil {
+		e.CancelRequestedAt = *cancel
 	}
 	return e, nil
 }
@@ -646,6 +733,41 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	return false, nil
 }
 
+// CancelTasks moves to cancelled every task of a run that is not over, and answers the keys of
+// those a runner had redeemed.
+//
+// "cancelled: Stopped because the run was cancelled by a principal, by a concurrency group or by
+// a merge: first." It belongs in the transaction that writes the cancellation, because the
+// evaluator ends a run and leaves its tasks where they were: it names the ones a runner holds, to
+// be stopped, and the endings those runners send back reach a run with nothing left to learn.
+// Left in flight, a task whose message was still on the queue would redeem its grant and start a
+// container for a run that had ended, and every one of them would count against
+// max_concurrent_tasks for good. A dispatch the heartbeat declared lost keeps its loss, which is
+// the one record that its runner went quiet.
+//
+// The keys it answers are to be stopped whatever the evaluator's document says of them. A pass
+// that published a task and died before recording the dispatch leaves the task pending in the
+// document, where the evaluator names nothing to stop, and a runner that took the message
+// meanwhile has redeemed its grant and started the container. The row knows, because the
+// redemption bound it.
+func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
+	rows, err := w.tx.Query(ctx,
+		`with cancelled as (
+		   update tasks set state = 'cancelled', finished_at = coalesce(finished_at, $3)
+		   where namespace = $1 and run_id = $2 and state in ('pending', 'dispatched', 'running', 'publishing')
+		   returning idempotency_key, runner)
+		 select idempotency_key from cancelled where runner is not null order by idempotency_key`,
+		namespace, string(run), at)
+	if err != nil {
+		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+	}
+	held, err := pgx.CollectRows(rows, pgx.RowTo[agk.TaskID])
+	if err != nil {
+		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+	}
+	return held, nil
+}
+
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what
@@ -676,8 +798,9 @@ func (w *Wide) Published(ctx context.Context, namespace string, keys []agk.TaskI
 // "A controller that was restarting therefore misses notifications, so it also sweeps for
 // actionable work on a fixed interval. The notification is a latency optimisation; the sweep is
 // the correctness guarantee." So this has to find everything a notification would have, which
-// is three things: a run that has never been decided, a run whose clock has come round, and a
-// run holding a task whose message never went.
+// is four things: a run that has never been decided, a run whose clock has come round, a run
+// holding a task whose message never went, and a run somebody has asked to cancel, whose clock
+// says nothing about when that was.
 func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.RunID, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -687,11 +810,12 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 		select id from runs
 		where state in ('queued', 'running', 'waiting')
 		  and (wake_at is null or wake_at <= $1
+		       or cancel_requested_at is not null
 		       or exists (select 1 from tasks t
 		                  where t.namespace = runs.namespace and t.run_id = runs.id
 		                    and t.published_at is null
 		                    and t.state in ('pending', 'dispatched')))
-		order by coalesce(wake_at, created_at)
+		order by coalesce(least(wake_at, cancel_requested_at), created_at)
 		limit $2`, now, batch)
 	if err != nil {
 		return nil, fmt.Errorf("db: the actionable runs could not be read: %w", err)
