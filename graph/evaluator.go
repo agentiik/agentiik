@@ -993,13 +993,12 @@ func (e *Evaluator) stepsMeta() map[string]expr.StepMeta {
 	return out
 }
 
-// secrets are the declared secrets as opaque references. A Secret carries the name the
-// workflow declared and never the value behind it, because nothing in this process has
-// the value.
+// secrets are the secrets the workflow names, as opaque references. A Secret carries the
+// name and never the value behind it, because nothing in this process has the value.
 func (e *Evaluator) secrets() map[string]expr.Secret {
-	declared := e.g.Workflow().Secrets
-	out := make(map[string]expr.Secret, len(declared))
-	for name := range declared {
+	named := e.g.Workflow().Secrets
+	out := make(map[string]expr.Secret, len(named))
+	for _, name := range named {
 		out[name] = expr.Secret{Name: name}
 	}
 	return out

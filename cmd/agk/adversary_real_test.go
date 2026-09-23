@@ -42,8 +42,7 @@ func TestARealStepCannotReadAnotherStepsSecretThroughTheRepositoryMount(t *testi
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: peeking, namespace: adversary }
-secrets:
-  billing_api: { provider: builtin, path: finance/billing-api }
+secrets: [billing_api]
 outputs:
   seen: { from: { step: peeker, port: out } }
 steps:
@@ -116,8 +115,7 @@ func TestARealSecretAStepPublishedDoesNotReachTheTerminal(t *testing.T) {
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: publishes, namespace: adversary }
-secrets:
-  billing_api: { provider: builtin, path: finance/billing-api }
+secrets: [billing_api]
 outputs:
   billed: { from: { step: only, port: out } }
 steps:

@@ -513,9 +513,7 @@ func TestASecretNobodySuppliedIsNamedWithEveryStepThatMountsIt(t *testing.T) {
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: one, namespace: finance }
-secrets:
-  billing_api: { provider: builtin, path: finance/billing }
-  ledger: { provider: builtin, path: finance/ledger }
+secrets: [billing_api, ledger]
 steps:
   first:
     image: alpine:3.21

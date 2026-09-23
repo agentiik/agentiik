@@ -261,10 +261,7 @@ kind: Workflow
 metadata:
   name: reconciliation
   namespace: finance
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 steps:
   normalize:
     image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0
@@ -362,6 +359,33 @@ func TestAnEmptyToolListIsNotNoBlockAtAll(t *testing.T) {
 	}
 	if wf.MCP.Tools == nil || len(wf.MCP.Tools) != 0 {
 		t.Fatalf("the empty tool list was read as %v", wf.MCP.Tools)
+	}
+}
+
+// TestAWorkflowNamesItsSecretsAndNothingMore holds the line the namespace draws: the file
+// names the secrets it uses, and where each value lives, its provider and its path, is
+// declared on the namespace by a principal holding secret:write. A path in the file would let
+// anybody able to push the workflow aim it at whatever the store holds.
+func TestAWorkflowNamesItsSecretsAndNothingMore(t *testing.T) {
+	wf := parsed(t, strings.Replace(minimal, "steps:", "secrets: [billing, ledger]\nsteps:", 1))
+	if len(wf.Secrets) != 2 || wf.Secrets[0] != "billing" || wf.Secrets[1] != "ledger" {
+		t.Fatalf("the secrets were read as %v", wf.Secrets)
+	}
+
+	err := refused(t, strings.Replace(minimal, "steps:", "secrets:\n  billing:\n    provider: vault\n    path: kv/data/agentiik/billing\nsteps:", 1))
+	for _, want := range []string{"list of names", "declared on the namespace"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a secret written with its provider and path was refused without saying %q: %v", want, err)
+		}
+	}
+	for what, block := range map[string]string{
+		"an empty list":        "secrets: []",
+		"a name written twice": "secrets: [billing, billing]",
+		"a path for a name":    "secrets: [kv/data/agentiik/billing]",
+	} {
+		if _, err := Parse([]byte(strings.Replace(minimal, "steps:", block+"\nsteps:", 1))); err == nil {
+			t.Errorf("%s was accepted", what)
+		}
 	}
 }
 

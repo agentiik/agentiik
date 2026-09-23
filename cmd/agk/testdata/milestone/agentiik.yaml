@@ -32,10 +32,7 @@ inputs:
 vars:
   currency: EUR
 
-secrets:
-  billing_api:
-    provider: builtin
-    path: finance/billing-api
+secrets: [billing_api]
 
 # Four outputs, and the two that are views of the fan-out's own ports are what make the
 # comparison of two runs reach the items the fan-out published rather than only the totals a

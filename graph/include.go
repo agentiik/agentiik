@@ -45,7 +45,6 @@ func Load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow,
 		blocks:  map[string]stepValues{},
 		values:  map[agk.Step]stepValues{},
 		vars:    Vars{},
-		secrets: map[string]SecretDecl{},
 		visited: map[string]bool{},
 		open:    map[string]bool{entry: true},
 	}
@@ -71,8 +70,7 @@ func Load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow,
 	}
 	vars := held.vars
 	maps.Copy(vars, wf.Vars)
-	secrets := held.secrets
-	maps.Copy(secrets, wf.Secrets)
+	secrets := union(held.secrets, wf.Secrets)
 	defaults := held.defaults
 	applyDefaults(&defaults, wf.Defaults)
 
@@ -103,7 +101,7 @@ type included struct {
 	blocks   map[string]stepValues
 	values   map[agk.Step]stepValues
 	vars     Vars
-	secrets  map[string]SecretDecl
+	secrets  []string
 	defaults Defaults
 	visited  map[string]bool
 	open     map[string]bool
@@ -183,10 +181,26 @@ func (in *included) gather(fsys fs.FS, dir string, includes []Include, remote ma
 			in.values[name] = own
 		}
 		maps.Copy(in.vars, f.vars)
-		maps.Copy(in.secrets, f.secrets)
+		in.secrets = union(in.secrets, f.secrets)
 		applyDefaults(&in.defaults, f.defaults)
 	}
 	return nil
+}
+
+// union is the secrets two files name, each once, in the order they were first named.
+//
+// A name is not a value that one file can override in another: it says a secret is used, and
+// the namespace says where it lives. So an include and the file including it naming the same
+// secret agree rather than collide, and the only thing left to decide is the order, which is
+// the order the files were read in.
+func union(held, own []string) []string {
+	out := slices.Clone(held)
+	for _, name := range own {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // dirOf is the directory a fragment's own path includes resolve against: its own, for a

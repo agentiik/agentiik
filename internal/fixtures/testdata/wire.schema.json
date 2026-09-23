@@ -131,19 +131,19 @@
             "properties": {
               "name": {
                 "$ref": "#/$defs/identifier",
-                "description": "The secret's name, as the workflow secrets block declares it and as the brick manifest asks for it. Only secrets of the owning namespace can be named, and this is what the runner presents when it redeems the grant, so the name is the whole of what the message says about the secret.",
+                "description": "The secret's name, as the workflow secrets block names it and as the brick manifest asks for it. Only secrets the owning namespace declares can be named, and this is what the runner presents when it redeems the grant, so the name is the whole of what the message says about the secret.",
                 "examples": [
                   "billing",
                   "bearer"
                 ]
               },
               "mount": {
-                "type": "string",
-                "pattern": "^/agk/secrets/[^/]+$",
+                "$ref": "#/$defs/secretMount",
                 "description": "Where the value is mounted inside the container, on tmpfs under /agk/secrets/ and nowhere else: a mount at /run/secrets/bearer, written out of habit, is refused. It is a file and not an environment variable because a process environment is readable by its children and ends up in diagnostic dumps. The controller resolves the path before publishing, from the brick manifest or from the name, so the runner is told where to put the value rather than deriving it and deriving it differently.",
                 "examples": [
                   "/agk/secrets/billing",
-                  "/agk/secrets/bearer"
+                  "/agk/secrets/bearer",
+                  "/agk/secrets/client.key"
                 ]
               }
             },
@@ -313,7 +313,7 @@
         },
         "grant": {
           "$ref": "#/$defs/grant",
-          "description": "The bearer token issued with this task, and the only thing that turns the names in this message into values. The runner redeems it at the API for the input URLs, the secret values and the upload URLs, and for nothing that belongs to another task: it is scoped to this one and expires with it. It is the hinge the whole message turns on, since everything else here is a name, and a name without this token names what was going to happen and grants none of it.",
+          "description": "The bearer token issued with this task, and the only thing that turns the names in this message into values. The runner redeems it at the API for the input URLs, the URLs of the workflow tree, the secret values and the upload URLs, and for nothing that belongs to another task: it is scoped to this one and expires with it. It is the hinge the whole message turns on, since everything else here is a name, and a name without this token names what was going to happen and grants none of it.",
           "examples": [
             "agkgrant_01JMZ8V1PC7K3M0QY4B8ZR6TDN_Zm9vYmFyYmF6cXV4MTIzNA"
           ]
@@ -1862,7 +1862,7 @@
             },
             "secrets": {
               "type": "array",
-              "description": "The values of the secrets the step mounts, and only those: the grant is scoped to this task and to the secrets this task named, so a runner cannot ask for one the workflow did not declare, and a workflow can only declare secrets of the namespace that owns it. The API is the only component that reads the secret store. The controller decided which secrets this task may have and never saw a value, no role reads one through the API at any time, and these strings are what the runner masks out of collected logs by literal match before a line is written to the store. A step that mounts nothing carries an empty list.",
+              "description": "The values of the secrets the step mounts, and only those: the grant is scoped to this task and to the secrets this task named, so a runner cannot ask for one the workflow did not name, and a workflow can only name secrets the namespace that owns it declares. The API is the only component that reads the secret store. The controller decided which secrets this task may have and never saw a value, no role reads one through the API at any time, and these strings are what the runner masks out of collected logs by literal match before a line is written to the store. A step that mounts nothing carries an empty list.",
               "items": {
                 "type": "object",
                 "required": [
@@ -1881,11 +1881,11 @@
                     ]
                   },
                   "mount": {
-                    "type": "string",
-                    "pattern": "^/agk/secrets/[A-Za-z0-9][A-Za-z0-9_-]*$",
-                    "description": "Where the value is written inside the container: a tmpfs mount at /agk/secrets/<name>, created noexec, nosuid and nodev. It repeats the mount point the task message gave so that a value and the path it belongs at arrive as one entry rather than being paired by position while a secret sits in memory. A secret is not injected as an environment variable, by default, because a process environment is readable by its children and ends up in diagnostic dumps.",
+                    "$ref": "#/$defs/secretMount",
+                    "description": "Where the value is written inside the container: a file on a tmpfs mount under /agk/secrets/, created noexec, nosuid and nodev. It repeats the mount point the task message gave so that a value and the path it belongs at arrive as one entry rather than being paired by position while a secret sits in memory. A secret is not injected as an environment variable, by default, because a process environment is readable by its children and ends up in diagnostic dumps.",
                     "examples": [
-                      "/agk/secrets/billing"
+                      "/agk/secrets/billing",
+                      "/agk/secrets/client.key"
                     ]
                   },
                   "encoding": {
@@ -2902,6 +2902,17 @@
       "examples": [
         "agkgrant_01JMZ8V1P9C4XQ7K2N4D6F8H0A_Zm9vYmFyYmF6cXV4MTIzNA",
         "agkgrant_01JMZ8V1PC7K3M0_Zm9vYmFyYmF6cXV4MTIzNA"
+      ]
+    },
+    "secretMount": {
+      "title": "Secret mount",
+      "description": "Where a secret's value is mounted inside the container: one file on tmpfs directly under /agk/secrets/, and nowhere else. The file name begins with a letter or a digit and goes on in letters, digits, dots, hyphens and underscores. The dot is kept because a file name naturally carries one, as client.key does, and the first character is what refuses . and .., which name the directory or its parent rather than a file in it. It is one grammar for the task message, for the redemption that answers it and for the brick manifest the mount was read from, because a mount one of them accepts and the next refuses is a secret the engine dispatches and a strict runner then cannot write.",
+      "$comment": "The same pattern is brick.schema.json $defs/secret/properties/mount. A $ref may not leave a document here, so the two are copies, and tools/check.py fails the build when they differ: changing one is changing both.",
+      "type": "string",
+      "pattern": "^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "examples": [
+        "/agk/secrets/billing",
+        "/agk/secrets/client.key"
       ]
     },
     "resources": {

@@ -339,6 +339,34 @@ func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 	}
 }
 
+// A mount is one file directly under /agk/secrets/, and the host side is named after its last
+// element. So a mount of . would replace the secrets directory with the value and one of .. would
+// name its parent, and both are refused as the brick's, while a file name carrying a dot, as a
+// key file does, lands where it says.
+func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
+	for _, mount := range []string{"/agk/secrets/..", "/agk/secrets/.", "/agk/secrets/.netrc", "/agk/secrets/a/b"} {
+		store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
+		w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+		if err != nil {
+			t.Fatalf("newWorkdir: %s", err)
+		}
+		task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: mount}}}
+		_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", vault{"bearer": "token"})
+		w.remove()
+		if err == nil {
+			t.Errorf("a secret was mounted at %s", mount)
+			continue
+		}
+		if !errors.Is(err, ErrContractBroken) {
+			t.Errorf("the mount %s was refused, and not as the contract being broken: %s", mount, err)
+		}
+	}
+
+	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: "/agk/secrets/client.key"}}}
+	g, _ := prepared(t, task, vault{"bearer": "token"}, "")
+	mountAt(t, g, "/agk/secrets/client.key")
+}
+
 func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 	store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
 	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")

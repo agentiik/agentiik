@@ -286,12 +286,12 @@ func TestTheSurfaceCanBeReadBack(t *testing.T) {
 	}
 }
 
-// The eight atoms, held to the page. A permission invented here is one nothing documents and one
+// The nine atoms, held to the page. A permission invented here is one nothing documents and one
 // no role includes.
 func TestThePermissionsAreThePageOwn(t *testing.T) {
 	want := []string{
 		"workflow:read", "workflow:run", "workflow:write", "workflow:delete",
-		"run:read", "run:read_data", "secret:use", "grant:manage",
+		"run:read", "run:read_data", "secret:use", "secret:write", "grant:manage",
 	}
 	if len(api.Permissions) != len(want) {
 		t.Fatalf("this package has %d permissions and the page names %d", len(api.Permissions), len(want))
@@ -302,7 +302,7 @@ func TestThePermissionsAreThePageOwn(t *testing.T) {
 		}
 	}
 	if api.Permission("run:read_data").Valid() != true || api.Permission("run:everything").Valid() {
-		t.Error("Valid does not answer for the eight")
+		t.Error("Valid does not answer for the nine")
 	}
 }
 

@@ -38,19 +38,32 @@ const (
 	// SecretUse: "Let a step reference a namespace secret. Never allows reading its value."
 	SecretUse Permission = "secret:use"
 
+	// SecretWrite declares, moves and removes a namespace's secrets: which store holds each
+	// value and where in it. Never allows reading a value.
+	//
+	// An atom of its own rather than workflow:write, because a declaration is not part of a
+	// workflow: it is what decides which credential a step is handed, for every workflow of the
+	// namespace at once, and the one holding workflow:write on a single workflow has no business
+	// pointing another's secret somewhere else. Reading the declarations needs workflow:read,
+	// since a workflow names the secrets it uses and the declarations are where they live.
+	//
+	// Owner holds it, and editor by default. Which atoms a role holds arrives with the roles in
+	// v0.3.0, and nothing here guesses at the rest of that mapping ahead of it.
+	SecretWrite Permission = "secret:write"
+
 	// GrantManage: "Grant and revoke access at this scope."
 	GrantManage Permission = "grant:manage"
 )
 
-// Permissions are the eight, in the order the page lists them. A test holds this list to the
+// Permissions are the nine, in the order the page lists them. A test holds this list to the
 // page, because a permission invented here would be one nothing documents and one no role
 // includes.
 var Permissions = []Permission{
 	WorkflowRead, WorkflowRun, WorkflowWrite, WorkflowDelete,
-	RunRead, RunReadData, SecretUse, GrantManage,
+	RunRead, RunReadData, SecretUse, SecretWrite, GrantManage,
 }
 
-// Valid says whether this is one of the eight.
+// Valid says whether this is one of the nine.
 func (p Permission) Valid() bool {
 	for _, known := range Permissions {
 		if p == known {

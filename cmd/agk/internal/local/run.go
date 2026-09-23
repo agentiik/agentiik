@@ -40,7 +40,7 @@ type Request struct {
 	Vars   map[string]any
 
 	// Secrets are the values the command line supplied, by the name the secrets block
-	// gives them. They are mounted exactly as a server run mounts them, through the
+	// lists them under. They are mounted exactly as a server run mounts them, through the
 	// driver: a file bound read-only at /agk/secrets/<name>, masked out of the log and
 	// out of the payload, never an environment variable.
 	Secrets map[string][]byte

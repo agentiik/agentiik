@@ -29,7 +29,7 @@ type Workflow struct {
 	MCP         *MCP
 	Include     []Include
 	Vars        Vars
-	Secrets     map[string]SecretDecl
+	Secrets     []string
 	Defaults    Defaults
 	Concurrency Concurrency
 	Timeout     Duration
@@ -133,14 +133,6 @@ type Event struct {
 
 // Vars are the workflow variables, read by expressions under the vars root.
 type Vars map[string]any
-
-// SecretDecl is one secret of the workflow: the store it is read from and where in it.
-// "The value is never written in the file, so the provider is all there is to resolve it
-// by."
-type SecretDecl struct {
-	Provider string
-	Path     string
-}
 
 // Include is one entry of the include block: either a file of this repository, resolved
 // inside the same commit, or another repository at a ref.

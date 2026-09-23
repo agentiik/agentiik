@@ -49,8 +49,8 @@ type Context struct {
 	// Matrix is the current combination, one value per matrix key.
 	Matrix map[string]any
 
-	// Secrets is the declared secrets, by name, as references. A Secret carries a
-	// name and never a value: the value is resolved by the runner, in the container,
+	// Secrets is the secrets the workflow names, by name, as references. A Secret
+	// carries a name and never a value: the value is resolved by the runner, in the container,
 	// and never in the process that evaluates this.
 	Secrets map[string]Secret
 }

@@ -7,10 +7,7 @@ inputs:
   cycle:
     schema: { type: string }
     required: true
-secrets:
-  billing_api:
-    provider: builtin
-    path: finance/billing-api
+secrets: [billing_api]
 outputs:
   invoices:
     from: { step: charge, port: out }

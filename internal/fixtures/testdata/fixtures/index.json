@@ -269,10 +269,16 @@
           "reference": "https://agentiik.github.io/docs/#step-keywords"
         },
         {
-          "file": "workflow/invalid/secret-without-provider.yaml",
-          "rule": "A secret declared without the store it is read from. The value is never written in the file, so the provider is all there is to resolve it by.",
+          "file": "workflow/invalid/secret-with-provider-and-path.yaml",
+          "rule": "A secret written with the store it is read from. The namespace declares where each of its secrets lives, provider and path, and is confined to its own paths; the file names a secret and nothing more, so that pushing a workflow cannot aim it at whatever the store holds.",
           "refused_by": "schema",
-          "reference": "https://agentiik.github.io/docs/#yaml"
+          "reference": "https://agentiik.github.io/docs/#secrets"
+        },
+        {
+          "file": "workflow/invalid/secret-name-is-a-path.yaml",
+          "rule": "A secret named by where it sits in the store. A secret is named on the identifier grammar, the name a step mounts it by and the namespace declares it under, and where its value lives belongs to that declaration rather than to the file.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#secrets"
         },
         {
           "file": "workflow/invalid/cron-not-five-fields.yaml",
@@ -326,7 +332,7 @@
         },
         {
           "file": "workflow/invalid/secret-not-declared.yaml",
-          "rule": "A step mounting a secret the workflow never declared. Secrets are mounted by the name the secrets block gives them, and only secrets of the owning namespace can be named there.",
+          "rule": "A step mounting a secret the workflow never names. Secrets are mounted by the name the secrets block lists them under, and only secrets the owning namespace declares can be named there.",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#step-keywords"
         },
@@ -403,6 +409,11 @@
         {
           "file": "brick/valid/minimal.yaml",
           "covers": "the smallest manifest the contract accepts: an identity and the account the container runs as",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/valid/secret-mount-with-a-dot.yaml",
+          "covers": "a secret mounted under a file name carrying a dot, as a key file naturally does, and a secret whose mount is not its name: the mount the task message and the grant redemption then carry on the same grammar",
           "reference": "https://agentiik.github.io/docs/#brick-manifest"
         }
       ],
@@ -482,6 +493,12 @@
         {
           "file": "brick/invalid/secret-mount-outside-agk-secrets.yaml",
           "rule": "A secret mounted somewhere other than /agk/secrets/<name>. The runner mounts secret values on tmpfs there, and nowhere else.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/invalid/secret-mount-parent-directory.yaml",
+          "rule": "A secret mounted at /agk/secrets/.., which names the parent of the secrets directory rather than a file in it. A mount's file name begins with a letter or a digit, so a dot inside a name is kept and a name made of dots is refused.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#brick-manifest"
         },
@@ -599,6 +616,10 @@
           "file": "wire/valid/task-message-script-step.json",
           "covers": "script, before_script, after_script, shell, files, timeout, idempotent and cache_key: what a runner needs for a step whose image is a base image rather than a brick",
           "source": "https://agentiik.github.io/docs/#running-a-script-instead-of-a-brick"
+        },
+        {
+          "file": "wire/valid/task-message-secret-mount-with-a-dot.json",
+          "covers": "a secret whose mount carries a dot, client.key, on the grammar the brick manifest declared it on and the grant redemption answers it on"
         }
       ],
       "invalid": [
@@ -626,6 +647,11 @@
           "file": "wire/invalid/task-message-without-grant.json",
           "rule": "the grant is what turns the names in the message into values, and a message without one asks a runner to do work it cannot fetch the inputs for",
           "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-message-secret-mount-parent-directory.json",
+          "rule": "a mount is one file directly under /agk/secrets/, and .. names the parent of that directory rather than a file in it: a file name begins with a letter or a digit, so a dot inside it is kept and a name made of dots is refused",
+          "refused_by": "schema"
         }
       ]
     },
@@ -652,7 +678,7 @@
         },
         {
           "file": "wire/invalid/task-result-state-of-a-run.json",
-          "rule": "cancelled is a run state, not a task state, and the two vocabularies are separate on purpose",
+          "rule": "queued is a run state, not a task state, and the two vocabularies are separate on purpose",
           "refused_by": "schema"
         }
       ]
@@ -692,12 +718,21 @@
         {
           "file": "wire/valid/grant-redemption.json",
           "covers": "redeeming one task's grant: the input URLs, the secret values, the upload URLs and the repository tree the step will see"
+        },
+        {
+          "file": "wire/valid/grant-redemption-secret-mount-with-a-dot.json",
+          "covers": "a secret value answered for a mount carrying a dot, client.key, which the task message and the brick manifest already accepted and this answer used to refuse"
         }
       ],
       "invalid": [
         {
           "file": "wire/invalid/grant-redemption-mode-not-octal.json",
           "rule": "a file mode is octal, written the way the workflow file writes it, because the wire echoes a value that file wrote",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/grant-redemption-secret-mount-parent-directory.json",
+          "rule": "a secret value is written at its mount, and a mount of .. would write it over the parent of /agk/secrets/ rather than into a file under it: the grammar that keeps a dot inside a name still refuses a name made of dots",
           "refused_by": "schema"
         }
       ]

@@ -45,9 +45,9 @@ const (
 	// RuleOutputFromUnknownStep is a workflow output taken from a step the workflow
 	// does not declare.
 	RuleOutputFromUnknownStep Rule = "output-from-unknown-step"
-	// RuleSecretNotDeclared is a step mounting a secret the workflow never declared.
-	// "Secrets are mounted by the name the secrets block gives them, and only secrets
-	// of the owning namespace can be named there."
+	// RuleSecretNotDeclared is a step mounting a secret the workflow never names.
+	// "Secrets are mounted by the name the secrets block lists them under, and only
+	// secrets the owning namespace declares can be named there."
 	RuleSecretNotDeclared Rule = "secret-not-declared"
 	// RuleScriptWithoutOutputs is a script step that declares no output port. "The
 	// image is a base image, no manifest is read and nothing about its ports is

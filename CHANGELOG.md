@@ -40,6 +40,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `tasks` keeps one row per dispatch of a key, numbered by `requeue`, and at most one of them that is not `lost`.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
+- `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
 
 ### Bus
 
@@ -65,13 +66,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
 - A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
+- A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
 
 ### API
 
 - Deny by default is structural: a route is registered with the permission it needs and the router checks it.
 - A refusal at a namespace or a workflow is the same 404 as an absence. 403 is for the installation scope, and a failure to decide is a 500.
 - Until access control arrives in v0.3.0, every route that needs a permission is refused.
-- Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field is refused.
+- A ninth permission, `secret:write`, declares and removes a namespace's secrets.
+- Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field, or anything after its document, is refused.
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
@@ -90,12 +93,19 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Somewhere to write is one signed POST policy per task, answered at the first redemption, bounded to `<namespace>/sha256/` and the run, and good until the grant expires and not after, so a task redeems once and its secrets are read once. The request no longer takes `upload`. The built-in store takes the form at `POST /objects/{namespace}`, only under a key that is the prefix and 64 lowercase hex characters, and hashes the file as it arrives, as it does a PUT.
 - A posted form carries at most 64 KiB before its file. The file itself is bounded by `artifact_max_bytes` alone, and above it the post is refused with 413 and nothing is stored.
 - A push names its commit by the whole 40-character hash, and is refused with 409 when that commit is already recorded with other files. A tree is at most 4 MiB counted with its paths, 4,096 files, 255 bytes a name and 2,048 a path: limits of the interim JSON push, until the installation hosts the repository. A path a runner could lay out as `.git`, or outside the tree, is refused.
+- `GET /api/v1/{ns}/secrets` lists a namespace's secret declarations, and `GET`, `PUT` and `DELETE /api/v1/{ns}/secrets/{name}` read, write and remove one: name, provider (`builtin`, `env` or `vault`), path and mount point, never a value. Reading takes `workflow:read` and writing `secret:write`.
+- A `builtin` declaration's `PUT` may carry its value, `base64` when it is not text, handed to the built-in store in the declaration's transaction and never answered. With no store attached it is a 503. Removing a secret, or moving it out of the store, forgets its value.
+- A declaration is confined to its namespace when it is written. `env` is refused unless the installation opts in, and then takes only a variable under the prefix it gives that namespace; `vault` is refused until its provider arrives.
+- A secret's name is at most 255 characters, since a step is given its value in a file named after it, and a path at most 1 KiB.
+- A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
 
 ### Secrets
 
 - Package `secret`, the built-in store: a fresh AES-256-GCM data key per value, wrapped by a master key read from a file only the API user can open.
 - Master keys rotate through a keyring. Resealing is idempotent and does not change a value's version.
 - A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
+- A workflow's `secrets` block is a list of names, `secrets: [billing]`. Where a value lives is the namespace's declaration, and a block still writing a provider or a path is refused.
+- A test sends a request to every API route but the redemption, with a secret store that fails if it is read.
 
 ### Command line
 

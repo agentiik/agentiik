@@ -60,10 +60,11 @@ func TestGrantRedemptionsCarriesTheWholeCorpus(t *testing.T) {
 			t.Errorf("%s names no rule it is refused by", c.File)
 		}
 	}
-	// One exchange that must be accepted, and one whose tree carries a mode that is not
-	// octal.
-	if valid != 1 || invalid != 1 {
-		t.Fatalf("the corpus holds %d valid and %d invalid redemptions, want 1 and 1", valid, invalid)
+	// Two exchanges that must be accepted, one of them a secret mounted at a file name
+	// carrying a dot, and two that must be refused: a tree carrying a mode that is not octal,
+	// and a secret mounted at the parent of /agk/secrets/.
+	if valid != 2 || invalid != 2 {
+		t.Fatalf("the corpus holds %d valid and %d invalid redemptions, want 2 and 2", valid, invalid)
 	}
 }
 
@@ -106,10 +107,10 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 		}
 	}
 	// The corpus the release carries: nine documents that must be accepted and
-	// fifty-two that must be refused, of which fifteen are rules no JSON Schema can
+	// fifty-three that must be refused, of which fifteen are rules no JSON Schema can
 	// express and the evaluator owns.
-	if valid != 9 || invalid != 52 || byValidator != 15 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 52 and 15", valid, invalid, byValidator)
+	if valid != 9 || invalid != 53 || byValidator != 15 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 53 and 15", valid, invalid, byValidator)
 	}
 }
 
@@ -130,8 +131,8 @@ func TestBricksCarriesTheWholeCorpus(t *testing.T) {
 			t.Errorf("%s names no rule it is refused by", c.File)
 		}
 	}
-	if valid != 3 || invalid != 14 {
-		t.Fatalf("the corpus holds %d valid and %d invalid manifests, want 3 and 14", valid, invalid)
+	if valid != 4 || invalid != 15 {
+		t.Fatalf("the corpus holds %d valid and %d invalid manifests, want 4 and 15", valid, invalid)
 	}
 }
 

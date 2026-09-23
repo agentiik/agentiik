@@ -152,7 +152,10 @@ func portNamesOf(ports map[agk.Port]ManifestPort) []agk.Port {
 // documentation says why: a brick name is what a person types and what the catalog files
 // a page under; a version moves with the brick and not with the image tag; a parameter
 // name becomes a key of /agk/params.json and AGK_PARAM_<NAME>; a secret is mounted on
-// tmpfs under /agk/secrets/ and nowhere else.
+// tmpfs as one file directly under /agk/secrets/ and nowhere else. The file name keeps a
+// dot, because client.key is what a key file is called, and begins with a letter or a digit,
+// which is what refuses . and .., the directory itself and its parent rather than a file in
+// it.
 var (
 	brickName      = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	identifier     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -161,7 +164,7 @@ var (
 	definitionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	accountName    = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.][A-Za-z0-9_.-]*)?$`)
 	rootAccount    = regexp.MustCompile(`^(?:0+|root)(?::|$)`)
-	secretMount    = regexp.MustCompile(`^/agk/secrets/[^/]+$`)
+	secretMount    = regexp.MustCompile(`^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	cpuRequest     = regexp.MustCompile(`^(?:[0-9]*[1-9][0-9]*(?:\.[0-9]+)?|[0-9]+\.[0-9]*[1-9][0-9]*)$`)
 	memoryRequest  = regexp.MustCompile(`^[1-9][0-9]*(Ki|Mi|Gi|Ti)$`)
 )
@@ -384,7 +387,7 @@ func secretsOf(spec map[string]any) ([]Secret, error) {
 			return nil, err
 		}
 		if s.Mount != "" && !secretMount.MatchString(s.Mount) {
-			return nil, fmt.Errorf("%s mounts the secret at %q: the runner mounts secret values on tmpfs under /agk/secrets/, and nowhere else", where, s.Mount)
+			return nil, fmt.Errorf("%s mounts the secret at %q: the runner mounts a secret value on tmpfs as one file directly under /agk/secrets/, named with a letter or a digit and then letters, digits, dots, hyphens and underscores, and nowhere else", where, s.Mount)
 		}
 		if s.Optional, err = boolean(b, "optional", where); err != nil {
 			return nil, err

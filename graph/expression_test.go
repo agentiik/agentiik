@@ -215,10 +215,7 @@ metadata:
   namespace: finance
 vars:
   currency: EUR
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 steps:
   normalize:
     image: ghcr.io/acme/agk-normalize@sha256:9f2c1d073f187ad520aaf67af255db9208210cfac76f1f2426ef8d938079b7e0

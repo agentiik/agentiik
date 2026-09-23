@@ -29,10 +29,7 @@ include:
 vars:
   currency: EUR
 
-secrets:
-  billing:
-    provider: vault
-    path: kv/data/agentiik/billing
+secrets: [billing]
 
 defaults:
   timeout: 10m
