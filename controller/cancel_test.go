@@ -136,6 +136,45 @@ func TestACancellationAskedForOnTheRunStopsWhatItHolds(t *testing.T) {
 	}
 }
 
+// A pass that published a task and died before recording the dispatch leaves the task pending in
+// the document, where the evaluator names nothing to stop, and a runner may take the message and
+// redeem its grant before any pass comes round. Cancelling the run stops that task all the same:
+// the redemption bound its row, and the row is what says a runner holds it.
+func TestACancellationStopsATaskTakenBeforeItsDispatchWasRecorded(t *testing.T) {
+	core, q, pool, _ := deciding(t)
+	createRun(t, pool)
+	ctx, cancel := context.WithCancel(t.Context())
+	died := &diesOnPublishing{cancel: cancel}
+	dead, err := NewCore(core.controller, core.term, Options{
+		Queue: died, Versions: core.versions, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dead.Decide(ctx, decidedRun); err == nil {
+		t.Fatal("a pass that died after publishing answered as if it had recorded the dispatch")
+	}
+	sent := died.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the pass that died published %d tasks", len(sent))
+	}
+	if err := core.redeem(t, sent[0], theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	askedToCancel(t, pool, core, decidedRun)
+	if err := core.Wake(t.Context(), Wake{Run: decidedRun}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Fatalf("a run somebody asked to cancel is %s", got)
+	}
+	stops := q.stops()
+	if len(stops) != 1 || stops[0].Task != sent[0].Task.ID || stops[0].Reason != graph.StopCancelled {
+		t.Errorf("cancelling stopped %+v, and %s had redeemed %s", stops, theRunner, sent[0].Task.ID)
+	}
+}
+
 // A run still queued is cancelled before it is let in, so nothing is ever published for it.
 func TestARunAskedToCancelBeforeItStartedStartsNothing(t *testing.T) {
 	core, q, pool, _ := deciding(t)

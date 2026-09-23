@@ -152,7 +152,8 @@ func TestARunIsFoundByItsIdentifierAlone(t *testing.T) {
 }
 
 // Cancelling a run's tasks ends every one that is not over, and leaves a loss as the loss it was:
-// the one record that a runner went quiet.
+// the one record that a runner went quiet. What it answers is the ones a runner had redeemed, which
+// are the ones to stop.
 func TestCancellingTheTasksOfARunLeavesWhatEndedAsItEnded(t *testing.T) {
 	pool, _ := created(t)
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
@@ -175,16 +176,16 @@ func TestCancellingTheTasksOfARunLeavesWhatEndedAsItEnded(t *testing.T) {
 	)
 
 	later := now.Add(time.Minute)
-	var cancelled int
+	var held []agk.TaskID
 	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
 		var err error
-		cancelled, err = w.CancelTasks(ctx, "finance", theRun, later)
+		held, err = w.CancelTasks(ctx, "finance", theRun, later)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if cancelled != 3 {
-		t.Errorf("cancelling the run's tasks moved %d, and three of them were not over", cancelled)
+	if len(held) != 1 || held[0] != invoice {
+		t.Errorf("cancelling the run's tasks answered %v as held by a runner, and only the requeue of %s was", held, invoice)
 	}
 
 	var d RunDetail

@@ -732,7 +732,8 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	return false, nil
 }
 
-// CancelTasks moves to cancelled every task of a run that is not over, and answers how many.
+// CancelTasks moves to cancelled every task of a run that is not over, and answers the keys of
+// those a runner had redeemed.
 //
 // "cancelled: Stopped because the run was cancelled by a principal, by a concurrency group or by
 // a merge: first." It belongs in the transaction that writes the cancellation, because the
@@ -742,15 +743,28 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 // container for a run that had ended, and every one of them would count against
 // max_concurrent_tasks for good. A dispatch the heartbeat declared lost keeps its loss, which is
 // the one record that its runner went quiet.
-func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) (int, error) {
-	tag, err := w.tx.Exec(ctx,
-		`update tasks set state = 'cancelled', finished_at = coalesce(finished_at, $3)
-		 where namespace = $1 and run_id = $2 and state in ('pending', 'dispatched', 'running', 'publishing')`,
+//
+// The keys it answers are to be stopped whatever the evaluator's document says of them. A pass
+// that published a task and died before recording the dispatch leaves the task pending in the
+// document, where the evaluator names nothing to stop, and a runner that took the message
+// meanwhile has redeemed its grant and started the container. The row knows, because the
+// redemption bound it.
+func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
+	rows, err := w.tx.Query(ctx,
+		`with cancelled as (
+		   update tasks set state = 'cancelled', finished_at = coalesce(finished_at, $3)
+		   where namespace = $1 and run_id = $2 and state in ('pending', 'dispatched', 'running', 'publishing')
+		   returning idempotency_key, runner)
+		 select idempotency_key from cancelled where runner is not null order by idempotency_key`,
 		namespace, string(run), at)
 	if err != nil {
-		return 0, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
 	}
-	return int(tag.RowsAffected()), nil
+	held, err := pgx.CollectRows(rows, pgx.RowTo[agk.TaskID])
+	if err != nil {
+		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+	}
+	return held, nil
 }
 
 // Published stamps the tasks whose messages have gone.

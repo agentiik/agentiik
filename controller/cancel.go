@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 )
 
 // Calling a run off.
@@ -67,6 +69,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: the document of run %s could not be written: %w", run, err)
 	}
 	steps, tasks := project(state)
+	var held []agk.TaskID
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
@@ -87,10 +90,21 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 		// message is still on the queue is held by no runner a stop can reach: written as
 		// cancelled, its grant no longer redeems, so no container starts for it. The rows then
 		// say more than the document does, which nothing reads again once the run has ended.
-		_, err := w.CancelTasks(ctx, e.Namespace, run, now)
+		var err error
+		held, err = w.CancelTasks(ctx, e.Namespace, run, now)
 		return err
 	}); err != nil {
 		return err
+	}
+
+	// And they say more about what a runner holds. A pass that published a task and died
+	// before recording the dispatch left it pending in the document, where the evaluator
+	// stops nothing, and a runner may have taken the message and started the container since:
+	// its redemption bound the row, so the row is what names it.
+	for _, key := range held {
+		if !slices.ContainsFunc(plan.Stop, func(s graph.Stop) bool { return s.Task == key }) {
+			plan.Stop = append(plan.Stop, graph.Stop{Task: key, Reason: graph.StopCancelled})
+		}
 	}
 
 	// The stops go after the commit, like everything else that leaves this process. A stop
