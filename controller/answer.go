@@ -97,11 +97,13 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // with ErrNotAResult before anything is read: "a heartbeat is what says a task is still
 // running, and a result saying so would be a result for work that has not finished."
 //
-// And taken from one runner. Any machine holding its pool's bus credential can publish a result,
-// and the first ending recorded for an attempt stands, so an answer is matched on its key and then
-// held to the runner its dispatch was bound to at redemption. Another runner's answer is refused
-// with ErrNotTheHolder before the run is decided, and so is one about a dispatch nobody redeemed:
-// no runner holds that one, so none can have run it.
+// And taken from one runner. Every machine of a pool can publish a result about any task of the
+// pool, and the first ending recorded for an attempt stands, so an answer is matched on its key and
+// then held to the runner its dispatch was bound to at redemption. That Runner is the machine that
+// sent it is the bus's to vouch for, and package bus does, by giving each runner a subject only it
+// may publish on. Another runner's answer is refused with ErrNotTheHolder before the run is
+// decided, and so is one about a dispatch nobody redeemed: no runner holds that one, so none can
+// have run it.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {

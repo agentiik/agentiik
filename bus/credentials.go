@@ -72,6 +72,9 @@ func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, err
 	if err := validPool(pool); err != nil {
 		return Credentials{}, fmt.Errorf("bus: %w", err)
 	}
+	if err := validRunner(name); err != nil {
+		return Credentials{}, fmt.Errorf("bus: %w", err)
+	}
 	return i.mint(name, until, func(c *jwt.UserClaims) {
 		c.Sub.Allow.Add(
 			// Replies to its own requests, and the stop subject, which is the one
@@ -86,8 +89,9 @@ func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, err
 			// Acknowledging what it took. A task nobody acks is redelivered, which
 			// is what at-least-once means and what the idempotency key is for.
 			"$JS.ACK.>",
-			// Saying what happened.
-			ResultSubject,
+			// Saying what happened, on its own subject and on nobody else's, which
+			// is what makes the runner a result arrives under the one that sent it.
+			ResultSubject(name),
 			"_INBOX.>",
 		)
 	})

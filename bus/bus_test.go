@@ -453,6 +453,43 @@ func TestAResultTheControllerWillNeverRecordIsTakenOffAndReported(t *testing.T) 
 	}
 }
 
+// A result is the word of the runner whose subject it arrives on, and one naming another runner is
+// a machine of the pool speaking for somebody else's task. It is taken off the queue and said out
+// loud as a result from a runner that does not hold the task, and the controller never sees it.
+func TestAResultNamingAnotherRunnerIsTakenOffAndReported(t *testing.T) {
+	b := open(t)
+	trouble := make(chan error, 8)
+	b.Trouble = func(_ string, err error) { trouble <- err }
+
+	result := aResult(aTask(step(t)))
+	body, err := result.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.js.Publish(t.Context(), ResultSubject("runner-lan-01"), body); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := answering(t, b, func(controller.Answer) error { return nil })
+	select {
+	case err := <-trouble:
+		if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
+			t.Errorf("what was said reads %q", err)
+		}
+	case a := <-seen:
+		t.Fatalf("the controller was handed a result runner-lan-01 published as runner-dmz-02: %+v", a)
+	case <-time.After(15 * time.Second):
+		t.Fatal("nothing was said about a result published under another runner's name")
+	}
+	select {
+	case a := <-seen:
+		t.Errorf("the controller was handed it after all: %+v", a)
+	case err := <-trouble:
+		t.Errorf("it was said twice, the second time as %q", err)
+	case <-time.After(2 * time.Second):
+	}
+}
+
 // A pool the control plane made no consumer for has nothing to take from, and Take says so
 // rather than making one. A runner able to create a consumer could create one with no filter,
 // and the credential a runner holds is refused the attempt anyway.

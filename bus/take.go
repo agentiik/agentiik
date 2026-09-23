@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/controller"
@@ -22,8 +23,17 @@ import (
 // are taken by the one active controller. WorkQueue on both, for the same reason.
 const Results = "AGENTIIK_RESULTS"
 
-// ResultSubject is where a result goes.
-const ResultSubject = "agentiik.results"
+// ResultSubject is where one runner's results go.
+//
+// A subject per runner, because a subject is the one thing on this bus a publisher cannot choose
+// for itself: a runner's credential may publish on its own and on no other, so the runner a result
+// arrives under is the runner that sent it, whatever the result says. That is what the controller
+// holds against the runner the task was bound to at redemption. On one subject shared by the pool
+// the runner field would be a claim, and a machine of the pool could settle another machine's task
+// by writing the other machine's name in it.
+func ResultSubject(runner string) string { return resultPrefix + runner }
+
+const resultPrefix = "agentiik.results."
 
 // Taken is one task message a runner pulled, and the two things it can say about it afterwards.
 //
@@ -145,7 +155,7 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 		return fmt.Errorf("bus: %w", err)
 	}
 	msg := &nats.Msg{
-		Subject: ResultSubject,
+		Subject: ResultSubject(r.Runner),
 		Data:    body,
 		Header: nats.Header{
 			jetstream.MsgIDHeader: []string{"result-" + r.TaskID + "-" + r.State.String()},
@@ -169,6 +179,8 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 // A result is read as the wire describes it, and handed on with its outputs as digests. One the
 // wire refuses is taken off the queue and said out loud, as one nobody can decode is: a result
 // that is not an ending, or that says what no container could, reads the same on every delivery.
+// So is one naming a runner other than the one whose subject it came on, for the reason
+// ResultSubject gives.
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
@@ -199,6 +211,15 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 			a, err := readResult(msg.Data())
 			if err != nil {
 				b.report(msg.Subject(), fmt.Errorf("a result could not be read: %w", err))
+				msg.Term()
+				continue
+			}
+			// The subject is who sent it, and the result is taken as that
+			// runner's word or not at all. One naming somebody else is a
+			// machine of the pool speaking for another, the same on every
+			// delivery, and the controller is not shown it.
+			if sender := strings.TrimPrefix(msg.Subject(), resultPrefix); sender != a.Runner {
+				b.report(msg.Subject(), fmt.Errorf("%w: %w: the result of %s names %s and was published by %s", controller.ErrNotAResult, controller.ErrNotTheHolder, a.Result.Task, a.Runner, sender))
 				msg.Term()
 				continue
 			}

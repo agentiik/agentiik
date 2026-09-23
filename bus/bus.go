@@ -109,7 +109,7 @@ func Open(ctx context.Context, o Options) (*Bus, error) {
 	results, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:        Results,
 		Description: "One result per attempt, removed once the controller has recorded it.",
-		Subjects:    []string{ResultSubject},
+		Subjects:    []string{ResultSubject("*")},
 		Retention:   jetstream.WorkQueuePolicy,
 		Discard:     jetstream.DiscardOld,
 		Storage:     jetstream.FileStorage,
@@ -307,13 +307,34 @@ func validPool(pool string) error {
 	if pool == "" {
 		return errors.New("a runner pool with no name")
 	}
-	for _, r := range pool {
+	if !isToken(pool) {
+		return fmt.Errorf("%q is not a runner pool: letters, digits, hyphens and underscores, because a pool name is a subject token and a dot or a wildcard in one would reach another pool's work", pool)
+	}
+	return nil
+}
+
+// validRunner holds a runner's name to what can be a subject token, for the same reason: a
+// runner's results go on a subject of its own, and a name with a wildcard in it would be a
+// credential allowed to publish as every runner at once.
+func validRunner(runner string) error {
+	if runner == "" {
+		return errors.New("a runner with no name, and a result is taken from the runner that sent it")
+	}
+	if !isToken(runner) {
+		return fmt.Errorf("%q is not a runner: letters, digits, hyphens and underscores, because a runner's name is a subject token and a dot or a wildcard in one would reach another runner's results", runner)
+	}
+	return nil
+}
+
+// isToken says whether a name can be one token of a subject and nothing more.
+func isToken(s string) bool {
+	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		case r == '-', r == '_':
 		default:
-			return fmt.Errorf("%q is not a runner pool: letters, digits, hyphens and underscores, because a pool name is a subject token and a dot or a wildcard in one would reach another pool's work", pool)
+			return false
 		}
 	}
-	return nil
+	return true
 }

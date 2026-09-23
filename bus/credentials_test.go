@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,12 +158,22 @@ func TestARunnerTakesItsOwnWorkAndCanDoNothingElse(t *testing.T) {
 		t.Fatalf("the runner took %d messages", took)
 	}
 
-	// And says what happened.
-	if err := conn.Publish(ResultSubject, []byte(`{"task_id":"one"}`)); err != nil {
+	// And says what happened, as itself.
+	if err := conn.Publish(ResultSubject("runner-1"), []byte(`{"task_id":"one"}`)); err != nil {
 		t.Errorf("publishing a result: %s", err)
 	}
 	if err := conn.Flush(); err != nil {
 		t.Errorf("publishing a result: %s", err)
+	}
+	if err := conn.LastError(); err != nil {
+		t.Errorf("publishing a result on its own subject: %s", err)
+	}
+
+	// And as nobody else: the subject a result arrives on is who sent it.
+	conn.Publish(ResultSubject("runner-2"), []byte(`{"task_id":"theirs"}`))
+	conn.Flush()
+	if err := conn.LastError(); err == nil || !strings.Contains(err.Error(), ResultSubject("runner-2")) {
+		t.Errorf("a runner published a result as another runner, and the server said %v", err)
 	}
 
 	// What it cannot do, in the server's own words.
@@ -180,8 +191,8 @@ func TestARunnerTakesItsOwnWorkAndCanDoNothingElse(t *testing.T) {
 
 	conn.Publish(Subject("dmz"), []byte(`{"task_id":"mine"}`))
 	conn.Flush()
-	if conn.LastError() == nil {
-		t.Error("a runner published a task of its own")
+	if err := conn.LastError(); err == nil || !strings.Contains(err.Error(), Subject("dmz")) {
+		t.Errorf("a runner published a task of its own, and the server said %v", err)
 	}
 }
 
@@ -281,6 +292,14 @@ func TestWhatCannotBeMinted(t *testing.T) {
 	}{
 		{"a credential for nobody", func() error {
 			_, err := a.issuer.ForRunner("", "dmz", until)
+			return err
+		}},
+		{"a runner whose results would be every runner's", func() error {
+			_, err := a.issuer.ForRunner(">", "dmz", until)
+			return err
+		}},
+		{"a runner reaching another one's results", func() error {
+			_, err := a.issuer.ForRunner("runner-1.runner-2", "dmz", until)
 			return err
 		}},
 		{"a credential for no pool", func() error {

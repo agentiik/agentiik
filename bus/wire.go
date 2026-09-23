@@ -307,9 +307,9 @@ func readResult(body []byte) (controller.Answer, error) {
 // Not the whole schema: the shape is JSON Schema's to state and the conformance test's to hold,
 // against the vendored document. What is written out here is what a controller would otherwise
 // read wrongly or not at all: which dispatch and which runner, whether it is an ending, what a
-// container reported where one ran, and every name that is about to become an object key or a row.
-// The runner's grammar is left out, because the wire prints lowercase names and a runner answers to
-// the identifier the API minted it, which is a ULID.
+// container reported where one ran, and every name that is about to become an object key, a row or
+// a subject. The runner is held to a subject token rather than to the lowercase names the wire
+// prints, because a runner answers to the identifier the API minted it, which is a ULID.
 func (r TaskResult) check() error {
 	if !isULID(r.TaskID) {
 		return fmt.Errorf("task_id %q is not a dispatch identifier: a result carries back the one its task message carried", r.TaskID)
@@ -317,8 +317,8 @@ func (r TaskResult) check() error {
 	if err := agk.TaskID(r.IdempotencyKey).Validate(); err != nil {
 		return fmt.Errorf("idempotency_key: %w", err)
 	}
-	if r.Runner == "" {
-		return fmt.Errorf("the result of %s names no runner, and it is the runner a result is taken from", r.IdempotencyKey)
+	if err := validRunner(r.Runner); err != nil {
+		return fmt.Errorf("the result of %s: %w", r.IdempotencyKey, err)
 	}
 	if !r.State.Terminal() {
 		return fmt.Errorf("the result of %s is %s, which is not one of the five endings a result reports: a heartbeat is what says a task is still going", r.IdempotencyKey, r.State)
@@ -447,8 +447,9 @@ func isULID(s string) bool {
 	return true
 }
 
-// hexOf reads the hexadecimal out of a digest written as the wire writes one, sha256: and sixty-four
-// lowercase characters, which is the form an object key is built from once the algorithm is off.
+// hexOf reads the hexadecimal out of a digest written as the wire writes one, sha256: and
+// sixty-four lowercase characters, which is the form an object key is built from once the
+// algorithm is off.
 func hexOf(digest string) (string, bool) {
 	hex, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok || !isHex64(hex) {

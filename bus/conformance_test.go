@@ -256,10 +256,10 @@ func TestAMessageWithoutItsGrantIsNotPublished(t *testing.T) {
 
 // What a runner sends back, held to the same document.
 //
-// The result was the half nobody checked, and the first version of this package put controller.Answer
-// on the queue as Go spells it: whole envelopes, no task_id, no key. The vendored corpus did not
-// decode into it, so a runner written against the schema would have had every result taken off the
-// queue as unreadable. The corpus is what the reader is held to now.
+// The result was the half nobody checked, and the first version of this package put
+// controller.Answer on the queue as Go spells it: whole envelopes, no task_id, no key. The vendored
+// corpus did not decode into it, so a runner written against the schema would have had every
+// result taken off the queue as unreadable. The corpus is what the reader is held to now.
 
 // outgrown names the fixtures the corpus calls invalid and its own schema accepts, and says why.
 //
@@ -559,6 +559,7 @@ func TestAResultIsWhatTheWireDescribes(t *testing.T) {
 		}
 		var named struct {
 			TaskID string `json:"task_id"`
+			Runner string `json:"runner"`
 			State  string `json:"state"`
 		}
 		if err := json.Unmarshal(body, &named); err != nil {
@@ -569,7 +570,7 @@ func TestAResultIsWhatTheWireDescribes(t *testing.T) {
 		} else {
 			refused++
 		}
-		if _, err := b.js.Publish(t.Context(), ResultSubject, body); err != nil {
+		if _, err := b.js.Publish(t.Context(), ResultSubject(named.Runner), body); err != nil {
 			t.Fatal(err)
 		}
 	}

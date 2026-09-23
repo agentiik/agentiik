@@ -26,6 +26,17 @@
 // what a filtered durable consumer is for. The AWS profile gives up exactly this and pays for it
 // with a queue per pool, "which is why each runner pool gets its own queue".
 //
+// # Why a subject per runner for results
+//
+// Every machine of a pool holds the same kind of credential, and the first ending recorded for
+// an attempt is the one that stands. On one results subject a result's runner field would be a
+// claim, and any machine of the pool could settle any task of the pool by writing the name of the
+// runner that holds it. So each runner publishes on a subject of its own and its credential
+// allows no other: the subject a result arrives on is the runner that sent it, the reader refuses
+// a result naming anybody else, and the controller holds what is left to the runner the task was
+// bound to when its grant was redeemed. A compromised host's "reach is the tasks in its hands",
+// and this is what keeps it there.
+//
 // # What at-least-once costs and who pays it
 //
 // "JetStream guarantees at-least-once delivery. Every task is therefore built to be replayable:
