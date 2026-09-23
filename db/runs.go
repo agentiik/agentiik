@@ -438,6 +438,34 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 	return *runner, nil
 }
 
+// BindUnreached binds one dispatch nobody has redeemed to the runner reporting that it never
+// reached a container, and answers who holds it once that is done.
+//
+// A runner pulls a task's image before it redeems the grant, so a refused pull, or a grant that
+// would not redeem, ends a dispatch no runner is bound to. The first runner to report such an
+// ending is bound to the dispatch here, as a redemption would have bound it, so that no other
+// runner can report a second ending for it and no redemption can follow. A dispatch somebody
+// already holds keeps its holder, and the answer says who that is; the row is locked by the
+// update, so a redemption racing it binds first or finds it bound.
+func (w *Wide) BindUnreached(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
+	if runner == "" {
+		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
+	}
+	var holder string
+	err := w.tx.QueryRow(ctx,
+		`update tasks set runner = coalesce(runner, $4)
+		 where namespace = $1 and id = $2::text and idempotency_key = $3
+		 returning runner`,
+		namespace, row, string(key), runner).Scan(&holder)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s is no dispatch of %s", ErrNoDispatch, row, key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: dispatch %s of task %s could not be bound: %w", row, key, err)
+	}
+	return holder, nil
+}
+
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what

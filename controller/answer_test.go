@@ -299,8 +299,8 @@ func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 // "Its reach is the tasks in its hands." A task is in a runner's hands once it redeemed the task's
 // grant, and a result is taken from that runner and from no other: not from another machine of the
 // pool, which holds the same bus credential and could otherwise settle a task it was never given,
-// and not from anybody before a redemption, when nobody holds it. Each is refused, with an error
-// the bus takes off the queue and reports, and the run is left as it was.
+// and not from anybody saying a container ran before a redemption, when nobody holds it. Each is
+// refused, with an error the bus takes off the queue and reports, and the run is left as it was.
 func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
 	core, q, pool, super := deciding(t)
 	createRun(t, pool)
@@ -367,5 +367,63 @@ func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
 	}
 	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
 		t.Errorf("the holder's result published %+v, want archive", got)
+	}
+}
+
+// "A task that never reached a container writes what stopped it", "a refused pull or a grant that
+// would not redeem being the usual reasons", and a runner pulls the image before it redeems, so
+// such an ending is about a dispatch nobody holds. It is taken from the first runner to report it,
+// which is bound to the dispatch as a redemption would have bound it: another runner's word on it
+// is refused, and its grant redeems for nobody.
+func TestATaskThatNeverReachedAContainerIsEndedByTheRunnerThatReportsIt(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+	log, err := agk.NewLogURI(d.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := Answer{
+		Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed},
+		Row:    d.Row, Runner: theRunner,
+		Log: log, LogLines: 3,
+	}
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("the failure of a task whose image was refused, reported before any redemption, answered %s", err)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	var state string
+	var runner *string
+	if err := conn.QueryRow(t.Context(),
+		`select state, runner from tasks where idempotency_key = $1`, string(d.Task.ID)).
+		Scan(&state, &runner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || runner == nil || *runner != theRunner {
+		t.Errorf("the task reads %s, held by %v, after %s reported it never reached a container", state, runner, theRunner)
+	}
+
+	other := pulled
+	other.Runner = "runner-lan-01"
+	if err := core.Answer(t.Context(), other); !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("another runner reporting the same ending answered %v", err)
+	}
+	grant, ok := issued.Load(d.Row)
+	if !ok {
+		t.Fatal("no grant went out for the task")
+	}
+	if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.Redeem(ctx, grant.(string), d.Task.ID, "runner-lan-01", core.now())
+		return err
+	}); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("the grant of a task another runner ended redeemed, answering %v", err)
 	}
 }

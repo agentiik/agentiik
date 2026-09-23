@@ -75,7 +75,7 @@ type Output struct {
 var ErrNotAResult = errors.New("controller: not a result any controller could record")
 
 // ErrNotTheHolder is a result published by a runner other than the one its task was bound to when
-// its grant was redeemed, or about a task nobody redeemed.
+// its grant was redeemed, or one saying a container ran for a task nobody redeemed.
 //
 // It always comes wrapped with ErrNotAResult, since no delivery would change it: a binding is never
 // released. It has a name of its own because it points somewhere else. A result that is not an
@@ -103,8 +103,15 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // then held to the runner its dispatch was bound to at redemption. That Runner is the machine that
 // sent it is the bus's to vouch for, and package bus does, by giving each runner a subject only it
 // may publish on. Another runner's answer is refused with ErrNotTheHolder before the run is
-// decided, and so is one about a dispatch nobody redeemed: no runner holds that one, so none can
-// have run it.
+// decided, and so is one saying a container ran for a dispatch nobody redeemed: a container is
+// started from what the grant hands over, so none can have run for it.
+//
+// One saying no container ran is another matter. A runner pulls the image before it redeems the
+// grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,
+// and a runner reports it all the same, having acknowledged the message on take and left nothing
+// on the queue to deliver it again. The first runner to report such an ending is bound to the
+// dispatch as a redemption would have bound it, in the transaction that reads the binding, and
+// the answer is taken from it and from no other.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
@@ -129,7 +136,10 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		if e, err = w.Run(ctx, run); err != nil {
 			return err
 		}
-		holder, err = w.HeldBy(ctx, e.Namespace, a.Result.Task, a.Row)
+		if holder, err = w.HeldBy(ctx, e.Namespace, a.Result.Task, a.Row); err != nil || holder != "" || !unreached(a) {
+			return err
+		}
+		holder, err = w.BindUnreached(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner)
 		return err
 	}); err != nil {
 		// A run nobody holds and a dispatch nobody wrote are the same on every delivery:
@@ -141,7 +151,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	}
 	switch {
 	case holder == "":
-		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which no runner has redeemed", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task)
+		return fmt.Errorf("%w: %w: %s reported %s from a container for dispatch %s of %s, which no runner has redeemed, and a container is started from what a redemption hands over", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task)
 	case holder != a.Runner:
 		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which is bound to %s", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task, holder)
 	}
@@ -254,6 +264,16 @@ func (co *Core) published(ctx context.Context, namespace string, a Answer) (map[
 		out[o.Port] = e
 	}
 	return out, nil
+}
+
+// unreached says whether an answer is about a task that never reached a container: it is not a
+// success, and nothing started, exited or published. It is what a refused pull or a grant that
+// would not redeem produces, and the one ending a runner can report for a dispatch it never
+// redeemed.
+func unreached(a Answer) bool {
+	return a.Result.State != agk.TaskSucceeded &&
+		a.Result.StartedAt.IsZero() && a.Result.FinishedAt.IsZero() &&
+		a.Result.ExitCode == 0 && len(a.Outputs) == 0
 }
 
 // isDigest says whether a string is sixty-four lowercase hexadecimal characters, which is what an

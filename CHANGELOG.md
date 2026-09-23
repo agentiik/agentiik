@@ -16,7 +16,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `controller.Answer` names outputs by digest. A success's envelopes are read back from the store, and one not there yet leaves the result for redelivery.
 - An envelope is read back no further than one byte past `envelope_max_bytes`, so a digest a runner names never has the controller hold a whole artifact in memory.
 - A result naming an object that is not the envelope its digest names (too long, other bytes, or not an envelope) is refused with `controller.ErrNotAResult` rather than delivered again. `artifact.ErrNotAnEnvelope` tells it apart from an object that could not be read.
-- A result is taken only from the runner its dispatch was bound to at redemption. Another runner's, or one for a task nobody redeemed, is refused with `controller.ErrNotTheHolder`.
+- A result is taken only from the runner its dispatch was bound to at redemption. Another runner's, or one saying a container ran for a task nobody redeemed, is refused with `controller.ErrNotTheHolder`.
+- A task that never reached a container (a refused pull, a grant that would not redeem) is ended by the first runner to report it, which is bound to it as a redemption would bind it.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.
 - Retries wait out their backoff. A task carries the deadline of its step's timeout, and a run past its root timeout is `timed_out` and stops what it holds. Cancelling twice is not an error.
