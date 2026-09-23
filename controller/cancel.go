@@ -66,7 +66,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	}
 	steps, tasks := project(state)
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-		return w.SaveDecision(ctx, db.Decision{
+		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
 			Was: e.Seq, Seq: state.Seq,
 			Document:   encoded,
@@ -76,7 +76,17 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 			Steps:      steps, Tasks: tasks,
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
-		})
+		}); err != nil {
+			return err
+		}
+		// "Cancels pending tasks and sends SIGTERM to running containers." The stops below
+		// are the second half. The first is written here, in the same transaction, because
+		// the evaluator ends the run and leaves its tasks as they were, and a task whose
+		// message is still on the queue is held by no runner a stop can reach: written as
+		// cancelled, its grant no longer redeems, so no container starts for it. The rows then
+		// say more than the document does, which nothing reads again once the run has ended.
+		_, err := w.CancelTasks(ctx, e.Namespace, run, now)
+		return err
 	}); err != nil {
 		return err
 	}

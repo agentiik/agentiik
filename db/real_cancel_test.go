@@ -10,8 +10,8 @@ import (
 	"github.com/agentiik/agentiik/agk"
 )
 
-// A cancellation, against a real PostgreSQL: asked for by the API on the run's row, and found there
-// by the controller.
+// A cancellation, against a real PostgreSQL: asked for by the API on the run's row, found there by
+// the controller, and carried out by the controller over the run's tasks.
 
 // decidedAs writes one pass over theRun, taking it from sequence 0 to 1 in state.
 func decidedAs(t *testing.T, pool *Pool, state agk.RunState, now time.Time, tasks ...TaskRow) {
@@ -142,6 +142,68 @@ func TestARunsWorkflowIsFoundInItsOwnNamespace(t *testing.T) {
 	}{{"team-ops", theRun}, {"finance", "not-a-run"}, {"finance", "01M2ZZZZZZZZZZZZZZZZZZZZZZ"}} {
 		if workflow, err := of(c.namespace, c.run); !errors.Is(err, ErrNoRun) {
 			t.Errorf("%s in %s is of %q, %v", c.run, c.namespace, workflow, err)
+		}
+	}
+}
+
+// Cancelling a run's tasks ends every one that is not over, and leaves a loss as the loss it was:
+// the one record that a runner went quiet.
+func TestCancellingTheTasksOfARunLeavesWhatEndedAsItEnded(t *testing.T) {
+	pool, _ := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	code := 0
+	normalize := agk.NewTaskID(theRun, "normalize", 1, agk.Shard{})
+	invoice := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	first := agk.NewTaskID(theRun, "archive", 1, agk.Shard{Index: 1, Of: 2})
+	second := agk.NewTaskID(theRun, "archive", 1, agk.Shard{Index: 2, Of: 2})
+	decidedAs(t, pool, agk.Running, now,
+		TaskRow{ID: normalize, Step: "normalize", Attempt: 1, State: agk.TaskSucceeded, ExitCode: &code, StartedAt: now, FinishedAt: now},
+		TaskRow{ID: invoice, Step: "invoice", Attempt: 1, State: agk.TaskLost, Runner: "runner-1", FinishedAt: now},
+		TaskRow{ID: invoice, Step: "invoice", Attempt: 1, Requeue: 1, State: agk.TaskRunning, Runner: "runner-2", StartedAt: now},
+		TaskRow{ID: first, Step: "archive", Attempt: 1, Shard: agk.Shard{Index: 1, Of: 2}, State: agk.TaskDispatched, DispatchedAt: now},
+		TaskRow{ID: second, Step: "archive", Attempt: 1, Shard: agk.Shard{Index: 2, Of: 2}, State: agk.TaskPending},
+	)
+
+	later := now.Add(time.Minute)
+	var cancelled int
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		var err error
+		cancelled, err = w.CancelTasks(ctx, "finance", theRun, later)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != 3 {
+		t.Errorf("cancelling the run's tasks moved %d, and three of them were not over", cancelled)
+	}
+
+	var d RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		d, err = ns.RunDetail(ctx, theRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[agk.TaskState]int{}
+	for _, task := range d.Tasks {
+		counts[task.State]++
+		if task.State == agk.TaskCancelled && !task.FinishedAt.Equal(later) {
+			t.Errorf("%s was cancelled and says it finished at %s", task.Task, task.FinishedAt)
+		}
+	}
+	want := map[agk.TaskState]int{agk.TaskSucceeded: 1, agk.TaskLost: 1, agk.TaskCancelled: 3}
+	if len(counts) != len(want) {
+		t.Errorf("the run's tasks read %v", counts)
+	}
+	for state, n := range want {
+		if counts[state] != n {
+			t.Errorf("%d tasks read %s, want %d: %v", counts[state], state, n, counts)
 		}
 	}
 }

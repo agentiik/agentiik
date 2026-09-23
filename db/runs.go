@@ -692,6 +692,27 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	return false, nil
 }
 
+// CancelTasks moves to cancelled every task of a run that is not over, and answers how many.
+//
+// "cancelled: Stopped because the run was cancelled by a principal, by a concurrency group or by
+// a merge: first." It belongs in the transaction that writes the cancellation, because the
+// evaluator ends a run and leaves its tasks where they were: it names the ones a runner holds, to
+// be stopped, and the endings those runners send back reach a run with nothing left to learn.
+// Left in flight, a task whose message was still on the queue would redeem its grant and start a
+// container for a run that had ended, and every one of them would count against
+// max_concurrent_tasks for good. A dispatch the heartbeat declared lost keeps its loss, which is
+// the one record that its runner went quiet.
+func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) (int, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update tasks set state = 'cancelled', finished_at = coalesce(finished_at, $3)
+		 where namespace = $1 and run_id = $2 and state in ('pending', 'dispatched', 'running', 'publishing')`,
+		namespace, string(run), at)
+	if err != nil {
+		return 0, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what
