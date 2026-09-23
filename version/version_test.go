@@ -183,7 +183,8 @@ func TestTheStoreAnswersOneGraphPerVersion(t *testing.T) {
 		if err := ns.SaveWorkflow(ctx, "monthly-invoicing", "main"); err != nil {
 			return err
 		}
-		return ns.SaveVersion(ctx, v)
+		_, err := ns.SaveVersion(ctx, v)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -243,10 +244,11 @@ func TestPushingOneCommitTwiceLeavesItAsItWas(t *testing.T) {
 		if err := ns.SaveWorkflow(ctx, "monthly-invoicing", "main"); err != nil {
 			return err
 		}
-		if err := ns.SaveVersion(ctx, first); err != nil {
+		if _, err := ns.SaveVersion(ctx, first); err != nil {
 			return err
 		}
-		return ns.SaveVersion(ctx, second)
+		_, err := ns.SaveVersion(ctx, second)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

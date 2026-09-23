@@ -72,6 +72,15 @@ func serving(t *testing.T) (http.Handler, *db.Pool, string) {
 
 func servingWithObjects(t *testing.T) (http.Handler, *db.Pool, string, artifact.Objects) {
 	t.Helper()
+	objects := artifact.Dir(t.TempDir())
+	h, pool, super := servingOn(t, objects)
+	return h, pool, super, objects
+}
+
+// servingOn is the same server over objects of the caller's, which may be nil: an installation
+// with no object store is one of the things a test needs to stand up.
+func servingOn(t *testing.T, objects artifact.Objects) (http.Handler, *db.Pool, string) {
+	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
@@ -86,11 +95,10 @@ func servingWithObjects(t *testing.T) (http.Handler, *db.Pool, string, artifact.
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects := artifact.Dir(t.TempDir())
 	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: store, Objects: objects}); err != nil {
 		t.Fatal(err)
 	}
-	return rt, pool, super, objects
+	return rt, pool, super
 }
 
 func call(t *testing.T, h http.Handler, method, path, as string, body any) (*httptest.ResponseRecorder, map[string]any) {
@@ -133,6 +141,7 @@ func aPush(t *testing.T) api.Push {
 	return api.Push{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Branch: "main",
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(workflowDocument), Mode: "0644"}},
 	}
 }
 
@@ -218,7 +227,9 @@ func TestAVersionThatCannotBeRebuiltIsRefused(t *testing.T) {
 		t.Errorf("a version whose manifests are missing answered %d: %s", w.Code, w.Body)
 	}
 
-	empty := api.Push{Entry: "agentiik.yaml"}
+	// A tree holding an empty entry point, so that what is refused is the version and not the
+	// tree around it.
+	empty := api.Push{Entry: "agentiik.yaml", Tree: map[string]api.PushFile{"agentiik.yaml": {Mode: "0644"}}}
 	w, _ = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/a3f9c1e", "alice", empty)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a version with no document answered %d", w.Code)
