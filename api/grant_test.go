@@ -322,30 +322,41 @@ func TestAGrantTurnsIntoTheInputsTheArtifactsAndTheSecrets(t *testing.T) {
 	}
 }
 
-// A PUT URL cannot be minted in advance, because the key of an object is the digest of bytes that
-// do not exist yet. So the runner asks for one when it knows what it produced.
-func TestARunnerAsksForSomewhereToPutWhatItMade(t *testing.T) {
+// The key of an object is the digest of bytes that do not exist when a task starts, so the runner
+// is told where to write before it has made anything: one policy, at the first redemption, which
+// stores whatever the task makes under its namespace's prefix and nothing anywhere else.
+func TestARunnerIsToldWhereToWriteBeforeItHasMadeAnything(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, nil)
 
-	const produced = "a rendered invoice"
-	sum := sha256.Sum256([]byte(produced))
-	digest := hex.EncodeToString(sum[:])
+	uploads := g.redeemed(t, credential, asking(clear)).Uploads
+	if uploads.URL != "https://agentiik.example.com/objects/finance" || uploads.KeyPrefix != "finance/sha256/" {
+		t.Errorf("the task is told to write to %s under %s", uploads.URL, uploads.KeyPrefix)
+	}
 
-	ask := asking(clear)
-	ask.Upload = []string{digest}
-	answer := g.redeemed(t, credential, ask)
-	if len(answer.Uploads) != 1 {
-		t.Fatalf("the grant answered %d upload URLs", len(answer.Uploads))
+	// One policy for everything the task makes, whatever that turns out to be.
+	for _, produced := range []string{"a rendered invoice", "the envelope that names it"} {
+		key := uploads.KeyPrefix + digestOf([]byte(produced))
+		if w := posted(t, g.handler, uploads.URL, uploads.Fields, key, produced); w.Code != http.StatusCreated {
+			t.Fatalf("storing %q answered %d", produced, w.Code)
+		}
+		if held, err := g.objects.Has(t.Context(), key); err != nil || !held {
+			t.Errorf("%s is not held once it was stored: %v", key, err)
+		}
 	}
-	url := answer.Uploads[0].URL
-	if res := follow(t, g.handler, "PUT", url, produced); res.Code != http.StatusCreated {
-		t.Fatalf("storing what the task made answered %d", res.Code)
+	// And the object its key names and no other.
+	other := uploads.KeyPrefix + digestOf([]byte("an invoice nobody rendered"))
+	if w := posted(t, g.handler, uploads.URL, uploads.Fields, other, "something else"); w.Code != http.StatusBadRequest {
+		t.Errorf("storing other bytes than the key names answered %d", w.Code)
 	}
-	// And it stores that object and no other.
-	if res := follow(t, g.handler, "PUT", url, "something else"); res.Code != http.StatusBadRequest {
-		t.Errorf("storing other bytes under the same URL answered %d", res.Code)
+
+	// Never in another namespace, whether the key names one or the form is posted to one.
+	elsewhere := artifact.Key("ops", digestOf([]byte("a rendered invoice")))
+	for _, to := range []string{uploads.URL, "https://agentiik.example.com/objects/ops"} {
+		if w := posted(t, g.handler, to, uploads.Fields, elsewhere, "a rendered invoice"); w.Code != http.StatusForbidden {
+			t.Errorf("storing into another namespace through %s answered %d", to, w.Code)
+		}
 	}
 }
 
@@ -362,6 +373,10 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 		body any
 	}{
 		{"a body naming its task as task", map[string]any{"grant": clear, "task": grantKey}},
+		{"a body naming what it wants to upload", map[string]any{
+			"grant": clear, "task_id": grantTaskRow, "idempotency_key": grantKey,
+			"upload": []string{strings.Repeat("a", 64)},
+		}},
 		{"a body with no task_id", api.Redemption{Grant: clear, IdempotencyKey: grantKey}},
 		{"a body with no idempotency_key", api.Redemption{Grant: clear, TaskID: grantTaskRow}},
 	} {
@@ -643,8 +658,7 @@ func conforms(t *testing.T, pointer string, value any) error {
 }
 
 // A redemption is held to the wire whole, because the wire is what a runner is written against:
-// what a runner sends, and every part of what it is answered, each against its own definition. The
-// uploads are the one part left out, because they do not take the wire's shape yet.
+// what a runner sends and all of what it is answered, uploads included.
 func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
 	// A runner written from the wire is understood: the request of every valid fixture reads
 	// as a redemption, with no field in it the API does not know.
@@ -683,53 +697,16 @@ func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
 	clear, _, _ := g.dispatched(t, []string{"billing"})
 
 	ask := asking(clear)
-	if err := conforms(t, "/$defs/grantRedemption/properties/request", ask); err != nil {
-		t.Errorf("the request is not what the wire describes: %s", err)
-	}
 	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
 	}
-	for _, key := range []string{"task_id", "expires_at", "inputs", "secrets", "tree"} {
-		part, present := answer[key]
-		if !present {
-			t.Errorf("the answer has no %s", key)
-			continue
-		}
-		if err := conforms(t, "/$defs/grantRedemption/properties/response/properties/"+key, part); err != nil {
-			t.Errorf("%s is not what the wire describes: %s", key, err)
-		}
-	}
-
-	// And nothing beside what the wire names, read from the schema itself rather than from a
-	// list written here, since the response is closed and a runner reading it strictly would
-	// refuse the document.
-	doc, err := fixtures.Wire()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema struct {
-		Defs struct {
-			GrantRedemption struct {
-				Properties struct {
-					Response struct {
-						Properties map[string]json.RawMessage `json:"properties"`
-					} `json:"response"`
-				} `json:"properties"`
-			} `json:"grantRedemption"`
-		} `json:"$defs"`
-	}
-	if err := json.Unmarshal(doc, &schema); err != nil {
-		t.Fatal(err)
-	}
-	described := schema.Defs.GrantRedemption.Properties.Response.Properties
-	if len(described) == 0 {
-		t.Fatal("the vendored wire describes no redemption response")
-	}
-	for key := range answer {
-		if _, named := described[key]; !named {
-			t.Errorf("the answer carries %s, which the wire does not describe", key)
-		}
+	// The exchange as the wire writes it, request and response together against the one
+	// definition. The response is closed and requires every part it names, so this is also
+	// the answer carrying nothing the wire leaves out and leaving out nothing it names, which a
+	// runner reading it strictly would refuse the document for.
+	if err := conforms(t, "/$defs/grantRedemption", map[string]any{"request": ask, "response": answer}); err != nil {
+		t.Errorf("the redemption is not what the wire describes: %s", err)
 	}
 }
 
