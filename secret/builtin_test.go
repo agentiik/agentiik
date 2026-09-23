@@ -169,6 +169,59 @@ func TestASealedValueMovedElsewhereDoesNotOpen(t *testing.T) {
 	}
 }
 
+// The row sealed before a rotation, deleted over and inserted again whole by the application's own
+// role, bound to the namespace the way the API is, would open at the version it was sealed at. The
+// table refuses the delete, so what opens is still the rotated value.
+func TestARowFromBeforeARotationIsNotInsertedBack(t *testing.T) {
+	pool, conn := stored(t)
+	b := builtin(t, pool, keyring(t, master(t, "2026-09")))
+	const leaked, rotated = "bk_live_leaked_notreal", "bk_live_rotated_notreal"
+
+	written(t, pool, b, "finance", "billing", leaked)
+	var version int
+	var under string
+	var parts [5][]byte
+	if err := conn.QueryRow(t.Context(),
+		`select version, master, salt, wrapped_key, wrap_nonce, ciphertext, nonce
+		 from secret_values where namespace = 'finance' and name = 'billing'`).
+		Scan(&version, &under, &parts[0], &parts[1], &parts[2], &parts[3], &parts[4]); err != nil {
+		t.Fatal(err)
+	}
+	written(t, pool, b, "finance", "billing", rotated)
+
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	for _, stmt := range []string{
+		`select set_config('role', current_database(), true)`,
+		`select set_config('agentiik.namespace', 'finance', true)`,
+	} {
+		if _, err := tx.Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = tx.Exec(t.Context(), `delete from secret_values where namespace = 'finance' and name = 'billing'`)
+	if err == nil {
+		_, err = tx.Exec(t.Context(),
+			`insert into secret_values (namespace, name, version, master, salt, wrapped_key, wrap_nonce, ciphertext, nonce)
+			 values ('finance', 'billing', $1, $2, $3, $4, $5, $6, $7)`,
+			version, under, parts[0], parts[1], parts[2], parts[3], parts[4])
+	}
+	if err == nil {
+		if err := tx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Error("the row from before the rotation was deleted over and inserted back")
+	}
+
+	got, err := b.Read(t.Context(), "finance", inTheStore("billing"))
+	if err != nil || string(got) != rotated {
+		t.Errorf("billing opens as %q, %v, and was rotated to %q", got, err, rotated)
+	}
+}
+
 // A value sealed under a key the installation has since rotated away from keeps opening while the
 // ring holds that key, and once the ring no longer does the refusal says so, naming the secret.
 func TestAValueOpensUnderWhicheverKeyOfTheRingSealedIt(t *testing.T) {

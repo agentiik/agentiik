@@ -194,6 +194,85 @@ func TestTheSealedValuesTableHoldsItsOwnRules(t *testing.T) {
 	}
 }
 
+// An update is not the only way to put a row back. As the application's own role, bound to the
+// namespace the rows belong to, the way the API and the controller hold the table: a row deleted
+// and inserted again whole, a row deleted so that the next write counts from one, a row moved to
+// another name, and a forgotten row filled at its own version are each refused, and what the
+// table held is what it holds afterwards.
+func TestNoRowOfTheStoreIsPutBack(t *testing.T) {
+	pool, super := opened(t)
+	for _, mark := range []string{"leaked", "rotated"} {
+		if _, err := writeSealed(t, pool, "finance", "billing", mark); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := writeSealed(t, pool, "finance", "ledger", "forgotten"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.ForgetSealed(ctx, "ledger")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	leaked := sealedFor(1, "leaked")
+	for what, stmts := range map[string][]string{
+		"a row deleted and inserted again whole": {
+			`delete from secret_values where name = 'billing'`,
+			`insert into secret_values (namespace, name, version, master, salt, wrapped_key, wrap_nonce, ciphertext, nonce)
+			 values ('finance', 'billing', 1, $1, $2, $3, $4, $5, $6)`,
+		},
+		"a row deleted": {`delete from secret_values where name = 'billing'`},
+		"a row inserted holding a value": {
+			`insert into secret_values (namespace, name, version, master, salt, wrapped_key, wrap_nonce, ciphertext, nonce)
+			 values ('finance', 'payroll', 1, $1, $2, $3, $4, $5, $6)`,
+		},
+		"a row inserted at a version no write reached": {`insert into secret_values (namespace, name, version) values ('finance', 'pension', 7)`},
+		"a row moved to another name":                  {`update secret_values set name = 'payroll' where name = 'billing'`},
+		"a forgotten row filled at its own version": {
+			`update secret_values
+			   set master = $1, salt = $2, wrapped_key = $3, wrap_nonce = $4, ciphertext = $5, nonce = $6
+			 where name = 'ledger'`,
+		},
+	} {
+		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			for _, stmt := range stmts {
+				var args []any
+				if strings.Contains(stmt, "$1") {
+					args = []any{leaked.Master, leaked.Salt, leaked.WrappedKey, leaked.WrapNonce, leaked.Ciphertext, leaked.Nonce}
+				}
+				if _, err := ns.tx.Exec(ctx, stmt, args...); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err == nil {
+			t.Errorf("%s was taken from the application's role", what)
+		}
+	}
+
+	// Nor by emptying the table, which the role that owns it could do and a superuser can.
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(), `truncate secret_values`); err == nil {
+		t.Error("the table was emptied")
+	}
+
+	if got, err := sealedOf(t, pool, "finance", "billing"); err != nil || got.Version != 2 || string(got.Ciphertext) != "sealed rotated" {
+		t.Errorf("billing reads %+v, %v, and was last written as rotated at version 2", got, err)
+	}
+	if _, err := sealedOf(t, pool, "finance", "ledger"); !errors.Is(err, ErrNoValue) {
+		t.Errorf("the forgotten ledger reads as %v", err)
+	}
+	if at, err := writeSealed(t, pool, "finance", "ledger", "written again"); err != nil || at != 2 {
+		t.Errorf("ledger written again was sealed at version %d, %v, and it had been written once", at, err)
+	}
+}
+
 // One namespace cannot read, overwrite or forget another's values, and cannot plant one in it; the
 // table is behind the namespace policy, and the policy binds the table's owner too.
 func TestAnotherNamespacesValuesAreInvisible(t *testing.T) {
@@ -244,10 +323,10 @@ func TestAnotherNamespacesValuesAreInvisible(t *testing.T) {
 		t.Errorf("finance's value reads %+v, %v after team-ops wrote and forgot the same name", got, err)
 	}
 
+	// Planted empty, the way a write begins a row, so that the policy is all that stands in
+	// its way.
 	err := pool.In(t.Context(), "team-ops", func(ctx context.Context, ns *NS) error {
-		_, err := ns.tx.Exec(ctx,
-			`insert into secret_values (namespace, name, version, master, salt, wrapped_key, wrap_nonce, ciphertext, nonce)
-			 values ('finance', 'planted', 1, 'm', 's', 'k', 'w', 'c', 'n')`)
+		_, err := ns.tx.Exec(ctx, `insert into secret_values (namespace, name, version) values ('finance', 'planted', 0)`)
 		return err
 	})
 	if err == nil || !strings.Contains(err.Error(), "row-level security") {

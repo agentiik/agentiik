@@ -47,13 +47,30 @@ create table secret_values (
 -- master key and a forgotten value keep it, and nothing lowers it: a row copied back from a
 -- backup over the current one is refused here rather than opening as the credential somebody
 -- rotated away from.
+--
+-- An update is not the only way to put a row back, so the rest of what could is refused with it.
+-- A row is created empty at version zero, which is how WriteSealed creates one, and gains a value
+-- only by a write that raises its version: inserted whole, a copy from a backup would open at
+-- the version it was sealed at, and a value forgotten and then refilled at its own version would
+-- be that value back. A row stays where it was created, since one moved to another name leaves
+-- the first to start again at one. And a row is never deleted, since the next write of its name
+-- would start again at one too, and a ciphertext kept from the first write of it would open in
+-- place of the new one. A value goes by being forgotten, which keeps the count.
 create function secret_values_never_go_back() returns trigger
   language plpgsql
   as $$
 begin
+  if new.namespace <> old.namespace or new.name <> old.name then
+    raise exception 'the value of % in % stays where it was sealed, and a write never moves it to % in %',
+      old.name, old.namespace, new.name, new.namespace;
+  end if;
   if new.version < old.version then
     raise exception 'the value of % in % is at version % and a write never takes it back to %',
       old.name, old.namespace, old.version, new.version;
+  end if;
+  if old.master is null and new.master is not null and new.version = old.version then
+    raise exception 'the value of % in % holds nothing at version %, and only a write at a later version gives it one',
+      old.name, old.namespace, old.version;
   end if;
   return new;
 end
@@ -61,6 +78,39 @@ $$;
 
 create trigger secret_values_never_go_back before update on secret_values
   for each row execute function secret_values_never_go_back();
+
+create function secret_values_start_empty() returns trigger
+  language plpgsql
+  as $$
+begin
+  if new.version <> 0 or new.master is not null then
+    raise exception 'the value of % in % is created empty at version zero, and a row at version % would be a value no write sealed here',
+      new.name, new.namespace, new.version;
+  end if;
+  return new;
+end
+$$;
+
+create trigger secret_values_start_empty before insert on secret_values
+  for each row execute function secret_values_start_empty();
+
+create function secret_values_are_kept() returns trigger
+  language plpgsql
+  as $$
+begin
+  if tg_op = 'TRUNCATE' then
+    raise exception 'the values of the built-in store are forgotten rather than deleted, so that no name starts counting its writes again';
+  end if;
+  raise exception 'the value of % in % is forgotten rather than deleted, so that its name never starts counting its writes again',
+    old.name, old.namespace;
+end
+$$;
+
+create trigger secret_values_are_kept before delete on secret_values
+  for each row execute function secret_values_are_kept();
+
+create trigger secret_values_are_never_truncated before truncate on secret_values
+  for each statement execute function secret_values_are_kept();
 
 -- Behind the same policy as everything else a namespace owns. A ciphertext opens nowhere but
 -- where it was sealed, and a namespace still has no business reading another's.
