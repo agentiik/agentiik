@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -712,6 +713,125 @@ func TestAContainerThatIgnoresTheSignalIsKilledWhenTheGraceRunsOut(t *testing.T)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the container that ignored the signal was never killed")
+	}
+}
+
+// A daemon runs an exited container again on POST /start, and answers 304 only while it is
+// running. A fake answering 304 to any container ever started would let a driver that
+// starts a container which has already done its work pass, while every real daemon ran the
+// brick twice.
+func TestAnExitedContainerStartsAgainAndARunningOneDoesNot(t *testing.T) {
+	var runs atomic.Int32
+	release := make(chan struct{})
+	d, c := start(t, dockertest.With(dockertest.Options{
+		Images: anImage(),
+		Run: func(container dockertest.Container) (int, error) {
+			n := runs.Add(1)
+			io.WriteString(container.Stdout, "ran\n")
+			if n == 2 {
+				// The second run is held, so that there is a running
+				// container to start.
+				<-release
+			}
+			return int(n), nil
+		},
+	}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	events, _ := c.Events(ctx, time.Time{}, docker.Filters{}.Add("type", docker.EventTypeContainer))
+
+	cfg, host := aTask(t.TempDir())
+	created, err := c.ContainerCreate(ctx, "", cfg, host, docker.NetworkingConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.ContainerWait(ctx, created.ID, docker.WaitNextExit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if exit := <-first; exit.Err != nil || exit.StatusCode != 1 {
+		t.Fatalf("the first run exited %d (%v)", exit.StatusCode, exit.Err)
+	}
+
+	// not-running on a container that is over answers at once, with the code it
+	// already exited with.
+	over, err := c.ContainerWait(ctx, created.ID, docker.WaitNotRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case exit := <-over:
+		if exit.StatusCode != 1 {
+			t.Errorf("not-running answered %d on a container that exited 1", exit.StatusCode)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("not-running waited on a container that is not running")
+	}
+
+	// next-exit on the same container waits for the run a start begins, and the start
+	// begins one.
+	next, err := c.ContainerWait(ctx, created.ID, docker.WaitNextExit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatalf("starting the exited container: %v", err)
+	}
+
+	// It is running now, so a start is answered 304: nothing runs and nothing is
+	// emitted.
+	before := d.Events()
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatalf("starting the running container: %v", err)
+	}
+	if d.Events() != before {
+		t.Error("starting a running container emitted an event, and a daemon answers it 304 and does nothing")
+	}
+	close(release)
+
+	select {
+	case exit := <-next:
+		if exit.StatusCode != 2 {
+			t.Errorf("next-exit answered %d, and it waits for the run the start began, which exited 2", exit.StatusCode)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second run never ended")
+	}
+	if n := runs.Load(); n != 2 {
+		t.Errorf("the container ran %d times for one start while created and one while exited", n)
+	}
+
+	var actions []string
+	deadline := time.After(10 * time.Second)
+	for dies := 0; dies < 2; {
+		select {
+		case e, open := <-events:
+			if !open {
+				t.Fatal("the event stream closed before the second die")
+			}
+			actions = append(actions, e.Action)
+			if e.Action == docker.ActionDie {
+				dies++
+			}
+		case <-deadline:
+			t.Fatalf("the events were %v, and the second run never died", actions)
+		}
+	}
+	if got := strings.Join(actions, " "); got != "start die start die" {
+		t.Errorf("the events were %q, and each run is a start and a die", got)
+	}
+
+	logs, err := c.ContainerLogs(ctx, created.ID, docker.LogOptions{Stdout: true, Stderr: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	if out, _ := drain(t, logs); out != "ran\nran\n" {
+		t.Errorf("the log reads %q, and a daemon's log of a container is every run it has had", out)
 	}
 }
 

@@ -89,13 +89,20 @@ type live struct {
 
 	rec *recorder
 
+	signal chan string
+
+	mu sync.Mutex
+
+	// stdinR and stdinW are the standard input of the run under way, and a container
+	// started again after it exited is given a fresh pair, as a daemon gives it.
 	stdinR *io.PipeReader
 	stdinW *io.PipeWriter
 
-	signal chan string
-	done   chan struct{}
+	// done closes when the run under way ends, or the next one where none is: it is
+	// replaced as it closes, so a wait taken on a container that has exited waits for
+	// the run a start would begin, which is what next-exit means to a daemon.
+	done chan struct{}
 
-	mu         sync.Mutex
 	started    bool
 	exited     bool
 	code       int
@@ -148,6 +155,12 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // containerStart starts the container, which is to say it calls the test's function.
+//
+// A container that is running answers 304 and nothing happens. A container that has
+// exited runs again, with the same configuration, the same mounts and a fresh standard
+// input, and its log carries both runs: that is what a daemon does with POST /start on an
+// exited container, and a fake that answered 304 there would let a driver starting a
+// container that already did its work pass every test while running the brick twice.
 func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	l := d.container(r.PathValue("id"))
 	if l == nil {
@@ -166,10 +179,15 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.mu.Lock()
-	if l.started {
+	if l.started && !l.exited {
 		l.mu.Unlock()
 		writeError(w, http.StatusNotModified, "container already started")
 		return
+	}
+	if l.exited {
+		l.exited, l.code, l.oom = false, 0, false
+		l.stdinR, l.stdinW = io.Pipe()
+		l.rec.reopen()
 	}
 	l.started = true
 	l.startedAt = time.Now().UTC()
@@ -269,9 +287,12 @@ func (d *Daemon) containerAttach(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("stdin") == "true" {
 		// Standard input arrives raw on the same connection, and its end is the
 		// client half-closing, which reaches this side as an ordinary EOF.
+		l.mu.Lock()
+		stdin := l.stdinW
+		l.mu.Unlock()
 		go func() {
-			_, err := io.Copy(l.stdinW, conn)
-			l.stdinW.CloseWithError(err)
+			_, err := io.Copy(stdin, conn)
+			stdin.CloseWithError(err)
 		}()
 	}
 }
@@ -281,12 +302,22 @@ func (d *Daemon) containerAttach(w http.ResponseWriter, r *http.Request) {
 // Answering the header before the container has exited is the behaviour the whole
 // ordering depends on: a caller that has read it knows the wait is registered and may
 // start the container, which is what makes the exit-during-attach race unrepresentable.
+//
+// The condition is read as a daemon reads it. next-exit on a container that has already
+// exited waits for the run a start would begin, and not-running, the default, answers at
+// once on a container that is not running.
 func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 	l := d.container(r.PathValue("id"))
 	if l == nil {
 		writeError(w, http.StatusNotFound, "No such container: "+r.PathValue("id"))
 		return
 	}
+	condition := r.URL.Query().Get("condition")
+
+	l.mu.Lock()
+	running := l.started && !l.exited
+	done, code := l.done, l.code
+	l.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -294,8 +325,13 @@ func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 
+	if !running && (condition == "" || condition == docker.WaitNotRunning) {
+		json.NewEncoder(w).Encode(docker.Waited{StatusCode: code})
+		return
+	}
+
 	select {
-	case <-l.done:
+	case <-done:
 	case <-r.Context().Done():
 		return
 	}
@@ -307,7 +343,7 @@ func (d *Daemon) containerWait(w http.ResponseWriter, r *http.Request) {
 	}
 
 	l.mu.Lock()
-	code := l.code
+	code = l.code
 	l.mu.Unlock()
 	json.NewEncoder(w).Encode(docker.Waited{StatusCode: code})
 }
@@ -403,6 +439,7 @@ func (d *Daemon) containerStop(w http.ResponseWriter, r *http.Request) {
 
 	l.mu.Lock()
 	running := l.started && !l.exited
+	done := l.done
 	l.mu.Unlock()
 	// A container the daemon has not started has no process to signal, and a real
 	// daemon answers a stop on one with 304 Not Modified and remembers nothing about
@@ -423,7 +460,7 @@ func (d *Daemon) containerStop(w http.ResponseWriter, r *http.Request) {
 
 	l.deliver("SIGTERM")
 	select {
-	case <-l.done:
+	case <-done:
 	case <-time.After(grace):
 		l.deliver("SIGKILL")
 		l.exit(137, false)
@@ -620,6 +657,7 @@ func (d *Daemon) container(id string) *live {
 func (l *live) container() Container {
 	l.mu.Lock()
 	signals := append([]string(nil), l.signals...)
+	stdin := l.stdinR
 	l.mu.Unlock()
 
 	work := ""
@@ -632,7 +670,7 @@ func (l *live) container() Container {
 		ID: l.id, Name: l.name,
 		Config: l.config, HostConfig: l.host, Networking: l.net,
 		Labels: l.config.Labels, Work: work,
-		Stdin:   l.stdinR,
+		Stdin:   stdin,
 		Stdout:  l.rec.writer(docker.Stdout),
 		Stderr:  l.rec.writer(docker.Stderr),
 		Signals: signals,
@@ -640,20 +678,20 @@ func (l *live) container() Container {
 	}
 }
 
-// exit records the end of a container, once, and says whether this call was the one that
-// did it.
+// exit records the end of a run, once, and says whether this call was the one that did
+// it.
 func (l *live) exit(code int, oom bool) bool {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.exited {
-		l.mu.Unlock()
 		return false
 	}
 	l.exited, l.code, l.oom = true, code, oom
 	l.finishedAt = time.Now().UTC()
-	l.mu.Unlock()
 
 	l.stdinR.Close()
 	close(l.done)
+	l.done = make(chan struct{})
 	return true
 }
 
@@ -740,6 +778,14 @@ func (r *recorder) close() {
 		r.conn.Close()
 		r.conn = nil
 	}
+}
+
+// reopen takes a container started again: an attach carries the new run, and the frames
+// of the first stay, because a daemon's log of a container is every run it has had.
+func (r *recorder) reopen() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed, r.dropped = false, false
 }
 
 // streamWriter is one of a container's two output streams.
