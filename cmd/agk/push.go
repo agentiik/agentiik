@@ -367,8 +367,13 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		if err != nil || size < 0 {
 			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
 		}
-		total += size
+		// Counted as the server counts it, the path with the bytes, so that what passes here is
+		// never refused there after every file has been read and sent.
+		total += int64(len(path)) + size
 		entries = append(entries, entry{path: path, mode: mode, object: fields[2], size: size})
+	}
+	if files := len(entries) + len(missing); files > api.TreeMaxFiles {
+		return nil, fmt.Errorf("the tree of %s has %d files, and a push carries at most %d until the installation hosts the repository itself: a tree of this many is usually carrying dependencies that belong in an image", short(sha), files, api.TreeMaxFiles)
 	}
 	if total > api.TreeMaxBytes {
 		// Where blobs are missing, the sizes added up are a floor, and already too much.
@@ -376,7 +381,7 @@ func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.P
 		if len(missing) > 0 {
 			size = "at least " + size
 		}
-		return nil, fmt.Errorf("the tree of %s is %s, and a push carries a tree of at most %d bytes until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), size, api.TreeMaxBytes)
+		return nil, fmt.Errorf("the tree of %s is %s with its paths, and a push carries a tree of at most %d bytes until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), size, api.TreeMaxBytes)
 	}
 	if len(missing) > 0 {
 		held := missing[0]

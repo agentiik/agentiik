@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -736,6 +737,36 @@ func TestAnOversizedTreeIsRefusedBeforeItsContentIsRead(t *testing.T) {
 	}
 	if strings.Contains(string(said), "cat-file") {
 		t.Error("git was asked for content before the size refused the tree")
+	}
+}
+
+// The server counts files as well as bytes, so the client refuses the same tree before it reads a
+// byte of it rather than sending it all to be refused.
+func TestATreeWithTooManyFilesIsRefusedBeforeItsContentIsRead(t *testing.T) {
+	dir := repository(t)
+	for i := 0; i <= api.TreeMaxFiles; i++ {
+		write(t, dir, fmt.Sprintf("vendor/%05d.txt", i), "")
+	}
+	commitAll(t, dir, "dependencies that belong in an image")
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a tree of too many files answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "belong in an image") {
+		t.Errorf("the refusal does not say where they go: %q", errs)
+	}
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(said), "cat-file") {
+		t.Error("git was asked for content before the count refused the tree")
 	}
 }
 

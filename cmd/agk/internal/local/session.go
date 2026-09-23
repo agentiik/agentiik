@@ -244,8 +244,9 @@ func (s *Session) current() *inflight {
 // /agk/repo.
 //
 // Narrowing it by the files a step declares is an optimisation and never a requirement,
-// and the long form's to relocation still applies inside the driver. A server runner has a
-// checkout of the commit; this has the tree the person is standing in.
+// and the long form's to relocation still applies inside the driver. A server runner lays the
+// commit's tree out from what its task's grant redeems for; this has the tree the person is
+// standing in.
 func (s *Session) repo(ctx context.Context, namespace, workflow, commit string) (string, error) {
 	f := s.current()
 	if f == nil {
