@@ -425,8 +425,8 @@ func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
 // where it sets nothing, and no more. Each dispatch is redeemed by a runner of its own, which then
 // goes quiet, as a container that takes down every host it lands on would leave it, and the
 // heartbeat declares it lost. The loss past the bound stands: the key goes out no more, its last
-// grant opens nothing, and the run fails on it rather than spending the attempt max: 1 has left,
-// since the brick never failed.
+// grant opens nothing even to the runner it was bound to, and the run fails on it rather than
+// spending the attempt max: 1 has left, since the brick never failed.
 func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -455,8 +455,8 @@ func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
 			}
 			key := sent[0].Task.ID
 			for n := range len(c.dispatches) {
-				last := sent[0]
-				if err := core.redeem(t, last, fmt.Sprintf("runner-%d", n+1)); err != nil {
+				last, holder := sent[0], fmt.Sprintf("runner-%d", n+1)
+				if err := core.redeem(t, last, holder); err != nil {
 					t.Fatal(err)
 				}
 				core.silence(t)
@@ -465,7 +465,9 @@ func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
 					if len(sent) != 0 {
 						t.Errorf("a key lost past max_requeues went out again as %+v", sent)
 					}
-					if err := core.redeem(t, last, "runner-5"); !errors.Is(err, db.ErrTaskHeld) {
+					// Its own holder, since a stranger is refused a dispatch bound to
+					// somebody else before anything asks whether it is over.
+					if err := core.redeem(t, last, holder); !errors.Is(err, db.ErrTaskHeld) {
 						t.Errorf("the grant of a dispatch lost past max_requeues was redeemed again, answering %v", err)
 					}
 					break
