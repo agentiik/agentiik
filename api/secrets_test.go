@@ -1,11 +1,14 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -148,27 +151,179 @@ func TestADeclarationReadsAsItWasWritten(t *testing.T) {
 	}
 }
 
-// A value has nowhere to go here: a body carrying one is refused rather than accepted and dropped,
-// which would tell its author the value had been kept, and nothing is written. That holds for a
-// value sent after the declaration as a second document, which a decoder reading one document and
-// stopping would never see.
-func TestADeclarationWithAValueIsRefused(t *testing.T) {
-	h, _ := withDeclarations(t, everything{who: "alice"})
+// sealing is a built-in store that keeps what it is given where a test can look, by namespace and
+// name, and refuses everything when it is told to.
+type sealing struct {
+	mu     sync.Mutex
+	held   map[string][]byte
+	refuse bool
+}
+
+func (s *sealing) Write(_ context.Context, ns *db.NS, name string, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refuse {
+		return errors.New("the store is not answering")
+	}
+	if s.held == nil {
+		s.held = map[string][]byte{}
+	}
+	s.held[ns.Namespace()+"/"+name] = bytes.Clone(value)
+	return nil
+}
+
+func (s *sealing) Forget(_ context.Context, ns *db.NS, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.held, ns.Namespace()+"/"+name)
+	return nil
+}
+
+func (s *sealing) holds(key string) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.held[key]
+	return value, ok
+}
+
+// "A value reaches the built-in store write-only, on the declaration's PUT, for provider builtin:
+// the request carries it once, no answer ever returns it, and rotating is writing again." The
+// store is handed each value as sent, a PUT with none leaves the stored one where it is, and no
+// answer of any route carries one.
+func TestABuiltinValueIsWrittenAndNeverAnswered(t *testing.T) {
+	store := &sealing{}
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Values: store})
+	const first, second = "sk_live_first", "sk_live_second"
+
+	for _, c := range []struct {
+		what, body string
+		want       int
+		holds      string
+	}{
+		{"writing a value", `{"provider":"builtin","value":"` + first + `"}`, http.StatusCreated, first},
+		{"rotating it", `{"provider":"builtin","value":"` + second + `"}`, http.StatusOK, second},
+		{"declaring again with no value", `{"provider":"builtin"}`, http.StatusOK, second},
+	} {
+		w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", c.body)
+		if w.Code != c.want {
+			t.Fatalf("%s answered %d: %s", c.what, w.Code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), first) || strings.Contains(w.Body.String(), second) || strings.Contains(w.Body.String(), `"value"`) {
+			t.Errorf("%s was answered with a value: %s", c.what, w.Body)
+		}
+		if got, _ := store.holds("finance/billing"); string(got) != c.holds {
+			t.Errorf("after %s the store holds %q, want %q", c.what, got, c.holds)
+		}
+	}
+	for _, path := range []string{"/api/v1/finance/secrets/billing", "/api/v1/finance/secrets"} {
+		w := sent(t, h, "GET", path, "alice", "")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), second) || strings.Contains(w.Body.String(), `"value"`) {
+			t.Errorf("GET %s answered %d %s", path, w.Code, w.Body)
+		}
+	}
+
+	// A value that is not text travels as base64 and is kept as the bytes it names, not as the
+	// text that named them.
+	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/keystore", "alice", `{"provider":"builtin","value":"//4A","encoding":"base64"}`); w.Code != http.StatusCreated {
+		t.Fatalf("writing a value that is not text answered %d: %s", w.Code, w.Body)
+	}
+	if got, _ := store.holds("finance/keystore"); !bytes.Equal(got, []byte{0xff, 0xfe, 0x00}) {
+		t.Errorf("a value written as base64 is kept as %x", got)
+	}
+}
+
+// A value is refused wherever it would not be kept as sent: for a store that is not the built-in
+// one, after the declaration as a second document, which a decoder reading one document would
+// never see, empty, in an encoding nobody knows or not in the one it names, or larger than the
+// store seals. Nothing is written, the refusal does not repeat the value, and the store is never
+// handed it.
+func TestAValueWithNowhereToGoIsRefused(t *testing.T) {
+	store := &sealing{}
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing, Values: store})
 
 	const value = "sk_live_notreal"
-	for what, body := range map[string]string{
-		"a value in the declaration":    `{"provider":"builtin","value":"` + value + `"}`,
-		"a value after the declaration": `{"provider":"builtin"} {"value":"` + value + `"}`,
+	for what, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"a value for a variable":                 {`{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING","value":"` + value + `"}`, http.StatusBadRequest},
+		"a value after the declaration":          {`{"provider":"builtin"} {"value":"` + value + `"}`, http.StatusBadRequest},
+		"an empty value":                         {`{"provider":"builtin","value":""}`, http.StatusBadRequest},
+		"an encoding and no value":               {`{"provider":"builtin","encoding":"base64"}`, http.StatusBadRequest},
+		"an encoding nobody knows":               {`{"provider":"builtin","value":"` + value + `","encoding":"rot13"}`, http.StatusBadRequest},
+		"a value that is not the base64 it says": {`{"provider":"builtin","value":"` + value + `!","encoding":"base64"}`, http.StatusBadRequest},
+		"a value larger than the store seals":    {`{"provider":"builtin","value":"` + value + strings.Repeat("s", 1<<20) + `"}`, http.StatusRequestEntityTooLarge},
+		"a body larger than any value":           {`{"provider":"builtin","value":"` + value + strings.Repeat("s", 3<<20) + `"}`, http.StatusRequestEntityTooLarge},
 	} {
-		w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", body)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("%s answered %d: %s", what, w.Code, w.Body)
+		w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", c.body)
+		if w.Code != c.want {
+			t.Errorf("%s answered %d, want %d: %s", what, w.Code, c.want, w.Body)
 		}
 		if strings.Contains(w.Body.String(), value) {
 			t.Errorf("the refusal of %s repeats the value: %s", what, w.Body)
 		}
 		if w, _ := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusNotFound {
-			t.Errorf("a declaration refused for %s was written anyway, and reads %d", what, w.Code)
+			t.Errorf("%s was refused and written anyway, and reads %d", what, w.Code)
+		}
+	}
+	if _, ok := store.holds("finance/billing"); ok {
+		t.Error("the store was handed a value every request carrying it was refused for")
+	}
+}
+
+// A value the installation cannot keep leaves the namespace as it was: with no built-in store
+// attached it is a 503 that says so, and with one that fails it is a 500, and in both the
+// declaration written in the same transaction is undone rather than left with no value.
+func TestAValueTheInstallationCannotKeepWritesNothing(t *testing.T) {
+	h, _ := withDeclarations(t, everything{who: "alice"})
+	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin","value":"sk_live_notreal"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("a value sent to an installation with no built-in store answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusNotFound {
+		t.Errorf("a declaration whose value had nowhere to go was written anyway, and reads %d", w.Code)
+	}
+	// With no value, the same installation takes the declaration: the value can follow once a
+	// store is attached.
+	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin"}`); w.Code != http.StatusCreated {
+		t.Errorf("a declaration with no value answered %d: %s", w.Code, w.Body)
+	}
+
+	store := &sealing{}
+	h, _ = declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing, Values: store})
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_BILLING"}); w.Code != http.StatusCreated {
+		t.Fatalf("declaring answered %d", w.Code)
+	}
+	store.refuse = true
+	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin","value":"sk_live_notreal"}`); w.Code != http.StatusInternalServerError {
+		t.Errorf("a value the store refused answered %d: %s", w.Code, w.Body)
+	}
+	if w, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusOK || one["provider"] != "env" {
+		t.Errorf("a declaration whose value the store refused reads %d %v, and it was env before", w.Code, one)
+	}
+}
+
+// A secret removed, or moved out of the built-in store, takes its value with it, so that the name
+// declared in the built-in store again later does not bring back a credential somebody meant gone.
+func TestARemovedSecretTakesItsValueWithIt(t *testing.T) {
+	store := &sealing{}
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing, Values: store})
+	written := `{"provider":"builtin","value":"sk_live_notreal"}`
+
+	for _, c := range []struct {
+		what, method, body string
+		want               int
+	}{
+		{"removed", "DELETE", "", http.StatusNoContent},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING"}`, http.StatusOK},
+	} {
+		if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", written); w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("writing the value answered %d: %s", w.Code, w.Body)
+		}
+		if w := sent(t, h, c.method, "/api/v1/finance/secrets/billing", "alice", c.body); w.Code != c.want {
+			t.Fatalf("the secret %s answered %d: %s", c.what, w.Code, w.Body)
+		}
+		if _, ok := store.holds("finance/billing"); ok {
+			t.Errorf("the store still holds the value of a secret %s", c.what)
 		}
 	}
 }
@@ -191,7 +346,7 @@ func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
 		"a name the workflow file cannot write":    {"bill.ing", `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name no file could be named after":      {strings.Repeat("a", 256), `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name longer than an index row can hold": {strings.Repeat("q7-Z", 1500), `{"provider":"builtin"}`, http.StatusBadRequest},
-		"a body far larger than a declaration is":  {"billing", `{"provider":"env","path":"` + strings.Repeat("A", 64<<10) + `"}`, http.StatusRequestEntityTooLarge},
+		"a path longer than any store's":           {"billing", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_` + strings.Repeat("A", 64<<10) + `"}`, http.StatusBadRequest},
 		"a body that is not a declaration at all":  {"billing", `["builtin"]`, http.StatusBadRequest},
 		"a body that says nothing about the store": {"billing", ``, http.StatusBadRequest},
 	} {

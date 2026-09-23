@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
@@ -24,6 +25,11 @@ import (
 // One secret per request, GET, PUT and DELETE on /api/v1/{ns}/secrets/{name}, beside the listing.
 // A PUT of the whole set would let two Terraform applies each declaring their own secret drop each
 // other's change without either of them seeing it happen; one row per request cannot.
+//
+// A value goes one way only. "A value reaches the built-in store write-only, on the declaration's
+// PUT, for provider builtin: the request carries it once, no answer ever returns it, and rotating
+// is writing again, never read-then-write." So a PUT may carry one for builtin, handed to Values
+// in the transaction the declaration is written in, and nothing here answers a value or reads one.
 //
 // Nothing here holds a Secrets. The routes answer where a value is kept and never read one, and
 // the one route that does read a value is the redemption, which only a runner holding a task's
@@ -107,19 +113,39 @@ type Declaration struct {
 	DeclaredAt time.Time `json:"declared_at"`
 }
 
-// Declare is what a PUT carries: which store holds the value, and where in it.
+// Declare is what a PUT carries: which store holds the value, where in it, and for the built-in
+// store the value itself.
 //
-// Decoded closed, so a body carrying anything else is refused rather than half understood, and a
-// value above all: accepted and dropped, it would tell whoever sent it that the value had been
-// kept somewhere.
+// Decoded closed, so a body carrying anything else is refused rather than half understood: a field
+// accepted and dropped would tell whoever sent it that something had been kept.
 type Declare struct {
 	Provider string `json:"provider"`
 	Path     string `json:"path,omitempty"`
+
+	// Value is the secret, for builtin alone, and written only: no answer carries it, now or
+	// later. A PUT without one leaves the value stored as it was, and rotating is sending one
+	// again. A pointer, so that an empty value is told apart from none and refused, rather than
+	// taken for a PUT that keeps the old one.
+	Value *string `json:"value,omitempty"`
+
+	// Encoding is how Value is written: utf-8 when absent, or base64 for a value that is not
+	// text, as a redemption answers it, since JSON carries no arbitrary bytes and a keystore is
+	// a secret too.
+	Encoding string `json:"encoding,omitempty"`
 }
 
-// declareMaxBytes is how large a PUT body may be. A declaration is a provider and a path, and a
-// body many times larger than any path a store uses is not a declaration.
-const declareMaxBytes = 8 << 10
+// valueMaxBytes is the largest value a PUT writes, the bound package secret seals to, repeated
+// here because this package cannot import that one.
+const valueMaxBytes = 1 << 20
+
+// declareMaxBytes is how large a PUT body may be: the largest value, written as base64, and room
+// for the declaration around it.
+const declareMaxBytes = 2 << 20
+
+// pathMax is how long a path may be. A path is a variable's name, or a key in a store, and a
+// kilobyte is more than either needs; bounded because every listing answers it and every
+// Terraform plan prints it, and the room a body leaves for a value is not room for a path.
+const pathMax = 1 << 10
 
 // secretName is the grammar a secret is named on, which is the one every name of the workflow file
 // is written on: the workflow names the secret by it and a step mounts it by it, so a declaration
@@ -135,6 +161,46 @@ const secretNameMax = 255
 // than imported from the driver so that the API links no part of what runs a container.
 const secretsDir = "/agk/secrets/"
 
+// Values is the built-in store as the declaration routes reach it: a value goes in, and nothing
+// comes back out.
+//
+// There is no method here that reads, and Secrets, which reads, is held by the redemption alone.
+// Each method is handed the namespace's transaction, the one the declaration is written in, so
+// that a declaration and its value are written together or not at all: a PUT that failed half
+// way leaves neither a declaration with no value nor a value nothing declares.
+//
+// An interface here and filled elsewhere, because sealing is package secret and cmd/agk imports
+// this package: the boundary test holds that only the API reaches the store, and the command line
+// reaching it through this package would be the command line linking it. What fills it is wired
+// in by the server's own main package, once there is one, which nothing else imports.
+type Values interface {
+	// Write seals value as the one the namespace's secret of that name holds, replacing
+	// whatever it held before.
+	Write(ctx context.Context, ns *db.NS, name string, value []byte) error
+
+	// Forget removes the value of that name where the namespace holds one, and is not an error
+	// where it holds none. A secret removed, or moved out of the built-in store, takes its value
+	// with it, so that declaring the name again later does not bring back a credential somebody
+	// meant to be gone.
+	Forget(ctx context.Context, ns *db.NS, name string) error
+}
+
+// ErrNoStore is a value written to an installation with no built-in store attached.
+var ErrNoStore = errors.New("api: this installation has no built-in secret store attached")
+
+// NoValues is an installation with no built-in store attached. It takes no value and holds none,
+// so it never has one to forget.
+//
+// It is the default, for the reason NoSecrets is: a value sent to an installation that cannot keep
+// it is refused in front of whoever sent it, rather than taken and lost.
+type NoValues struct{}
+
+// Write takes nothing.
+func (NoValues) Write(context.Context, *db.NS, string, []byte) error { return ErrNoStore }
+
+// Forget has nothing to forget.
+func (NoValues) Forget(context.Context, *db.NS, string) error { return nil }
+
 // DeclarationOptions are what the declaration routes are given.
 type DeclarationOptions struct {
 	Pool *db.Pool
@@ -144,6 +210,10 @@ type DeclarationOptions struct {
 	// has said, in the installation's own configuration, that this one is for development.
 	Environment Environment
 
+	// Values is where a builtin value is written. Nil, the default, is NoValues: a declaration
+	// is still taken, and a value is refused.
+	Values Values
+
 	// Now is the clock, an argument so that a test has one.
 	Now func() time.Time
 }
@@ -152,14 +222,15 @@ type DeclarationOptions struct {
 type DeclarationAPI struct {
 	pool        *db.Pool
 	environment Environment
+	values      Values
 	now         func() time.Time
 }
 
 // NewDeclarations registers the declaration routes on a router.
 //
 // A constructor of its own rather than routes of the Server, because what it is given is the
-// whole of what it may reach: a database, and no secret store. Whoever wires an installation
-// together can read that off the call.
+// whole of what it may reach: a database, and a store it writes a value into and never reads one
+// from. Whoever wires an installation together can read that off the call.
 func NewDeclarations(rt *Router, o DeclarationOptions) (*DeclarationAPI, error) {
 	switch {
 	case rt == nil:
@@ -170,10 +241,13 @@ func NewDeclarations(rt *Router, o DeclarationOptions) (*DeclarationAPI, error) 
 	if err := o.Environment.confining(); err != nil {
 		return nil, err
 	}
+	if o.Values == nil {
+		o.Values = NoValues{}
+	}
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &DeclarationAPI{pool: o.Pool, environment: maps.Clone(o.Environment), now: o.Now}
+	s := &DeclarationAPI{pool: o.Pool, environment: maps.Clone(o.Environment), values: o.Values, now: o.Now}
 
 	reading := Needs{Permission: WorkflowRead, Scope: Namespace}
 	writing := Needs{Permission: SecretWrite, Scope: Namespace}
@@ -248,7 +322,7 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 	if err := readAtMost(r, &d, declareMaxBytes); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a declaration is a provider and a path, and this body is larger than %d bytes", declareMaxBytes))
+			fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a declaration is a provider, a path and a value of at most %d bytes, and this body is larger than %d", valueMaxBytes, declareMaxBytes))
 			return
 		}
 		fail(w, http.StatusBadRequest, err.Error())
@@ -258,20 +332,43 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	value, err := valueOf(d)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(value) > valueMaxBytes {
+		fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("a secret is at most %d bytes, the most the built-in store seals, and this one is %d", valueMaxBytes, len(value)))
+		return
+	}
 
+	// The value is written in the declaration's own transaction, so that a store refusing it
+	// leaves the declaration as it was. Each write also belongs in the audit log as a secret
+	// write; there is no audit log yet, and the task that builds it names this event.
 	declared := db.Declaration{
 		Name: name, Provider: d.Provider, Path: d.Path,
 		DeclaredBy: string(who), DeclaredAt: s.now(),
 	}
 	var created bool
-	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		declared, created, err = ns.Declare(ctx, declared)
-		return err
+		if declared, created, err = ns.Declare(ctx, declared); err != nil {
+			return err
+		}
+		switch {
+		case value != nil:
+			return s.values.Write(ctx, ns, name, value)
+		case d.Provider != "builtin":
+			return s.values.Forget(ctx, ns, name)
+		}
+		return nil
 	})
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
+		return
+	case errors.Is(err, ErrNoStore):
+		fail(w, http.StatusServiceUnavailable, "this installation has no built-in secret store attached, and a value has nowhere to go: nothing was written")
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the secret declaration could not be written")
@@ -288,7 +385,10 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
 	name := r.PathValue("name")
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		return ns.Undeclare(ctx, name)
+		if err := ns.Undeclare(ctx, name); err != nil {
+			return err
+		}
+		return s.values.Forget(ctx, ns, name)
 	})
 	switch {
 	case errors.Is(err, db.ErrNoDeclaration):
@@ -313,6 +413,9 @@ func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, _ Pri
 // prefix in Vault until that provider arrives. A path taken now on the promise of a check later
 // would be a row every later reader had to distrust.
 func (s *DeclarationAPI) check(namespace string, d Declare) error {
+	if len(d.Path) > pathMax {
+		return fmt.Errorf("a path is at most %d bytes, more than a variable's name or a key in a store needs, and this one is %d", pathMax, len(d.Path))
+	}
 	switch d.Provider {
 	case "builtin":
 		if d.Path != "" {
@@ -328,6 +431,38 @@ func (s *DeclarationAPI) check(namespace string, d Declare) error {
 		return errors.New("vault is not a store this installation reads secrets from: a namespace is confined to its own paths, nothing gives a namespace its prefix in Vault until that provider arrives, and a path taken before then could name any namespace's secret")
 	}
 	return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin, the encrypted store, env, the API's environment for development, or vault", d.Provider)
+}
+
+// valueOf is the value a declaration carries, as the bytes a step will be given, or nil where it
+// carries none.
+func valueOf(d Declare) ([]byte, error) {
+	if d.Value == nil {
+		if d.Encoding != "" {
+			return nil, errors.New("an encoding says how a value is written, and this declaration carries no value")
+		}
+		return nil, nil
+	}
+	if d.Provider != "builtin" {
+		return nil, fmt.Errorf("a value is written only into the built-in store, and a secret kept in %s is read where %s keeps it, which is where to set it", d.Provider, d.Provider)
+	}
+	var value []byte
+	switch d.Encoding {
+	case "", EncodingUTF8:
+		value = []byte(*d.Value)
+	case EncodingBase64:
+		var err error
+		// Refused without the decoder's own error, which points at the byte where the value
+		// stopped being base64, and a value is not something to point into.
+		if value, err = base64.StdEncoding.DecodeString(*d.Value); err != nil {
+			return nil, errors.New("the value is not base64, which its encoding says it is")
+		}
+	default:
+		return nil, fmt.Errorf("%q is not an encoding a value is written in: it is utf-8, the default, or base64 for a value that is not text", d.Encoding)
+	}
+	if len(value) == 0 {
+		return nil, errors.New("the value is empty, and a step would be given a file with nothing in it where it expects a credential; a PUT with no value at all keeps the one stored")
+	}
+	return value, nil
 }
 
 // answered is a declaration as the routes answer it, with the mount its name puts it at.
