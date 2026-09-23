@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -18,7 +19,7 @@ func declare(t *testing.T, pool *Pool, namespace string, d Declaration) (bool, e
 	var created bool
 	err := pool.In(t.Context(), namespace, func(ctx context.Context, ns *NS) error {
 		var err error
-		created, err = ns.Declare(ctx, d)
+		_, created, err = ns.Declare(ctx, d)
 		return err
 	})
 	return created, err
@@ -63,6 +64,23 @@ func TestADeclarationRoundTrips(t *testing.T) {
 	}
 	if got[1].Provider != "env" || got[1].Path != "AGENTIIK_SECRET_FINANCE_LEDGER" || got[1].DeclaredBy != "alice" || got[1].DeclaredAt.IsZero() {
 		t.Errorf("ledger reads back as %+v", got[1])
+	}
+
+	// What a write answers is what a read finds, to the microsecond and in UTC, and not the
+	// nanoseconds of the clock that wrote it.
+	var written Declaration
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		written, _, err = ns.Declare(ctx, Declaration{Name: "billing", Provider: "builtin", DeclaredBy: "alice",
+			DeclaredAt: time.Date(2026, 9, 23, 15, 32, 45, 945646123, time.FixedZone("CEST", 2*60*60))})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read := declarationsOf(t, pool, "finance")[0]
+	want := time.Date(2026, 9, 23, 13, 32, 45, 945646000, time.UTC)
+	if !written.DeclaredAt.Equal(want) || !read.DeclaredAt.Equal(want) || written.DeclaredAt.Location() != time.UTC || read.DeclaredAt.Location() != time.UTC {
+		t.Errorf("a declaration was answered at %v when written and %v when read, and it was stored at %v", written.DeclaredAt, read.DeclaredAt, want)
 	}
 
 	// Declared again elsewhere is the same secret moved, and the answer says it was not new.

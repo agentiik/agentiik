@@ -208,7 +208,7 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 	var created bool
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		created, err = ns.Declare(ctx, declared)
+		declared, created, err = ns.Declare(ctx, declared)
 		return err
 	})
 	switch {

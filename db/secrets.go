@@ -48,6 +48,7 @@ func (n *NS) Declarations(ctx context.Context) ([]Declaration, error) {
 	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Declaration, error) {
 		var d Declaration
 		err := row.Scan(&d.Name, &d.Provider, &d.Path, &d.DeclaredBy, &d.DeclaredAt)
+		d.DeclaredAt = d.DeclaredAt.UTC()
 		return d, err
 	})
 	if err != nil {
@@ -69,21 +70,27 @@ func (n *NS) Declaration(ctx context.Context, name string) (Declaration, error) 
 	if err != nil {
 		return Declaration{}, fmt.Errorf("db: secret %s could not be read: %w", name, err)
 	}
+	d.DeclaredAt = d.DeclaredAt.UTC()
 	return d, nil
 }
 
 // Declare writes one declaration, replacing the one of that name if there is one, and answers
-// whether it is new.
+// it as it was stored and whether it is new.
 //
 // One secret at a time and never the set, so that two writers each declaring their own secret
 // cannot undo each other. Replacing is the ordinary case rather than a conflict: a declaration
 // moved to another path is the same secret declared again.
-func (n *NS) Declare(ctx context.Context, d Declaration) (bool, error) {
+//
+// The time answered is the one the row holds, in UTC, and not the one it was given: PostgreSQL
+// keeps microseconds where a clock may give nanoseconds, so answering the clock would make a
+// declaration read differently the moment after it was written, and a client comparing the two,
+// as Terraform does after every apply, would see it change.
+func (n *NS) Declare(ctx context.Context, d Declaration) (Declaration, bool, error) {
 	switch {
 	case d.Name == "" || d.Provider == "":
-		return false, fmt.Errorf("db: a declaration names its secret and its provider, and this one is %q in %q", d.Name, d.Provider)
+		return Declaration{}, false, fmt.Errorf("db: a declaration names its secret and its provider, and this one is %q in %q", d.Name, d.Provider)
 	case d.DeclaredBy == "":
-		return false, fmt.Errorf("db: secret %s is declared by nobody", d.Name)
+		return Declaration{}, false, fmt.Errorf("db: secret %s is declared by nobody", d.Name)
 	}
 	at := d.DeclaredAt
 	if at.IsZero() {
@@ -99,16 +106,17 @@ func (n *NS) Declare(ctx context.Context, d Declaration) (bool, error) {
 		 on conflict (namespace, name) do update
 		   set provider = excluded.provider, path = excluded.path,
 		       declared_by = excluded.declared_by, declared_at = excluded.declared_at
-		 returning xmax = 0`,
-		n.namespace, d.Name, d.Provider, nilIfEmpty(d.Path), d.DeclaredBy, at).Scan(&created)
+		 returning xmax = 0, declared_at`,
+		n.namespace, d.Name, d.Provider, nilIfEmpty(d.Path), d.DeclaredBy, at).Scan(&created, &d.DeclaredAt)
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == foreignKeyViolation {
-		return false, ErrNoNamespace
+		return Declaration{}, false, ErrNoNamespace
 	}
 	if err != nil {
-		return false, fmt.Errorf("db: secret %s could not be declared: %w", d.Name, err)
+		return Declaration{}, false, fmt.Errorf("db: secret %s could not be declared: %w", d.Name, err)
 	}
-	return created, nil
+	d.DeclaredAt = d.DeclaredAt.UTC()
+	return d, created, nil
 }
 
 // Undeclare removes one declaration, or answers ErrNoDeclaration where there was none.

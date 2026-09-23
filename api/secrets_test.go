@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
@@ -20,13 +21,20 @@ import (
 
 func withDeclarations(t *testing.T, auth api.Authorizer) (http.Handler, *db.Pool) {
 	t.Helper()
+	return declaring(t, auth, api.DeclarationOptions{})
+}
+
+// declaring is withDeclarations with options of the test's own, the database filled in.
+func declaring(t *testing.T, auth api.Authorizer, o api.DeclarationOptions) (http.Handler, *db.Pool) {
+	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
 		t.Fatal(err)
 	}
 	rt := router(t, auth)
-	if _, err := api.NewDeclarations(rt, api.DeclarationOptions{Pool: pool}); err != nil {
+	o.Pool = pool
+	if _, err := api.NewDeclarations(rt, o); err != nil {
 		t.Fatal(err)
 	}
 	return rt, pool
@@ -103,6 +111,35 @@ func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
 	for _, method := range []string{"GET", "DELETE"} {
 		if w, _ := call(t, h, method, "/api/v1/finance/secrets/ledger", "alice", nil); w.Code != http.StatusNotFound {
 			t.Errorf("%s of a removed declaration answered %d", method, w.Code)
+		}
+	}
+}
+
+// A declaration reads the same the moment it is written as every time after, to the microsecond
+// and in UTC, whatever the clock that wrote it gave: a client comparing what a PUT answered with
+// what it reads next, as Terraform does after every apply, sees nothing move.
+func TestADeclarationReadsAsItWasWritten(t *testing.T) {
+	paris := time.FixedZone("CEST", 2*60*60)
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{
+		Now: func() time.Time { return time.Date(2026, 9, 23, 15, 32, 45, 945646123, paris) },
+	})
+
+	w, written := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "builtin"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("declaring answered %d: %s", w.Code, w.Body)
+	}
+	_, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil)
+	_, listing := call(t, h, "GET", "/api/v1/finance/secrets", "alice", nil)
+	secrets, _ := listing["secrets"].([]any)
+	if len(secrets) != 1 {
+		t.Fatalf("the listing holds %v", listing)
+	}
+	listed, _ := secrets[0].(map[string]any)
+
+	const want = "2026-09-23T13:32:45.945646Z"
+	for what, got := range map[string]any{"the PUT": written["declared_at"], "the GET": one["declared_at"], "the listing": listed["declared_at"]} {
+		if got != want {
+			t.Errorf("%s answered the declaration's time as %v, and it was stored as %s", what, got, want)
 		}
 	}
 }
