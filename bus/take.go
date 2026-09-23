@@ -61,10 +61,14 @@ type Taken struct {
 // server that never received the acknowledgement hands the task to another runner of the pool
 // when the consumer's AckWait runs out. So a runner starts nothing for a task whose Held did not
 // answer nil, and does not name it in its heartbeat. The key stays recorded as taken and not
-// ended, and what comes next is the bus redelivering the task where the acknowledgement was
-// lost, or the heartbeat finding it lost where only the answer was. Neither runs it twice, and a
-// step that is not idempotent is not run at all, which is the side to err on. A ctx with no
-// deadline waits as long as JetStream's own default.
+// ended. Where the acknowledgement was lost, the bus delivers the task again and it runs once.
+// Where only the confirmation was, nothing comes next: the server has taken the message off the
+// queue, and the heartbeat does not find the task either, because nobody redeemed it and a task
+// nobody redeemed is one db.Pool.Lost reads as waiting on the queue. It stays dispatched until the
+// run's own timeout ends it, and a run with none waits for ever. That is not run twice, and a step
+// that is not idempotent is not run at all, which is the side to err on, but it is a task left
+// hanging; nothing can find it until the database records who took a message as well as who
+// redeemed it. A ctx with no deadline waits as long as JetStream's own default.
 func (t Taken) Held(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")

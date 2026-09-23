@@ -35,8 +35,9 @@
 // allows no other: the subject a result arrives on is the runner that sent it, the reader refuses
 // a result naming anybody else, and the controller holds what is left to the runner the dispatch
 // its task_id names was bound to when its grant was redeemed. The dispatch and not the key, since
-// a requeue after loss keeps the key and is somebody else's to answer. A compromised host's
-// "reach is the tasks in its hands", and this, with an inbox of its own, is what keeps it there.
+// a requeue after loss keeps the key and is answered by whoever redeems it, which may be the
+// runner that lost the dispatch before it or may not. A compromised host's "reach is the tasks in
+// its hands", and this, with an inbox of its own, is what keeps it there.
 //
 // # Why an inbox per runner
 //
@@ -65,7 +66,10 @@
 // bus's to redeliver: "Liveness therefore lives in the database beside the task state, rather
 // than as traffic on a work queue that exists to distribute work." A host that dies holding a
 // task stops heartbeating, the task becomes lost, and an idempotent step is requeued under the
-// same key.
+// same key. Holding is redeeming, though, since only a task a runner has redeemed can be lost: a
+// host that dies between the acknowledgement and the redemption, pulling the image for instance,
+// leaves a task nothing hands out again and the heartbeat never finds, which only the run's own
+// timeout ends.
 //
 // Acknowledging at the end would have made the ack wait the longest a step may run. A runner
 // that died would then hold its work for that long before anybody else could take it, and a

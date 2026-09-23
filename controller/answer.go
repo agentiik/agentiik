@@ -32,6 +32,7 @@ import (
 type Answer struct {
 	Result graph.Result
 
+	// Row is the task_id of the dispatch the answer is about, carried back unchanged from the
 	// task message: on the wire it is the result's task_id, and nothing else is read for it. A
 	// requeue after loss keeps the idempotency key and takes a new task_id, so the key in Result
 	// says which unit of work this is and only the row says which dispatch of it, which is what
@@ -40,7 +41,8 @@ type Answer struct {
 
 	// Runner is the runner that published it. "A user never learns which host executed a task
 	// beyond its runner name and labels." It is also who the answer is taken from: the runner
-	// the dispatch was bound to at redemption, and no other.
+	// the dispatch was bound to, by its redemption or by an ending that never reached a
+	// container, and no other.
 	Runner string
 
 	// Outputs are the envelopes the task published, one per port, named rather than carried.
@@ -75,8 +77,10 @@ type Output struct {
 // delivery, so a consumer that delivered it again would deliver it for ever.
 var ErrNotAResult = errors.New("controller: not a result any controller could record")
 
-// ErrNotTheHolder is a result published by a runner other than the one its task was bound to when
-// its grant was redeemed, or one saying a container ran for a task nobody redeemed.
+// ErrNotTheHolder is a result about a dispatch the runner that published it does not hold: one
+// bound to another runner, by its redemption or by an ending that never reached a container; one
+// saying a container ran for a dispatch nobody redeemed; and a loss of a dispatch the runner never
+// held, nobody's included, since a runner cannot lose what it never had.
 //
 // It always comes wrapped with ErrNotAResult, since no delivery would change it: a binding is never
 // released. It has a name of its own because it points somewhere else. A result that is not an
@@ -102,13 +106,15 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // And taken from one runner. Every machine of a pool can publish a result about any task of the
 // pool, and the first ending recorded for an attempt stands, so an answer is matched on its key and
 // its dispatch, and then held to the runner that dispatch was bound to at redemption. The dispatch
-// and not the key, because a requeue after loss keeps the key: the runner that lost a dispatch
-// holds nothing of the requeue, and the runner holding the requeue held nothing of the dispatch it
-// replaced. That Runner is the machine that sent it is the bus's to vouch for, and package bus
-// does, by giving each runner a subject only it may publish on. Another runner's answer is refused
-// with ErrNotTheHolder before the run is decided, and so is one saying a container ran for a
-// dispatch nobody redeemed, since a container is started from what the grant hands over and none
-// can have run for it, and so is a loss of one, since a runner cannot lose what it never held.
+// and not the key, because a requeue after loss keeps the key and is bound on its own: holding
+// the dispatch that was lost gives a runner nothing of the requeue, whose ending is taken from
+// whoever redeems it, the same runner or another, or from the first to report it never reached a
+// container; and holding the requeue gives nothing of the dispatch it replaced. That Runner is
+// the machine that sent it is the bus's to vouch for, and package bus does, by giving each runner
+// a subject only it may publish on. Another runner's answer is refused with ErrNotTheHolder before
+// the run is decided, and so is one saying a container ran for a dispatch nobody redeemed, since
+// a container is started from what the grant hands over and none can have run for it, and so is
+// a loss of one, since a runner cannot lose what it never held.
 //
 // One saying no container ran is another matter. A runner pulls the image before it redeems the
 // grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,

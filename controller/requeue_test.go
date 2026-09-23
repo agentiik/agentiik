@@ -471,9 +471,11 @@ func TestALateEndingOfARequeuedPastDispatchFromItsOwnRunnerIsNotNews(t *testing.
 }
 
 // A requeue keeps the key and takes a new task_id, and the binding is the task_id's. runner-1 held
-// the dispatch that was lost and holds nothing of the requeue, which runner-2 redeemed: an ending
-// or a loss runner-1 reports for the requeue is refused as somebody else's, before runner-2 has
-// redeemed it and after, and none of it binds runner-1 to it. Only runner-2's ending is taken.
+// the dispatch that was lost, which gives it nothing of the requeue, and runner-2 redeems the
+// requeue: an ending from a container runner-1 says ran for the requeue, or a loss of it, is
+// refused as somebody else's, before runner-2 has redeemed it and after, and binds runner-1 to
+// nothing. Only runner-2's ending is taken. An ending that never reached a container is not this
+// case: the first runner to report one is bound by it, whichever dispatch it held before.
 func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) {
 	core, q, conn, lost, requeued := lostAndRequeued(t)
 	before := seqOf(t, conn)
@@ -523,6 +525,24 @@ func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) 
 	}
 	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-2"}; !slices.Equal(got, want) {
 		t.Errorf("the key holds %q, want %q", got, want)
+	}
+}
+
+// Holding the dispatch that was lost neither gives a runner the requeue nor keeps it from it. The
+// requeue's message may reach runner-1 as well as anybody, and a pull refused there ends it before
+// any redemption: runner-1 is the first to report that ending, so it is bound to the requeue by
+// it, and runner-2 redeeming the requeue's grant afterwards is told the work is somebody else's.
+func TestTheRunnerThatLostADispatchMayEndItsRequeueUnreached(t *testing.T) {
+	core, _, conn, lost, requeued := lostAndRequeued(t)
+	pulled := Answer{Result: graph.Result{Task: requeued.Task.ID, State: agk.TaskFailed}, Row: requeued.Row, Runner: "runner-1"}
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("runner-1 reporting the requeue never reached a container answered %v", err)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+	if err := core.redeem(t, requeued, "runner-2"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("runner-2 redeeming a requeue runner-1 ended answered %v", err)
 	}
 }
 
