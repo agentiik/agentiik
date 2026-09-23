@@ -358,6 +358,10 @@ func orEmptyStrings(s []string) []string {
 // A task whose runner has not reported since it was dispatched counts from the dispatch: a runner
 // that took work and was never heard from again is exactly the case this is for, and it has no
 // heartbeat to have missed.
+//
+// What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
+// the task is handed out again is the evaluator's to say, and the controller hears of the loss
+// through Losses on the run's next pass.
 func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {

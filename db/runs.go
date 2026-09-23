@@ -215,9 +215,14 @@ type StepRow struct {
 
 // TaskRow is one task as the projection holds it.
 //
-// ID is the ULID the row is keyed by and Key is the identifier on the wire, which the database
-// computes for itself from the four columns that make it. A caller writing the key would be a
-// second place it could be got wrong.
+// ID is the idempotency key, which the database also computes for itself from the four columns
+// that make it and checks against this one; the ULID the row is keyed by is minted when the row is
+// first written and never by a caller. A caller writing the key would be a second place it could
+// be got wrong.
+//
+// Requeue is which dispatch of the key the row records, as graph.ShardState counts them. It is
+// what makes a requeue after loss a row of its own under the same key rather than the lost row
+// written over.
 type TaskRow struct {
 	ID    agk.TaskID
 	Step  agk.Step
@@ -225,6 +230,7 @@ type TaskRow struct {
 
 	Attempt int
 	Shard   agk.Shard
+	Requeue int
 
 	Runner   string
 	ExitCode *int
@@ -300,9 +306,23 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		}
 	}
 
+	unheard := false
 	for _, t := range d.Tasks {
-		if err := w.writeTask(ctx, d.Namespace, d.Run, t); err != nil {
+		heard, err := w.writeTask(ctx, d.Namespace, d.Run, t)
+		if err != nil {
 			return err
+		}
+		unheard = unheard || !heard
+	}
+	if unheard {
+		// A dispatch the heartbeat declared lost after this decision was read, and which the
+		// decision still thought in flight. The loss stands, and the run is left with nothing
+		// on the clock, which is what the sweep comes round for, so that the next pass hears
+		// of it rather than the first one after whatever this decision was waiting on.
+		if _, err := w.tx.Exec(ctx,
+			`update runs set wake_at = null where namespace = $1 and id = $2`,
+			d.Namespace, string(d.Run)); err != nil {
+			return fmt.Errorf("db: run %s could not be woken for the loss it has not heard of: %w", d.Run, err)
 		}
 	}
 
@@ -336,14 +356,24 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 	return s, *by, nil
 }
 
-// writeTask records one task, keyed by the identifier it is known by everywhere else.
+// writeTask records one dispatch of one task, keyed by the identifier it is known by everywhere
+// else and by which dispatch of it this is.
 //
 // The row's primary key is a ULID, and the identifier a runner compares is the generated
-// idempotency key. The two are matched here, which is the one place they meet: a task is
-// inserted once, by its key, and updated by its key for ever after.
-func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t TaskRow) error {
+// idempotency key. The two are matched here, which is the one place they meet: a dispatch is
+// inserted once, by its key and its requeue, and updated by them for ever after. A requeue after
+// loss is a requeue the row has not seen, so it is inserted, and that is the whole of how it takes
+// a new task_id while it keeps its key.
+//
+// It answers whether the row says what the decision said. It does not where the heartbeat moved
+// the dispatch to lost after the decision was read: a loss is declared here and heard by the
+// evaluator on its next pass, so a decision that still has the dispatch in flight is behind rather
+// than right, and writing it over the loss would erase the one record that the runner went quiet.
+// An ending is different. It came back from the runner, so the dispatch was not lost after all,
+// and it is written.
+func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t TaskRow) (bool, error) {
 	if err := t.ID.Validate(); err != nil {
-		return fmt.Errorf("db: a task of run %s: %w", run, err)
+		return false, fmt.Errorf("db: a task of run %s: %w", run, err)
 	}
 	var shardIndex, shardOf *int
 	if !t.Shard.IsZero() {
@@ -357,16 +387,22 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 
 	usage, err := json.Marshal(orEmpty(t.Usage))
 	if err != nil {
-		return fmt.Errorf("db: the usage of task %s could not be written: %w", t.ID, err)
+		return false, fmt.Errorf("db: the usage of task %s could not be written: %w", t.ID, err)
 	}
 
-	_, err = w.tx.Exec(ctx,
-		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, state,
+	// The finish is kept where the decision has none, because a dispatch finishes once: a
+	// further attempt and a requeue are rows of their own, so nothing written to this row
+	// later can mean it has not finished after all.
+	var held string
+	err = w.tx.QueryRow(ctx,
+		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
 		                    dispatched_at, started_at, finished_at, deadline, published_at, usage)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-		 on conflict (namespace, idempotency_key) do update
-		 set state = excluded.state,
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		 on conflict (namespace, idempotency_key, requeue) do update
+		 set state = case when tasks.state = 'lost'
+		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
+		                  then tasks.state else excluded.state end,
 		     runner = coalesce(excluded.runner, tasks.runner),
 		     exit_code = excluded.exit_code,
 		     log_uri = coalesce(excluded.log_uri, tasks.log_uri),
@@ -374,31 +410,34 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		     log_truncated = excluded.log_truncated,
 		     dispatched_at = coalesce(tasks.dispatched_at, excluded.dispatched_at),
 		     started_at = coalesce(tasks.started_at, excluded.started_at),
-		     finished_at = excluded.finished_at,
+		     finished_at = coalesce(excluded.finished_at, tasks.finished_at),
 		     deadline = coalesce(excluded.deadline, tasks.deadline),
 		     published_at = coalesce(tasks.published_at, excluded.published_at),
-		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end`,
-		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf,
+		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end
+		 returning state`,
+		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf, t.Requeue,
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage).Scan(&held)
 	if err != nil {
-		return fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
+		return false, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
-	return nil
+	return held == t.State.String(), nil
 }
 
-// TaskRow is the identifier a task's own row is keyed by.
+// TaskRow is the identifier a task's own row is keyed by: the row of the latest dispatch of the
+// key, which is the one a decision has just planned.
 //
 // Not the idempotency key. The key says which unit of work this is and is derived from what makes
 // it that; the row says which record, and it is what a grant names inside its own text and what a
 // log is addressed by. The two are separate on purpose: one is a statement about the work and the
-// other is a handle on a row.
+// other is a handle on a row, and a key requeued after a loss has a row for every dispatch.
 func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (string, error) {
 	var id string
 	err := w.tx.QueryRow(ctx,
-		`select id from tasks where namespace = $1 and idempotency_key = $2`,
+		`select id from tasks where namespace = $1 and idempotency_key = $2
+		 order by requeue desc limit 1`,
 		namespace, string(key)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("db: task %s has no row, and a task is recorded before it is handed out", key)
@@ -407,6 +446,101 @@ func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (s
 		return "", fmt.Errorf("db: task %s could not be read: %w", key, err)
 	}
 	return id, nil
+}
+
+// Loss is one dispatch the heartbeat declared lost: the key, which dispatch of it, and when.
+type Loss struct {
+	Task    agk.TaskID
+	Requeue int
+	At      time.Time
+}
+
+// Losses names the dispatches of one run that are lost and that nothing has requeued.
+//
+// It is how the controller hears what the heartbeat declared. "Liveness therefore lives in the
+// database beside the task state", so a loss is written here first, by Pool.Lost or by Lose, and
+// the evaluator is told on the next pass rather than by whoever noticed: a requeue is a decision,
+// and deciding is the controller's. A dispatch already requeued past is not named, since the loss
+// has been heard; one that was not requeued, because its step is not idempotent or its policy
+// does not name lost, is named on every pass and changes nothing on any but the first.
+func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]Loss, error) {
+	rows, err := w.tx.Query(ctx, `
+		select t.idempotency_key, t.requeue, t.finished_at from tasks t
+		where t.namespace = $1 and t.run_id = $2 and t.state = 'lost'
+		  and not exists (select 1 from tasks later
+		                  where later.namespace = t.namespace
+		                    and later.idempotency_key = t.idempotency_key
+		                    and later.requeue > t.requeue)
+		order by t.idempotency_key`,
+		namespace, string(run))
+	if err != nil {
+		return nil, fmt.Errorf("db: the lost tasks of run %s could not be read: %w", run, err)
+	}
+	defer rows.Close()
+	var out []Loss
+	for rows.Next() {
+		var l Loss
+		var at *time.Time
+		if err := rows.Scan(&l.Task, &l.Requeue, &at); err != nil {
+			return nil, err
+		}
+		if at != nil {
+			l.At = *at
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ErrNotHeld is a runner speaking for a task it never held.
+var ErrNotHeld = errors.New("db: that runner holds no dispatch of that task")
+
+// Lose moves to lost the dispatch of one key a runner holds, on that runner's own word, and
+// answers whether anything moved.
+//
+// "lost is declared by the controller rather than reported here, and travels on a result only
+// where a runner recovers one it had already lost." Such a result is written where the heartbeat
+// writes its own losses, so that the evaluator hears of both the same way and a loss delivered
+// twice moves nothing the second time. It reaches only the dispatch bound to that runner at
+// redemption, for the reason a heartbeat keeps alive only a runner's own tasks: a runner able to
+// declare somebody else's task lost could send work round the fleet that is running perfectly
+// well. A runner that holds no dispatch of the key at all is answered ErrNotHeld.
+func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, runner string, at time.Time) (bool, error) {
+	if runner == "" {
+		return false, fmt.Errorf("%w: a loss declared by no runner", ErrNotHeld)
+	}
+	tag, err := w.tx.Exec(ctx,
+		`update tasks set state = 'lost', finished_at = $4
+		 where namespace = $1 and idempotency_key = $2 and runner = $3
+		   and state in ('dispatched', 'running', 'publishing')`,
+		namespace, string(key), runner, at)
+	if err != nil {
+		return false, fmt.Errorf("db: task %s could not be declared lost: %w", key, err)
+	}
+	if tag.RowsAffected() > 0 {
+		// And the run is left for the next sweep, as Pool.Lost leaves it, so that the loss
+		// is heard even where whoever wrote it goes no further.
+		if _, err := w.tx.Exec(ctx,
+			`update runs set wake_at = null
+			 where namespace = $1 and id = (select run_id from tasks
+			                                where namespace = $1 and idempotency_key = $2
+			                                limit 1)
+			   and state in ('queued', 'running', 'waiting')`,
+			namespace, string(key)); err != nil {
+			return false, fmt.Errorf("db: the run of task %s could not be woken for its loss: %w", key, err)
+		}
+		return true, nil
+	}
+	var held bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select 1 from tasks where namespace = $1 and idempotency_key = $2 and runner = $3)`,
+		namespace, string(key), runner).Scan(&held); err != nil {
+		return false, fmt.Errorf("db: task %s could not be read: %w", key, err)
+	}
+	if !held {
+		return false, fmt.Errorf("%w: %s holds no dispatch of %s", ErrNotHeld, runner, key)
+	}
+	return false, nil
 }
 
 // Published stamps the tasks whose messages have gone.

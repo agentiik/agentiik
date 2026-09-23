@@ -135,7 +135,15 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 // Binding the task here is what makes at-least-once delivery safe on the way in. A message may be
 // delivered twice and to two machines; the second one to redeem is told the work is somebody
 // else's rather than starting a container for it. The binding is never released, because a task
-// whose runner was lost is moved to lost and retried as a new row with a grant of its own.
+// whose runner was lost is moved to lost and requeued as a new row under the same key, with a
+// grant of its own.
+//
+// A key may therefore have several rows, one per dispatch, and the rule is about the key: "the
+// runner refuses to start a container for a key that has already completed". The row is what is
+// read, and it answers for the key because of the uniqueness rule on tasks: at most one row of a
+// key is anything but lost, so a key that completed on one dispatch has every row over, and a key
+// with a row still going has completed on none. A lost row is refused like any row that is over,
+// since its dispatch was superseded by the requeue and the grant it carried opens nothing.
 func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner string, now time.Time) (Redeemed, error) {
 	id, ok := token.TaskOf(clear)
 	if !ok {

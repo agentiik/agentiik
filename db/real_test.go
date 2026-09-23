@@ -397,11 +397,12 @@ func TestTheIdempotencyKeyIsComputedAndUnique(t *testing.T) {
 	}
 
 	// The same unit of work twice is refused, which is what makes at-least-once
-	// delivery survivable.
+	// delivery survivable, and it is refused as a second dispatch too: a key has one row
+	// that is not lost.
 	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
 		_, err := ns.tx.Exec(ctx,
-			`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of)
-			 values ('finance','01M2EEEEEEEEEEEEEEEEEEEEEE',$1,'invoice',2,3,8)`, run)
+			`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue)
+			 values ('finance','01M2EEEEEEEEEEEEEEEEEEEEEE',$1,'invoice',2,3,8,1)`, run)
 		return err
 	})
 	if err == nil {
@@ -409,6 +410,74 @@ func TestTheIdempotencyKeyIsComputedAndUnique(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tasks_by_idempotency_key") {
 		t.Fatalf("the second write was refused, and not by the uniqueness rule: %s", err)
+	}
+}
+
+// "A requeue after loss keeps the idempotency key and takes a new task_id." Once the dispatch a
+// key had is lost, the key takes another, and each dispatch is written once.
+func TestALostTaskTakesANewRowUnderItsKey(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	const run agk.RunID = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+	insert := func(ctx context.Context, ns *NS, id string, requeue int) error {
+		_, err := ns.tx.Exec(ctx,
+			`insert into tasks (namespace, id, run_id, step, attempt, requeue, state)
+			 values ('finance', $1, $2, 'invoice', 1, $3, 'dispatched')`, id, run, requeue)
+		return err
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		if _, err := ns.tx.Exec(ctx,
+			`insert into steps (namespace, run_id, step) values ('finance', $1, 'invoice')`, run); err != nil {
+			return err
+		}
+		if err := insert(ctx, ns, "01M2HAAAAAAAAAAAAAAAAAAAAA", 0); err != nil {
+			return err
+		}
+		if _, err := ns.tx.Exec(ctx,
+			`update tasks set state = 'lost' where id = '01M2HAAAAAAAAAAAAAAAAAAAAA'`); err != nil {
+			return err
+		}
+		return insert(ctx, ns, "01M2HBBBBBBBBBBBBBBBBBBBBB", 1)
+	}); err != nil {
+		t.Fatalf("a lost task could not be handed out again under its key: %s", err)
+	}
+
+	var keys []string
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		rows, err := ns.tx.Query(ctx, `select idempotency_key from tasks where run_id = $1 order by requeue`, run)
+		if err != nil {
+			return err
+		}
+		keys, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := string(agk.NewTaskID(run, "invoice", 1, agk.Shard{}))
+	if len(keys) != 2 || keys[0] != want || keys[1] != want {
+		t.Errorf("the two dispatches carry the keys %v, want %s twice", keys, want)
+	}
+
+	// The second dispatch lost in its turn, a third written as the second again is refused:
+	// each dispatch of a key exists once.
+	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		if _, err := ns.tx.Exec(ctx,
+			`update tasks set state = 'lost' where id = '01M2HBBBBBBBBBBBBBBBBBBBBB'`); err != nil {
+			return err
+		}
+		return insert(ctx, ns, "01M2HCCCCCCCCCCCCCCCCCCCCC", 1)
+	})
+	if err == nil {
+		t.Fatal("one dispatch of a key was written twice")
+	}
+	if !strings.Contains(err.Error(), "tasks_by_dispatch") {
+		t.Fatalf("the second write of a dispatch was refused, and not by the rule for dispatches: %s", err)
 	}
 }
 
