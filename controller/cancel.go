@@ -13,7 +13,9 @@ import (
 //
 // "cancelled: Cancelled by a principal holding workflow:run, by a concurrency group or by a
 // merge: first." The third of those is the evaluator's own and arrives through an ordinary
-// pass; the first two come from outside and arrive here.
+// pass; the first two come from outside and arrive here. A principal's arrives through the
+// database, since the API and the controller share it and nothing else: the API writes the
+// request on the run, and Decide, reading it there, calls this.
 
 // Cancel ends a run and stops what it is holding.
 //
