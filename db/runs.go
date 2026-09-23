@@ -102,8 +102,9 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 // It asks and decides nothing. Ending a run and stopping what it holds is one decision, and it is
 // the controller's, which reads the request on its next pass: the API writes down the moment it
 // was asked and notifies, as it does for a run it starts. A run that has already ended is left as
-// it is and answered in the state it ended in, so that somebody asking about a run that finished
-// while they were asking learns how it finished. Asking again keeps the first moment.
+// it is and answered in the state it ended in, so that the API wakes nobody for it; what the API
+// says back is its own to decide, and it says nothing of the state. Asking again keeps the first
+// moment.
 //
 // An identifier outside the alphabet runs are minted in is no run, as it is for Locate.
 func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, error) {
