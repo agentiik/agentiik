@@ -180,10 +180,18 @@ func (s StopReason) MarshalText() ([]byte, error) { return []byte(s.String()), n
 // Outputs is one envelope per declared port, which is what brick.Collect returns, empty
 // envelopes included: a port the container never wrote publishes an empty envelope, and
 // that is success.
+//
+// Requeue names the dispatch an ending is about, as ShardState counts them. The key
+// names the unit of work and a requeue keeps it, so only this tells the requeue's ending
+// from a late one of the dispatch it replaced, and only the requeue's is news. The
+// dispatch before it was judged lost and handed out again: its loss has been heard, and
+// whatever its runner reports afterwards is the report of a runner the attempt stopped
+// waiting on, while the requeue is still out and still owed an answer.
 type Result struct {
 	Task     agk.TaskID    `json:"task"`
 	State    agk.TaskState `json:"state"`
 	ExitCode int           `json:"exit_code,omitempty"`
+	Requeue  int           `json:"requeue,omitempty"`
 
 	Outputs map[agk.Port]agk.Envelope `json:"outputs,omitempty"`
 

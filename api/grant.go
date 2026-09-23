@@ -31,6 +31,12 @@ import (
 // content-addressed objects with the task's grant, exactly as it fetches an artifact." So the
 // commit is in the scope the controller wrote, the files of that commit are named here with a URL
 // each, and the runner can reach the tree of the one version its task runs and of no other.
+//
+// Somewhere to write is the one part the runner could not be told by name, because the key of an
+// output is the digest of bytes that do not exist until the container has exited. So it is told at
+// the first redemption, beside everything else, as one policy for the task's namespace: a task has
+// no reason to redeem a second time, and its secrets are read once rather than again at the end to
+// ask where its outputs go.
 
 // Secrets is where a secret value comes from.
 //
@@ -68,12 +74,6 @@ type Redemption struct {
 	// rather than believing either alone".
 	TaskID         string     `json:"task_id"`
 	IdempotencyKey agk.TaskID `json:"idempotency_key"`
-
-	// Upload names the digests the runner has computed and wants somewhere to put. It is
-	// empty at the start of a task, when the runner is asking what to fetch, and full at
-	// the end, when it knows what it produced. A PUT URL cannot be minted in advance
-	// because the key of an object is the digest of bytes that do not exist yet.
-	Upload []string `json:"upload,omitempty"`
 }
 
 func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner) {
@@ -158,7 +158,7 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		return
 	}
 
-	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree, ask.Upload)
+	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -166,12 +166,6 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	// Not cached anywhere, by anything: what is in it is every value the task was given.
 	w.Header().Set("Cache-Control", "no-store")
 	write(w, http.StatusOK, answer)
-}
-
-// Upload is one digest the runner named, and the URL that stores those bytes under it.
-type Upload struct {
-	Digest string `json:"digest"`
-	URL    string `json:"url"`
 }
 
 // Input is one input port: where its envelope is fetched from, and every artifact that envelope
@@ -223,6 +217,19 @@ type Secret struct {
 	Value    string `json:"value"`
 }
 
+// Uploads is where the runner writes everything the task makes, its output envelopes and its
+// artifacts alike: a form posted to URL with Fields as they are given, a key that is KeyPrefix
+// followed by the digest of the bytes, and the file.
+//
+// It is one signed policy for the task and not a URL per object, because no digest exists until
+// the container has exited. The policy is bounded instead by the namespace's prefix, the run and
+// the grant's expiry, and the built-in store holds each object to the digest its key names.
+type Uploads struct {
+	URL       string            `json:"url"`
+	Fields    map[string]string `json:"fields"`
+	KeyPrefix string            `json:"key_prefix"`
+}
+
 // The two ways a value is written, said on every entry rather than left to a default: "a reader
 // that had to guess would guess wrong exactly once, on the day a value stops being text".
 const (
@@ -245,7 +252,7 @@ type Grant struct {
 	// does every task of a version is handed the same list.
 	Tree []TreeEntry `json:"tree"`
 
-	Uploads []Upload `json:"uploads,omitempty"`
+	Uploads Uploads `json:"uploads"`
 }
 
 // errNoCommit is a scope naming no version, which is a scope written by a controller from before
@@ -253,9 +260,9 @@ type Grant struct {
 var errNoCommit = errors.New("api: the grant's scope names no commit")
 
 // whatTheGrantIsFor turns the names the controller wrote into values, and refuses to go beyond
-// them. Every URL here is minted for one object and ends with the grant, so nothing the runner
-// holds outlives the task it was given for.
-func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile, upload []string) (Grant, error) {
+// them. Every URL here is minted for one object, the policy for the namespace's prefix, and each
+// ends with the grant, so nothing the runner holds outlives the task it was given for.
+func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree []db.TreeFile) (Grant, error) {
 	out := Grant{
 		TaskID:    got.Row,
 		ExpiresAt: got.ExpiresAt.UTC().Format(time.RFC3339Nano),
@@ -340,14 +347,13 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 		out.Secrets = append(out.Secrets, secretOf(secret, value))
 	}
 
-	for _, digest := range upload {
-		key := artifact.Key(got.Namespace, digest)
-		url, err := s.urls.Presign(ctx, http.MethodPut, key, got.Scope.Run, got.ExpiresAt)
-		if err != nil {
-			return Grant{}, err
-		}
-		out.Uploads = append(out.Uploads, Upload{Digest: digest, URL: url})
+	// Signed for the namespace the grant was issued in, never one the runner names, and expiring
+	// with the grant, so that what it may write is bounded by what it was given to run.
+	policy, err := s.urls.Policy(ctx, got.Namespace, got.Scope.Run, got.ExpiresAt)
+	if err != nil {
+		return Grant{}, err
 	}
+	out.Uploads = Uploads{URL: policy.URL, Fields: policy.Fields, KeyPrefix: policy.KeyPrefix}
 	return out, nil
 }
 

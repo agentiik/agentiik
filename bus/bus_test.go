@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/ulid"
 )
 
 // The bus against a real NATS, for the reason every other real test in this module exists: what
@@ -41,6 +45,25 @@ func open(t *testing.T) *Bus {
 	}
 	if err := b.results.Purge(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+
+	// And from the consumers the control plane makes and no others. A NATS kept running
+	// between suites still holds whatever consumers the code of an earlier day created, and a
+	// WorkQueue stream refuses a second consumer on a subject one already filters on, so one
+	// left behind under another name is a pool nobody can take from.
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if err := b.stream.DeleteConsumer(t.Context(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		if err := b.Consumer(t.Context(), pool); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return b
 }
@@ -85,13 +108,29 @@ func aTask(step agk.Step, runsOn ...string) graph.Task {
 
 // dispatch is a task with the three things only the controller can add.
 func dispatch(step agk.Step, runsOn ...string) controller.Dispatch {
+	return dispatchAs(rowOf(step), step, runsOn...)
+}
+
+// dispatchAs is the same task under a row of the caller's choosing, which is what a requeue
+// after loss is.
+func dispatchAs(row string, step agk.Step, runsOn ...string) controller.Dispatch {
 	return controller.Dispatch{
-		Task: aTask(step, runsOn...),
-		Row:  "01M2AAZ9G62NQXFAFCXKRPJEH5",
-		Grant: "agkgrant_01M2AAZ9G62NQXFAFCXKRPJEH5_" +
-			"dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
+		Task:   aTask(step, runsOn...),
+		Row:    row,
+		Grant:  "agkgrant_" + row + "_dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
 		Inputs: map[agk.Port]controller.InputRef{},
 	}
+}
+
+// rows are the task_id each step's dispatch goes out as, minted once per step and per test
+// process for the reason aRun is: the row is what the stream deduplicates on, so one written down
+// would make every publish after the first in a two-minute window publish nothing, and one minted
+// on every call would make a publish repeated inside a test two messages.
+var rows sync.Map
+
+func rowOf(step agk.Step) string {
+	row, _ := rows.LoadOrStore(step, ulid.New())
+	return row.(string)
 }
 
 // The round trip, which is the whole contract: the controller publishes and a runner of the pool
@@ -126,7 +165,7 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	if got.Grant == "" {
 		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
 	}
-	if err := taken[0].Done(); err != nil {
+	if err := taken[0].Held(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -154,7 +193,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("the default pool took %d tasks", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held(t.Context())
 }
 
 // A runner that took work it cannot run puts it back, and somebody else gets it.
@@ -178,11 +217,89 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	if len(second) != 1 || second[0].Task.IdempotencyKey != first[0].Task.IdempotencyKey {
 		t.Fatalf("a task put back came round as %+v", second)
 	}
-	second[0].Done()
+	second[0].Held(t.Context())
+}
+
+// A task is held once the server says the acknowledgement arrived, and not once it has left
+// this side. A link that drops keeps the acknowledgement in the client's buffer, and the server
+// hands the task to another runner of the pool when its wait runs out, so a runner told it held
+// the task on the strength of the buffer would start the container beside that one.
+func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
+	b := open(t)
+	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
+		t.Fatal(err)
+	}
+
+	link := linkTo(t, b.conn.ConnectedAddr())
+	runner, err := OpenRunner(Options{URL: "nats://" + link.addr(), Name: "runner-cut-off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+	taken, err := runner.Take(t.Context(), DefaultPool, 1, 5*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("taking: %v, %d", err, len(taken))
+	}
+
+	link.cut()
+	short, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := taken[0].Held(short); err == nil {
+		t.Fatal("a task was held whose acknowledgement never reached the server")
+	}
+}
+
+// link is a connection to the bus that can be cut from outside, as a network does it: both
+// directions at once, and nothing listening where the client tries to connect again.
+type link struct {
+	ln net.Listener
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func linkTo(t *testing.T, target string) *link {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &link{ln: ln}
+	t.Cleanup(l.cut)
+	go func() {
+		for {
+			near, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			far, err := net.Dial("tcp", target)
+			if err != nil {
+				near.Close()
+				continue
+			}
+			l.mu.Lock()
+			l.conns = append(l.conns, near, far)
+			l.mu.Unlock()
+			go io.Copy(far, near)
+			go io.Copy(near, far)
+		}
+	}()
+	return l
+}
+
+func (l *link) addr() string { return l.ln.Addr().String() }
+
+func (l *link) cut() {
+	l.ln.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, c := range l.conns {
+		c.Close()
+	}
 }
 
 // "JetStream guarantees at-least-once delivery", so publishing the same task twice inside the
-// duplicate window is one message rather than two: the key is what makes a retry free.
+// duplicate window is one message rather than two: the task_id is what makes a retry free.
 func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	b := open(t)
 	for range 3 {
@@ -197,47 +314,106 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("one task published three times was offered %d times", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held(t.Context())
+}
+
+// aResult is what the runner holding task sends back once it has succeeded, with one item on ok.
+//
+// Its task_id is minted per call, because the stream deduplicates a result on its dispatch for two
+// minutes and a suite run is faster than that.
+func aResult(task graph.Task) TaskResult {
+	exit := 0
+	started := time.Date(2026, 9, 10, 6, 41, 9, 104_000_000, time.UTC)
+	log, _ := agk.NewLogURI(task.ID)
+	return TaskResult{
+		TaskID:         ulid.New(),
+		IdempotencyKey: string(task.ID),
+		Runner:         "runner-dmz-02",
+		State:          agk.TaskSucceeded,
+		ExitCode:       &exit,
+		StartedAt:      started,
+		FinishedAt:     started.Add(83 * time.Second),
+		Outputs: []Output{{
+			Port: "ok", Digest: "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1,
+		}},
+		Log:   &Log{URI: log.String(), Lines: 412},
+		Usage: &Usage{CPUSeconds: 12.4, MaxRSSBytes: 198443008},
+	}
+}
+
+// answering runs Answers until the test ends, handing each result to fn and on to the channel it
+// answers.
+func answering(t *testing.T, b *Bus, fn func(controller.Answer) error) <-chan controller.Answer {
+	t.Helper()
+	ctx, stop := context.WithCancel(t.Context())
+	got := make(chan controller.Answer, 16)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
+			got <- a
+			return fn(a)
+		}); err != nil && ctx.Err() == nil {
+			t.Errorf("taking results: %s", err)
+		}
+	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
+	return got
+}
+
+// "A requeue after loss keeps the idempotency key and takes a new task_id." Published again
+// inside the duplicate window under its new task_id, it is a second message and not a duplicate
+// of the dispatch that was lost.
+func TestARequeueIsQueuedUnderTheKeyItWasLostUnder(t *testing.T) {
+	b := open(t)
+	lost := dispatch(step(t))
+	requeued := dispatchAs(ulid.New(), step(t))
+	for _, d := range []controller.Dispatch{lost, requeued} {
+		if err := b.Publish(t.Context(), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taken, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taken) != 2 {
+		t.Fatalf("a task and its requeue were offered %d times, and a requeue is a message of its own", len(taken))
+	}
+	for i, want := range []controller.Dispatch{lost, requeued} {
+		got := taken[i].Task
+		if got.TaskID != want.Row || got.IdempotencyKey != string(want.Task.ID) {
+			t.Errorf("message %d is task_id %s under key %s, want %s under %s", i+1, got.TaskID, got.IdempotencyKey, want.Row, want.Task.ID)
+		}
+		taken[i].Held(t.Context())
+	}
 }
 
 // A result goes back and the controller takes it, once.
 func TestAResultComesBackToTheController(t *testing.T) {
 	b := open(t)
 	task := aTask(step(t))
-	answer := controller.Answer{
-		Result: graph.Result{
-			Task: task.ID, State: agk.TaskSucceeded,
-			Outputs: map[agk.Port]agk.Envelope{},
-		},
-		Runner:   "runner-dmz-02",
-		LogLines: 412,
-		Usage:    map[string]any{"cpu_seconds": 12.4},
-	}
-	if err := b.Report(t.Context(), answer); err != nil {
+	result := aResult(task)
+	if err := b.Report(t.Context(), result); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
-	defer stop()
-	got := make(chan controller.Answer, 4)
-	go func() {
-		if err := b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
-			got <- a
-			return nil
-		}); err != nil && ctx.Err() == nil {
-			t.Errorf("taking results: %s", err)
-		}
-	}()
-
+	got := answering(t, b, func(controller.Answer) error { return nil })
 	select {
 	case a := <-got:
-		if a.Result.Task != task.ID || a.Runner != "runner-dmz-02" || a.LogLines != 412 {
+		if a.Result.Task != task.ID || a.Row != result.TaskID || a.Runner != "runner-dmz-02" || a.LogLines != 412 {
 			t.Errorf("the result came back as %+v", a)
+		}
+		if len(a.Outputs) != 1 || a.Outputs[0] != (controller.Output{Port: "ok", Digest: "7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1}) {
+			t.Errorf("the outputs came back as %+v", a.Outputs)
 		}
 		if a.Usage["cpu_seconds"] != 12.4 {
 			t.Errorf("the usage came back as %v", a.Usage)
 		}
-	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
 		t.Fatal("no result reached the controller")
 	}
 
@@ -248,86 +424,203 @@ func TestAResultComesBackToTheController(t *testing.T) {
 	}
 }
 
+// "A requeue after loss keeps the idempotency key and takes a new task_id." The requeue's ending
+// and a late one of the dispatch it replaced are two results under one key, and both reach the
+// controller, which alone can say which of them is news. Each reaches it as the dispatch its
+// task_id names, and a result that names no dispatch is not sent at all.
+func TestTwoDispatchesOfOneKeyEachReportTheirEnding(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	sent := map[string]bool{}
+	for range 2 {
+		result := aResult(task)
+		if err := b.Report(t.Context(), result); err != nil {
+			t.Fatal(err)
+		}
+		sent[result.TaskID] = true
+	}
+	nameless := aResult(task)
+	nameless.TaskID = ""
+	if err := b.Report(t.Context(), nameless); err == nil {
+		t.Error("a result naming no dispatch was published")
+	}
+
+	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+	got := make(chan controller.Answer, 4)
+	go func() {
+		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
+			got <- a
+			return nil
+		})
+	}()
+	rows := map[string]bool{}
+	for len(rows) < 2 {
+		select {
+		case a := <-got:
+			if !sent[a.Row] {
+				t.Errorf("the controller was handed dispatch %s, and the two sent were %v", a.Row, sent)
+			}
+			rows[a.Row] = true
+		case <-ctx.Done():
+			t.Fatalf("the controller was handed %d of the two endings of one key", len(rows))
+		}
+	}
+	select {
+	case a := <-got:
+		t.Errorf("a third result reached the controller: %+v", a)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// One dispatch delivered to two machines is redeemed by one of them, and the other may report the
+// unreached failure the controller refuses from it. The failure of the runner that holds it then
+// follows under the same task_id and the same ending, and it still reaches the controller: two
+// runners' results are two results, whatever they say. The holder publishing its own again, after
+// an answer it never heard, is still one.
+func TestTwoRunnersReportingOneDispatchAreBothHeard(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	row := rowOf(step(t))
+
+	unreached := TaskResult{TaskID: row, IdempotencyKey: string(task.ID), Runner: "runner-lan-01", State: agk.TaskFailed}
+	exit := 1
+	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	held := TaskResult{
+		TaskID: row, IdempotencyKey: string(task.ID), Runner: "runner-dmz-02", State: agk.TaskFailed,
+		ExitCode: &exit, StartedAt: started, FinishedAt: started.Add(time.Second),
+	}
+	for _, r := range []TaskResult{unreached, held, held} {
+		if err := b.Report(t.Context(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := answering(t, b, func(a controller.Answer) error {
+		if a.Runner != held.Runner {
+			return fmt.Errorf("%w: %w", controller.ErrNotAResult, controller.ErrNotTheHolder)
+		}
+		return nil
+	})
+	heard := map[string]int{}
+	for len(heard) < 2 {
+		select {
+		case a := <-got:
+			heard[a.Runner]++
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the controller was handed results from %v, and the holder's failure never arrived", heard)
+		}
+	}
+	select {
+	case a := <-got:
+		heard[a.Runner]++
+	case <-time.After(500 * time.Millisecond):
+	}
+	if heard[unreached.Runner] != 1 || heard[held.Runner] != 1 {
+		t.Errorf("the controller was handed %v, want one result from each runner", heard)
+	}
+}
+
 // A result the controller could not record is left for the next delivery, which is what
 // at-least-once buys.
 func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 	b := open(t)
-	task := aTask(step(t))
-	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded},
-	}); err != nil {
+	if err := b.Report(t.Context(), aResult(aTask(step(t)))); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
-	defer stop()
-	seen := make(chan int, 8)
 	tries := 0
-	go func() {
-		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
-			tries++
-			seen <- tries
-			if tries == 1 {
-				return errTest
-			}
-			return nil
-		})
-	}()
-
+	got := answering(t, b, func(controller.Answer) error {
+		tries++
+		if tries == 1 {
+			return errTest
+		}
+		return nil
+	})
 	for want := 1; want <= 2; want++ {
 		select {
-		case got := <-seen:
-			if got != want {
-				t.Fatalf("delivery %d arrived as %d", want, got)
-			}
-		case <-ctx.Done():
+		case <-got:
+		case <-time.After(15 * time.Second):
 			t.Fatalf("delivery %d never arrived, so a result the controller refused was lost", want)
 		}
 	}
 }
 
+// And not at once. The consumer delivers without limit, so a result the controller keeps failing to
+// record, because the database is down or an envelope is not in the store, would otherwise come
+// round as fast as the controller can refuse it, holding the controller and the store for as long
+// as the cause lasts.
+func TestAResultTheControllerCouldNotRecordWaitsBeforeComingBack(t *testing.T) {
+	b := open(t)
+	if err := b.Report(t.Context(), aResult(aTask(step(t)))); err != nil {
+		t.Fatal(err)
+	}
+
+	got := answering(t, b, func(controller.Answer) error { return errTest })
+	select {
+	case <-got:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the result never reached the controller")
+	}
+	first := time.Now()
+	deliveries := 1
+	window := time.After(2500 * time.Millisecond)
+	for waiting := true; waiting; {
+		select {
+		case <-got:
+			deliveries++
+			if deliveries == 2 {
+				if gap := time.Since(first); gap < 900*time.Millisecond {
+					t.Errorf("the result came back %s after the controller could not record it", gap)
+				}
+			}
+		case <-window:
+			waiting = false
+		}
+	}
+	if deliveries > 3 {
+		t.Errorf("the result came round %d times in two and a half seconds", deliveries)
+	}
+	if deliveries < 2 {
+		t.Error("the result never came back, and a result the controller could not record is delivered again")
+	}
+}
+
 // A result no controller could ever record is taken off the queue and said out loud, as a
 // message nobody can read is. Left for the next delivery it would come round for ever, since
-// this consumer delivers without limit and nothing about the result changes in between.
-func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
+// this consumer delivers without limit and nothing about the result changes in between. The
+// controller says which kind it is, and what is said keeps it, so that a runner speaking for a
+// task it does not hold is told apart from one that misread the wire.
+func TestAResultTheControllerWillNeverRecordIsTakenOffAndReported(t *testing.T) {
 	b := open(t)
 	trouble := make(chan error, 8)
 	b.Trouble = func(_ string, err error) { trouble <- err }
 
 	task := aTask(step(t))
-	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskRunning},
-	}); err != nil {
+	if err := b.Report(t.Context(), aResult(task)); err != nil {
 		t.Fatal(err)
 	}
-
-	ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
-	defer stop()
-	seen := make(chan controller.Answer, 8)
-	go func() {
-		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
-			seen <- a
-			// Wrapped, as Core.Answer wraps it.
-			return fmt.Errorf("%w: %s is %s", controller.ErrNotAResult, a.Result.Task, a.Result.State)
-		})
-	}()
+	seen := answering(t, b, func(a controller.Answer) error {
+		// Wrapped, as Core.Answer wraps it.
+		return fmt.Errorf("%w: %w: %s is bound to runner-lan-01", controller.ErrNotAResult, controller.ErrNotTheHolder, a.Result.Task)
+	})
 
 	select {
 	case a := <-seen:
 		if a.Result.Task != task.ID {
 			t.Fatalf("the controller was handed %s", a.Result.Task)
 		}
-	case <-ctx.Done():
+	case <-time.After(15 * time.Second):
 		t.Fatal("the result never reached the controller")
 	}
 	select {
 	case err := <-trouble:
-		if !errors.Is(err, controller.ErrNotAResult) {
+		if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
 			t.Errorf("what was said reads %q", err)
 		}
 	case a := <-seen:
 		t.Fatalf("it was delivered again rather than taken off the queue: %+v", a)
-	case <-ctx.Done():
+	case <-time.After(15 * time.Second):
 		t.Fatal("nothing was said about a result taken off the queue")
 	}
 
@@ -338,6 +631,68 @@ func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
 	case err := <-trouble:
 		t.Errorf("it was said twice, the second time as %q", err)
 	case <-time.After(2 * time.Second):
+	}
+}
+
+// A result is the word of the runner whose subject it arrives on, and one naming another runner is
+// a machine of the pool speaking for somebody else's task. It is taken off the queue and said out
+// loud as a result from a runner that does not hold the task, and the controller never sees it.
+func TestAResultNamingAnotherRunnerIsTakenOffAndReported(t *testing.T) {
+	b := open(t)
+	trouble := make(chan error, 8)
+	b.Trouble = func(_ string, err error) { trouble <- err }
+
+	result := aResult(aTask(step(t)))
+	body, err := result.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.js.Publish(t.Context(), ResultSubject("runner-lan-01"), body); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := answering(t, b, func(controller.Answer) error { return nil })
+	select {
+	case err := <-trouble:
+		if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
+			t.Errorf("what was said reads %q", err)
+		}
+	case a := <-seen:
+		t.Fatalf("the controller was handed a result runner-lan-01 published as runner-dmz-02: %+v", a)
+	case <-time.After(15 * time.Second):
+		t.Fatal("nothing was said about a result published under another runner's name")
+	}
+	select {
+	case a := <-seen:
+		t.Errorf("the controller was handed it after all: %+v", a)
+	case err := <-trouble:
+		t.Errorf("it was said twice, the second time as %q", err)
+	case <-time.After(2 * time.Second):
+	}
+}
+
+// A pool the control plane made no consumer for has nothing to take from, and Take says so
+// rather than making one. A runner able to create a consumer could create one with no filter,
+// and the credential a runner holds is refused the attempt anyway.
+func TestTakingFromAPoolWithNoConsumerSaysSo(t *testing.T) {
+	b := open(t)
+
+	_, err := b.Take(t.Context(), "nobody", 8, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("a pool with no consumer was taken from")
+	}
+	if !strings.Contains(err.Error(), "pool nobody has no consumer") {
+		t.Errorf("the refusal reads %q, and it names the pool", err)
+	}
+
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if name != Durable(DefaultPool) && name != Durable("dmz") {
+			t.Errorf("taking from a pool with no consumer created %s", name)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 

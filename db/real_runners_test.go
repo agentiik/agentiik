@@ -343,6 +343,88 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 	}
 }
 
+// "lost: The runner holding it stopped reporting." A task nobody has redeemed is waiting on the
+// queue however long it waits, and a task redeemed after a long wait counts from its redemption
+// rather than from the dispatch that put it on the queue.
+func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// Two tasks dispatched five minutes ago, which is ten intervals of thirty seconds. One is
+	// still on the queue and the other has just been taken.
+	const waiting, taken = "01M2HWAAAAAAAAAAAAAAAAAAAA", "01M2HTAAAAAAAAAAAAAAAAAAAA"
+	for i, row := range []string{waiting, taken} {
+		if _, err := conn.Exec(ctx, `
+			insert into tasks (namespace, id, run_id, step, attempt, state, dispatched_at)
+			values ('finance', $1, $2, 'render', $3, 'dispatched', now() - interval '5 minutes')`,
+			row, string(financeRun), i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	key := agk.NewTaskID(financeRun, "render", 2, agk.Shard{})
+	var clear string
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", key, taken,
+			GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, "runner-dmz-02", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+		t.Fatalf("a task on the queue and a task taken a moment ago were lost %d times, %v", lost, err)
+	}
+
+	// A pass that could not record the dispatch publishes the task again with a grant of its
+	// own, which nobody redeems, since the task is already taken. The redemption still counts.
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		_, err := w.IssueGrant(ctx, "finance", key, taken,
+			GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+		t.Fatalf("a task taken a moment ago and issued a grant since was lost %d times, %v", lost, err)
+	}
+
+	// The runner that took it says nothing for ten intervals after taking it.
+	if _, err := conn.Exec(ctx,
+		`update task_grants set redeemed_at = now() - interval '5 minutes' where task_id = $1`, taken); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 1 {
+		t.Fatalf("a runner silent since it took its task lost %d tasks, %v", lost, err)
+	}
+	var states []string
+	rows, err := conn.Query(ctx,
+		`select id || ' ' || state || ' ' || coalesce(runner, '-') from tasks
+		 where id in ($1, $2) order by attempt`, waiting, taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{waiting + " dispatched -", taken + " lost runner-dmz-02"}
+	if len(states) != 2 || states[0] != want[0] || states[1] != want[1] {
+		t.Errorf("the tasks read %q, want %q", states, want)
+	}
+}
+
 // A revoked credential stops being accepted, which is what "revoking it from the console stops the
 // runner at its next heartbeat" comes down to.
 func TestARevokedCredentialOpensNothing(t *testing.T) {

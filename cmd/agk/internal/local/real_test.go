@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
@@ -205,7 +206,15 @@ func TestARealFanOutAndMergeRunsThroughTheLoop(t *testing.T) {
 	// next task on that host". The empty parents it was nested under are left behind, which
 	// is a directory and not a residue; a file is the thing to fail on, because the files are
 	// the envelopes, the parameters and the secret values.
+	//
+	// The record of the keys that ended is the one file meant to outlive them, and it is
+	// passed over: it holds a key, a state and a moment, and the driver's own test holds that
+	// it never holds a payload.
+	keys := filepath.Join(layout.WorkRoot(), driver.KeysDir)
 	filepath.WalkDir(layout.WorkRoot(), func(path string, d fs.DirEntry, err error) error {
+		if path == keys {
+			return fs.SkipDir
+		}
 		if err != nil || d.IsDir() {
 			return nil
 		}

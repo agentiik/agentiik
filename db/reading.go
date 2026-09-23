@@ -238,7 +238,7 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		select idempotency_key, step, state, attempt, shard_index, shard_of,
 		       runner, exit_code, started_at, finished_at
 		from tasks where namespace = $1 and run_id = $2
-		order by step, attempt, shard_index nulls first`,
+		order by step, attempt, shard_index nulls first, requeue`,
 		n.namespace, string(run))
 	if err != nil {
 		return nil, fmt.Errorf("db: the tasks of run %s could not be read: %w", run, err)

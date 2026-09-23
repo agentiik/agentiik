@@ -209,7 +209,9 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 // makes "a run replays by replaying its Results" true. A result for an attempt that is
 // over changes nothing: the task identifier is the idempotency key, a bus is allowed to
 // deliver twice, and a late answer about an attempt already judged is a duplicate rather
-// than news.
+// than news. Nor does an ending of a dispatch the shard has been requeued past, since the
+// requeue kept the key and only the dispatch tells the two apart: that dispatch was
+// judged lost and handed out again, and the attempt now waits on the requeue.
 func (e *Evaluator) Record(r Result, now time.Time) error {
 	now = now.UTC()
 	run, name, attempt, shard, err := agk.ParseTaskID(string(r.Task))
@@ -230,6 +232,9 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 
 	sh := ss.Shards[at]
 	if sh.Attempt != attempt || sh.Task.Terminal() {
+		return nil
+	}
+	if r.State.Terminal() && r.Requeue != sh.Requeue {
 		return nil
 	}
 
@@ -257,11 +262,23 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 
 	if r.State.Terminal() && shardVerdict(r.State, r.ExitCode) == agk.VerdictFailed {
 		if st, ok := e.g.Step(name); ok {
-			if when, again := nextAttempt(st.Retry, st.Idempotent, sh); again {
-				// A shard granted another attempt has not finished: it goes back
-				// to pending on its new attempt number, and what it carried from
-				// the attempt that failed goes with it.
+			var when time.Time
+			again := requeued(st.Retry, st.Idempotent, sh)
+			if again {
+				// A requeue is the same attempt handed out again, so the
+				// attempt number and the key built from it stay as they were
+				// and the dispatch is what moves. It is due at once.
+				sh.Requeue++
+			} else if when, again = nextAttempt(st.Retry, sh); again {
+				// A further attempt is a new key, handed out for the first
+				// time.
 				sh.Attempt++
+				sh.Requeue = 0
+			}
+			if again {
+				// A shard with more to come has not finished: it goes back to
+				// pending, and what it carried from the dispatch that ended goes
+				// with it.
 				sh.Task = agk.TaskPending
 				sh.ExitCode = 0
 				sh.Ports = nil

@@ -38,6 +38,10 @@ type Docker struct {
 
 	mu       sync.Mutex
 	inflight map[agk.TaskID]*held
+
+	// keys is the record under the work root of what this host has taken and completed,
+	// which outlives this process and is what a restarted one reads.
+	keys *keys
 }
 
 // held is one task this process is running.
@@ -131,6 +135,7 @@ func New(cfg Config) (*Docker, error) {
 		cfg: cfg, cli: cli, floor: floor, cache: newManifests(),
 		ctx: ctx, cancel: cancel,
 		inflight: map[agk.TaskID]*held{},
+		keys:     &keys{root: cfg.WorkRoot},
 	}
 	floor.announce(cfg.Policy, d.say)
 
@@ -209,11 +214,13 @@ func (d *Docker) dispatch(e docker.Event) {
 // ErrTaskInFlight is a second Run for a task this driver is already running.
 //
 // At-least-once delivery can hand one task to one host twice while the first delivery is
-// still in hand: a message not acknowledged inside its window is delivered again, and the
-// window can pass during a cold image pull. The second is refused rather than run beside
-// the first, because two Runs carrying one container would each collect it and each remove
-// it, and the one that removed it first would take it away under the other. The first
-// delivery is the one that reports.
+// still in hand. Not through the ack window, since a runner acknowledges on take, before it
+// pulls or creates anything, and package bus says why. Through the requeue of a task the
+// heartbeat declared lost, which keeps its key and can reach the host that is still
+// running it: one whose heartbeat was cut off while its container ran. The second is
+// refused rather than run beside the first, because two Runs carrying one container would
+// each collect it and each remove it, and the one that removed it first would take it away
+// under the other. The first delivery is the one that reports.
 var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
 
 // register records a task as being in flight, and answers with what to call when it is

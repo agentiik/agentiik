@@ -37,7 +37,14 @@ import (
 // forget the namespace, and an existence check on a key without one is an existence
 // check that answers for every tenant at once.
 func Key(namespace, digest string) string {
-	return namespace + "/sha256/" + digest
+	return Prefix(namespace) + digest
+}
+
+// Prefix is what every key of one namespace starts with: <namespace>/sha256/, ending in the
+// separator so that it reads as a prefix and never as a name. Key is built on it, so that
+// what a write is allowed under and what a read is addressed by cannot drift apart.
+func Prefix(namespace string) string {
+	return namespace + "/sha256/"
 }
 
 // Objects is the byte layer under the store: content in, content out, keyed by the
