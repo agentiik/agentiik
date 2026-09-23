@@ -110,14 +110,23 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 // asymmetry the page fixes: "The notification is a latency optimisation; the sweep is the
 // correctness guarantee." So a sweep has to reach everything a notification would have, and a
 // notification is only ever a shortcut to one of them.
+//
+// A sweep is also the one thing that notices a silence, since nothing notifies one. So it moves
+// to lost, first, every task in flight whose runner has said nothing of it in three heartbeat
+// intervals. First, so that the runs it wakes are among those this sweep decides, and the loss is
+// heard and requeued on this pass rather than the next.
 func (co *Core) Wake(ctx context.Context, w Wake) error {
 	if !w.Swept {
 		return co.Decide(ctx, w.Run)
 	}
+	now := co.now().UTC()
 	var runs []agk.RunID
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
+		if _, err := wide.Lost(ctx, now, 0); err != nil {
+			return err
+		}
 		var err error
-		runs, err = wide.Actionable(ctx, co.now(), 0)
+		runs, err = wide.Actionable(ctx, now, 0)
 		return err
 	}); err != nil {
 		return err
@@ -193,7 +202,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return err
 	}
 
-	// The losses the heartbeat declared are heard here, before anything is decided. "Three
+	// The losses the sweep declared are heard here, before anything is decided. "Three
 	// missed intervals move a task to lost", and that is written beside the task state where
 	// liveness lives, by whatever noticed; whether the task is then requeued is a decision,
 	// and deciding is this loop's. A loss already heard, or one of a dispatch requeued past,

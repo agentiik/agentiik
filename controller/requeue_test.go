@@ -37,6 +37,17 @@ steps:
     outputs: [ok, rejected]
 `
 
+// silence lets more than three heartbeat intervals pass with nothing heard, and sweeps, as the
+// controller does on its interval: what went unaccounted for is declared lost, and the runs that
+// woke are decided.
+func (co *Core) silence(t *testing.T) {
+	t.Helper()
+	clock.advance(db.LostAfter + time.Second)
+	if err := co.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // redeem binds a dispatch to a runner, which is what the runner's first call does and what the
 // heartbeat and a runner's own loss are read against.
 func (co *Core) redeem(t *testing.T, d Dispatch, runner string) error {
@@ -82,16 +93,9 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// runner-1 goes quiet. The task was dispatched on the test's clock, which is days behind
-	// the database's, so three missed intervals have long passed. The wake the heartbeat
-	// leaves is on the database's clock too, so the run is decided here as a sweep would
-	// decide it once its own clock got there.
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	// runner-1 goes quiet for three intervals, and the sweep declares the task lost and
+	// decides the run it woke.
+	core.silence(t)
 
 	again := q.dispatched()
 	if len(again) != 1 {
@@ -225,12 +229,7 @@ func TestALossReportedAfterTheHeartbeatDeclaredItMovesNothing(t *testing.T) {
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 {
 		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
@@ -277,12 +276,7 @@ func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 {
 		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
@@ -354,14 +348,8 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 				t.Fatalf("the first pass dispatched %d tasks", len(first))
 			}
 
-			// Dispatched on the test's clock, days behind the database's, and taken by
-			// nobody since.
-			if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
-				t.Fatalf("the heartbeat declared %d tasks lost that no runner had taken, answering %v", n, err)
-			}
-			if err := core.Decide(t.Context(), decidedRun); err != nil {
-				t.Fatal(err)
-			}
+			// Taken by nobody for three intervals and more.
+			core.silence(t)
 			if got := stateOf(t, core); got != agk.Running {
 				t.Errorf("a run whose one task is waiting on the queue is %s", got)
 			}
@@ -393,12 +381,7 @@ func lostAndRequeued(t *testing.T) (*Core, *fakeQueue, *pgx.Conn, Dispatch, Disp
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row {
 		t.Fatalf("after the loss the controller dispatched %+v, want %s again under a new task_id", again, first[0].Task.ID)

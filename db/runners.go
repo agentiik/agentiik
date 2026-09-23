@@ -231,12 +231,25 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 	return r, nil
 }
 
+// HeartbeatInterval is how often a runner says it is there: "A runner posts one heartbeat every 10
+// seconds to the API".
+//
+// One constant, because two things read it and they must not disagree. The API tells a runner the
+// interval in the answer to every heartbeat, and Lost counts silence in it: a runner told one
+// interval and judged by another would be declared lost while it reported on time, or kept long
+// after it had gone.
+const HeartbeatInterval = 10 * time.Second
+
+// LostAfter is how long a task in flight may go unaccounted for before Lost moves it: "Three
+// missed intervals move a task to lost."
+const LostAfter = 3 * HeartbeatInterval
+
 // Beat records that a runner is there and says what it is holding.
 //
 // "A runner posts one heartbeat every 10 seconds to the API, listing the idempotency keys it
 // currently holds. One request covers every in-flight task on that host." What it writes is the
-// moment against every task it named, which is what a lost-task sweep compares against, and what
-// it answers is whether the runner should be draining.
+// moment against every task it named, which is what Lost compares against, and what it answers is
+// whether the runner should be draining.
 func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at time.Time) (Runner, error) {
 	var r Runner
 	var reason *string
@@ -344,7 +357,8 @@ func orEmptyStrings(s []string) []string {
 	return s
 }
 
-// Lost moves the tasks of runners that stopped reporting.
+// Lost moves the tasks of runners that stopped reporting, as of now, and answers how many it
+// moved.
 //
 // "Three missed intervals move a task to lost, which is the state whose consequences Lifecycle and
 // replay describes." A task is lost rather than failed, and the distinction is the whole of why
@@ -352,8 +366,13 @@ func orEmptyStrings(s []string) []string {
 // charged to the infrastructure and is requeued only when the step is declared idempotent, since
 // it may well have completed without the result coming back."
 //
-// after is three heartbeat intervals. It is an argument rather than a constant because the
-// interval is what an installation configures and thirty seconds is only the default's default.
+// It is the controller's sweep and judges by the controller's clock, though not everything it
+// judges was stamped by that clock: the dispatch was, and the heartbeat and the redemption were
+// stamped by the API's. So it rests on the two agreeing, as a grant already does, whose expiry the
+// controller sets and the API judges. A heartbeat is at most one interval old when the next one
+// lands, so a controller less than two intervals ahead of the API still finds a runner reporting
+// on time, and one behind it declares a loss that much later. Judging by the database's clock
+// would not have removed the pairing, only added a third clock to it.
 //
 // Only a task some runner holds, which is one a runner has redeemed the grant of. A task nobody
 // has redeemed is a message waiting on the queue for a runner with room, and a busy pool or an
@@ -378,43 +397,39 @@ func orEmptyStrings(s []string) []string {
 //
 // What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
 // the task is handed out again is the evaluator's to say, and the controller hears of the loss
-// through Losses on the run's next pass.
-func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, error) {
+// through Losses on the pass the wake brings round.
+func (w *Wide) Lost(ctx context.Context, now time.Time, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
 		return 0, err
 	}
 	var lost int
-	err = p.Installation(ctx, Heartbeat, func(ctx context.Context, w *Wide) error {
-		return w.tx.QueryRow(ctx, `
-			with gone as (
-			  update tasks set state = 'lost', finished_at = now()
-			  where (namespace, id) in (
-			    select t.namespace, t.id from tasks t
-			    cross join lateral (
-			      select max(g.redeemed_at) as at from task_grants g
-			      where g.namespace = t.namespace and g.task_id = t.id
-			    ) redeemed
-			    where t.state in ('dispatched', 'running', 'publishing')
-			      and t.runner is not null
-			      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
-			          < now() - ($1::bigint * interval '1 second')
-			    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
-			    limit $2
-			    for update of t skip locked
-			  )
-			  returning namespace, run_id
-			), woken as (
-			  update runs r set wake_at = now()
-			  from (select distinct namespace, run_id from gone) g
-			  where r.namespace = g.namespace and r.id = g.run_id
-			    and r.state in ('queued', 'running', 'waiting')
-			  returning 1
-			)
-			select (select count(*) from gone)::int`,
-			int64(after/time.Second), batch).Scan(&lost)
-	})
-	if err != nil {
+	if err := w.tx.QueryRow(ctx, `
+		with gone as (
+		  update tasks set state = 'lost', finished_at = $1
+		  where (namespace, id) in (
+		    select t.namespace, t.id from tasks t
+		    cross join lateral (
+		      select max(g.redeemed_at) as at from task_grants g
+		      where g.namespace = t.namespace and g.task_id = t.id
+		    ) redeemed
+		    where t.state in ('dispatched', 'running', 'publishing')
+		      and t.runner is not null
+		      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at) < $2
+		    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
+		    limit $3
+		    for update of t skip locked
+		  )
+		  returning namespace, run_id
+		), woken as (
+		  update runs r set wake_at = $1
+		  from (select distinct namespace, run_id from gone) g
+		  where r.namespace = g.namespace and r.id = g.run_id
+		    and r.state in ('queued', 'running', 'waiting')
+		  returning 1
+		)
+		select (select count(*) from gone)::int`,
+		now, now.Add(-LostAfter), batch).Scan(&lost); err != nil {
 		return 0, fmt.Errorf("db: the lost tasks could not be found: %w", err)
 	}
 	return lost, nil

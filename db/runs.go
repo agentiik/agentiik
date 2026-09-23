@@ -578,10 +578,10 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 // answer says who that is; the row is locked by the update, so a redemption racing it binds first
 // or finds it bound.
 //
-// It belongs in the transaction that writes the ending, and never in one of its own. Pool.Lost
-// takes a bound dispatch in flight for one a runner redeemed, so a binding committed without its
-// ending would be swept lost, counted from the dispatch, as if a container had run and its host
-// gone quiet.
+// It belongs in the transaction that writes the ending, and never in one of its own. Lost takes a
+// bound dispatch in flight for one a runner redeemed, so a binding committed without its ending
+// would be swept lost, counted from the dispatch, as if a container had run and its host gone
+// quiet.
 func (w *Wide) BindUnredeemed(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
 	if runner == "" {
 		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
@@ -665,8 +665,8 @@ type Loss struct {
 
 // Losses names the dispatches of one run that are lost and that nothing has requeued.
 //
-// It is how the controller hears what the heartbeat declared. "Liveness therefore lives in the
-// database beside the task state", so a loss is written here first, by Pool.Lost or by Lose, and
+// It is how the controller hears what its sweep declared. "Liveness therefore lives in the
+// database beside the task state", so a loss is written here first, by Lost or by Lose, and
 // the evaluator is told on the next pass rather than by whoever noticed: a requeue is a decision,
 // and deciding is the controller's. A dispatch already requeued past is not named, since the loss
 // has been heard; one that was not requeued, because its step is not idempotent or its policy
@@ -746,8 +746,8 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 		namespace, row, string(key), runner, at).Scan(&run)
 	switch {
 	case err == nil:
-		// And the run is left for the next sweep, as Pool.Lost leaves it, so that the loss
-		// is heard even where whoever wrote it goes no further.
+		// And the run is left for the next sweep, as Lost leaves it, so that the loss is
+		// heard even where whoever wrote it goes no further.
 		if _, err := w.tx.Exec(ctx,
 			`update runs set wake_at = null
 			 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')`,

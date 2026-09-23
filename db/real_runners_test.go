@@ -231,7 +231,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 	}
 
 	// Nothing is lost yet.
-	if lost, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a runner that just reported lost %d tasks, %v", lost, err)
 	}
 
@@ -244,7 +244,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 		 where step = 'render'`); err != nil {
 		t.Fatal(err)
 	}
-	lost, err := pool.Lost(t.Context(), 30*time.Second, 0)
+	lost, err := declaredLost(t, pool, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lost, err := pool.Lost(t.Context(), 30*time.Second, 0)
+	lost, err := declaredLost(t, pool, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a task on the queue and a task taken a moment ago were lost %d times, %v", lost, err)
 	}
 
@@ -397,7 +397,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a task taken a moment ago and issued a grant since was lost %d times, %v", lost, err)
 	}
 
@@ -406,7 +406,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 		`update task_grants set redeemed_at = now() - interval '5 minutes' where task_id = $1`, taken); err != nil {
 		t.Fatal(err)
 	}
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 1 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 1 {
 		t.Fatalf("a runner silent since it took its task lost %d tasks, %v", lost, err)
 	}
 	var states []string
@@ -423,6 +423,19 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 	if len(states) != 2 || states[0] != want[0] || states[1] != want[1] {
 		t.Errorf("the tasks read %q, want %q", states, want)
 	}
+}
+
+// declaredLost is the controller's sweep for silence as of now, on the door the controller's fence
+// opens.
+func declaredLost(t *testing.T, pool *Pool, now time.Time) (int, error) {
+	t.Helper()
+	var lost int
+	err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		var err error
+		lost, err = w.Lost(ctx, now, 0)
+		return err
+	})
+	return lost, err
 }
 
 // A revoked credential stops being accepted, which is what "revoking it from the console stops the

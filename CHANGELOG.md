@@ -35,6 +35,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Cancelling a run writes every task of it not yet over as `cancelled`, in the pass that ends the run. A message still on the queue then redeems nothing and starts no container, and the run gives back its share of `max_concurrent_tasks` at once. A lost dispatch keeps its loss.
 - Cancelling a run also stops every task whose row a runner has redeemed. A task published by a pass that died before recording the dispatch reads pending in the document, and was left running to its deadline.
 - A requeue that comes back to the host which already ended its key is answered with that ending, reported under the requeue's `task_id`. Where nobody has redeemed the requeue, the controller takes it from a runner that redeemed an earlier dispatch of the key and binds that runner as the ending is written, so the run no longer waits for its timeout.
+- The sweep declares lost every task whose runner has said nothing of it for three heartbeat intervals, then decides the runs it woke on the same pass. Nothing ran that check before, so a silent runner's tasks were never lost.
 
 ### State
 
@@ -44,6 +45,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
 - `tasks` keeps one row per dispatch of a key, numbered by `requeue`, and at most one of them that is not `lost`.
 - `Wide.RedeemedBefore` says whether a runner redeemed an earlier dispatch of a key, and `Wide.BindUnreached` is now `Wide.BindUnredeemed`, since it also binds a requeue answered from a host's record.
+- `Pool.Lost` is now `Wide.Lost`, which the controller calls through its fence with its own clock. `db.HeartbeatInterval` is the interval the API tells a runner, and `db.LostAfter` is three of them.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
