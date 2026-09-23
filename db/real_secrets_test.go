@@ -43,7 +43,7 @@ func TestADeclarationRoundTrips(t *testing.T) {
 	pool, _ := opened(t)
 
 	for _, d := range []Declaration{
-		{Name: "ledger", Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_LEDGER", DeclaredBy: "alice"},
+		{Name: "ledger", Provider: "env", Path: "AGK_DEV_FINANCE_LEDGER", DeclaredBy: "alice"},
 		{Name: "billing", Provider: "builtin", DeclaredBy: "alice"},
 	} {
 		created, err := declare(t, pool, "finance", d)
@@ -62,7 +62,7 @@ func TestADeclarationRoundTrips(t *testing.T) {
 	if got[0].Provider != "builtin" || got[0].Path != "" {
 		t.Errorf("billing reads back as %+v", got[0])
 	}
-	if got[1].Provider != "env" || got[1].Path != "AGENTIIK_SECRET_FINANCE_LEDGER" || got[1].DeclaredBy != "alice" || got[1].DeclaredAt.IsZero() {
+	if got[1].Provider != "env" || got[1].Path != "AGK_DEV_FINANCE_LEDGER" || got[1].DeclaredBy != "alice" || got[1].DeclaredAt.IsZero() {
 		t.Errorf("ledger reads back as %+v", got[1])
 	}
 

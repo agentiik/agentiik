@@ -45,7 +45,7 @@ func declaring(t *testing.T, auth api.Authorizer, o api.DeclarationOptions) (htt
 
 // developing is an installation opted in to the env provider for both namespaces the tests make,
 // each under a prefix of its own.
-var developing = api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_", "team-ops": "AGENTIIK_SECRET_TEAM_OPS_"}
+var developing = api.Environment{"finance": "AGK_DEV_FINANCE_", "team-ops": "AGK_DEV_TEAM_OPS_"}
 
 // sent is call with a body written by hand, for a body no Go type in this package would produce.
 func sent(t *testing.T, h http.Handler, method, path, as, body string) *httptest.ResponseRecorder {
@@ -79,7 +79,7 @@ func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
 		t.Errorf("a declaration in the built-in store was answered with a path: %v", answer)
 	}
 
-	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_LEDGER"})
+	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "env", Path: "AGK_DEV_FINANCE_LEDGER"})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("declaring answered %d: %s", w.Code, w.Body)
 	}
@@ -97,17 +97,17 @@ func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
 	if first["name"] != "billing" || first["provider"] != "builtin" {
 		t.Errorf("the listing begins with %v", first)
 	}
-	if second["name"] != "ledger" || second["provider"] != "env" || second["path"] != "AGENTIIK_SECRET_FINANCE_LEDGER" || second["mount"] != "/agk/secrets/ledger" {
+	if second["name"] != "ledger" || second["provider"] != "env" || second["path"] != "AGK_DEV_FINANCE_LEDGER" || second["mount"] != "/agk/secrets/ledger" {
 		t.Errorf("the listing ends with %v", second)
 	}
 
 	// Declared again elsewhere is the same secret moved, answered 200 rather than 201.
-	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_GENERAL_LEDGER"})
+	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "env", Path: "AGK_DEV_FINANCE_GENERAL_LEDGER"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("moving a declaration answered %d: %s", w.Code, w.Body)
 	}
 	w, one := call(t, h, "GET", "/api/v1/finance/secrets/ledger", "alice", nil)
-	if w.Code != http.StatusOK || one["provider"] != "env" || one["path"] != "AGENTIIK_SECRET_FINANCE_GENERAL_LEDGER" {
+	if w.Code != http.StatusOK || one["provider"] != "env" || one["path"] != "AGK_DEV_FINANCE_GENERAL_LEDGER" {
 		t.Fatalf("the moved declaration reads %d %v", w.Code, one)
 	}
 
@@ -246,7 +246,7 @@ func TestAValueWithNowhereToGoIsRefused(t *testing.T) {
 		body string
 		want int
 	}{
-		"a value for a variable":                 {`{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING","value":"` + value + `"}`, http.StatusBadRequest},
+		"a value for a variable":                 {`{"provider":"env","path":"AGK_DEV_FINANCE_BILLING","value":"` + value + `"}`, http.StatusBadRequest},
 		"a value after the declaration":          {`{"provider":"builtin"} {"value":"` + value + `"}`, http.StatusBadRequest},
 		"an empty value":                         {`{"provider":"builtin","value":""}`, http.StatusBadRequest},
 		"an encoding and no value":               {`{"provider":"builtin","encoding":"base64"}`, http.StatusBadRequest},
@@ -290,7 +290,7 @@ func TestAValueTheInstallationCannotKeepWritesNothing(t *testing.T) {
 
 	store := &sealing{}
 	h, _ = declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing, Values: store})
-	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_BILLING"}); w.Code != http.StatusCreated {
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGK_DEV_FINANCE_BILLING"}); w.Code != http.StatusCreated {
 		t.Fatalf("declaring answered %d", w.Code)
 	}
 	store.refuse = true
@@ -314,7 +314,7 @@ func TestARemovedSecretTakesItsValueWithIt(t *testing.T) {
 		want               int
 	}{
 		{"removed", "DELETE", "", http.StatusNoContent},
-		{"moved to a variable", "PUT", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING"}`, http.StatusOK},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGK_DEV_FINANCE_BILLING"}`, http.StatusOK},
 	} {
 		if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", written); w.Code != http.StatusCreated && w.Code != http.StatusOK {
 			t.Fatalf("writing the value answered %d: %s", w.Code, w.Body)
@@ -324,6 +324,49 @@ func TestARemovedSecretTakesItsValueWithIt(t *testing.T) {
 		}
 		if _, ok := store.holds("finance/billing"); ok {
 			t.Errorf("the store still holds the value of a secret %s", c.what)
+		}
+	}
+}
+
+// With no built-in store attached a value is still forgotten. Forgetting needs no key, and the
+// value is a row another process of the installation, attached with its keyring, may have written:
+// a secret removed or moved to a variable through these routes leaves nothing for the name
+// declared in the built-in store again to bring back.
+func TestASecretRemovedWithNoStoreAttachedStillTakesItsValue(t *testing.T) {
+	h, pool := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
+	kept := func() error {
+		return pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			return ns.WriteSealed(ctx, "billing", func(version int) (db.SealedValue, error) {
+				return db.SealedValue{
+					Version: version, Master: "2026-09", Salt: []byte("salt"), WrappedKey: []byte("key"),
+					WrapNonce: []byte("wrap"), Ciphertext: []byte("sealed"), Nonce: []byte("nonce"),
+				}, nil
+			})
+		})
+	}
+
+	for _, c := range []struct {
+		what, method, body string
+		want               int
+	}{
+		{"removed", "DELETE", "", http.StatusNoContent},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGK_DEV_FINANCE_BILLING"}`, http.StatusOK},
+	} {
+		if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin"}`); w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("declaring billing answered %d: %s", w.Code, w.Body)
+		}
+		if err := kept(); err != nil {
+			t.Fatal(err)
+		}
+		if w := sent(t, h, c.method, "/api/v1/finance/secrets/billing", "alice", c.body); w.Code != c.want {
+			t.Fatalf("the secret %s answered %d: %s", c.what, w.Code, w.Body)
+		}
+		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			_, err := ns.SealedValue(ctx, "billing")
+			return err
+		})
+		if !errors.Is(err, db.ErrNoValue) {
+			t.Errorf("a secret %s with no store attached left its value, which reads as %v", c.what, err)
 		}
 	}
 }
@@ -342,11 +385,11 @@ func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
 		"no store at all":                          {"billing", `{"path":"kv/data/finance/billing"}`, http.StatusBadRequest},
 		"the built-in store with a path":           {"billing", `{"provider":"builtin","path":"finance/billing"}`, http.StatusBadRequest},
 		"a variable with no name":                  {"billing", `{"provider":"env"}`, http.StatusBadRequest},
-		"a variable carrying an escape sequence":   {"billing", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_\u001b[2J"}`, http.StatusBadRequest},
+		"a variable carrying an escape sequence":   {"billing", `{"provider":"env","path":"AGK_DEV_FINANCE_\u001b[2J"}`, http.StatusBadRequest},
 		"a name the workflow file cannot write":    {"bill.ing", `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name no file could be named after":      {strings.Repeat("a", 256), `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name longer than an index row can hold": {strings.Repeat("q7-Z", 1500), `{"provider":"builtin"}`, http.StatusBadRequest},
-		"a path longer than any store's":           {"billing", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_` + strings.Repeat("A", 64<<10) + `"}`, http.StatusBadRequest},
+		"a path longer than any store's":           {"billing", `{"provider":"env","path":"AGK_DEV_FINANCE_` + strings.Repeat("A", 64<<10) + `"}`, http.StatusBadRequest},
 		"a body that is not a declaration at all":  {"billing", `["builtin"]`, http.StatusBadRequest},
 		"a body that says nothing about the store": {"billing", ``, http.StatusBadRequest},
 	} {
@@ -373,13 +416,13 @@ func TestADeclarationIsConfinedToItsNamespace(t *testing.T) {
 		ns   string
 		body string
 	}{
-		{"env with no opting in", nil, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_LEDGER"}`},
-		{"env in a namespace the installation left out", api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_"}, "team-ops", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`},
+		{"env with no opting in", nil, "finance", `{"provider":"env","path":"AGK_DEV_FINANCE_LEDGER"}`},
+		{"env in a namespace the installation left out", api.Environment{"finance": "AGK_DEV_FINANCE_"}, "team-ops", `{"provider":"env","path":"AGK_DEV_TEAM_OPS_LEDGER"}`},
 		{"the API's database", developing, "finance", `{"provider":"env","path":"AGENTIIK_DATABASE_URL"}`},
 		{"the API's master key", developing, "finance", `{"provider":"env","path":"AGENTIIK_MASTER_KEY"}`},
-		{"another namespace's variable", developing, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`},
-		{"the namespace's prefix in another case", developing, "finance", `{"provider":"env","path":"agentiik_secret_finance_ledger"}`},
-		{"a variable no environment can hold", developing, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_../x"}`},
+		{"another namespace's variable", developing, "finance", `{"provider":"env","path":"AGK_DEV_TEAM_OPS_LEDGER"}`},
+		{"the namespace's prefix in another case", developing, "finance", `{"provider":"env","path":"agk_dev_finance_ledger"}`},
+		{"a variable no environment can hold", developing, "finance", `{"provider":"env","path":"AGK_DEV_FINANCE_../x"}`},
 		{"another namespace's Vault path", developing, "finance", `{"provider":"vault","path":"kv/data/team-ops/root-token"}`},
 		{"a Vault path climbing out of the namespace", developing, "finance", `{"provider":"vault","path":"kv/data/finance/../team-ops/x"}`},
 		{"the namespace's own Vault path", developing, "finance", `{"provider":"vault","path":"kv/data/finance/ledger"}`},
@@ -394,20 +437,24 @@ func TestADeclarationIsConfinedToItsNamespace(t *testing.T) {
 	}
 
 	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
-	if w := sent(t, h, "PUT", "/api/v1/team-ops/secrets/ledger", "alice", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`); w.Code != http.StatusCreated {
+	if w := sent(t, h, "PUT", "/api/v1/team-ops/secrets/ledger", "alice", `{"provider":"env","path":"AGK_DEV_TEAM_OPS_LEDGER"}`); w.Code != http.StatusCreated {
 		t.Errorf("a variable under the namespace's own prefix answered %d: %s", w.Code, w.Body)
 	}
 }
 
 // An installation opting in to env names prefixes that confine, or the routes are not built: no
-// prefix begins another namespace's, which would hand the first the second's variables, and each
-// is the beginning of a name a variable can have.
+// prefix begins another namespace's, which would hand the first the second's variables, each is
+// the beginning of a name a variable can have, and each begins with the development prefix, so
+// that none reaches what the API reads for itself.
 func TestAnEnvironmentThatCannotConfineIsRefused(t *testing.T) {
 	for what, env := range map[string]api.Environment{
-		"a prefix beginning another's": {"team": "AGENTIIK_SECRET_TEAM_", "team-ops": "AGENTIIK_SECRET_TEAM_OPS_"},
-		"one prefix for two":           {"finance": "AGENTIIK_SECRET_", "team-ops": "AGENTIIK_SECRET_"},
-		"a prefix of nothing":          {"finance": ""},
-		"a prefix no variable has":     {"finance": "AGENTIIK-SECRET-FINANCE-"},
+		"a prefix beginning another's":                   {"team": "AGK_DEV_TEAM_", "team-ops": "AGK_DEV_TEAM_OPS_"},
+		"one prefix for two":                             {"finance": "AGK_DEV_", "team-ops": "AGK_DEV_"},
+		"a prefix of nothing":                            {"finance": ""},
+		"a prefix no variable has":                       {"finance": "AGK-DEV-FINANCE-"},
+		"a prefix reaching the API's own variables":      {"finance": "AGENTIIK_"},
+		"a prefix reaching what a library reads":         {"finance": "PG"},
+		"a prefix of its own beside the development one": {"finance": "AGK_DEV_FINANCE_", "team-ops": "TEAM_OPS_"},
 	} {
 		if _, err := api.NewDeclarations(router(t, api.DenyAll{}), api.DeclarationOptions{Pool: &db.Pool{}, Environment: env}); err == nil {
 			t.Errorf("an environment with %s was taken", what)
@@ -423,7 +470,7 @@ func TestAnEnvironmentThatCannotConfineIsRefused(t *testing.T) {
 // or removed from outside.
 func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
 	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
-	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_BILLING"}); w.Code != http.StatusCreated {
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGK_DEV_FINANCE_BILLING"}); w.Code != http.StatusCreated {
 		t.Fatalf("declaring answered %d", w.Code)
 	}
 
@@ -449,7 +496,7 @@ func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
 	if _, listing := call(t, h, "GET", "/api/v1/team-ops/secrets", "alice", nil); len(listing["secrets"].([]any)) != 0 {
 		t.Errorf("team-ops lists %v, which finance declared", listing)
 	}
-	if w, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusOK || one["path"] != "AGENTIIK_SECRET_FINANCE_BILLING" {
+	if w, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusOK || one["path"] != "AGK_DEV_FINANCE_BILLING" {
 		t.Errorf("finance's declaration reads %d %v after another namespace tried to remove it", w.Code, one)
 	}
 }

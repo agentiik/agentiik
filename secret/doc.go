@@ -23,8 +23,22 @@
 //
 // "The API is the only component that reads one." The controller "names which secret a task may
 // have and never sees its value", and a runner obtains it "at the last moment, by redeeming at
-// the API the per-task grant". So this package is imported by the API and by nothing else, and
-// the test that holds that boundary is the same idiom the evaluator and the driver already have.
+// the API the per-task grant". So this package is linked into the API's process and into nothing
+// else, and the test that holds that boundary is the same idiom the evaluator and the driver
+// already have.
+//
+// Linked into the process, and not imported by package api, because the command line imports
+// package api as well. So api holds the two interfaces a store fills, Secrets for the redemption
+// and Values for a declaration's PUT, and none of what fills them; this package fills them, Attach
+// wires them into the API's options, and the server's own main package is what calls it.
+//
+// # Where a value is read from
+//
+// A namespace declares where each of its secrets lives, and Providers reads one through that
+// declaration from the store it names. Two stores are read in this version: builtin, which is
+// this package's own, and env, the API's environment, which is for development and read only
+// where the installation opts a namespace in and under the prefix it gives it. vault is a name a
+// declaration may carry and a store nothing reads yet.
 //
 // # Rotation is a write
 //

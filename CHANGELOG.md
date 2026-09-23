@@ -41,6 +41,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
+- `secret_values` keeps the built-in store's values sealed, one row per secret behind the namespace policy. A write takes the next version under a row lock, nothing lowers one, and a forgotten value keeps its count.
+- `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
 
 ### Bus
 
@@ -87,6 +89,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A grant is never replaced. A task published again, because the pass that published it could not record the dispatch, gets another grant beside the first, and the message the bus kept still redeems; the first redemption binds the task for both. Before, the message on the queue carried a grant that opened nothing. Migration `0014_grants_kept.sql`.
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
+- A redemption tells the runner whether a secret it names is not held or held and unreadable, and hands the store's reason to `RunnerOptions.Trouble` for whoever runs the installation.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
 - Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.
 - A redemption is asked with `task_id` and `idempotency_key`, both required, and answered in the `grantRedemption` shape: artifacts under the port whose envelope names them, and each secret with its `mount` and an `encoding`, base64 when the value is not text. A `mount` the manifest allows and the response pattern does not, such as `/agk/secrets/api.key`, is answered as written.
@@ -95,7 +98,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A push names its commit by the whole 40-character hash, and is refused with 409 when that commit is already recorded with other files. A tree is at most 4 MiB counted with its paths, 4,096 files, 255 bytes a name and 2,048 a path: limits of the interim JSON push, until the installation hosts the repository. A path a runner could lay out as `.git`, or outside the tree, is refused.
 - `GET /api/v1/{ns}/secrets` lists a namespace's secret declarations, and `GET`, `PUT` and `DELETE /api/v1/{ns}/secrets/{name}` read, write and remove one: name, provider (`builtin`, `env` or `vault`), path and mount point, never a value. Reading takes `workflow:read` and writing `secret:write`.
 - A `builtin` declaration's `PUT` may carry its value, `base64` when it is not text, handed to the built-in store in the declaration's transaction and never answered. With no store attached it is a 503. Removing a secret, or moving it out of the store, forgets its value.
+- Removing a secret, or moving it out of the built-in store, forgets its value with no store attached too, since another process of the installation may have written it.
 - A declaration is confined to its namespace when it is written. `env` is refused unless the installation opts in, and then takes only a variable under the prefix it gives that namespace; `vault` is refused until its provider arrives.
+- Every `env` prefix begins with `AGK_DEV_`, under which the API reads nothing for itself, so no namespace reaches the API's own variables.
 - A secret's name is at most 255 characters, since a step is given its value in a file named after it, and a path at most 1 KiB.
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
 
@@ -106,6 +111,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
 - A workflow's `secrets` block is a list of names, `secrets: [billing]`. Where a value lives is the namespace's declaration, and a block still writing a provider or a path is refused.
 - A test sends a request to every API route but the redemption, with a secret store that fails if it is read.
+- `secret.Builtin` keeps a `builtin` value in `secret_values`: sealed on the declaration's `PUT` at the next version, opened as bytes under whichever key of the ring sealed it. A row copied into another namespace, another name or over a later write does not open.
+- `secret.Env` reads the API's environment for development: only for a namespace the installation opts in, only under the prefix it gives that namespace, held again at every read. A variable set to nothing is not a value.
+- `secret.Providers` fills `api.Secrets`: it reads a secret through the namespace's declaration, from the store the declaration names, as bytes. A store the installation does not read, or does not know, is refused naming the secret and never a value.
+- `secret.Attach` wires both stores into the API's options from one configuration, so the routes and the redemption cannot disagree. `api` holds only the interfaces, and `cmd/agk` links none of it.
 
 ### Command line
 

@@ -214,11 +214,13 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	sql := whole.String()
 
 	// The eight the Storage chapter names that belong to a namespace, plus the object
-	// row that carries the reference count, and where a namespace's secrets live.
+	// row that carries the reference count, where a namespace's secrets live, and the
+	// values the built-in store keeps for it, sealed.
 	namespaced := map[string]bool{
 		"workflows": true, "workflow_versions": true, "runs": true, "steps": true,
 		"tasks": true, "approvals": true, "artifacts": true, "artifact_objects": true,
 		"notification_events": true, "task_grants": true, "secret_declarations": true,
+		"secret_values": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace

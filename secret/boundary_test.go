@@ -49,10 +49,10 @@ var theStore = []string{"secret"}
 // Being on the list excuses a package from the check and from nothing else. The walk goes through
 // it like any other, so a package that imports the API reaches whatever the API reaches. cmd/agk
 // imports it today, for the shape of a push and the limits on its tree, and the main package of
-// the API's own binary will once there is one. So nothing wires the store into the API's process
-// until that main package is on this list too, whether the providers live under api or beside it,
-// since it links them either way; and while cmd/agk imports the API, the API reaching the store
-// puts the store in the command line as well, which this test names.
+// the API's own binary will once there is one. So the API reaching the store would put the store
+// in the command line as well, which this test names, and the providers live beside the store
+// instead: package api holds the interfaces they fill and secret.Attach wires them in. The main
+// package that calls it links the store, and joins this list when it is written.
 var mayRead = map[string]bool{
 	"api": true,
 }
