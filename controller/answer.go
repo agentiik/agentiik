@@ -70,6 +70,9 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	if !a.Result.State.Terminal() {
 		return fmt.Errorf("%w: %s is %s, which is not one of the five endings a result reports", ErrNotAResult, a.Result.Task, a.Result.State)
 	}
+	if a.Result.State == agk.TaskLost {
+		return co.lose(ctx, run, a)
+	}
 
 	var e db.Evaluation
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
@@ -139,6 +142,35 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	// And round again, because a result is the only thing that makes a step downstream of it
 	// runnable: "The controller consumes it, writes the new state, evaluates the graph again
 	// and publishes whatever has just become runnable."
+	return co.Decide(ctx, run)
+}
+
+// lose takes a loss a runner reported, which "travels on a result only where a runner recovers
+// one it had already lost".
+//
+// It is written where the heartbeat writes its own and heard the way those are, on the pass that
+// follows, rather than recorded here. A loss is about one dispatch, and a requeue keeps the key,
+// so the key alone cannot say which dispatch a runner means: the dispatch bound to that runner at
+// redemption can. The same loss delivered twice then finds that dispatch already lost, moves
+// nothing, and decides nothing, where recording it would requeue the key a second time. A runner
+// that holds no dispatch of the key at all is speaking for somebody else's task, and that answer
+// is the same on every delivery.
+func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
+	moved := false
+	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		e, err := w.Run(ctx, run)
+		if err != nil || e.State.Terminal() {
+			return err
+		}
+		moved, err = w.Lose(ctx, e.Namespace, a.Result.Task, a.Runner, co.now().UTC())
+		return err
+	})
+	if errors.Is(err, db.ErrNotHeld) {
+		return fmt.Errorf("%w: %w", ErrNotAResult, err)
+	}
+	if err != nil || !moved {
+		return err
+	}
 	return co.Decide(ctx, run)
 }
 
