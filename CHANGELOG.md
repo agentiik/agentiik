@@ -41,6 +41,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - A redelivered task never starts its container a second time: a running one is waited on, an exited one is collected as it stands, and a delivery of a task already in flight on the host is refused.
 - A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
+- A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `..`, which put the value over the secrets directory's parent, is refused, as is any name beginning with a dot.
 
 ### API
 
@@ -59,7 +60,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
 - Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.
-- A redemption is asked with `task_id` and `idempotency_key`, both required, and answered in the `grantRedemption` shape except for uploads: artifacts under the port whose envelope names them, and each secret with its `mount` and an `encoding`, base64 when the value is not text. A `mount` the manifest allows and the response pattern does not, such as `/agk/secrets/api.key`, is answered as written.
+- A redemption is asked with `task_id` and `idempotency_key`, both required, and answered in the `grantRedemption` shape except for uploads: artifacts under the port whose envelope names them, and each secret with its `mount` and an `encoding`, base64 when the value is not text.
 - A push names its commit by the whole 40-character hash, and is refused with 409 when that commit is already recorded with other files. A tree is at most 4 MiB counted with its paths, 4,096 files, 255 bytes a name and 2,048 a path: limits of the interim JSON push, until the installation hosts the repository. A path a runner could lay out as `.git`, or outside the tree, is refused.
 
 ### Secrets

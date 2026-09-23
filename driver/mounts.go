@@ -65,8 +65,12 @@ type Secrets interface {
 }
 
 // secretMountRule is where a secret may be asked for, quoted from the manifest rules so
-// that a refusal prints the rule rather than a paraphrase of it.
-const secretMountRule = `^/agk/secrets/[^/]+$`
+// that a refusal prints the rule rather than a paraphrase of it. It is the grammar the brick
+// manifest, the task message and the grant redemption all hold a mount to, and it is narrower
+// than one path segment on purpose: the host file is named after the last element of the mount,
+// and a mount of /agk/secrets/.. would write the value over the parent of the secrets directory
+// rather than into a file under it.
+const secretMountRule = `^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$`
 
 var secretMountPattern = regexp.MustCompile(secretMountRule)
 
