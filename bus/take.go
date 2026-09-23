@@ -171,8 +171,8 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 //
 // One durable consumer, because there is one active controller. fn is called before the message
 // is acknowledged and never after, so a controller dying in the middle gets the result again
-// rather than losing it, and fn returning an error leaves the message for the next delivery,
-// unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
+// rather than losing it, and fn returning an error leaves the message for a later delivery, which
+// again times, unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
 // deduplicates: "the same result delivered twice writes the same thing" is the controller's
 // promise, made good by the evaluator answering a duplicate with no decision.
 //
@@ -236,8 +236,9 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 				}
 				// Left for the next delivery, which is the whole of what
 				// at-least-once buys: a controller that could not record a
-				// result gets it again rather than losing it.
-				msg.Nak()
+				// result gets it again rather than losing it. Not at once,
+				// for the reason again gives.
+				msg.NakWithDelay(again(msg))
 				continue
 			}
 			if err := msg.Ack(); err != nil {
@@ -249,4 +250,27 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 		}
 	}
 	return ctx.Err()
+}
+
+// again is how long a result the controller could not record waits before it is delivered again.
+//
+// Not at once. What leaves a result unrecorded is a database or a store that did not answer, or an
+// envelope the store does not hold, and asking again a millisecond later changes none of them. The
+// consumer delivers without limit, so a redelivery with no pause is a loop that holds the
+// controller and the store for as long as the cause lasts. A second, doubling up to a minute,
+// keeps the first retry quick and the hundredth cheap.
+//
+// It never gives up, because a result dropped while the database was down is an ending nobody
+// records, and it has no need to: a result for a run that has ended is acknowledged without being
+// read, so the run ending is what stops one that never records.
+func again(msg jetstream.Msg) time.Duration {
+	delay := time.Second
+	meta, err := msg.Metadata()
+	if err != nil {
+		return delay
+	}
+	for n := uint64(1); n < meta.NumDelivered && delay < time.Minute; n++ {
+		delay *= 2
+	}
+	return min(delay, time.Minute)
 }

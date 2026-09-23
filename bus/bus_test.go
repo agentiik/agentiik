@@ -405,6 +405,46 @@ func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 	}
 }
 
+// And not at once. The consumer delivers without limit, so a result the controller keeps failing to
+// record, because the database is down or an envelope is not in the store, would otherwise come
+// round as fast as the controller can refuse it, holding the controller and the store for as long
+// as the cause lasts.
+func TestAResultTheControllerCouldNotRecordWaitsBeforeComingBack(t *testing.T) {
+	b := open(t)
+	if err := b.Report(t.Context(), aResult(aTask(step(t)))); err != nil {
+		t.Fatal(err)
+	}
+
+	got := answering(t, b, func(controller.Answer) error { return errTest })
+	select {
+	case <-got:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the result never reached the controller")
+	}
+	first := time.Now()
+	deliveries := 1
+	window := time.After(2500 * time.Millisecond)
+	for waiting := true; waiting; {
+		select {
+		case <-got:
+			deliveries++
+			if deliveries == 2 {
+				if gap := time.Since(first); gap < 900*time.Millisecond {
+					t.Errorf("the result came back %s after the controller could not record it", gap)
+				}
+			}
+		case <-window:
+			waiting = false
+		}
+	}
+	if deliveries > 3 {
+		t.Errorf("the result came round %d times in two and a half seconds", deliveries)
+	}
+	if deliveries < 2 {
+		t.Error("the result never came back, and a result the controller could not record is delivered again")
+	}
+}
+
 // A result no controller could ever record is taken off the queue and said out loud, as a
 // message nobody can read is. Left for the next delivery it would come round for ever, since
 // this consumer delivers without limit and nothing about the result changes in between. The
