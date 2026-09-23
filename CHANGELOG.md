@@ -43,6 +43,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
 - `secret_values` keeps the built-in store's values sealed, one row per secret behind the namespace policy. A write takes the next version under a row lock, nothing lowers one, and a forgotten value keeps its count.
 - `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
+- A workflow, step, port or secret name is stored as the `identifier` domain. `0001` had called the domain `name`, so its columns got PostgreSQL's own `name` type, which checked nothing and cut a name at 63 bytes; one of up to 255 characters is now kept whole, and a longer one or one off the grammar is refused.
 - `Wide.Redeemable` makes every check `Wide.Redeem` makes and writes nothing, so a redemption can be checked before it is answered and bound once it is.
 
 ### Bus
@@ -99,6 +100,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Somewhere to write is one signed POST policy per task, answered at the first redemption, bounded to `<namespace>/sha256/` and the run, and good until the grant expires and not after, so a task redeems once and its secrets are read once. The request no longer takes `upload`. The built-in store takes the form at `POST /objects/{namespace}`, only under a key that is the prefix and 64 lowercase hex characters, and hashes the file as it arrives, as it does a PUT.
 - A posted form carries at most 64 KiB before its file. The file itself is bounded by `artifact_max_bytes` alone, and above it the post is refused with 413 and nothing is stored.
 - A push names its commit by the whole 40-character hash, and is refused with 409 when that commit is already recorded with other files. A tree is at most 4 MiB counted with its paths, 4,096 files, 255 bytes a name and 2,048 a path: limits of the interim JSON push, until the installation hosts the repository. A path a runner could lay out as `.git`, or outside the tree, is refused.
+- A push to a workflow whose name is off the identifier grammar or past 255 characters is refused with 400, and one whose files write a name past 255 with 422, before any of its tree is stored.
 - `GET /api/v1/{ns}/secrets` lists a namespace's secret declarations, and `GET`, `PUT` and `DELETE /api/v1/{ns}/secrets/{name}` read, write and remove one: name, provider (`builtin`, `env` or `vault`), path and mount point, never a value. Reading takes `workflow:read` and writing `secret:write`.
 - A `builtin` declaration's `PUT` may carry its value, `base64` when it is not text, handed to the built-in store in the declaration's transaction and never answered. With no store attached it is a 503. Removing a secret, or moving it out of the store, forgets its value.
 - Removing a secret, or moving it out of the built-in store, forgets its value with no store attached too, since another process of the installation may have written it.
@@ -124,6 +126,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Command line
 
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
+- `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 
 ### Tests
 

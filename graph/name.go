@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/agentiik/agentiik/agk"
 )
 
 // The two grammars every name in the file is written on.
@@ -28,9 +30,14 @@ var (
 	hiddenName     = regexp.MustCompile(`^\.[A-Za-z0-9][A-Za-z0-9_-]*$`)
 )
 
-// identifier refuses a name that is not written on the one grammar, saying what kind of
-// name it was and where it was written.
+// identifier refuses a name that is not written on the one grammar, or is longer than a
+// directory holds a name to, saying what kind of name it was and where it was written.
+// The bound is agk's, reached for rather than written again, since it is a number and
+// not a grammar: a name survives a directory unchanged only if it fits in one.
 func identifier(name, what, where string) error {
+	if len(name) > agk.IdentifierMaxBytes {
+		return fmt.Errorf("%s names %s %.64s..., which is %d characters long: a name is at most %d, so that one name survives a URL, a directory and a tool list unchanged, and no filesystem holds a longer one", where, what, name, len(name), agk.IdentifierMaxBytes)
+	}
 	if identifierName.MatchString(name) {
 		return nil
 	}

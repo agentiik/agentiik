@@ -46,6 +46,28 @@ func TestTheIdentifierGrammar(t *testing.T) {
 	}
 }
 
+// A step or a port is at most 255 characters, the longest name a filesystem holds: a
+// step is a directory of its task's work directory and a port a file under
+// /agk/out/ports/, so a longer one is a name no runner could lay out.
+func TestAnIdentifierIsNoLongerThanAFileName(t *testing.T) {
+	longest := strings.Repeat("n", 255)
+	for _, err := range []error{agk.Step(longest).Validate(), agk.Port(longest).Validate()} {
+		if err != nil {
+			t.Errorf("a name of 255 characters was refused: %v", err)
+		}
+	}
+	for _, err := range []error{agk.Step(longest + "n").Validate(), agk.Port(longest + "n").Validate()} {
+		if err == nil {
+			t.Error("a name of 256 characters was accepted")
+			continue
+		}
+		// The bound, and not the whole name printed back.
+		if said := err.Error(); !strings.Contains(said, "at most 255") || strings.Contains(said, longest) {
+			t.Errorf("the refusal reads %q", said)
+		}
+	}
+}
+
 func TestAPortNameSaysWhatTheRuleIs(t *testing.T) {
 	err := agk.Port("out,error").Validate()
 	if err == nil {
