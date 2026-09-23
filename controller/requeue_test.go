@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -415,6 +416,71 @@ func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
 				t.Errorf("a step that does not requeue sent its task out again as %+v", again)
 			case c.run == agk.Running && (len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row):
 				t.Errorf("the requeue went out as %+v, want %s again under a new task_id", again, first[0].Task.ID)
+			}
+		})
+	}
+}
+
+// A key is handed out again after a loss as often as the installation's max_requeues allows, three
+// where it sets nothing, and no more. Each dispatch is redeemed by a runner of its own, which then
+// goes quiet, as a container that takes down every host it lands on would leave it, and the
+// heartbeat declares it lost. The loss past the bound stands: the key goes out no more, its last
+// grant opens nothing, and the run fails on it rather than spending the attempt max: 1 has left,
+// since the brick never failed.
+func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		set        int
+		dispatches []string
+	}{
+		{"the default", 0, []string{"0 lost runner-1", "1 lost runner-2", "2 lost runner-3", "3 lost runner-4"}},
+		{"one", 1, []string{"0 lost runner-1", "1 lost runner-2"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			deciding, q, pool, super := decidingOn(t, requeueingWorkflow)
+			core, err := NewCore(deciding.controller, deciding.term, Options{
+				Queue: q, Versions: deciding.versions, Objects: deciding.objects, Now: deciding.now,
+				MaxRequeues: c.set,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			sent := q.dispatched()
+			if len(sent) != 1 {
+				t.Fatalf("the first pass dispatched %d tasks", len(sent))
+			}
+			key := sent[0].Task.ID
+			for n := range len(c.dispatches) {
+				last := sent[0]
+				if err := core.redeem(t, last, fmt.Sprintf("runner-%d", n+1)); err != nil {
+					t.Fatal(err)
+				}
+				core.silence(t)
+				sent = q.dispatched()
+				if n == len(c.dispatches)-1 {
+					if len(sent) != 0 {
+						t.Errorf("a key lost past max_requeues went out again as %+v", sent)
+					}
+					if err := core.redeem(t, last, "runner-5"); !errors.Is(err, db.ErrTaskHeld) {
+						t.Errorf("the grant of a dispatch lost past max_requeues was redeemed again, answering %v", err)
+					}
+					break
+				}
+				if len(sent) != 1 || sent[0].Task.ID != key || sent[0].Task.Attempt != 1 || sent[0].Row == last.Row {
+					t.Fatalf("after loss %d the controller dispatched %+v, want %s again on attempt 1 under a new task_id", n+1, sent, key)
+				}
+			}
+
+			conn := dbtest.Superuser(t, super)
+			if got := dispatchesOf(t, conn, key); !slices.Equal(got, c.dispatches) {
+				t.Errorf("the key holds %q, want %q", got, c.dispatches)
+			}
+			if got := stateOf(t, core); got != agk.Failed {
+				t.Errorf("the run is %s after its one step lost a key past max_requeues", got)
 			}
 		})
 	}
