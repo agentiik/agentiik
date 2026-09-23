@@ -16,6 +16,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/ulid"
 )
 
 // The bus against a real NATS, for the reason every other real test in this module exists: what
@@ -300,44 +301,75 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	taken[0].Held(t.Context())
 }
 
-// A result goes back and the controller takes it, once.
-func TestAResultComesBackToTheController(t *testing.T) {
-	b := open(t)
-	task := aTask(step(t))
-	answer := controller.Answer{
-		Result: graph.Result{
-			Task: task.ID, State: agk.TaskSucceeded,
-			Outputs: map[agk.Port]agk.Envelope{},
-		},
-		Runner:   "runner-dmz-02",
-		LogLines: 412,
-		Usage:    map[string]any{"cpu_seconds": 12.4},
+// aResult is what the runner holding task sends back once it has succeeded, with one item on ok.
+//
+// Its task_id is minted per call, because the stream deduplicates a result on its dispatch for two
+// minutes and a suite run is faster than that.
+func aResult(task graph.Task) TaskResult {
+	exit := 0
+	started := time.Date(2026, 9, 10, 6, 41, 9, 104_000_000, time.UTC)
+	log, _ := agk.NewLogURI(task.ID)
+	return TaskResult{
+		TaskID:         ulid.New(),
+		IdempotencyKey: string(task.ID),
+		Runner:         "runner-dmz-02",
+		State:          agk.TaskSucceeded,
+		ExitCode:       &exit,
+		StartedAt:      started,
+		FinishedAt:     started.Add(83 * time.Second),
+		Outputs: []Output{{
+			Port: "ok", Digest: "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1,
+		}},
+		Log:   &Log{URI: log.String(), Lines: 412},
+		Usage: &Usage{CPUSeconds: 12.4, MaxRSSBytes: 198443008},
 	}
-	if err := b.Report(t.Context(), answer); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
-	defer stop()
-	got := make(chan controller.Answer, 4)
+// answering runs Answers until the test ends, handing each result to fn and on to the channel it
+// answers.
+func answering(t *testing.T, b *Bus, fn func(controller.Answer) error) <-chan controller.Answer {
+	t.Helper()
+	ctx, stop := context.WithCancel(t.Context())
+	got := make(chan controller.Answer, 16)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if err := b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
 			got <- a
-			return nil
+			return fn(a)
 		}); err != nil && ctx.Err() == nil {
 			t.Errorf("taking results: %s", err)
 		}
 	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
+	return got
+}
 
+// A result goes back and the controller takes it, once.
+func TestAResultComesBackToTheController(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	result := aResult(task)
+	if err := b.Report(t.Context(), result); err != nil {
+		t.Fatal(err)
+	}
+
+	got := answering(t, b, func(controller.Answer) error { return nil })
 	select {
 	case a := <-got:
-		if a.Result.Task != task.ID || a.Runner != "runner-dmz-02" || a.LogLines != 412 {
+		if a.Result.Task != task.ID || a.Row != result.TaskID || a.Runner != "runner-dmz-02" || a.LogLines != 412 {
 			t.Errorf("the result came back as %+v", a)
+		}
+		if len(a.Outputs) != 1 || a.Outputs[0] != (controller.Output{Port: "ok", Digest: "7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1}) {
+			t.Errorf("the outputs came back as %+v", a.Outputs)
 		}
 		if a.Usage["cpu_seconds"] != 12.4 {
 			t.Errorf("the usage came back as %v", a.Usage)
 		}
-	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
 		t.Fatal("no result reached the controller")
 	}
 
@@ -352,35 +384,22 @@ func TestAResultComesBackToTheController(t *testing.T) {
 // at-least-once buys.
 func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 	b := open(t)
-	task := aTask(step(t))
-	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded},
-	}); err != nil {
+	if err := b.Report(t.Context(), aResult(aTask(step(t)))); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
-	defer stop()
-	seen := make(chan int, 8)
 	tries := 0
-	go func() {
-		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
-			tries++
-			seen <- tries
-			if tries == 1 {
-				return errTest
-			}
-			return nil
-		})
-	}()
-
+	got := answering(t, b, func(controller.Answer) error {
+		tries++
+		if tries == 1 {
+			return errTest
+		}
+		return nil
+	})
 	for want := 1; want <= 2; want++ {
 		select {
-		case got := <-seen:
-			if got != want {
-				t.Fatalf("delivery %d arrived as %d", want, got)
-			}
-		case <-ctx.Done():
+		case <-got:
+		case <-time.After(15 * time.Second):
 			t.Fatalf("delivery %d never arrived, so a result the controller refused was lost", want)
 		}
 	}
@@ -388,46 +407,39 @@ func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 
 // A result no controller could ever record is taken off the queue and said out loud, as a
 // message nobody can read is. Left for the next delivery it would come round for ever, since
-// this consumer delivers without limit and nothing about the result changes in between.
-func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
+// this consumer delivers without limit and nothing about the result changes in between. The
+// controller says which kind it is, and what is said keeps it, so that a runner speaking for a
+// task it does not hold is told apart from one that misread the wire.
+func TestAResultTheControllerWillNeverRecordIsTakenOffAndReported(t *testing.T) {
 	b := open(t)
 	trouble := make(chan error, 8)
 	b.Trouble = func(_ string, err error) { trouble <- err }
 
 	task := aTask(step(t))
-	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskRunning},
-	}); err != nil {
+	if err := b.Report(t.Context(), aResult(task)); err != nil {
 		t.Fatal(err)
 	}
-
-	ctx, stop := context.WithTimeout(t.Context(), 15*time.Second)
-	defer stop()
-	seen := make(chan controller.Answer, 8)
-	go func() {
-		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
-			seen <- a
-			// Wrapped, as Core.Answer wraps it.
-			return fmt.Errorf("%w: %s is %s", controller.ErrNotAResult, a.Result.Task, a.Result.State)
-		})
-	}()
+	seen := answering(t, b, func(a controller.Answer) error {
+		// Wrapped, as Core.Answer wraps it.
+		return fmt.Errorf("%w: %w: %s is bound to runner-lan-01", controller.ErrNotAResult, controller.ErrNotTheHolder, a.Result.Task)
+	})
 
 	select {
 	case a := <-seen:
 		if a.Result.Task != task.ID {
 			t.Fatalf("the controller was handed %s", a.Result.Task)
 		}
-	case <-ctx.Done():
+	case <-time.After(15 * time.Second):
 		t.Fatal("the result never reached the controller")
 	}
 	select {
 	case err := <-trouble:
-		if !errors.Is(err, controller.ErrNotAResult) {
+		if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
 			t.Errorf("what was said reads %q", err)
 		}
 	case a := <-seen:
 		t.Fatalf("it was delivered again rather than taken off the queue: %+v", a)
-	case <-ctx.Done():
+	case <-time.After(15 * time.Second):
 		t.Fatal("nothing was said about a result taken off the queue")
 	}
 

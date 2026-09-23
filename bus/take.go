@@ -135,20 +135,24 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // long before, on take, so a result that could not be published is the runner's to publish
 // again and not the bus's to recover by redelivering the task: redelivery would run the brick a
 // second time to recover an answer that already exists.
-func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
-	body, err := json.Marshal(a)
+//
+// A result the controller would refuse is refused here rather than on the queue, where the one
+// thing left to do with it is take it off and say so. The stream deduplicates on the dispatch
+// and the ending, which is what a runner publishing again after an answer it never heard sends.
+func (b *Bus) Report(ctx context.Context, r TaskResult) error {
+	body, err := r.encode()
 	if err != nil {
-		return fmt.Errorf("bus: the result of %s could not be written: %w", a.Result.Task, err)
+		return fmt.Errorf("bus: %w", err)
 	}
 	msg := &nats.Msg{
 		Subject: ResultSubject,
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{"result-" + string(a.Result.Task) + "-" + a.Result.State.String()},
+			jetstream.MsgIDHeader: []string{"result-" + r.TaskID + "-" + r.State.String()},
 		},
 	}
 	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
-		return fmt.Errorf("bus: the result of %s could not be published: %w", a.Result.Task, err)
+		return fmt.Errorf("bus: the result of %s could not be published: %w", r.IdempotencyKey, err)
 	}
 	return nil
 }
@@ -161,6 +165,10 @@ func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 // unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
 // deduplicates: "the same result delivered twice writes the same thing" is the controller's
 // promise, made good by the evaluator answering a duplicate with no decision.
+//
+// A result is read as the wire describes it, and handed on with its outputs as digests. One the
+// wire refuses is taken off the queue and said out loud, as one nobody can decode is: a result
+// that is not an ending, or that says what no container could, reads the same on every delivery.
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
@@ -188,9 +196,9 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 			return fmt.Errorf("bus: results could not be taken: %w", err)
 		}
 		for msg := range msgs.Messages() {
-			var a controller.Answer
-			if err := json.Unmarshal(msg.Data(), &a); err != nil {
-				b.report(ResultSubject, fmt.Errorf("a result could not be read: %w", err))
+			a, err := readResult(msg.Data())
+			if err != nil {
+				b.report(msg.Subject(), fmt.Errorf("a result could not be read: %w", err))
 				msg.Term()
 				continue
 			}
@@ -201,7 +209,7 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 					// this consumer delivers without limit. So it goes the
 					// way of a message nobody can read, off the queue and
 					// said out loud.
-					b.report(ResultSubject, err)
+					b.report(msg.Subject(), err)
 					msg.Term()
 					continue
 				}

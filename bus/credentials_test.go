@@ -5,9 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/controller"
-	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -239,10 +236,9 @@ func TestARunnerTakesFromThePoolsConsumer(t *testing.T) {
 	}
 
 	// And says what happened, on the same connection.
-	if err := runner.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: aTask("mine").ID, State: agk.TaskSucceeded},
-		Runner: "runner-1",
-	}); err != nil {
+	result := aResult(aTask("mine"))
+	result.Runner = "runner-1"
+	if err := runner.Report(t.Context(), result); err != nil {
 		t.Errorf("reporting: %s", err)
 	}
 
