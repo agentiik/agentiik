@@ -40,7 +40,7 @@ func TestTheTableDecidesWhatMayBeRetriedAtAll(t *testing.T) {
 		{125, false, "125 and above is charged to the runner and not to the brick"},
 		{137, false, "125 and above is charged to the runner and not to the brick"},
 	} {
-		_, again := nextAttempt(everything, true, outcomeEnded(1, agk.TaskFailed, c.exit))
+		_, again := nextAttempt(everything, outcomeEnded(1, agk.TaskFailed, c.exit))
 		if again != c.retried {
 			t.Errorf("exit %d is retried=%v: %s", c.exit, again, c.why)
 		}
@@ -51,26 +51,26 @@ func TestTheTableDecidesWhatMayBeRetriedAtAll(t *testing.T) {
 // no others, and an application failure is retried only where the author said so.
 func TestRetryOnNamesTheFailure(t *testing.T) {
 	transient := Retry{Max: 2, On: []agk.Failure{agk.FailureTransient}}
-	if _, again := nextAttempt(transient, true, outcomeEnded(1, agk.TaskFailed, 7)); again {
+	if _, again := nextAttempt(transient, outcomeEnded(1, agk.TaskFailed, 7)); again {
 		t.Error("retry.on: [transient] retried an application failure, which is retried only where retry.on says so explicitly")
 	}
-	if _, again := nextAttempt(transient, true, outcomeEnded(1, agk.TaskFailed, 100)); !again {
+	if _, again := nextAttempt(transient, outcomeEnded(1, agk.TaskFailed, 100)); !again {
 		t.Error("retry.on: [transient] did not retry a transient failure")
 	}
-	if _, again := nextAttempt(transient, true, outcomeEnded(1, agk.TaskTimedOut, 0)); again {
+	if _, again := nextAttempt(transient, outcomeEnded(1, agk.TaskTimedOut, 0)); again {
 		t.Error("retry.on: [transient] retried an attempt stopped at its deadline")
 	}
 
 	failed := Retry{Max: 2, On: []agk.Failure{agk.FailureFailed}}
-	if _, again := nextAttempt(failed, true, outcomeEnded(1, agk.TaskFailed, 7)); !again {
+	if _, again := nextAttempt(failed, outcomeEnded(1, agk.TaskFailed, 7)); !again {
 		t.Error("retry.on: [failed] did not retry an application failure")
 	}
-	if _, again := nextAttempt(failed, true, outcomeEnded(1, agk.TaskFailed, 100)); again {
+	if _, again := nextAttempt(failed, outcomeEnded(1, agk.TaskFailed, 100)); again {
 		t.Error("retry.on: [failed] retried a transient failure it does not name")
 	}
 
 	timeout := Retry{Max: 1, On: []agk.Failure{agk.FailureTimeout}}
-	if _, again := nextAttempt(timeout, true, outcomeEnded(1, agk.TaskTimedOut, 0)); !again {
+	if _, again := nextAttempt(timeout, outcomeEnded(1, agk.TaskTimedOut, 0)); !again {
 		t.Error("retry.on: [timeout] did not retry an attempt stopped at its deadline")
 	}
 }
@@ -80,7 +80,7 @@ func TestRetryOnNamesTheFailure(t *testing.T) {
 // policy, so it is the one a policy that has not had to name anything accepts.
 func TestAPolicyThatNamesNothingRetriesTheTransientBand(t *testing.T) {
 	silent := Retry{Max: 2}
-	if _, again := nextAttempt(silent, true, outcomeEnded(1, agk.TaskFailed, 100)); !again {
+	if _, again := nextAttempt(silent, outcomeEnded(1, agk.TaskFailed, 100)); !again {
 		t.Error("retry: {max: 2} did not retry a transient failure")
 	}
 	for _, c := range []struct {
@@ -92,7 +92,7 @@ func TestAPolicyThatNamesNothingRetriesTheTransientBand(t *testing.T) {
 		{agk.TaskLost, 0, "a lost task"},
 		{agk.TaskTimedOut, 0, "an attempt stopped at its deadline"},
 	} {
-		if _, again := nextAttempt(silent, true, outcomeEnded(1, c.task, c.exit)); again {
+		if _, again := nextAttempt(silent, outcomeEnded(1, c.task, c.exit)); again {
 			t.Errorf("retry: {max: 2} retried %s without being asked to", c.what)
 		}
 	}
@@ -104,13 +104,13 @@ func TestAPolicyThatNamesNothingRetriesTheTransientBand(t *testing.T) {
 func TestMaxCountsFurtherAttempts(t *testing.T) {
 	policy := Retry{Max: 2, On: []agk.Failure{agk.FailureTransient}}
 	for attempt, want := range map[int]bool{1: true, 2: true, 3: false, 4: false} {
-		if _, again := nextAttempt(policy, true, outcomeEnded(attempt, agk.TaskFailed, 100)); again != want {
+		if _, again := nextAttempt(policy, outcomeEnded(attempt, agk.TaskFailed, 100)); again != want {
 			t.Errorf("after attempt %d of max: 2, another attempt is %v", attempt, again)
 		}
 	}
 
 	// A step with no retry block gets the one attempt it was given.
-	if _, again := nextAttempt(Retry{}, true, outcomeEnded(1, agk.TaskFailed, 100)); again {
+	if _, again := nextAttempt(Retry{}, outcomeEnded(1, agk.TaskFailed, 100)); again {
 		t.Error("a step with no retry policy was retried")
 	}
 }
@@ -120,17 +120,48 @@ func TestMaxCountsFurtherAttempts(t *testing.T) {
 // again is safe only where the author said it is.
 func TestOnlyAnIdempotentStepIsRequeuedAfterALoss(t *testing.T) {
 	policy := Retry{Max: 3, On: []agk.Failure{agk.FailureLost}}
-	if _, again := nextAttempt(policy, true, outcomeEnded(1, agk.TaskLost, 0)); !again {
+	if !requeued(policy, true, outcomeEnded(1, agk.TaskLost, 0)) {
 		t.Error("an idempotent step was not requeued after its task was lost")
 	}
-	if _, again := nextAttempt(policy, false, outcomeEnded(1, agk.TaskLost, 0)); again {
+	if requeued(policy, false, outcomeEnded(1, agk.TaskLost, 0)) {
 		t.Error("a step declared idempotent: false was requeued after its task was lost")
 	}
 	// The rule is about loss and not about the policy: a step that is not
 	// idempotent is still retried on the failures it can be retried on.
 	both := Retry{Max: 3, On: []agk.Failure{agk.FailureLost, agk.FailureTransient}}
-	if _, again := nextAttempt(both, false, outcomeEnded(1, agk.TaskFailed, 100)); !again {
+	if _, again := nextAttempt(both, outcomeEnded(1, agk.TaskFailed, 100)); !again {
 		t.Error("a step declared idempotent: false was not retried on a transient failure")
+	}
+	// And only a loss is requeued: every other failure is a further attempt or the end.
+	if requeued(both, true, outcomeEnded(1, agk.TaskFailed, 100)) {
+		t.Error("a transient failure was requeued on the attempt that failed, and a failure the brick reported is a further attempt")
+	}
+}
+
+// TestALossIsRequeuedAndNotRetried holds what a requeue is: the same attempt handed out
+// again, which the policy has to name and which spends nothing max counts. So a loss is
+// never a further attempt, a policy that does not name lost does not requeue, and one
+// that does requeues an attempt however many of its attempts are spent, with no number at
+// all.
+func TestALossIsRequeuedAndNotRetried(t *testing.T) {
+	policy := Retry{Max: 2, On: []agk.Failure{agk.FailureLost}}
+	if _, again := nextAttempt(policy, outcomeEnded(1, agk.TaskLost, 0)); again {
+		t.Error("a lost task was given a further attempt, and a requeue after loss keeps the attempt it was lost on")
+	}
+	if !requeued(policy, true, outcomeEnded(3, agk.TaskLost, 0)) {
+		t.Error("the last attempt max: 2 allows was not requeued after a loss, and a loss does not use up an attempt")
+	}
+	if !requeued(Retry{On: []agk.Failure{agk.FailureLost}}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+		t.Error("retry: {on: [lost]} did not requeue a lost task, and a requeue is not a further attempt for max to grant")
+	}
+	if requeued(Retry{Max: 2, On: []agk.Failure{agk.FailureTransient}}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+		t.Error("a policy that does not name lost requeued a lost task")
+	}
+	if requeued(Retry{Max: 2}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+		t.Error("retry: {max: 2} requeued a lost task, and a policy that names nothing accepts the transient band alone")
+	}
+	if requeued(Retry{}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+		t.Error("a step with no retry policy requeued a lost task")
 	}
 }
 
@@ -173,7 +204,7 @@ func TestTheWaitRunsFromTheEndOfTheAttempt(t *testing.T) {
 		Backoff: Backoff{Type: BackoffExponential, Base: Duration(2 * time.Second), Max: Duration(60 * time.Second)},
 	}
 	first := outcomeEnded(1, agk.TaskFailed, 100)
-	at, again := nextAttempt(policy, true, first)
+	at, again := nextAttempt(policy, first)
 	if !again {
 		t.Fatal("a transient failure was not retried")
 	}
@@ -182,7 +213,7 @@ func TestTheWaitRunsFromTheEndOfTheAttempt(t *testing.T) {
 	}
 
 	second := outcomeEnded(2, agk.TaskFailed, 100)
-	at, again = nextAttempt(policy, true, second)
+	at, again = nextAttempt(policy, second)
 	if !again {
 		t.Fatal("the second failure was not retried, and max: 2 allows a third attempt")
 	}
@@ -193,7 +224,7 @@ func TestTheWaitRunsFromTheEndOfTheAttempt(t *testing.T) {
 	// A result that says nothing about when the attempt ended gets its next
 	// attempt at once, which is the consequence of not saying.
 	silent := ShardState{Attempt: 1, Task: agk.TaskFailed, ExitCode: 100}
-	if at, again := nextAttempt(policy, true, silent); !again || !at.IsZero() {
+	if at, again := nextAttempt(policy, silent); !again || !at.IsZero() {
 		t.Errorf("an attempt that reported no finish time is due at %s (again=%v)", at, again)
 	}
 }

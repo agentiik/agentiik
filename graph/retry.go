@@ -7,26 +7,51 @@ import (
 	"github.com/agentiik/agentiik/agk"
 )
 
-// Retrying is deliberate rather than automatic. Four things have to agree before an
+// Retrying is deliberate rather than automatic. Three things have to agree before an
 // attempt is made again, and they are asked in this order: the exit code table has to
-// allow it at all, a lost task has to be a lost task of an idempotent step, the step's
-// policy has to name the failure, and there has to be an attempt left. A failure that
-// clears all four waits for the backoff and then runs again; anything else is the end of
-// that shard.
+// allow it at all, the step's policy has to name the failure, and there has to be an
+// attempt left. A failure that clears all three waits for the backoff and then runs
+// again; anything else is the end of that shard.
 //
 // None of this is a decision about the step. A shard that has run out of attempts is a
 // failed shard, and what that does to the step, and what the step does to the run, is
 // settled in verdict.go and by continue_on_error.
+//
+// A lost task is the exception, and requeued answers it rather than nextAttempt. "A
+// requeue after loss keeps the idempotency key and takes a new task_id": the attempt
+// is handed out again under the key it was lost under, so it is the same attempt and
+// not a further one, and it uses up nothing that max counts.
+
+// requeued says whether a shard whose task was lost is handed out again, under the same
+// idempotency key and on the same attempt.
+//
+// Two questions are asked. A lost task may well have finished without the result coming
+// back, so only an idempotent step is requeued after one; and the policy has to name
+// lost, because requeueing a step whose runner went quiet is a decision the author takes
+// and not one taken for them. The other two are not asked. The exit code table has
+// nothing to say about a task that reported no exit, and whether there is an attempt left
+// is not the question, because a loss is charged to the infrastructure and a brick that
+// never failed has not spent anything.
+//
+// Nor is there a wait, which is a reading the documentation does not state and doc.go
+// lists. A backoff spaces attempts out so that a dependency which is briefly unwell is
+// not hammered while it recovers, and what failed here was the host, which the requeue
+// leaves behind by going back on the queue for any runner of the pool.
+func requeued(r Retry, idempotent bool, sh ShardState) bool {
+	if sh.Task != agk.TaskLost || !idempotent {
+		return false
+	}
+	return retryAllows(r, agk.FailureLost)
+}
 
 // nextAttempt says whether a shard that has finished gets another attempt, and the
 // moment that attempt may be dispatched.
 //
-// The four questions are the documentation's, in the order it asks them. What kind of
+// The three questions are the documentation's, in the order it asks them. What kind of
 // failure this was comes off the exit code table and off nothing else, which is what
 // keeps a step from being retried on a runner's trouble or on a code the table calls
-// permanent. A lost task is the one kind that asks a second question of the step: a lost
-// task may well have finished without the result coming back, so only an idempotent step
-// is requeued after one.
+// permanent. A lost task is never given another attempt here: it is requeued on the one
+// it was lost on, or it is over, and requeued is what says which.
 //
 // The wait runs from the moment the attempt ended, and the moment returned is zero when
 // there is nothing to wait for: no backoff was asked for, or the result carried no
@@ -38,12 +63,9 @@ import (
 // returning it to pending on its new attempt number. A shard left in the terminal state
 // its last attempt ended in, with nothing on the clock to say another is coming, reads
 // downstream as a shard that is over.
-func nextAttempt(r Retry, idempotent bool, sh ShardState) (time.Time, bool) {
+func nextAttempt(r Retry, sh ShardState) (time.Time, bool) {
 	failure, named := failureOf(sh.Task, sh.ExitCode)
-	if !named {
-		return time.Time{}, false
-	}
-	if failure == agk.FailureLost && !idempotent {
+	if !named || failure == agk.FailureLost {
 		return time.Time{}, false
 	}
 	if !retryAllows(r, failure) {
