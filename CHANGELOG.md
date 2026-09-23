@@ -37,6 +37,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
 - A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
 - A runner takes work from the consumer the control plane created for its pool, and creates none. `bus.OpenRunner` connects with the runner's credential.
+- A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 
 ### Driver
 

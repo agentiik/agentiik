@@ -145,7 +145,7 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	if got.Grant == "" {
 		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
 	}
-	if err := taken[0].Done(); err != nil {
+	if err := taken[0].Held(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +173,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("the default pool took %d tasks", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held()
 }
 
 // A runner that took work it cannot run puts it back, and somebody else gets it.
@@ -197,7 +197,7 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	if len(second) != 1 || second[0].Task.IdempotencyKey != first[0].Task.IdempotencyKey {
 		t.Fatalf("a task put back came round as %+v", second)
 	}
-	second[0].Done()
+	second[0].Held()
 }
 
 // "JetStream guarantees at-least-once delivery", so publishing the same task twice inside the
@@ -216,7 +216,7 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("one task published three times was offered %d times", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held()
 }
 
 // A result goes back and the controller takes it, once.

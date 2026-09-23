@@ -34,4 +34,23 @@
 // delivered twice is expected, the key is what makes the second one harmless, and a bus that
 // tried to promise exactly-once would be a bus promising something it cannot keep and a runner
 // that had stopped checking.
+//
+// # When a runner acknowledges
+//
+// On take, once the task is written down on the host, and not when the work is over. The runner
+// records the key under its work root, which is driver.Docker.Hold, and then acknowledges, before
+// it pulls, redeems or creates anything. From that moment the task is the host's to answer for
+// and no longer the bus's to redeliver: "Liveness therefore lives in the database beside the task
+// state, rather than as traffic on a work queue that exists to distribute work." A host that dies
+// holding a task stops heartbeating, the task becomes lost, and an idempotent step is requeued
+// under the same key.
+//
+// Acknowledging at the end would have made the ack wait the longest a step may run. A runner
+// that died would then hold its work for that long before anybody else could take it, and a
+// runner that lived would have to keep telling the bus so for as long as its container ran, which
+// is a second liveness channel beside the heartbeat and one that says less.
+//
+// What is left to redelivery is the minute between a take and its record, which the pool
+// consumer's AckWait bounds, and the requeue of a lost task. Both can hand a host a key it has
+// already run, and the host's record is what refuses one it has already carried to an ending.
 package bus

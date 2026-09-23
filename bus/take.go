@@ -27,19 +27,25 @@ const ResultSubject = "agentiik.results"
 
 // Taken is one task message a runner pulled, and the two things it can say about it afterwards.
 //
-// Acknowledging is what removes it from the queue, and under WorkQueue retention that is what
-// removes it from the stream: "a message is removed as soon as it has been consumed". So a
-// runner acknowledges when the work is over rather than when it arrives, and a runner that dies
-// holding one has the task redelivered, which is what at-least-once means and what the
-// idempotency key makes survivable.
+// It says them at once. A runner either writes the task down and holds it, or puts it back, and
+// the package documentation says why the first is said on take rather than when the container is
+// over: from then on the task is the host's to answer for, through its heartbeat, and nothing is
+// left to tell the bus while the container runs.
 type Taken struct {
 	Task TaskMessage
 
 	msg jetstream.Msg
 }
 
-// Done removes the task from the queue.
-func (t Taken) Done() error {
+// Held says the task is written down on this host, and takes it off the queue.
+//
+// Under WorkQueue retention acknowledging is what removes a message from the stream: "a message
+// is removed as soon as it has been consumed". So it is said after the key is recorded under the
+// work root, driver.Docker.Hold, and never before. The other order leaves a moment in which the
+// task is off the queue and on no host's record, and a runner that died in it would leave the
+// task for the heartbeat's sweep to find lost, where one that dies before acknowledging has it
+// handed to the next runner of the pool a minute later.
+func (t Taken) Held() error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")
 	}
@@ -47,24 +53,13 @@ func (t Taken) Done() error {
 }
 
 // Again puts it back for somebody else, which is what a runner says when it took a task it
-// cannot run: its labels changed, it is draining, or it has no room after all.
+// cannot run: its labels changed, it is draining, it has no room after all, or the task could
+// not be written down.
 func (t Taken) Again() error {
 	if t.msg == nil {
 		return errors.New("bus: returning a task that came from nowhere")
 	}
 	return t.msg.Nak()
-}
-
-// Working says the task is still in hand, which holds off redelivery for another interval.
-//
-// It is not the heartbeat. The heartbeat is a request to the API "listing the idempotency keys
-// it currently holds" and is what liveness is read from; this only tells the bus not to hand the
-// same message to somebody else while a container is legitimately still running.
-func (t Taken) Working() error {
-	if t.msg == nil {
-		return errors.New("bus: reporting on a task that came from nowhere")
-	}
-	return t.msg.InProgress()
 }
 
 // Take pulls up to batch tasks for one pool, waiting up to wait for them.
@@ -123,9 +118,10 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // Report sends one result back.
 //
 // Called by the runner when the container is over and everything it produced is uploaded, which
-// is why the task state it carries is terminal and why the runner acknowledges the task message
-// after this rather than before: a result that never went and a task already off the queue is a
-// task nothing will ever answer for.
+// is why the task state it carries is terminal. The task message it answers was acknowledged
+// long before, on take, so a result that could not be published is the runner's to publish
+// again and not the bus's to recover by redelivering the task: redelivery would run the brick a
+// second time to recover an answer that already exists.
 func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 	body, err := json.Marshal(a)
 	if err != nil {

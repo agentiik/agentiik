@@ -234,7 +234,7 @@ func TestARunnerTakesFromThePoolsConsumer(t *testing.T) {
 	if len(taken) != 1 || taken[0].Task.Step != "mine" {
 		t.Fatalf("the runner took %+v, and its pool holds one task", taken)
 	}
-	if err := taken[0].Done(); err != nil {
+	if err := taken[0].Held(); err != nil {
 		t.Fatalf("acknowledging: %s", err)
 	}
 

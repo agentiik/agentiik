@@ -186,13 +186,12 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 		Description:   "Every runner of the " + pool + " pool, sharing one queue.",
 		FilterSubject: Subject(pool),
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		// A runner acknowledges when it has taken a task and written that down, not when
-		// the container finishes: "Liveness therefore lives in the database beside the
-		// task state, rather than as traffic on a work queue that exists to distribute
-		// work." So this bounds the seconds between a message being handed over and being
-		// recorded, and a task that runs for an hour is not redelivered halfway through
-		// it. What notices a host that died is the heartbeat, and what it produces is
-		// lost rather than a second delivery.
+		// A runner acknowledges on take, once it has written the task down, and not
+		// when the container finishes: the package documentation says why. So this
+		// bounds the seconds between a message being handed over and being recorded,
+		// and a task that runs for an hour is not redelivered halfway through it. What
+		// notices a host that died after that is the heartbeat, and what it produces
+		// is lost rather than a second delivery.
 		AckWait: time.Minute,
 		// Without limit, because a message comes round again only when a runner took
 		// it and never wrote it down, or put it back, and neither is a reason to give
