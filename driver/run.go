@@ -38,9 +38,9 @@ const drainGrace = 5 * time.Second
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
 // and the rule. No exit code is invented for a failure that produced none, because a
-// driver reporting its own trouble as a brick failure fails somebody else's step. The one
-// error that follows a container which did run is what it left failing to be collected,
-// and its key is written down as ended all the same.
+// driver reporting its own trouble as a brick failure fails somebody else's step. Where a
+// container did run to its end and what it left could not be collected, Run answers with
+// that error all the same, and the key is written down as ended.
 func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if t.Call != nil && t.Image == "" {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,

@@ -336,8 +336,10 @@ type afterExit struct {
 	err  error
 }
 
+// Error is the error it carries, word for word.
 func (e *afterExit) Error() string { return e.err.Error() }
 
+// Unwrap gives that error up, so that errors.Is and Charged read through the mark.
 func (e *afterExit) Unwrap() error { return e.err }
 
 // exited marks err as met after the container of task had run to its end.
