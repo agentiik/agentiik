@@ -707,6 +707,60 @@ func TestARealExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 	}
 }
 
+// TestARealExitedContainersOutputIsReadBackOffItsLog, against the daemon: what a container
+// that has already exited wrote is read back off the daemon's log, so a script step whose
+// output is its standard output publishes what the first delivery's container printed.
+func TestARealExitedContainersOutputIsReadBackOffItsLog(t *testing.T) {
+	d, image := realDriver(t)
+	logs := &memLogs{}
+	d.cfg.Logs = logs
+
+	id := agk.NewTaskID("01JMZ8V1P9C4XQ7K2N4D6F8H0A", "replayed", 1, agk.Shard{})
+	task := graph.Task{
+		ID:        id,
+		Run:       "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+		Namespace: "finance",
+		Step:      "replayed",
+		Attempt:   1,
+		Image:     image,
+		Script:    []string{"echo hello-from-first"},
+		Outputs:   []agk.Port{"out"},
+		Network:   graph.NetworkNone,
+	}
+
+	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := exec.Command("docker", "run", "-d",
+		"--label", LabelTask+"="+string(id),
+		"--mount", "type=bind,source="+w.Out+",target=/agk/out",
+		image, "/bin/sh", "-e", "-c", "echo hello-from-first").Output()
+	if err != nil {
+		t.Skipf("could not start the first delivery's container: %v", err)
+	}
+	container := strings.TrimSpace(string(started))
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
+	if code, err := exec.Command("docker", "wait", container).Output(); err != nil || strings.TrimSpace(string(code)) != "0" {
+		t.Fatalf("the first delivery's container exited %q (%v)", strings.TrimSpace(string(code)), err)
+	}
+
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivered task: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	out := result.Outputs["out"]
+	if len(out.Items) != 1 || out.Items[0].Data[StdoutField] != "hello-from-first\n" {
+		t.Errorf("out carries %+v, and a script step that wrote no port file publishes what it printed", out)
+	}
+	if got := logText(t, logs.String()); !strings.Contains(got, "hello-from-first") {
+		t.Errorf("the log does not carry what the container printed:\n%s", got)
+	}
+}
+
 // TestAStopEndsARealTaskInFlight, against the daemon: the container is stopped and the
 // Run that was blocked on it comes back cancelled.
 func TestAStopEndsARealTaskInFlight(t *testing.T) {

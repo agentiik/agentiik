@@ -436,6 +436,56 @@ func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 	}
 }
 
+// What a container that had already exited wrote is read back off the daemon's log, into
+// the task's log and into the standard output a script step publishes, and it is masked on
+// the way as a watched container's output is. The values are the redelivery's own, redeemed
+// again, and a secret the container printed is masked whichever delivery it printed under.
+func TestWhatAnExitedContainerWroteIsReadBackMasked(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var written strings.Builder
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stdout, "the token is s3cr3t-value")
+		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
+		return 0, nil
+	})
+	r.cfg.Logs = &sinkFor{b: &written}
+
+	// A script step that writes no port file publishes its standard output on out.
+	task := taskWithASecret(ref)
+	task.Script = []string{`echo "the token is $(cat /agk/secrets/bearer)"`}
+	exitedFirstDelivery(t, r, task)
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivery: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the redelivery reports %s with code %d, and the container exited 0", result.State, result.ExitCode)
+	}
+	out := result.Outputs["out"]
+	if len(out.Items) != 1 {
+		t.Fatalf("out carries %+v, and a script step that wrote no port file publishes its standard output there", out)
+	}
+	stdout, _ := out.Items[0].Data[StdoutField].(string)
+	if strings.Contains(stdout, "s3cr3t-value") {
+		t.Errorf("the published standard output carries the secret value: %q", stdout)
+	}
+	if !strings.Contains(stdout, "the token is "+maskToken) {
+		t.Errorf("the published standard output is %q, and it is what the container wrote, read back off the daemon's log", stdout)
+	}
+
+	log := written.String()
+	if strings.Contains(log, "s3cr3t-value") {
+		t.Errorf("the log carries the secret value: %q", log)
+	}
+	for _, want := range []string{"the token is " + maskToken, "authorising with " + maskToken} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the log does not carry %q, and it is what the container wrote, read back off the daemon's log: %q", want, log)
+		}
+	}
+}
+
 // A container that is still running is waited on, and no start is sent to it at all. A
 // daemon answers a start on a running container 304 and does nothing, but one that reached
 // it a moment after it exited would run the brick a second time.
