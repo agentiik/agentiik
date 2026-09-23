@@ -142,8 +142,6 @@ func TestTheTriggerKindsAreTheEngineOwn(t *testing.T) {
 // the wire, and a generated column for the uniqueness rule. They have to agree exactly, or
 // each is right about its own key while the pair let a container start twice.
 func TestTheIdempotencyKeyIsTheOneOnTheWire(t *testing.T) {
-	sql := readMigration(t, "0001_state.sql")
-
 	for _, c := range []struct {
 		run     agk.RunID
 		step    agk.Step
@@ -160,15 +158,31 @@ func TestTheIdempotencyKeyIsTheOneOnTheWire(t *testing.T) {
 	}
 
 	// The column concatenates the same four columns in the same order, cardinality
-	// included. Read from the file rather than from a live database, so the disagreement is
-	// caught on a laptop with nothing installed.
-	for _, want := range []string{
-		`run_id || '/' || step || '/' || attempt`,
-		`'/' || shard_index || '/' || shard_of`,
-	} {
-		if !strings.Contains(sql, want) {
-			t.Errorf("the generated key does not build %s, so the key in the database is not the key on the wire", want)
+	// included. Read from the files rather than from a live database, so the disagreement is
+	// caught on a laptop with nothing installed; and from every file that writes the column,
+	// since 0017 wrote it again to retype the step it reads, and the last one written is the
+	// one the database holds.
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := regexp.MustCompile(`(?s)idempotency_key\s+text generated always as \((.*?)\)\s*stored`)
+	var written int
+	for _, m := range all {
+		for _, expr := range generated.FindAllStringSubmatch(m.SQL, -1) {
+			written++
+			for _, want := range []string{
+				`run_id || '/' || step || '/' || attempt`,
+				`'/' || shard_index || '/' || shard_of`,
+			} {
+				if !strings.Contains(expr[1], want) {
+					t.Errorf("the generated key %s writes does not build %s, so the key in the database is not the key on the wire", m.Name, want)
+				}
+			}
 		}
+	}
+	if written == 0 {
+		t.Fatal("no migration writes the generated key, so the uniqueness rule is over nothing")
 	}
 }
 
