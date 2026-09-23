@@ -741,11 +741,18 @@ func TestAResultRecordsWhatOnlyTheRunnerKnows(t *testing.T) {
 	}
 
 	// And a result for an attempt that is over changes nothing, because a bus is allowed to
-	// deliver twice.
+	// deliver twice. Nothing is no decision written and nothing decided again, so nothing
+	// published either: the first delivery already handed out what it made runnable.
+	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
+		t.Fatalf("the result published %+v, want archive", got)
+	}
 	before := seqOf(t, conn)
 	core.answer(t, succeeded(t, taken[0], core.now()))
-	if after := seqOf(t, conn); after == before {
-		t.Log("the duplicate took no decision at all, which is also correct")
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("a result delivered twice took the run from seq %d to %d, and the second delivery is a duplicate rather than news", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("a result delivered twice published %+v again", got)
 	}
 	var tasks int
 	if err := conn.QueryRow(t.Context(),
