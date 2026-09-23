@@ -47,13 +47,13 @@ func filled(prefix, suffix string, limit int64, each func(i int) string) []byte 
 // named is the i-th of a run of distinct short names, quoted.
 func named(i int) string { return `"` + strconv.FormatInt(int64(i), 36) + `"` }
 
-// spent is what reading one body allocates: the least of three readings, so that whatever else
-// the process allocates meanwhile is not counted against it.
-func spent(body []byte, into func() request, limit int64) (uint64, error) {
+// spent is what reading the body of one request allocates: the least of three readings, so that
+// whatever else the process allocates meanwhile is not counted against it.
+func spent(ask func() *http.Request, into func() request, limit int64) (uint64, error) {
 	least := uint64(math.MaxUint64)
 	var err error
 	for range 3 {
-		r := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+		r := ask()
 		runtime.GC()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -64,16 +64,31 @@ func spent(body []byte, into func() request, limit int64) (uint64, error) {
 	return least, err
 }
 
+// declaring is a request carrying body that declares its length, as httptest's does and as most
+// clients' do, and chunked one that declares nothing, as a client sending in chunks does.
+func declaring(body []byte) func() *http.Request {
+	return func() *http.Request { return httptest.NewRequest("POST", "/", bytes.NewReader(body)) }
+}
+
+func chunked(body []byte) func() *http.Request {
+	return func() *http.Request {
+		r := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+		r.ContentLength = -1
+		return r
+	}
+}
+
 // Every route's body, shaped to cost as much as that route lets it, at its route's cap. A body of
 // many small values is the expensive one, since decoding pays for each value whatever it weighs
 // on the wire, so each collection a route reads is filled with the smallest entries it takes.
 //
 // Before is what encoding/json spent reading the same shape at the cap the route had then, 8 MiB
 // for every route but a push (16 MiB) and a secret's declaration (2 MiB); after is what this
-// reader spends at the route's cap now. Both were measured with go1.27.1 on darwin/arm64, without
-// the race detector, as bytes allocated. Nothing asserts either number, which move with the
-// toolchain and the platform. What is asserted is the ceiling: no body costs more than
-// costsAtMost times its route's cap to read.
+// reader spends at the route's cap now, the same whether the body declares its length or is sent
+// in chunks. Both were measured with go1.27.1 on darwin/arm64, without the race detector, as
+// bytes allocated. Nothing asserts either number, which move with the toolchain and the platform.
+// What is asserted is the ceiling, both ways: no body costs more than costsAtMost times its
+// route's cap to read.
 //
 // The object store's routes are not here: they read no JSON, the form before a file is held to
 // 64 KiB, and the file is hashed as it streams.
@@ -92,67 +107,69 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 		{"a push of empty tree entries", func() request { return new(Push) }, pushMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"tree":{`, `}}`, l, func(i int) string { return named(i) + `:{}` })
-			}, 16, 295.2, 17.201},
+			}, 16, 295.2, 22.533},
 		{"a push of tree entries written out", func() request { return new(Push) }, pushMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"tree":{`, `}}`, l, func(i int) string { return named(i) + `:{"content":"","mode":"0644"}` })
-			}, 16, 142.1, 17.461},
+			}, 16, 142.1, 22.793},
 		{"a push of empty includes", func() request { return new(Push) }, pushMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"includes":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
-			}, 16, 231.3, 16.758},
+			}, 16, 231.3, 22.090},
 		{"a push of empty manifests", func() request { return new(Push) }, pushMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"manifests":{`, `}}`, l, func(i int) string { return named(i) + `:""` })
-			}, 16, 231.2, 16.758},
+			}, 16, 231.2, 22.090},
 		{"a push of one file as large as the body", func() request { return new(Push) }, pushMaxBytes,
 			func(l int64) []byte {
 				return []byte(`{"tree":{"big.bin":{"mode":"0644","content":"` + strings.Repeat("A", int(l-60)/4*4) + `"}}}`)
-			}, 16, 44.0, 28.003},
+			}, 16, 44.0, 33.335},
 		{"inputs of zeros", func() request { return new(starting) }, startMaxBytes,
 			func(l int64) []byte { return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `0` }) },
-			8, 402.4, 4.002},
+			8, 402.4, 5.334},
 		{"inputs of empty objects", func() request { return new(starting) }, startMaxBytes,
 			func(l int64) []byte { return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `{}` }) },
-			8, 508.5, 4.002},
+			8, 508.5, 5.334},
 		{"inputs of objects of one member", func() request { return new(starting) }, startMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"inputs":{"a":[`, `]}}`, l, func(int) string { return `{"a":0}` })
 			},
-			8, 491.9, 4.002},
+			8, 491.9, 5.334},
 		{"inputs of one object of many members", func() request { return new(starting) }, startMaxBytes,
 			func(l int64) []byte {
 				return filled(`{"inputs":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
-			}, 8, 176.8, 4.002},
+			}, 8, 176.8, 5.334},
 		{"a pool of empty labels", func() request { return new(Pool) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
 		{"a pool of empty namespaces", func() request { return new(Pool) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"accepted_namespaces":[`, `]}`, l, empty) }, 8, 273.8, 0.122},
+			func(l int64) []byte { return filled(`{"accepted_namespaces":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
 		{"a join token of empty labels", func() request { return new(Issue) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
 		{"a join of empty labels, from anybody", func() request { return new(Join) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.121},
+			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
 		{"a heartbeat of empty keys", func() request { return new(Beat) }, beatMaxBytes,
-			func(l int64) []byte { return filled(`{"tasks":[`, `]}`, l, empty) }, 8, 273.8, 1.231},
+			func(l int64) []byte { return filled(`{"tasks":[`, `]}`, l, empty) }, 8, 273.8, 1.563},
 		{"a redemption of one long grant", func() request { return new(Redemption) }, smallMaxBytes,
-			func(l int64) []byte { return []byte(`{"grant":"` + strings.Repeat("A", int(l)-12) + `"}`) }, 8, 24.0, 0.126},
+			func(l int64) []byte { return []byte(`{"grant":"` + strings.Repeat("A", int(l)-12) + `"}`) }, 8, 24.0, 0.145},
 		{"a request for a bus credential naming one long field", func() request { return nothingAsked{} }, smallMaxBytes,
-			func(l int64) []byte { return []byte(`{"` + strings.Repeat("A", int(l)-7) + `":0}`) }, 8, 159.6, 0.127},
+			func(l int64) []byte { return []byte(`{"` + strings.Repeat("A", int(l)-7) + `":0}`) }, 8, 159.6, 0.146},
 		{"a declaration of one long value", func() request { return new(Declare) }, declareMaxBytes,
 			func(l int64) []byte {
 				return []byte(`{"provider":"builtin","value":"` + strings.Repeat("A", int(l)-33) + `"}`)
-			}, 2, 6.0, 4.001},
+			}, 2, 6.0, 4.667},
 	} {
 		body := c.body(c.limit)
 		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {
 			t.Fatalf("%s is %d bytes, and it is meant to fill its cap of %d", c.name, len(body), c.limit)
 		}
-		n, _ := spent(body, c.into, c.limit)
-		cost := float64(n) / float64(c.limit)
-		t.Logf("%s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; encoding/json spent %.1f MiB at %v MiB (x%.1f)",
-			c.name, float64(n)/mib, float64(c.limit)/mib, cost, c.after, c.before, c.was, c.before/c.was)
-		if cost > costsAtMost {
-			t.Errorf("%s costs %.1f MiB to read, %.1f times its cap of %.3f MiB", c.name, float64(n)/mib, cost, float64(c.limit)/mib)
+		for how, ask := range map[string]func() *http.Request{"declaring its length": declaring(body), "in chunks": chunked(body)} {
+			n, _ := spent(ask, c.into, c.limit)
+			cost := float64(n) / float64(c.limit)
+			t.Logf("%s, %s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; encoding/json spent %.1f MiB at %v MiB (x%.1f)",
+				c.name, how, float64(n)/mib, float64(c.limit)/mib, cost, c.after, c.before, c.was, c.before/c.was)
+			if cost > costsAtMost {
+				t.Errorf("%s, %s, costs %.1f MiB to read, %.1f times its cap of %.3f MiB", c.name, how, float64(n)/mib, cost, float64(c.limit)/mib)
+			}
 		}
 	}
 }
@@ -385,12 +402,50 @@ func TestABodyPastItsCapIsTooLarge(t *testing.T) {
 		}
 	}
 
+	// One in chunks exactly as long as the cap is read, and one a byte longer is not, which is
+	// told by reading one byte past the cap rather than by a buffer a byte larger than it.
+	for extra, want := range map[int]int{0: 0, 1: http.StatusRequestEntityTooLarge} {
+		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"token":"`+strings.Repeat("x", smallMaxBytes-12+extra)+`"}`))
+		r.ContentLength = -1
+		got := 0
+		if err := readAtMost(r, new(Join), smallMaxBytes); err != nil {
+			got = statusOf(err)
+		}
+		if got != want {
+			t.Errorf("a body in chunks %d bytes past the cap is answered %d, want %d", extra, got, want)
+		}
+	}
+
 	// And one in chunks within the cap is read like any other.
 	within := httptest.NewRequest("POST", "/", strings.NewReader(`{"token":"agkjoin_x"}`))
 	within.ContentLength = -1
 	var j Join
 	if err := readAtMost(within, &j, smallMaxBytes); err != nil || j.Token != "agkjoin_x" {
 		t.Errorf("a body in chunks within the cap reads as %+v: %v", j, err)
+	}
+}
+
+// A body is held as it arrives rather than as it declares, since a length is only what its caller
+// says: one declaring the most a push may be and sending none of it holds a few kibibytes, and one
+// cut short a few times what it sent. Before, the declaration alone held 16 MiB until the caller
+// hung up, so that a few hundred bytes of headers on each of 64 connections held a gibibyte.
+func TestABodyIsHeldAsItArrivesRatherThanAsItDeclares(t *testing.T) {
+	// Nothing, a little, and two sizes a buffer fills exactly, which is when one four times
+	// larger is made.
+	for _, sent := range []int{0, 100, 64 << 10, 1 << 20} {
+		n, err := spent(func() *http.Request {
+			r := httptest.NewRequest("PUT", "/", bytes.NewReader(bytes.Repeat([]byte(" "), sent)))
+			r.ContentLength = pushMaxBytes
+			return r
+		}, func() request { return new(Push) }, pushMaxBytes)
+		if err == nil || !strings.Contains(err.Error(), "ends before") {
+			t.Errorf("a push declaring %d bytes and sending %d is refused with %v", pushMaxBytes, sent, err)
+		}
+		// The buffer it holds is at most slurpGrowth times what arrived, and those it grew
+		// through a third of that again.
+		if most := uint64(2*slurpFirstBytes + sent*slurpGrowth*slurpGrowth/(slurpGrowth-1)); n > most {
+			t.Errorf("a push declaring %d bytes and sending %d allocates %d bytes to read, more than %d", pushMaxBytes, sent, n, most)
+		}
 	}
 }
 

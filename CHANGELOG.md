@@ -104,10 +104,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Every `env` prefix begins with `AGK_DEV_`, under which the API reads nothing for itself, so no namespace reaches the API's own variables.
 - A secret's name is at most 255 characters, since a step is given its value in a file named after it, and a path at most 1 KiB.
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
-- A request body is read a token at a time, into what its route keeps, and every collection is counted as it is read. Reading one costs at most about twice its route's cap, where a 16 MiB push of empty tree entries cost 295 MiB and 8 MiB of inputs written `[{},{},...]` 508 MiB.
+- A request body is read a token at a time, into what its route keeps, and every collection is counted as it is read. Reading one costs at most two and a half times its route's cap, where a 16 MiB push of empty tree entries cost 295 MiB and 8 MiB of inputs written `[{},{},...]` 508 MiB.
 - Each route has a cap of its own: 64 KiB for a pool, a join token, a join, a redemption and a bus credential, 1 MiB for a heartbeat, and 4 MiB, one envelope, for starting a run. A body past its cap, or a list past its count, is refused with 413: 1,024 labels or namespaces, 4,096 keys in a heartbeat, 4,096 includes or manifests in a push.
 - A run's inputs are counted, at most 100,000 values, and written down as they were sent rather than decoded. A number no 64-bit float holds is refused.
 - A field, a tree file, an include or a manifest written twice is refused, and so are a field named in another case and text that is not UTF-8.
+- A body is held as it arrives, not as it declares: a push declared and never sent holds 4 KiB rather than 16 MiB. A body sent in chunks costs what one declaring its length does, where it cost up to five times its cap.
 
 ### Secrets
 

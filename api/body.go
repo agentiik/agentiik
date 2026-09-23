@@ -131,6 +131,19 @@ func readAtMost(r *http.Request, into request, limit int64) error {
 	return nil
 }
 
+// slurpFirstBytes is the most a body is given to arrive into before any of it has: the size of
+// the buffer net/http already reads each connection through, so that a caller who sends headers
+// and nothing after them holds no more than the connection already does.
+const slurpFirstBytes = 4 << 10
+
+// slurpGrowth is how many times larger each buffer a body grows into is than the one it has
+// filled, which bounds what it holds at that many times what has arrived.
+//
+// Four, because what the buffers cost in all is the body and a third of it again, where doubling
+// would cost the body twice over: the one large file of a push is read, and decoded once, for a
+// little over twice the push, and doubling would make that nearly three times.
+const slurpGrowth = 4
+
 // slurp reads a body whole, and refuses one longer than limit.
 //
 // Whole, and before any of it is decoded, because a decoder reading from the connection holds the
@@ -139,11 +152,12 @@ func readAtMost(r *http.Request, into request, limit int64) error {
 // was decoded. Read whole, the decoder reads the body where it lies, and a string is copied once,
 // into whatever keeps it.
 //
-// A body declaring its length is read into one allocation of exactly that length, and one
-// declaring more than the limit is refused before a byte of it is read. The allocation is made
-// before the bytes arrive, so a caller who declares a length and sends nothing holds it until the
-// server's read timeout: that is at most the route's limit, which is what the route allows
-// anyway. A body sent in chunks, which declares nothing, grows as it arrives, up to the limit.
+// A body declaring more than the limit is refused before a byte of it is read. Every other body is
+// held as it arrives rather than as it declares: a length is only what its caller says, and one
+// allocated before its bytes came let a caller who declared a push and sent nothing hold 16 MiB
+// for a few hundred bytes of headers, until it hung up. So a body starts in at most
+// slurpFirstBytes and grows slurpGrowth times at each buffer it fills, through sizes chosen so
+// that the last is exactly the length it declares, or the limit where it declares none.
 func slurp(r *http.Request, limit int64) ([]byte, error) {
 	larger := func() error {
 		return &tooLarge{
@@ -154,22 +168,61 @@ func slurp(r *http.Request, limit int64) ([]byte, error) {
 	if r.ContentLength > limit {
 		return nil, larger()
 	}
-	in := http.MaxBytesReader(nil, r.Body, limit)
+	// Why a body could not be read whole: it went past the limit, which only one that declared
+	// no length can, or it was cut short.
+	unread := func(err error) error {
+		switch {
+		case err == nil || errors.As(err, new(*http.MaxBytesError)):
+			return larger()
+		case r.ContentLength >= 0:
+			return fmt.Errorf("the request body ends before the %d bytes it declares", r.ContentLength)
+		}
+		return fmt.Errorf("the request body could not be read: %w", err)
+	}
+
+	most := limit
 	if r.ContentLength >= 0 {
-		raw := make([]byte, r.ContentLength)
-		if _, err := io.ReadFull(in, raw); err != nil {
-			return nil, fmt.Errorf("the request body ends before the %d bytes it declares", r.ContentLength)
-		}
-		return raw, nil
+		most = r.ContentLength
 	}
-	var raw bytes.Buffer
-	if _, err := raw.ReadFrom(in); err != nil {
-		if errors.As(err, new(*http.MaxBytesError)) {
-			return nil, larger()
-		}
-		return nil, fmt.Errorf("the request body could not be read: %w", err)
+	// most divided by slurpGrowth as often as it takes to fit slurpFirstBytes, rounded up, so
+	// that multiplying it back reaches most in as many steps and no buffer is larger than it
+	// needs to be.
+	first := most
+	for first > slurpFirstBytes {
+		first = (first + slurpGrowth - 1) / slurpGrowth
 	}
-	return raw.Bytes(), nil
+
+	in := http.MaxBytesReader(nil, r.Body, limit)
+	raw := make([]byte, 0, first)
+	for {
+		if len(raw) == cap(raw) {
+			if int64(len(raw)) == most {
+				break
+			}
+			raw = append(make([]byte, 0, min(most, int64(cap(raw))*slurpGrowth)), raw...)
+		}
+		n, err := in.Read(raw[len(raw):cap(raw)])
+		raw = raw[:len(raw)+n]
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, unread(err)
+		}
+	}
+	if r.ContentLength < 0 && int64(len(raw)) == limit {
+		// Read to the limit with no end yet: one byte further tells a body of exactly the limit
+		// from a longer one, whose byte past it MaxBytesReader answers with its error, without a
+		// buffer one byte larger than the limit, which would round up to the allocator's next
+		// size.
+		if _, err := io.ReadFull(in, make([]byte, 1)); err != io.EOF {
+			return nil, unread(err)
+		}
+	}
+	if int64(len(raw)) < r.ContentLength {
+		return nil, unread(io.ErrUnexpectedEOF)
+	}
+	return raw, nil
 }
 
 // object reads an object one member at a time, and refuses the member after the most-th with
