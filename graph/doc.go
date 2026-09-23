@@ -108,7 +108,7 @@
 //
 // # Where the documentation is silent
 //
-// Twelve readings are taken here, each recorded beside the rule that applies it rather
+// Thirteen readings are taken here, each recorded beside the rule that applies it rather
 // than only in this list, because otherwise whoever writes the driver, or the next reader
 // of a workflow file, settles them again and differently.
 //
@@ -133,6 +133,10 @@
 //
 // Whether max_parallel counts a retry attempt, and whether it is read per step or per
 // step per attempt.
+//
+// Whether a requeue after a loss waits out the backoff. It does not: a backoff spaces
+// attempts so that a dependency which is briefly unwell is not hammered, and a requeue is
+// the same attempt handed out again because a host went quiet.
 //
 // Which position a step's inputs keyword is read in. It feeds a port, and a port is fed
 // before the step is divided into shards, so it reads what a step reads and not what a
