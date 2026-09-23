@@ -741,7 +741,7 @@ func TestAResultRecordsWhatOnlyTheRunnerKnows(t *testing.T) {
 	}
 
 	// And a result for an attempt that is over changes nothing, because a bus is allowed to
-	// deliver twice. Nothing is no decision written and nothing decided again, so nothing
+	// deliver twice. No decision is written and the run is not decided again, so nothing is
 	// published either: the first delivery already handed out what it made runnable.
 	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
 		t.Fatalf("the result published %+v, want archive", got)
