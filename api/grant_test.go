@@ -435,7 +435,10 @@ func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 // that are not UTF-8: a keystore sent as one would arrive as a different file. So a value that is
 // not text travels as base64 and says so, and one that is travels as itself.
 func TestASecretThatIsNotTextTravelsAsBase64(t *testing.T) {
-	keystore := []byte{0xff, 0xfe, 0x00}
+	// Four bytes, which do not fill whole groups of three, so that the value is padded: a
+	// runner decoding with the standard alphabet refuses one that is not, and the task would
+	// stop with its secret unmounted.
+	keystore := []byte{0xff, 0xfe, 0x00, 0x01}
 	const pem = "-----BEGIN PRIVATE KEY-----\nbm90IGEga2V5\n-----END PRIVATE KEY-----\n"
 	g := withGrants(t, held{"finance/keystore": string(keystore), "finance/tls-key": pem})
 	credential := g.joined(t)
@@ -448,8 +451,8 @@ func TestASecretThatIsNotTextTravelsAsBase64(t *testing.T) {
 	}
 
 	binary := secrets["keystore"]
-	if binary.Encoding != "base64" {
-		t.Errorf("a value that is not text travels as %q", binary.Encoding)
+	if binary.Encoding != "base64" || binary.Value != "//4AAQ==" {
+		t.Errorf("a value that is not text travels as %q %q", binary.Encoding, binary.Value)
 	}
 	if decoded, err := base64.StdEncoding.DecodeString(binary.Value); err != nil || !bytes.Equal(decoded, keystore) {
 		t.Errorf("a value that is not text decodes to %x (%v), and the store holds %x", decoded, err, keystore)
