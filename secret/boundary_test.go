@@ -57,7 +57,7 @@ var mayRead = map[string]bool{
 
 // TestOnlyTheAPIReadsASecret reads the module and names every package that reaches the store.
 func TestOnlyTheAPIReadsASecret(t *testing.T) {
-	imports, read, err := importsOf("..")
+	tr, err := readTree("..")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,19 +65,23 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 	// A walk that read nothing would pass this test by looking at no code at all, and one that
 	// skipped a directory would pass it by not looking there, which is how the root went unread
 	// in the first version of this test.
-	if read < 150 {
-		t.Fatalf("read the imports of %d files, and the module holds more than that", read)
+	if tr.files < 150 {
+		t.Fatalf("read the imports of %d files, and the module holds more than that", tr.files)
 	}
-	if len(imports) < 20 {
-		t.Fatalf("found %d packages, and the module holds more than that", len(imports))
+	if len(tr.packages) < 20 {
+		t.Fatalf("found %d packages, and the module holds more than that", len(tr.packages))
 	}
 	for _, pkg := range []string{".", "api", "secret", "controller", "cmd/agk"} {
-		if _, ok := imports[pkg]; !ok {
+		if !slices.Contains(tr.packages, pkg) {
 			t.Fatalf("the walk did not find %s, so it is not reading the module it is meant to", named(pkg))
 		}
 	}
 
-	for _, through := range reaching(imports) {
+	found, err := tr.reaching()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, through := range found {
 		t.Errorf("%s: the API is the only component that reads a secret value", chain(through))
 	}
 }
@@ -89,25 +93,38 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 // controller's closure held the store: a package under api importing the store, the controller
 // importing that package, and a file at the root importing the store. Each of those is named now,
 // as is a package reaching the root and one reaching a provider written beside the built-in store.
-// Neither the API nor the store's own packages are, and neither is a package whose only way to the
-// store is a test file or a testdata directory.
+// So is a package reaching the store through each kind of directory ./... leaves out: a testdata
+// directory, one whose name starts with a dot or an underscore, and one a symbolic link names. The
+// go command builds an import of any of those like any other, so a package that links the store
+// through one links it all the same.
+//
+// Neither the API nor the store's own packages are named, and neither is a package whose only way
+// to the store is a test file, nor one in a testdata directory that nothing imports.
 func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 	root := t.TempDir()
 	for path, imports := range map[string][]string{
-		"doc.go":                 {"secret"},
-		"agk/agk.go":             {"internal/ulid"},
-		"api/api.go":             {"agk", "db", "secret"},
-		"api/store/store.go":     {"secret"},
-		"bus/bus.go":             {"."},
-		"controller/core.go":     {"agk", "api/store", "db"},
-		"db/db.go":               {"agk"},
-		"driver/driver.go":       {"agk", "secret/vault"},
-		"graph/graph.go":         {"agk"},
-		"graph/graph_test.go":    {"secret"},
-		"graph/testdata/leak.go": {"secret"},
-		"internal/ulid/ulid.go":  nil,
-		"secret/seal.go":         {"internal/ulid"},
-		"secret/vault/vault.go":  {"secret"},
+		"doc.go":                       {"secret"},
+		".leak/leak.go":                {"secret"},
+		"_leak/leak.go":                {"secret"},
+		"_linked/linked.go":            {"secret"},
+		"agk/agk.go":                   {"internal/ulid"},
+		"api/api.go":                   {"agk", "db", "secret"},
+		"api/store/store.go":           {"secret"},
+		"artifact/artifact.go":         {"agk", "artifact/linked"},
+		"brick/brick.go":               {"agk", ".leak"},
+		"bus/bus.go":                   {"."},
+		"controller/core.go":           {"agk", "api/store", "db"},
+		"db/db.go":                     {"agk"},
+		"driver/driver.go":             {"agk", "secret/vault"},
+		"graph/graph.go":               {"agk"},
+		"graph/graph_test.go":          {"secret"},
+		"graph/testdata/leak.go":       {"secret"},
+		"internal/ulid/ulid.go":        nil,
+		"runner/runner.go":             {"agk", "runner/testdata/leak"},
+		"runner/testdata/leak/leak.go": {"secret"},
+		"schema/schema.go":             {"agk", "_leak"},
+		"secret/seal.go":               {"internal/ulid"},
+		"secret/vault/vault.go":        {"secret"},
 	} {
 		// Every file imports the standard library as well, which the walk has to step over.
 		var src strings.Builder
@@ -128,13 +145,16 @@ func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Symlink(filepath.Join("..", "_linked"), filepath.Join(root, "artifact", "linked")); err != nil {
+		t.Fatal(err)
+	}
 
-	imports, _, err := importsOf(root)
+	tr, err := readTree(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, pkg := range []string{".", "api", "graph", "secret", "secret/vault"} {
-		if _, ok := imports[pkg]; !ok {
+		if !slices.Contains(tr.packages, pkg) {
 			t.Fatalf("the walk did not find %s, so what it does not name below says nothing", named(pkg))
 		}
 	}
@@ -142,15 +162,23 @@ func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 	want := map[string][]string{
 		".":          {".", "secret"},
 		"api/store":  {"api/store", "secret"},
+		"artifact":   {"artifact", "artifact/linked", "secret"},
+		"brick":      {"brick", ".leak", "secret"},
 		"bus":        {"bus", ".", "secret"},
 		"controller": {"controller", "api/store", "secret"},
 		"driver":     {"driver", "secret/vault"},
+		"runner":     {"runner", "runner/testdata/leak", "secret"},
+		"schema":     {"schema", "_leak", "secret"},
+	}
+	found, err := tr.reaching()
+	if err != nil {
+		t.Fatal(err)
 	}
 	got := map[string][]string{}
-	for _, through := range reaching(imports) {
+	for _, through := range found {
 		got[through[0]] = through
 		if _, ok := want[through[0]]; !ok {
-			t.Errorf("the check says %s, and %s is the API, the store, or a package whose closure holds neither", chain(through), named(through[0]))
+			t.Errorf("the check says %s, and %s is the API, the store, a package whose closure holds neither, or one the check does not start from", chain(through), named(through[0]))
 		}
 	}
 	for pkg, through := range want {
@@ -160,18 +188,34 @@ func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 	}
 }
 
-// importsOf reads the imports of every non-test file of the module rooted at root, and answers
-// them by package: each keyed by its path inside the module, with "." for the root, and holding
-// the packages of the module it imports. It also answers how many files it read.
-func importsOf(root string) (map[string][]string, int, error) {
-	imports := map[string][]string{}
-	read := 0
+// A tree is a module on disk, read a package at a time.
+type tree struct {
+	root string
+
+	// packages is where the check starts: every package ./... matches, by its path inside the
+	// module, with "." for the root.
+	packages []string
+
+	// imports is every package read so far, keyed as packages is, holding the packages of the
+	// module its non-test files import.
+	imports map[string][]string
+
+	// files is how many files have been read.
+	files int
+}
+
+// readTree finds the packages of the module rooted at root, and reads the imports of each.
+func readTree(root string) (*tree, error) {
+	tr := &tree{root: root, imports: map[string][]string{}}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
 			return err
 		case entry.IsDir():
-			// What the go command ignores, this ignores as well.
+			// What ./... leaves out, this leaves out as well, and only here, where the check
+			// starts. The go command still builds an import of a package in one of these like
+			// any other, and the walk follows it there through importsOf, which also reads a
+			// directory a symbolic link names where WalkDir would not go.
 			name := entry.Name()
 			if path != root && (name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
 				return filepath.SkipDir
@@ -185,61 +229,93 @@ func importsOf(root string) (map[string][]string, int, error) {
 		if err != nil {
 			return err
 		}
-		pkg := filepath.ToSlash(dir)
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
-		if err != nil {
-			return err
-		}
-		read++
-		if _, ok := imports[pkg]; !ok {
-			imports[pkg] = nil
-		}
-		for _, spec := range file.Imports {
-			imported, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				return err
-			}
-			if inside, ok := insideTheModule(imported); ok && !slices.Contains(imports[pkg], inside) {
-				imports[pkg] = append(imports[pkg], inside)
-			}
+		if pkg := filepath.ToSlash(dir); !slices.Contains(tr.packages, pkg) {
+			tr.packages = append(tr.packages, pkg)
 		}
 		return nil
 	})
-	for pkg := range imports {
-		slices.Sort(imports[pkg])
+	if err != nil {
+		return nil, err
 	}
-	return imports, read, err
+	slices.Sort(tr.packages)
+	for _, pkg := range tr.packages {
+		if _, err := tr.importsOf(pkg); err != nil {
+			return nil, err
+		}
+	}
+	return tr, nil
+}
+
+// importsOf answers the packages of the module that the non-test files of pkg import, reading
+// its directory the first time it is asked.
+func (tr *tree) importsOf(pkg string) ([]string, error) {
+	if imports, ok := tr.imports[pkg]; ok {
+		return imports, nil
+	}
+
+	dir := filepath.Join(tr.root, filepath.FromSlash(pkg))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var imports []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.ImportsOnly)
+		if err != nil {
+			return nil, err
+		}
+		tr.files++
+		for _, spec := range file.Imports {
+			imported, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return nil, err
+			}
+			if inside, ok := insideTheModule(imported); ok && !slices.Contains(imports, inside) {
+				imports = append(imports, inside)
+			}
+		}
+	}
+	slices.Sort(imports)
+	tr.imports[pkg] = imports
+	return imports, nil
 }
 
 // reaching answers, for every package held to the boundary whose closure holds the store, the
 // shortest line of imports that takes it there: the package first and the store last.
-func reaching(imports map[string][]string) [][]string {
-	var held []string
-	for pkg := range imports {
-		if !mayRead[pkg] && !isTheStore(pkg) {
-			held = append(held, pkg)
-		}
-	}
-	slices.Sort(held)
-
+func (tr *tree) reaching() ([][]string, error) {
 	var found [][]string
-	for _, pkg := range held {
-		if through := towardsTheStore(imports, pkg); through != nil {
+	for _, pkg := range tr.packages {
+		if mayRead[pkg] || isTheStore(pkg) {
+			continue
+		}
+		through, err := tr.towardsTheStore(pkg)
+		if err != nil {
+			return nil, err
+		}
+		if through != nil {
 			found = append(found, through)
 		}
 	}
-	return found
+	return found, nil
 }
 
 // towardsTheStore walks the closure of from breadth first, so that the line it answers is the
 // shortest one, and answers nothing when the closure does not hold the store.
-func towardsTheStore(imports map[string][]string, from string) []string {
+func (tr *tree) towardsTheStore(from string) ([]string, error) {
 	cameFrom := map[string]string{from: ""}
 	queue := []string{from}
 	for len(queue) > 0 {
 		pkg := queue[0]
 		queue = queue[1:]
-		for _, next := range imports[pkg] {
+		imports, err := tr.importsOf(pkg)
+		if err != nil {
+			return nil, err
+		}
+		for _, next := range imports {
 			if _, seen := cameFrom[next]; seen {
 				continue
 			}
@@ -250,12 +326,12 @@ func towardsTheStore(imports map[string][]string, from string) []string {
 					through = append(through, at)
 				}
 				slices.Reverse(through)
-				return through
+				return through, nil
 			}
 			queue = append(queue, next)
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func isTheStore(pkg string) bool {
