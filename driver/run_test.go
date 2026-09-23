@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -435,7 +436,8 @@ func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 	}
 }
 
-// A container that is still running is waited on and never started: a start that reached
+// A container that is still running is waited on, and no start is sent to it at all. A
+// daemon answers a start on a running container 304 and does nothing, but one that reached
 // it a moment after it exited would run the brick a second time.
 func TestARunningContainerIsWaitedOnNotStartedAgain(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
@@ -499,6 +501,68 @@ func TestARunningContainerIsWaitedOnNotStartedAgain(t *testing.T) {
 	defer mu.Unlock()
 	if starts != 0 {
 		t.Errorf("the adopted container was started %d times while it was running", starts)
+	}
+}
+
+// A container the inspect found running can exit before the wait on it is opened. The wait
+// is opened with condition=not-running, which answers with the exit that happened; a wait
+// for the next exit would wait for one that only a start brings, and the redelivery would
+// hang, or be stopped at its deadline and reported timed_out for work that had finished.
+func TestAContainerThatExitsBetweenTheInspectAndTheWaitIsCollected(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var mu sync.Mutex
+	ran := 0
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		mu.Lock()
+		ran++
+		mu.Unlock()
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"from": "the first delivery"}))
+	})
+
+	task := oneTask(ref)
+	container, _ := exitedFirstDelivery(t, r, task)
+
+	// The inspect the redelivery reads first finds the container running, as it was a
+	// moment before it exited, and every inspect after it reads the daemon as it is.
+	now, err := r.cli.ContainerInspect(t.Context(), container)
+	if err != nil {
+		t.Fatalf("inspecting the first delivery's container: %s", err)
+	}
+	before := now
+	before.State.Status, before.State.Running = "running", true
+	before.State.ExitCode, before.State.FinishedAt = 0, time.Time{}
+	inspected := 0
+	r.daemon.Handle("GET", "/containers/{id}/json", func(w http.ResponseWriter, req *http.Request) {
+		if !strings.HasPrefix(req.URL.Path, "/containers/"+container) {
+			http.Error(w, `{"message":"No such container"}`, http.StatusNotFound)
+			return
+		}
+		mu.Lock()
+		inspected++
+		answer := now
+		if inspected == 1 {
+			answer = before
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(answer)
+	})
+
+	// Bounded, because a wait for an exit that has already happened never answers.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result, err := r.Run(ctx, task)
+	if err != nil {
+		t.Fatalf("the redelivery: %s", err)
+	}
+	if out := result.Outputs["out"]; result.State != agk.TaskSucceeded || result.ExitCode != 0 || len(out.Items) != 1 || out.Items[0].Data["from"] != "the first delivery" {
+		t.Errorf("the redelivery reports %s with code %d and %+v, and the container exited 0 having written one item", result.State, result.ExitCode, out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if ran != 1 {
+		t.Errorf("the brick ran %d times, and the container was over before the redelivery reached it", ran)
 	}
 }
 
