@@ -26,6 +26,12 @@ import (
 type Answer struct {
 	Result graph.Result
 
+	// Row is the task_id of the dispatch the answer is about, carried back unchanged from the
+	// task message. A requeue after loss keeps the idempotency key and takes a new task_id, so
+	// the key in Result says which unit of work this is and only the row says which dispatch
+	// of it.
+	Row string
+
 	// Runner is the name of the host that held it. "A user never learns which host executed
 	// a task beyond its runner name and labels."
 	Runner string
@@ -154,11 +160,12 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 //
 // It is written where the heartbeat writes its own and heard the way those are, on the pass that
 // follows, rather than recorded here. A loss is about one dispatch, and a requeue keeps the key,
-// so the key alone cannot say which dispatch a runner means: the dispatch bound to that runner at
-// redemption can. The same loss delivered twice then finds that dispatch already lost, moves
-// nothing, and decides nothing, where recording it would requeue the key a second time. A runner
-// that holds no dispatch of the key at all is speaking for somebody else's task, and that answer
-// is the same on every delivery.
+// so the key alone cannot say which dispatch a runner means, and neither can the key and the
+// runner together, since the runner that lost a dispatch may be the one holding its requeue. The
+// row can. The same loss delivered twice, or delivered late, then finds its dispatch already
+// lost, moves nothing, and decides nothing, where recording it would requeue the key a second
+// time. A loss naming a dispatch that was never bound to its runner is speaking for somebody
+// else's task, and that answer is the same on every delivery.
 func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
 	moved := false
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
@@ -166,7 +173,7 @@ func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
 		if err != nil || e.State.Terminal() {
 			return err
 		}
-		moved, err = w.Lose(ctx, e.Namespace, a.Result.Task, a.Runner, co.now().UTC())
+		moved, err = w.Lose(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner, co.now().UTC())
 		return err
 	})
 	if errors.Is(err, db.ErrNotHeld) {

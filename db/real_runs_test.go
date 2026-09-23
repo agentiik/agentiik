@@ -281,13 +281,16 @@ func TestARequeueIsARowOfItsOwnUnderTheSameKey(t *testing.T) {
 	// Only the runner holding the dispatch can say it lost it, and saying so twice moves
 	// nothing the second time.
 	wide(func(ctx context.Context, w *Wide) error {
-		if _, err := w.Lose(ctx, "finance", key, "runner-2", now); !errors.Is(err, ErrNotHeld) {
+		if _, err := w.Lose(ctx, "finance", key, first, "runner-2", now); !errors.Is(err, ErrNotHeld) {
 			t.Errorf("a runner that never held the task declared it lost, answering %v", err)
 		}
-		if moved, err := w.Lose(ctx, "finance", key, "runner-1", now); err != nil || !moved {
+		if _, err := w.Lose(ctx, "finance", key, "not-a-row", "runner-1", now); !errors.Is(err, ErrNotHeld) {
+			t.Errorf("a loss naming no dispatch of the key answered %v", err)
+		}
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || !moved {
 			t.Errorf("the runner holding the task could not declare it lost: moved %v, %v", moved, err)
 		}
-		if moved, err := w.Lose(ctx, "finance", key, "runner-1", now); err != nil || moved {
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || moved {
 			t.Errorf("a loss declared twice moved %v the second time, answering %v", moved, err)
 		}
 		return nil
@@ -346,6 +349,26 @@ func TestARequeueIsARowOfItsOwnUnderTheSameKey(t *testing.T) {
 	want := []string{first + " 0 lost runner-1", second + " 1 pending -"}
 	if len(rows) != 2 || rows[0] != want[0] || rows[1] != want[1] {
 		t.Errorf("the key holds %q, want %q", rows, want)
+	}
+
+	// The runner that lost the first dispatch takes the requeue, and its loss of the first
+	// comes round again. It names the first, which is lost already, and the requeue that
+	// runner now holds is left as it is.
+	decide(time.Time{}, TaskRow{State: agk.TaskDispatched, Runner: "runner-1", Requeue: 1, DispatchedAt: now})
+	wide(func(ctx context.Context, w *Wide) error {
+		if moved, err := w.Lose(ctx, "finance", key, first, "runner-1", now); err != nil || moved {
+			t.Errorf("a loss of the first dispatch moved %v once the same runner held the requeue, answering %v", moved, err)
+		}
+		return nil
+	})
+	var requeue string
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.tx.QueryRow(ctx, `select state::text from tasks where id = $1`, second).Scan(&requeue)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if requeue != "dispatched" {
+		t.Errorf("the requeue reads %s after a loss of the dispatch before it", requeue)
 	}
 }
 

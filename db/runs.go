@@ -491,53 +491,66 @@ func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]L
 	return out, rows.Err()
 }
 
-// ErrNotHeld is a runner speaking for a task it never held.
-var ErrNotHeld = errors.New("db: that runner holds no dispatch of that task")
+// ErrNotHeld is a runner speaking for a dispatch that was never bound to it.
+var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 
-// Lose moves to lost the dispatch of one key a runner holds, on that runner's own word, and
-// answers whether anything moved.
+// Lose moves to lost the one dispatch a loss names, where it is bound to the runner reporting it
+// and still in flight, and answers whether anything moved.
 //
 // "lost is declared by the controller rather than reported here, and travels on a result only
 // where a runner recovers one it had already lost." Such a result is written where the heartbeat
-// writes its own losses, so that the evaluator hears of both the same way and a loss delivered
-// twice moves nothing the second time. It reaches only the dispatch bound to that runner at
-// redemption, for the reason a heartbeat keeps alive only a runner's own tasks: a runner able to
-// declare somebody else's task lost could send work round the fleet that is running perfectly
-// well. A runner that holds no dispatch of the key at all is answered ErrNotHeld.
-func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, runner string, at time.Time) (bool, error) {
-	if runner == "" {
-		return false, fmt.Errorf("%w: a loss declared by no runner", ErrNotHeld)
+// writes its own losses, so that the evaluator hears of both the same way.
+//
+// The dispatch is named by its task_id rather than found by its key. A requeue keeps the key, and
+// one runner may hold two dispatches of a key over time: the one it lost, and the requeue it took
+// afterwards. Found by the key and the runner, a loss it reported about the first, late or
+// delivered again, would land on the second and requeue a task that is running perfectly well.
+// Named, it finds the first already lost and moves nothing, which is also what makes a loss
+// delivered twice requeue once.
+//
+// It reaches only a dispatch bound to that runner at redemption, for the reason a heartbeat keeps
+// alive only a runner's own tasks: a runner able to declare somebody else's task lost could send
+// work round the fleet that is running perfectly well. A dispatch of the key bound to another
+// runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld.
+func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, runner string, at time.Time) (bool, error) {
+	switch {
+	case runner == "":
+		return false, fmt.Errorf("%w: a loss of %s declared by no runner", ErrNotHeld, key)
+	case row == "":
+		return false, fmt.Errorf("%w: a loss of %s that names no dispatch of it", ErrNotHeld, key)
 	}
-	tag, err := w.tx.Exec(ctx,
-		`update tasks set state = 'lost', finished_at = $4
-		 where namespace = $1 and idempotency_key = $2 and runner = $3
-		   and state in ('dispatched', 'running', 'publishing')`,
-		namespace, string(key), runner, at)
-	if err != nil {
-		return false, fmt.Errorf("db: task %s could not be declared lost: %w", key, err)
-	}
-	if tag.RowsAffected() > 0 {
+	// The row is compared as text, because a runner wrote it and the column's domain would
+	// refuse a value that is not a ULID with an error rather than find nothing.
+	var run string
+	err := w.tx.QueryRow(ctx,
+		`update tasks set state = 'lost', finished_at = $5
+		 where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4
+		   and state in ('dispatched', 'running', 'publishing')
+		 returning run_id`,
+		namespace, row, string(key), runner, at).Scan(&run)
+	switch {
+	case err == nil:
 		// And the run is left for the next sweep, as Pool.Lost leaves it, so that the loss
 		// is heard even where whoever wrote it goes no further.
 		if _, err := w.tx.Exec(ctx,
 			`update runs set wake_at = null
-			 where namespace = $1 and id = (select run_id from tasks
-			                                where namespace = $1 and idempotency_key = $2
-			                                limit 1)
-			   and state in ('queued', 'running', 'waiting')`,
-			namespace, string(key)); err != nil {
+			 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')`,
+			namespace, run); err != nil {
 			return false, fmt.Errorf("db: the run of task %s could not be woken for its loss: %w", key, err)
 		}
 		return true, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return false, fmt.Errorf("db: task %s could not be declared lost: %w", key, err)
 	}
 	var held bool
 	if err := w.tx.QueryRow(ctx,
-		`select exists (select 1 from tasks where namespace = $1 and idempotency_key = $2 and runner = $3)`,
-		namespace, string(key), runner).Scan(&held); err != nil {
+		`select exists (select 1 from tasks
+		                where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4)`,
+		namespace, row, string(key), runner).Scan(&held); err != nil {
 		return false, fmt.Errorf("db: task %s could not be read: %w", key, err)
 	}
 	if !held {
-		return false, fmt.Errorf("%w: %s holds no dispatch of %s", ErrNotHeld, runner, key)
+		return false, fmt.Errorf("%w: %s never held dispatch %s of %s", ErrNotHeld, runner, row, key)
 	}
 	return false, nil
 }

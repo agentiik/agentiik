@@ -139,8 +139,9 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 }
 
 // A runner that recovers a task it had lost says so on a result, and the bus may deliver that
-// result twice. The first is heard as the heartbeat's losses are, and the second finds the
-// dispatch already lost: one requeue, one decision.
+// result twice, the second time after the same runner has taken the requeue. The first is heard as
+// the heartbeat's losses are, and the second names the dispatch that is already lost: one requeue,
+// one decision, and the requeue left running.
 func TestALossReportedTwiceIsRequeuedOnce(t *testing.T) {
 	core, q, pool, super := decidingOn(t, requeueingWorkflow)
 	createRun(t, pool)
@@ -155,31 +156,101 @@ func TestALossReportedTwiceIsRequeuedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loss := graph.Result{Task: first[0].Task.ID, State: agk.TaskLost}
-	core.answer(t, loss)
-	again := q.taken()
-	if len(again) != 1 || again[0].ID != first[0].Task.ID {
-		t.Fatalf("the reported loss published %+v, want %s again", again, first[0].Task.ID)
+	loss := Answer{
+		Result: graph.Result{Task: first[0].Task.ID, State: agk.TaskLost},
+		Row:    first[0].Row, Runner: "runner-dmz-02",
+	}
+	if err := core.Answer(t.Context(), loss); err != nil {
+		t.Fatal(err)
+	}
+	again := q.dispatched()
+	if len(again) != 1 || again[0].Task.ID != first[0].Task.ID {
+		t.Fatalf("the reported loss dispatched %+v, want %s again", again, first[0].Task.ID)
+	}
+	if err := core.redeem(t, again[0], "runner-dmz-02"); err != nil {
+		t.Fatal(err)
 	}
 
 	conn := dbtest.Superuser(t, super)
 	before := seqOf(t, conn)
-	core.answer(t, loss)
+	if err := core.Answer(t.Context(), loss); err != nil {
+		t.Fatal(err)
+	}
 	if after := seqOf(t, conn); after != before {
 		t.Errorf("the loss delivered again took the run from seq %d to %d", before, after)
 	}
 	if got := q.taken(); len(got) != 0 {
 		t.Errorf("the loss delivered again published %+v", got)
 	}
-	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-dmz-02", "1 dispatched -"}; !slices.Equal(got, want) {
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-dmz-02", "1 dispatched runner-dmz-02"}; !slices.Equal(got, want) {
 		t.Errorf("the key holds %q, want %q", got, want)
 	}
 
 	// A runner speaking for a dispatch it never held is refused, the same way on every
-	// delivery.
-	err := core.Answer(t.Context(), Answer{Result: loss, Runner: "runner-lan-01"})
-	if !errors.Is(err, ErrNotAResult) {
-		t.Errorf("a loss reported by a runner that never held the task answered %v", err)
+	// delivery, and so is a loss that names no dispatch at all.
+	for _, c := range []struct {
+		answer Answer
+		why    string
+	}{
+		{Answer{Result: loss.Result, Row: again[0].Row, Runner: "runner-lan-01"}, "a runner that never held the task"},
+		{Answer{Result: loss.Result, Runner: "runner-dmz-02"}, "no dispatch"},
+	} {
+		if err := core.Answer(t.Context(), c.answer); !errors.Is(err, ErrNotAResult) {
+			t.Errorf("a loss reported naming %s answered %v", c.why, err)
+		}
+	}
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-dmz-02", "1 dispatched runner-dmz-02"}; !slices.Equal(got, want) {
+		t.Errorf("after the refusals the key holds %q, want %q", got, want)
+	}
+}
+
+// The heartbeat declares a dispatch lost, the requeue goes out, and the runner that went quiet
+// comes back, takes the requeue, and reports the loss it recovered. That loss is about the first
+// dispatch, which the heartbeat has already moved, and not about the requeue the same runner now
+// holds.
+func TestALossReportedAfterTheHeartbeatDeclaredItMovesNothing(t *testing.T) {
+	core, q, pool, super := decidingOn(t, requeueingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
+		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	again := q.dispatched()
+	if len(again) != 1 {
+		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
+	}
+	if err := core.redeem(t, again[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	if err := core.Answer(t.Context(), Answer{
+		Result: graph.Result{Task: first[0].Task.ID, State: agk.TaskLost},
+		Row:    first[0].Row, Runner: "runner-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("a loss the heartbeat had already declared took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("a loss the heartbeat had already declared published %+v", got)
+	}
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-1", "1 dispatched runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }
 
