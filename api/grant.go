@@ -150,10 +150,15 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	}
 
 	// And the task is bound once there is an answer to give. A redemption that cannot answer
-	// refuses and takes nothing: a runner told there is no tree, or no secret, has not taken
-	// a task it cannot run, and a binding left on it would have the heartbeat declare lost a
-	// task no container ran for. Redeem checks again under the row's lock, so a task another
-	// runner bound in between is refused here and the values read for it go nowhere.
+	// refuses and binds nothing, as a missing tree always did: a runner told there is no tree,
+	// or no secret, has not taken a task it cannot run. It reports that no container ran, and
+	// that report binds it and ends the dispatch (db.Wide.BindUnreached). No other runner is
+	// handed the task, which was acknowledged on take, unless the bus delivered it twice. So a
+	// runner that dies between the refusal and its report leaves a dispatch nobody redeemed,
+	// which db.Pool.Lost does not look at: the sweep of dispatches nobody redeemed ends it, and
+	// until that is built the run's own timeout does. Bound here, the heartbeat would have found
+	// it lost instead. Redeem checks again under the row's lock, so a task another runner bound
+	// in between is refused here and the values read for it go nowhere.
 	err = s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		bound, err := wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
 		if err != nil {

@@ -67,9 +67,10 @@ func (r *rotated) read() []string {
 }
 
 // A secret the store cannot give leaves the task where it was: the store is read before the task
-// is bound, and a redemption that cannot answer takes nothing. So the next runner to redeem the
-// task, once the store holds the value, is given it, and the first is then told the task is not
-// its own.
+// is bound, and a redemption that cannot answer takes nothing. The runner refused reports that no
+// container ran, and that report is what binds it. The one other way the task is redeemed is the
+// bus delivering it twice, and that second delivery, redeemed once the store holds the value, is
+// given it, after which the first runner is told the task is not its own.
 func TestASecretTheStoreCannotGiveLeavesTheTaskUntaken(t *testing.T) {
 	for what, broken := range map[string]error{
 		"a secret nobody holds":             nil,
@@ -95,7 +96,7 @@ func TestASecretTheStoreCannotGiveLeavesTheTaskUntaken(t *testing.T) {
 			store.holds("finance/stripe", "sk_live_notreal")
 			given := g.redeemed(t, second, asking(clear))
 			if len(given.Secrets) != 1 || given.Secrets[0].Value != "sk_live_notreal" {
-				t.Errorf("the next runner to redeem was given %+v", given.Secrets)
+				t.Errorf("the runner redeeming a second delivery was given %+v", given.Secrets)
 			}
 			if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", first, asking(clear)); w.Code != http.StatusConflict {
 				t.Errorf("the first runner, redeeming again once another took the task, answered %d", w.Code)
