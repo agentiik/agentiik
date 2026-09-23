@@ -248,14 +248,20 @@ func TestOfRunnersRedeemingATaskAtOnceOneTakesIt(t *testing.T) {
 }
 
 // The last moment is every redemption, and nothing between the store and the answer keeps a value.
-// Nothing reads one before a runner redeems, each redemption reads every secret the task names
-// once, and a value rotated between two redemptions is the one the second is given, whichever
-// grant of the task it redeems. Nor is one written into the database on the way, where a copy of
-// the table would be a copy of the credential.
+// Nothing reads one before a runner redeems, so a value rotated once the task was dispatched is the
+// one its first redemption is given, and each redemption reads every secret the task names once,
+// whichever grant of the task it redeems. Nor is one written into the database on the way, where a
+// copy of the table would be a copy of the credential.
+//
+// What asking again answers for a value rotated since the first redemption is left out on purpose.
+// The documentation says asking again after a lost answer gets the same answer while the grant
+// lives, and a runner adopting its container after a restart redeems again for the values its
+// masker matches, which are the ones the container was given, while the store read again answers
+// the rotated one. Which of the two is meant is not for a test to decide.
 func TestASecretIsReadAtEveryRedemptionAndKeptByNothing(t *testing.T) {
 	store := &rotated{}
-	store.holds("finance/billing", "bk_live_first")
-	store.holds("finance/stripe", "sk_live_first")
+	store.holds("finance/billing", "bk_live_dispatched")
+	store.holds("finance/stripe", "sk_live_dispatched")
 	g := withGrants(t, store)
 	credential := g.joined(t)
 	clear, envelope, _ := g.dispatched(t, []string{"billing", "stripe"})
@@ -274,26 +280,25 @@ func TestASecretIsReadAtEveryRedemptionAndKeptByNothing(t *testing.T) {
 		},
 	})
 
-	var given []string
-	for i, c := range []struct {
-		why     string
-		grant   string
-		rotated string
-	}{
-		{"the first redemption", clear, "first"},
-		{"asking again after a lost answer", clear, "second"},
-		{"the grant of the task published again", again, "third"},
-	} {
-		store.holds("finance/billing", "bk_live_"+c.rotated)
-		store.holds("finance/stripe", "sk_live_"+c.rotated)
-		answer := g.redeemed(t, credential, asking(c.grant))
+	// Rotated once the task is dispatched, and before anything redeems it.
+	store.holds("finance/billing", "bk_live_rotated")
+	store.holds("finance/stripe", "sk_live_rotated")
+	want := []string{"billing=bk_live_rotated", "stripe=sk_live_rotated"}
 
+	for i, c := range []struct {
+		why   string
+		grant string
+	}{
+		{"the first redemption", clear},
+		{"asking again after a lost answer", clear},
+		{"the grant of the task published again", again},
+	} {
+		answer := g.redeemed(t, credential, asking(c.grant))
 		var got []string
 		for _, s := range answer.Secrets {
 			got = append(got, s.Name+"="+s.Value)
-			given = append(given, s.Value)
 		}
-		if want := []string{"billing=bk_live_" + c.rotated, "stripe=sk_live_" + c.rotated}; !slices.Equal(got, want) {
+		if !slices.Equal(got, want) {
 			t.Errorf("%s was given %v, and the store holds %v", c.why, got, want)
 		}
 		if reads, want := len(store.read()), 2*(i+1); reads != want {
@@ -301,8 +306,8 @@ func TestASecretIsReadAtEveryRedemptionAndKeptByNothing(t *testing.T) {
 		}
 	}
 
-	for _, held := range kept(t, g.super, given...) {
-		t.Errorf("a value a redemption answered is kept in the database: %s", held)
+	for _, held := range kept(t, g.super, "bk_live_dispatched", "sk_live_dispatched", "bk_live_rotated", "sk_live_rotated") {
+		t.Errorf("a value the store held is kept in the database: %s", held)
 	}
 }
 

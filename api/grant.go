@@ -375,8 +375,10 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 	out.Uploads = Uploads{URL: policy.URL, Fields: policy.Fields, KeyPrefix: policy.KeyPrefix}
 
 	// And the values last, once nothing else can refuse, each read from the store at every
-	// redemption and kept by nothing on the way: a value rotated since the last one is the
-	// value this one is given.
+	// redemption and kept by nothing on the way. That answers asking again with whatever the
+	// store holds by then, which is not settled: the documentation says asking again after a
+	// lost answer gets the same answer while the grant lives, and a runner adopting its
+	// container redeems again for the values its masker matches.
 	for _, secret := range got.Scope.Secrets {
 		value, err := s.secrets.Value(ctx, got.Namespace, secret.Name)
 		if err != nil {
