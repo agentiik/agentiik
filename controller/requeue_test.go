@@ -182,3 +182,45 @@ func TestALossReportedTwiceIsRequeuedOnce(t *testing.T) {
 		t.Errorf("a loss reported by a runner that never held the task answered %v", err)
 	}
 }
+
+// "lost: The runner holding it stopped reporting." A task no runner has taken is waiting on the
+// queue, however long a busy pool keeps it there, and the heartbeat declares nothing about it: a
+// step that does not requeue is not failed for the wait, and one that does is not sent out again
+// into the queue its task is already waiting on.
+func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
+	for _, c := range []struct{ name, workflow string }{
+		{"no retry policy", theWorkflow},
+		{"retry on lost", requeueingWorkflow},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, c.workflow)
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			first := q.dispatched()
+			if len(first) != 1 {
+				t.Fatalf("the first pass dispatched %d tasks", len(first))
+			}
+
+			// Dispatched on the test's clock, days behind the database's, and taken by
+			// nobody since.
+			if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
+				t.Fatalf("the heartbeat declared %d tasks lost that no runner had taken, answering %v", n, err)
+			}
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			if got := stateOf(t, core); got != agk.Running {
+				t.Errorf("a run whose one task is waiting on the queue is %s", got)
+			}
+			if again := q.dispatched(); len(again) != 0 {
+				t.Errorf("a task waiting on the queue was sent out again as %+v", again)
+			}
+			conn := dbtest.Superuser(t, super)
+			if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 dispatched -"}; !slices.Equal(got, want) {
+				t.Errorf("the key holds %q, want %q", got, want)
+			}
+		})
+	}
+}

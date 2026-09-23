@@ -58,6 +58,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
 - Runner routes have a guard of their own, and every bad runner credential is the same 401. Draining is told in the heartbeat; a revoked credential just stops working.
 - A heartbeat keeps alive only the runner's own tasks. A runner silent for three intervals leaves its tasks `lost`, not `failed`.
+- Only a task a runner has redeemed can be `lost`, counted from its last heartbeat or its redemption, so a task waiting on the queue of a full pool is neither failed nor requeued for the wait.
 - Grants, join tokens and runner credentials carry 256 bits, are stored hashed and are shown once.
 - A grant carries what its task was dispatched with. Redeeming it returns URLs for the input envelopes and the artifacts they name, the secret values and the upload URLs, and binds the task to that runner.
 - The grant of a dispatch that was lost is refused, and so is every grant of a key that has completed. A requeue redeems a grant of its own.
