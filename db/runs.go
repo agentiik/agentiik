@@ -215,10 +215,9 @@ type StepRow struct {
 
 // TaskRow is one task as the projection holds it.
 //
-// ID is the idempotency key, which the database also computes for itself from the four columns
-// that make it and checks against this one; the ULID the row is keyed by is minted when the row is
-// first written and never by a caller. A caller writing the key would be a second place it could
-// be got wrong.
+// ID is the idempotency key, and it is never written: the database computes the same string for
+// itself from the four columns that make it, and a caller writing the key would be a second place
+// it could be got wrong. The ULID the row is keyed by is minted when the row is first written.
 //
 // Requeue is which dispatch of the key the row records, as graph.ShardState counts them. It is
 // what makes a requeue after loss a row of its own under the same key rather than the lost row
