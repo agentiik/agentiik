@@ -224,6 +224,43 @@ spec:
 	}
 }
 
+// A name the manifest writes is at most 255 characters, the longest a file name is: a
+// port becomes a file under /agk/out/ports/ and a secret, unless it says otherwise, a
+// file under /agk/secrets/.
+func TestANameIsNoLongerThanAFileName(t *testing.T) {
+	longest := strings.Repeat("n", 255)
+	manifest := func(port, secret string) []byte {
+		return []byte(`
+apiVersion: agentiik.dev/v1
+kind: Brick
+metadata: { name: normalize, version: 1.0.0 }
+spec:
+  outputs:
+    ` + port + `: {}
+  secrets:
+    - name: ` + secret + `
+  runtime:
+    user: "65532:65532"
+`)
+	}
+	if _, err := brick.ParseManifest(manifest(longest, longest)); err != nil {
+		t.Errorf("a port and a secret of 255 characters were refused: %v", err)
+	}
+	for what, doc := range map[string][]byte{
+		"a port":   manifest(longest+"n", "billing"),
+		"a secret": manifest("ok", longest+"n"),
+	} {
+		_, err := brick.ParseManifest(doc)
+		if err == nil {
+			t.Errorf("%s of 256 characters was accepted", what)
+			continue
+		}
+		if said := err.Error(); !strings.Contains(said, "at most 255") {
+			t.Errorf("%s of 256 characters was refused with %q", what, said)
+		}
+	}
+}
+
 func parse(t *testing.T, name string) brick.Manifest {
 	t.Helper()
 	doc, err := fs.ReadFile(fixtures.FS, name)

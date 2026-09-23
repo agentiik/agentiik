@@ -1,6 +1,9 @@
 package graph
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestOneGrammarGovernsEveryNameInTheFile holds the sentence that says so: a name is
 // "letters, digits, hyphens and underscores, beginning with a letter or a digit", so that
@@ -29,6 +32,24 @@ func TestOneGrammarGovernsEveryNameInTheFile(t *testing.T) {
 		if !accepted && err == nil {
 			t.Errorf("%q was accepted", name)
 		}
+	}
+}
+
+// TestANameIsNoLongerThanADirectoryHoldsOne holds the other half of "one name survives a
+// URL, a directory and a tool list unchanged": no filesystem holds a name longer than 255
+// characters, so neither does the grammar.
+func TestANameIsNoLongerThanADirectoryHoldsOne(t *testing.T) {
+	longest := strings.Repeat("n", 255)
+	if err := identifier(longest, "the input", "inputs"); err != nil {
+		t.Errorf("a name of 255 characters was refused: %v", err)
+	}
+	err := identifier(longest+"n", "the input", "inputs")
+	if err == nil {
+		t.Fatal("a name of 256 characters was accepted")
+	}
+	// The bound, and where the name was written, and not the whole name printed back.
+	if said := err.Error(); !strings.Contains(said, "at most 255") || !strings.Contains(said, "inputs") || strings.Contains(said, longest) {
+		t.Errorf("the refusal reads %q", said)
 	}
 }
 
