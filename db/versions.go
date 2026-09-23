@@ -16,8 +16,8 @@ import (
 //
 // "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
 // because that is what a commit already is." So a version is written once and never changed, and
-// what is written is what it takes to rebuild it: a branch that moves afterwards changes nothing
-// about a run pinned to that commit.
+// what is written is what it takes to rebuild its graph and the name of every file in its tree: a
+// branch that moves afterwards changes nothing about a run pinned to that commit.
 
 // Version is one commit of one workflow, as the database holds it.
 type Version struct {
@@ -30,8 +30,8 @@ type Version struct {
 	// Includes are the files it pulled in, by the path each was named at. Manifests are the
 	// brick manifests of every image the workflow names, by image reference.
 	//
-	// Together these are the version: loading them back gives the same workflow resolved the
-	// same way, with nothing fetched from anywhere.
+	// Together these are what the graph is rebuilt from: loading them back gives the same
+	// workflow resolved the same way, with nothing fetched from anywhere.
 	Entry     string
 	Document  []byte
 	Includes  map[string][]byte

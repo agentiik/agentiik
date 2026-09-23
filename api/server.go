@@ -99,8 +99,8 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 // a commit": pushing the same commit twice is the same version and has to be the same request.
 type Push struct {
 	// Entry is the path of the entry point in the tree, Document is what it holds, and
-	// Includes are the files it pulls in. Together they are what the version is: enough to
-	// rebuild it with no tree in reach.
+	// Includes are the files it pulls in. Together they are what the graph is rebuilt from,
+	// with no repository and no object store in reach.
 	Entry     string            `json:"entry"`
 	Document  []byte            `json:"document"`
 	Includes  map[string][]byte `json:"includes,omitempty"`
