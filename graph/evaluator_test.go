@@ -843,6 +843,53 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	}
 }
 
+// A step a merge: first cancelled keeps the reason that cancelled it. The stop is only a
+// request, so its task in flight can still be lost, and a loss past max_requeues there
+// fails nothing: the verdict is already cancelled, and a reason saying the step fails
+// would contradict it.
+func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
+	e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: whichever, namespace: finance }
+steps:
+  quick:
+    image: `+image+`
+    outputs: [ok]
+  slow:
+    image: `+image+`
+    retry: { on: [lost] }
+    outputs: [ok]
+  whichever:
+    image: `+image+`
+    needs:
+      - { step: quick, port: ok, as: orders }
+      - { step: slow,  port: ok, as: orders }
+    merge: first
+    outputs: [ok]
+`, Options{MaxRequeues: -1})
+
+	plan := next(t, e, runAt)
+	slow := taskOf(t, plan, "slow")
+	record(t, e, Result{Task: slow.ID, State: agk.TaskRunning}, runAt)
+	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+	next(t, e, runAt.Add(2*time.Minute))
+	cancelled := e.State().Steps["slow"]
+	if cancelled.Verdict != agk.VerdictCancelled {
+		t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
+	}
+
+	record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
+	next(t, e, runAt.Add(3*time.Minute))
+	st := e.State().Steps["slow"]
+	if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
+		t.Errorf("slow is %s because %q after its task was lost, and it was cancelled because %q", st.Verdict, st.Reason, cancelled.Reason)
+	}
+	if sh := st.Shards[0]; sh.Task != agk.TaskLost {
+		t.Errorf("the shard of slow is %s, and the loss is recorded where it happened", sh.Task)
+	}
+}
+
 // The count is per key. A further attempt is a new key, granted by max for a failure the
 // brick reported, so it is handed out again after a loss as often as the first was.
 func TestAFurtherAttemptIsRequeuedAsOftenAsTheFirst(t *testing.T) {

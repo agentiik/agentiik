@@ -292,8 +292,13 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 			} else if requeueable(st.Retry, st.Idempotent, sh) {
 				// The file asked for a requeue and the installation's bound
 				// refused it. Nothing in the file explains a step failing on a
-				// loss it said to requeue, so the step says why.
-				ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
+				// loss it said to requeue, so the step says why. Only a step
+				// still running fails on it: one a merge: first cancelled can
+				// still lose a task in flight, since a stop is a request, and
+				// it keeps the reason that fixed its verdict.
+				if ss.Verdict == agk.VerdictRunning {
+					ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
+				}
 			} else if when, again = nextAttempt(st.Retry, sh); again {
 				// A further attempt is a new key, handed out for the first
 				// time.
