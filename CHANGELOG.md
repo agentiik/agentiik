@@ -51,6 +51,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A grant carries what its task was dispatched with. Redeeming it returns URLs for the input envelopes and the artifacts they name, the secret values and the upload URLs, and binds the task to that runner.
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
+- A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
+- Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.
+- A push is refused with 409 when its commit is already recorded with other files, and with 413 above 4 MiB or 4,096 files: a limit of the interim JSON push, until the installation hosts the repository.
 
 ### Secrets
 
@@ -60,7 +63,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Command line
 
-- `agk push` sends a version built from the working tree. A dirty tree is refused unless `--allow-dirty`, and the credential comes from `AGENTIIK_TOKEN`, never a flag.
+- `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links and submodules are refused, and so is a directory outside a repository. The credential comes from `AGENTIIK_TOKEN`, never a flag.
 
 ### Tests
 
