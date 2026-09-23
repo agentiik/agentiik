@@ -493,9 +493,11 @@ func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
 }
 
 // A result the controller would refuse is refused before it is published, where the error reaches
-// the runner that wrote it, rather than on the queue, where all that is left is to take it off.
+// the runner that wrote it, rather than on the queue, where all that is left is to take it off. And
+// read off the queue, it is refused there too. Each rule is held by a case only it refuses.
 func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 	task := aTask("invoice")
+	artifact := strings.Repeat("c1f4", 16)
 	for _, c := range []struct {
 		name string
 		with func(*TaskResult)
@@ -509,15 +511,24 @@ func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 		{"a success that names no ports", func(r *TaskResult) { r.Outputs = nil }},
 		{"an exit code with no container started", func(r *TaskResult) { r.StartedAt = time.Time{} }},
 		{"an exit with no instant", func(r *TaskResult) { r.FinishedAt = time.Time{} }},
+		{"a deadline's exit code with no instant", func(r *TaskResult) { r.State, r.FinishedAt = agk.TaskTimedOut, time.Time{} }},
+		{"a failure from a container that started and never exited", func(r *TaskResult) {
+			r.State, r.ExitCode, r.FinishedAt = agk.TaskFailed, nil, time.Time{}
+		}},
 		{"an exit code no container exits with", func(r *TaskResult) { exit := 256; r.State, r.ExitCode = agk.TaskFailed, &exit }},
 		{"a loss that describes an outcome", func(r *TaskResult) { r.State = agk.TaskLost }},
+		{"a loss that describes nothing but its log", func(r *TaskResult) {
+			*r = TaskResult{TaskID: r.TaskID, IdempotencyKey: r.IdempotencyKey, Runner: r.Runner, State: agk.TaskLost, StartedAt: r.StartedAt, Log: r.Log}
+		}},
 		{"a port twice", func(r *TaskResult) { r.Outputs = append(r.Outputs, r.Outputs[0]) }},
 		{"a port that is not a name", func(r *TaskResult) { r.Outputs[0].Port = "ok,error" }},
 		{"a digest without its algorithm", func(r *TaskResult) { r.Outputs[0].Digest = strings.TrimPrefix(r.Outputs[0].Digest, "sha256:") }},
 		{"a digest that would leave its prefix", func(r *TaskResult) { r.Outputs[0].Digest = "sha256:../../other/sha256/x" }},
 		{"a negative count", func(r *TaskResult) { r.Outputs[0].Items = -1 }},
 		{"an artifact that is not a digest", func(r *TaskResult) { r.Artifacts = []Artifact{{SHA256: "C1F4", Bytes: 1}} }},
+		{"an artifact of negative size", func(r *TaskResult) { r.Artifacts = []Artifact{{SHA256: artifact, Bytes: -1}} }},
 		{"a log that is not a log URI", func(r *TaskResult) { r.Log.URI = "https://logs.example.com/x" }},
+		{"a log of negative length", func(r *TaskResult) { r.Log.Lines = -1 }},
 		{"a log under another run", func(r *TaskResult) {
 			other, _ := agk.NewLogURI(agk.NewTaskID(agk.NewRunID(), "invoice", 1, agk.Shard{}))
 			r.Log.URI = other.String()
@@ -529,13 +540,35 @@ func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 		log, usage := *r.Log, *r.Usage
 		r.Log, r.Usage = &log, &usage
 		c.with(&r)
-		if err := (&Bus{}).Report(t.Context(), r); err == nil {
-			t.Errorf("a result with %s was published", c.name)
+		if _, err := r.encode(); err == nil {
+			t.Errorf("a result with %s would be published", c.name)
 		}
 		if body, err := json.Marshal(r); err == nil {
 			if _, err := readResult(body); err == nil {
 				t.Errorf("a result with %s was read", c.name)
 			}
+		}
+	}
+
+	// Report is encode and then the bus, and a result encode refuses never reaches the bus,
+	// which a Bus with no connection would find out about the hard way.
+	refused := aResult(task)
+	refused.State = agk.TaskRunning
+	if err := (&Bus{}).Report(t.Context(), refused); err == nil {
+		t.Error("a result that is not an ending was published")
+	}
+
+	// What only a document can say: more than the wire describes, and more than one of it.
+	body, err := aResult(task).encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, doc := range map[string][]byte{
+		"a field the wire does not describe": append(bytes.TrimSuffix(body, []byte("}")), []byte(`,"host":"runner-dmz-02.example.com"}`)...),
+		"a second document after the first":  append(append([]byte{}, body...), body...),
+	} {
+		if _, err := readResult(doc); err == nil {
+			t.Errorf("a result with %s was read", name)
 		}
 	}
 }

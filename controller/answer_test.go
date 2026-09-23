@@ -296,6 +296,34 @@ func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 	}
 }
 
+// A failure's envelopes are not read back. The evaluator keeps the ports of a shard that succeeded
+// and of no other, so a failure naming a digest the store does not hold is recorded all the same:
+// holding its ending back until the envelope turned up would be waiting on what nothing reads.
+func TestAFailuresOutputsAreNotReadBack(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+	answer := core.answerOf(t, failed(taken[0], 1, core.now()))
+	answer.Outputs = []Output{{Port: "rejected", Digest: strings.Repeat("0", 64), Items: 3}}
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("a failure naming an envelope the store does not hold answered %s", err)
+	}
+	var state string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select state from tasks where idempotency_key = $1`, string(taken[0].ID)).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" {
+		t.Errorf("the task reads %s after its failure was answered", state)
+	}
+}
+
 // "Its reach is the tasks in its hands." A task is in a runner's hands once it redeemed the task's
 // grant, and a result is taken from that runner and from no other: not from another machine of the
 // pool, which holds the same bus credential and could otherwise settle a task it was never given,
