@@ -658,6 +658,106 @@ steps:
 	unchanged(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), "a success for an attempt already retried")
 }
 
+const requeueing = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+steps:
+  invoice:
+    image: ` + image + `
+    retry:
+      max: 1
+      on: [lost, transient]
+      backoff: { type: exponential, base: 30s, max: 60s }
+    outputs: [ok]
+`
+
+// "A requeue after loss keeps the idempotency key and takes a new task_id." So the task
+// the plan hands out again is the task that was lost, attempt and identifier alike, and
+// it is handed out at once: the backoff spaces attempts, and this is not one.
+func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
+	e := started(t, requeueing, Options{})
+	first := next(t, e, runAt).Start[0]
+	record(t, e, Result{Task: first.ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	record(t, e, Result{Task: first.ID, State: agk.TaskLost}, runAt.Add(time.Minute))
+
+	sh := e.State().Steps["invoice"].Shards[0]
+	if sh.Attempt != 1 || sh.Requeue != 1 || sh.Task != agk.TaskPending {
+		t.Fatalf("the shard is attempt %d, requeue %d, %s, and a lost task of an idempotent step is requeued on the attempt it was lost on", sh.Attempt, sh.Requeue, sh.Task)
+	}
+	plan := next(t, e, runAt.Add(time.Minute))
+	if len(plan.Start) != 1 {
+		t.Fatalf("the plan starts %s after the loss, and the requeue is due at once", starts(plan))
+	}
+	if again := plan.Start[0]; again.ID != first.ID || again.Attempt != 1 {
+		t.Errorf("the requeue is %s, attempt %d, and it keeps the key %s it was lost under", again.ID, again.Attempt, first.ID)
+	}
+
+	// The loss of the first dispatch, heard again, is about a dispatch the shard has left
+	// behind, while the same key now names the second.
+	unchanged(t, e, Result{Task: first.ID, State: agk.TaskLost}, "a loss of the first dispatch delivered again")
+
+	// Nor is any other ending of the first dispatch, from a runner that came back after it
+	// was declared lost: the attempt waits on the requeue, which is still going. The
+	// requeue's own ending is the one that ends it.
+	unchanged(t, e, succeeded(first, ports("ok", item("a1"))), "a success of the first dispatch after the requeue went out")
+	unchanged(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 1}, "a failure of the first dispatch after the requeue went out")
+	ended := succeeded(first, ports("ok", item("a1")))
+	ended.Requeue = 1
+	record(t, e, ended, runAt.Add(2*time.Minute))
+	next(t, e, runAt.Add(2*time.Minute))
+	if got := e.State().Run.State; got != agk.Succeeded {
+		t.Errorf("the run is %s after the requeue came back with a success", got)
+	}
+}
+
+// "A loss does not use up a retry.max attempt." max: 1 is two attempts, and a first
+// attempt lost twice still has its second attempt to fail on.
+func TestALossDoesNotUseUpAnAttempt(t *testing.T) {
+	e := started(t, requeueing, Options{})
+	task := next(t, e, runAt).Start[0]
+	for requeue := range 2 {
+		record(t, e, Result{Task: task.ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+		record(t, e, Result{Task: task.ID, State: agk.TaskLost, Requeue: requeue}, runAt)
+		plan := next(t, e, runAt)
+		if len(plan.Start) != 1 || plan.Start[0].ID != task.ID {
+			t.Fatalf("after loss %d the plan starts %s, want %s again", requeue+1, starts(plan), task.ID)
+		}
+	}
+
+	record(t, e, Result{Task: task.ID, State: agk.TaskFailed, ExitCode: 108, Requeue: 2, FinishedAt: runAt}, runAt)
+	plan := next(t, e, runAt.Add(time.Minute))
+	if len(plan.Start) != 1 || plan.Start[0].Attempt != 2 {
+		t.Fatalf("a transient failure after two losses starts %s, and max: 1 still owes attempt 2", starts(plan))
+	}
+	if sh := e.State().Steps["invoice"].Shards[0]; sh.Requeue != 0 {
+		t.Errorf("attempt 2 carries requeue %d, and a further attempt is a new key handed out for the first time", sh.Requeue)
+	}
+
+	record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskFailed, ExitCode: 108, FinishedAt: runAt.Add(time.Minute)}, runAt.Add(time.Minute))
+	next(t, e, runAt.Add(time.Hour))
+	if got := e.State().Run.State; got != agk.Failed {
+		t.Errorf("the run is %s after both attempts max: 1 allows failed", got)
+	}
+}
+
+// "idempotent: false ... never requeued after loss." The loss ends the shard, whatever
+// the policy names, because the work may well have been done.
+func TestALostTaskOfAStepThatIsNotIdempotentIsNotRequeued(t *testing.T) {
+	e := started(t, replace(requeueing, "    outputs: [ok]", "    idempotent: false\n    outputs: [ok]"), Options{})
+	task := next(t, e, runAt).Start[0]
+	record(t, e, Result{Task: task.ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	record(t, e, Result{Task: task.ID, State: agk.TaskLost}, runAt)
+
+	plan := next(t, e, runAt)
+	if len(plan.Start) != 0 {
+		t.Errorf("the plan starts %s after a step declared idempotent: false lost its task", starts(plan))
+	}
+	if got := e.State().Run.State; got != agk.Failed {
+		t.Errorf("the run is %s, and its one step lost a task it may not run again", got)
+	}
+}
+
 // unchanged records a result that should be a duplicate and holds that it was: the shard
 // is as it was, and so is the sequence, which is what the controller reads to decide
 // whether there is anything to write and anything to decide again.

@@ -163,6 +163,8 @@ func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
 		{graph.Result{Task: task, State: agk.TaskState(99)}, "a state that is not one"},
 		{graph.Result{Task: "normalize", State: agk.TaskSucceeded}, "a key that is a step and not a task"},
 		{graph.Result{Task: "", State: agk.TaskSucceeded}, "no key at all"},
+		// An ending, and of this task, but of no dispatch of it: a requeue keeps the key.
+		{graph.Result{Task: task, State: agk.TaskSucceeded}, "an ending naming no dispatch"},
 		// A run nobody holds, which would be db.ErrNoRun had anything been read first.
 		{graph.Result{Task: agk.NewTaskID(agk.NewRunID(), "normalize", 1, agk.Shard{}), State: agk.TaskRunning}, "running, for a run nobody holds"},
 	} {
@@ -457,5 +459,40 @@ func TestATaskThatNeverReachedAContainerIsEndedByTheRunnerThatReportsIt(t *testi
 		return err
 	}); !errors.Is(err, db.ErrTaskHeld) {
 		t.Errorf("the grant of a task another runner ended redeemed, answering %v", err)
+	}
+}
+
+// An attempt a retry moved past is written as it ended. The state holds the attempt a shard is
+// on and nothing of the one before, so a row nothing wrote again would read as dispatched for
+// ever: counted against the namespace's ceiling, and a grant still honoured for a key that has
+// completed.
+func TestAnAttemptARetryMovedPastIsWrittenAsItEnded(t *testing.T) {
+	core, q, pool, super := decidingOn(t, retryingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-dmz-02"); err != nil {
+		t.Fatal(err)
+	}
+	core.answer(t, failed(first[0].Task, 1, core.now()))
+
+	conn := dbtest.Superuser(t, super)
+	var state, runner string
+	var code *int
+	if err := conn.QueryRow(t.Context(),
+		`select state, exit_code, runner from tasks where idempotency_key = $1`, string(first[0].Task.ID)).
+		Scan(&state, &code, &runner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code == nil || *code != 1 || runner != "runner-dmz-02" {
+		t.Errorf("attempt 1 reads %s, exit %v, runner %s, and it failed with 1 on runner-dmz-02", state, code, runner)
+	}
+	if err := core.redeem(t, first[0], "runner-dmz-02"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("the grant of an attempt that failed was redeemed again, answering %v", err)
 	}
 }

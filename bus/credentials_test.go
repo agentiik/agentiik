@@ -266,7 +266,7 @@ func takesFromThePoolsConsumer(t *testing.T, a authenticated) {
 
 	// And says what happened, on the same connection.
 	result := aResult(aTask("mine"))
-	result.Runner = "runner-1"
+	result.TaskID, result.Runner = taken[0].Task.TaskID, "runner-1"
 	if err := runner.Report(t.Context(), result); err != nil {
 		t.Errorf("reporting: %s", err)
 	}
@@ -368,7 +368,7 @@ func TestARunnerHearsNothingHandedToAnotherRunner(t *testing.T) {
 		t.Fatalf("acknowledging: %s", err)
 	}
 	result := aResult(aTask("mine"))
-	result.Runner = "runner-1"
+	result.TaskID, result.Runner = taken[0].Task.TaskID, "runner-1"
 	if err := runner.Report(t.Context(), result); err != nil {
 		t.Fatalf("reporting: %s", err)
 	}

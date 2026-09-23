@@ -33,9 +33,10 @@
 // claim, and any machine of the pool could settle any task of the pool by writing the name of the
 // runner that holds it. So each runner publishes on a subject of its own and its credential
 // allows no other: the subject a result arrives on is the runner that sent it, the reader refuses
-// a result naming anybody else, and the controller holds what is left to the runner the task was
-// bound to when its grant was redeemed. A compromised host's "reach is the tasks in its hands",
-// and this, with an inbox of its own, is what keeps it there.
+// a result naming anybody else, and the controller holds what is left to the runner the dispatch
+// its task_id names was bound to when its grant was redeemed. The dispatch and not the key, since
+// a requeue after loss keeps the key and is somebody else's to answer. A compromised host's
+// "reach is the tasks in its hands", and this, with an inbox of its own, is what keeps it there.
 //
 // # Why an inbox per runner
 //

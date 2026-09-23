@@ -316,6 +316,21 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 	}
 }
 
+// row is the task_id of the latest dispatch of a key, which is the one the runner answering it
+// in these tests took.
+func (co *Core) row(t *testing.T, key agk.TaskID) string {
+	t.Helper()
+	var row string
+	if err := co.controller.Fenced(t.Context(), co.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		row, err = w.TaskRow(ctx, "finance", key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
 // answer feeds one result back the way the bus will, through the door a bus consumer calls.
 func (co *Core) answer(t *testing.T, r graph.Result) {
 	t.Helper()

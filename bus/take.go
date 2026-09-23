@@ -147,8 +147,16 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // second time to recover an answer that already exists.
 //
 // A result the controller would refuse is refused here rather than on the queue, where the one
-// thing left to do with it is take it off and say so. The stream deduplicates on the dispatch
-// and the ending, which is what a runner publishing again after an answer it never heard sends.
+// thing left to do with it is take it off and say so. One naming no dispatch is among them: a
+// requeue keeps the key, so the key alone cannot say which dispatch ended, and task_id is what
+// does.
+//
+// The stream deduplicates it on the dispatch and the ending, which is what a runner publishing
+// again after an answer it never heard sends, and not on the key. A requeue after loss keeps the
+// key, and the ending of the requeue could then follow a late one of the dispatch it replaced
+// inside the duplicate window: the stream would answer that it was already there, and the one
+// ending the controller was waiting for would go nowhere while the one it throws away went
+// through.
 func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 	body, err := r.encode()
 	if err != nil {
