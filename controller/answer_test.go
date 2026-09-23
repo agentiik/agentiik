@@ -402,13 +402,17 @@ func TestATaskThatNeverReachedAContainerIsEndedByTheRunnerThatReportsIt(t *testi
 	conn := dbtest.Superuser(t, super)
 	var state string
 	var runner *string
+	var exit *int
 	if err := conn.QueryRow(t.Context(),
-		`select state, runner from tasks where idempotency_key = $1`, string(d.Task.ID)).
-		Scan(&state, &runner); err != nil {
+		`select state, runner, exit_code from tasks where idempotency_key = $1`, string(d.Task.ID)).
+		Scan(&state, &runner, &exit); err != nil {
 		t.Fatal(err)
 	}
 	if state != "failed" || runner == nil || *runner != theRunner {
 		t.Errorf("the task reads %s, held by %v, after %s reported it never reached a container", state, runner, theRunner)
+	}
+	if exit != nil {
+		t.Errorf("a task that never reached a container is recorded as exiting %d", *exit)
 	}
 
 	other := pulled

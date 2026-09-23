@@ -523,8 +523,11 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 	}
 	// "ExitCode is read for a task that succeeded or failed and for no other state", which
 	// the column says too: a task stopped at its deadline or by a cancellation decided
-	// nothing and has no code of its own to carry.
-	if sh.Task == agk.TaskSucceeded || sh.Task == agk.TaskFailed {
+	// nothing and has no code of its own to carry. Nor does a failure that never reached a
+	// container, which a runner reports with no exit code at all and the shard holds as 0, the
+	// code of success. So a code is written where a container started, and where the evaluator
+	// gave one to a task it could not build, which is 120 and never 0.
+	if (sh.Task == agk.TaskSucceeded || sh.Task == agk.TaskFailed) && (!sh.StartedAt.IsZero() || sh.ExitCode != 0) {
 		code := sh.ExitCode
 		t.ExitCode = &code
 	}
