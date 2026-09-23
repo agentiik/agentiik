@@ -25,15 +25,16 @@ const drainGrace = 5 * time.Second
 // Run runs one task in one container and reports what became of it.
 //
 // The order is chosen so that the races cannot happen rather than so that they are
-// caught. Refuse what cannot run at all. Resolve the image and read its manifest. Adopt
-// by label or prepare and create. Open the wait with condition=next-exit before the
-// start, which is what makes the exit-during-attach race unrepresentable. Attach, start,
-// write the envelope on standard input from its own goroutine and half-close. Read the
-// demultiplexed stream, keeping standard output for the shorthand and passing standard
-// error through the masker into the log. Take the exit code from the wait that was
-// already open, or from the event stream where the wait missed it, or from an inspect
-// under both. Collect, upload, spill. Then remove the container, the network and the
-// working directory, in defers that run on every path.
+// caught. Refuse what cannot run at all, and a key this host has already carried to an
+// ending. Resolve the image and read its manifest. Adopt by label or prepare and create.
+// Open the wait with condition=next-exit before the start, which is what makes the
+// exit-during-attach race unrepresentable. Attach, start, write the envelope on standard
+// input from its own goroutine and half-close. Read the demultiplexed stream, keeping
+// standard output for the shorthand and passing standard error through the masker into
+// the log. Take the exit code from the wait that was already open, or from the event
+// stream where the wait missed it, or from an inspect under both. Collect, upload, spill.
+// Write the ending down under the work root. Then remove the container, the network and
+// the working directory, in defers that run on every path.
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
 // and the rule. No exit code is invented for a failure that produced none, because a
@@ -66,6 +67,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, fault(t.Step, ErrTaskInFlight, ChargePlatform, "task %s", t.ID)
 	}
 	defer done()
+
+	// A key this host has already carried to an ending is refused next, and after the
+	// registration rather than before it, so that what it tidies away is never a
+	// container a delivery still holding the key is carrying. Adoption below reaches a
+	// container that is still there; this reaches a key whose container is long gone.
+	if err := d.refuseCompleted(ctx, t); err != nil {
+		return graph.Result{}, err
+	}
 
 	// Everything that can be refused without creating anything is refused first, and
 	// network: egress is the one that matters: a workflow must not be able to
@@ -116,7 +125,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			defer cancel()
 			d.cli.ContainerRemove(tidy, adopted, true)
 		}()
-		return d.rejoin(ctx, t, store, adopted, image)
+		return d.ended(d.rejoin(ctx, t, store, adopted, image))
 	}
 
 	w, err := newWorkdir(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
@@ -174,7 +183,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		d.cli.ContainerRemove(tidy, created.ID, true)
 	}()
 
-	return d.carry(ctx, t, store, created.ID, image, given, w.Out, dispatched, true, false)
+	return d.ended(d.carry(ctx, t, store, created.ID, image, given, w.Out, dispatched, true, false))
 }
 
 // carry is the half of Run that a container exists for: wait, attach, start, read, exit,

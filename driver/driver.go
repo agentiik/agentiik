@@ -38,6 +38,10 @@ type Docker struct {
 
 	mu       sync.Mutex
 	inflight map[agk.TaskID]*held
+
+	// keys is the record under the work root of what this host has completed, which
+	// outlives this process and is what a restarted one reads.
+	keys *keys
 }
 
 // held is one task this process is running.
@@ -131,6 +135,7 @@ func New(cfg Config) (*Docker, error) {
 		cfg: cfg, cli: cli, floor: floor, cache: newManifests(),
 		ctx: ctx, cancel: cancel,
 		inflight: map[agk.TaskID]*held{},
+		keys:     &keys{root: cfg.WorkRoot},
 	}
 	floor.announce(cfg.Policy, d.say)
 
