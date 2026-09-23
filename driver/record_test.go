@@ -785,3 +785,29 @@ func TestAFailureIsAnsweredFromTheRecordWithItsExitCode(t *testing.T) {
 		t.Errorf("the brick ran %d times", n)
 	}
 }
+
+// A runner reads a refusal through errors.Is and errors.As, and a runner's own tests fake
+// the driver by writing the refusal as a literal. That literal is the refusal it holds, whole:
+// it reads as ErrCompleted, is charged to the platform and names the key, rather than
+// dereferencing something only this package could have filled in.
+func TestACompletedWrittenAsALiteralIsTheRefusalItHolds(t *testing.T) {
+	task := oneTask("ghcr.io/agentiik/http-request@" + imageDigest)
+	at := time.Date(2026, 9, 23, 6, 0, 0, 0, time.UTC)
+	var err error = &Completed{Ending: Ending{Key: task.ID, State: agk.TaskSucceeded, At: at}}
+
+	if !errors.Is(err, ErrCompleted) {
+		t.Errorf("%v does not read as ErrCompleted", err)
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and a key refused is not the brick's failure", charge)
+	}
+	var done *Completed
+	if !errors.As(err, &done) || done.Ending.Key != task.ID {
+		t.Errorf("%v does not hand over the ending of %s", err, task.ID)
+	}
+	for _, want := range []string{"step fetch", string(task.ID), "succeeded", "2026-09-23T06:00:00Z", ErrCompleted.Error()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal reads %q, and it names %q", err, want)
+		}
+	}
+}

@@ -87,18 +87,27 @@ var ErrCompleted = errors.New("the runner refuses to start a container for a key
 // key reports that ending under the task_id of the message it took, which is how the
 // requeue of a task lost while its host was only cut off is answered without the brick
 // running again.
+//
+// The Ending is the whole of it, so a Completed written as a literal, which is how a
+// runner's tests fake this package, is the same refusal as one Hold answered.
 type Completed struct {
 	Ending Ending
-
-	fault *Fault
 }
 
 // Error is the refusal, naming the key, how and when it ended, and the rule.
-func (c *Completed) Error() string { return c.fault.Error() }
+func (c *Completed) Error() string { return c.fault().Error() }
 
 // Unwrap gives up the fault, through which errors.Is reaches ErrCompleted and Charged reads
 // whose it is.
-func (c *Completed) Unwrap() error { return c.fault }
+func (c *Completed) Unwrap() error { return c.fault() }
+
+// fault is the refusal written as every other refusal of this package is, composed from the
+// ending each time rather than kept beside it, since a field only this package could fill
+// would leave every Completed made anywhere else pointing at nothing.
+func (c *Completed) fault() *Fault {
+	_, step, _, _, _ := agk.ParseTaskID(string(c.Ending.Key))
+	return fault(step, ErrCompleted, ChargePlatform, "task %s ended %s on this host at %s", c.Ending.Key, c.Ending.State, c.Ending.At.UTC().Format(time.RFC3339))
+}
 
 // Ending is what the record says about one key: how it ended, when, and what it left, by
 // reference.
@@ -334,7 +343,7 @@ func (d *Docker) Hold(id agk.TaskID) error {
 		return err
 	}
 	if found && e.State.Terminal() {
-		return completed(id, e)
+		return &Completed{Ending: e}
 	}
 	return d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()})
 }
@@ -367,7 +376,7 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
 		w.remove()
 	}
-	return completed(t.ID, e)
+	return &Completed{Ending: e}
 }
 
 // ended writes down the ending Run is about to return, and returns it.
@@ -468,14 +477,4 @@ func (e *afterExit) Unwrap() error { return e.err }
 // exited marks err as met after the container of task had run to its end.
 func exited(task agk.TaskID, err error) error {
 	return &afterExit{task: task, err: err}
-}
-
-// completed is the refusal of one key, naming how and when it ended, and holding the
-// ending.
-func completed(id agk.TaskID, e Ending) error {
-	_, step, _, _, _ := agk.ParseTaskID(string(id))
-	return &Completed{
-		Ending: e,
-		fault:  fault(step, ErrCompleted, ChargePlatform, "task %s ended %s on this host at %s", id, e.State, e.At.UTC().Format(time.RFC3339)),
-	}
 }

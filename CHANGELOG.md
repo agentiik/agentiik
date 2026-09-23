@@ -74,6 +74,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The record of a key's ending keeps what it left by reference and never a payload: each port's envelope by digest and count, each artifact by digest and size, the log's address and length.
 - Each port's envelope is written to the store before the ending is recorded, and the terminal `driver.Event` names it in `Outputs` by the digest the store answered, through `artifact.Store.PutEnvelope`. An envelope the store refuses ends the key `failed`, naming nothing, charged to the platform.
 - A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
+- A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
 
 ### API
