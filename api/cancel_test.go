@@ -118,7 +118,7 @@ func TestCancellingARunNeedsWorkflowRunOnItsWorkflow(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("bob, who holds workflow:run on the run's workflow, asking to cancel answered %d: %s", w.Code, w.Body)
 	}
-	if answer["run"] != o.run || answer["state"] != "queued" {
+	if len(answer) != 1 || answer["run"] != o.run {
 		t.Errorf("the answer reads %v", answer)
 	}
 	if got := w.Header().Get("Location"); got != "/api/v1/finance/runs/"+o.run {
@@ -180,8 +180,7 @@ func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 		t.Fatal("the request is not on the run")
 	}
 
-	w, answer := call(t, h, "POST", o.cancel(), "alice", nil)
-	if w.Code != http.StatusAccepted || answer["state"] != "queued" {
+	if w, _ := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusAccepted {
 		t.Errorf("asking a second time answered %d: %s", w.Code, w.Body)
 	}
 	if !told() {
@@ -192,18 +191,25 @@ func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 	}
 }
 
-// A run that has ended is answered in the state it ended in, and nothing is asked of it: somebody
-// whose run succeeded before their request arrived learns that it did.
-func TestCancellingARunThatHasEndedChangesNothing(t *testing.T) {
+// The answer says nothing of how the run stands, in its body or its status: the route is guarded
+// by workflow:run, and a run's state is what run:read guards. operator holds the first and not the
+// second, and reads the same answer about a run going and one that failed, while GET refuses it
+// both. A run that has ended is asked nothing.
+func TestCancellingSaysNothingOfHowTheRunStands(t *testing.T) {
 	o := withOneRun(t)
-	if _, err := dbtest.Superuser(t, o.super).Exec(t.Context(),
-		`update runs set state = 'succeeded', started_at = now(), finished_at = now() where id = $1`, o.run); err != nil {
-		t.Fatal(err)
+	h := o.servedTo(t, holder{who: "olivia", what: api.WorkflowRun, over: api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}})
+	if w, _ := call(t, h, "GET", "/api/v1/finance/runs/"+o.run, "olivia", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("reading the run without run:read answered %d, so the case under test is not an operator's", w.Code)
 	}
 
-	w, answer := call(t, o.servedTo(t, everything{who: "alice"}), "POST", o.cancel(), "alice", nil)
-	if w.Code != http.StatusOK || answer["state"] != "succeeded" {
-		t.Errorf("asking to cancel a run that succeeded answered %d: %s", w.Code, w.Body)
+	going, _ := call(t, h, "POST", o.cancel(), "olivia", nil)
+	if _, err := dbtest.Superuser(t, o.super).Exec(t.Context(),
+		`update runs set state = 'failed', started_at = now(), finished_at = now(), cancel_requested_at = null where id = $1`, o.run); err != nil {
+		t.Fatal(err)
+	}
+	ended, _ := call(t, h, "POST", o.cancel(), "olivia", nil)
+	if going.Code != http.StatusAccepted || ended.Code != going.Code || ended.Body.String() != going.Body.String() {
+		t.Errorf("a run going answered %d %s, and once it had failed %d %s", going.Code, going.Body, ended.Code, ended.Body)
 	}
 	if at := o.requested(t); at != nil {
 		t.Errorf("a run that had ended was asked to cancel at %s", at)
@@ -260,7 +266,7 @@ func TestACancelledRunStopsWhatItHolds(t *testing.T) {
 	}
 	handed := q.sent[0].Task.ID
 
-	if w, answer := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusAccepted || answer["state"] != "running" {
+	if w, _ := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusAccepted {
 		t.Fatalf("asking to cancel a running run answered %d: %s", w.Code, w.Body)
 	}
 	if err := core.Wake(t.Context(), controller.Wake{Run: run}); err != nil {
@@ -282,8 +288,8 @@ func TestACancelledRunStopsWhatItHolds(t *testing.T) {
 		t.Errorf("the task the run held reads %v", state)
 	}
 
-	// And asked again, the run is answered as it ended, and nothing else is stopped.
-	if w, answer := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusOK || answer["state"] != "cancelled" {
+	// And asked again, nothing else is stopped.
+	if w, _ := call(t, h, "POST", o.cancel(), "alice", nil); w.Code != http.StatusAccepted {
 		t.Errorf("asking to cancel a cancelled run answered %d: %s", w.Code, w.Body)
 	}
 	if err := core.Wake(t.Context(), controller.Wake{Swept: true}); err != nil {

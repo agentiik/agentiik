@@ -117,7 +117,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Inputs holding U+0000 in a string or a name are refused with 400, where PostgreSQL refused them with a 500.
 - A body that is not JSON is refused saying where it stops being JSON, and no longer repeats the bytes there, which could be part of a secret's value.
 - `api.OnRun` authorises a route whose path names a run and nothing it is of against the namespace and workflow the run is of, found by its identifier alone. `POST /api/v1/runs/{run}/cancel` is the first to take it. A run that is not there, or an identifier no run was minted with, is the same 404 as a run the caller may not reach, where U+0000 or bytes that are not UTF-8 were a 500.
-- `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest: a run still going is answered 202 in the state it is in, one that has ended 200 in the state it ended in. Asking twice is asking once. The audit log records it once there is one.
+- `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
 
 ### Secrets
 

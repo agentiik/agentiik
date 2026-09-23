@@ -744,19 +744,24 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 	write(w, http.StatusOK, detail)
 }
 
-// cancel asks for a run to be cancelled, and answers the state it is in.
+// cancel asks for a run to be cancelled, and answers that it was asked.
 //
 // "Cancels pending tasks and sends SIGTERM to running containers." Neither happens here. The API
 // writes the request on the run and notifies, in one transaction as it does for a run it starts,
 // and the controller, which reads it there, ends the run and stops what it holds: the two share
 // the database and nothing else, and a route that stopped a container would be a second
-// controller. So a run still going is answered 202, and the state it is in until the controller
-// has read the request.
+// controller. So the answer is 202, pointing at the run.
+//
+// It says nothing of how the run stands, and its status is the same whether the run is going or
+// has ended. The route is guarded by workflow:run, and a run's state is what run:read guards: "See
+// run state, per-step state, timings and log lines". operator holds the one and not the other, as
+// does anybody denied run:read, and an answer saying how the run stood, or a status that changed
+// once it had ended, would hand them what GET refuses them, at any moment and with no side effect
+// on a run that has ended. Somebody holding both reads the state where run:read guards it.
 //
 // Asking again is asking once, and asking about a run that has ended changes nothing: "a
 // principal asking twice, or asking about a run that finished while they were asking, has got
-// what they wanted either way", as controller.Cancel puts it. The run is answered 200 in the state
-// it ended in, which is how a caller whose run succeeded first learns that it did.
+// what they wanted either way", as controller.Cancel puts it.
 //
 // Nothing is written to the audit log yet, since there is none: "manual trigger, approval,
 // cancellation" are recorded there once #160 builds it, in the transaction that writes the
@@ -795,13 +800,8 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 		return
 	}
 
-	answer := map[string]any{"run": string(run), "state": state.String()}
-	if state.Terminal() {
-		write(w, http.StatusOK, answer)
-		return
-	}
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/%s/runs/%s", over.Namespace, run))
-	write(w, http.StatusAccepted, answer)
+	write(w, http.StatusAccepted, map[string]any{"run": string(run)})
 }
 
 // runsIn finds the namespace and workflow of a run for the router, from its identifier alone.
