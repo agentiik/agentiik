@@ -25,6 +25,13 @@ import (
 
 const grantRun = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
 const grantTaskRow = "01M2T1AAAAAAAAAAAAAAAAAAAA"
+const grantKey agk.TaskID = grantRun + "/render/1"
+
+// asking is the redemption a runner holding the grant sends: the grant, the row it names, and the
+// key of the attempt it was dispatched for.
+func asking(clear string) api.Redemption {
+	return api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantKey}
+}
 
 // held is a secret store holding exactly what a test put in it.
 type held map[string]string
@@ -189,7 +196,7 @@ func (g grants) dispatched(t *testing.T, secrets []string) (clear, envelope, fil
 	var granted db.Granted
 	if err := g.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		granted, err = w.IssueGrant(ctx, "finance", agk.TaskID(grantRun+"/render/1"), grantTaskRow,
+		granted, err = w.IssueGrant(ctx, "finance", grantKey, grantTaskRow,
 			db.GrantScope{
 				Run: grantRun, Step: "render",
 				Workflow: "monthly-invoicing", Commit: "a3f9c1e",
@@ -210,7 +217,7 @@ func (g grants) grantedFor(t *testing.T, workflow, commit string) string {
 	var granted db.Granted
 	if err := g.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		granted, err = w.IssueGrant(ctx, "finance", agk.TaskID(grantRun+"/render/1"), grantTaskRow,
+		granted, err = w.IssueGrant(ctx, "finance", grantKey, grantTaskRow,
 			db.GrantScope{Run: grantRun, Step: "render", Workflow: workflow, Commit: commit},
 			time.Now().UTC().Add(time.Hour))
 		return err
@@ -220,13 +227,37 @@ func (g grants) grantedFor(t *testing.T, workflow, commit string) string {
 	return granted.Clear
 }
 
+// redeemed is a redemption that has to succeed, read into the shape the API answers.
+func (g grants) redeemed(t *testing.T, credential string, ask api.Redemption) api.Grant {
+	t.Helper()
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	}
+	var answer api.Grant
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	return answer
+}
+
+// bound is the runner a task is held by, or nothing when no redemption has taken it.
+func (g grants) bound(t *testing.T) *string {
+	t.Helper()
+	var runner *string
+	if err := dbtest.Superuser(t, g.super).QueryRow(t.Context(),
+		`select runner from tasks where id = $1`, grantTaskRow).Scan(&runner); err != nil {
+		t.Fatal(err)
+	}
+	return runner
+}
+
 func TestAGrantTurnsIntoTheInputsTheArtifactsAndTheSecrets(t *testing.T) {
 	g := withGrants(t, held{"finance/stripe": "sk_live_notreal"})
 	credential := g.joined(t)
 	clear, envelope, file := g.dispatched(t, []string{"stripe"})
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1")})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
 	}
@@ -286,17 +317,13 @@ func TestARunnerAsksForSomewhereToPutWhatItMade(t *testing.T) {
 	sum := sha256.Sum256([]byte(produced))
 	digest := hex.EncodeToString(sum[:])
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1"), Upload: []string{digest}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
+	ask := asking(clear)
+	ask.Upload = []string{digest}
+	answer := g.redeemed(t, credential, ask)
+	if len(answer.Uploads) != 1 {
+		t.Fatalf("the grant answered %d upload URLs", len(answer.Uploads))
 	}
-	uploads, _ := answer["uploads"].([]any)
-	if len(uploads) != 1 {
-		t.Fatalf("the grant answered %d upload URLs", len(uploads))
-	}
-	one, _ := uploads[0].(map[string]any)
-	url, _ := one["url"].(string)
+	url := answer.Uploads[0].URL
 	if res := follow(t, g.handler, "PUT", url, produced); res.Code != http.StatusCreated {
 		t.Fatalf("storing what the task made answered %d", res.Code)
 	}
@@ -310,37 +337,57 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, nil)
-	key := agk.TaskID(grantRun + "/render/1")
 
-	// A value that is not a grant, and a grant for another task.
+	// A body naming its task by anything less than both the row and the key is refused before
+	// anything is read, and so is the shape this route took before it took the wire's: the
+	// grant is checked against both, and a comparison with nothing is no comparison.
+	for _, c := range []struct {
+		name string
+		body any
+	}{
+		{"a body naming its task as task", map[string]any{"grant": clear, "task": grantKey}},
+		{"a body with no task_id", api.Redemption{Grant: clear, IdempotencyKey: grantKey}},
+		{"a body with no idempotency_key", api.Redemption{Grant: clear, TaskID: grantTaskRow}},
+	} {
+		if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d", c.name, w.Code)
+		}
+	}
+
+	// A value that is not a grant, and a grant presented for another task, by its row or by
+	// the key of another attempt, are one refusal, and none of them takes the task.
 	for _, c := range []struct {
 		name string
 		ask  api.Redemption
 	}{
-		{"a value that opens nothing", api.Redemption{Grant: "agkgrant_notarealgrantatallbutlongenoughtopass", Task: key}},
-		{"a grant redeemed for another task", api.Redemption{Grant: clear, Task: "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1"}},
+		{"a value that opens nothing", api.Redemption{Grant: "agkgrant_notarealgrantatallbutlongenoughtopass", TaskID: grantTaskRow, IdempotencyKey: grantKey}},
+		{"a grant redeemed for another task's row", api.Redemption{Grant: clear, TaskID: "01M2ZZZZZZZZZZZZZZZZZZZZZZ", IdempotencyKey: grantKey}},
+		{"a grant redeemed for another attempt", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: grantRun + "/render/2"}},
+		{"a grant redeemed for another task", api.Redemption{Grant: clear, TaskID: grantTaskRow, IdempotencyKey: "01M2ZZZZZZZZZZZZZZZZZZZZZZ/other/1"}},
 	} {
 		w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, c.ask)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s answered %d", c.name, w.Code)
 		}
+		if runner := g.bound(t); runner != nil {
+			t.Fatalf("%s bound the task to %s", c.name, *runner)
+		}
 	}
 
 	// It is a runner route, so a principal's token reaches nothing.
-	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", "admin", api.Redemption{Grant: clear, Task: key})
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", "admin", asking(clear))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("an administrator redeeming a grant answered %d", w.Code)
 	}
 
-	// The first machine to redeem holds the task, and a second is told so rather than
-	// starting a container for it.
-	if w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key}); w.Code != http.StatusOK {
-		t.Fatalf("the first redemption answered %d", w.Code)
-	}
+	// So the task is still there for the first machine to redeem it properly, and the one
+	// refused above is then told the work is somebody else's rather than starting a
+	// container for it.
 	second := g.joined(t)
-	w, _ = call(t, g.handler, "POST", "/api/v1/tasks/redeem", second, api.Redemption{Grant: clear, Task: key})
+	g.redeemed(t, second, asking(clear))
+	w, _ = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusConflict {
-		t.Errorf("a second machine redeeming the same grant answered %d", w.Code)
+		t.Errorf("a machine redeeming a grant another has redeemed answered %d", w.Code)
 	}
 }
 
@@ -351,8 +398,7 @@ func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, []string{"stripe"})
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		api.Redemption{Grant: clear, Task: agk.TaskID(grantRun + "/render/1")})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("a secret nobody holds answered %d: %s", w.Code, w.Body)
 	}
@@ -414,6 +460,64 @@ func TestTheVendoredRedemptionCorpusIsWhatItSaysItIs(t *testing.T) {
 	}
 }
 
+// conforms says whether a value, as it would be written on the wire, is what one definition of the
+// vendored wire schema describes.
+func conforms(t *testing.T, pointer string, value any) error {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire(t, pointer).Validate(v)
+}
+
+// A redemption is asked in the wire's words, because the wire is what a runner is written against.
+func TestARedemptionIsWhatTheWireDescribes(t *testing.T) {
+	// A runner written from the wire is understood: the request of every valid fixture reads
+	// as a redemption, with no field in it the API does not know.
+	cases, err := fixtures.GrantRedemptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		if !c.Valid {
+			continue
+		}
+		body, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pair struct {
+			Request json.RawMessage `json:"request"`
+		}
+		if err := json.Unmarshal(body, &pair); err != nil {
+			t.Fatal(err)
+		}
+		d := json.NewDecoder(bytes.NewReader(pair.Request))
+		d.DisallowUnknownFields()
+		var ask api.Redemption
+		if err := d.Decode(&ask); err != nil {
+			t.Errorf("the request of %s is not a redemption the API reads: %s", c.File, err)
+			continue
+		}
+		if ask.Grant == "" || ask.TaskID == "" || ask.IdempotencyKey == "" {
+			t.Errorf("the request of %s reads as %+v", c.File, ask)
+		}
+	}
+
+	// And a request as a runner holding the grant sends it is what the wire describes.
+	g := withGrants(t, api.NoSecrets{})
+	clear, _, _ := g.dispatched(t, nil)
+	ask := asking(clear)
+	if err := conforms(t, "/$defs/grantRedemption/properties/request", ask); err != nil {
+		t.Errorf("the request is not what the wire describes: %s", err)
+	}
+}
+
 // "A runner still never speaks git and never holds a credential, because the controller resolves a
 // commit to a tree and the runner fetches content-addressed objects with the task's grant, exactly
 // as it fetches an artifact." So the tree a redemption answers is the one version the scope names:
@@ -422,7 +526,6 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
 	clear, _, _ := g.dispatched(t, nil)
-	key := agk.TaskID(grantRun + "/render/1")
 
 	// Another version of the same workflow, whose files the task must never be handed.
 	other := map[string]api.PushFile{
@@ -434,26 +537,18 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	// And the runner has no way to ask for it: the version is what the controller wrote, and
 	// a body naming one of its own is refused rather than half understood.
 	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential,
-		map[string]any{"grant": clear, "task": key, "commit": "b4a0d2f"})
+		map[string]any{"grant": clear, "task_id": grantTaskRow, "idempotency_key": grantKey, "commit": "b4a0d2f"})
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("a redemption naming its own commit answered %d", w.Code)
 	}
 
-	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key})
+	w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming answered %d: %s", w.Code, w.Body)
 	}
 
 	// The shape is the wire's, held to the schema the schemas repository publishes.
-	encoded, err := json.Marshal(answer["tree"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := wire(t, "/$defs/grantRedemption/properties/response/properties/tree").Validate(v); err != nil {
+	if err := conforms(t, "/$defs/grantRedemption/properties/response/properties/tree", answer["tree"]); err != nil {
 		t.Errorf("the tree is not what the wire describes: %s", err)
 	}
 
@@ -508,7 +603,7 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 	// And a grant whose scope names the other version is handed that version's tree: what
 	// decides is the scope, and only the scope.
 	again := g.grantedFor(t, "monthly-invoicing", "b4a0d2f")
-	w, answer = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: again, Task: key})
+	w, answer = call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(again))
 	if w.Code != http.StatusOK {
 		t.Fatalf("redeeming the second grant answered %d: %s", w.Code, w.Body)
 	}
@@ -530,7 +625,6 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
-	key := agk.TaskID(grantRun + "/render/1")
 
 	conn := dbtest.Superuser(t, g.super)
 	if _, err := conn.Exec(t.Context(),
@@ -549,7 +643,7 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 		{"a version nobody recorded", "monthly-invoicing", "deadbee", "/agk/repo"},
 	} {
 		clear := g.grantedFor(t, c.workflow, c.commit)
-		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, api.Redemption{Grant: clear, Task: key})
+		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
 			continue
@@ -561,11 +655,7 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 			t.Errorf("%s answered a tree anyway", c.name)
 		}
 
-		var runner *string
-		if err := conn.QueryRow(t.Context(), `select runner from tasks where id = $1`, grantTaskRow).Scan(&runner); err != nil {
-			t.Fatal(err)
-		}
-		if runner != nil {
+		if runner := g.bound(t); runner != nil {
 			t.Errorf("%s bound the task to %s, and a runner told there is no tree has not taken it", c.name, *runner)
 		}
 	}

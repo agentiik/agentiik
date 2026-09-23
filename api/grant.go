@@ -50,10 +50,16 @@ type NoSecrets struct{}
 // Value holds nothing.
 func (NoSecrets) Value(context.Context, string, string) ([]byte, error) { return nil, ErrNoSecret }
 
-// Redemption is what a runner presents.
+// Redemption is what a runner presents: the grant, and the task it claims the grant is for.
 type Redemption struct {
-	Grant string     `json:"grant"`
-	Task  agk.TaskID `json:"task"`
+	Grant string `json:"grant"`
+
+	// TaskID is the task's row, which the grant also names inside its own text, and
+	// IdempotencyKey is which attempt and which shard is asking. Both are compared with what
+	// the grant was issued for, and "the API refuses a redemption where the two disagree
+	// rather than believing either alone".
+	TaskID         string     `json:"task_id"`
+	IdempotencyKey agk.TaskID `json:"idempotency_key"`
 
 	// Upload names the digests the runner has computed and wants somewhere to put. It is
 	// empty at the start of a task, when the runner is asking what to fetch, and full at
@@ -72,14 +78,30 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Both are required rather than checked when present, because a comparison with nothing
+	// is no comparison: a request that left one out would be believed on the other alone.
+	switch {
+	case ask.TaskID == "":
+		fail(w, http.StatusBadRequest, "a redemption names the task it is for, and this one has no task_id")
+		return
+	case ask.IdempotencyKey == "":
+		fail(w, http.StatusBadRequest, "a redemption names the attempt that is asking, and this one has no idempotency_key")
+		return
+	}
 
 	var got db.Redeemed
 	var tree []db.TreeFile
 	err := s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		got, err = wide.Redeem(ctx, ask.Grant, ask.Task, runner.ID, s.now())
+		got, err = wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
 		if err != nil {
 			return err
+		}
+		// The row is compared here, inside the transaction that bound the task, so a
+		// request naming another task's row is refused as a grant that opens nothing
+		// and the binding Redeem wrote is rolled back with it.
+		if got.Row != ask.TaskID {
+			return db.ErrNoGrant
 		}
 		// The version the scope names and no other, read in the same transaction, so a
 		// refusal here also leaves the task unbound: a runner told there is no tree has

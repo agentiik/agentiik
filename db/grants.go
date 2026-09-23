@@ -72,8 +72,13 @@ type GrantSecret struct {
 // Redeemed is what a grant turned out to be for.
 type Redeemed struct {
 	Namespace string
-	Task      agk.TaskID
-	Scope     GrantScope
+
+	// Row is the task's own identifier, the one the grant names inside its text, and Task is
+	// the idempotency key that says which unit of work it is. A redemption is asked with both
+	// and answers the row.
+	Row   string
+	Task  agk.TaskID
+	Scope GrantScope
 
 	// ExpiresAt is the grant's own expiry, which is the task's deadline. Anything the
 	// redemption hands out is minted to end with it: a URL that outlived the task it was
@@ -193,5 +198,5 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 		namespace, id, runner); err != nil {
 		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
 	}
-	return Redeemed{Namespace: namespace, Task: key, Scope: scope, ExpiresAt: expires}, nil
+	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }

@@ -384,7 +384,7 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 		t.Fatalf("joining answered %d", code)
 	}
 	var grant api.Grant
-	if code := in.ask(t, "POST", "/api/v1/tasks/redeem", joined.Credential, api.Redemption{Grant: d.Grant, Task: d.Task.ID}, &grant); code != http.StatusOK {
+	if code := in.ask(t, "POST", "/api/v1/tasks/redeem", joined.Credential, api.Redemption{Grant: d.Grant, TaskID: d.Row, IdempotencyKey: d.Task.ID}, &grant); code != http.StatusOK {
 		t.Fatalf("redeeming answered %d", code)
 	}
 
