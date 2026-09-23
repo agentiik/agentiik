@@ -20,7 +20,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run that ends emits a completion carrying an identifier and a state and nothing else, preceded by a failure when it `failed` or `timed_out`.
 - `retain` is resolved by the controller and recorded on the artifact reference.
 - A lost task is requeued at once under the same idempotency key and a new `task_id`, where the step is idempotent and `retry.on` names `lost`. A loss does not use up a `retry.max` attempt.
-- A loss is heard from the tasks table on the next pass, whether the heartbeat declared it or the runner holding the task reported it. A loss reported twice requeues once, and a runner cannot report another's.
+- A loss is heard from the tasks table on the next pass, whether the heartbeat declared it or the runner holding the task reported it. A loss reported twice requeues once. One naming a dispatch bound to another runner is refused, though the runner is the one the answer names: nothing yet checks who published a result.
 - An answer carries the `task_id` of its dispatch. A reported loss moves that dispatch alone, so one delivered late or twice moves nothing, even once the same runner holds the requeue.
 - An ending reported for a dispatch its key was requeued past is not news, since the attempt waits on the requeue, and it writes nothing on the requeue's row. An answer naming no dispatch of its key is refused with `controller.ErrNotAResult`.
 - An attempt a retry moved past is written as it ended, so it no longer reads as dispatched, counts against `max_concurrent_tasks` or redeems its grant.

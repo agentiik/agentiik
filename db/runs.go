@@ -514,11 +514,11 @@ func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]L
 	return out, rows.Err()
 }
 
-// ErrNotHeld is a runner speaking for a dispatch that was never bound to it.
+// ErrNotHeld is a loss naming a dispatch that was never bound to the runner it names.
 var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 
-// Lose moves to lost the one dispatch a loss names, where it is bound to the runner reporting it
-// and still in flight, and answers whether anything moved.
+// Lose moves to lost the one dispatch a loss names, where it is bound to the runner the loss
+// names and still in flight, and answers whether anything moved.
 //
 // "lost is declared by the controller rather than reported here, and travels on a result only
 // where a runner recovers one it had already lost." Such a result is written where the heartbeat
@@ -535,6 +535,13 @@ var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 // alive only a runner's own tasks: a runner able to declare somebody else's task lost could send
 // work round the fleet that is running perfectly well. A dispatch of the key bound to another
 // runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld.
+//
+// That runner is the one the result names, which is its own word and not something checked. A
+// heartbeat is a request the API authenticates; a result is a message on a subject every runner
+// may publish to, and nothing on it says who published it. So this keeps a runner that is wrong
+// about what it holds off another's task, and does not keep off one that lies about its name.
+// That waits for results to carry a publisher the controller can check, which the refusal of a
+// result from a runner other than the one bound at redemption waits for too.
 func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, runner string, at time.Time) (bool, error) {
 	switch {
 	case runner == "":

@@ -177,8 +177,9 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 // runner together, since the runner that lost a dispatch may be the one holding its requeue. The
 // row can. The same loss delivered twice, or delivered late, then finds its dispatch already
 // lost, moves nothing, and decides nothing, where recording it would requeue the key a second
-// time. A loss naming a dispatch that was never bound to its runner is speaking for somebody
-// else's task, and that answer is the same on every delivery.
+// time. A loss naming a dispatch that was never bound to the runner it names is speaking for
+// somebody else's task, and that answer is the same on every delivery. The runner it names is
+// the answer's own word, which Lose says more about.
 func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
 	moved := false
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
