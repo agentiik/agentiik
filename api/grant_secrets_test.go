@@ -2,7 +2,9 @@ package api_test
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/jackc/pgx/v5"
 )
 
 // When a redemption reads a secret value, and what it does with one.
@@ -160,5 +163,122 @@ func TestASecretIsReadOnlyOnceNothingElseCanRefuse(t *testing.T) {
 	}
 	if reads := store.read(); len(reads) != 1 {
 		t.Errorf("refusing a task that is not the runner's to work on read %v", reads[1:])
+	}
+}
+
+// The last moment is every redemption, and nothing between the store and the answer keeps a value.
+// Nothing reads one before a runner redeems, each redemption reads every secret the task names
+// once, and a value rotated between two redemptions is the one the second is given, whichever
+// grant of the task it redeems. Nor is one written into the database on the way, where a copy of
+// the table would be a copy of the credential.
+func TestASecretIsReadAtEveryRedemptionAndKeptByNothing(t *testing.T) {
+	store := &rotated{}
+	store.holds("finance/billing", "bk_live_first")
+	store.holds("finance/stripe", "sk_live_first")
+	g := withGrants(t, store)
+	credential := g.joined(t)
+	clear, envelope, _ := g.dispatched(t, []string{"billing", "stripe"})
+	if reads := store.read(); len(reads) != 0 {
+		t.Fatalf("the store was read before any redemption: %v", reads)
+	}
+
+	// The task published again, as a pass that could not record its dispatch does, carries a
+	// grant of its own beside the first.
+	again := g.granted(t, db.GrantScope{
+		Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Inputs: []db.GrantInput{{Port: "in", Digest: envelope, Items: 1}},
+		Secrets: []db.GrantSecret{
+			{Name: "billing", Mount: "/agk/secrets/billing"},
+			{Name: "stripe", Mount: "/agk/secrets/stripe"},
+		},
+	})
+
+	var given []string
+	for i, c := range []struct {
+		why     string
+		grant   string
+		rotated string
+	}{
+		{"the first redemption", clear, "first"},
+		{"asking again after a lost answer", clear, "second"},
+		{"the grant of the task published again", again, "third"},
+	} {
+		store.holds("finance/billing", "bk_live_"+c.rotated)
+		store.holds("finance/stripe", "sk_live_"+c.rotated)
+		answer := g.redeemed(t, credential, asking(c.grant))
+
+		var got []string
+		for _, s := range answer.Secrets {
+			got = append(got, s.Name+"="+s.Value)
+			given = append(given, s.Value)
+		}
+		if want := []string{"billing=bk_live_" + c.rotated, "stripe=sk_live_" + c.rotated}; !slices.Equal(got, want) {
+			t.Errorf("%s was given %v, and the store holds %v", c.why, got, want)
+		}
+		if reads, want := len(store.read()), 2*(i+1); reads != want {
+			t.Errorf("after %s the store was read %d times, and %d redemptions of two secrets read it %d", c.why, reads, i+1, want)
+		}
+	}
+
+	for _, held := range kept(t, g.super, given...) {
+		t.Errorf("a value a redemption answered is kept in the database: %s", held)
+	}
+}
+
+// kept names each table of the database holding one of the values in some row, written as text or
+// as the hexadecimal PostgreSQL writes bytes in, read as the superuser from behind every policy.
+func kept(t *testing.T, super string, values ...string) []string {
+	t.Helper()
+	conn := dbtest.Superuser(t, super)
+	rows, err := conn.Query(t.Context(), `select quote_ident(tablename) from pg_tables where schemaname = 'public' order by tablename`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A search that read no table would find nothing anywhere.
+	for _, table := range []string{"task_grants", "tasks", "secret_values"} {
+		if !slices.Contains(tables, table) {
+			t.Fatalf("the search does not reach %s, so what it does not find says nothing", table)
+		}
+	}
+	var found []string
+	for _, table := range tables {
+		for _, v := range values {
+			var n int
+			if err := conn.QueryRow(t.Context(),
+				`select count(*) from `+table+` r where strpos(r::text, $1) > 0 or strpos(r::text, $2) > 0`,
+				v, hex.EncodeToString([]byte(v))).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n > 0 {
+				found = append(found, fmt.Sprintf("%s holds %s in %d rows", table, v, n))
+			}
+		}
+	}
+	return found
+}
+
+// The store is asked for the secrets the grant names, in the namespace the grant was issued in,
+// and for nothing else: not the same name in another namespace, and not another secret the task's
+// own namespace holds.
+func TestOnlyTheSecretsTheGrantNamesAreRead(t *testing.T) {
+	store := &rotated{}
+	store.holds("finance/stripe", "sk_live_finance")
+	store.holds("ops/stripe", "sk_live_ops")
+	store.holds("finance/other", "ot_live_finance")
+	g := withGrants(t, store)
+	credential := g.joined(t)
+	clear, _, _ := g.dispatched(t, []string{"stripe"})
+
+	answer := g.redeemed(t, credential, asking(clear))
+	if reads := store.read(); !slices.Equal(reads, []string{"finance/stripe"}) {
+		t.Errorf("the redemption asked the store for %v", reads)
+	}
+	want := []api.Secret{{Name: "stripe", Mount: "/agk/secrets/stripe", Encoding: api.EncodingUTF8, Value: "sk_live_finance"}}
+	if !slices.Equal(answer.Secrets, want) {
+		t.Errorf("the redemption answered the secrets %+v, want %+v", answer.Secrets, want)
 	}
 }
