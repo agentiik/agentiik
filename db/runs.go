@@ -485,6 +485,11 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 // runner can report a second ending for it and no redemption can follow. A dispatch somebody
 // already holds keeps its holder, and the answer says who that is; the row is locked by the
 // update, so a redemption racing it binds first or finds it bound.
+//
+// It belongs in the transaction that writes the ending, and never in one of its own. Pool.Lost
+// takes a bound dispatch in flight for one a runner redeemed, so a binding committed without its
+// ending would be swept lost, counted from the dispatch, as if a container had run and its host
+// gone quiet.
 func (w *Wide) BindUnreached(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
 	if runner == "" {
 		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
@@ -585,10 +590,12 @@ var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 // Named, it finds the first already lost and moves nothing, which is also what makes a loss
 // delivered twice requeue once.
 //
-// It reaches only a dispatch bound to that runner at redemption, for the reason a heartbeat keeps
-// alive only a runner's own tasks: a runner able to declare somebody else's task lost could send
-// work round the fleet that is running perfectly well. A dispatch of the key bound to another
-// runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld.
+// It reaches only a dispatch bound to that runner, for the reason a heartbeat keeps alive only a
+// runner's own tasks: a runner able to declare somebody else's task lost could send work round
+// the fleet that is running perfectly well. A dispatch of the key bound to another runner, or to
+// none, or no dispatch of the key at all, is answered ErrNotHeld. And it moves only one still in
+// flight, which is one that runner redeemed: a runner bound by reporting that a task never reached
+// a container was bound with that ending, so the dispatch is over and nothing moves.
 //
 // That runner is the one the result names, and it is the one that published it: a heartbeat is a
 // request the API authenticates, and a result arrives on a subject only its runner's credential

@@ -17,7 +17,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An envelope is read back no further than one byte past `envelope_max_bytes`, so a digest a runner names never has the controller hold a whole artifact in memory.
 - A result naming an object that is not the envelope its digest names (too long, other bytes, or not an envelope) is refused with `controller.ErrNotAResult` rather than delivered again. `artifact.ErrNotAnEnvelope` tells it apart from an object that could not be read.
 - A result is taken only from the runner its dispatch was bound to at redemption. Another runner's, or one saying a container ran for a task nobody redeemed, is refused with `controller.ErrNotTheHolder`. The binding is the `task_id`'s and not the key's, so the runner that lost a dispatch is refused for its requeue, and is heard, though not as news, for the dispatch it held.
-- A task that never reached a container (a refused pull, a grant that would not redeem) is ended by the first runner to report it, which is bound to it as a redemption would bind it.
+- A task that never reached a container (a refused pull, a grant that would not redeem) is ended by the first runner to report it, which is bound to it as a redemption would bind it, in the transaction that writes the ending. A binding is never left on a task still in flight, where the heartbeat would declare lost a task no container ran for.
 - A task that never reached a container is recorded with no exit code, rather than the 0 of success.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.

@@ -114,8 +114,9 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,
 // and a runner reports it all the same, having acknowledged the message on take and left nothing
 // on the queue to deliver it again. The first runner to report such an ending is bound to the
-// dispatch as a redemption would have bound it, in the transaction that reads the binding, and
-// the answer is taken from it and from no other.
+// dispatch as a redemption would have bound it, in the transaction that writes the ending, and
+// the answer is taken from it and from no other. An ending that is not news writes nothing and
+// binds nobody.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
@@ -150,11 +151,6 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		if holder, err = w.HeldBy(ctx, e.Namespace, a.Result.Task, a.Row); err != nil {
 			return err
 		}
-		if holder == "" && unreached(a) {
-			if holder, err = w.BindUnreached(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner); err != nil {
-				return err
-			}
-		}
 		a.Result.Requeue, err = w.RequeueOf(ctx, e.Namespace, a.Result.Task, a.Row)
 		return err
 	}); err != nil {
@@ -164,6 +160,15 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 			return fmt.Errorf("%w: %w", ErrNotAResult, err)
 		}
 		return err
+	}
+	// An ending that never reached a container, of a dispatch nobody holds, is taken from the
+	// runner reporting it, and binds that runner in the transaction that writes the ending and
+	// not before. Bound on its own, a pass that failed before the ending was written would leave
+	// the dispatch in flight with a runner and no redemption, and the heartbeat, which counts a
+	// bound dispatch as held, would declare lost a task that never reached a container.
+	bind := holder == "" && unreached(a)
+	if bind {
+		holder = a.Runner
 	}
 	switch {
 	case holder == "":
@@ -225,7 +230,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	}
 
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-		return w.SaveDecision(ctx, db.Decision{
+		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
 			Was: e.Seq, Seq: state.Seq,
 			Document:   encoded,
@@ -235,7 +240,21 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 			Steps:      steps, Tasks: tasks,
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
-		})
+		}); err != nil || !bind {
+			return err
+		}
+		// After the decision rather than before it, so that the run's row is locked before
+		// the task's, in the order every pass takes them. A runner that redeemed the
+		// dispatch since it was read, or ended it the same way, holds it, and the whole of
+		// this is undone.
+		bound, err := w.BindUnreached(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner)
+		if err != nil {
+			return err
+		}
+		if bound != a.Runner {
+			return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which was bound to %s before it could be written", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task, bound)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}

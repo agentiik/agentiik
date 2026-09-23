@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -459,6 +460,133 @@ func TestATaskThatNeverReachedAContainerIsEndedByTheRunnerThatReportsIt(t *testi
 		return err
 	}); !errors.Is(err, db.ErrTaskHeld) {
 		t.Errorf("the grant of a task another runner ended redeemed, answering %v", err)
+	}
+}
+
+// failsFirst resolves no graph the first time it is asked, which stands for a controller that read
+// an answer and could not go on with it: the store, git or the database did not answer, or it
+// died. Every later call answers as the Versions it wraps.
+type failsFirst struct {
+	Versions
+
+	mu    sync.Mutex
+	asked bool
+}
+
+func (f *failsFirst) Graph(ctx context.Context, namespace, workflow, commit string) (*graph.Graph, error) {
+	f.mu.Lock()
+	first := !f.asked
+	f.asked = true
+	f.mu.Unlock()
+	if first {
+		return nil, errors.New("the graph could not be resolved this time")
+	}
+	return f.Versions.Graph(ctx, namespace, workflow, commit)
+}
+
+// An ending that never reached a container binds its runner when the ending is written, and not
+// before. A controller that read it and could not go on leaves the dispatch as it found it, bound
+// to nobody, so the heartbeat, which takes a bound dispatch for one a runner redeemed, finds no
+// task lost where no container ran, and the step is not requeued for a loss the infrastructure
+// never had. The redelivery then ends the dispatch as the runner reported it, where it would
+// otherwise find it lost and requeued and its ending no longer news.
+func TestAnUnreachedEndingTheControllerCouldNotWriteBindsNobody(t *testing.T) {
+	core, q, pool, super := decidingOn(t, requeueingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+
+	troubled, err := NewCore(core.controller, core.term, Options{
+		Queue: q, Versions: &failsFirst{Versions: core.versions}, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := Answer{Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed}, Row: d.Row, Runner: "runner-1"}
+	if err := troubled.Answer(t.Context(), pulled); err == nil || errors.Is(err, ErrNotAResult) {
+		t.Fatalf("an answer the controller could not go on with answered %v, and it is one to deliver again", err)
+	}
+	conn := dbtest.Superuser(t, super)
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 dispatched -"}; !slices.Equal(got, want) {
+		t.Errorf("after an ending that was never written the key holds %q, want %q", got, want)
+	}
+
+	// Dispatched on the test's clock, which is days behind the database's.
+	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
+		t.Fatalf("the heartbeat declared %d tasks lost that never reached a container, answering %v", n, err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if again := q.dispatched(); len(again) != 0 {
+		t.Errorf("a task that never reached a container was sent out again as %+v", again)
+	}
+
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("the ending delivered again was refused: %s", err)
+	}
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("after the ending was delivered again the key holds %q, want %q", got, want)
+	}
+}
+
+// redeemsMeanwhile has a runner redeem the dispatch the first time the graph is asked for, which is
+// after Answer has read who holds it and before it writes what it decided.
+type redeemsMeanwhile struct {
+	Versions
+
+	redeem func() error
+	once   sync.Once
+}
+
+func (r *redeemsMeanwhile) Graph(ctx context.Context, namespace, workflow, commit string) (*graph.Graph, error) {
+	var err error
+	r.once.Do(func() { err = r.redeem() })
+	if err != nil {
+		return nil, err
+	}
+	return r.Versions.Graph(ctx, namespace, workflow, commit)
+}
+
+// A runner may redeem a dispatch after an ending that never reached a container was read and
+// before it was written. The redemption bound first, so the ending is somebody else's word on the
+// dispatch: it is refused as such, and nothing of it is written.
+func TestAnUnreachedEndingIsRefusedOnceARedemptionBoundItMeanwhile(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+
+	racing, err := NewCore(core.controller, core.term, Options{
+		Queue: q, Objects: core.objects, Now: core.now,
+		Versions: &redeemsMeanwhile{Versions: core.versions, redeem: func() error { return core.redeem(t, d, "runner-2") }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	pulled := Answer{Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed}, Row: d.Row, Runner: "runner-1"}
+	if err := racing.Answer(t.Context(), pulled); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("an unreached ending of a dispatch runner-2 redeemed meanwhile answered %v", err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("the refused ending took the run from seq %d to %d", before, after)
+	}
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 dispatched runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }
 
