@@ -41,8 +41,8 @@ type Answer struct {
 
 	// Runner is the runner that published it. "A user never learns which host executed a task
 	// beyond its runner name and labels." It is also who the answer is taken from: the runner
-	// the dispatch was bound to, by its redemption or by an ending that never reached a
-	// container, and no other.
+	// the dispatch was bound to, by its redemption, by an ending that never reached a container,
+	// or by the ending its host recorded of an earlier dispatch of the key, and no other.
 	Runner string
 
 	// Outputs are the envelopes the task published, one per port, named rather than carried.
@@ -79,8 +79,9 @@ var ErrNotAResult = errors.New("controller: not a result any controller could re
 
 // ErrNotTheHolder is a result about a dispatch the runner that published it does not hold: one
 // bound to another runner, by its redemption or by an ending that never reached a container; one
-// saying a container ran for a dispatch nobody redeemed; and a loss of a dispatch the runner never
-// held, nobody's included, since a runner cannot lose what it never had.
+// saying a container ran for a dispatch nobody redeemed, from a runner that redeemed no earlier
+// dispatch of its key; and a loss of a dispatch the runner never held, nobody's included, since a
+// runner cannot lose what it never had.
 //
 // It always comes wrapped with ErrNotAResult, since no delivery would change it: a binding is never
 // released. It has a name of its own because it points somewhere else. A result that is not an
@@ -107,22 +108,31 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // pool, and the first ending recorded for an attempt stands, so an answer is matched on its key and
 // its dispatch, and then held to the runner that dispatch was bound to at redemption. The dispatch
 // and not the key, because a requeue after loss keeps the key and is bound on its own: holding
-// the dispatch that was lost gives a runner nothing of the requeue, whose ending is taken from
-// whoever redeems it, the same runner or another, or from the first to report it never reached a
-// container; and holding the requeue gives nothing of the dispatch it replaced. That Runner is
-// the machine that sent it is the bus's to vouch for, and package bus does, by giving each runner
-// a subject only it may publish on. Another runner's answer is refused with ErrNotTheHolder before
-// the run is decided, and so is one saying a container ran for a dispatch nobody redeemed, since
-// a container is started from what the grant hands over and none can have run for it, and so is
-// a loss of one, since a runner cannot lose what it never held.
+// the dispatch that was lost gives a runner nothing of a requeue somebody else redeemed, and
+// holding the requeue gives nothing of the dispatch it replaced. That Runner is the machine that
+// sent it is the bus's to vouch for, and package bus does, by giving each runner a subject only it
+// may publish on. Another runner's answer is refused with ErrNotTheHolder before the run is
+// decided, and so is a loss of a dispatch nobody redeemed, since a runner cannot lose what it
+// never held, and so is one saying a container ran for such a dispatch, but in the one case below.
 //
 // One saying no container ran is another matter. A runner pulls the image before it redeems the
 // grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,
 // and a runner reports it all the same, having acknowledged the message on take and left nothing
 // on the queue to deliver it again. The first runner to report such an ending is bound to the
 // dispatch as a redemption would have bound it, in the transaction that writes the ending, and
-// the answer is taken from it and from no other. An ending that is not news writes nothing and
-// binds nobody.
+// the answer is taken from it and from no other.
+//
+// The one case is a requeue that came back to the host which had already ended its key. The
+// heartbeat declares a task lost when its host stops reporting, and a host only cut off may have
+// run it to its end and reported that ending into the same silence. The requeue is likeliest to
+// come back to that host, and certain to where it is its pool's only runner, and the host refuses
+// to run the key again, acknowledges the message, and reports the ending it recorded under the
+// requeue's task_id. Nobody redeems the requeue, so nobody else will ever answer it, and the run
+// would wait on it until its own timeout, or for ever where it has none. So an ending of a dispatch
+// nobody holds is also taken from a runner that redeemed an earlier dispatch of the same key, and
+// binds it the same way. Its reach is still the tasks in its hands: it was given that key, and a
+// machine that never was is refused as before. An ending that is not news writes nothing and binds
+// nobody.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
@@ -149,6 +159,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	// attempt stopped waiting on, and the requeue it was replaced by is still owed its own.
 	var e db.Evaluation
 	var holder string
+	var redeemedBefore bool
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		if e, err = w.Run(ctx, run); err != nil {
@@ -156,6 +167,11 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		}
 		if holder, err = w.HeldBy(ctx, e.Namespace, a.Result.Task, a.Row); err != nil {
 			return err
+		}
+		if holder == "" && a.Result.State != agk.TaskLost && !unreached(a) {
+			if redeemedBefore, err = w.RedeemedBefore(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner); err != nil {
+				return err
+			}
 		}
 		a.Result.Requeue, err = w.RequeueOf(ctx, e.Namespace, a.Result.Task, a.Row)
 		return err
@@ -168,17 +184,18 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		return err
 	}
 	// An ending that never reached a container, of a dispatch nobody holds, is taken from the
-	// runner reporting it, and binds that runner in the transaction that writes the ending and
-	// not before. Bound on its own, a pass that failed before the ending was written would leave
-	// the dispatch in flight with a runner and no redemption, and the heartbeat, which counts a
-	// bound dispatch as held, would declare lost a task that never reached a container.
-	bind := holder == "" && unreached(a)
+	// runner reporting it, and so is one a host answered from its record of an earlier dispatch
+	// of the key it redeemed. Either binds that runner in the transaction that writes the ending
+	// and not before. Bound on its own, a pass that failed before the ending was written would
+	// leave the dispatch in flight with a runner and no redemption, and the heartbeat, which
+	// counts a bound dispatch as held, would declare lost a task that nobody is running.
+	bind := holder == "" && (unreached(a) || redeemedBefore)
 	if bind {
 		holder = a.Runner
 	}
 	switch {
 	case holder == "":
-		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which no runner has redeemed, and only a task that never reached a container ends with nobody holding it", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task)
+		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which no runner has redeemed, and only a task that never reached a container, or whose key that runner redeemed and ended on an earlier dispatch, ends with nobody holding it", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task)
 	case holder != a.Runner:
 		return fmt.Errorf("%w: %w: %s reported %s for dispatch %s of %s, which is bound to %s", ErrNotAResult, ErrNotTheHolder, a.Runner, a.Result.State, a.Row, a.Result.Task, holder)
 	}
@@ -253,7 +270,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		// the task's, in the order every pass takes them. A runner that redeemed the
 		// dispatch since it was read, or ended it the same way, holds it, and the whole of
 		// this is undone.
-		bound, err := w.BindUnreached(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner)
+		bound, err := w.BindUnredeemed(ctx, e.Namespace, a.Result.Task, a.Row, a.Runner)
 		if err != nil {
 			return err
 		}

@@ -223,7 +223,7 @@ func TestADispatchNobodyRedeemedIsBoundToTheFirstRunnerToEndIt(t *testing.T) {
 		var holder string
 		err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
 			var err error
-			holder, err = w.BindUnreached(ctx, "finance", key, row, runner)
+			holder, err = w.BindUnredeemed(ctx, "finance", key, row, runner)
 			return err
 		})
 		return holder, err
@@ -239,5 +239,110 @@ func TestADispatchNobodyRedeemedIsBoundToTheFirstRunnerToEndIt(t *testing.T) {
 	}
 	if _, err := bind(second, unredeemed, "runner-dmz-03"); !errors.Is(err, ErrNoDispatch) {
 		t.Errorf("a dispatch named by the row of one task and the key of another answered %v", err)
+	}
+}
+
+// A requeue that comes back to the host which already ended its key is answered from that host's
+// record, and nobody redeems it. Its ending is held instead to the redemption of a dispatch of the
+// same key handed out before it: the runner that redeemed one was given that work. Not a runner
+// that redeemed nothing of the key, not a dispatch it merely ended without reaching a container,
+// and not the requeue itself or anything after it.
+func TestARequeueIsAnsweredByTheRunnerThatRedeemedADispatchBeforeIt(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx,
+		`insert into steps (namespace, run_id, step) values ('finance', $1, 'render')`, financeRun); err != nil {
+		t.Fatalf("seeding: %s", err)
+	}
+
+	now := time.Now().UTC()
+	// dispatch writes one dispatch of one attempt of render, with its grant, and answers the
+	// grant's clear value.
+	dispatch := func(row string, attempt, requeue int) string {
+		t.Helper()
+		key := agk.NewTaskID(financeRun, "render", attempt, agk.Shard{})
+		if _, err := conn.Exec(ctx, `
+			insert into tasks (namespace, id, run_id, step, attempt, requeue, state)
+			values ('finance', $1, $2, 'render', $3, $4, 'dispatched')`, row, financeRun, attempt, requeue); err != nil {
+			t.Fatalf("seeding dispatch %d of attempt %d: %s", requeue, attempt, err)
+		}
+		var clear string
+		if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			granted, err := w.IssueGrant(ctx, "finance", key, row, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+			clear = granted.Clear
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return clear
+	}
+	lose := func(row string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, `update tasks set state = 'lost' where id = $1`, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Attempt 1 is redeemed by runner-dmz-01, lost, and requeued.
+	const redeemed, requeue = "01M2GHAAAAAAAAAAAAAAAAAAAA", "01M2GHBBBBBBBBBBBBBBBBBBBB"
+	first := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	clear := dispatch(redeemed, 1, 0)
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, first, "runner-dmz-01", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lose(redeemed)
+	dispatch(requeue, 1, 1)
+
+	// Attempt 2 is bound to runner-dmz-03 with no redemption behind it, lost, and requeued.
+	const bound, boundRequeue = "01M2GHCCCCCCCCCCCCCCCCCCCC", "01M2GHDDDDDDDDDDDDDDDDDDDD"
+	second := agk.NewTaskID(financeRun, "render", 2, agk.Shard{})
+	dispatch(bound, 2, 0)
+	if _, err := conn.Exec(ctx, `update tasks set runner = 'runner-dmz-03', state = 'lost' where id = $1`, bound); err != nil {
+		t.Fatal(err)
+	}
+	dispatch(boundRequeue, 2, 1)
+
+	for _, c := range []struct {
+		why    string
+		key    agk.TaskID
+		row    string
+		runner string
+		want   bool
+	}{
+		{"the runner that redeemed the dispatch before the requeue", first, requeue, "runner-dmz-01", true},
+		{"a runner that redeemed nothing of the key", first, requeue, "runner-dmz-02", false},
+		{"the dispatch that runner redeemed, which nothing came before", first, redeemed, "runner-dmz-01", false},
+		{"a runner bound to the dispatch before without redeeming it", second, boundRequeue, "runner-dmz-03", false},
+		{"the requeue under the key of another attempt", second, requeue, "runner-dmz-01", false},
+		{"a row that is not an identifier at all", first, "not a ulid; drop table tasks", "runner-dmz-01", false},
+		{"no runner", first, requeue, "", false},
+	} {
+		var got bool
+		if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			got, err = w.RedeemedBefore(ctx, "finance", c.key, c.row, c.runner)
+			return err
+		}); err != nil {
+			t.Errorf("%s: %s", c.why, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s answered %v", c.why, got)
+		}
 	}
 }
