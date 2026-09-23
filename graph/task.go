@@ -181,11 +181,12 @@ func (s StopReason) MarshalText() ([]byte, error) { return []byte(s.String()), n
 // envelopes included: a port the container never wrote publishes an empty envelope, and
 // that is success.
 //
-// Requeue names the dispatch a loss is about, as ShardState counts them, and is read for
-// a loss and for nothing else. Every other ending is about the unit of work, which the
-// key names whichever dispatch reached it, so a success that comes back from a runner
-// declared lost is still the success of that attempt. A loss is about one dispatch, and
-// a loss of a dispatch the shard has already been requeued past is not news.
+// Requeue names the dispatch an ending is about, as ShardState counts them. The key
+// names the unit of work and a requeue keeps it, so only this tells the requeue's ending
+// from a late one of the dispatch it replaced, and only the requeue's is news. The
+// dispatch before it was judged lost and handed out again: its loss has been heard, and
+// whatever its runner reports afterwards is the report of a runner the attempt stopped
+// waiting on, while the requeue is still out and still owed an answer.
 type Result struct {
 	Task     agk.TaskID    `json:"task"`
 	State    agk.TaskState `json:"state"`

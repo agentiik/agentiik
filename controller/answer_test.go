@@ -101,7 +101,8 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := succeeded(t, taken[0], core.now())
-	if err := dies.Answer(t.Context(), Answer{Result: result, Runner: "runner-dmz-02"}); err == nil {
+	row := core.row(t, taken[0].ID)
+	if err := dies.Answer(t.Context(), Answer{Result: result, Row: row, Runner: "runner-dmz-02"}); err == nil {
 		t.Fatal("a controller that died before deciding the run again answered as if it had")
 	}
 	written := seqOf(t, conn)
@@ -113,7 +114,7 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	}
 
 	// The redelivery, to a controller that is alive.
-	if err := core.Answer(t.Context(), Answer{Result: result, Runner: "runner-dmz-02"}); err != nil {
+	if err := core.Answer(t.Context(), Answer{Result: result, Row: row, Runner: "runner-dmz-02"}); err != nil {
 		t.Fatalf("a result redelivered after its decision committed was refused: %s", err)
 	}
 	if after := seqOf(t, conn); after != written {
@@ -158,6 +159,8 @@ func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
 		{graph.Result{Task: task, State: agk.TaskState(99)}, "a state that is not one"},
 		{graph.Result{Task: "normalize", State: agk.TaskSucceeded}, "a key that is a step and not a task"},
 		{graph.Result{Task: "", State: agk.TaskSucceeded}, "no key at all"},
+		// An ending, and of this task, but of no dispatch of it: a requeue keeps the key.
+		{graph.Result{Task: task, State: agk.TaskSucceeded}, "an ending naming no dispatch"},
 		// A run nobody holds, which would be db.ErrNoRun had anything been read first.
 		{graph.Result{Task: agk.NewTaskID(agk.NewRunID(), "normalize", 1, agk.Shard{}), State: agk.TaskRunning}, "running, for a run nobody holds"},
 	} {

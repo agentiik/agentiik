@@ -447,6 +447,29 @@ func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (s
 	return id, nil
 }
 
+// ErrNoDispatch is a task_id that names no dispatch of the key it came with.
+var ErrNoDispatch = errors.New("db: that task_id is no dispatch of that task")
+
+// RequeueOf answers which dispatch of its key a row records, as graph.ShardState counts them.
+//
+// A result names its unit of work by the key and its dispatch by the task_id, and the evaluator
+// counts dispatches rather than holding rows: this is the one number between them, read the
+// other way from TaskRow. A row that is not a dispatch of the key is answered ErrNoDispatch.
+func (w *Wide) RequeueOf(ctx context.Context, namespace string, key agk.TaskID, row string) (int, error) {
+	// Compared as text, for the reason Lose gives: a runner wrote it.
+	var requeue int
+	err := w.tx.QueryRow(ctx,
+		`select requeue from tasks where namespace = $1 and id = $2::text and idempotency_key = $3`,
+		namespace, row, string(key)).Scan(&requeue)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s is no dispatch of %s", ErrNoDispatch, row, key)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("db: dispatch %s of task %s could not be read: %w", row, key, err)
+	}
+	return requeue, nil
+}
+
 // Loss is one dispatch the heartbeat declared lost: the key, which dispatch of it, and when.
 type Loss struct {
 	Task    agk.TaskID

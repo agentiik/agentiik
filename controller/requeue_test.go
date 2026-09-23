@@ -118,7 +118,7 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 
 	// "A loss does not use up a retry.max attempt": the first attempt failing now is owed the
 	// second.
-	if err := core.Answer(t.Context(), Answer{Result: failed(requeued.Task, 1, core.now()), Runner: "runner-2"}); err != nil {
+	if err := core.Answer(t.Context(), Answer{Result: failed(requeued.Task, 1, core.now()), Row: requeued.Row, Runner: "runner-2"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := stateOf(t, core); got.Terminal() {
@@ -252,6 +252,78 @@ func TestALossReportedAfterTheHeartbeatDeclaredItMovesNothing(t *testing.T) {
 	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-1", "1 dispatched runner-1"}; !slices.Equal(got, want) {
 		t.Errorf("the key holds %q, want %q", got, want)
 	}
+}
+
+// The heartbeat declares a dispatch lost and the requeue goes to another runner. The runner that
+// went quiet comes back and reports how its container ended, which is not news: the attempt
+// stopped waiting on that dispatch when it was requeued, and the requeue is still running and
+// owed an ending of its own. So nothing is decided, no further attempt goes out, and the requeue's
+// row does not take the name of a runner that never held it. The requeue's ending is the one that
+// counts.
+func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
+	core, q, pool, super := decidingOn(t, requeueingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
+		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	again := q.dispatched()
+	if len(again) != 1 {
+		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
+	}
+	if err := core.redeem(t, again[0], "runner-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	if err := core.Answer(t.Context(), Answer{
+		Result: failed(first[0].Task, 1, core.now()), Row: first[0].Row, Runner: "runner-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("a failure of the dispatch that was lost took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("a failure of the dispatch that was lost published %+v", got)
+	}
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-1", "1 dispatched runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+
+	// An ending naming a row that is no dispatch of its key is one no delivery could make
+	// sense of.
+	if err := core.Answer(t.Context(), Answer{
+		Result: failed(first[0].Task, 1, core.now()), Row: "01M2HZZZZZZZZZZZZZZZZZZZZZ", Runner: "runner-1",
+	}); !errors.Is(err, ErrNotAResult) {
+		t.Errorf("an ending naming no dispatch of its key answered %v", err)
+	}
+
+	if err := core.Answer(t.Context(), Answer{
+		Result: succeeded(t, again[0].Task, core.now()), Row: again[0].Row, Runner: "runner-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Errorf("the run is %s after the requeue succeeded", got)
+	}
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-1", "1 succeeded runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+
 }
 
 // "lost: The runner holding it stopped reporting." A task no runner has taken is waiting on the

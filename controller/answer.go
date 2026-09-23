@@ -76,16 +76,29 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	if !a.Result.State.Terminal() {
 		return fmt.Errorf("%w: %s is %s, which is not one of the five endings a result reports", ErrNotAResult, a.Result.Task, a.Result.State)
 	}
+	if a.Row == "" {
+		return fmt.Errorf("%w: %s names no dispatch, and a requeue keeps the key, so the key alone cannot say which dispatch ended", ErrNotAResult, a.Result.Task)
+	}
 	if a.Result.State == agk.TaskLost {
 		return co.lose(ctx, run, a)
 	}
 
+	// The dispatch is read with the run, because the evaluator counts dispatches and the
+	// answer names a row. Which one it is decides whether the answer is news: an ending of a
+	// dispatch the key was requeued past after it was lost is the late report of a runner the
+	// attempt stopped waiting on, and the requeue it was replaced by is still owed its own.
 	var e db.Evaluation
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		e, err = w.Run(ctx, run)
+		if e, err = w.Run(ctx, run); err != nil || e.State.Terminal() || len(e.Document) == 0 {
+			return err
+		}
+		a.Result.Requeue, err = w.RequeueOf(ctx, e.Namespace, a.Result.Task, a.Row)
 		return err
 	}); err != nil {
+		if errors.Is(err, db.ErrNoDispatch) {
+			return fmt.Errorf("%w: %w", ErrNotAResult, err)
+		}
 		return err
 	}
 	if e.State.Terminal() {
@@ -220,11 +233,13 @@ func passed(run agk.RunID, step agk.Step, before graph.ShardState, r graph.Resul
 // stamp writes onto the projected row of the task the answer is about the things only the answer
 // knows: who held it, where its log went, and what it cost.
 //
-// Only that row. A result says nothing about the other shards of its step, and a projection that
-// spread one runner's name across them would be inventing.
+// Only that row, and only the dispatch of it the answer named. A result says nothing about the
+// other shards of its step, and a projection that spread one runner's name across them would be
+// inventing; nor about the other dispatches of its key, where a runner's name would be a binding
+// no redemption made.
 func stamp(tasks []db.TaskRow, a Answer) {
 	for i := range tasks {
-		if tasks[i].ID != a.Result.Task {
+		if tasks[i].ID != a.Result.Task || tasks[i].Requeue != a.Result.Requeue {
 			continue
 		}
 		tasks[i].Runner = a.Runner

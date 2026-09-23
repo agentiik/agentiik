@@ -697,12 +697,17 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 	// behind, while the same key now names the second.
 	unchanged(t, e, Result{Task: first.ID, State: agk.TaskLost}, "a loss of the first dispatch delivered again")
 
-	// And a success that comes back from the runner declared lost is the success of the
-	// attempt, whichever dispatch reached it.
-	record(t, e, succeeded(first, ports("ok", item("a1"))), runAt.Add(2*time.Minute))
+	// Nor is any other ending of the first dispatch, from a runner that came back after it
+	// was declared lost: the attempt waits on the requeue, which is still going. The
+	// requeue's own ending is the one that ends it.
+	unchanged(t, e, succeeded(first, ports("ok", item("a1"))), "a success of the first dispatch after the requeue went out")
+	unchanged(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 1}, "a failure of the first dispatch after the requeue went out")
+	ended := succeeded(first, ports("ok", item("a1")))
+	ended.Requeue = 1
+	record(t, e, ended, runAt.Add(2*time.Minute))
 	next(t, e, runAt.Add(2*time.Minute))
 	if got := e.State().Run.State; got != agk.Succeeded {
-		t.Errorf("the run is %s after the lost dispatch came back with a success", got)
+		t.Errorf("the run is %s after the requeue came back with a success", got)
 	}
 }
 
@@ -720,7 +725,7 @@ func TestALossDoesNotUseUpAnAttempt(t *testing.T) {
 		}
 	}
 
-	record(t, e, Result{Task: task.ID, State: agk.TaskFailed, ExitCode: 108, FinishedAt: runAt}, runAt)
+	record(t, e, Result{Task: task.ID, State: agk.TaskFailed, ExitCode: 108, Requeue: 2, FinishedAt: runAt}, runAt)
 	plan := next(t, e, runAt.Add(time.Minute))
 	if len(plan.Start) != 1 || plan.Start[0].Attempt != 2 {
 		t.Fatalf("a transient failure after two losses starts %s, and max: 1 still owes attempt 2", starts(plan))

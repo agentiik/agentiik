@@ -209,8 +209,9 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 // makes "a run replays by replaying its Results" true. A result for an attempt that is
 // over changes nothing: the task identifier is the idempotency key, a bus is allowed to
 // deliver twice, and a late answer about an attempt already judged is a duplicate rather
-// than news. Nor does a loss of a dispatch the shard has been requeued past, since the
-// requeue kept the key and only the dispatch tells the two losses apart.
+// than news. Nor does an ending of a dispatch the shard has been requeued past, since the
+// requeue kept the key and only the dispatch tells the two apart: that dispatch was
+// judged lost and handed out again, and the attempt now waits on the requeue.
 func (e *Evaluator) Record(r Result, now time.Time) error {
 	now = now.UTC()
 	run, name, attempt, shard, err := agk.ParseTaskID(string(r.Task))
@@ -233,7 +234,7 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	if sh.Attempt != attempt || sh.Task.Terminal() {
 		return nil
 	}
-	if r.State == agk.TaskLost && r.Requeue != sh.Requeue {
+	if r.State.Terminal() && r.Requeue != sh.Requeue {
 		return nil
 	}
 
