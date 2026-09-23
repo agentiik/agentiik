@@ -241,6 +241,7 @@ func TestARunnerTakesFromThePoolsConsumer(t *testing.T) {
 	// And says what happened, on the same connection.
 	if err := runner.Report(t.Context(), controller.Answer{
 		Result: graph.Result{Task: aTask("mine").ID, State: agk.TaskSucceeded},
+		Row:    taken[0].Task.TaskID,
 		Runner: "runner-1",
 	}); err != nil {
 		t.Errorf("reporting: %s", err)

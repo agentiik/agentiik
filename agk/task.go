@@ -78,9 +78,9 @@ func (t TaskState) String() string {
 
 // Terminal says whether anything more is expected of this task.
 //
-// Lost is terminal, which is the whole point of the state: the task is over as far as
-// anyone can tell, and what happens next is a new attempt with its own identity rather
-// than more news about this one.
+// Lost is terminal, which is the whole point of the state: the dispatch is over as far
+// as anyone can tell, and what happens next is the same attempt handed out again under a
+// new task_id, where the step allows it, rather than more news about this one.
 func (t TaskState) Terminal() bool {
 	switch t {
 	case TaskSucceeded, TaskFailed, TaskLost, TaskTimedOut, TaskCancelled:

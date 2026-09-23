@@ -135,7 +135,16 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // long before, on take, so a result that could not be published is the runner's to publish
 // again and not the bus's to recover by redelivering the task: redelivery would run the brick a
 // second time to recover an answer that already exists.
+//
+// The stream deduplicates it on the dispatch and the ending, and not on the key. A requeue after
+// loss keeps the key, and the ending of the requeue could then follow a late one of the dispatch
+// it replaced inside the duplicate window: the stream would answer that it was already there, and
+// the one ending the controller was waiting for would go nowhere while the one it throws away went
+// through.
 func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
+	if a.Row == "" {
+		return fmt.Errorf("bus: the result of %s names no dispatch, and a requeue keeps the key, so the key alone cannot say which one ended", a.Result.Task)
+	}
 	body, err := json.Marshal(a)
 	if err != nil {
 		return fmt.Errorf("bus: the result of %s could not be written: %w", a.Result.Task, err)
@@ -144,7 +153,7 @@ func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 		Subject: ResultSubject,
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{"result-" + string(a.Result.Task) + "-" + a.Result.State.String()},
+			jetstream.MsgIDHeader: []string{"result-" + a.Row + "-" + a.Result.State.String()},
 		},
 	}
 	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
