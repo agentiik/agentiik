@@ -299,7 +299,7 @@ func TestABodyIsReadClosed(t *testing.T) {
 
 	// And base64 is read however a writer escaped it, since JSON lets it escape any character.
 	var p Push
-	if err := readAtMost(httptest.NewRequest("POST", "/", strings.NewReader(`{"document":"aGk="}`)), &p, smallMaxBytes); err != nil || string(p.Document) != "hi" {
+	if err := readAtMost(httptest.NewRequest("POST", "/", strings.NewReader(`{"document":"\u0061Gk\u003d"}`)), &p, smallMaxBytes); err != nil || string(p.Document) != "hi" {
 		t.Errorf("base64 with an escaped character reads as %q: %v", p.Document, err)
 	}
 }
