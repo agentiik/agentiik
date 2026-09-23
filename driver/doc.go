@@ -30,10 +30,13 @@
 // A graph.Result means a container ran and the exit code table read its code. An error
 // means no outcome could be determined at all, which is a daemon that could not be
 // reached, the userns floor refusing, network: egress being refused, a manifest declaring
-// a root user, a pull that died, or a working directory that could not be prepared. That
-// distinction is the reason the signature carries both, and it is the only judgement this
-// package makes. No exit code is invented for a failure that produced none, because a
-// driver reporting its own trouble as a brick failure fails somebody else's step.
+// a root user, a pull that died, or a working directory that could not be prepared. A key
+// this host has already carried to an ending is refused the same way, ErrCompleted: its
+// outcome is the one the delivery that ran it reported, and this delivery determines
+// none. That distinction is the reason the signature carries both, and it is the only
+// judgement this package makes. No exit code is invented for a failure that produced
+// none, because a driver reporting its own trouble as a brick failure fails somebody
+// else's step.
 //
 // State is read through agk.Band and nowhere else. Exit 0 is agk.TaskSucceeded, every
 // other exit is agk.TaskFailed with ExitCode set, a deadline that fired is
@@ -104,11 +107,12 @@
 //
 // One task is one conversation with the daemon, and its order is chosen so that the races
 // cannot happen rather than so that they are caught. Negotiate the API version and check
-// the userns floor, once per daemon. Adopt by label or create. Pull by digest, reading
-// every message of the progress stream, because the daemon reports a failed pull as an
-// error object inside a 200 that has already streamed half its layers. Read
-// /agk/brick.yaml out of the image and cache what brick.ParseManifest returns under the
-// image digest. Prepare the working directory and its mounts. Open the wait with
+// the userns floor, once per daemon. Refuse a key this host has already carried to an
+// ending, which the record under the work root answers. Adopt by label or create. Pull by
+// digest, reading every message of the progress stream, because the daemon reports a
+// failed pull as an error object inside a 200 that has already streamed half its layers.
+// Read /agk/brick.yaml out of the image and cache what brick.ParseManifest returns under
+// the image digest. Prepare the working directory and its mounts. Open the wait with
 // condition=next-exit before the container is started, which makes the exit-during-attach
 // race unrepresentable rather than rare. Attach, start, write the envelope on standard
 // input from its own goroutine and half-close, treating a broken pipe as ordinary because
@@ -116,8 +120,20 @@
 // standard output for the shorthand and passing standard error through the masker into
 // the log. Take the exit code from the wait that was already open. Take the log from the
 // daemon, which is why AutoRemove is false and why nothing is lost on a fast exit.
-// Collect, upload, spill. Then remove the container, the network and the working
-// directory, in a defer that runs on every path.
+// Collect, upload, spill. Write the ending down under the work root, before anything is
+// removed, so that no moment passes in which the work is done and the record does not say
+// so. Then remove the container, the network and the working directory, in a defer that
+// runs on every path.
+//
+// The record is what a container is not. Adoption finds a container that is still there;
+// the record answers for a key whose container was collected and removed, which is the
+// key at-least-once delivery hands back after a restart or a requeue. It sits under the
+// work root and outside every task's directory, it holds the key, its state and a moment
+// and never a payload, and it keeps a key for KeysKept, the task stream's own retention.
+// A container that ran to its end ends its key even when what it left cannot be
+// collected, an output that is not an envelope or a store that refused the upload: the
+// brick ran, and the key is written down failed. Hold writes a key down on take, which is
+// what a runner does before it acknowledges the task message.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this
@@ -229,6 +245,7 @@
 //	container.go  the settings every task gets, as HostConfig writes them
 //	network.go    a network per task, none and internal, egress refused
 //	run.go        the create, wait, attach, start, copy, collect sequence, and adoption by label
+//	record.go     the keys this host has taken and ended, refused once ended, kept for a week
 //	deadline.go   SIGTERM then SIGKILL after grace, with the event stream as the backstop
 //	script.go     script, before_script, after_script, the shell default, the verdict
 //	collect.go    brick.Collect, the files upload, brick.Spill, the standard output shorthand

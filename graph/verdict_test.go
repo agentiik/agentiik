@@ -355,7 +355,7 @@ func TestARunIsReducedFromWhatTheDriverReported(t *testing.T) {
 	notify := []ShardState{
 		{Attempt: 1, Task: agk.TaskFailed, ExitCode: 7, FinishedAt: outcomeAt},
 	}
-	if _, again := nextAttempt(Retry{}, true, notify[0]); again {
+	if _, again := nextAttempt(Retry{}, notify[0]); again {
 		t.Fatal("a step with no retry policy was given another attempt")
 	}
 

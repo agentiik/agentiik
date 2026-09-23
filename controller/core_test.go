@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -86,8 +88,15 @@ func (q *fakeQueue) Publish(_ context.Context, d Dispatch) error {
 		return q.refuse
 	}
 	q.published = append(q.published, d)
+	issued.Store(d.Row, d.Grant)
 	return nil
 }
+
+// issued is every grant that went out, by the row it was issued for, which is what a runner taking
+// the message has in its hands. Kept outside any one queue because a failover hands the answer to
+// a controller that did not publish the task, and by row because a row is minted once and never
+// shared between two tests.
+var issued sync.Map
 
 func (q *fakeQueue) Stop(_ context.Context, s graph.Stop) error {
 	q.mu.Lock()
@@ -308,20 +317,82 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 	}
 }
 
+// row is the task_id of the latest dispatch of a key, which is the one the runner answering it
+// in these tests took.
+func (co *Core) row(t *testing.T, key agk.TaskID) string {
+	t.Helper()
+	var row string
+	if err := co.controller.Fenced(t.Context(), co.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		row, err = w.TaskRow(ctx, "finance", key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
 // answer feeds one result back the way the bus will, through the door a bus consumer calls.
 func (co *Core) answer(t *testing.T, r graph.Result) {
 	t.Helper()
+	if err := co.Answer(t.Context(), co.answerOf(t, r)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// theRunner is the machine these tests have holding their tasks.
+const theRunner = "runner-dmz-02"
+
+// answerOf is what the runner holding a task says about r, as the bus hands it on.
+//
+// The runner holds it because it redeemed its grant, and redeems it here as theRunner where nobody
+// has yet; a task somebody else redeemed is answered by whoever did. Its envelopes are uploaded
+// first and named by digest, and the instant it was handed out is left out, since that is the
+// controller's to know and not the runner's to say.
+func (co *Core) answerOf(t *testing.T, r graph.Result) Answer {
+	t.Helper()
+	ctx := t.Context()
 	log, err := agk.NewLogURI(r.Task)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := co.Answer(t.Context(), Answer{
-		Result: r, Runner: "runner-dmz-02",
-		Log: log, LogLines: 412,
+	a := Answer{
+		Runner: theRunner,
+		Log:    log, LogLines: 412,
 		Usage: map[string]any{"cpu_seconds": 12.4, "max_rss_bytes": 198443008, "image_pull_ms": 0},
+	}
+	for _, port := range sortedPorts(r.Outputs) {
+		e := r.Outputs[port]
+		digest, _, err := artifact.PutEnvelope(ctx, co.objects, "finance", e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Outputs = append(a.Outputs, Output{Port: port, Digest: digest, Items: e.Meta.Count})
+	}
+	r.Outputs, r.DispatchedAt = nil, time.Time{}
+	a.Result = r
+
+	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		row, err := w.TaskRow(ctx, "finance", r.Task)
+		if err != nil {
+			return err
+		}
+		a.Row = row
+		holder, err := w.HeldBy(ctx, "finance", r.Task, row)
+		if err != nil || holder != "" {
+			a.Runner = holder
+			return err
+		}
+		grant, ok := issued.Load(row)
+		if !ok {
+			return fmt.Errorf("no grant went out for %s, so no runner can hold it", r.Task)
+		}
+		_, err = w.Redeem(ctx, grant.(string), r.Task, theRunner, co.now())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return a
 }
 
 // succeeded is what a runner sends back for a task that worked, with one item on ok.
@@ -1080,5 +1151,73 @@ func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
 	}
 	if !held {
 		t.Error("the input envelope the message names is not in the store, so a runner redeeming the grant would be handed a name for nothing")
+	}
+}
+
+// diesOnPublishing publishes and then stands for a controller that dies before it records the
+// dispatch: the pass's context ends the moment the message has gone.
+type diesOnPublishing struct {
+	fakeQueue
+	cancel context.CancelFunc
+}
+
+func (d *diesOnPublishing) Publish(ctx context.Context, dispatch Dispatch) error {
+	if err := d.fakeQueue.Publish(ctx, dispatch); err != nil {
+		return err
+	}
+	d.cancel()
+	return nil
+}
+
+// A pass that published a task and died before recording the dispatch leaves the task to the next
+// pass, which plans it again and publishes it under the same row with another grant. The bus
+// deduplicates a task on its row, so the message a runner takes may well be the first, and the
+// grant it carries still redeems. Whichever grant is redeemed first binds the task, the other
+// answers that the work is somebody else's, and the ending is taken from the runner that redeemed.
+func TestATaskPublishedAgainKeepsTheGrantAlreadyOut(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	ctx, cancel := context.WithCancel(t.Context())
+	died := &diesOnPublishing{cancel: cancel}
+	dead, err := NewCore(core.controller, core.term, Options{
+		Queue: died, Versions: core.versions, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dead.Decide(ctx, decidedRun); err == nil {
+		t.Fatal("a pass that died after publishing answered as if it had recorded the dispatch")
+	}
+	first := died.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the pass that died published %d tasks", len(first))
+	}
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	second := q.dispatched()
+	if len(second) != 1 || second[0].Row != first[0].Row || second[0].Grant == first[0].Grant {
+		t.Fatalf("the next pass published %+v after %+v, and the case under test is the same row with another grant", second, first)
+	}
+
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatalf("the grant of the message the bus kept was refused once the task was published again: %s", err)
+	}
+	if err := core.redeem(t, second[0], "runner-2"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("the second message's grant, redeemed by another runner, answered %v", err)
+	}
+	if err := core.redeem(t, second[0], "runner-1"); err != nil {
+		t.Errorf("the second message's grant, redeemed by the runner holding the task, answered %v", err)
+	}
+
+	if err := core.Answer(t.Context(), Answer{
+		Result: failed(first[0].Task, 1, core.now()), Row: first[0].Row, Runner: "runner-1",
+	}); err != nil {
+		t.Fatalf("the ending of the runner that redeemed was refused: %s", err)
+	}
+	conn := dbtest.Superuser(t, super)
+	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }

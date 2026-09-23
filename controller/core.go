@@ -146,9 +146,13 @@ func (co *Core) Wake(ctx context.Context, w Wake) error {
 // a pass written against a state that has moved is refused whole.
 func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	var e db.Evaluation
+	var losses []db.Loss
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		e, err = w.Run(ctx, run)
+		if e, err = w.Run(ctx, run); err != nil {
+			return err
+		}
+		losses, err = w.Losses(ctx, e.Namespace, run)
 		return err
 	}); err != nil {
 		return err
@@ -180,6 +184,19 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	ev, err := co.resume(ctx, e, g, now)
 	if err != nil {
 		return err
+	}
+
+	// The losses the heartbeat declared are heard here, before anything is decided. "Three
+	// missed intervals move a task to lost", and that is written beside the task state where
+	// liveness lives, by whatever noticed; whether the task is then requeued is a decision,
+	// and deciding is this loop's. A loss already heard, or one of a dispatch requeued past,
+	// is not news, and the evaluator says so by not counting a decision.
+	for _, l := range losses {
+		if err := ev.Record(graph.Result{
+			Task: l.Task, State: agk.TaskLost, Requeue: l.Requeue, FinishedAt: l.At,
+		}, now); err != nil {
+			return fmt.Errorf("controller: the loss of %s could not be recorded: %w", l.Task, err)
+		}
 	}
 
 	plan, err := ev.Next(now)
@@ -377,7 +394,9 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 // graph.Task carries the items. The grant is minted and recorded, so that those names can be
 // turned back into values by whoever holds it and by nobody else. And the row is looked up,
 // because a grant and a log are addressed by the task's own identifier rather than by the key
-// that says which unit of work it is.
+// that says which unit of work it is. A key requeued after a loss has a row per dispatch, and the
+// one looked up is the one the decision before this has just written, which is how a requeue
+// takes a new task_id and a grant of its own.
 func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) (Dispatch, error) {
 	// A task nothing bounded gets the installation's ceiling, because a message requires a
 	// deadline and a grant expires with its task. It is a fallback and never an override:
@@ -516,6 +535,7 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		State:   sh.Task,
 		Attempt: sh.Attempt,
 		Shard:   sh.Shard,
+		Requeue: sh.Requeue,
 
 		DispatchedAt: sh.DispatchedAt,
 		StartedAt:    sh.StartedAt,
@@ -523,8 +543,11 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 	}
 	// "ExitCode is read for a task that succeeded or failed and for no other state", which
 	// the column says too: a task stopped at its deadline or by a cancellation decided
-	// nothing and has no code of its own to carry.
-	if sh.Task == agk.TaskSucceeded || sh.Task == agk.TaskFailed {
+	// nothing and has no code of its own to carry. Nor does a failure that never reached a
+	// container, which a runner reports with no exit code at all and the shard holds as 0, the
+	// code of success. So a code is written where a container started, and where the evaluator
+	// gave one to a task it could not build, which is 120 and never 0.
+	if (sh.Task == agk.TaskSucceeded || sh.Task == agk.TaskFailed) && (!sh.StartedAt.IsZero() || sh.ExitCode != 0) {
 		code := sh.ExitCode
 		t.ExitCode = &code
 	}

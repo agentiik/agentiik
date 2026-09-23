@@ -262,15 +262,21 @@ func TestTheObserverIsToldTheTransitionsAResultCannotCarry(t *testing.T) {
 	}
 }
 
-// "A driver that has already done the work recognises it": a redelivered task re-attaches
-// to the container it already started instead of starting a second one.
-func TestARedeliveredTaskAdoptsTheContainerItAlreadyStarted(t *testing.T) {
+// "the runner refuses to start a container for a key that has already completed": a key
+// delivered twice runs its brick once. By the time the second delivery arrives the first
+// one's container has been collected and removed, which is the case adoption by label
+// cannot reach and the record under the work root is for.
+func TestTwoDeliveriesOfOneKeyRunTheBrickOnce(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
+	var mu sync.Mutex
 	ran := 0
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		mu.Lock()
 		ran++
-		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": ran}))
+		n := ran
+		mu.Unlock()
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": n}))
 	})
 
 	task := oneTask(ref)
@@ -281,44 +287,44 @@ func TestARedeliveredTaskAdoptsTheContainerItAlreadyStarted(t *testing.T) {
 	if first.State != agk.TaskSucceeded {
 		t.Fatalf("the first delivery ended %s", first.State)
 	}
+	created := len(r.daemon.Created())
 
-	// The container of the first delivery was removed on the way out, so the second
-	// creates its own. What this holds is that the lookup happens at all and that
-	// nothing is created twice while one is there: a container left behind by a
-	// process that died is put back under the task it belongs to.
-	tasked := 0
-	for _, c := range r.daemon.Created() {
-		if c.Labels[LabelTask] == string(task.ID) {
-			tasked++
-		}
+	_, err = r.Run(t.Context(), task)
+	if !errors.Is(err, ErrCompleted) {
+		t.Fatalf("the second delivery answered %v, and a key that has completed is refused", err)
 	}
-	if tasked != 1 {
-		t.Errorf("%d containers were created under the task label for one delivery", tasked)
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and a key refused is not the brick's failure", charge)
 	}
-
-	second, err := r.Run(t.Context(), task)
-	if err != nil {
-		t.Fatalf("the second delivery: %s", err)
+	if !strings.Contains(err.Error(), "ended succeeded") {
+		t.Errorf("the refusal reads %q, and it says how the key ended", err)
 	}
-	if second.State != agk.TaskSucceeded {
-		t.Errorf("the second delivery ended %s", second.State)
+	mu.Lock()
+	defer mu.Unlock()
+	if ran != 1 {
+		t.Errorf("the brick ran %d times for two deliveries of one key", ran)
+	}
+	if n := len(r.daemon.Created()); n != created {
+		t.Errorf("the refused delivery created %d containers", n-created)
 	}
 }
 
-// "AutoRemove: false. The runner removes the container itself once logs and exit code are
-// collected", and the working directory is "removed with the container, so no residue of
-// one namespace survives into the next task on that host". Both are the runner's whoever
-// started the container: a delivery that adopts one is the delivery that tidies it, since
-// the one that started it is the process that died.
-func TestAnAdoptedContainerIsRemovedWithItsWorkingDirectory(t *testing.T) {
+// A key is refused on the delivery after a runner that ended it died between writing the
+// ending down and tidying: the ending is written before the container and the working
+// directory are removed, so both can be left behind with the key recorded. The refusal is
+// then the only delivery that will ever reach them, and it takes them away: "AutoRemove:
+// false. The runner removes the container itself once logs and exit code are collected",
+// and the working directory is "removed with the container, so no residue of one
+// namespace survives into the next task on that host".
+func TestWhatACompletedKeyLeftBehindIsTakenAwayByItsRefusal(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
 		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": 1}))
 	})
 
-	// The removal of the first delivery is recorded and refused, which is the
-	// container left behind by a runner that died between the exit and the tidying.
+	// The removal of the first delivery is recorded and refused, which is the container left
+	// behind by a runner that died between the ending and the tidying.
 	var mu sync.Mutex
 	var removed []string
 	r.daemon.Handle("DELETE", "/containers/{id}", func(w http.ResponseWriter, req *http.Request) {
@@ -339,21 +345,21 @@ func TestAnAdoptedContainerIsRemovedWithItsWorkingDirectory(t *testing.T) {
 	}
 	first := asked()
 
-	// The working directory the first delivery would have left behind had it died
-	// before its own defers ran, which is the same process that left the container.
+	// The working directory the first delivery would have left behind had it died before its
+	// own defers ran, which is the same process that left the container.
 	dir := filepath.Join(r.work, "01JMZ8V1P9C4", "fetch", "1")
 	if err := os.MkdirAll(filepath.Join(dir, "out", "ports"), 0o700); err != nil {
 		t.Fatalf("putting the first delivery's working directory back: %s", err)
 	}
 
-	if _, err := r.Run(t.Context(), task); err != nil {
-		t.Fatalf("the second delivery: %s", err)
+	if _, err := r.Run(t.Context(), task); !errors.Is(err, ErrCompleted) {
+		t.Fatalf("the second delivery answered %v, and a key that has completed is refused", err)
 	}
 	if asked() <= first {
-		t.Error("the adopted container was never removed, and the runner removes the container itself once the logs and the exit code are collected")
+		t.Error("the container a completed key left behind was never removed")
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Errorf("%s is still there after the delivery that adopted the container, and a task's working directory is removed with it", dir)
+		t.Errorf("%s is still there after the refusal, and a task's working directory is removed with its container", dir)
 	}
 }
 
@@ -433,6 +439,26 @@ func TestAnExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 		if _, err := os.Stat(left.root); !os.IsNotExist(err) {
 			t.Errorf("%s survived the delivery that collected its container", left.root)
 		}
+	}
+
+	// The adoption writes each ending down as a delivery that created the container does.
+	// The container is gone now, so the record is the only thing left to refuse the key,
+	// and a restarted runner that adopts what it held when it died is the case it is for.
+	for _, c := range []struct {
+		task  graph.Task
+		ended agk.TaskState
+	}{{fetch, agk.TaskSucceeded}, {check, agk.TaskFailed}} {
+		if e, found, err := r.keys.read(c.task.ID); err != nil || !found || e.State != c.ended {
+			t.Errorf("the record of %s reads %+v, %v, %v, and its adopted container ended %s", c.task.ID, e, found, err, c.ended)
+		}
+		if _, err := r.Run(t.Context(), c.task); !errors.Is(err, ErrCompleted) {
+			t.Errorf("%s was delivered again after its adopted container was collected and answered %v", c.task.ID, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if ran["fetch"] != 1 || ran["check"] != 1 {
+		t.Errorf("the bricks ran %v times after a further delivery of each", ran)
 	}
 }
 
