@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/controller"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -182,6 +185,80 @@ func TestARunnerTakesItsOwnWorkAndCanDoNothingElse(t *testing.T) {
 	conn.Flush()
 	if conn.LastError() == nil {
 		t.Error("a runner published a task of its own")
+	}
+}
+
+// Take, holding the credential a runner is minted and nothing else, from the consumer the control
+// plane created. It is the whole path a runner walks, and the one that failed while each half of
+// it passed on its own: Take created a consumer of its own, which the credential could not do and
+// which the stream refused beside the pool's.
+func TestARunnerTakesFromThePoolsConsumer(t *testing.T) {
+	a := withAccounts(t)
+	until := time.Now().UTC().Add(time.Hour)
+
+	control, err := a.issuer.ForControlPlane("controller", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(t.Context(), Options{URL: a.url, Name: "controller", Credentials: &control})
+	if err != nil {
+		t.Fatalf("the control plane could not connect: %s", err)
+	}
+	defer b.Close()
+	for _, pool := range []string{"dmz", "lan"} {
+		if err := b.Consumer(t.Context(), pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Publish(t.Context(), dispatch("mine", "pool=dmz")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Publish(t.Context(), dispatch("theirs", "pool=lan")); err != nil {
+		t.Fatal(err)
+	}
+
+	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := OpenRunner(Options{URL: minted.URL, Name: "runner-1", Credentials: &minted})
+	if err != nil {
+		t.Fatalf("the runner could not connect: %s", err)
+	}
+	defer runner.Close()
+
+	taken, err := runner.Take(t.Context(), "dmz", 8, 3*time.Second)
+	if err != nil {
+		t.Fatalf("the runner could not take from its own pool: %s", err)
+	}
+	if len(taken) != 1 || taken[0].Task.Step != "mine" {
+		t.Fatalf("the runner took %+v, and its pool holds one task", taken)
+	}
+	if err := taken[0].Held(t.Context()); err != nil {
+		t.Fatalf("acknowledging: %s", err)
+	}
+
+	// And says what happened, on the same connection.
+	if err := runner.Report(t.Context(), controller.Answer{
+		Result: graph.Result{Task: aTask("mine").ID, State: agk.TaskSucceeded},
+		Row:    taken[0].Task.TaskID,
+		Runner: "runner-1",
+	}); err != nil {
+		t.Errorf("reporting: %s", err)
+	}
+
+	// Another pool's work is not this runner's, and it is still there for that pool.
+	short, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if got, err := runner.Take(short, "lan", 8, 300*time.Millisecond); err == nil {
+		t.Errorf("a runner of dmz took %d tasks from lan", len(got))
+	}
+	theirs, err := b.Take(t.Context(), "lan", 8, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(theirs) != 1 || theirs[0].Task.Step != "theirs" {
+		t.Errorf("the lan pool holds %+v, and the task published to it was left alone", theirs)
 	}
 }
 

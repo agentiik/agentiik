@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -43,6 +45,25 @@ func open(t *testing.T) *Bus {
 	}
 	if err := b.results.Purge(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+
+	// And from the consumers the control plane makes and no others. A NATS kept running
+	// between suites still holds whatever consumers the code of an earlier day created, and a
+	// WorkQueue stream refuses a second consumer on a subject one already filters on, so one
+	// left behind under another name is a pool nobody can take from.
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if err := b.stream.DeleteConsumer(t.Context(), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		if err := b.Consumer(t.Context(), pool); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return b
 }
@@ -144,7 +165,7 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	if got.Grant == "" {
 		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
 	}
-	if err := taken[0].Done(); err != nil {
+	if err := taken[0].Held(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +193,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("the default pool took %d tasks", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held(t.Context())
 }
 
 // A runner that took work it cannot run puts it back, and somebody else gets it.
@@ -196,7 +217,85 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	if len(second) != 1 || second[0].Task.IdempotencyKey != first[0].Task.IdempotencyKey {
 		t.Fatalf("a task put back came round as %+v", second)
 	}
-	second[0].Done()
+	second[0].Held(t.Context())
+}
+
+// A task is held once the server says the acknowledgement arrived, and not once it has left
+// this side. A link that drops keeps the acknowledgement in the client's buffer, and the server
+// hands the task to another runner of the pool when its wait runs out, so a runner told it held
+// the task on the strength of the buffer would start the container beside that one.
+func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
+	b := open(t)
+	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
+		t.Fatal(err)
+	}
+
+	link := linkTo(t, b.conn.ConnectedAddr())
+	runner, err := OpenRunner(Options{URL: "nats://" + link.addr(), Name: "runner-cut-off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+	taken, err := runner.Take(t.Context(), DefaultPool, 1, 5*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("taking: %v, %d", err, len(taken))
+	}
+
+	link.cut()
+	short, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := taken[0].Held(short); err == nil {
+		t.Fatal("a task was held whose acknowledgement never reached the server")
+	}
+}
+
+// link is a connection to the bus that can be cut from outside, as a network does it: both
+// directions at once, and nothing listening where the client tries to connect again.
+type link struct {
+	ln net.Listener
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func linkTo(t *testing.T, target string) *link {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &link{ln: ln}
+	t.Cleanup(l.cut)
+	go func() {
+		for {
+			near, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			far, err := net.Dial("tcp", target)
+			if err != nil {
+				near.Close()
+				continue
+			}
+			l.mu.Lock()
+			l.conns = append(l.conns, near, far)
+			l.mu.Unlock()
+			go io.Copy(far, near)
+			go io.Copy(near, far)
+		}
+	}()
+	return l
+}
+
+func (l *link) addr() string { return l.ln.Addr().String() }
+
+func (l *link) cut() {
+	l.ln.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, c := range l.conns {
+		c.Close()
+	}
 }
 
 // "JetStream guarantees at-least-once delivery", so publishing the same task twice inside the
@@ -215,7 +314,7 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	if len(taken) != 1 {
 		t.Fatalf("one task published three times was offered %d times", len(taken))
 	}
-	taken[0].Done()
+	taken[0].Held(t.Context())
 }
 
 // "A requeue after loss keeps the idempotency key and takes a new task_id." Published again
@@ -242,7 +341,7 @@ func TestARequeueIsQueuedUnderTheKeyItWasLostUnder(t *testing.T) {
 		if got.TaskID != want.Row || got.IdempotencyKey != string(want.Task.ID) {
 			t.Errorf("message %d is task_id %s under key %s, want %s under %s", i+1, got.TaskID, got.IdempotencyKey, want.Row, want.Task.ID)
 		}
-		taken[i].Done()
+		taken[i].Held(t.Context())
 	}
 }
 
@@ -431,6 +530,31 @@ func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
 	case err := <-trouble:
 		t.Errorf("it was said twice, the second time as %q", err)
 	case <-time.After(2 * time.Second):
+	}
+}
+
+// A pool the control plane made no consumer for has nothing to take from, and Take says so
+// rather than making one. A runner able to create a consumer could create one with no filter,
+// and the credential a runner holds is refused the attempt anyway.
+func TestTakingFromAPoolWithNoConsumerSaysSo(t *testing.T) {
+	b := open(t)
+
+	_, err := b.Take(t.Context(), "nobody", 8, 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("a pool with no consumer was taken from")
+	}
+	if !strings.Contains(err.Error(), "pool nobody has no consumer") {
+		t.Errorf("the refusal reads %q, and it names the pool", err)
+	}
+
+	names := b.stream.ConsumerNames(t.Context())
+	for name := range names.Name() {
+		if name != Durable(DefaultPool) && name != Durable("dmz") {
+			t.Errorf("taking from a pool with no consumer created %s", name)
+		}
+	}
+	if err := names.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 

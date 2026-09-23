@@ -44,11 +44,17 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task is deduplicated on its `task_id` rather than its key, so a requeue published within two minutes of the dispatch it replaces still goes out.
 - A result is deduplicated on its `task_id` and its ending rather than its key, so the requeue's ending still reaches the controller after a late one of the dispatch it replaced. A result naming no dispatch is not published.
 - A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
+- A runner takes work from the consumer the control plane created for its pool, and creates none. `bus.OpenRunner` connects with the runner's credential.
+- A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
+- `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
 
 ### Driver
 
 - A redelivered task never starts its container a second time: a running one is waited on, an exited one is collected as it stands, and a delivery of a task already in flight on the host is refused.
 - A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
+- A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
+- `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
+- A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
 
 ### API
 

@@ -27,27 +27,47 @@ const ResultSubject = "agentiik.results"
 
 // Taken is one task message a runner pulled, and the two things it can say about it afterwards.
 //
-// Acknowledging is what removes it from the queue, and under WorkQueue retention that is what
-// removes it from the stream: "a message is removed as soon as it has been consumed". So a
-// runner acknowledges when the work is over rather than when it arrives, and a runner that dies
-// holding one has the task redelivered, which is what at-least-once means and what the
-// idempotency key makes survivable.
+// It says them at once. A runner either writes the task down and holds it, or puts it back, and
+// the package documentation says why the first is said on take rather than when the container is
+// over: from then on the task is the host's to answer for, through its heartbeat, and nothing is
+// left to tell the bus while the container runs.
 type Taken struct {
 	Task TaskMessage
 
 	msg jetstream.Msg
 }
 
-// Done removes the task from the queue.
-func (t Taken) Done() error {
+// Held says the task is written down on this host, and takes it off the queue.
+//
+// Under WorkQueue retention acknowledging is what removes a message from the stream: "a message
+// is removed as soon as it has been consumed". So it is said after the key is recorded under the
+// work root, driver.Docker.Hold, and never before. The other order leaves a moment in which the
+// task is off the queue and on no host's record, and a runner that died in it would leave the
+// task for the heartbeat's sweep to find lost, where one that dies before acknowledging has it
+// handed to the next runner of the pool a minute later.
+//
+// It answers once the server says the acknowledgement arrived, and not once it has left this
+// side. The client keeps what it sends while its link is down and answers nil for it, and a
+// server that never received the acknowledgement hands the task to another runner of the pool
+// when the consumer's AckWait runs out. So a runner starts nothing for a task whose Held did not
+// answer nil, and does not name it in its heartbeat. The key stays recorded as taken and not
+// ended, and what comes next is the bus redelivering the task where the acknowledgement was
+// lost, or the heartbeat finding it lost where only the answer was. Neither runs it twice, and a
+// step that is not idempotent is not run at all, which is the side to err on. A ctx with no
+// deadline waits as long as JetStream's own default.
+func (t Taken) Held(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")
 	}
-	return t.msg.Ack()
+	if err := t.msg.DoubleAck(ctx); err != nil {
+		return fmt.Errorf("bus: task %s: the server did not confirm the acknowledgement, so the task is not held and nothing is to be started for it: %w", t.Task.IdempotencyKey, err)
+	}
+	return nil
 }
 
 // Again puts it back for somebody else, which is what a runner says when it took a task it
-// cannot run: its labels changed, it is draining, or it has no room after all.
+// cannot run: its labels changed, it is draining, it has no room after all, or the task could
+// not be written down.
 func (t Taken) Again() error {
 	if t.msg == nil {
 		return errors.New("bus: returning a task that came from nowhere")
@@ -55,25 +75,18 @@ func (t Taken) Again() error {
 	return t.msg.Nak()
 }
 
-// Working says the task is still in hand, which holds off redelivery for another interval.
-//
-// It is not the heartbeat. The heartbeat is a request to the API "listing the idempotency keys
-// it currently holds" and is what liveness is read from; this only tells the bus not to hand the
-// same message to somebody else while a container is legitimately still running.
-func (t Taken) Working() error {
-	if t.msg == nil {
-		return errors.New("bus: reporting on a task that came from nowhere")
-	}
-	return t.msg.InProgress()
-}
-
 // Take pulls up to batch tasks for one pool, waiting up to wait for them.
 //
-// The consumer is durable and named after the pool, which is what makes several runners of one
-// pool share the work: they are one consumer with many clients, so a task goes to whichever asks
-// first. It is a pull consumer because "a runner asks for a batch of tasks when it has room,
-// which makes distribution naturally proportional to each host's real capacity without the
-// controller having to model load".
+// From the one durable consumer the control plane created for the pool, which this binds to and
+// never creates. Several runners of one pool are one consumer with many clients, so a task goes
+// to whichever asks first. It is a pull consumer because "a runner asks for a batch of tasks when
+// it has room, which makes distribution naturally proportional to each host's real capacity
+// without the controller having to model load".
+//
+// Creating one here would fail twice over. A runner's credential reaches this consumer and no
+// other and creates nothing, for the reason Consumer gives, and a WorkQueue stream refuses a
+// second consumer on a subject one already filters on. So AckWait and MaxDeliver are what
+// Consumer set, and nothing on this side restates them.
 func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Duration) ([]Taken, error) {
 	if err := validPool(pool); err != nil {
 		return nil, fmt.Errorf("bus: %w", err)
@@ -81,21 +94,12 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 	if batch < 1 {
 		return nil, fmt.Errorf("bus: a runner asking for %d tasks", batch)
 	}
-	consumer, err := b.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "pool-" + pool,
-		Description:   "Every runner of the " + pool + " pool, sharing one queue.",
-		FilterSubject: Subject(pool),
-		// Explicit, because acknowledging is what says the work is over rather than
-		// what says it arrived.
-		AckPolicy: jetstream.AckExplicitPolicy,
-		// How long a task may be held before the bus decides the runner holding it is
-		// gone. A container runs for as long as its step's timeout allows, so this is
-		// held off by Working rather than set to the longest a step may take.
-		AckWait:    time.Minute,
-		MaxDeliver: -1,
-	})
+	consumer, err := b.js.Consumer(ctx, Stream, Durable(pool))
+	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
+		return nil, fmt.Errorf("bus: pool %s has no consumer to take work from: the control plane creates it when a runner of the pool asks for its bus credential, and a runner creates none", pool)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("bus: the consumer for pool %s could not be created: %w", pool, err)
+		return nil, fmt.Errorf("bus: the consumer of pool %s could not be reached: %w", pool, err)
 	}
 
 	msgs, err := consumer.Fetch(batch, jetstream.FetchMaxWait(wait))
@@ -127,9 +131,10 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // Report sends one result back.
 //
 // Called by the runner when the container is over and everything it produced is uploaded, which
-// is why the task state it carries is terminal and why the runner acknowledges the task message
-// after this rather than before: a result that never went and a task already off the queue is a
-// task nothing will ever answer for.
+// is why the task state it carries is terminal. The task message it answers was acknowledged
+// long before, on take, so a result that could not be published is the runner's to publish
+// again and not the bus's to recover by redelivering the task: redelivery would run the brick a
+// second time to recover an answer that already exists.
 //
 // The stream deduplicates it on the dispatch and the ending, and not on the key. A requeue after
 // loss keeps the key, and the ending of the requeue could then follow a late one of the dispatch
@@ -168,6 +173,9 @@ func (b *Bus) Report(ctx context.Context, a controller.Answer) error {
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
+	}
+	if b.results == nil {
+		return errors.New("bus: a runner's connection takes no results back: the controller opens the bus with Open, which is what makes sure the result stream is there")
 	}
 	consumer, err := b.results.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:     "controller",
