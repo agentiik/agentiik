@@ -255,6 +255,7 @@ func TestAResultComesBackToTheController(t *testing.T) {
 			Task: task.ID, State: agk.TaskSucceeded,
 			Outputs: map[agk.Port]agk.Envelope{},
 		},
+		Row:      ulid.New(),
 		Runner:   "runner-dmz-02",
 		LogLines: 412,
 		Usage:    map[string]any{"cpu_seconds": 12.4},
@@ -294,13 +295,59 @@ func TestAResultComesBackToTheController(t *testing.T) {
 	}
 }
 
+// "A requeue after loss keeps the idempotency key and takes a new task_id." The requeue's ending
+// and a late one of the dispatch it replaced are two results under one key, and both reach the
+// controller, which alone can say which of them is news. A result that names no dispatch is not
+// sent at all.
+func TestTwoDispatchesOfOneKeyEachReportTheirEnding(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	for _, row := range []string{ulid.New(), ulid.New()} {
+		if err := b.Report(t.Context(), controller.Answer{
+			Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded, Outputs: map[agk.Port]agk.Envelope{}},
+			Row:    row, Runner: "runner-dmz-02",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Report(t.Context(), controller.Answer{
+		Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded}, Runner: "runner-dmz-02",
+	}); err == nil {
+		t.Error("a result naming no dispatch was published")
+	}
+
+	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+	got := make(chan controller.Answer, 4)
+	go func() {
+		b.Answers(ctx, func(_ context.Context, a controller.Answer) error {
+			got <- a
+			return nil
+		})
+	}()
+	rows := map[string]bool{}
+	for len(rows) < 2 {
+		select {
+		case a := <-got:
+			rows[a.Row] = true
+		case <-ctx.Done():
+			t.Fatalf("the controller was handed %d of the two endings of one key", len(rows))
+		}
+	}
+	select {
+	case a := <-got:
+		t.Errorf("a third result reached the controller: %+v", a)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 // A result the controller could not record is left for the next delivery, which is what
 // at-least-once buys.
 func TestAResultTheControllerRefusesComesBack(t *testing.T) {
 	b := open(t)
 	task := aTask(step(t))
 	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded},
+		Result: graph.Result{Task: task.ID, State: agk.TaskSucceeded}, Row: ulid.New(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +389,7 @@ func TestAResultThatIsNotAnEndingIsTakenOffAndReported(t *testing.T) {
 
 	task := aTask(step(t))
 	if err := b.Report(t.Context(), controller.Answer{
-		Result: graph.Result{Task: task.ID, State: agk.TaskRunning},
+		Result: graph.Result{Task: task.ID, State: agk.TaskRunning}, Row: ulid.New(),
 	}); err != nil {
 		t.Fatal(err)
 	}

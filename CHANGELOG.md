@@ -42,6 +42,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A message nobody can decode is taken off the queue and reported, never dropped silently.
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
 - A task is deduplicated on its `task_id` rather than its key, so a requeue published within two minutes of the dispatch it replaces still goes out.
+- A result is deduplicated on its `task_id` and its ending rather than its key, so the requeue's ending still reaches the controller after a late one of the dispatch it replaced. A result naming no dispatch is not published.
 - A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
 
 ### Driver
