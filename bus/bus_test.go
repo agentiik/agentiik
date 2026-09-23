@@ -473,6 +473,63 @@ func TestTwoDispatchesOfOneKeyEachReportTheirEnding(t *testing.T) {
 	}
 }
 
+// The requeue of a task lost while its host was only cut off comes back to that host, which had
+// run it to its end. The host takes it, and answers it with the ending it recorded: the message is
+// acknowledged, so nobody else is handed it to run, and the ending reaches the controller as the
+// requeue's, under the task_id the message carried and not the one of the dispatch the host ended.
+// An ending of another key is no answer to it and is not sent.
+func TestARequeueIsAnsweredWithTheEndingItsHostRecorded(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	requeue := dispatchAs(ulid.New(), step(t))
+	if err := b.Publish(t.Context(), requeue); err != nil {
+		t.Fatal(err)
+	}
+	taken, err := b.Take(t.Context(), DefaultPool, 1, 5*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("taking the requeue: %v, %d", err, len(taken))
+	}
+
+	// What the record holds carries no task_id of its own, and the one it was first reported
+	// under is the dispatch that was lost.
+	recorded := aResult(task)
+	recorded.TaskID = rowOf(step(t))
+
+	other := aResult(aTask(step(t) + "-other"))
+	if err := b.Ended(t.Context(), taken[0], other); err == nil {
+		t.Error("the ending of another key was sent as the answer to the requeue")
+	}
+	if err := b.Ended(t.Context(), taken[0], recorded); err != nil {
+		t.Fatalf("answering the requeue with the recorded ending: %s", err)
+	}
+
+	again, err := b.Take(t.Context(), DefaultPool, 1, 300*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Errorf("a requeue answered from the record was offered again: %+v", again)
+	}
+
+	got := answering(t, b, func(controller.Answer) error { return nil })
+	select {
+	case a := <-got:
+		if a.Row != requeue.Row || a.Result.Task != task.ID || a.Runner != recorded.Runner {
+			t.Errorf("the controller was handed dispatch %s of %s from %s, want %s of %s from %s", a.Row, a.Result.Task, a.Runner, requeue.Row, task.ID, recorded.Runner)
+		}
+		if a.Result.State != agk.TaskSucceeded || len(a.Outputs) != 1 || a.LogLines != 412 {
+			t.Errorf("the recorded ending came back as %+v", a)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the recorded ending never reached the controller")
+	}
+	select {
+	case a := <-got:
+		t.Errorf("a second result reached the controller: %+v", a)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 // One dispatch delivered to two machines is redeemed by one of them, and the other may report the
 // unreached failure the controller refuses from it. The failure of the runner that holds it then
 // follows under the same task_id and the same ending, and it still reaches the controller: two

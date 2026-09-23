@@ -62,6 +62,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner takes work from the consumer the control plane created for its pool, and creates none. `bus.OpenRunner` connects with the runner's credential.
 - A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 - `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
+- `Bus.Ended` answers a task whose key the host already ended: it acknowledges the message and reports the recorded ending under the message's `task_id`. An ending of another key is not sent.
 
 ### Driver
 
