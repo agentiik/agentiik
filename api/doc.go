@@ -20,7 +20,9 @@
 // grant yet.
 //
 // The permissions themselves are here rather than in v0.3.0, because a route declares what it
-// needs and a route is written now. They are the page's own eight, held to it by a test.
+// needs and a route is written now. They are the page's own nine, held to it by a test, and the
+// four roles are here beside them as the fixed sets of those nine they are, so that an atom is
+// added to the roles that hold it in the same change that adds it.
 //
 // # Absent and forbidden answer the same thing
 //

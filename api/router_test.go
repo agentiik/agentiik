@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -286,12 +287,12 @@ func TestTheSurfaceCanBeReadBack(t *testing.T) {
 	}
 }
 
-// The eight atoms, held to the page. A permission invented here is one nothing documents and one
+// The nine atoms, held to the page. A permission invented here is one nothing documents and one
 // no role includes.
 func TestThePermissionsAreThePageOwn(t *testing.T) {
 	want := []string{
 		"workflow:read", "workflow:run", "workflow:write", "workflow:delete",
-		"run:read", "run:read_data", "secret:use", "grant:manage",
+		"run:read", "run:read_data", "secret:use", "secret:write", "grant:manage",
 	}
 	if len(api.Permissions) != len(want) {
 		t.Fatalf("this package has %d permissions and the page names %d", len(api.Permissions), len(want))
@@ -302,7 +303,52 @@ func TestThePermissionsAreThePageOwn(t *testing.T) {
 		}
 	}
 	if api.Permission("run:read_data").Valid() != true || api.Permission("run:everything").Valid() {
-		t.Error("Valid does not answer for the eight")
+		t.Error("Valid does not answer for the nine")
+	}
+}
+
+// The four roles, held to the page's table and to what it says about two of them: operator
+// "deliberately lacks workflow:read", and owner "exists because someone has to be able to share".
+// secret:write is owner's, and editor's by default.
+func TestTheRolesAreThePageOwn(t *testing.T) {
+	if len(api.Roles) != 4 || api.Roles[0] != "viewer" || api.Roles[1] != "operator" || api.Roles[2] != "editor" || api.Roles[3] != "owner" {
+		t.Fatalf("the roles are %v", api.Roles)
+	}
+	for _, c := range []struct {
+		role api.Role
+		want []api.Permission
+	}{
+		{api.Viewer, []api.Permission{api.WorkflowRead, api.RunRead}},
+		{api.Operator, []api.Permission{api.WorkflowRun}},
+		{api.Editor, []api.Permission{
+			api.WorkflowRead, api.WorkflowRun, api.WorkflowWrite, api.WorkflowDelete,
+			api.RunRead, api.RunReadData, api.SecretUse, api.SecretWrite,
+		}},
+		{api.Owner, api.Permissions},
+	} {
+		if got := c.role.Permissions(); !slices.Equal(got, c.want) {
+			t.Errorf("%s holds %v, want %v", c.role, got, c.want)
+		}
+	}
+	if api.Operator.Holds(api.WorkflowRead) {
+		t.Error("operator reads the workflow it runs, and a colleague who can launch a job was meant not to see the queries inside it")
+	}
+	if api.Editor.Holds(api.GrantManage) {
+		t.Error("editor can share, and owner exists because someone has to")
+	}
+	for role, holds := range map[api.Role]bool{api.Viewer: false, api.Operator: false, api.Editor: true, api.Owner: true} {
+		if role.Holds(api.SecretWrite) != holds {
+			t.Errorf("%s holding secret:write is %v", role, !holds)
+		}
+	}
+	if api.Role("admin").Holds(api.WorkflowRead) || len(api.Role("admin").Permissions()) != 0 {
+		t.Error("a role the page does not name holds something")
+	}
+
+	// And what a caller is answered is a copy, so reading a role cannot widen it.
+	api.Editor.Permissions()[0] = api.GrantManage
+	if api.Editor.Holds(api.GrantManage) {
+		t.Error("a role can be widened by whoever reads it")
 	}
 }
 

@@ -1,6 +1,9 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Permission is one atom of what a principal may do.
 //
@@ -38,19 +41,29 @@ const (
 	// SecretUse: "Let a step reference a namespace secret. Never allows reading its value."
 	SecretUse Permission = "secret:use"
 
+	// SecretWrite declares, moves and removes a namespace's secrets: which store holds each
+	// value and where in it. Never allows reading a value.
+	//
+	// An atom of its own rather than workflow:write, because a declaration is not part of a
+	// workflow: it is what decides which credential a step is handed, for every workflow of the
+	// namespace at once, and the one holding workflow:write on a single workflow has no business
+	// pointing another's secret somewhere else. Reading the declarations needs workflow:read,
+	// since a workflow names the secrets it uses and the declarations are where they live.
+	SecretWrite Permission = "secret:write"
+
 	// GrantManage: "Grant and revoke access at this scope."
 	GrantManage Permission = "grant:manage"
 )
 
-// Permissions are the eight, in the order the page lists them. A test holds this list to the
+// Permissions are the nine, in the order the page lists them. A test holds this list to the
 // page, because a permission invented here would be one nothing documents and one no role
 // includes.
 var Permissions = []Permission{
 	WorkflowRead, WorkflowRun, WorkflowWrite, WorkflowDelete,
-	RunRead, RunReadData, SecretUse, GrantManage,
+	RunRead, RunReadData, SecretUse, SecretWrite, GrantManage,
 }
 
-// Valid says whether this is one of the eight.
+// Valid says whether this is one of the nine.
 func (p Permission) Valid() bool {
 	for _, known := range Permissions {
 		if p == known {
@@ -59,6 +72,48 @@ func (p Permission) Valid() bool {
 	}
 	return false
 }
+
+// Role is a name for a set of permissions, and the set is fixed.
+//
+// "viewer, operator and editor are the read, run and edit roles; owner exists because someone has
+// to be able to share." A grant binds a principal to one of these at one scope, and what the
+// principal may then do is the union of the sets its grants name, less what a deny takes away.
+type Role string
+
+const (
+	Viewer   Role = "viewer"
+	Operator Role = "operator"
+	Editor   Role = "editor"
+	Owner    Role = "owner"
+)
+
+// Roles are the four, in the order the page lists them.
+var Roles = []Role{Viewer, Operator, Editor, Owner}
+
+// bundles are what each role holds.
+//
+// The page writes a role as five columns, read, run, write, data and grant, and its own figure
+// says what two of them are in atoms: a viewer grant is workflow:read and run:read, an operator
+// grant is workflow:run, and operator "deliberately lacks workflow:read". editor is yes on every
+// column but grant, which is every atom but grant:manage, and owner is every atom. So secret:write
+// is held by owner, and by editor by default: a deny takes it from an editor as it takes any
+// other atom, which is how a namespace keeps its declarations to its owners.
+var bundles = map[Role][]Permission{
+	Viewer:   {WorkflowRead, RunRead},
+	Operator: {WorkflowRun},
+	Editor: {
+		WorkflowRead, WorkflowRun, WorkflowWrite, WorkflowDelete,
+		RunRead, RunReadData, SecretUse, SecretWrite,
+	},
+	Owner: Permissions,
+}
+
+// Permissions are what the role holds, in the order the page lists them, and nothing for a role
+// the page does not name.
+func (r Role) Permissions() []Permission { return slices.Clone(bundles[r]) }
+
+// Holds says whether the role carries one permission.
+func (r Role) Holds(p Permission) bool { return slices.Contains(bundles[r], p) }
 
 // Scope is what a permission is held at.
 //
