@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -9,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -193,8 +197,9 @@ func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
 // uploads what it produced and names it, and the controller reads it back before the evaluator is
 // shown the result, so what the next step is handed is what the store holds under those digests.
 // A digest the store does not hold is an error rather than a refusal, because an upload may not
-// have landed yet: the message is left for the next delivery and nothing is written. One whose
-// envelope contradicts what the result says of it is refused, since no delivery will change it.
+// have landed yet: the message is left for the next delivery and nothing is written. One naming
+// what is not an envelope, or an envelope that contradicts what the result says of it, is refused,
+// since no delivery will change it.
 func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 	core, q, pool, super := deciding(t)
 	createRun(t, pool)
@@ -215,6 +220,15 @@ func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 		named[o.Port] = o
 	}
 
+	// Bytes that are not an envelope, uploaded under their own digest, which a runner can do
+	// with anything it likes.
+	stray := []byte(`{"meta":{"port":"ok","count":3},"items":[]}`)
+	sum := sha256.Sum256(stray)
+	strayDigest := hex.EncodeToString(sum[:])
+	if err := core.objects.Put(t.Context(), artifact.Key("finance", strayDigest), bytes.NewReader(stray)); err != nil {
+		t.Fatal(err)
+	}
+
 	conn := dbtest.Superuser(t, super)
 	before := seqOf(t, conn)
 	for _, c := range []struct {
@@ -223,6 +237,7 @@ func TestAResultNamesItsOutputsByDigest(t *testing.T) {
 		refused bool
 	}{
 		{"a digest the store does not hold", func(a *Answer) { a.Outputs[0].Digest = strings.Repeat("0", 64) }, false},
+		{"bytes that are not an envelope, under their own digest", func(a *Answer) { a.Outputs[0].Digest = strayDigest }, true},
 		{"a digest that is not one", func(a *Answer) { a.Outputs[0].Digest = "../../secrets" }, true},
 		{"a count its envelope does not carry", func(a *Answer) { a.Outputs[0].Items = 7 }, true},
 		{"one port's envelope on another port", func(a *Answer) {

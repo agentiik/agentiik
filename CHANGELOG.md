@@ -15,6 +15,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A result whose state is not an ending, or whose key names no task, is refused with `controller.ErrNotAResult`; the bus takes it off the queue and reports it rather than redelivering it.
 - `controller.Answer` names outputs by digest. A success's envelopes are read back from the store, and one not there yet leaves the result for redelivery.
 - An envelope is read back no further than one byte past `envelope_max_bytes`, so a digest a runner names never has the controller hold a whole artifact in memory.
+- A result naming an object that is not the envelope its digest names (too long, other bytes, or not an envelope) is refused with `controller.ErrNotAResult` rather than delivered again. `artifact.ErrNotAnEnvelope` tells it apart from an object that could not be read.
 - A result is taken only from the runner its dispatch was bound to at redemption. Another runner's, or one for a task nobody redeemed, is refused with `controller.ErrNotTheHolder`.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.

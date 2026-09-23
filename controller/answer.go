@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 )
@@ -219,10 +220,12 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 // failure's would be fetching what nothing reads, and holding its ending back whenever one of
 // them could not be.
 //
-// An envelope that cannot be read is an error and not a refusal: the runner uploads before it
+// An envelope that could not be read is an error and not a refusal: the runner uploads before it
 // reports, and a store that has not got it yet, or cannot be reached, may have it on the next
-// delivery. One that is read and disagrees with what the answer says of it is a refusal, since it
-// will disagree on every delivery: the digest names the bytes, and the bytes do not change.
+// delivery. Everything else is a refusal, since it will be the same on every delivery: the digest
+// names the bytes, and the bytes do not change. That is an object that is not the envelope its
+// digest names, whether too long for one, holding other bytes or not decoding as one, and an
+// envelope that disagrees with what the answer says of it.
 func (co *Core) published(ctx context.Context, namespace string, a Answer) (map[agk.Port]agk.Envelope, error) {
 	if a.Result.State != agk.TaskSucceeded {
 		return nil, nil
@@ -236,7 +239,10 @@ func (co *Core) published(ctx context.Context, namespace string, a Answer) (map[
 			return nil, fmt.Errorf("%w: %s names %q on port %s, which is not a digest", ErrNotAResult, a.Result.Task, o.Digest, o.Port)
 		}
 		e, err := get(ctx, namespace, co.objects, EnvelopeRef{Digest: o.Digest}, co.limits)
-		if err != nil {
+		switch {
+		case errors.Is(err, artifact.ErrNotAnEnvelope):
+			return nil, fmt.Errorf("%w: %s names on port %s what is not an envelope: %w", ErrNotAResult, a.Result.Task, o.Port, err)
+		case err != nil:
 			return nil, fmt.Errorf("controller: the envelope the result of %s names on port %s could not be read: %w", a.Result.Task, o.Port, err)
 		}
 		switch {
