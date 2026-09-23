@@ -74,7 +74,11 @@
 // redemption the installation has nothing to answer with is reported as a task no container ran
 // before it is acknowledged, as Taken.Refused says. One that failed for any other reason, with no
 // answer or with one about the runner rather than the task, says nothing of whose the task is, and
-// the message is left to come round.
+// may have bound it all the same, its answer lost on the way back. So the runner keeps the key,
+// which its heartbeat goes on naming, and redeems again until an answer says, and leaves the
+// message unacknowledged meanwhile, to come round should the runner die. Let go, a task the lost
+// answer had bound would be declared lost by the heartbeat's sweep before the message came round,
+// spending a requeue on a host that was never lost.
 //
 // So a host that dies leaves its task to exactly one thing, whichever side of the redemption it
 // died on. Before it, the host never acknowledged, and the bus hands the message to another runner

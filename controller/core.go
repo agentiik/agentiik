@@ -92,6 +92,16 @@ type Options struct {
 	// dispatch delivered again, under its row and its grant, and a task waiting on the queue
 	// of a full pool is not lost however long it waits. Neither is handed out again, so
 	// neither spends a requeue, and a pool slow to take its work never fails a step for it.
+	//
+	// The runner's order is what keeps a loss to a runner that went quiet, and package bus
+	// sets it out. A runner that never heard its redemption answered keeps the key, names it
+	// in its heartbeat and redeems again, rather than letting it go and leaving a task the
+	// lost answer had bound to be declared lost before the message came round. A host still
+	// running a key redeems nothing of its requeue until the key has ended there, and then
+	// answers it from its record, rather than binding a requeue its one ending would never
+	// answer. So what spends a requeue is a host the control plane stopped hearing from,
+	// which is a host lost as far as it can tell, one only cut off included, and one cut
+	// costs its key one requeue however the host comes back.
 	MaxRequeues *int
 }
 

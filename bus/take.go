@@ -44,11 +44,11 @@ const resultPrefix = "agentiik.results."
 // anything is redeemed. Where writing the key down finds it still in flight on its host,
 // driver.ErrTaskInFlight, it redeems nothing and says nothing, and the message comes round once
 // AckWait has passed, to be answered with Ended once the key has ended there. Where the redemption
-// failed without saying whose the task is, it says nothing, and the message comes round once
-// AckWait has passed. The package documentation says why
-// the acknowledgement follows the redemption and never the container: from the redemption on, the
-// task is bound to one runner and is that runner's to answer for, through its heartbeat, and
-// nothing is left to tell the bus while the container runs.
+// got no answer saying whose the task is, it keeps the key and redeems again until one does, and
+// says nothing meanwhile, as Refused says. The package documentation says why the acknowledgement
+// follows the redemption and never the container: from the redemption on, the task is bound to one
+// runner and is that runner's to answer for, through its heartbeat, and nothing is left to tell the
+// bus while the container runs.
 type Taken struct {
 	Task TaskMessage
 
@@ -107,15 +107,25 @@ func (t Taken) Held(ctx context.Context) error {
 //
 // Nothing else is a refusal. A redemption that got no answer, or an answer about the runner rather
 // than the task, its own credential refused or the API failing on its side, has said nothing of
-// whose the task is, and acknowledging it would take off the queue a task nobody holds and no sweep
-// finds. The runner says nothing, and the message comes round once AckWait has passed: left, it
-// costs a redemption, where acknowledged it would cost the task. Which answer is which is not
-// always in the status alone, since a 401 answers a grant that opens nothing and a runner
-// credential that opens nothing alike, and a 500 an installation that will never have the task's
-// tree and one that could not read it this time.
+// whose the task is. Acknowledged, the message would leave the queue with the task perhaps held by
+// nobody, where no sweep finds it. Which answer is which is not always in the status alone, since a
+// 401 answers a grant that opens nothing and a runner credential that opens nothing alike, and a
+// 500 an installation that will never have the task's tree and one that could not read it this
+// time.
 //
-// A runner that says Refused, or says nothing, lets go of the key it held, which is
-// driver.Docker.Release.
+// Nor does the runner let go of the key. A redemption that got no answer may have bound the task
+// all the same: a client that gave up on a slow API, or a connection that dropped once the binding
+// had committed. The heartbeat's sweep counts a bound task from its redemption, so a runner that let
+// go would stop naming it, and the task would be declared lost three heartbeat intervals on, before
+// AckWait brought the message round to be refused even to its holder: a requeue of max_requeues
+// spent on a host that was never lost, or a step that does not requeue failed for it. So the
+// runner keeps the key, which its heartbeat goes on naming, and redeems again as the holder it may
+// already be, which answers as the first time would have and counts as hearing from it, until an
+// answer says whose the task is, or the task's deadline, which the grant expires with, has passed.
+// It says nothing to the bus meanwhile, so a runner that dies meanwhile leaves the message to come
+// round once AckWait has passed, as one that died before redeeming does.
+//
+// A runner that says Refused lets go of the key it held, which is driver.Docker.Release.
 func (t Taken) Refused(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")

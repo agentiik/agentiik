@@ -354,8 +354,10 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 // runner is still acknowledging and before Run has begun: answered nil and forgotten, it
 // would leave Run to start a brick for a run already called off. Recorded here, it is what
 // Run finds, and the container is never started. A runner that does not go on to Run the
-// task, its redemption refused or failed or the message put back, lets go of it with
-// Release, and a delivery Hold refused holds nothing and lets go of nothing.
+// task, its redemption refused or the message put back, lets go of it with Release, and a
+// delivery Hold refused holds nothing and lets go of nothing. A redemption that got no
+// answer is neither: it may have bound the task, so the runner keeps the key, which its
+// heartbeat goes on naming, and redeems again, as package bus says.
 func (d *Docker) Hold(id agk.TaskID) error {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()

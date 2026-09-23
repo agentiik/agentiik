@@ -217,6 +217,10 @@ func (b *Bus) Close() { b.conn.Close() }
 // redeeming it that much more time on the queue. Nothing depends on how it compares with
 // db.LostAfter either: a message whose runner died after redeeming it is refused to the next runner
 // whether the heartbeat's sweep has declared the task lost yet or the silent runner still holds it.
+// A runner that redeemed and never heard the answer does not wait on the message coming round,
+// which would find the task already lost, since the sweep counts it from the redemption and
+// db.LostAfter is the shorter of the two: it keeps the key, names it in its heartbeat and redeems
+// again itself, as Taken.Refused says.
 const AckWait = time.Minute
 
 // Consumer makes sure the one durable consumer a pool's runners share is there.
@@ -247,8 +251,10 @@ func (b *Bus) consumer(ctx context.Context, pool string, wait time.Duration) err
 		// than a second delivery.
 		AckWait: wait,
 		// Without limit, because a message comes round again only when a runner took it and
-		// never redeemed it, redeemed it and never got its acknowledgement through, or put
-		// it back, and none of them is a reason to give up on the task.
+		// never redeemed it, redeemed it and never got its acknowledgement through, is
+		// still redeeming it after an answer that never came, left it for its key to end on
+		// its host, or put it back, and none of them is a reason to give up on the task. The
+		// one that waits on a key to end comes round for as long as the container runs.
 		MaxDeliver:    -1,
 		MaxAckPending: -1,
 	})

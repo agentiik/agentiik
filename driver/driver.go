@@ -301,12 +301,14 @@ func (d *Docker) hold(id agk.TaskID) bool {
 }
 
 // Release lets go of a key Hold wrote down and no Run has taken, which is what a runner
-// does with a task it is not going to run after all: its redemption was refused or failed,
-// or it puts the message back with Again. A key a Run has is left alone, since that Run
-// lets go of it when it returns and a stop reaches the task through it. It is for a
-// delivery Hold answered nil, the one delivery holding the key, and never for one Hold
-// refused, which holds nothing. The record under the work root keeps the key as taken and
-// not ended, which refuses nothing.
+// does with a task it is not going to run after all: its redemption was refused, or it
+// puts the message back with Again. Not one whose redemption got no answer, which may have
+// bound the task and is redeemed again, the key held and named in the heartbeat meanwhile,
+// as package bus says. A key a Run has is left alone, since that Run lets go of it when it
+// returns and a stop reaches the task through it. It is for a delivery Hold answered nil,
+// the one delivery holding the key, and never for one Hold refused, which holds nothing.
+// The record under the work root keeps the key as taken and not ended, which refuses
+// nothing.
 func (d *Docker) Release(id agk.TaskID) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
