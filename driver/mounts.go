@@ -68,8 +68,9 @@ type Secrets interface {
 // that a refusal prints the rule rather than a paraphrase of it. It is the grammar the brick
 // manifest, the task message and the grant redemption all hold a mount to, and it is narrower
 // than one path segment on purpose: the host file is named after the last element of the mount,
-// and a mount of /agk/secrets/.. would write the value over the parent of the secrets directory
-// rather than into a file under it.
+// so /agk/secrets/. named the secrets directory itself, which while still empty was removed and
+// replaced by a file holding the value, and /agk/secrets/.. named its parent, which failed as the
+// platform's fault rather than being refused as the brick's.
 const secretMountRule = `^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$`
 
 var secretMountPattern = regexp.MustCompile(secretMountRule)

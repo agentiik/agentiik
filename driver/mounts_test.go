@@ -340,8 +340,9 @@ func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 }
 
 // A mount is one file directly under /agk/secrets/, and the host side is named after its last
-// element. So a mount of .. would put the value over the parent of the secrets directory, and it
-// is refused, while a file name carrying a dot, as a key file does, lands where it says.
+// element. So a mount of . would replace the secrets directory with the value and one of .. would
+// name its parent, and both are refused as the brick's, while a file name carrying a dot, as a
+// key file does, lands where it says.
 func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
 	for _, mount := range []string{"/agk/secrets/..", "/agk/secrets/.", "/agk/secrets/.netrc", "/agk/secrets/a/b"} {
 		store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
