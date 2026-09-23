@@ -277,6 +277,42 @@ func TestACommitThatIsNotOneIsRefusedBeforeItsTreeIsStored(t *testing.T) {
 	}
 }
 
+// A workflow named off the grammar every name of the file is written on is the caller's mistake,
+// and is refused as one before a byte of the tree is in the store. Left to the table's domain, it
+// was refused by the insert, answered 500, and left its files behind with nothing counting them.
+func TestAWorkflowNamedOffTheGrammarIsRefusedBeforeItsTreeIsStored(t *testing.T) {
+	h, _, super, objects := servingWithObjects(t)
+
+	for _, c := range []struct{ name, escaped string }{
+		{"a name with a dot", "my.wf"},
+		{"a name with a space", "Invoices%20v2"},
+		{"a name beginning with a hyphen", "-invoicing"},
+	} {
+		lone := []byte("only " + c.name + " carries this file\n")
+		p := pushed(t, map[string]api.PushFile{"scripts/lone.sh": {Content: lone, Mode: "0755"}})
+		w, answer := call(t, h, "PUT", "/api/v1/finance/workflows/"+c.escaped+"/versions/"+aCommit, "alice", p)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
+			continue
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, "letters, digits, hyphens and underscores") {
+			t.Errorf("%s was refused with %q", c.name, said)
+		}
+		if held, err := objects.Has(t.Context(), keyOf("finance", lone)); err != nil || held {
+			t.Errorf("%s left its tree in the store: %v %v", c.name, held, err)
+		}
+	}
+
+	var workflows int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select count(*) from workflows where namespace = 'finance'`).Scan(&workflows); err != nil {
+		t.Fatal(err)
+	}
+	if workflows != 0 {
+		t.Errorf("%d workflows were recorded from pushes that were all refused", workflows)
+	}
+}
+
 // A refusal about size says what the limit is for, because a limit with no rationale is a limit
 // somebody works around rather than reconsiders.
 func TestTheSizeRefusalSaysWhyThereIsALimit(t *testing.T) {
