@@ -118,13 +118,23 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 
 	// "A loss does not use up a retry.max attempt": the first attempt failing now is owed the
 	// second.
-	core.answer(t, failed(requeued.Task, 1, core.now()))
+	if err := core.Answer(t.Context(), Answer{Result: failed(requeued.Task, 1, core.now()), Runner: "runner-2"}); err != nil {
+		t.Fatal(err)
+	}
 	if got := stateOf(t, core); got.Terminal() {
 		t.Fatalf("a first attempt that failed after a loss left the run %s, and max: 1 owes a second", got)
 	}
 	second := q.taken()
 	if len(second) != 1 || second[0].Attempt != 2 {
 		t.Fatalf("after the failure the controller published %+v, want attempt 2", second)
+	}
+
+	// And once the key has completed, no dispatch of it is redeemed again.
+	if err := core.redeem(t, requeued, "runner-2"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("a key that completed was redeemed again, answering %v", err)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }
 

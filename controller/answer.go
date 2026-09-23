@@ -63,7 +63,7 @@ var ErrNotAResult = errors.New("controller: not a result any controller could re
 // with ErrNotAResult before anything is read: "a heartbeat is what says a task is still
 // running, and a result saying so would be a result for work that has not finished."
 func (co *Core) Answer(ctx context.Context, a Answer) error {
-	run, _, _, _, err := agk.ParseTaskID(string(a.Result.Task))
+	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {
 		return fmt.Errorf("%w: it names no task: %w", ErrNotAResult, err)
 	}
@@ -100,6 +100,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	if err != nil {
 		return err
 	}
+	before, _ := shardOf(ev.State(), step, shard)
 	if err := ev.Record(a.Result, now); err != nil {
 		return fmt.Errorf("controller: the result of %s could not be recorded: %w", a.Result.Task, err)
 	}
@@ -114,6 +115,9 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		return fmt.Errorf("controller: the document of run %s could not be written: %w", run, err)
 	}
 	steps, tasks := project(state)
+	if after, _ := shardOf(state, step, shard); after.Attempt != before.Attempt {
+		tasks = append(tasks, passed(run, step, before, a.Result))
+	}
 	stamp(tasks, a)
 
 	// "A result for an attempt that is over changes nothing", and the evaluator says so by
@@ -172,6 +176,38 @@ func (co *Core) lose(ctx context.Context, run agk.RunID, a Answer) error {
 		return err
 	}
 	return co.Decide(ctx, run)
+}
+
+// shardOf is one shard of one step as a state holds it.
+func shardOf(s *graph.State, step agk.Step, shard agk.Shard) (graph.ShardState, bool) {
+	for _, sh := range s.Steps[step].Shards {
+		if sh.Shard == shard {
+			return sh, true
+		}
+	}
+	return graph.ShardState{}, false
+}
+
+// passed is the row of the attempt an answer ended, where the evaluator has already moved its
+// shard on to the next one.
+//
+// The projection is the state, and the state holds the attempt a shard is on and nothing of the
+// ones before it. A further attempt is a new key, so the row the answer was about drops out of
+// what project writes the moment the retry is granted, and left there it would read as
+// dispatched for ever: a row counted against max_concurrent_tasks, a grant still honoured for a
+// key that has completed, and a task the heartbeat would declare lost once its runner stopped
+// listing it. So the ending the answer reported is written on it, from the shard as it stood
+// before, and stamp then writes on it who held it as it does for any other row.
+func passed(run agk.RunID, step agk.Step, before graph.ShardState, r graph.Result) db.TaskRow {
+	ended := before
+	ended.Task, ended.ExitCode = r.State, r.ExitCode
+	if !r.StartedAt.IsZero() {
+		ended.StartedAt = r.StartedAt.UTC()
+	}
+	if !r.FinishedAt.IsZero() {
+		ended.FinishedAt = r.FinishedAt.UTC()
+	}
+	return taskOf(run, step, ended)
 }
 
 // stamp writes onto the projected row of the task the answer is about the things only the answer
