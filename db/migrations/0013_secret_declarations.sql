@@ -24,9 +24,10 @@ create table secret_declarations (
   -- file name is longer, and a name no step could mount is not one to keep.
   name        text not null check (name ~ '^[A-Za-z0-9][A-Za-z0-9_-]*$' and length(name) <= 255),
 
-  -- Which store holds the value. The three identifiers the installation knows; whether this
-  -- installation has configured the one named is a question for the moment a value is read,
-  -- and not a property of the declaration.
+  -- Which store holds the value, by the three identifiers there are. Which of them this
+  -- installation serves, and which paths a namespace may name in each, the API checks when a
+  -- declaration is written and a reader checks again when a value is read, since both are the
+  -- installation's configuration and may change in between.
   provider    text not null check (provider in ('builtin', 'env', 'vault')),
 
   -- Where the value sits inside that store. The built-in store keeps a value under the

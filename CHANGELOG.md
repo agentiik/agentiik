@@ -65,6 +65,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redemption is asked with `task_id` and `idempotency_key`, both required, and answered in the `grantRedemption` shape except for uploads: artifacts under the port whose envelope names them, and each secret with its `mount` and an `encoding`, base64 when the value is not text.
 - A push names its commit by the whole 40-character hash, and is refused with 409 when that commit is already recorded with other files. A tree is at most 4 MiB counted with its paths, 4,096 files, 255 bytes a name and 2,048 a path: limits of the interim JSON push, until the installation hosts the repository. A path a runner could lay out as `.git`, or outside the tree, is refused.
 - `GET /api/v1/{ns}/secrets` lists a namespace's secret declarations, and `GET`, `PUT` and `DELETE /api/v1/{ns}/secrets/{name}` read, write and remove one: name, provider (`builtin`, `env` or `vault`), path and mount point, never a value. Reading takes `workflow:read` and writing `secret:write`. A body carrying a value is refused.
+- A declaration is confined to its namespace when it is written. `env` is refused unless the installation opts in, and then takes only a variable under the prefix it gives that namespace; `vault` is refused until its provider arrives.
 - A secret's name is at most 255 characters, since a step is given its value in a file named after it.
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
 

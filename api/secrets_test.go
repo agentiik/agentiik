@@ -40,6 +40,10 @@ func declaring(t *testing.T, auth api.Authorizer, o api.DeclarationOptions) (htt
 	return rt, pool
 }
 
+// developing is an installation opted in to the env provider for both namespaces the tests make,
+// each under a prefix of its own.
+var developing = api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_", "team-ops": "AGENTIIK_SECRET_TEAM_OPS_"}
+
 // sent is call with a body written by hand, for a body no Go type in this package would produce.
 func sent(t *testing.T, h http.Handler, method, path, as, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -56,7 +60,7 @@ func sent(t *testing.T, h http.Handler, method, path, as, body string) *httptest
 // The whole of what a namespace does with a declaration: writes it, reads it, moves it and takes
 // it away, one secret at a time.
 func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
-	h, _ := withDeclarations(t, everything{who: "alice"})
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
 
 	w, answer := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "builtin"})
 	if w.Code != http.StatusCreated {
@@ -95,12 +99,12 @@ func TestADeclarationIsWrittenAndReadBack(t *testing.T) {
 	}
 
 	// Declared again elsewhere is the same secret moved, answered 200 rather than 201.
-	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "vault", Path: "kv/data/finance/ledger"})
+	w, _ = call(t, h, "PUT", "/api/v1/finance/secrets/ledger", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_GENERAL_LEDGER"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("moving a declaration answered %d: %s", w.Code, w.Body)
 	}
 	w, one := call(t, h, "GET", "/api/v1/finance/secrets/ledger", "alice", nil)
-	if w.Code != http.StatusOK || one["provider"] != "vault" || one["path"] != "kv/data/finance/ledger" {
+	if w.Code != http.StatusOK || one["provider"] != "env" || one["path"] != "AGENTIIK_SECRET_FINANCE_GENERAL_LEDGER" {
 		t.Fatalf("the moved declaration reads %d %v", w.Code, one)
 	}
 
@@ -172,7 +176,7 @@ func TestADeclarationWithAValueIsRefused(t *testing.T) {
 // A declaration says where a store keeps a value, and one that names no store, or says where in a
 // way its store cannot read, is refused before anything is written.
 func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
-	h, _ := withDeclarations(t, everything{who: "alice"})
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
 
 	for what, c := range map[string]struct {
 		name string
@@ -183,11 +187,11 @@ func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
 		"no store at all":                          {"billing", `{"path":"kv/data/finance/billing"}`, http.StatusBadRequest},
 		"the built-in store with a path":           {"billing", `{"provider":"builtin","path":"finance/billing"}`, http.StatusBadRequest},
 		"a variable with no name":                  {"billing", `{"provider":"env"}`, http.StatusBadRequest},
-		"a path carrying an escape sequence":       {"billing", `{"provider":"vault","path":"kv/\u001b[2Jbilling"}`, http.StatusBadRequest},
+		"a variable carrying an escape sequence":   {"billing", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_\u001b[2J"}`, http.StatusBadRequest},
 		"a name the workflow file cannot write":    {"bill.ing", `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name no file could be named after":      {strings.Repeat("a", 256), `{"provider":"builtin"}`, http.StatusBadRequest},
 		"a name longer than an index row can hold": {strings.Repeat("q7-Z", 1500), `{"provider":"builtin"}`, http.StatusBadRequest},
-		"a body far larger than a declaration is":  {"billing", `{"provider":"vault","path":"` + strings.Repeat("a", 64<<10) + `"}`, http.StatusRequestEntityTooLarge},
+		"a body far larger than a declaration is":  {"billing", `{"provider":"env","path":"` + strings.Repeat("A", 64<<10) + `"}`, http.StatusRequestEntityTooLarge},
 		"a body that is not a declaration at all":  {"billing", `["builtin"]`, http.StatusBadRequest},
 		"a body that says nothing about the store": {"billing", ``, http.StatusBadRequest},
 	} {
@@ -202,12 +206,69 @@ func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
 	}
 }
 
+// "A namespace is confined to its own paths." A declaration is refused wherever the path it gives
+// could not be held to its namespace when it is written: env where the installation has not opted
+// in, a variable outside the namespace's own prefix, which is where another namespace's and the
+// API's own are, and vault anywhere, since nothing gives a namespace its prefix there yet. Only
+// what could be confined is written.
+func TestADeclarationIsConfinedToItsNamespace(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		env  api.Environment
+		ns   string
+		body string
+	}{
+		{"env with no opting in", nil, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_LEDGER"}`},
+		{"env in a namespace the installation left out", api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_"}, "team-ops", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`},
+		{"the API's database", developing, "finance", `{"provider":"env","path":"AGENTIIK_DATABASE_URL"}`},
+		{"the API's master key", developing, "finance", `{"provider":"env","path":"AGENTIIK_MASTER_KEY"}`},
+		{"another namespace's variable", developing, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`},
+		{"the namespace's prefix in another case", developing, "finance", `{"provider":"env","path":"agentiik_secret_finance_ledger"}`},
+		{"a variable no environment can hold", developing, "finance", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_../x"}`},
+		{"another namespace's Vault path", developing, "finance", `{"provider":"vault","path":"kv/data/team-ops/root-token"}`},
+		{"a Vault path climbing out of the namespace", developing, "finance", `{"provider":"vault","path":"kv/data/finance/../team-ops/x"}`},
+		{"the namespace's own Vault path", developing, "finance", `{"provider":"vault","path":"kv/data/finance/ledger"}`},
+	} {
+		h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: c.env})
+		if w := sent(t, h, "PUT", "/api/v1/"+c.ns+"/secrets/ledger", "alice", c.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s answered %d: %s", c.what, w.Code, w.Body)
+		}
+		if w, _ := call(t, h, "GET", "/api/v1/"+c.ns+"/secrets/ledger", "alice", nil); w.Code != http.StatusNotFound {
+			t.Errorf("%s was refused and written anyway, and reads %d", c.what, w.Code)
+		}
+	}
+
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
+	if w := sent(t, h, "PUT", "/api/v1/team-ops/secrets/ledger", "alice", `{"provider":"env","path":"AGENTIIK_SECRET_TEAM_OPS_LEDGER"}`); w.Code != http.StatusCreated {
+		t.Errorf("a variable under the namespace's own prefix answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// An installation opting in to env names prefixes that confine, or the routes are not built: no
+// prefix begins another namespace's, which would hand the first the second's variables, and each
+// is the beginning of a name a variable can have.
+func TestAnEnvironmentThatCannotConfineIsRefused(t *testing.T) {
+	for what, env := range map[string]api.Environment{
+		"a prefix beginning another's": {"team": "AGENTIIK_SECRET_TEAM_", "team-ops": "AGENTIIK_SECRET_TEAM_OPS_"},
+		"one prefix for two":           {"finance": "AGENTIIK_SECRET_", "team-ops": "AGENTIIK_SECRET_"},
+		"a prefix of nothing":          {"finance": ""},
+		"a prefix no variable has":     {"finance": "AGENTIIK-SECRET-FINANCE-"},
+	} {
+		if _, err := api.NewDeclarations(router(t, api.DenyAll{}), api.DeclarationOptions{Pool: &db.Pool{}, Environment: env}); err == nil {
+			t.Errorf("an environment with %s was taken", what)
+		}
+	}
+	if _, err := api.NewDeclarations(router(t, api.DenyAll{}), api.DeclarationOptions{Pool: &db.Pool{}, Environment: developing}); err != nil {
+		t.Errorf("an environment giving each namespace a prefix of its own was refused: %s", err)
+	}
+}
+
 // A declaration another namespace holds is answered exactly as one nobody holds, in a namespace
 // that exists or one that does not, so that probing names yields nothing; and it cannot be moved
 // or removed from outside.
 func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
-	h, _ := withDeclarations(t, everything{who: "alice"})
-	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "vault", Path: "kv/data/finance/billing"}); w.Code != http.StatusCreated {
+	h, _ := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", api.Declare{Provider: "env", Path: "AGENTIIK_SECRET_FINANCE_BILLING"}); w.Code != http.StatusCreated {
 		t.Fatalf("declaring answered %d", w.Code)
 	}
 
@@ -233,7 +294,7 @@ func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
 	if _, listing := call(t, h, "GET", "/api/v1/team-ops/secrets", "alice", nil); len(listing["secrets"].([]any)) != 0 {
 		t.Errorf("team-ops lists %v, which finance declared", listing)
 	}
-	if w, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusOK || one["path"] != "kv/data/finance/billing" {
+	if w, one := call(t, h, "GET", "/api/v1/finance/secrets/billing", "alice", nil); w.Code != http.StatusOK || one["path"] != "AGENTIIK_SECRET_FINANCE_BILLING" {
 		t.Errorf("finance's declaration reads %d %v after another namespace tried to remove it", w.Code, one)
 	}
 }

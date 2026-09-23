@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/db"
 )
@@ -30,13 +29,63 @@ import (
 // the one route that does read a value is the redemption, which only a runner holding a task's
 // grant reaches. A test walks every route with a store that fails if anything else asks it.
 
-// Providers are the stores a declaration may name, as the declaration spells them: the built-in
-// encrypted store, the API's environment for development, and HashiCorp Vault.
+// Environment opts an installation in to the env provider, which reads a value out of the API's
+// own environment and is for development only. It gives each namespace that may use it the
+// prefix its variables begin with, and a namespace it does not name may not declare one.
 //
-// Whether this installation has configured the one a declaration names is a question for the
-// moment a value is read, and not for the declaration: a namespace may declare its secrets before
-// the store that will hold them is wired in.
-var Providers = []string{"builtin", "env", "vault"}
+// Prefixes the installation writes rather than one derived from the namespace's name, because no
+// derivation confines: a variable's name is letters, digits and underscores, a namespace's may
+// hold hyphens and underscores too, and AGENTIIK_SECRET_TEAM_OPS_ would be the prefix of both
+// team-ops and team_ops, and would begin with the prefix of team. Written out, two prefixes of
+// which one begins the other are refused when the routes are built, so no namespace reaches
+// another's variables, and none reaches the API's own unless somebody writes a prefix that does.
+type Environment map[string]string
+
+// variableName is what an environment variable is named on: letters, digits and underscores, not
+// beginning with a digit, which is what a shell or a Compose file can set.
+var variableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// confining refuses an environment that could not confine a namespace: a prefix that is no
+// variable's beginning, or two namespaces of which one's prefix begins the other's.
+func (e Environment) confining() error {
+	namespaces := make([]string, 0, len(e))
+	for namespace := range e {
+		namespaces = append(namespaces, namespace)
+	}
+	slices.Sort(namespaces)
+	for _, a := range namespaces {
+		if !variableName.MatchString(e[a]) {
+			return fmt.Errorf("api: the environment prefix of %s is %q, and a prefix is the beginning of a variable's name: letters, digits and underscores, not beginning with a digit", a, e[a])
+		}
+		for _, b := range namespaces {
+			if a != b && strings.HasPrefix(e[b], e[a]) {
+				return fmt.Errorf("api: the environment prefix of %s, %q, begins the prefix of %s, %q, and %s would read %s's variables", a, e[a], b, e[b], a, b)
+			}
+		}
+	}
+	return nil
+}
+
+// Confines refuses a variable that is not the namespace's own: one not named as a variable is, or
+// not beginning with the prefix this installation gives that namespace. A namespace it gives none
+// has no variables at all.
+//
+// It is the check a declaration is held to when it is written, and exported for the reader of the
+// environment to hold it to again when it reads a value, since an installation's prefixes may
+// have changed since the declaration was accepted.
+func (e Environment) Confines(namespace, variable string) error {
+	prefix, ok := e[namespace]
+	if !ok {
+		return fmt.Errorf("env is not a store this installation reads the secrets of %s from: the API's environment is for development, and an installation opts in to it by giving a namespace the prefix its variables begin with", namespace)
+	}
+	if !variableName.MatchString(variable) {
+		return fmt.Errorf("%q is not the name of an environment variable, which is letters, digits and underscores, not beginning with a digit", variable)
+	}
+	if !strings.HasPrefix(variable, prefix) {
+		return fmt.Errorf("%s is not a variable of %s: a secret it keeps in env is a variable beginning with %s, the prefix this installation gives it, so that no namespace reads another's variables or the API's own", variable, namespace, prefix)
+	}
+	return nil
+}
 
 // Declaration is one secret as the routes answer it: its name, where its value is kept, and where
 // a step is given it.
@@ -90,14 +139,20 @@ const secretsDir = "/agk/secrets/"
 type DeclarationOptions struct {
 	Pool *db.Pool
 
+	// Environment opts the installation in to the env provider, namespace by namespace. Nil, the
+	// default, opts in none, so a declaration naming env is refused everywhere until somebody
+	// has said, in the installation's own configuration, that this one is for development.
+	Environment Environment
+
 	// Now is the clock, an argument so that a test has one.
 	Now func() time.Time
 }
 
 // DeclarationAPI serves a namespace's secret declarations.
 type DeclarationAPI struct {
-	pool *db.Pool
-	now  func() time.Time
+	pool        *db.Pool
+	environment Environment
+	now         func() time.Time
 }
 
 // NewDeclarations registers the declaration routes on a router.
@@ -112,10 +167,13 @@ func NewDeclarations(rt *Router, o DeclarationOptions) (*DeclarationAPI, error) 
 	case o.Pool == nil:
 		return nil, errors.New("api: no database, and a declaration is a row")
 	}
+	if err := o.Environment.confining(); err != nil {
+		return nil, err
+	}
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &DeclarationAPI{pool: o.Pool, now: o.Now}
+	s := &DeclarationAPI{pool: o.Pool, environment: maps.Clone(o.Environment), now: o.Now}
 
 	reading := Needs{Permission: WorkflowRead, Scope: Namespace}
 	writing := Needs{Permission: SecretWrite, Scope: Namespace}
@@ -196,7 +254,7 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := checkDeclare(d); err != nil {
+	if err := s.check(over.Namespace, d); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -243,27 +301,33 @@ func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, _ Pri
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// checkDeclare refuses a declaration that names no store this installation knows, or that says
-// where its value is in a way that store cannot read.
-func checkDeclare(d Declare) error {
-	if !slices.Contains(Providers, d.Provider) {
-		return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin, the encrypted store, env, the API's environment for development, or vault", d.Provider)
-	}
-	if d.Provider == "builtin" {
+// check refuses a declaration that names no store this installation reads, or says where its
+// value is in a way that store cannot read or this namespace may not name.
+//
+// A declaration names one of three stores: builtin, the encrypted store, env, the API's
+// environment for development, and vault, HashiCorp Vault. Naming one is not being given it. "A
+// namespace is confined to its own paths", so a declaration is taken only where the path it gives
+// can be held to its namespace when it is written: builtin always, since that store keys a value
+// by the namespace and the name and takes no path at all; env where the installation has opted in
+// and given the namespace its prefix; and vault nowhere yet, since nothing gives a namespace its
+// prefix in Vault until that provider arrives. A path taken now on the promise of a check later
+// would be a row every later reader had to distrust.
+func (s *DeclarationAPI) check(namespace string, d Declare) error {
+	switch d.Provider {
+	case "builtin":
 		if d.Path != "" {
 			return errors.New("the built-in store keeps a value under the namespace and the name it is declared by, so a declaration naming it carries no path: one would name something that store does not have")
 		}
 		return nil
+	case "env":
+		if d.Path == "" {
+			return errors.New("a secret kept in env is read from a variable, and this declaration names none")
+		}
+		return s.environment.Confines(namespace, d.Path)
+	case "vault":
+		return errors.New("vault is not a store this installation reads secrets from: a namespace is confined to its own paths, nothing gives a namespace its prefix in Vault until that provider arrives, and a path taken before then could name any namespace's secret")
 	}
-	if d.Path == "" {
-		return fmt.Errorf("a secret kept in %s is read at a path, and this declaration gives none", d.Provider)
-	}
-	// Answered in every listing, and so printed in a terminal and in a Terraform plan, where a
-	// control character is an escape sequence rather than part of a path.
-	if !utf8.ValidString(d.Path) || strings.ContainsFunc(d.Path, unicode.IsControl) {
-		return fmt.Errorf("the path %q holds a control character or a byte that is not UTF-8, and a path is text a person reads", d.Path)
-	}
-	return nil
+	return fmt.Errorf("%q is not a store a secret can be kept in: a declaration names builtin, the encrypted store, env, the API's environment for development, or vault", d.Provider)
 }
 
 // answered is a declaration as the routes answer it, with the mount its name puts it at.
