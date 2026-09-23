@@ -175,7 +175,8 @@ func TestACancellationStopsATaskTakenBeforeItsDispatchWasRecorded(t *testing.T) 
 	}
 }
 
-// A run still queued is cancelled before it is let in, so nothing is ever published for it.
+// A run still queued is cancelled before it is let in, so nothing is ever published for it, and it
+// ends without ever having started.
 func TestARunAskedToCancelBeforeItStartedStartsNothing(t *testing.T) {
 	core, q, pool, _ := deciding(t)
 	createRun(t, pool)
@@ -192,5 +193,16 @@ func TestARunAskedToCancelBeforeItStartedStartsNothing(t *testing.T) {
 	}
 	if got := q.stops(); len(got) != 0 {
 		t.Errorf("a run cancelled before it started stopped %+v", got)
+	}
+	var d db.RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		d, err = ns.RunDetail(ctx, decidedRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !d.StartedAt.IsZero() || !d.FinishedAt.Equal(core.now()) {
+		t.Errorf("a run cancelled from queued reads started at %s and finished at %s", d.StartedAt, d.FinishedAt)
 	}
 }

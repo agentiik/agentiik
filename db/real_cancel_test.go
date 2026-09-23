@@ -116,6 +116,29 @@ func TestARunThatHasEndedIsLeftAsItEnded(t *testing.T) {
 	}
 }
 
+// A run that has finished has started, unless it was cancelled while it was queued: that one was
+// never let in, and ends with no started_at.
+func TestOnlyACancelledRunEndsWithoutStarting(t *testing.T) {
+	now := time.Now().UTC()
+	for _, state := range []agk.RunState{agk.Cancelled, agk.Succeeded, agk.Failed, agk.TimedOut} {
+		pool, _ := created(t)
+		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			return ns.CreateRun(ctx, aRun())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			return w.SaveDecision(ctx, Decision{
+				Namespace: "finance", Run: theRun, Was: 0, Seq: 1,
+				Document: json.RawMessage(`{"version":1}`), State: state, FinishedAt: now,
+			})
+		})
+		if (err == nil) != (state == agk.Cancelled) {
+			t.Errorf("a run ending %s without having started answered %v", state, err)
+		}
+	}
+}
+
 // A run is found by its identifier alone, as a route naming nothing else finds it, and an
 // identifier no run was minted with is no run rather than an error PostgreSQL raises about it.
 func TestARunIsFoundByItsIdentifierAlone(t *testing.T) {

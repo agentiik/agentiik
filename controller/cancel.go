@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
@@ -60,6 +61,13 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	}
 
 	state := ev.State()
+	if len(e.Document) == 0 {
+		// Nothing has decided this run, so it is cancelled from queued and was never let in.
+		// graph.Start stamped it as started, since resuming a run nothing has decided is
+		// starting it, and a run that never left the queue did not start: it ends with no
+		// started_at, rather than one saying it began at the moment it was called off.
+		state.Run.StartedAt = time.Time{}
+	}
 	doc, err := Elide(ctx, state, e.Namespace, co.objects)
 	if err != nil {
 		return err
