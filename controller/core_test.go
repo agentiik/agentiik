@@ -271,7 +271,7 @@ func createRun(t *testing.T, pool *db.Pool) {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Trigger: agk.TriggerManual, TriggeredBy: "alice",
-			Inputs: map[string]any{"orders": []any{map[string]any{"customer_id": "C-1042"}}},
+			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}]}`),
 			Steps:  []agk.Step{"normalize", "archive"},
 		})
 	})

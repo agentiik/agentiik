@@ -554,12 +554,20 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		return
 	}
 
+	var inputs json.RawMessage
+	if start.Inputs != nil {
+		if inputs, err = json.Marshal(start.Inputs); err != nil {
+			fail(w, http.StatusBadRequest, "the inputs of this run could not be written down as JSON")
+			return
+		}
+	}
+
 	run := agk.NewRunID()
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CreateRun(ctx, db.NewRun{
 			ID: run, Workflow: over.Workflow, Commit: start.Commit,
 			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: start.Inputs, Steps: g.Steps(),
+			Inputs: inputs, Steps: g.Steps(),
 		}); err != nil {
 			return err
 		}
