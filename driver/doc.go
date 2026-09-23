@@ -130,8 +130,10 @@
 // key at-least-once delivery hands back after a restart or a requeue. It sits under the
 // work root and outside every task's directory, it holds the key, its state and a moment
 // and never a payload, and it keeps a key for KeysKept, the task stream's own retention.
-// Hold writes a key down on take, which is what a runner does before it acknowledges the
-// task message.
+// A container that ran to its end ends its key even when what it left cannot be
+// collected, an output that is not an envelope or a store that refused the upload: the
+// brick ran, and the key is written down failed. Hold writes a key down on take, which is
+// what a runner does before it acknowledges the task message.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this

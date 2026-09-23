@@ -287,30 +287,62 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 // It takes Run's own return values so that it sits on the return itself, which is what
 // places it before the defers that remove the container and the working directory.
 //
+// An error is an ending too where it came after the container had run to its end, which
+// afterExit marks. The brick ran, the removal on the way out takes what it left whether
+// or not it was collected, and a key left unrecorded there is a key whose next delivery
+// runs the brick from the beginning. It is written failed, which is how a caller records
+// a Run that answered an error, and with no exit code, since none reached a Result. Only
+// an error from before the container ran leaves the key as it was: nothing ran, so there
+// is nothing a second delivery would run twice.
+//
 // An entry that could not be written does not turn the result into an error. The
 // container ran and this is what became of it, and an error here would say that no
 // outcome could be determined at all, which is the one thing that is not true. It is said
 // instead, because what is lost is the refusal of a later delivery of this key on this
 // host.
 func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
-	if err != nil || !r.State.Terminal() {
+	e := keyEntry{Key: r.Task, State: r.State}
+	if r.State == agk.TaskSucceeded || r.State == agk.TaskFailed {
+		e.ExitCode = r.ExitCode
+	}
+	var late *afterExit
+	switch {
+	case errors.As(err, &late):
+		e = keyEntry{Key: late.task, State: agk.TaskFailed}
+		r, err = graph.Result{}, late.err
+	case err != nil || !r.State.Terminal():
 		return r, err
 	}
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
 
 	now := d.now().UTC()
-	e := keyEntry{Key: r.Task, State: r.State, At: now}
-	if r.State == agk.TaskSucceeded || r.State == agk.TaskFailed {
-		e.ExitCode = r.ExitCode
-	}
+	e.At = now
 	if werr := d.keys.write(e); werr != nil {
 		d.say(werr.Error() + ": a later delivery of this key on this host will not be refused")
 	}
 	if now.Sub(d.keys.pruned) >= pruneEvery {
 		d.keys.prune(now)
 	}
-	return r, nil
+	return r, err
+}
+
+// afterExit is an error met once the container of a task had run to its end: an output
+// that is not an envelope, a store that refused the upload, a container an adoption found
+// exited and could not collect. Run still answers with the error it carries, and ended
+// takes the mark off before it does, so it never leaves this package.
+type afterExit struct {
+	task agk.TaskID
+	err  error
+}
+
+func (e *afterExit) Error() string { return e.err.Error() }
+
+func (e *afterExit) Unwrap() error { return e.err }
+
+// exited marks err as met after the container of task had run to its end.
+func exited(task agk.TaskID, err error) error {
+	return &afterExit{task: task, err: err}
 }
 
 // completed is the refusal of one key, naming how and when it ended.

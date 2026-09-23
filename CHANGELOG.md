@@ -45,6 +45,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
+- A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
 
 ### API
 

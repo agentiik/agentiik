@@ -38,7 +38,9 @@ const drainGrace = 5 * time.Second
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
 // and the rule. No exit code is invented for a failure that produced none, because a
-// driver reporting its own trouble as a brick failure fails somebody else's step.
+// driver reporting its own trouble as a brick failure fails somebody else's step. The one
+// error that follows a container which did run is what it left failing to be collected,
+// and its key is written down as ended all the same.
 func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if t.Call != nil && t.Image == "" {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
@@ -317,6 +319,9 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 // conclude is the end every container this driver carries comes to, whether it was watched
 // to its exit or found already over: the exit read as a task state, the ports collected off
 // the mount where it succeeded, the log closed and the observer told.
+//
+// A collection that fails is an error that came after the exit, which is how ended knows
+// to write the key down all the same.
 func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, log *taskLog, mask *masker, stdout *capture, e exit, out string, dispatched time.Time) (graph.Result, error) {
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskPublishing, Container: container})
 
@@ -346,7 +351,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 			Mask:       mask,
 		})
 		if err != nil {
-			return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick, "%v", err)
+			return graph.Result{}, exited(t.ID, fault(t.Step, ErrContractBroken, ChargeBrick, "%v", err))
 		}
 		result.Outputs, artifacts = got.Outputs, got.Artifacts
 	}
@@ -385,6 +390,15 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 		return graph.Result{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform,
 			"a container carrying this task's label could not be inspected: %v", err)
 	}
+	// A container that is over has ended its key, whatever this delivery then makes of
+	// it, so a failure from here on is one that came after its exit. It is removed on
+	// the way out all the same, and its key has to be written down before it goes.
+	fail := func(err error) (graph.Result, error) {
+		if over(in.State) {
+			err = exited(t.ID, err)
+		}
+		return graph.Result{}, err
+	}
 	// The resolved mount list and not the host configuration the create sent. The
 	// daemon echoes a host configuration back in whichever form it arrived in, so a
 	// container started with Binds rather than Mounts, which is what docker run and
@@ -398,8 +412,8 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 		}
 	}
 	if out == "" {
-		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargePlatform,
-			"the container adopted for this task has nothing bound at %s, so there is nowhere to collect its outputs from", brick.OutDir)
+		return fail(fault(t.Step, ErrContractBroken, ChargePlatform,
+			"the container adopted for this task has nothing bound at %s, so there is nowhere to collect its outputs from", brick.OutDir))
 	}
 
 	// The values are redeemed again rather than remembered, because the masker needs
@@ -407,7 +421,7 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 	// Nothing is written: this is the list the literal match runs against.
 	values, err := d.values(ctx, t)
 	if err != nil {
-		return graph.Result{}, err
+		return fail(err)
 	}
 
 	dispatched := in.State.StartedAt
@@ -455,7 +469,7 @@ func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store
 
 	sink, closeSink, err := d.openLog(ctx, t)
 	if err != nil {
-		return graph.Result{}, err
+		return graph.Result{}, exited(t.ID, err)
 	}
 	defer closeSink()
 	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)

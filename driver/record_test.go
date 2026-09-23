@@ -2,7 +2,10 @@ package driver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
@@ -362,6 +366,139 @@ func TestAnEntryThatDoesNotReadRefusesItsKey(t *testing.T) {
 		t.Error("a key whose entry does not read was held")
 	}
 	if n := bricks.times("fetch"); n != 0 {
+		t.Errorf("the brick ran %d times", n)
+	}
+}
+
+// storeGone is an object store the network has gone from, which is the outage that also
+// silences a heartbeat.
+type storeGone struct{}
+
+func (storeGone) Has(context.Context, string) (bool, error) {
+	return false, errors.New("the object store could not be reached")
+}
+
+func (storeGone) Put(context.Context, string, io.Reader) error {
+	return errors.New("the object store could not be reached")
+}
+
+func (storeGone) Open(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("the object store could not be reached")
+}
+
+// A container that ran to its end has ended its key, whatever then became of what it left.
+// An output that is not an envelope, or a store that refused the upload, is still the error
+// Run answers with, and the key is still written down: the brick ran, and a second delivery
+// of the key would run it again.
+func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	for _, c := range []struct {
+		name    string
+		left    func(dockertest.Container) error
+		store   artifact.Objects
+		refused string
+	}{
+		{
+			name: "an output that is not an envelope",
+			left: func(ctr dockertest.Container) error {
+				return os.WriteFile(filepath.Join(ctr.Work, "ports", "out.json"), []byte("{not an envelope"), 0o644)
+			},
+			refused: "the envelope is not a JSON document",
+		},
+		{
+			name: "a store that refused the upload",
+			left: func(ctr dockertest.Container) error {
+				body := []byte("%PDF-1.7 a charge was made")
+				if err := os.WriteFile(filepath.Join(ctr.Work, "files", "receipt.pdf"), body, 0o644); err != nil {
+					return err
+				}
+				sum := sha256.Sum256(body)
+				item := agk.NewItem(map[string]any{"charged": true})
+				item.Files = []agk.File{{
+					Name:      "receipt.pdf",
+					URI:       agk.URI{Run: agk.RunID(ctr.Labels[LabelRun]), Step: agk.Step(ctr.Labels[LabelStep]), Port: "out", Name: "receipt.pdf"},
+					MediaType: "application/pdf",
+					Size:      int64(len(body)),
+					SHA256:    hex.EncodeToString(sum[:]),
+				}}
+				return wrote(ctr, "out", item)
+			},
+			store:   storeGone{},
+			refused: "the object store could not be reached",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bricks := &counting{}
+			r := newRunner(t, oneImage(ref, goodManifest), func(ctr dockertest.Container) (int, error) {
+				bricks.run(func(string) int { return 0 })(ctr)
+				return 0, c.left(ctr)
+			})
+			first := r
+			if c.store != nil {
+				s, err := artifact.New(c.store, "finance", agk.DefaultLimits())
+				if err != nil {
+					t.Fatal(err)
+				}
+				first = reopen(t, r, func(cfg *Config) {
+					cfg.Store = func(string) (*artifact.Store, error) { return s, nil }
+				})
+			}
+			task := oneTask(ref)
+
+			_, err := first.Run(t.Context(), task)
+			if err == nil || !strings.Contains(err.Error(), c.refused) {
+				t.Fatalf("the delivery answered %v, and what the container left could not be collected", err)
+			}
+			e, found, err := first.keys.read(task.ID)
+			if err != nil || !found {
+				t.Fatalf("the key is not in the record after its container ran to its end: %v", err)
+			}
+			if e.State != agk.TaskFailed {
+				t.Errorf("the key is recorded %s, and a delivery that answered an error is recorded failed", e.State)
+			}
+
+			again := reopen(t, r, nil)
+			if _, err := again.Run(t.Context(), task); !errors.Is(err, ErrCompleted) {
+				t.Errorf("the next delivery answered %v, and a key whose container ran to its end is refused", err)
+			}
+			if n := bricks.times("fetch"); n != 1 {
+				t.Errorf("the brick ran %d times", n)
+			}
+		})
+	}
+}
+
+// An adopted container that has already exited has ended its key too, even when this
+// delivery cannot collect it. The removal on the way out takes the container and its
+// working directory whether or not the collection worked, so a key left unrecorded here
+// is a key whose next delivery starts the brick from the beginning.
+func TestAnExitedContainerThatCannotBeCollectedStillEndsItsKey(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	task := taskWithASecret(ref)
+	exitedFirstDelivery(t, r, task)
+
+	// The secret cannot be redeemed on the delivery that adopts the container, and a log
+	// read back without the value to mask it with is a log that carries it in the clear.
+	adopting := reopen(t, r, func(cfg *Config) { cfg.Secrets = secretSource{} })
+	if _, err := adopting.Run(t.Context(), task); err == nil {
+		t.Fatal("the container was collected with no value to mask its log with")
+	}
+	if e, found, err := adopting.keys.read(task.ID); err != nil || !found || e.State != agk.TaskFailed {
+		t.Fatalf("the record reads %+v, %v, %v, and the adopted container had run to its end", e, found, err)
+	}
+
+	created := len(r.daemon.Created())
+	if _, err := reopen(t, r, nil).Run(t.Context(), task); !errors.Is(err, ErrCompleted) {
+		t.Errorf("the next delivery answered %v, and a key whose container ran to its end is refused", err)
+	}
+	if n := len(r.daemon.Created()); n != created {
+		t.Errorf("the next delivery created %d containers", n-created)
+	}
+	if n := bricks.times("fetch"); n != 1 {
 		t.Errorf("the brick ran %d times", n)
 	}
 }
