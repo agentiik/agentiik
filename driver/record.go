@@ -43,8 +43,8 @@ import (
 // long it is. The host answers the requeue with that, and the brick never runs twice.
 //
 // By reference and never a payload. The envelopes and the artifacts are in the object
-// store before the ending is written down, since the collection writes them there first
-// and names each by the digest the store answered, so a reference is all a second report
+// store before the ending is written down, since conclude writes them there first and
+// names each by the digest the store answered, so a reference is all a second report
 // needs. And a working directory is "removed with the container, so no residue of one
 // namespace survives into the next task on that host": a record that kept the envelopes
 // would be exactly that residue.
