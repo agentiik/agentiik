@@ -180,10 +180,15 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 // Publish puts one task on the queue its labels select.
 //
 // This is controller.Queue's half. The message carries the task as the wire describes it, and
-// the identifier is given to JetStream as its deduplication key: a bus is at-least-once and the
+// the task_id is given to JetStream as its deduplication key: a bus is at-least-once and the
 // runner is what makes that safe, but a publish retried by this process inside the duplicate
 // window is a retry this process knows about and there is no reason to make somebody else pay
 // for it.
+//
+// The task_id and not the idempotency key, because "a requeue after loss keeps the idempotency
+// key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being
+// published would be requeued into a stream that answers it was already there, and the requeue
+// would go nowhere while the controller recorded it as handed out.
 func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
 	t := d.Task
 	pool, err := PoolOf(t.RunsOn)
@@ -202,7 +207,7 @@ func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
 		Subject: Subject(pool),
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{string(t.ID)},
+			jetstream.MsgIDHeader: []string{d.Row},
 			"Agentiik-Namespace":  []string{t.Namespace},
 			"Agentiik-Run":        []string{string(t.Run)},
 		},

@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/ulid"
 )
 
 // The bus against a real NATS, for the reason every other real test in this module exists: what
@@ -85,13 +87,29 @@ func aTask(step agk.Step, runsOn ...string) graph.Task {
 
 // dispatch is a task with the three things only the controller can add.
 func dispatch(step agk.Step, runsOn ...string) controller.Dispatch {
+	return dispatchAs(rowOf(step), step, runsOn...)
+}
+
+// dispatchAs is the same task under a row of the caller's choosing, which is what a requeue
+// after loss is.
+func dispatchAs(row string, step agk.Step, runsOn ...string) controller.Dispatch {
 	return controller.Dispatch{
-		Task: aTask(step, runsOn...),
-		Row:  "01M2AAZ9G62NQXFAFCXKRPJEH5",
-		Grant: "agkgrant_01M2AAZ9G62NQXFAFCXKRPJEH5_" +
-			"dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
+		Task:   aTask(step, runsOn...),
+		Row:    row,
+		Grant:  "agkgrant_" + row + "_dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
 		Inputs: map[agk.Port]controller.InputRef{},
 	}
+}
+
+// rows are the task_id each step's dispatch goes out as, minted once per step and per test
+// process for the reason aRun is: the row is what the stream deduplicates on, so one written down
+// would make every publish after the first in a two-minute window publish nothing, and one minted
+// on every call would make a publish repeated inside a test two messages.
+var rows sync.Map
+
+func rowOf(step agk.Step) string {
+	row, _ := rows.LoadOrStore(step, ulid.New())
+	return row.(string)
 }
 
 // The round trip, which is the whole contract: the controller publishes and a runner of the pool
@@ -182,7 +200,7 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 }
 
 // "JetStream guarantees at-least-once delivery", so publishing the same task twice inside the
-// duplicate window is one message rather than two: the key is what makes a retry free.
+// duplicate window is one message rather than two: the task_id is what makes a retry free.
 func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	b := open(t)
 	for range 3 {
@@ -198,6 +216,34 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 		t.Fatalf("one task published three times was offered %d times", len(taken))
 	}
 	taken[0].Done()
+}
+
+// "A requeue after loss keeps the idempotency key and takes a new task_id." Published again
+// inside the duplicate window under its new task_id, it is a second message and not a duplicate
+// of the dispatch that was lost.
+func TestARequeueIsQueuedUnderTheKeyItWasLostUnder(t *testing.T) {
+	b := open(t)
+	lost := dispatch(step(t))
+	requeued := dispatchAs(ulid.New(), step(t))
+	for _, d := range []controller.Dispatch{lost, requeued} {
+		if err := b.Publish(t.Context(), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taken, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taken) != 2 {
+		t.Fatalf("a task and its requeue were offered %d times, and a requeue is a message of its own", len(taken))
+	}
+	for i, want := range []controller.Dispatch{lost, requeued} {
+		got := taken[i].Task
+		if got.TaskID != want.Row || got.IdempotencyKey != string(want.Task.ID) {
+			t.Errorf("message %d is task_id %s under key %s, want %s under %s", i+1, got.TaskID, got.IdempotencyKey, want.Row, want.Task.ID)
+		}
+		taken[i].Done()
+	}
 }
 
 // A result goes back and the controller takes it, once.
