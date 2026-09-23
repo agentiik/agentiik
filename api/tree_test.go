@@ -313,6 +313,57 @@ func TestAWorkflowNamedOffTheGrammarIsRefusedBeforeItsTreeIsStored(t *testing.T)
 	}
 }
 
+// A name is at most 255 characters, the longest a directory holds one to, and a version naming a
+// step past it, or pushed under a workflow name past it, is refused at the push. It was accepted,
+// and a step named past what a row of a database index holds then failed every run of the
+// version with a 500 at its start.
+func TestANameLongerThanADirectoryHoldsIsRefusedAtThePush(t *testing.T) {
+	h, _, _, objects := servingWithObjects(t)
+	longest := strings.Repeat("n", 255)
+
+	// The ordinary push with its last step renamed, carrying a file no other push carries.
+	renamed := func(step string, lone []byte) api.Push {
+		doc := []byte(strings.ReplaceAll(workflowDocument, "archive", step))
+		p := pushed(t, map[string]api.PushFile{"scripts/lone.sh": {Content: lone, Mode: "0755"}})
+		p.Document = doc
+		p.Tree["agentiik.yaml"] = api.PushFile{Content: doc, Mode: "0644"}
+		return p
+	}
+
+	// At the bound, under a workflow and with a step of 255 characters each, and a run of it
+	// starts, which is where the step is first written into a row.
+	at := "/api/v1/finance/workflows/" + longest
+	if w, _ := call(t, h, "PUT", at+"/versions/"+aCommit, "alice", renamed(longest, []byte("at the bound\n"))); w.Code != http.StatusOK {
+		t.Fatalf("a workflow and a step of 255 characters answered %d: %s", w.Code, w.Body)
+	}
+	if w, _ := call(t, h, "POST", at+"/runs", "alice", api.Start{Commit: aCommit, Inputs: map[string]any{"orders": []any{}}}); w.Code != http.StatusAccepted {
+		t.Fatalf("a run of them answered %d: %s", w.Code, w.Body)
+	}
+
+	for _, c := range []struct {
+		name   string
+		to     string
+		step   string
+		status int
+	}{
+		{"a step of 256 characters", pushTo, longest + "n", http.StatusUnprocessableEntity},
+		{"a workflow of 256 characters", "/api/v1/finance/workflows/" + longest + "n/versions/" + aCommit, "archive", http.StatusBadRequest},
+	} {
+		lone := []byte("only " + c.name + " carries this file\n")
+		w, answer := call(t, h, "PUT", c.to, "alice", renamed(c.step, lone))
+		if w.Code != c.status {
+			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
+			continue
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, "at most 255") {
+			t.Errorf("%s was refused with %q", c.name, said)
+		}
+		if held, err := objects.Has(t.Context(), keyOf("finance", lone)); err != nil || held {
+			t.Errorf("%s left its tree in the store: %v %v", c.name, held, err)
+		}
+	}
+}
+
 // A refusal about size says what the limit is for, because a limit with no rationale is a limit
 // somebody works around rather than reconsiders.
 func TestTheSizeRefusalSaysWhyThereIsALimit(t *testing.T) {
