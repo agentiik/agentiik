@@ -87,7 +87,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: RunRead, Scope: Namespace}, s.list},
 		{"GET", "/api/v1/{namespace}/runs/{run}",
 			Needs{Permission: RunRead, Scope: Namespace}, s.detail},
-		{"POST", "/api/v1/{namespace}/runs/{run}/cancel",
+		{"POST", "/api/v1/runs/{run}/cancel",
 			OnRun{Permission: WorkflowRun}, s.cancel},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
@@ -772,7 +772,7 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 		}
 	}
 
-	// The run the router found in this namespace, of the workflow it authorised.
+	// The run the router found, in the namespace and of the workflow it authorised.
 	run := agk.RunID(r.PathValue("run"))
 	var state agk.RunState
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
@@ -804,23 +804,24 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 	write(w, http.StatusAccepted, answer)
 }
 
-// runsIn finds the workflow of a run for the router, inside the namespace the path names.
+// runsIn finds the namespace and workflow of a run for the router, from its identifier alone.
 //
-// Through the namespaced door like every other read of a route, so that a run of another
-// namespace is not there to be found, rather than through Installation with a reason of its own.
+// Across the installation, for the one reason db.RunRoute names: the path of a route about a run
+// names nothing else, and what is found goes to the authorizer and nowhere else. The handler then
+// reads and writes through In, in the namespace that was authorised.
 type runsIn struct{ pool *db.Pool }
 
-func (f runsIn) WorkflowOf(ctx context.Context, namespace, run string) (string, error) {
-	var workflow string
-	err := f.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+func (f runsIn) RunOf(ctx context.Context, run string) (Target, error) {
+	var of Target
+	err := f.pool.Installation(ctx, db.RunRoute, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		workflow, err = ns.WorkflowOf(ctx, agk.RunID(run))
+		of.Namespace, of.Workflow, err = w.Locate(ctx, agk.RunID(run))
 		return err
 	})
 	if errors.Is(err, db.ErrNoRun) {
-		return "", ErrNoRun
+		return Target{}, ErrNoRun
 	}
-	return workflow, err
+	return of, err
 }
 
 func write(w http.ResponseWriter, status int, body any) {

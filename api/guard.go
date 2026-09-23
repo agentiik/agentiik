@@ -43,14 +43,14 @@ func (n Needs) guards() guard {
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
 //
-// The path names a namespace and a run, as every route about a run does, and not the workflow,
-// while a permission such as workflow:run is held on a single workflow as well as on a whole
-// namespace: "access is granted by binding a principal to a role, either on the whole namespace or
-// on a single workflow". Checked at the namespace, an operator of one workflow could not cancel a
-// run of it. Checked against a {workflow} in the path, the path would name the workflow twice,
-// once itself and once through the run, and a request could name one it holds and a run of
-// another. So the router asks which workflow the run is of, in the namespace the path names, and
-// asks the authorizer about that one.
+// Its path names the run and nothing the run is of, as the documentation lists every route about
+// one: /api/v1/runs/{id}/cancel. "Agentiik sends the push service an identifier and a state", and
+// the application a notification opens holds that identifier and nothing else. A permission such
+// as workflow:run is held on a single workflow as well as on a whole namespace: "access is granted
+// by binding a principal to a role, either on the whole namespace or on a single workflow". So the
+// router asks which namespace and workflow the run is of, and asks the authorizer about those. A
+// path naming either as well could name one the caller holds beside a run of another, which is
+// why it may not.
 type OnRun struct {
 	Permission Permission
 }
@@ -59,18 +59,19 @@ func (o OnRun) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true}
 }
 
-// FindRun says which workflow a run of a namespace is of, which is what a route taking OnRun is
-// authorised against. A run the namespace does not hold is ErrNoRun.
+// FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
+// authorised against. A run nobody minted is ErrNoRun.
 //
-// It is asked before anything is authorised, with the namespace the path names, and its answer
-// goes to the authorizer and nowhere else: a run that is not there and a run the caller may not
-// reach are the same 404, so asking tells a caller nothing the refusal would not.
+// It is asked before anything is authorised, across the installation since the path names no
+// namespace, and its answer goes to the authorizer and nowhere else: a run that is not there and a
+// run the caller may not reach are the same 404, so asking tells a caller nothing the refusal
+// would not.
 type FindRun interface {
-	WorkflowOf(ctx context.Context, namespace, run string) (string, error)
+	RunOf(ctx context.Context, run string) (Target, error)
 }
 
-// ErrNoRun is no run of that identifier in that namespace.
-var ErrNoRun = errors.New("api: no run of that identifier in that namespace")
+// ErrNoRun is no run of that identifier.
+var ErrNoRun = errors.New("api: no run of that identifier")
 
 // Public is a route that is not authorised by a principal, and says what authorises it instead.
 //
@@ -130,8 +131,8 @@ type Principal string
 //
 // It is what a namespaced permission is checked against, and it is filled by the router from the
 // path rather than by a handler, because a handler that read its own namespace out of the path
-// would be a handler that could read a different one. On a route taking OnRun the workflow is the
-// one the run in the path is of, which the router looked up.
+// would be a handler that could read a different one. On a route taking OnRun both are the ones the
+// run in the path is of, which the router looked up.
 type Target struct {
 	Namespace string
 	Workflow  string

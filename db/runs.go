@@ -105,20 +105,22 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 // it is and answered in the state it ended in, so that somebody asking about a run that finished
 // while they were asking learns how it finished. Asking again keeps the first moment.
 //
-// The identifier is compared as text, because it comes from a path and the column's domain would
-// refuse one that is not a ULID with an error rather than find nothing.
+// An identifier outside the alphabet runs are minted in is no run, as it is for Locate.
 func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, error) {
+	if !minted(run) {
+		return 0, fmt.Errorf("%w: %q", ErrNoRun, run)
+	}
 	var state string
 	err := n.tx.QueryRow(ctx,
 		`update runs set cancel_requested_at = coalesce(cancel_requested_at, $3)
-		 where namespace = $1 and id = $2::text and state in ('queued', 'running', 'waiting')
+		 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')
 		 returning state`,
 		n.namespace, string(run), at).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Over, or never there. A run that has ended stays ended, so the state read here
 		// is the one the update was refused for.
 		err = n.tx.QueryRow(ctx,
-			`select state from runs where namespace = $1 and id = $2::text`,
+			`select state from runs where namespace = $1 and id = $2`,
 			n.namespace, string(run)).Scan(&state)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -132,6 +134,44 @@ func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (ag
 		return 0, fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
 	}
 	return s, nil
+}
+
+// Locate says which namespace and workflow a run is of, from its identifier alone.
+//
+// It is what a route about one run is authorised against: the path of such a route names the run
+// and nothing it is of, and a permission such as workflow:run can be held on a single workflow.
+// The identifier comes from a path, so one outside the alphabet runs are minted in is no run,
+// answered without asking PostgreSQL: the column's domain refuses it with an error rather than
+// finding nothing, and so does the protocol for U+0000 or bytes that are not UTF-8, which would
+// have been a 500 for anybody holding a credential.
+func (w *Wide) Locate(ctx context.Context, run agk.RunID) (namespace, workflow string, err error) {
+	if !minted(run) {
+		return "", "", fmt.Errorf("%w: %q", ErrNoRun, run)
+	}
+	err = w.tx.QueryRow(ctx,
+		`select namespace, workflow from runs where id = $1`, string(run)).Scan(&namespace, &workflow)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("db: run %s could not be found: %w", run, err)
+	}
+	return namespace, workflow, nil
+}
+
+// minted says whether an identifier is in the alphabet the ulid domain holds, Crockford base32 of
+// any length, which is every run identifier the engine has minted and the documentation printed.
+func minted(run agk.RunID) bool {
+	if run == "" {
+		return false
+	}
+	for i := 0; i < len(run); i++ {
+		c := run[i]
+		if !('0' <= c && c <= '9' || 'A' <= c && c <= 'Z' && c != 'I' && c != 'L' && c != 'O' && c != 'U') {
+			return false
+		}
+	}
+	return true
 }
 
 // Evaluation is a run as the controller picks it up.

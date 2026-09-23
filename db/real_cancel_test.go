@@ -116,32 +116,37 @@ func TestARunThatHasEndedIsLeftAsItEnded(t *testing.T) {
 	}
 }
 
-// The workflow a run is of is found inside the namespace the run is in, and nowhere else.
-func TestARunsWorkflowIsFoundInItsOwnNamespace(t *testing.T) {
+// A run is found by its identifier alone, as a route naming nothing else finds it, and an
+// identifier no run was minted with is no run rather than an error PostgreSQL raises about it.
+func TestARunIsFoundByItsIdentifierAlone(t *testing.T) {
 	pool, _ := created(t)
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
 		return ns.CreateRun(ctx, aRun())
 	}); err != nil {
 		t.Fatal(err)
 	}
-	of := func(namespace string, run agk.RunID) (string, error) {
-		var workflow string
-		err := pool.In(t.Context(), namespace, func(ctx context.Context, ns *NS) error {
+	locate := func(run agk.RunID) (string, string, error) {
+		var namespace, workflow string
+		err := pool.Installation(t.Context(), RunRoute, func(ctx context.Context, w *Wide) error {
 			var err error
-			workflow, err = ns.WorkflowOf(ctx, run)
+			namespace, workflow, err = w.Locate(ctx, run)
 			return err
 		})
-		return workflow, err
+		return namespace, workflow, err
 	}
-	if workflow, err := of("finance", theRun); err != nil || workflow != "monthly-invoicing" {
-		t.Errorf("the run is of %q, %v", workflow, err)
+	if namespace, workflow, err := locate(theRun); err != nil || namespace != "finance" || workflow != "monthly-invoicing" {
+		t.Errorf("the run is of %q in %q, %v", workflow, namespace, err)
 	}
-	for _, c := range []struct {
-		namespace string
-		run       agk.RunID
-	}{{"team-ops", theRun}, {"finance", "not-a-run"}, {"finance", "01M2ZZZZZZZZZZZZZZZZZZZZZZ"}} {
-		if workflow, err := of(c.namespace, c.run); !errors.Is(err, ErrNoRun) {
-			t.Errorf("%s in %s is of %q, %v", c.run, c.namespace, workflow, err)
+	for _, run := range []agk.RunID{"01M2ZZZZZZZZZZZZZZZZZZZZZZ", "not-a-run", "01M2\x00", "01M2\xff", "01m2z8v1p9c4xq7k2n4d6f8h0c", ""} {
+		if namespace, workflow, err := locate(run); !errors.Is(err, ErrNoRun) {
+			t.Errorf("%q is of %q in %q, %v", run, workflow, namespace, err)
+		}
+	}
+
+	// Asking to cancel one is refused the same way, before PostgreSQL is asked.
+	for _, run := range []agk.RunID{"01M2\x00", "01M2\xff"} {
+		if _, err := askToCancel(t, pool, "finance", run, time.Now()); !errors.Is(err, ErrNoRun) {
+			t.Errorf("asking to cancel %q answered %v", run, err)
 		}
 	}
 }

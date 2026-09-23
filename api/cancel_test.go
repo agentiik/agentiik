@@ -68,7 +68,7 @@ func (o oneRun) servedTo(t *testing.T, auth api.Authorizer) http.Handler {
 	return rt
 }
 
-func (o oneRun) cancel() string { return "/api/v1/finance/runs/" + o.run + "/cancel" }
+func (o oneRun) cancel() string { return "/api/v1/runs/" + o.run + "/cancel" }
 
 // requested is when the run was asked to cancel, read past the API, and nil while nobody has.
 func (o oneRun) requested(t *testing.T) *time.Time {
@@ -82,8 +82,9 @@ func (o oneRun) requested(t *testing.T) *time.Time {
 }
 
 // "workflow:run: Start a manual run, cancel it, replay it, approve or reject a waiting run." Held
-// on the run's workflow it cancels; held on another workflow, or anything else held on this one,
-// is the 404 an absent run gets, and writes nothing.
+// on the run's workflow it cancels; held on another workflow, on a workflow of the same name in
+// another namespace, or anything else held on this one, is the 404 an absent run gets, and writes
+// nothing.
 func TestCancellingARunNeedsWorkflowRunOnItsWorkflow(t *testing.T) {
 	o := withOneRun(t)
 	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
@@ -96,6 +97,7 @@ func TestCancellingARunNeedsWorkflowRunOnItsWorkflow(t *testing.T) {
 		{"", holder{who: "bob", what: api.WorkflowRun, over: invoicing}, http.StatusUnauthorized},
 		{"alice", api.DenyAll{}, http.StatusNotFound},
 		{"carol", holder{who: "carol", what: api.WorkflowRun, over: api.Target{Namespace: "finance", Workflow: "payroll"}}, http.StatusNotFound},
+		{"frank", holder{who: "frank", what: api.WorkflowRun, over: api.Target{Namespace: "team-ops", Workflow: "monthly-invoicing"}}, http.StatusNotFound},
 		{"dave", holder{who: "dave", what: api.RunRead, over: invoicing}, http.StatusNotFound},
 		{"erin", holder{who: "erin", what: api.WorkflowWrite, over: invoicing}, http.StatusNotFound},
 	} {
@@ -108,10 +110,8 @@ func TestCancellingARunNeedsWorkflowRunOnItsWorkflow(t *testing.T) {
 	}
 
 	h := o.servedTo(t, holder{who: "bob", what: api.WorkflowRun, over: invoicing})
-	refused, _ := call(t, h, "POST", "/api/v1/finance/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ/cancel", "bob", nil)
-	elsewhere, _ := call(t, h, "POST", "/api/v1/team-ops/runs/"+o.run+"/cancel", "bob", nil)
-	if refused.Code != http.StatusNotFound || elsewhere.Code != http.StatusNotFound {
-		t.Errorf("a run nobody started answered %d, and this one under another namespace %d", refused.Code, elsewhere.Code)
+	if refused, _ := call(t, h, "POST", "/api/v1/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ/cancel", "bob", nil); refused.Code != http.StatusNotFound {
+		t.Errorf("a run nobody started answered %d", refused.Code)
 	}
 
 	w, answer := call(t, h, "POST", o.cancel(), "bob", nil)
@@ -126,6 +126,21 @@ func TestCancellingARunNeedsWorkflowRunOnItsWorkflow(t *testing.T) {
 	}
 	if o.requested(t) == nil {
 		t.Error("an accepted request left nothing on the run for the controller to read")
+	}
+}
+
+// An identifier no run was minted with is no run, answered as one without asking PostgreSQL, which
+// refuses U+0000 and bytes that are not UTF-8 with an error: a 500 for anybody holding a credential,
+// even one that holds nothing.
+func TestCancellingARunNobodyCouldHaveMintedIsNoRun(t *testing.T) {
+	o := withOneRun(t)
+	for _, auth := range []api.Authorizer{api.DenyAll{}, everything{who: "alice"}} {
+		h := o.servedTo(t, auth)
+		for _, run := range []string{"%00", "%ff", "01M2%00", "not-a-run", "01m2z8v1p9c4xq7k2n4d6f8h0c"} {
+			if w, _ := call(t, h, "POST", "/api/v1/runs/"+run+"/cancel", "alice", nil); w.Code != http.StatusNotFound {
+				t.Errorf("asking to cancel %s under %T answered %d: %s", run, auth, w.Code, w.Body)
+			}
+		}
 	}
 }
 

@@ -134,6 +134,13 @@ const (
 	// grant, the task it names, and the tree of the one version the grant's scope names.
 	Redemption Reason = "a grant redemption"
 
+	// RunRoute is a route about one run, whose path names the run and nothing it is of:
+	// "Agentiik sends the push service an identifier and a state", and the application a
+	// notification opens holds that identifier and nothing else. What it reads is which
+	// namespace and workflow the run is of, and that goes to the authorizer and nowhere else;
+	// the route itself reads and writes through In, in the namespace it was authorised in.
+	RunRoute Reason = "a route that names a run and not its namespace"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"
