@@ -1,9 +1,11 @@
 package secret_test
 
 import (
+	"fmt"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -77,6 +79,84 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 
 	for _, through := range reaching(imports) {
 		t.Errorf("%s: the API is the only component that reads a secret value", chain(through))
+	}
+}
+
+// TestTheSecretBoundaryIsCheckedAndNotAssumed holds the check itself, since a boundary test that
+// would pass whatever it was given is a comment with a func keyword in front of it.
+//
+// The module it is handed holds what the first version of this test let through while the
+// controller's closure held the store: a package under api importing the store, the controller
+// importing that package, and a file at the root importing the store. Each of those is named now,
+// as is a package reaching the root and one reaching a provider written beside the built-in store.
+// Neither the API nor the store's own packages are, and neither is a package whose only way to the
+// store is a test file or a testdata directory.
+func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
+	root := t.TempDir()
+	for path, imports := range map[string][]string{
+		"doc.go":                 {"secret"},
+		"agk/agk.go":             {"internal/ulid"},
+		"api/api.go":             {"agk", "db", "secret"},
+		"api/store/store.go":     {"secret"},
+		"bus/bus.go":             {"."},
+		"controller/core.go":     {"agk", "api/store", "db"},
+		"db/db.go":               {"agk"},
+		"driver/driver.go":       {"agk", "secret/vault"},
+		"graph/graph.go":         {"agk"},
+		"graph/graph_test.go":    {"secret"},
+		"graph/testdata/leak.go": {"secret"},
+		"internal/ulid/ulid.go":  nil,
+		"secret/seal.go":         {"internal/ulid"},
+		"secret/vault/vault.go":  {"secret"},
+	} {
+		// Every file imports the standard library as well, which the walk has to step over.
+		var src strings.Builder
+		src.WriteString("package p\n\nimport (\n\t\"strings\"\n")
+		for _, imported := range imports {
+			if imported == "." {
+				fmt.Fprintf(&src, "\t_ %q\n", module)
+			} else {
+				fmt.Fprintf(&src, "\t_ %q\n", module+"/"+imported)
+			}
+		}
+		src.WriteString(")\n")
+		path = filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	imports, _, err := importsOf(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pkg := range []string{".", "api", "graph", "secret", "secret/vault"} {
+		if _, ok := imports[pkg]; !ok {
+			t.Fatalf("the walk did not find %s, so what it does not name below says nothing", named(pkg))
+		}
+	}
+
+	want := map[string][]string{
+		".":          {".", "secret"},
+		"api/store":  {"api/store", "secret"},
+		"bus":        {"bus", ".", "secret"},
+		"controller": {"controller", "api/store", "secret"},
+		"driver":     {"driver", "secret/vault"},
+	}
+	got := map[string][]string{}
+	for _, through := range reaching(imports) {
+		got[through[0]] = through
+		if _, ok := want[through[0]]; !ok {
+			t.Errorf("the check says %s, and %s is the API, the store, or a package whose closure holds neither", chain(through), named(through[0]))
+		}
+	}
+	for pkg, through := range want {
+		if !slices.Equal(got[pkg], through) {
+			t.Errorf("the check should say %s, and it says %s", chain(through), chain(got[pkg]))
+		}
 	}
 }
 
