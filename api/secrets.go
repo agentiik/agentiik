@@ -210,18 +210,26 @@ type Values interface {
 // ErrNoStore is a value written to an installation with no built-in store attached.
 var ErrNoStore = errors.New("api: this installation has no built-in secret store attached")
 
-// NoValues is an installation with no built-in store attached. It takes no value and holds none,
-// so it never has one to forget.
+// NoValues is an installation with no built-in store attached. It takes no value, and it still
+// forgets one.
 //
 // It is the default, for the reason NoSecrets is: a value sent to an installation that cannot keep
 // it is refused in front of whoever sent it, rather than taken and lost.
+//
+// Forgetting needs no key, and the values are rows every process of the installation shares. So
+// an API attached without its keyring, beside one attached with it or restarted without the file
+// that holds it, clears the value of a secret it removes or moves out of the built-in store, as
+// the store would have. A removal answered and not done would leave the old credential for the
+// next builtin declaration of that name to hand to a task.
 type NoValues struct{}
 
 // Write takes nothing.
 func (NoValues) Write(context.Context, *db.NS, string, []byte) error { return ErrNoStore }
 
-// Forget has nothing to forget.
-func (NoValues) Forget(context.Context, *db.NS, string) error { return nil }
+// Forget clears whatever value the namespace keeps under the name.
+func (NoValues) Forget(ctx context.Context, ns *db.NS, name string) error {
+	return ns.ForgetSealed(ctx, name)
+}
 
 // DeclarationOptions are what the declaration routes are given.
 type DeclarationOptions struct {
@@ -233,7 +241,7 @@ type DeclarationOptions struct {
 	Environment Environment
 
 	// Values is where a builtin value is written. Nil, the default, is NoValues: a declaration
-	// is still taken, and a value is refused.
+	// is still taken, a value is refused, and one already kept is forgotten all the same.
 	Values Values
 
 	// Now is the clock, an argument so that a test has one.

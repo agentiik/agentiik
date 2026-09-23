@@ -101,3 +101,58 @@ func TestARedemptionReadsSecretsFromTwoProviders(t *testing.T) {
 		t.Errorf("billing, removed and declared again with no value, reads %q, %v", got, err)
 	}
 }
+
+// Two processes of one installation share the database, and one may be attached without its
+// keyring: a replica missing the key's mount, or a restart without the file. A secret removed
+// through that one, or moved to a variable, still takes the value the other wrote, so that the
+// name declared in the built-in store again gives a task nothing rather than the old credential.
+func TestAProcessWithNoKeyringStillForgetsAValue(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	m, err := secret.NewMaster("2026-09")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secret.NewKeyring(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached := func(keys *secret.Keyring) (http.Handler, api.Secrets) {
+		declarations := api.DeclarationOptions{Pool: g.pool}
+		runners := api.RunnerOptions{Pool: g.pool, Objects: g.objects, URLs: g.signed}
+		if err := secret.Attach(secret.Options{
+			Pool: g.pool, Keys: keys,
+			Environment: api.Environment{"finance": "AGENTIIK_SECRET_FINANCE_"},
+			Lookup:      func(string) (string, bool) { return "", false },
+		}, &declarations, &runners); err != nil {
+			t.Fatal(err)
+		}
+		rt := router(t, everything{who: "admin"})
+		if _, err := api.NewDeclarations(rt, declarations); err != nil {
+			t.Fatal(err)
+		}
+		return rt, runners.Secrets
+	}
+	keyed, secrets := attached(keys)
+	keyless, _ := attached(nil)
+
+	for _, c := range []struct {
+		what, method, body string
+		want               int
+	}{
+		{"removed", "DELETE", "", http.StatusNoContent},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING"}`, http.StatusOK},
+	} {
+		if w := sent(t, keyed, "PUT", "/api/v1/finance/secrets/billing", "admin", `{"provider":"builtin","value":"bk_live_meant_to_be_gone"}`); w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("writing billing answered %d: %s", w.Code, w.Body)
+		}
+		if w := sent(t, keyless, c.method, "/api/v1/finance/secrets/billing", "admin", c.body); w.Code != c.want {
+			t.Fatalf("billing %s without a keyring answered %d: %s", c.what, w.Code, w.Body)
+		}
+		if w := sent(t, keyed, "PUT", "/api/v1/finance/secrets/billing", "admin", `{"provider":"builtin"}`); w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("declaring billing again answered %d: %s", w.Code, w.Body)
+		}
+		if got, err := secrets.Value(t.Context(), "finance", "billing"); !errors.Is(err, api.ErrNoSecret) {
+			t.Errorf("billing, %s without a keyring and declared again with no value, reads %q, %v", c.what, got, err)
+		}
+	}
+}

@@ -104,8 +104,9 @@ type Options struct {
 	Pool *db.Pool
 
 	// Keys is what the built-in store seals under and opens with. Nil attaches no built-in
-	// store: a builtin declaration is still taken, a value sent with one is refused, and a task
-	// naming one fails saying which secret.
+	// store: a builtin declaration is still taken, a value sent with one is refused, a value
+	// already kept is still forgotten when its declaration goes, and a task naming one fails
+	// saying which secret.
 	Keys *Keyring
 
 	// Environment opts the installation in to env, namespace by namespace, and is what

@@ -328,6 +328,49 @@ func TestARemovedSecretTakesItsValueWithIt(t *testing.T) {
 	}
 }
 
+// With no built-in store attached a value is still forgotten. Forgetting needs no key, and the
+// value is a row another process of the installation, attached with its keyring, may have written:
+// a secret removed or moved to a variable through these routes leaves nothing for the name
+// declared in the built-in store again to bring back.
+func TestASecretRemovedWithNoStoreAttachedStillTakesItsValue(t *testing.T) {
+	h, pool := declaring(t, everything{who: "alice"}, api.DeclarationOptions{Environment: developing})
+	kept := func() error {
+		return pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			return ns.WriteSealed(ctx, "billing", func(version int) (db.SealedValue, error) {
+				return db.SealedValue{
+					Version: version, Master: "2026-09", Salt: []byte("salt"), WrappedKey: []byte("key"),
+					WrapNonce: []byte("wrap"), Ciphertext: []byte("sealed"), Nonce: []byte("nonce"),
+				}, nil
+			})
+		})
+	}
+
+	for _, c := range []struct {
+		what, method, body string
+		want               int
+	}{
+		{"removed", "DELETE", "", http.StatusNoContent},
+		{"moved to a variable", "PUT", `{"provider":"env","path":"AGENTIIK_SECRET_FINANCE_BILLING"}`, http.StatusOK},
+	} {
+		if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin"}`); w.Code != http.StatusCreated && w.Code != http.StatusOK {
+			t.Fatalf("declaring billing answered %d: %s", w.Code, w.Body)
+		}
+		if err := kept(); err != nil {
+			t.Fatal(err)
+		}
+		if w := sent(t, h, c.method, "/api/v1/finance/secrets/billing", "alice", c.body); w.Code != c.want {
+			t.Fatalf("the secret %s answered %d: %s", c.what, w.Code, w.Body)
+		}
+		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			_, err := ns.SealedValue(ctx, "billing")
+			return err
+		})
+		if !errors.Is(err, db.ErrNoValue) {
+			t.Errorf("a secret %s with no store attached left its value, which reads as %v", c.what, err)
+		}
+	}
+}
+
 // A declaration says where a store keeps a value, and one that names no store, or says where in a
 // way its store cannot read, is refused before anything is written.
 func TestADeclarationTheStoreCannotReadIsRefused(t *testing.T) {
