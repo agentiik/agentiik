@@ -240,35 +240,46 @@ func TestAnotherNamespacesDeclarationsAreNotFound(t *testing.T) {
 
 // Reading a declaration takes workflow:read and writing one takes secret:write, each at the
 // namespace, and until v0.3.0 gives anybody either, every one of the four is refused.
+//
+// Each principal is sent the four against a declaration that exists, because a refusal answers
+// 404 and so does an absence: against an empty namespace a route guarded by nothing at all would
+// pass for one guarded by the right permission.
 func TestTheDeclarationsNeedWhatTheirRoutesSay(t *testing.T) {
 	finance := api.Target{Namespace: "finance"}
-
-	h, _ := withDeclarations(t, api.DenyAll{})
-	for _, c := range []struct{ method, path, body string }{
-		{"GET", "/api/v1/finance/secrets", ""},
-		{"GET", "/api/v1/finance/secrets/billing", ""},
-		{"PUT", "/api/v1/finance/secrets/billing", `{"provider":"builtin"}`},
-		{"DELETE", "/api/v1/finance/secrets/billing", ""},
+	const (
+		list   = "GET /api/v1/finance/secrets"
+		read   = "GET /api/v1/finance/secrets/billing"
+		write  = "PUT /api/v1/finance/secrets/billing"
+		remove = "DELETE /api/v1/finance/secrets/billing"
+	)
+	for _, c := range []struct {
+		who  string
+		auth api.Authorizer
+		want map[string]int
+	}{
+		{"nobody", api.DenyAll{}, map[string]int{list: 404, read: 404, write: 404, remove: 404}},
+		{"bob", holder{who: "bob", what: api.WorkflowRead, over: finance}, map[string]int{list: 200, read: 200, write: 404, remove: 404}},
+		{"carol", holder{who: "carol", what: api.SecretWrite, over: finance}, map[string]int{list: 404, read: 404, write: 200, remove: 204}},
 	} {
-		if w := sent(t, h, c.method, c.path, "alice", c.body); w.Code != http.StatusNotFound {
-			t.Errorf("%s %s answered %d with nothing granted", c.method, c.path, w.Code)
+		h, pool := withDeclarations(t, c.auth)
+		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			_, _, err := ns.Declare(ctx, db.Declaration{Name: "billing", Provider: "builtin", DeclaredBy: "alice"})
+			return err
+		}); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	h, _ = withDeclarations(t, holder{who: "bob", what: api.WorkflowRead, over: finance})
-	if w := sent(t, h, "GET", "/api/v1/finance/secrets", "bob", ""); w.Code != http.StatusOK {
-		t.Errorf("reading the declarations with workflow:read answered %d", w.Code)
-	}
-	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "bob", `{"provider":"builtin"}`); w.Code != http.StatusNotFound {
-		t.Errorf("declaring with workflow:read alone answered %d", w.Code)
-	}
-
-	h, _ = withDeclarations(t, holder{who: "carol", what: api.SecretWrite, over: finance})
-	if w := sent(t, h, "PUT", "/api/v1/finance/secrets/billing", "carol", `{"provider":"builtin"}`); w.Code != http.StatusCreated {
-		t.Errorf("declaring with secret:write answered %d: %s", w.Code, w.Body)
-	}
-	if w := sent(t, h, "DELETE", "/api/v1/finance/secrets/billing", "carol", ""); w.Code != http.StatusNoContent {
-		t.Errorf("removing with secret:write answered %d", w.Code)
+		// In this order, so that the removal, when it is allowed, comes after everything that
+		// needs the declaration to be there.
+		for _, route := range []string{list, read, write, remove} {
+			method, path, _ := strings.Cut(route, " ")
+			body := ""
+			if method == "PUT" {
+				body = `{"provider":"builtin"}`
+			}
+			if w := sent(t, h, method, path, c.who, body); w.Code != c.want[route] {
+				t.Errorf("%s: %s answered %d, want %d", c.who, route, w.Code, c.want[route])
+			}
+		}
 	}
 }
 
