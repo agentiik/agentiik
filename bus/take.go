@@ -151,12 +151,22 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 // requeue keeps the key, so the key alone cannot say which dispatch ended, and task_id is what
 // does.
 //
-// The stream deduplicates it on the dispatch and the ending, which is what a runner publishing
-// again after an answer it never heard sends, and not on the key. A requeue after loss keeps the
-// key, and the ending of the requeue could then follow a late one of the dispatch it replaced
-// inside the duplicate window: the stream would answer that it was already there, and the one
-// ending the controller was waiting for would go nowhere while the one it throws away went
-// through.
+// The stream deduplicates it on the runner, the dispatch and the ending, which is what a runner
+// publishing again after an answer it never heard sends. Not on the key: a requeue after loss
+// keeps the key, and the ending of the requeue could then follow a late one of the dispatch it
+// replaced inside the duplicate window, so the stream would answer that it was already there, and
+// the one ending the controller was waiting for would go nowhere while the one it throws away
+// went through. Nor on the dispatch and the ending alone, because JetStream deduplicates across
+// the stream and not per subject, and one dispatch may be reported by two runners: a message
+// delivered to two machines is redeemed by one, and the other may report the unreached failure
+// the controller refuses from it. Deduplicated on the dispatch alone, that refused report would
+// swallow the holder's own failure for two minutes, while the holder was told it had been
+// published.
+//
+// The identifier is the publisher's to write, and a runner's credential does not hold it to its
+// subject as it holds the subject. A compromised machine that wrote another's identifier would
+// withhold that machine's ending until the heartbeat found the task lost, which is no more than
+// it can do already by taking the pool's tasks off the queue and running none of them.
 func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 	body, err := r.encode()
 	if err != nil {
@@ -166,7 +176,7 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 		Subject: ResultSubject(r.Runner),
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{"result-" + r.TaskID + "-" + r.State.String()},
+			jetstream.MsgIDHeader: []string{"result-" + r.Runner + "-" + r.TaskID + "-" + r.State.String()},
 		},
 	}
 	if _, err := b.js.PublishMsg(ctx, msg); err != nil {

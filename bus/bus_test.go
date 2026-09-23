@@ -473,6 +473,54 @@ func TestTwoDispatchesOfOneKeyEachReportTheirEnding(t *testing.T) {
 	}
 }
 
+// One dispatch delivered to two machines is redeemed by one of them, and the other may report the
+// unreached failure the controller refuses from it. The failure of the runner that holds it then
+// follows under the same task_id and the same ending, and it still reaches the controller: two
+// runners' results are two results, whatever they say. The holder publishing its own again, after
+// an answer it never heard, is still one.
+func TestTwoRunnersReportingOneDispatchAreBothHeard(t *testing.T) {
+	b := open(t)
+	task := aTask(step(t))
+	row := rowOf(step(t))
+
+	unreached := TaskResult{TaskID: row, IdempotencyKey: string(task.ID), Runner: "runner-lan-01", State: agk.TaskFailed}
+	exit := 1
+	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	held := TaskResult{
+		TaskID: row, IdempotencyKey: string(task.ID), Runner: "runner-dmz-02", State: agk.TaskFailed,
+		ExitCode: &exit, StartedAt: started, FinishedAt: started.Add(time.Second),
+	}
+	for _, r := range []TaskResult{unreached, held, held} {
+		if err := b.Report(t.Context(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := answering(t, b, func(a controller.Answer) error {
+		if a.Runner != held.Runner {
+			return fmt.Errorf("%w: %w", controller.ErrNotAResult, controller.ErrNotTheHolder)
+		}
+		return nil
+	})
+	heard := map[string]int{}
+	for len(heard) < 2 {
+		select {
+		case a := <-got:
+			heard[a.Runner]++
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the controller was handed results from %v, and the holder's failure never arrived", heard)
+		}
+	}
+	select {
+	case a := <-got:
+		heard[a.Runner]++
+	case <-time.After(500 * time.Millisecond):
+	}
+	if heard[unreached.Runner] != 1 || heard[held.Runner] != 1 {
+		t.Errorf("the controller was handed %v, want one result from each runner", heard)
+	}
+}
+
 // A result the controller could not record is left for the next delivery, which is what
 // at-least-once buys.
 func TestAResultTheControllerRefusesComesBack(t *testing.T) {
