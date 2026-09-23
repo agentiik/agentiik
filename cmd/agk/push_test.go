@@ -433,6 +433,90 @@ func TestACommitOtherThanHeadPushesItsOwnTree(t *testing.T) {
 	}
 }
 
+// A -f that names nothing, on the disk or in the commit, is a mistyped path and is said in the words
+// agk validate says it in, before a byte of the tree is read. Telling somebody to commit a file
+// that does not exist sends them looking for it; that sentence is for a file that is on the disk
+// and was never committed.
+func TestAMistypedEntryPointIsSaidToBeNowhere(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "docs/readme.md", "not a workflow")
+	commitAll(t, dir, "some documentation")
+	write(t, dir, "draft.yaml", scriptWorkflow)
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	for _, c := range []struct{ entry, reads string }{
+		{"workflow.yml", "there is no workflow at " + filepath.Join(dir, "workflow.yml")},
+		{"docs/agentiik.yaml", "there is no workflow at " + filepath.Join(dir, "docs", "agentiik.yaml")},
+		{"nowhere/agentiik.yaml", "there is no workflow at " + filepath.Join(dir, "nowhere", "agentiik.yaml")},
+		{"draft.yaml", "holds no draft.yaml: what is pushed is the commit, so the entry point has to be committed"},
+	} {
+		code, _, errs, got := pushing(t, dir, http.StatusOK, "-f", c.entry)
+		if code != exitRefused || got != nil {
+			t.Errorf("-f %s answered %d", c.entry, code)
+		}
+		if !strings.Contains(errs, c.reads) {
+			t.Errorf("the refusal of -f %s reads %q", c.entry, errs)
+		}
+	}
+
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(said), "rev-parse") {
+		t.Fatalf("git was not traced, so this proves nothing:\n%s", said)
+	}
+	if strings.Contains(string(said), "ls-tree") || strings.Contains(string(said), "cat-file") {
+		t.Error("the tree was read before the entry point was found missing")
+	}
+}
+
+// The tree is rooted at the entry point's directory, the root load gives every include, and not at
+// the top of the repository it is committed to: run from billing/, a push carries billing/ and
+// nothing beside it.
+func TestAWorkflowBelowTheTopCarriesItsOwnDirectory(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "billing/agentiik.yaml", scriptWorkflow)
+	write(t, dir, "billing/scripts/render.sh", "#!/bin/sh\necho hello\n")
+	commitAll(t, dir, "a second workflow")
+
+	code, out, errs, got := pushing(t, filepath.Join(dir, "billing"), http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if want := []string{"agentiik.yaml", "scripts/render.sh"}; strings.Join(keysOf(got.Tree), " ") != strings.Join(want, " ") {
+		t.Errorf("the tree holds %v, where billing/ holds %v", keysOf(got.Tree), want)
+	}
+}
+
+// What is pushed is the commit, so a commit is pushed from wherever its entry point was when it was
+// committed, even where a later commit has removed that directory from the working copy.
+func TestACommitFromBeforeItsDirectoryWasRemovedIsPushed(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "legacy/agentiik.yaml", scriptWorkflow)
+	write(t, dir, "legacy/scripts/old.sh", "#!/bin/sh\necho old\n")
+	commitAll(t, dir, "the legacy workflow")
+	earlier := gitIn(t, dir, "rev-parse", "HEAD")
+	gitIn(t, dir, "rm", "-rq", "legacy")
+	gitIn(t, dir, "commit", "-qm", "the legacy workflow retired")
+
+	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier, "-f", "legacy/agentiik.yaml")
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if !strings.HasSuffix(path, "/versions/"+earlier) {
+		t.Errorf("the version was sent to %s", path)
+	}
+	// Rooted at the entry point's directory, as it was when that directory was on the disk.
+	if got.Entry != "agentiik.yaml" || string(got.Tree["agentiik.yaml"].Content) != scriptWorkflow {
+		t.Errorf("the entry point travelled as %q in a tree holding %v", got.Entry, keysOf(got.Tree))
+	}
+	if _, held := got.Tree["scripts/old.sh"]; !held || len(got.Tree) != 2 {
+		t.Errorf("the tree holds %v", keysOf(got.Tree))
+	}
+}
+
 // A symbolic link is resolved on whatever host lays the tree out, where nothing stops it pointing
 // outside the repository. So one is refused naming it, and what it points at is never read: the
 // tree comes out of git's objects, where a link is the name of its target and nothing more.

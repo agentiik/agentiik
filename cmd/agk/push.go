@@ -87,18 +87,30 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitUsage
 	}
 
-	dir, base, err := entryOf(e, *entry)
+	path, err := entryOf(e, *entry)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
-	sha, err := commitOf(ctx, dir, *commit)
+	repo, err := repositoryAt(ctx, path)
 	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	sha, err := commitOf(ctx, repo.top, *commit)
+	if err != nil {
+		refusal(e.Err, err)
+		return exitRefused
+	}
+	// Before the working copy is asked about and before any of the tree is read, because a -f
+	// that names nothing is the one mistake here that neither committing nor --allow-dirty
+	// puts right.
+	if err := repo.holds(ctx, sha, path); err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
 	if !*dirty {
-		if changed, err := dirtyTree(ctx, dir); err != nil {
+		if changed, err := dirtyTree(ctx, repo.top); err != nil {
 			fmt.Fprintf(e.Err, "%s\n", err)
 			return exitRefused
 		} else if len(changed) > 0 {
@@ -113,7 +125,7 @@ func push(ctx context.Context, e Env, args []string) int {
 
 	// The whole tree, because "every step of every run sees it, mounted read-only at
 	// /agk/repo", and the installation holds no clone of the repository to read it out of.
-	files, err := repositoryOf(ctx, dir, sha)
+	files, err := repositoryOf(ctx, repo, sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -123,7 +135,8 @@ func push(ctx context.Context, e Env, args []string) int {
 	// closure the version is rebuilt from and the tree a container is given cannot disagree
 	// about any file both of them hold.
 	tree := committed(files)
-	wf, err := loadCommitted(tree, base, dir, sha)
+	base := filepath.Base(path)
+	wf, err := loadCommitted(tree, base, filepath.Dir(path), sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -152,7 +165,7 @@ func push(ctx context.Context, e Env, args []string) int {
 		Entry: captured.Entry, Document: captured.Document,
 		Includes: captured.Includes, Manifests: captured.Manifests,
 		Tree:   files,
-		Branch: branchOf(ctx, dir),
+		Branch: branchOf(ctx, repo.top),
 	}
 	name := string(wf.Metadata.Name)
 	url := fmt.Sprintf("%s/api/v1/%s/workflows/%s/versions/%s",
@@ -171,24 +184,106 @@ func push(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// entryOf is where the entry point is: the directory git is asked about, and the name inside it.
+// entryOf is where the entry point is on the disk.
 //
 // The working copy is consulted for where and never for what, since every byte is read out of the
-// commit. So what is said here are the two mistakes of -f that no commit could put right, in the
-// words load says them in.
-func entryOf(e Env, entry string) (string, string, error) {
+// commit, and the entry point need not be on the disk at all: --commit can name a commit from
+// before its directory was removed. So the one mistake of -f said here is a directory, which is
+// the commonest way -f is mistyped, in the words load says it in. Whether there is anything at
+// the path is the commit's to say, and place.holds says it.
+func entryOf(e Env, entry string) (string, error) {
 	if entry == "" {
 		entry = entryPoint
 	}
 	path := e.path(entry)
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return "", "", fmt.Errorf("%s is a directory: -f names the entry point itself, which is %s inside it", path, entryPoint)
+		return "", fmt.Errorf("%s is a directory: -f names the entry point itself, which is %s inside it", path, entryPoint)
 	}
+	return path, nil
+}
+
+// place is where an entry point is committed: the git repository, and the directory inside it.
+type place struct {
+	// top is the top of the working copy, and where every git command a push runs is run.
+	// Not the entry point's own directory, which a later commit may have removed, and git
+	// cannot be run in a directory that is not there.
+	top string
+
+	// prefix is the entry point's directory inside the repository, the way git writes one:
+	// empty at the top, and billing/ below it. The tree a version carries is rooted there,
+	// because that is the root load gives every include and every schema reference.
+	prefix string
+}
+
+// repositoryAt is the repository the entry point at path is committed to.
+//
+// Outside a git repository there is no commit, and so nothing to push. Walking the directory
+// instead would send whatever it holds under a hash nobody can check it against, which is the one
+// lie this command exists to refuse, and would leave it guessing what a repository is made of: a
+// virtual environment, a build, the .agk a local run leaves behind.
+//
+// That is said only where git says it, though. Anything else git refuses a repository over, one
+// owned by somebody else, a configuration it cannot parse, a HEAD it cannot follow, is passed on
+// in git's words: they name the cause and usually the remedy, and telling somebody standing in a
+// repository that there is none sends them looking for the wrong thing.
+//
+// Git is asked about the nearest directory that exists, and the names missing below it are added
+// to the prefix it answers, so that a directory gone from the working copy can still be pushed
+// from a commit that holds it.
+func repositoryAt(ctx context.Context, path string) (place, error) {
 	dir := filepath.Dir(path)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return "", "", fmt.Errorf("there is no workflow at %s: one is read from %s in the directory the command is run in, or from the path -f names", path, entryPoint)
+	at, below := dir, []string(nil)
+	for {
+		if info, err := os.Stat(at); err == nil && info.IsDir() {
+			break
+		}
+		parent := filepath.Dir(at)
+		if parent == at {
+			break
+		}
+		below = append([]string{filepath.Base(at)}, below...)
+		at = parent
 	}
-	return dir, filepath.Base(path), nil
+
+	prefix, err := gitLine(ctx, at, "rev-parse", "--show-prefix")
+	if err != nil {
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return place{}, errors.New("git is not installed, and agk push reads what it sends out of a git commit")
+		case !notARepository(err):
+			return place{}, fmt.Errorf("the repository at %s could not be read from git: %w", at, err)
+		case len(below) > 0:
+			// Neither a directory nor a repository around where it would be: this is a
+			// mistyped -f, and saying it in load's words is saying so.
+			return place{}, fmt.Errorf("there is no workflow at %s: one is read from %s in the directory the command is run in, or from the path -f names", path, entryPoint)
+		}
+		return place{}, fmt.Errorf("%s is not in a git repository, and a version is a commit: agk push reads what it sends out of one, so it runs inside the repository the workflow is committed to", dir)
+	}
+	top, err := gitLine(ctx, at, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return place{}, fmt.Errorf("the repository at %s could not be read from git: %w", at, err)
+	}
+	if len(below) > 0 {
+		prefix += strings.Join(below, "/") + "/"
+	}
+	return place{top: top, prefix: prefix}, nil
+}
+
+// holds refuses an entry point the commit does not hold, before any of the tree is read, and says
+// which of two mistakes it is. A file on the disk that was never committed is the first, and
+// committing it is the remedy. Nothing at the path at all is the second: a mistyped -f, said in
+// load's words, since telling somebody to commit a file that does not exist sends them looking
+// for it.
+func (r place) holds(ctx context.Context, sha, path string) error {
+	name := r.prefix + filepath.Base(path)
+	// Resolving the path reads the commit's trees and none of its files.
+	if _, err := git(ctx, r.top, "rev-parse", "--verify", "--quiet", sha+":"+name); err == nil {
+		return nil
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return fmt.Errorf("%s holds no %s: what is pushed is the commit, so the entry point has to be committed", short(sha), name)
+	}
+	return fmt.Errorf("there is no workflow at %s: one is read from %s in the directory the command is run in, or from the path -f names", path, entryPoint)
 }
 
 // repositoryOf is the tree of one commit as a container will see it, read out of git's objects.
@@ -196,8 +291,8 @@ func entryOf(e Env, entry string) (string, string, error) {
 // The commit rather than the working copy, for the reason this file opens with. What the commit
 // tracks is also what leaves out an editor's leftovers, a build and a virtual environment: an
 // ignored file is ignored because somebody said it is not part of the repository. The tree is
-// rooted where the entry point is, because git lists a commit from the directory it runs in, and
-// that is the root load gives every include and every schema reference.
+// the one at the entry point's directory inside the commit, which git lists by that name from the
+// top of the repository.
 //
 // A file carries one of git's two modes, 0644 or 0755, and says which even where it is the
 // ordinary one, so that nothing downstream has to guess what an absent mode meant. Two other kinds
@@ -210,8 +305,11 @@ func entryOf(e Env, entry string) (string, string, error) {
 // headers, so that a tree above the limit is refused having read nothing. The limit belongs to how
 // the tree travels rather than to what a repository may be: until the installation serves the
 // repository over git smart HTTP, which is v0.4.0, all of it rides inside one JSON request.
-func repositoryOf(ctx context.Context, dir, sha string) (map[string]api.PushFile, error) {
-	listed, err := gitOutput(ctx, dir, "ls-tree", "-r", "-z", "-l", sha)
+func repositoryOf(ctx context.Context, repo place, sha string) (map[string]api.PushFile, error) {
+	// sha: is the commit's root, and sha:billing the tree at billing/ inside it. Either is
+	// listed with paths relative to itself, because git runs at the top, where a listing is
+	// not narrowed to the directory it runs in.
+	listed, err := gitOutput(ctx, repo.top, "ls-tree", "-r", "-z", "-l", sha+":"+strings.TrimSuffix(repo.prefix, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
 	}
@@ -266,7 +364,7 @@ func repositoryOf(ctx context.Context, dir, sha string) (map[string]api.PushFile
 	for _, f := range entries {
 		sizes[f.object] = f.size
 	}
-	contents, err := contentsOf(ctx, dir, sizes)
+	contents, err := contentsOf(ctx, repo.top, sizes)
 	if err != nil {
 		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
 	}
@@ -378,8 +476,10 @@ func committed(files map[string]api.PushFile) fstest.MapFS {
 // loadCommitted is load, reading the commit rather than the disk: the same graph.Load and the same
 // graph.Check, over the tree that travels.
 func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
-	if info, err := fs.Stat(tree, base); err != nil || info.IsDir() {
-		return nil, fmt.Errorf("%s holds no %s in %s: what is pushed is the commit, so the entry point has to be committed", short(sha), base, dir)
+	// place.holds has refused a commit with nothing at the path, so what is left to say here is
+	// the commit holding a directory there.
+	if info, err := fs.Stat(tree, base); err == nil && info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory in %s: -f names the entry point itself, which is %s inside it", base, short(sha), entryPoint)
 	}
 	wf, err := graph.Load(tree, base, nil)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -441,40 +541,21 @@ func put(ctx context.Context, url, token string, body api.Push) error {
 // one version rather than three, and so that a name this repository does not hold is refused
 // before anything is read. A name beginning with a dash is refused before git sees it, since git
 // would take it for an option of its own.
-//
-// Outside a git repository there is no commit, and so nothing to push. Walking the directory
-// instead would send whatever it holds under a hash nobody can check it against, which is the one
-// lie this command exists to refuse, and would leave it guessing what a repository is made of: a
-// virtual environment, a build, the .agk a local run leaves behind.
-//
-// That is said only where git says it, though. Anything else git refuses a repository over, one
-// owned by somebody else, a configuration it cannot parse, a HEAD it cannot follow, is passed on
-// in git's words: they name the cause and usually the remedy, and telling somebody standing in a
-// repository that there is none sends them looking for the wrong thing.
-func commitOf(ctx context.Context, dir, named string) (string, error) {
-	if _, err := git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
-		switch {
-		case errors.Is(err, exec.ErrNotFound):
-			return "", errors.New("git is not installed, and agk push reads what it sends out of a git commit")
-		case !notARepository(err):
-			return "", fmt.Errorf("the repository at %s could not be read from git: %w", dir, err)
-		}
-		return "", fmt.Errorf("%s is not in a git repository, and a version is a commit: agk push reads what it sends out of one, so it runs inside the repository the workflow is committed to", dir)
-	}
+func commitOf(ctx context.Context, top, named string) (string, error) {
 	switch {
 	case named == "":
 		named = "HEAD"
 	case strings.HasPrefix(named, "-"):
 		return "", fmt.Errorf("--commit %s names no commit: a commit is a hash, a branch or a tag", named)
 	}
-	sha, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", named+"^{commit}")
+	sha, err := git(ctx, top, "rev-parse", "--verify", "--quiet", named+"^{commit}")
 	switch {
 	case err == nil && sha != "":
 		return sha, nil
 	case named == "HEAD":
-		return "", fmt.Errorf("the repository at %s has no commit yet, and a version is a commit: commit the workflow, then push it", dir)
+		return "", fmt.Errorf("the repository at %s has no commit yet, and a version is a commit: commit the workflow, then push it", top)
 	}
-	return "", fmt.Errorf("the repository at %s holds no commit %s", dir, named)
+	return "", fmt.Errorf("the repository at %s holds no commit %s", top, named)
 }
 
 // notARepository is whether git refused because it found no repository at all, which it says in
@@ -550,6 +631,16 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitLine is the one line git answered, less the newline that ends it and nothing else, for an
+// answer that is a path: a directory's name may begin or end with a space as a file's may.
+func gitLine(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitOutput(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
 }
 
 // short is a commit as a person writes it.
