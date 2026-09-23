@@ -34,9 +34,10 @@ type Controller struct {
 	Sweep time.Duration
 
 	// Trouble is where something worth saying goes: a run that could not be decided, a
-	// message the bus refused, a stop nobody took. None of them is fatal to the controller
-	// and all of them are worth a person seeing, so an installation says where they go and
-	// a controller with nowhere to put them drops them rather than choosing for it.
+	// message the bus refused, a stop nobody took, a sweep that could not look for lost
+	// tasks, which names no run. None of them is fatal to the controller and all of them are
+	// worth a person seeing, so an installation says where they go and a controller with
+	// nowhere to put them drops them rather than choosing for it.
 	//
 	// It is a field rather than a package level logger because a controller is a value a
 	// test builds, and a test that had to read standard error to find out what happened is

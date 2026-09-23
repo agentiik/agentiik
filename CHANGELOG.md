@@ -38,6 +38,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The sweep declares lost every task whose runner has said nothing of it for three heartbeat intervals, then decides the runs it woke on the same pass. Nothing ran that check before, so a silent runner's tasks were never lost.
 - The sweep locks a run before its tasks, as a decision does, and passes over a run or a task somebody else holds rather than wait on it, so it never deadlocks with a decision.
 - A loss a runner reports locks its run before its task, as a decision does, and waits for a decision on the run rather than deadlocking with it.
+- A sweep that cannot look for lost tasks reports why, through `Controller.Trouble` with no run, and still decides the runs that are due.
 
 ### State
 

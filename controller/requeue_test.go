@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -361,6 +362,63 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 				t.Errorf("the key holds %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A sweep that cannot look for lost tasks still decides the runs that are due, and says why it could
+// not. The losses wait for the next sweep, and the runs have nothing to do with them: a sweep that
+// stopped there would leave every run of the installation waiting on the one statement.
+func TestASweepThatCannotLookForLossesStillDecides(t *testing.T) {
+	core, q, pool, super := decidingOn(t, theWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing may be moved to lost, so looking for losses fails whole.
+	conn := dbtest.Superuser(t, super)
+	for _, stmt := range []string{
+		`create function refuse_loss() returns trigger language plpgsql as $$
+		 begin raise exception 'no loss may be written here'; end $$`,
+		`create trigger refuse_loss before update on tasks for each row
+		 when (new.state = 'lost') execute function refuse_loss()`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A second run, created while the runner holding the first one's task went quiet.
+	const later agk.RunID = "01M2Z8V1P9C4XQ7K2N4D6F8H0D"
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: later, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice",
+			Inputs: json.RawMessage(`{"orders": []}`),
+			Steps:  []agk.Step{"normalize", "archive"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var trouble []error
+	core.controller.Trouble = func(_ agk.RunID, err error) { trouble = append(trouble, err) }
+	clock.advance(db.LostAfter + time.Second)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatalf("a sweep that could not look for losses answered %v", err)
+	}
+	if len(trouble) != 1 {
+		t.Errorf("a sweep that could not look for losses reported %v", trouble)
+	}
+	if sent := q.taken(); len(sent) != 1 || sent[0].Run != later {
+		t.Errorf("the sweep published %+v, want the first task of run %s", sent, later)
 	}
 }
 

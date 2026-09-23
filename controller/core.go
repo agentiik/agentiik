@@ -115,16 +115,26 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 // to lost, first, every task in flight whose runner has said nothing of it in three heartbeat
 // intervals. First, so that the runs it wakes are among those this sweep decides, and the loss is
 // heard and requeued on this pass rather than the next.
+//
+// In a transaction of its own, and a failure of it is reported rather than returned. The runs a
+// sweep decides do not depend on it: a loss it could not write is found by the next sweep, and a
+// sweep that stopped at it would leave every run of the installation waiting on one statement.
 func (co *Core) Wake(ctx context.Context, w Wake) error {
 	if !w.Swept {
 		return co.Decide(ctx, w.Run)
 	}
 	now := co.now().UTC()
-	var runs []agk.RunID
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
-		if _, err := wide.Lost(ctx, now, 0); err != nil {
+		_, err := wide.Lost(ctx, now, 0)
+		return err
+	}); err != nil {
+		if errors.Is(err, db.ErrFenced) || ctx.Err() != nil {
 			return err
 		}
+		co.controller.report("", fmt.Errorf("controller: the sweep could not look for lost tasks: %w", err))
+	}
+	var runs []agk.RunID
+	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		runs, err = wide.Actionable(ctx, now, 0)
 		return err
