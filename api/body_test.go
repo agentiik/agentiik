@@ -304,22 +304,34 @@ func TestABodyIsReadClosed(t *testing.T) {
 	}
 }
 
-// A refusal does not repeat what the body carried after its document, nor more than the start of
-// a name it did not read, since either may be a secret or as long as its caller likes.
+// A refusal does not repeat what the body carried after its document, nor any of a value where it
+// stopped being JSON, nor more than the start of a name it did not read, since any of them may be
+// a secret or as long as its caller likes.
 func TestARefusalRepeatsNothingItNeedNot(t *testing.T) {
-	const value = "sk_live_notreal"
+	const value = "sk_live_Zq7Xw2Pv"
 	for what, body := range map[string]string{
 		"a value after the declaration":               `{"provider":"builtin"} {"value":"` + value + `"}`,
 		"a value that is not the base64 it should be": `{"tree":{"a":{"content":"` + value + `!","mode":"0644"}}}`,
 		"a value under a name nobody reads":           `{"provider":"builtin","valeu":"` + value + `"}`,
+		"a value after a lone surrogate":              `{"provider":"builtin","value":"\ud800` + value + `"}`,
+		"a value after an escape JSON does not have":  `{"provider":"builtin","value":"\x` + value + `"}`,
 	} {
 		var into request = new(Declare)
 		if strings.Contains(body, "tree") {
 			into = new(Push)
 		}
 		err := readAtMost(httptest.NewRequest("PUT", "/", strings.NewReader(body)), into, declareMaxBytes)
-		if err == nil || strings.Contains(err.Error(), value) {
-			t.Errorf("%s is refused with %v", what, err)
+		if err == nil {
+			t.Errorf("%s is read", what)
+			continue
+		}
+		// Four bytes in a row of the value, which is more than any sentence here has of it by
+		// chance and less than the six the decoder's own sentence repeated.
+		for i := 0; i+4 <= len(value); i++ {
+			if strings.Contains(err.Error(), value[i:i+4]) {
+				t.Errorf("%s is refused with %q, which repeats %q of the value", what, err, value[i:i+4])
+				break
+			}
 		}
 	}
 

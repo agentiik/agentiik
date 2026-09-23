@@ -541,6 +541,19 @@ func malformed(err error) error {
 	if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
 		return errors.New("the request body ends in the middle of its document")
 	}
+	// Where the body stops being JSON, and not the decoder's own sentence, which repeats the
+	// bytes it stopped at and some of those after them: a lone surrogate in a secret's value was
+	// answered with the six bytes of the value that followed it.
+	var syntax *jsontext.SyntacticError
+	if errors.As(err, &syntax) {
+		switch {
+		case syntax.ByteOffset == 0:
+			return errors.New("the request body is not JSON")
+		case syntax.JSONPointer == "":
+			return fmt.Errorf("the request body is not JSON past its first %d bytes", syntax.ByteOffset)
+		}
+		return fmt.Errorf("the request body is not JSON past its first %d bytes, at %.100q", syntax.ByteOffset, syntax.JSONPointer)
+	}
 	return fmt.Errorf("the request body: %w", err)
 }
 
