@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/api"
 	versions "github.com/agentiik/agentiik/version"
@@ -120,7 +124,7 @@ func push(ctx context.Context, e Env, args []string) int {
 
 	// The whole tree, because "every step of every run sees it, mounted read-only at
 	// /agk/repo", and the installation holds no clone of the repository to read it out of.
-	files, err := repositoryOf(ctx, dir)
+	files, err := repositoryOf(ctx, dir, sha)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -149,55 +153,172 @@ func push(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// repositoryOf is the repository as a container will see it.
+// repositoryOf is the tree of one commit as a container will see it, read out of git's objects.
 //
-// What git tracks, rather than what is on the disk: a version is a commit, and a commit holds
-// tracked files. Reading the directory instead would put whatever an editor, a build or a virtual
-// environment left behind into every run of every version, and an ignored file is ignored because
-// somebody said it is not part of the repository.
-func repositoryOf(ctx context.Context, dir string) (map[string]api.PushFile, error) {
-	files := map[string]api.PushFile{}
-	var total int64
-
-	add := func(rel string) error {
-		info, err := os.Stat(filepath.Join(dir, rel))
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			// A submodule, or a directory git lists for some other reason. The tree
-			// is files.
-			return nil
-		}
-		content, err := os.ReadFile(filepath.Join(dir, rel))
-		if err != nil {
-			return err
-		}
-		total += int64(len(content))
-		if total > api.TreeMaxBytes {
-			return fmt.Errorf("this repository is above the %d bytes a tree may be: a workflow repository is an entry point, its fragments and its scripts, and something this size belongs in an image or in an artifact", api.TreeMaxBytes)
-		}
-		f := api.PushFile{Content: content}
-		if info.Mode().Perm()&0o111 != 0 {
-			f.Mode = "0755"
-		}
-		files[filepath.ToSlash(rel)] = f
-		return nil
-	}
-
-	listed, err := git(ctx, dir, "ls-files", "-z")
+// The commit rather than the working copy, for the reason this file opens with. What the commit
+// tracks is also what leaves out an editor's leftovers, a build and a virtual environment: an
+// ignored file is ignored because somebody said it is not part of the repository. The tree is
+// rooted where the entry point is, because git lists a commit from the directory it runs in, and
+// that is the root load gives every include and every schema reference.
+//
+// A file carries one of git's two modes, 0644 or 0755, and says which even where it is the
+// ordinary one, so that nothing downstream has to guess what an absent mode meant. Two other kinds
+// of entry are refused rather than carried. A symbolic link is resolved on whatever host lays the
+// tree out, and nothing stops its target being outside the repository once it is there. A
+// submodule is another repository, which a runner would need a credential to fetch, and a runner
+// holds none.
+//
+// Every size is added up before any content is read, out of the listing git makes from object
+// headers, so that a tree above the limit is refused having read nothing. The limit belongs to how
+// the tree travels rather than to what a repository may be: until the installation serves the
+// repository over git smart HTTP, which is v0.4.0, all of it rides inside one JSON request.
+func repositoryOf(ctx context.Context, dir, sha string) (map[string]api.PushFile, error) {
+	listed, err := gitOutput(ctx, dir, "ls-tree", "-r", "-z", "-l", sha)
 	if err != nil {
-		return nil, fmt.Errorf("the files of the repository could not be listed from git: %w", err)
+		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
 	}
-	for _, rel := range strings.Split(listed, "\x00") {
-		if rel == "" {
+
+	type entry struct {
+		path, mode, object string
+		size               int64
+	}
+	var entries []entry
+	var total int64
+	for _, record := range strings.Split(string(listed), "\x00") {
+		if record == "" {
 			continue
 		}
-		if err := add(rel); err != nil {
-			return nil, err
+		// "<mode> <type> <object> <size>", a tab, and the path exactly as it was committed:
+		// -z quotes nothing, and a name may begin or end with a space.
+		meta, path, found := strings.Cut(record, "\t")
+		fields := strings.Fields(meta)
+		if !found || len(fields) != 4 {
+			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
 		}
+		if !utf8.ValidString(path) {
+			return nil, fmt.Errorf("%q is not a UTF-8 name, and a push carries every name as JSON text, where it would arrive as some other name", path)
+		}
+
+		var mode string
+		switch fields[0] {
+		case "100644":
+			mode = "0644"
+		case "100755":
+			mode = "0755"
+		case "120000":
+			return nil, fmt.Errorf("%s is a symbolic link, and a tree carries none: its target would be resolved on whatever host lays the tree out, where it could point outside the repository. Commit the file it points to in its place", path)
+		case "160000":
+			return nil, fmt.Errorf("%s is a submodule, and a tree carries none: it is another repository, which a runner would need a credential to fetch, and a runner holds none. Commit its files into this repository, or put them in an image", path)
+		default:
+			return nil, fmt.Errorf("%s is committed with mode %s, and a tree carries a file as 100644 or 100755 and nothing else", path, fields[0])
+		}
+
+		size, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil || size < 0 {
+			return nil, fmt.Errorf("the tree of %s could not be read from git: %q is not a line of its listing", short(sha), record)
+		}
+		total += size
+		entries = append(entries, entry{path: path, mode: mode, object: fields[2], size: size})
+	}
+	if total > api.TreeMaxBytes {
+		return nil, fmt.Errorf("the tree of %s is %d bytes, and a push carries at most %d until the installation hosts the repository itself: something this size belongs in an image or in an artifact", short(sha), total, api.TreeMaxBytes)
+	}
+
+	sizes := make(map[string]int64, len(entries))
+	for _, f := range entries {
+		sizes[f.object] = f.size
+	}
+	contents, err := contentsOf(ctx, dir, sizes)
+	if err != nil {
+		return nil, fmt.Errorf("the tree of %s could not be read from git: %w", short(sha), err)
+	}
+
+	files := make(map[string]api.PushFile, len(entries))
+	for _, f := range entries {
+		files[f.path] = api.PushFile{Content: contents[f.object], Mode: f.mode}
 	}
 	return files, nil
+}
+
+// contentsOf reads the bytes of every object named, of the size the listing gave it, through one
+// git process rather than one per file: a tree of three hundred scripts is otherwise three hundred
+// processes.
+//
+// An object is asked for by its hash and never as commit:path, because the batch protocol is one
+// name per line and a path may hold a newline.
+func contentsOf(ctx context.Context, dir string, sizes map[string]int64) (map[string][]byte, error) {
+	if len(sizes) == 0 {
+		return map[string][]byte{}, nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	objects := make([]string, 0, len(sizes))
+	var asked strings.Builder
+	for object := range sizes {
+		objects = append(objects, object)
+		asked.WriteString(object + "\n")
+	}
+
+	cmd := gitCommand(ctx, dir, "cat-file", "--batch")
+	cmd.Stdin = strings.NewReader(asked.String())
+	var errs bytes.Buffer
+	cmd.Stderr = &errs
+	answers, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string][]byte, len(objects))
+	r := bufio.NewReader(answers)
+	var failed error
+	for _, object := range objects {
+		content, err := oneObject(r, object, sizes[object])
+		if err != nil {
+			failed = err
+			break
+		}
+		out[object] = content
+	}
+	if failed != nil {
+		// Whatever git had left to say is not going to be read, and a process blocked
+		// writing it would never exit for Wait to see.
+		cancel()
+	}
+	err = cmd.Wait()
+	switch {
+	case failed != nil:
+		return nil, failed
+	case err != nil:
+		if said := strings.TrimSpace(errs.String()); said != "" {
+			return nil, errors.New(said)
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// oneObject reads one answer of git cat-file --batch: a header naming the object, its type and its
+// size, the content, and a newline.
+func oneObject(r *bufio.Reader, object string, size int64) ([]byte, error) {
+	header, err := r.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("object %s: %w", object, err)
+	}
+	if want := object + " blob " + strconv.FormatInt(size, 10) + "\n"; header != want {
+		return nil, fmt.Errorf("git answered %q for object %s, where the listing gave a blob of %d bytes", strings.TrimSpace(header), object, size)
+	}
+	content := make([]byte, size+1)
+	if _, err := io.ReadFull(r, content); err != nil {
+		return nil, fmt.Errorf("object %s: %w", object, err)
+	}
+	if content[size] != '\n' {
+		return nil, fmt.Errorf("git answered more than the %d bytes object %s holds", size, object)
+	}
+	return content[:size], nil
 }
 
 // put sends the version and reads whatever the server says about it.
@@ -301,19 +422,41 @@ func branchOf(ctx context.Context, dir string) string {
 	return out
 }
 
-func git(ctx context.Context, dir string, args ...string) (string, error) {
+// gitCommand is git run in dir, reading what is committed and nothing a local setting would put in
+// its place.
+//
+// GIT_OPTIONAL_LOCKS=0 because a push only reads, and git status otherwise refreshes the index
+// behind the back of whatever else has the repository open. GIT_NO_REPLACE_OBJECTS=1 because a
+// replace ref lives in this clone alone: honouring one would push, under the commit's name, a tree
+// no other clone of that commit holds.
+func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_REPLACE_OBJECTS=1")
+	return cmd
+}
+
+// gitOutput is what git wrote, exactly as it wrote it. A -z listing is read through this rather
+// than through git, since a name may begin or end with a space and trimming it is renaming it.
+func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := gitCommand(ctx, dir, args...)
 	var out, errs bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errs
 	if err := cmd.Run(); err != nil {
 		if said := strings.TrimSpace(errs.String()); said != "" {
-			return "", fmt.Errorf("%s", said)
+			return nil, fmt.Errorf("%s", said)
 		}
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitOutput(ctx, dir, args...)
+	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out.String()), nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // short is a commit as a person writes it.

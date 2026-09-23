@@ -81,6 +81,13 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// commitAll commits whatever the working tree holds.
+func commitAll(t *testing.T, dir, message string) {
+	t.Helper()
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", message)
+}
+
 // pushing runs the command against a server that records what arrived.
 func pushing(t *testing.T, dir string, answer int, args ...string) (int, string, string, *api.Push) {
 	t.Helper()
@@ -250,13 +257,7 @@ func TestThePushCarriesTheTreeGitTracks(t *testing.T) {
 	}
 	write(t, dir, ".gitignore", "build/\n")
 	write(t, dir, "build/leftover.o", "not part of the repository")
-	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "a script"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %s", args, out)
-		}
-	}
+	commitAll(t, dir, "a script")
 
 	code, out, errs, got := pushing(t, dir, http.StatusOK)
 	if code != exitSucceeded {
@@ -343,6 +344,169 @@ func TestACommitIsPushedUnderItsWholeHash(t *testing.T) {
 		if !strings.Contains(errs, c.reads) {
 			t.Errorf("the refusal of --commit %s reads %q", c.named, errs)
 		}
+	}
+}
+
+// A symbolic link is resolved on whatever host lays the tree out, where nothing stops it pointing
+// outside the repository. So one is refused naming it, and what it points at is never read: the
+// tree comes out of git's objects, where a link is the name of its target and nothing more.
+func TestASymbolicLinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	dir := repository(t)
+	outside := filepath.Join(t.TempDir(), "credentials")
+	if err := os.WriteFile(outside, []byte("a-secret-nobody-committed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "config", "credentials")); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, dir, "a link")
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a tree holding a symbolic link answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "config/credentials") || !strings.Contains(errs, "symbolic link") {
+		t.Errorf("the refusal does not name the link and say what it is: %q", errs)
+	}
+	if strings.Contains(out+errs, "a-secret-nobody-committed") {
+		t.Error("what the link points at was read")
+	}
+}
+
+// A submodule is another repository, which a runner would need a credential to fetch and never
+// holds, so one is refused naming it.
+func TestASubmoduleIsRefused(t *testing.T) {
+	dir := repository(t)
+	// Inside a commit a submodule is a gitlink and nothing more, so one is written straight
+	// into the index rather than cloned from somewhere: the entry is what is refused. The
+	// empty directory is what an uninitialised submodule looks like, and it leaves the
+	// working tree clean.
+	head := gitIn(t, dir, "rev-parse", "HEAD")
+	gitIn(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+head+",vendor/lib")
+	if err := os.MkdirAll(filepath.Join(dir, "vendor", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "commit", "-qm", "a submodule")
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("a tree holding a submodule answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "vendor/lib") || !strings.Contains(errs, "submodule") {
+		t.Errorf("the refusal does not name the submodule and say what it is: %q", errs)
+	}
+}
+
+// A name travels as it was committed. -z hands it over unquoted, and a space at either end of it
+// is part of the name rather than something to trim.
+func TestANameWithASpaceAtEitherEndSurvives(t *testing.T) {
+	dir := repository(t)
+	names := map[string]string{" leading.txt": "leading", "data/trailing.txt ": "trailing"}
+	for name, body := range names {
+		write(t, dir, name, body)
+	}
+	commitAll(t, dir, "names with spaces")
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	for name, body := range names {
+		if f, held := got.Tree[name]; !held || string(f.Content) != body {
+			t.Errorf("%q did not travel as committed: the tree holds %q", name, keysOf(got.Tree))
+		}
+	}
+}
+
+// A name that is not UTF-8 would arrive as some other name, since JSON text cannot carry it, so it
+// is refused rather than renamed on the way.
+func TestANameThatIsNotUTF8IsRefused(t *testing.T) {
+	dir := repository(t)
+	blob := gitIn(t, dir, "hash-object", "-w", "agentiik.yaml")
+	gitIn(t, dir, "update-index", "--add", "--cacheinfo", "100644,"+blob+",caf\xe9.txt")
+	gitIn(t, dir, "commit", "-qm", "a Latin-1 name")
+
+	// The name is in the commit and not on the disk, which is an uncommitted deletion.
+	code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
+	if code != exitRefused {
+		t.Fatalf("a name that is not UTF-8 answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "not a UTF-8 name") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+}
+
+// The mode is git's and not the disk's. A file committed executable travels as 0755 whatever its
+// bits are on this machine, and an ordinary one travels as 0644, said rather than left out.
+func TestTheModeOfAFileIsWhatGitSays(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "scripts/render.sh", "#!/bin/sh\necho hello\n")
+	write(t, dir, "notes.txt", "an ordinary file")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "update-index", "--chmod=+x", "scripts/render.sh")
+	gitIn(t, dir, "commit", "-qm", "modes")
+	// And the disk says the opposite of both, which is only an uncommitted change.
+	if err := os.Chmod(filepath.Join(dir, "scripts/render.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "notes.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK, "--allow-dirty")
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	for name, mode := range map[string]string{
+		"scripts/render.sh": "0755", "notes.txt": "0644", "agentiik.yaml": "0644",
+	} {
+		if got.Tree[name].Mode != mode {
+			t.Errorf("%s travelled with mode %q, and git says %s", name, got.Tree[name].Mode, mode)
+		}
+	}
+}
+
+// Every size comes out of git's listing, so a tree above the limit is refused before a byte of it
+// is read: git is asked for the listing and never for a blob.
+func TestAnOversizedTreeIsRefusedBeforeItsContentIsRead(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "fixtures/big.bin", strings.Repeat("x", api.TreeMaxBytes))
+	commitAll(t, dir, "a fixture that belongs somewhere else")
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused {
+		t.Fatalf("an oversized tree answered %d: %s%s", code, out, errs)
+	}
+	if got != nil {
+		t.Error("it reached the server anyway")
+	}
+	if !strings.Contains(errs, "belongs in an image or in an artifact") {
+		t.Errorf("the refusal does not say where something this size goes: %q", errs)
+	}
+
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(said), "ls-tree") {
+		t.Fatalf("git was not traced, so this proves nothing:\n%s", said)
+	}
+	if strings.Contains(string(said), "cat-file") {
+		t.Error("git was asked for content before the size refused the tree")
 	}
 }
 
