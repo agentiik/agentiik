@@ -41,9 +41,9 @@ type NewRun struct {
 
 	// Inputs are the workflow's declared inputs as they were bound, "already held to their
 	// declared schemas with required and default applied", which is package schema's work
-	// and happens before a run exists. A JSON object, written down as it arrived rather than
-	// decoded here to be encoded again, since nothing between the request and this row reads
-	// it. Empty is none.
+	// and happens before a run exists. A JSON object, written down as it arrived: the API
+	// counts its values and decodes none of them, since nothing between the request and this
+	// row reads them and decoding is what a document costs. Empty is none.
 	Inputs json.RawMessage
 
 	// Steps are every step of the graph, so that a step nobody has reached is a pending row

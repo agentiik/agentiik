@@ -2,7 +2,9 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +140,38 @@ func TestEveryWayAJoinFailsAnswersTheSameThing(t *testing.T) {
 		if bodies[i] != bodies[0] {
 			t.Errorf("the answers differ:\n%s\n%s", bodies[0], bodies[i])
 		}
+	}
+}
+
+// The join reads a body from anybody on the network, so what reading one costs is what anybody can
+// make the API spend: it is held to a small body and a count of labels, and a body past either is
+// refused with 413 before the token in it is looked at, as a body the heartbeat does not read is.
+func TestAJoinLargerThanAMachineIsDescribedByIsTooLarge(t *testing.T) {
+	h, pool := withRunners(t)
+	token := issue(t, pool, []string{"zone=dmz"})
+
+	many := make([]string, 1025)
+	for i := range many {
+		many[i] = fmt.Sprintf("l%d", i)
+	}
+	long := aMachine(token.Clear, "zone=dmz")
+	long.AgentVersion = strings.Repeat("0", 64<<10)
+	for what, join := range map[string]api.Join{
+		"more labels than a machine is described by": aMachine(token.Clear, many...),
+		"a body larger than a join is":               long,
+	} {
+		w, answer := call(t, h, "POST", "/api/v1/runners", "", join)
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("a join carrying %s answered %d: %s", what, w.Code, w.Body)
+		}
+		if said, _ := answer["error"].(string); said == "" {
+			t.Errorf("a join carrying %s was refused with no reason", what)
+		}
+	}
+
+	// The token was never looked at, and a machine sending what a join is joins with it.
+	if w, _ := call(t, h, "POST", "/api/v1/runners", "", aMachine(token.Clear, "zone=dmz")); w.Code != http.StatusCreated {
+		t.Errorf("the token of two refused joins answered %d: %s", w.Code, w.Body)
 	}
 }
 

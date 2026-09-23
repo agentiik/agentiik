@@ -1,0 +1,441 @@
+package api
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json/jsontext"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"slices"
+)
+
+// What reading a request body costs, and what bounds it.
+//
+// Decoding JSON into Go values costs far more than the JSON weighs, because every value becomes
+// something of its own: a string is a header of sixteen bytes before its bytes, an entry of a map
+// is a slot of forty or more, an element of an []any is an interface and whatever it boxes, and
+// three bytes of {} are a map. So what a body cost to decode was set by how many values it held
+// rather than by how many bytes, and a body of many small values cost up to sixty times itself:
+// 295 MiB for a push of 16 MiB of empty tree entries, 508 MiB for 8 MiB of inputs written
+// [{},{},...], 274 MiB for 8 MiB of empty labels sent to the join, which answers anybody. A
+// handful of such requests at once was an instance at its memory limit.
+//
+// So a body is read here one token at a time, and never into anything generic that could hold
+// more than the route reads. Each request type reads its own fields, every collection is counted
+// as its entries are read and refused at the first one past what the route takes, and a document
+// whose shape is the caller's, as the inputs of a run are, is counted value by value. What is left
+// is the body itself and the values the route keeps, whose number is bounded.
+//
+// Every route also has a cap of its own on the bytes, with its reason beside it where the request
+// type is declared, rather than one cap that fits the largest body and is ten thousand times what
+// most of them carry.
+
+// smallMaxBytes is how large the body of a route that takes a few names and numbers may be: a
+// runner pool, a join token, a join, a redemption and a request for a bus credential.
+//
+// Each of those is a few hundred bytes, and sixty-four kibibytes is a hundred times the largest of
+// them: room for whatever they come to carry, and no room for a body that costs anything to read.
+// The join is the one route that reads JSON from somebody nobody has authenticated, so what one of
+// its bodies costs is what anybody on the network can make the API spend.
+const smallMaxBytes = 64 << 10
+
+// namesMax is how many entries a list of names in one of those bodies may hold: the labels of a
+// pool, a token or a machine, and the namespaces a pool accepts.
+//
+// A label is something a step selects a runner by, zone=dmz or arch=arm64, and a machine is
+// described by a handful of them, as a pool that restricts its namespaces lists a handful. The
+// count is what bounds reading one, since an entry costs a header of sixteen bytes however short
+// it is and an empty one is three bytes on the wire: at smallMaxBytes, 1024 of them is sixty-four
+// bytes a name.
+const namesMax = 1024
+
+// request is a body a route reads, one field at a time.
+type request interface {
+	// field reads the value of the member called name, and refuses a name the route does not
+	// read. It is called at most once per name, since a member written twice is refused
+	// before it is reached.
+	field(b *body, name string) error
+}
+
+// body is a request body being read.
+type body struct {
+	raw []byte
+	d   *jsontext.Decoder
+
+	// values is how many more values document may count, for a field whose shape is its
+	// caller's. Everything else has a shape of its own, and a count of its own where it is a
+	// collection.
+	values int
+}
+
+// tooLarge is a body holding more than its route reads: more bytes than its cap, more entries in
+// a collection or more values in a document than the route takes. All three are answered 413,
+// because they are one refusal: the request is larger than the route is willing to read, rather
+// than wrong. A body over its cap in bytes also wraps *http.MaxBytesError, which is how a route
+// with a sentence of its own for that tells it apart.
+type tooLarge struct {
+	reason string
+	bytes  *http.MaxBytesError
+}
+
+func (e *tooLarge) Error() string { return e.reason }
+
+func (e *tooLarge) Unwrap() error {
+	if e.bytes == nil {
+		return nil
+	}
+	return e.bytes
+}
+
+// statusOf is how a body readAtMost refused is answered: 413 where it held more than its route
+// reads, and 400 where it was not what the route reads at all.
+func statusOf(err error) int {
+	if errors.As(err, new(*tooLarge)) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
+}
+
+// readAtMost reads a body into a request, closed and at most limit bytes long.
+//
+// Closed: a member the request does not read is refused rather than half understood, one written
+// twice is refused rather than decided by whichever came last, and so is anything after the
+// document. A decoder reads one document and stops, so a second one would otherwise be accepted
+// and dropped, and a declaration followed by a value would tell whoever sent it the value had been
+// kept. The refusal does not repeat what followed, which may be that value.
+//
+// A name written twice is found by the request, as a field or as a path, rather than by the
+// decoder, which would find it by keeping every name of every object it reads, a map of them for
+// a large one: the inputs of a run written as one object of a hundred thousand members cost four
+// times their body that way. What the API keeps without reading, as it keeps the inputs, it keeps
+// as written, and a name written twice there is decided by whoever reads it, by the last as
+// encoding/json and PostgreSQL both decide it.
+func readAtMost(r *http.Request, into request, limit int64) error {
+	raw, err := slurp(r, limit)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return errors.New("the request body is empty, and this route reads a JSON object")
+	}
+	b := &body{raw: raw, d: jsontext.NewDecoder(bytes.NewBuffer(raw), jsontext.AllowDuplicateNames(true))}
+	if err := b.fields(into); err != nil {
+		return err
+	}
+	if _, err := b.d.ReadToken(); err != io.EOF {
+		return errors.New("the request body is one JSON document, and this one carries something after it")
+	}
+	return nil
+}
+
+// slurp reads a body whole, and refuses one longer than limit.
+//
+// Whole, and before any of it is decoded, because a decoder reading from the connection holds the
+// value it is in the middle of in a buffer that doubles as the value grows, and leaves each smaller
+// one behind it: the one large file of a push cost twice its size in buffers before a byte of it
+// was decoded. Read whole, the decoder reads the body where it lies, and a string is copied once,
+// into whatever keeps it.
+//
+// A body declaring its length is read into one allocation of exactly that length, and one
+// declaring more than the limit is refused before a byte of it is read. The allocation is made
+// before the bytes arrive, so a caller who declares a length and sends nothing holds it until the
+// server's read timeout: that is at most the route's limit, which is what the route allows
+// anyway. A body sent in chunks, which declares nothing, grows as it arrives, up to the limit.
+func slurp(r *http.Request, limit int64) ([]byte, error) {
+	larger := func() error {
+		return &tooLarge{
+			reason: fmt.Sprintf("the request body is larger than the %d bytes this route reads", limit),
+			bytes:  &http.MaxBytesError{Limit: limit},
+		}
+	}
+	if r.ContentLength > limit {
+		return nil, larger()
+	}
+	in := http.MaxBytesReader(nil, r.Body, limit)
+	if r.ContentLength >= 0 {
+		raw := make([]byte, r.ContentLength)
+		if _, err := io.ReadFull(in, raw); err != nil {
+			return nil, fmt.Errorf("the request body ends before the %d bytes it declares", r.ContentLength)
+		}
+		return raw, nil
+	}
+	var raw bytes.Buffer
+	if _, err := raw.ReadFrom(in); err != nil {
+		if errors.As(err, new(*http.MaxBytesError)) {
+			return nil, larger()
+		}
+		return nil, fmt.Errorf("the request body could not be read: %w", err)
+	}
+	return raw.Bytes(), nil
+}
+
+// object reads an object one member at a time, and refuses the member after the most-th with
+// tooMany where most is not negative. Null is an object with no members, as encoding/json reads it.
+func (b *body) object(most int, tooMany string, each func(name string) error) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	switch t.Kind() {
+	case jsontext.KindNull:
+		return nil
+	case jsontext.KindBeginObject:
+	default:
+		return b.mistyped(t.Kind(), "an object")
+	}
+	for n := 0; b.d.PeekKind() != jsontext.KindEndObject; n++ {
+		// The name is read before the count is held to, so that what follows the last member
+		// the route takes is refused as too many only where it is a member.
+		name, err := b.d.ReadToken()
+		if err != nil {
+			return malformed(err)
+		}
+		if n == most {
+			return &tooLarge{reason: tooMany}
+		}
+		if err := each(name.String()); err != nil {
+			return err
+		}
+	}
+	_, err = b.d.ReadToken()
+	return malformed(err)
+}
+
+// fields reads an object whose members are the fields of a request, and refuses a field written
+// twice. The names are the request's own and few, since a name it does not read is refused at
+// once, so they are looked for among those already read rather than kept in a map.
+func (b *body) fields(into request) error {
+	var read []string
+	return b.object(-1, "", func(name string) error {
+		if slices.Contains(read, name) {
+			return fmt.Errorf("the request body writes %.64q twice, and a field written twice is refused rather than decided by whichever came last", name)
+		}
+		if err := into.field(b, name); err != nil {
+			return err
+		}
+		read = append(read, name)
+		return nil
+	})
+}
+
+// twice refuses a name a collection already holds, the path of a file in a tree for one.
+func twice(what, name string) error {
+	return fmt.Errorf("the request body names %s %.64q twice, and one written twice is refused rather than decided by whichever came last", what, name)
+}
+
+// text reads a string. Null leaves it as it was.
+func text[T ~string](b *body, into *T) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	switch t.Kind() {
+	case jsontext.KindNull:
+		return nil
+	case jsontext.KindString:
+		*into = T(t.String())
+		return nil
+	}
+	return b.mistyped(t.Kind(), "a string")
+}
+
+// texts reads an array of strings, and refuses the entry after the most-th with tooMany. Null is
+// nil.
+func texts[T ~string](b *body, into *[]T, most int, tooMany string) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	switch t.Kind() {
+	case jsontext.KindNull:
+		return nil
+	case jsontext.KindBeginArray:
+	default:
+		return b.mistyped(t.Kind(), "an array of strings")
+	}
+	out := []T{}
+	for {
+		k := b.d.PeekKind()
+		if k == jsontext.KindEndArray {
+			break
+		}
+		if len(out) == most && k != jsontext.KindInvalid {
+			return &tooLarge{reason: tooMany}
+		}
+		var s T
+		if err := text(b, &s); err != nil {
+			return err
+		}
+		out = append(out, s)
+	}
+	if _, err := b.d.ReadToken(); err != nil {
+		return malformed(err)
+	}
+	*into = out
+	return nil
+}
+
+// integer reads a whole number that the type holds. Null leaves it as it was.
+func integer[T ~int | ~int64](b *body, into *T) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	switch t.Kind() {
+	case jsontext.KindNull:
+		return nil
+	case jsontext.KindNumber:
+		n, err := t.Int()
+		if err != nil || int64(T(n)) != n {
+			return fmt.Errorf("the request body holds a number at %.100q that is not a whole number of 64 bits, and it holds one there", b.d.StackPointer())
+		}
+		*into = T(n)
+		return nil
+	}
+	return b.mistyped(t.Kind(), "a whole number")
+}
+
+// bytes reads what encoding/json writes a []byte as: standard base64, in a string. Null is nil.
+//
+// Decoded from the body where it lies, with no copy of the text on the way, since base64 needs no
+// escape. A writer may escape a character anyway, and a string that does is unquoted first, into
+// a copy no larger than itself.
+func (b *body) bytes(into *[]byte) error {
+	v, err := b.d.ReadValue()
+	if err != nil {
+		return malformed(err)
+	}
+	switch v.Kind() {
+	case jsontext.KindNull:
+		*into = nil
+		return nil
+	case jsontext.KindString:
+	default:
+		return b.mistyped(v.Kind(), "a string of base64")
+	}
+	encoded := []byte(v[1 : len(v)-1])
+	if bytes.IndexByte(encoded, '\\') >= 0 {
+		if encoded, err = jsontext.AppendUnquote(nil, v); err != nil {
+			return malformed(err)
+		}
+	}
+	out := make([]byte, base64.StdEncoding.DecodedLen(len(encoded)))
+	n, err := base64.StdEncoding.Decode(out, encoded)
+	if err != nil {
+		// Without the decoder's own error, which points at the byte where the string stopped
+		// being base64: the string may be a secret, and a secret is not something to point into.
+		return fmt.Errorf("the request body holds a string at %.100q that is not base64, where it holds bytes written as base64", b.d.StackPointer())
+	}
+	*into = out[:n]
+	return nil
+}
+
+// document reads a document whose shape is its caller's, as the inputs of a run are, and answers
+// the bytes it is written in rather than anything decoded from them. Every value it holds counts
+// against most, an object or an array as well as each thing it holds, and the one past it is
+// refused with tooMany.
+//
+// Counted rather than decoded, because nothing here reads the values: they are kept as they were
+// written, a slice of the body, and what a document costs to decode is paid by whoever decodes it.
+// The count is what bounds that, here and wherever the document is read again.
+func (b *body) document(most int, tooMany string) (jsontext.Value, error) {
+	// Where the value begins: after the name just read, the colon and whatever whitespace
+	// surrounds it.
+	from := b.d.InputOffset()
+	for ; from < int64(len(b.raw)); from++ {
+		if c := b.raw[from]; c != ' ' && c != '\t' && c != '\r' && c != '\n' && c != ':' {
+			break
+		}
+	}
+	b.values = most
+	if err := b.skim(tooMany); err != nil {
+		return nil, err
+	}
+	return jsontext.Value(b.raw[from:b.d.InputOffset()]), nil
+}
+
+// skim reads one value and everything in it, counting each against b.values.
+func (b *body) skim(tooMany string) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	if b.values <= 0 {
+		return &tooLarge{reason: tooMany}
+	}
+	b.values--
+	switch t.Kind() {
+	case jsontext.KindNumber:
+		// Held to what whoever decodes it can hold, which is a 64-bit float: kept as written,
+		// 1e400 would be refused by the controller's own decoding at every pass on the run
+		// rather than by this request in front of whoever sent it.
+		if _, err := t.Float(); err != nil {
+			return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and a value is decoded into one", b.d.StackPointer())
+		}
+		return nil
+	case jsontext.KindBeginArray:
+		for b.d.PeekKind() != jsontext.KindEndArray {
+			if err := b.skim(tooMany); err != nil {
+				return err
+			}
+		}
+		_, err = b.d.ReadToken()
+	case jsontext.KindBeginObject:
+		for b.d.PeekKind() != jsontext.KindEndObject {
+			if _, err := b.d.ReadToken(); err != nil {
+				return malformed(err)
+			}
+			if err := b.skim(tooMany); err != nil {
+				return err
+			}
+		}
+		_, err = b.d.ReadToken()
+	}
+	return malformed(err)
+}
+
+// mistyped refuses a value of the wrong kind, saying where it is and what is written there.
+func (b *body) mistyped(got jsontext.Kind, want string) error {
+	if at := b.d.StackPointer(); at != "" {
+		return fmt.Errorf("the request body holds %s at %.100q, where it holds %s", kindOf(got), at, want)
+	}
+	return fmt.Errorf("the request body is %s, and this route reads %s", kindOf(got), want)
+}
+
+// unknown refuses a member no field of the request is called. Only the first 64 characters of the
+// name are repeated, since a name is as long as its caller likes.
+func unknown(name string) error {
+	return fmt.Errorf("the request body carries %.64q, which is not a field of it, and a field nobody reads is refused rather than half understood", name)
+}
+
+// malformed is a body that is not JSON, or not JSON the route could read. Nil is nil, so that the
+// last read of a function can be returned through it.
+func malformed(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) {
+		return errors.New("the request body ends in the middle of its document")
+	}
+	return fmt.Errorf("the request body: %w", err)
+}
+
+func kindOf(k jsontext.Kind) string {
+	switch k {
+	case jsontext.KindNull:
+		return "null"
+	case jsontext.KindTrue, jsontext.KindFalse:
+		return "a boolean"
+	case jsontext.KindString:
+		return "a string"
+	case jsontext.KindNumber:
+		return "a number"
+	case jsontext.KindBeginObject:
+		return "an object"
+	case jsontext.KindBeginArray:
+		return "an array"
+	}
+	return "nothing"
+}

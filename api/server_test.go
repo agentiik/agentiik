@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -217,6 +218,50 @@ func TestAVersionIsPushedAndARunIsStarted(t *testing.T) {
 	}
 	if tasks != 0 {
 		t.Errorf("the API created %d tasks, and it decides nothing", tasks)
+	}
+}
+
+// The inputs of a run are written down as they were sent, counted and never decoded, and inputs
+// holding more values than an envelope carries items are refused with 413 before any run exists.
+func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+
+	body := `{"commit":"` + aCommit + `","inputs":{"orders":[{"customer_id":"C-1042","amount":12.50}],"cycle":"2026-09"}}`
+	w := sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	var started map[string]any
+	json.Unmarshal(w.Body.Bytes(), &started)
+	_, detail := call(t, h, "GET", "/api/v1/finance/runs/"+started["run"].(string), "alice", nil)
+	inputs, _ := detail["inputs"].(map[string]any)
+	orders, _ := inputs["orders"].([]any)
+	if inputs["cycle"] != "2026-09" || len(orders) != 1 || orders[0].(map[string]any)["amount"] != 12.5 {
+		t.Errorf("the run holds the inputs %v", detail["inputs"])
+	}
+
+	var many strings.Builder
+	many.WriteString(`{"commit":"` + aCommit + `","inputs":{"orders":[`)
+	for i := range agk.DefaultMaxItems {
+		if i > 0 {
+			many.WriteByte(',')
+		}
+		many.WriteByte('0')
+	}
+	many.WriteString(`]}}`)
+	w = sent(t, h, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", many.String())
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "values") {
+		t.Errorf("inputs of more values than an envelope carries items answered %d: %s", w.Code, w.Body)
+	}
+	var runs int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(), `select count(*) from runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Errorf("%d runs exist, and one start was taken", runs)
 	}
 }
 

@@ -76,14 +76,26 @@ type Redemption struct {
 	IdempotencyKey agk.TaskID `json:"idempotency_key"`
 }
 
+func (ask *Redemption) field(b *body, name string) error {
+	switch name {
+	case "grant":
+		return text(b, &ask.Grant)
+	case "task_id":
+		return text(b, &ask.TaskID)
+	case "idempotency_key":
+		return text(b, &ask.IdempotencyKey)
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner) {
 	if s.objects == nil || s.urls == nil {
 		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached")
 		return
 	}
 	var ask Redemption
-	if err := read(r, &ask); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 	// Both are required rather than checked when present, because a comparison with nothing
