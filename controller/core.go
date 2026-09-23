@@ -83,6 +83,13 @@ type Options struct {
 	// there is none. It reaches the evaluator as an argument on every pass, as the size
 	// rules do, and the evaluator counts it against the key. The zero value is
 	// graph.DefaultMaxRequeues, three, and a negative number requeues nothing.
+	//
+	// Only a loss counts, and only a dispatch a runner redeemed can be lost: the heartbeat's
+	// sweep declares it once that runner goes quiet, or the runner reports it. A message the
+	// bus hands to another runner because the first died before redeeming it is the same
+	// dispatch delivered again, under its row and its grant, and a task waiting on the queue
+	// of a full pool is not lost however long it waits. Neither is handed out again, so
+	// neither spends a requeue, and a pool slow to take its work never fails a step for it.
 	MaxRequeues int
 }
 
