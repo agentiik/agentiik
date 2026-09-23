@@ -44,6 +44,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret_values` keeps the built-in store's values sealed, one row per secret behind the namespace policy. A write takes the next version under a row lock, nothing lowers one, and a forgotten value keeps its count.
 - `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
 - A workflow, step, port or secret name is stored as the `identifier` domain. `0001` had called the domain `name`, so its columns got PostgreSQL's own `name` type, which checked nothing and cut a name at 63 bytes; one of up to 255 characters is now kept whole, and a longer one or one off the grammar is refused.
+- `Wide.Redeemable` makes every check `Wide.Redeem` makes and writes nothing, so a redemption can be checked before it is answered and bound once it is.
 
 ### Bus
 
@@ -91,6 +92,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A redemption tells the runner whether a secret it names is not held or held and unreadable, and hands the store's reason to `RunnerOptions.Trouble` for whoever runs the installation.
+- A redemption binds its task only once it has an answer to give. A secret the store cannot give, or an input envelope it cannot read, is refused and binds nothing, as a missing tree already did: the refused runner's report that no container ran ends the dispatch, and only a second delivery could redeem it. A runner that dies before that report leaves the task to the run's `timeout` until dispatches nobody redeemed are swept, where the heartbeat found it lost before. The values are read last, once nothing else can refuse, and in no transaction.
+- A test has runners redeem one task at once, all of them past the check before any is bound, and holds that one is given the task and the rest are refused with no value.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
 - Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.
 - A redemption is asked with `task_id` and `idempotency_key`, both required, and answered in the `grantRedemption` shape: artifacts under the port whose envelope names them, and each secret with its `mount` and an `encoding`, base64 when the value is not text. A `mount` the manifest allows and the response pattern does not, such as `/agk/secrets/api.key`, is answered as written.
@@ -113,6 +116,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds that the API is the only component reading a secret value. It follows imports transitively from every package, wherever they lead, and exempts `api` itself but not what imports it.
 - A workflow's `secrets` block is a list of names, `secrets: [billing]`. Where a value lives is the namespace's declaration, and a block still writing a provider or a path is refused.
 - A test sends a request to every API route but the redemption, with a secret store that fails if it is read.
+- A test decides a run with the namespace's declarations and the built-in store's values out of the controller's reach, and holds that each task's grant names the secrets its step mounts, with their mounts, and nothing a value could be kept under.
+- A test holds that every redemption reads each secret its grant names from the store again, in the grant's namespace and nothing else, so a value rotated after the dispatch arrives rotated, and that no value the store held is written anywhere in the database. What asking again answers after a rotation is left open.
 - `secret.Builtin` keeps a `builtin` value in `secret_values`: sealed on the declaration's `PUT` at the next version, opened as bytes under whichever key of the ring sealed it. A row copied into another namespace, another name or over a later write does not open.
 - `secret.Env` reads the API's environment for development: only for a namespace the installation opts in, only under the prefix it gives that namespace, held again at every read. A variable set to nothing is not a value.
 - `secret.Providers` fills `api.Secrets`: it reads a secret through the namespace's declaration, from the store the declaration names, as bytes. A store the installation does not read, or does not know, is refused naming the secret and never a value.

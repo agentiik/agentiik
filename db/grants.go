@@ -150,6 +150,38 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 // with a row still going has completed on none. A lost row is refused like any row that is over,
 // since its dispatch was superseded by the requeue and the grant it carried opens nothing.
 func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner string, now time.Time) (Redeemed, error) {
+	got, err := w.redeemable(ctx, clear, task, runner, now, true)
+	if err != nil {
+		return Redeemed{}, err
+	}
+	if _, err := w.tx.Exec(ctx,
+		`update task_grants set redeemed_at = $4 where namespace = $1 and task_id = $2 and hash = $3`,
+		got.Namespace, got.Row, token.Hash(clear), now); err != nil {
+		return Redeemed{}, fmt.Errorf("db: the redemption could not be recorded: %w", err)
+	}
+	if _, err := w.tx.Exec(ctx,
+		`update tasks set runner = $3 where namespace = $1 and id = $2`,
+		got.Namespace, got.Row, runner); err != nil {
+		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
+	}
+	return got, nil
+}
+
+// Redeemable is Redeem without the binding: every check Redeem makes, refused the same way, and
+// nothing written.
+//
+// It is the first half of a redemption and Redeem the second. What the grant is for is read
+// between the two, the secret values last, so that a value is read only for a grant that would
+// redeem and a task is bound only once there is an answer to give the runner. One transaction for
+// both would hold the task's row, and a connection, across a round trip to whichever store keeps
+// the value. Redeem checks again under the lock, so a task bound, ended or expired in between is
+// refused there and nothing is answered.
+func (w *Wide) Redeemable(ctx context.Context, clear string, task agk.TaskID, runner string, now time.Time) (Redeemed, error) {
+	return w.redeemable(ctx, clear, task, runner, now, false)
+}
+
+// redeemable is the checks Redeem and Redeemable share, the task's row locked for Redeem to bind.
+func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, runner string, now time.Time, lock bool) (Redeemed, error) {
 	id, ok := token.TaskOf(clear)
 	if !ok {
 		return Redeemed{}, ErrNoGrant
@@ -157,17 +189,20 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 
 	// Found by its hash as well as its task, because a task may have been issued several, one
 	// for every message prepared for it, and each redeems.
-	hashed := token.Hash(clear)
+	query := `
+		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
+		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
+		where g.task_id = $1 and g.hash = $2`
+	if lock {
+		query += ` for update of t`
+	}
 	var namespace string
 	var scope GrantScope
 	var expires time.Time
 	var key agk.TaskID
 	var state string
 	var holder *string
-	err := w.tx.QueryRow(ctx, `
-		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
-		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
-		where g.task_id = $1 and g.hash = $2 for update of t`, id, hashed).
+	err := w.tx.QueryRow(ctx, query, id, token.Hash(clear)).
 		Scan(&namespace, &expires, &scope, &key, &state, &holder)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Redeemed{}, ErrNoGrant
@@ -200,17 +235,6 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 		// completed", and refusing the grant is the same rule applied where it cannot
 		// be forgotten.
 		return Redeemed{}, ErrTaskHeld
-	}
-
-	if _, err := w.tx.Exec(ctx,
-		`update task_grants set redeemed_at = $4 where namespace = $1 and task_id = $2 and hash = $3`,
-		namespace, id, hashed, now); err != nil {
-		return Redeemed{}, fmt.Errorf("db: the redemption could not be recorded: %w", err)
-	}
-	if _, err := w.tx.Exec(ctx,
-		`update tasks set runner = $3 where namespace = $1 and id = $2`,
-		namespace, id, runner); err != nil {
-		return Redeemed{}, fmt.Errorf("db: the task could not be bound to its runner: %w", err)
 	}
 	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }
