@@ -545,8 +545,10 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, runne
 // Published stamps the tasks whose messages have gone.
 //
 // Called after the bus accepted them and never before, which is what makes the stamp mean what
-// it says. A task with no stamp is one the sweep publishes again, and publishing twice is free
-// because the key is the same.
+// it says. A task with no stamp is one the sweep publishes again, and publishing one dispatch
+// twice is free: the stream deduplicates it on its task_id, and a runner refuses a key it holds
+// or has completed. The stream does not deduplicate on the key, because a requeue after loss
+// keeps the key and takes a new task_id, and it is meant to go out.
 func (w *Wide) Published(ctx context.Context, namespace string, keys []agk.TaskID, at time.Time) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
