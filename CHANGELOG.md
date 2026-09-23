@@ -28,6 +28,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
+- `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
 
 ### Bus
 
