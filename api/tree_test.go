@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -212,7 +213,8 @@ func TestTheSizeRefusalSaysWhyThereIsALimit(t *testing.T) {
 
 // A tree at the limit fits in a push, which is the arithmetic behind the body cap: the entry point
 // and its includes travel twice, once as the version and once as files of the tree, so a body
-// only just large enough for the tree refuses a push the tree limit allows.
+// only just large enough for the tree refuses a push the tree limit allows. The limit counts the
+// paths, so the padding leaves room for them.
 func TestATreeAtTheLimitFitsInAPush(t *testing.T) {
 	h, _, _, _ := servingWithObjects(t)
 
@@ -238,7 +240,7 @@ steps:
     outputs: [ok]
 `
 	fragment := ".brick:\n  image: " + image + "\n"
-	padding := api.TreeMaxBytes - len(entry) - len(fragment) - len("# \n")
+	padding := api.TreeMaxBytes - len("agentiik.yaml") - len(entry) - len("common.yaml") - len(fragment) - len("# \n")
 	common := []byte("# " + strings.Repeat("x", padding) + "\n" + fragment)
 
 	p := aPush(t)
@@ -251,6 +253,50 @@ steps:
 	w, _ := call(t, h, "PUT", pushTo, "alice", p)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a tree of exactly %d bytes answered %d: %s", api.TreeMaxBytes, w.Code, w.Body)
+	}
+}
+
+// Bytes alone do not bound a tree, because every file is an entry of every redemption of every
+// task of the version: a push of many empty files, or of long names, is small on the way in and
+// large every time it is answered. So the paths count against the limit, and so do the files.
+func TestATreeOfManyFilesOrLongNamesIsRefused(t *testing.T) {
+	h, _, _, objects := servingWithObjects(t)
+
+	// As many files as a tree may hold is a push like any other.
+	many := map[string]api.PushFile{}
+	for i := range api.TreeMaxFiles - 1 {
+		many[fmt.Sprintf("d/%04d", i)] = api.PushFile{Content: []byte{}, Mode: "0644"}
+	}
+	if w, _ := call(t, h, "PUT", pushTo, "alice", pushed(t, many)); w.Code != http.StatusOK {
+		t.Fatalf("a tree of exactly %d files answered %d: %s", api.TreeMaxFiles, w.Code, w.Body)
+	}
+
+	// One more is refused, and says what the limit is.
+	many["d/one-more"] = api.PushFile{Content: []byte("one more\n"), Mode: "0644"}
+	w, answer := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/b4a0d2f", "alice", pushed(t, many))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a tree of %d files answered %d: %s", api.TreeMaxFiles+1, w.Code, w.Body)
+	}
+	if said, _ := answer["error"].(string); !strings.Contains(said, fmt.Sprint(api.TreeMaxFiles)) || !strings.Contains(said, "until the installation hosts the repository") {
+		t.Errorf("the refusal reads %q", said)
+	}
+
+	// And a tree whose files fit and whose paths take it over is over.
+	name := "a/" + strings.Repeat("n", 200)
+	content := make([]byte, api.TreeMaxBytes-len("agentiik.yaml")-len(workflowDocument)-len(name)+1)
+	content[0] = 'x'
+	w, answer = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/b4a0d2f", "alice",
+		pushed(t, map[string]api.PushFile{name: {Content: content, Mode: "0644"}}))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("a tree one byte over with its paths answered %d: %s", w.Code, w.Body)
+	}
+	if said, _ := answer["error"].(string); !strings.Contains(said, "with its paths") {
+		t.Errorf("the refusal reads %q", said)
+	}
+	for _, refused := range [][]byte{[]byte("one more\n"), content} {
+		if held, err := objects.Has(t.Context(), keyOf("finance", refused)); err != nil || held {
+			t.Errorf("a refused push left a file in the store: %v %v", held, err)
+		}
 	}
 }
 

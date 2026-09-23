@@ -125,7 +125,7 @@ type PushFile struct {
 	Mode string `json:"mode"`
 }
 
-// TreeMaxBytes is the largest tree a push carries.
+// TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
 //
 // It is a limit of this push rather than a rule about repositories. The tree travels inline, in
 // one JSON document and in base64, until the installation hosts the repository and a push is
@@ -133,7 +133,20 @@ type PushFile struct {
 // needed it. Until then the whole request is held in memory on its way through, and four
 // mebibytes of entry point, fragments and scripts is a great deal of workflow. A tree above it is
 // usually carrying something that belongs in an image or in an artifact, and the refusal says so.
+//
+// The paths count because they are the part of a tree that is paid for again after the push:
+// every redemption of every task of the version names every file, and a tree of long names and
+// no content would otherwise cost nothing here and a great deal there.
 const TreeMaxBytes = 4 << 20
+
+// TreeMaxFiles is the most files a push carries, and a limit of the same push for the same reason.
+//
+// Bytes alone do not bound a tree: three hundred thousand empty files fit in a push, and each of
+// them is an entry with a URL of a few hundred bytes in every redemption of every task that
+// version runs, held in the API's memory while it is answered. At TreeMaxBytes this many files is
+// a kibibyte each on average, which is smaller than a script usually is, so a workflow reaches it
+// only by carrying a dependency tree, and that belongs in an image.
+const TreeMaxFiles = 4096
 
 // commitName is a commit as the version table holds one, and a push is held to it before anything
 // is written. Left to the table's own check, a commit that is not one was refused only by the
@@ -273,6 +286,9 @@ func checkTree(files map[string]PushFile) ([]string, int, error) {
 	if len(files) == 0 {
 		return nil, http.StatusBadRequest, errors.New("a push carries the tree of its commit and this one carries none: every step of every run sees the repository under /agk/repo, and a version without it would start containers on an empty directory")
 	}
+	if len(files) > TreeMaxFiles {
+		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree has %d files and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree of this many is usually carrying dependencies that belong in an image", len(files), TreeMaxFiles)
+	}
 	paths := make([]string, 0, len(files))
 	var total int64
 	for p, f := range files {
@@ -282,11 +298,11 @@ func checkTree(files map[string]PushFile) ([]string, int, error) {
 		if f.Mode != "0644" && f.Mode != "0755" {
 			return nil, http.StatusBadRequest, fmt.Errorf("%s is pushed with mode %q, and a tree carries git's two, written out: 0644, or 0755 where the file is executable", p, f.Mode)
 		}
-		total += int64(len(f.Content))
+		total += int64(len(p) + len(f.Content))
 		paths = append(paths, p)
 	}
 	if total > TreeMaxBytes {
-		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree is %d bytes and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree this size is usually carrying something that belongs in an image or in an artifact", total, TreeMaxBytes)
+		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("this tree is %d bytes with its paths and a push carries at most %d until the installation hosts the repository and a push is a git push: a tree this size is usually carrying something that belongs in an image or in an artifact", total, TreeMaxBytes)
 	}
 	sort.Strings(paths)
 
