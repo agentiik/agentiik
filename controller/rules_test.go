@@ -315,3 +315,33 @@ func stateOf(t *testing.T, co *Core) agk.RunState {
 	}
 	return e.State
 }
+
+// An exit code is recorded where a container exited, and where the evaluator gave a task it could
+// not build the code for invalid input. A failure that never reached a container has neither, and
+// recording the 0 its shard holds would be recording success.
+func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
+	at := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	for _, c := range []struct {
+		why   string
+		shard graph.ShardState
+		want  *int
+	}{
+		{"a success", graph.ShardState{Task: agk.TaskSucceeded, StartedAt: at}, ptr(0)},
+		{"a container that exited non-zero", graph.ShardState{Task: agk.TaskFailed, ExitCode: 108, StartedAt: at}, ptr(108)},
+		{"a container that exited 0 and whose outputs could not be collected", graph.ShardState{Task: agk.TaskFailed, StartedAt: at}, ptr(0)},
+		{"a task the evaluator could not build", graph.ShardState{Task: agk.TaskFailed, ExitCode: 120}, ptr(120)},
+		{"a failure that never reached a container", graph.ShardState{Task: agk.TaskFailed}, nil},
+		{"a task stopped at its deadline", graph.ShardState{Task: agk.TaskTimedOut, ExitCode: 137, StartedAt: at}, nil},
+	} {
+		c.shard.Attempt = 1
+		got := taskOf(decidedRun, "normalize", c.shard).ExitCode
+		switch {
+		case c.want == nil && got != nil:
+			t.Errorf("%s is recorded as exiting %d", c.why, *got)
+		case c.want != nil && (got == nil || *got != *c.want):
+			t.Errorf("%s is recorded as exiting %v, want %d", c.why, got, *c.want)
+		}
+	}
+}
+
+func ptr(i int) *int { return &i }

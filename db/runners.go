@@ -362,12 +362,19 @@ func orEmptyStrings(s []string) []string {
 // queue it was already waiting on, one row and one message on every sweep for as long as the pool
 // stayed full, and a step that does not requeue would fail for having waited.
 //
+// Held is read as bound to a runner, and a task in flight is bound by a redemption and by nothing
+// else. A runner is also bound to a task it reports never reached a container, and that binding
+// is written with the ending, in one transaction, so the task is over by the time it is bound and
+// never in flight with a runner that did not redeem it.
+//
 // A task that is held counts from the last thing its runner said about it: its last heartbeat, or
 // its redemption where no heartbeat has named it yet, and the dispatch only where neither is
 // recorded. Not from the dispatch alone, which is when the message went on the queue: a task
 // redeemed after a long wait would be lost between its redemption and its first heartbeat, and
 // requeued while its container ran. A runner that took work and was never heard from again is
-// still exactly the case this is for, counted from when it took it.
+// still exactly the case this is for, counted from when it took it. The redemption is the latest
+// of its grants', since a task may have been issued several and a runner redeems one: joined on
+// each, the one nobody redeemed would count the task from its dispatch.
 //
 // What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
 // the task is handed out again is the evaluator's to say, and the controller hears of the loss
@@ -384,12 +391,15 @@ func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, e
 			  update tasks set state = 'lost', finished_at = now()
 			  where (namespace, id) in (
 			    select t.namespace, t.id from tasks t
-			    left join task_grants g on g.namespace = t.namespace and g.task_id = t.id
+			    cross join lateral (
+			      select max(g.redeemed_at) as at from task_grants g
+			      where g.namespace = t.namespace and g.task_id = t.id
+			    ) redeemed
 			    where t.state in ('dispatched', 'running', 'publishing')
 			      and t.runner is not null
-			      and coalesce(greatest(t.last_heartbeat_at, g.redeemed_at), t.dispatched_at)
+			      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
 			          < now() - ($1::bigint * interval '1 second')
-			    order by coalesce(greatest(t.last_heartbeat_at, g.redeemed_at), t.dispatched_at)
+			    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
 			    limit $2
 			    for update of t skip locked
 			  )

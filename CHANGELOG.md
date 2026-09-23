@@ -13,6 +13,12 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
 - Results are recorded idempotently: states, holder, log, usage, the digest of every port and the artifacts they reference.
 - A result whose state is not an ending, or whose key names no task, is refused with `controller.ErrNotAResult`; the bus takes it off the queue and reports it rather than redelivering it.
+- `controller.Answer` names outputs by digest. A success's envelopes are read back from the store, and one not there yet leaves the result for redelivery.
+- An envelope is read back no further than one byte past `envelope_max_bytes`, so a digest a runner names never has the controller hold a whole artifact in memory.
+- A result naming an object that is not the envelope its digest names (too long, other bytes, or not an envelope) is refused with `controller.ErrNotAResult` rather than delivered again. `artifact.ErrNotAnEnvelope` tells it apart from an object that could not be read.
+- A result is taken only from the runner its dispatch was bound to at redemption. Another runner's, or one saying a container ran for a task nobody redeemed, is refused with `controller.ErrNotTheHolder`. The binding is the `task_id`'s and not the key's, so holding a dispatch that was lost gives a runner nothing of its requeue, which answers to whoever redeems it, and that runner is heard, though not as news, for the dispatch it held.
+- A task that never reached a container (a refused pull, a grant that would not redeem) is ended by the first runner to report it, which is bound to it as a redemption would bind it, in the transaction that writes the ending. A binding is never left on a task still in flight, where the heartbeat would declare lost a task no container ran for.
+- A task that never reached a container is recorded with no exit code, rather than the 0 of success.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.
 - Retries wait out their backoff. A task carries the deadline of its step's timeout, and a run past its root timeout is `timed_out` and stops what it holds. Cancelling twice is not an error.
@@ -20,7 +26,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run that ends emits a completion carrying an identifier and a state and nothing else, preceded by a failure when it `failed` or `timed_out`.
 - `retain` is resolved by the controller and recorded on the artifact reference.
 - A lost task is requeued at once under the same idempotency key and a new `task_id`, where the step is idempotent and `retry.on` names `lost`. A loss does not use up a `retry.max` attempt.
-- A loss is heard from the tasks table on the next pass, whether the heartbeat declared it or the runner holding the task reported it. A loss reported twice requeues once. One naming a dispatch bound to another runner is refused, though the runner is the one the answer names: nothing yet checks who published a result.
+- A loss is heard from the tasks table on the next pass, whether the heartbeat declared it or the runner holding the task reported it. A loss reported twice requeues once. One naming a dispatch bound to another runner, or to none, is refused with `controller.ErrNotTheHolder`, and binds nobody.
 - An answer carries the `task_id` of its dispatch. A reported loss moves that dispatch alone, so one delivered late or twice moves nothing, even once the same runner holds the requeue.
 - An ending reported for a dispatch its key was requeued past is not news, since the attempt waits on the requeue, and it writes nothing on the requeue's row. An answer naming no dispatch of its key is refused with `controller.ErrNotAResult`.
 - An attempt a retry moved past is written as it ended, so it no longer reads as dispatched, counts against `max_concurrent_tasks` or redeems its grant.
@@ -40,10 +46,14 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `bus` fills `controller.Queue` over NATS JetStream: one WorkQueue stream, one subject per runner pool, results on a stream of their own.
 - A task message matches `wire.schema.json`, vendored with its fixtures, and carries names and digests rather than the input envelopes.
 - A message nobody can decode is taken off the queue and reported, never dropped silently.
+- A result travels as `wire.schema.json` `$defs/taskResult`, with its outputs as digests. `bus.Report` takes a `bus.TaskResult`, and a result the reader refuses (an unknown field, not an ending, what no container could report, a malformed name or digest, a log outside its run) is taken off the queue and reported. The reader takes a runner by the ULID the API mints, which the wire's lowercase pattern for `runner` refuses.
+- A runner publishes its results on `agentiik.results.<runner>`, the one results subject its bus credential allows, and a result naming another runner is taken off the queue and reported.
+- A result the controller could not record comes back after a pause, from a second doubling to a minute, rather than at once.
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
 - A task is deduplicated on its `task_id` rather than its key, so a requeue published within two minutes of the dispatch it replaces still goes out.
-- A result is deduplicated on its `task_id` and its ending rather than its key, so the requeue's ending still reaches the controller after a late one of the dispatch it replaced. A result naming no dispatch is not published.
+- A result is deduplicated on its runner, its `task_id` and its ending rather than its key, so the requeue's ending still reaches the controller after a late one of the dispatch it replaced, and a holder's ending still reaches it after another runner's refused report of the same dispatch. A result naming no dispatch is not published.
 - A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
+- A runner's replies come back under an inbox of its own, `bus.Inbox`, the only one its credential may listen on, and it acknowledges on its own pool's consumer alone. Before, any runner could hear every task handed to another, grant included.
 - A runner takes work from the consumer the control plane created for its pool, and creates none. `bus.OpenRunner` connects with the runner's credential.
 - A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 - `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
@@ -71,6 +81,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Grants, join tokens and runner credentials carry 256 bits, are stored hashed and are shown once.
 - The grant of a dispatch that was lost is refused, and so is every grant of a key that has completed. A requeue redeems a grant of its own.
 - A grant carries what its task was dispatched with. Redeeming it returns URLs for the input envelopes and the artifacts they name, the secret values and somewhere to write, and binds the task to that runner.
+- A grant is never replaced. A task published again, because the pass that published it could not record the dispatch, gets another grant beside the first, and the message the bus kept still redeems; the first redemption binds the task for both. Before, the message on the queue carried a grant that opened nothing. Migration `0014_grants_kept.sql`.
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.

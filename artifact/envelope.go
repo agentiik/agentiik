@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"math"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -41,11 +44,26 @@ func PutEnvelope(ctx context.Context, objects Objects, namespace string, e agk.E
 	return digest, size, nil
 }
 
+// ErrNotAnEnvelope is what an object read back under a digest is when it is not the envelope that
+// digest names: longer than an envelope may be, holding bytes whose digest is another, or holding
+// bytes that do not decode as an envelope.
+//
+// It has a name because a reader has to tell it apart from an object that could not be read. A
+// store that did not answer, or does not hold the object yet, may be different on the next try;
+// this is the same on every try, since the digest names the bytes and the bytes do not change.
+var ErrNotAnEnvelope = errors.New("artifact: not an envelope")
+
 // GetEnvelope reads one back, and refuses bytes that are not the bytes the digest names.
 //
 // The check is not belt and braces. A store that handed back something else under a digest has
 // broken the one promise content addressing makes, and a reader that trusted the transfer would
 // schedule against, or hand a runner, something nobody ever published.
+//
+// Reading stops one byte past envelope_max_bytes, for the reason agk.Decode stops there. The digest
+// is not always one the reader wrote: the controller reads back what a runner names, and a runner
+// may name any object it could upload, which runs to artifact_max_bytes. Taken whole, one such
+// object would be held in memory before it was found to be too long for an envelope. An object
+// that long is refused without its digest being checked, since whatever it holds is not one.
 func GetEnvelope(ctx context.Context, objects Objects, namespace, digest string, l agk.Limits) (agk.Envelope, error) {
 	r, err := objects.Open(ctx, Key(namespace, digest))
 	if err != nil {
@@ -53,13 +71,27 @@ func GetEnvelope(ctx context.Context, objects Objects, namespace, digest string,
 	}
 	defer r.Close()
 
+	// A limit of zero is not applied, as agk reads it, and the largest limit there is
+	// would wrap with one more.
+	var from io.Reader = r
+	limit := l.EnvelopeMaxBytes
+	if limit > 0 && limit < math.MaxInt64 {
+		from = io.LimitReader(r, limit+1)
+	}
 	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
+	if _, err := buf.ReadFrom(from); err != nil {
 		return agk.Envelope{}, err
+	}
+	if limit > 0 && int64(buf.Len()) > limit {
+		return agk.Envelope{}, fmt.Errorf("%w: the object under sha256/%s is longer than the %d bytes an envelope may be, and reading stopped there", ErrNotAnEnvelope, digest, limit)
 	}
 	sum := sha256.Sum256(buf.Bytes())
 	if got := hex.EncodeToString(sum[:]); got != digest {
-		return agk.Envelope{}, fmt.Errorf("artifact: the object under sha256/%s holds sha256/%s", digest, got)
+		return agk.Envelope{}, fmt.Errorf("%w: the object under sha256/%s holds sha256/%s", ErrNotAnEnvelope, digest, got)
 	}
-	return agk.Decode(&buf, l)
+	e, err := agk.Decode(&buf, l)
+	if err != nil {
+		return agk.Envelope{}, fmt.Errorf("%w: the object under sha256/%s: %w", ErrNotAnEnvelope, digest, err)
+	}
+	return e, nil
 }

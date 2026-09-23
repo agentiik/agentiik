@@ -450,6 +450,65 @@ func (w *Wide) TaskRow(ctx context.Context, namespace string, key agk.TaskID) (s
 // ErrNoDispatch is a task_id that names no dispatch of the key it came with.
 var ErrNoDispatch = errors.New("db: that task_id is no dispatch of that task")
 
+// HeldBy answers which runner one dispatch of a task was bound to when its grant was redeemed, and
+// the empty string where nobody has redeemed it.
+//
+// It is the binding Redeem made, read on the way out: a result is taken from the runner its task
+// was bound to and from no other. The dispatch is named twice, by its row and by its key, and both
+// are compared with what is recorded, for the reason Redeem compares them on the way in: a row of
+// one task and the key of another is an answer somebody assembled out of two, and neither half is
+// evidence about the other. The row is compared as text, because a runner wrote it and the
+// column's domain would refuse a value that is not a ULID with an error rather than find nothing.
+func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row string) (string, error) {
+	var runner *string
+	err := w.tx.QueryRow(ctx,
+		`select runner from tasks where namespace = $1 and id = $2::text and idempotency_key = $3`,
+		namespace, row, string(key)).Scan(&runner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s is no dispatch of %s", ErrNoDispatch, row, key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: dispatch %s of task %s could not be read: %w", row, key, err)
+	}
+	if runner == nil {
+		return "", nil
+	}
+	return *runner, nil
+}
+
+// BindUnreached binds one dispatch nobody has redeemed to the runner reporting that it never
+// reached a container, and answers who holds it once that is done.
+//
+// A runner pulls a task's image before it redeems the grant, so a refused pull, or a grant that
+// would not redeem, ends a dispatch no runner is bound to. The first runner to report such an
+// ending is bound to the dispatch here, as a redemption would have bound it, so that no other
+// runner can report a second ending for it and no redemption can follow. A dispatch somebody
+// already holds keeps its holder, and the answer says who that is; the row is locked by the
+// update, so a redemption racing it binds first or finds it bound.
+//
+// It belongs in the transaction that writes the ending, and never in one of its own. Pool.Lost
+// takes a bound dispatch in flight for one a runner redeemed, so a binding committed without its
+// ending would be swept lost, counted from the dispatch, as if a container had run and its host
+// gone quiet.
+func (w *Wide) BindUnreached(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
+	if runner == "" {
+		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
+	}
+	var holder string
+	err := w.tx.QueryRow(ctx,
+		`update tasks set runner = coalesce(runner, $4)
+		 where namespace = $1 and id = $2::text and idempotency_key = $3
+		 returning runner`,
+		namespace, row, string(key), runner).Scan(&holder)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s is no dispatch of %s", ErrNoDispatch, row, key)
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: dispatch %s of task %s could not be bound: %w", row, key, err)
+	}
+	return holder, nil
+}
+
 // RequeueOf answers which dispatch of its key a row records, as graph.ShardState counts them.
 //
 // A result names its unit of work by the key and its dispatch by the task_id, and the evaluator
@@ -531,17 +590,17 @@ var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 // Named, it finds the first already lost and moves nothing, which is also what makes a loss
 // delivered twice requeue once.
 //
-// It reaches only a dispatch bound to that runner at redemption, for the reason a heartbeat keeps
-// alive only a runner's own tasks: a runner able to declare somebody else's task lost could send
-// work round the fleet that is running perfectly well. A dispatch of the key bound to another
-// runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld.
+// It reaches only a dispatch bound to that runner, for the reason a heartbeat keeps alive only a
+// runner's own tasks: a runner able to declare somebody else's task lost could send work round
+// the fleet that is running perfectly well. A dispatch of the key bound to another runner, or to
+// none, or no dispatch of the key at all, is answered ErrNotHeld. And it moves only one still in
+// flight, which is one that runner redeemed: a runner bound by reporting that a task never reached
+// a container was bound with that ending, so the dispatch is over and nothing moves.
 //
-// That runner is the one the result names, which is its own word and not something checked. A
-// heartbeat is a request the API authenticates; a result is a message on a subject every runner
-// may publish to, and nothing on it says who published it. So this keeps a runner that is wrong
-// about what it holds off another's task, and does not keep off one that lies about its name.
-// That waits for results to carry a publisher the controller can check, which the refusal of a
-// result from a runner other than the one bound at redemption waits for too.
+// That runner is the one the result names, and it is the one that published it: a heartbeat is a
+// request the API authenticates, and a result arrives on a subject only its runner's credential
+// may publish on, which package bus holds the result's runner field to. So this keeps off another's
+// task both a runner that is wrong about what it holds and one that lies about its name.
 func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, runner string, at time.Time) (bool, error) {
 	switch {
 	case runner == "":

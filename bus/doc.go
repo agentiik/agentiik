@@ -26,6 +26,28 @@
 // what a filtered durable consumer is for. The AWS profile gives up exactly this and pays for it
 // with a queue per pool, "which is why each runner pool gets its own queue".
 //
+// # Why a subject per runner for results
+//
+// Every machine of a pool holds the same kind of credential, and the first ending recorded for
+// an attempt is the one that stands. On one results subject a result's runner field would be a
+// claim, and any machine of the pool could settle any task of the pool by writing the name of the
+// runner that holds it. So each runner publishes on a subject of its own and its credential
+// allows no other: the subject a result arrives on is the runner that sent it, the reader refuses
+// a result naming anybody else, and the controller holds what is left to the runner the dispatch
+// its task_id names was bound to when its grant was redeemed. The dispatch and not the key, since
+// a requeue after loss keeps the key and is answered by whoever redeems it, which may be the
+// runner that lost the dispatch before it or may not. A compromised host's "reach is the tasks in
+// its hands", and this, with an inbox of its own, is what keeps it there.
+//
+// # Why an inbox per runner
+//
+// JetStream hands a pulled message to the inbox the pull named, and every client's inbox is under
+// _INBOX unless it asks for another. A runner allowed to listen there would hear every task handed
+// to every runner of every pool, grant included, and could redeem a grant before the runner it was
+// handed to: the first redemption binds the task, so the binding would go to whoever listened. So
+// a runner's replies come back under Inbox, its credential listens there and nowhere else, and it
+// acknowledges on its own pool's consumer alone.
+//
 // # What at-least-once costs and who pays it
 //
 // "JetStream guarantees at-least-once delivery. Every task is therefore built to be replayable:
@@ -44,7 +66,10 @@
 // bus's to redeliver: "Liveness therefore lives in the database beside the task state, rather
 // than as traffic on a work queue that exists to distribute work." A host that dies holding a
 // task stops heartbeating, the task becomes lost, and an idempotent step is requeued under the
-// same key.
+// same key. Holding is redeeming, though, since only a task a runner has redeemed can be lost: a
+// host that dies between the acknowledgement and the redemption, pulling the image for instance,
+// leaves a task nothing hands out again and the heartbeat never finds, which only the run's own
+// timeout ends.
 //
 // Acknowledging at the end would have made the ack wait the longest a step may run. A runner
 // that died would then hold its work for that long before anybody else could take it, and a

@@ -1,13 +1,19 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -100,9 +106,8 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := succeeded(t, taken[0], core.now())
-	row := core.row(t, taken[0].ID)
-	if err := dies.Answer(t.Context(), Answer{Result: result, Row: row, Runner: "runner-dmz-02"}); err == nil {
+	answer := core.answerOf(t, succeeded(t, taken[0], core.now()))
+	if err := dies.Answer(t.Context(), answer); err == nil {
 		t.Fatal("a controller that died before deciding the run again answered as if it had")
 	}
 	written := seqOf(t, conn)
@@ -114,7 +119,7 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	}
 
 	// The redelivery, to a controller that is alive.
-	if err := core.Answer(t.Context(), Answer{Result: result, Row: row, Runner: "runner-dmz-02"}); err != nil {
+	if err := core.Answer(t.Context(), answer); err != nil {
 		t.Fatalf("a result redelivered after its decision committed was refused: %s", err)
 	}
 	if after := seqOf(t, conn); after != written {
@@ -188,6 +193,400 @@ func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
 	}
 	if runner != nil {
 		t.Errorf("the task is stamped as held by %s from an answer that was not a result", *runner)
+	}
+}
+
+// "It carries no item and no artifact content: what travels is a digest per port." The runner
+// uploads what it produced and names it, and the controller reads it back before the evaluator is
+// shown the result, so what the next step is handed is what the store holds under those digests.
+// A digest the store does not hold is an error rather than a refusal, because an upload may not
+// have landed yet: the message is left for the next delivery and nothing is written. One naming
+// what is not an envelope, or an envelope that contradicts what the result says of it, is refused,
+// since no delivery will change it.
+func TestAResultNamesItsOutputsByDigest(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 || taken[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v", taken)
+	}
+	result := succeeded(t, taken[0], core.now())
+	answer := core.answerOf(t, result)
+	if len(answer.Outputs) != 2 {
+		t.Fatalf("the answer names %+v, and normalize declares two ports", answer.Outputs)
+	}
+	named := map[agk.Port]Output{}
+	for _, o := range answer.Outputs {
+		named[o.Port] = o
+	}
+
+	// Bytes that are not an envelope, uploaded under their own digest, which a runner can do
+	// with anything it likes.
+	stray := []byte(`{"meta":{"port":"ok","count":3},"items":[]}`)
+	sum := sha256.Sum256(stray)
+	strayDigest := hex.EncodeToString(sum[:])
+	if err := core.objects.Put(t.Context(), artifact.Key("finance", strayDigest), bytes.NewReader(stray)); err != nil {
+		t.Fatal(err)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	for _, c := range []struct {
+		why     string
+		with    func(*Answer)
+		refused bool
+	}{
+		{"a digest the store does not hold", func(a *Answer) { a.Outputs[0].Digest = strings.Repeat("0", 64) }, false},
+		{"bytes that are not an envelope, under their own digest", func(a *Answer) { a.Outputs[0].Digest = strayDigest }, true},
+		{"a digest that is not one", func(a *Answer) { a.Outputs[0].Digest = "../../secrets" }, true},
+		{"a count its envelope does not carry", func(a *Answer) { a.Outputs[0].Items = 7 }, true},
+		{"one port's envelope on another port", func(a *Answer) {
+			a.Outputs[0].Digest, a.Outputs[1].Digest = a.Outputs[1].Digest, a.Outputs[0].Digest
+			a.Outputs[0].Items, a.Outputs[1].Items = a.Outputs[1].Items, a.Outputs[0].Items
+		}, true},
+		{"one port twice", func(a *Answer) { a.Outputs[1] = a.Outputs[0] }, true},
+	} {
+		wrong := answer
+		wrong.Outputs = append([]Output(nil), answer.Outputs...)
+		c.with(&wrong)
+		err := core.Answer(t.Context(), wrong)
+		switch {
+		case err == nil:
+			t.Errorf("%s was recorded", c.why)
+		case c.refused && !errors.Is(err, ErrNotAResult):
+			t.Errorf("%s answered %v, and it is the same on every delivery", c.why, err)
+		case !c.refused && errors.Is(err, ErrNotAResult):
+			t.Errorf("%s was refused for good, and the upload may land before the next delivery: %s", c.why, err)
+		}
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Fatalf("answers whose envelopes could not be read took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Fatalf("answers whose envelopes could not be read published %+v", got)
+	}
+
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("the answer naming what the store holds was refused: %s", err)
+	}
+	var ports db.Ports
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		ports, err = ns.PublishedPorts(ctx, decidedRun, "normalize")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for port, o := range named {
+		if got := ports[port]; got.Digest != o.Digest || got.Items != o.Items {
+			t.Errorf("port %s is recorded as %+v, and the result named %s holding %d", port, got, o.Digest, o.Items)
+		}
+	}
+
+	// And the next step is handed the envelope the store holds under the digest ok was named by.
+	next := q.dispatched()
+	if len(next) != 1 || next[0].Task.Step != "archive" {
+		t.Fatalf("the result made runnable %+v", next)
+	}
+	if in := next[0].Inputs["orders"]; in.Digest != named["ok"].Digest || in.Items != 1 {
+		t.Errorf("archive is handed %+v, and normalize published %+v on ok", in, named["ok"])
+	}
+	if got := next[0].Task.Inputs["orders"].Items; len(got) != 1 || got[0].ID != result.Outputs["ok"].Items[0].ID {
+		t.Errorf("archive is handed the items %+v", got)
+	}
+}
+
+// A failure's envelopes are not read back. The evaluator keeps the ports of a shard that succeeded
+// and of no other, so a failure naming a digest the store does not hold is recorded all the same:
+// holding its ending back until the envelope turned up would be waiting on what nothing reads.
+func TestAFailuresOutputsAreNotReadBack(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+	answer := core.answerOf(t, failed(taken[0], 1, core.now()))
+	answer.Outputs = []Output{{Port: "rejected", Digest: strings.Repeat("0", 64), Items: 3}}
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("a failure naming an envelope the store does not hold answered %s", err)
+	}
+	var state string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select state from tasks where idempotency_key = $1`, string(taken[0].ID)).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" {
+		t.Errorf("the task reads %s after its failure was answered", state)
+	}
+}
+
+// "Its reach is the tasks in its hands." A task is in a runner's hands once it redeemed the task's
+// grant, and a result is taken from that runner and from no other: not from another machine of the
+// pool, which holds the same bus credential and could otherwise settle a task it was never given,
+// and not from anybody saying a container ran before a redemption, when nobody holds it. Each is
+// refused, with an error the bus takes off the queue and reports, and the run is left as it was.
+func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+	result := succeeded(t, d.Task, core.now())
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	refused := func(why string, a Answer, holder bool) {
+		t.Helper()
+		err := core.Answer(t.Context(), a)
+		if !errors.Is(err, ErrNotAResult) {
+			t.Errorf("%s answered %v, and it is the same on every delivery", why, err)
+		}
+		if errors.Is(err, ErrNotTheHolder) != holder {
+			t.Errorf("%s answered %v", why, err)
+		}
+	}
+
+	// Nobody has redeemed it yet, so the answer is written by hand rather than by answerOf,
+	// which would redeem it.
+	early := Answer{Result: result, Row: d.Row, Runner: theRunner}
+	early.Result.Outputs = nil
+	refused("a result for a task nobody redeemed", early, true)
+
+	// runner-dmz-02 redeems it, and the task is in its hands.
+	answer := core.answerOf(t, result)
+	if answer.Runner != theRunner {
+		t.Fatalf("the task is held by %s", answer.Runner)
+	}
+	other := answer
+	other.Runner = "runner-lan-01"
+	refused("a result from another runner of the pool", other, true)
+	elsewhere := answer
+	elsewhere.Row = "01M2ZZZZZZZZZZZZZZZZZZZZZZ"
+	refused("a result naming a dispatch that is not this task's", elsewhere, false)
+
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("refused results took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("refused results published %+v", got)
+	}
+	var state, runner string
+	if err := conn.QueryRow(t.Context(),
+		`select state, runner from tasks where idempotency_key = $1`, string(d.Task.ID)).
+		Scan(&state, &runner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "dispatched" || runner != theRunner {
+		t.Errorf("the task reads %s, held by %s, after results from runners that do not hold it", state, runner)
+	}
+
+	// And the runner that holds it is heard.
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("the result of the runner holding the task was refused: %s", err)
+	}
+	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
+		t.Errorf("the holder's result published %+v, want archive", got)
+	}
+}
+
+// "A task that never reached a container writes what stopped it", "a refused pull or a grant that
+// would not redeem being the usual reasons", and a runner pulls the image before it redeems, so
+// such an ending is about a dispatch nobody holds. It is taken from the first runner to report it,
+// which is bound to the dispatch as a redemption would have bound it: another runner's word on it
+// is refused, and its grant redeems for nobody.
+func TestATaskThatNeverReachedAContainerIsEndedByTheRunnerThatReportsIt(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+	log, err := agk.NewLogURI(d.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := Answer{
+		Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed},
+		Row:    d.Row, Runner: theRunner,
+		Log: log, LogLines: 3,
+	}
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("the failure of a task whose image was refused, reported before any redemption, answered %s", err)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	var state string
+	var runner *string
+	var exit *int
+	if err := conn.QueryRow(t.Context(),
+		`select state, runner, exit_code from tasks where idempotency_key = $1`, string(d.Task.ID)).
+		Scan(&state, &runner, &exit); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || runner == nil || *runner != theRunner {
+		t.Errorf("the task reads %s, held by %v, after %s reported it never reached a container", state, runner, theRunner)
+	}
+	if exit != nil {
+		t.Errorf("a task that never reached a container is recorded as exiting %d", *exit)
+	}
+
+	other := pulled
+	other.Runner = "runner-lan-01"
+	if err := core.Answer(t.Context(), other); !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("another runner reporting the same ending answered %v", err)
+	}
+	grant, ok := issued.Load(d.Row)
+	if !ok {
+		t.Fatal("no grant went out for the task")
+	}
+	if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.Redeem(ctx, grant.(string), d.Task.ID, "runner-lan-01", core.now())
+		return err
+	}); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("the grant of a task another runner ended redeemed, answering %v", err)
+	}
+}
+
+// failsFirst resolves no graph the first time it is asked, which stands for a controller that read
+// an answer and could not go on with it: the store, git or the database did not answer, or it
+// died. Every later call answers as the Versions it wraps.
+type failsFirst struct {
+	Versions
+
+	mu    sync.Mutex
+	asked bool
+}
+
+func (f *failsFirst) Graph(ctx context.Context, namespace, workflow, commit string) (*graph.Graph, error) {
+	f.mu.Lock()
+	first := !f.asked
+	f.asked = true
+	f.mu.Unlock()
+	if first {
+		return nil, errors.New("the graph could not be resolved this time")
+	}
+	return f.Versions.Graph(ctx, namespace, workflow, commit)
+}
+
+// An ending that never reached a container binds its runner when the ending is written, and not
+// before. A controller that read it and could not go on leaves the dispatch as it found it, bound
+// to nobody, so the heartbeat, which takes a bound dispatch for one a runner redeemed, finds no
+// task lost where no container ran, and the step is not requeued for a loss the infrastructure
+// never had. The redelivery then ends the dispatch as the runner reported it, where it would
+// otherwise find it lost and requeued and its ending no longer news.
+func TestAnUnreachedEndingTheControllerCouldNotWriteBindsNobody(t *testing.T) {
+	core, q, pool, super := decidingOn(t, requeueingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+
+	troubled, err := NewCore(core.controller, core.term, Options{
+		Queue: q, Versions: &failsFirst{Versions: core.versions}, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := Answer{Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed}, Row: d.Row, Runner: "runner-1"}
+	if err := troubled.Answer(t.Context(), pulled); err == nil || errors.Is(err, ErrNotAResult) {
+		t.Fatalf("an answer the controller could not go on with answered %v, and it is one to deliver again", err)
+	}
+	conn := dbtest.Superuser(t, super)
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 dispatched -"}; !slices.Equal(got, want) {
+		t.Errorf("after an ending that was never written the key holds %q, want %q", got, want)
+	}
+
+	// Dispatched on the test's clock, which is days behind the database's.
+	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
+		t.Fatalf("the heartbeat declared %d tasks lost that never reached a container, answering %v", n, err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if again := q.dispatched(); len(again) != 0 {
+		t.Errorf("a task that never reached a container was sent out again as %+v", again)
+	}
+
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("the ending delivered again was refused: %s", err)
+	}
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("after the ending was delivered again the key holds %q, want %q", got, want)
+	}
+}
+
+// redeemsMeanwhile has a runner redeem the dispatch the first time the graph is asked for, which is
+// after Answer has read who holds it and before it writes what it decided.
+type redeemsMeanwhile struct {
+	Versions
+
+	redeem func() error
+	once   sync.Once
+}
+
+func (r *redeemsMeanwhile) Graph(ctx context.Context, namespace, workflow, commit string) (*graph.Graph, error) {
+	var err error
+	r.once.Do(func() { err = r.redeem() })
+	if err != nil {
+		return nil, err
+	}
+	return r.Versions.Graph(ctx, namespace, workflow, commit)
+}
+
+// A runner may redeem a dispatch after an ending that never reached a container was read and
+// before it was written. The redemption bound first, so the ending is somebody else's word on the
+// dispatch: it is refused as such, and nothing of it is written.
+func TestAnUnreachedEndingIsRefusedOnceARedemptionBoundItMeanwhile(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(sent))
+	}
+	d := sent[0]
+
+	racing, err := NewCore(core.controller, core.term, Options{
+		Queue: q, Objects: core.objects, Now: core.now,
+		Versions: &redeemsMeanwhile{Versions: core.versions, redeem: func() error { return core.redeem(t, d, "runner-2") }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	pulled := Answer{Result: graph.Result{Task: d.Task.ID, State: agk.TaskFailed}, Row: d.Row, Runner: "runner-1"}
+	if err := racing.Answer(t.Context(), pulled); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("an unreached ending of a dispatch runner-2 redeemed meanwhile answered %v", err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("the refused ending took the run from seq %d to %d", before, after)
+	}
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 dispatched runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }
 

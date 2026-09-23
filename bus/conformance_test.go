@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +24,13 @@ import (
 // envelope corpora were already checked here; the wire was not.
 
 // taskMessages compiles the wire's task message schema out of the vendored document.
-func taskMessages(t *testing.T) *jsonschema.Schema {
+func taskMessages(t *testing.T) *jsonschema.Schema { return wire(t, "taskMessage") }
+
+// taskResults compiles the wire's result schema, which is what a runner sends back.
+func taskResults(t *testing.T) *jsonschema.Schema { return wire(t, "taskResult") }
+
+// wire compiles one message of the vendored wire document.
+func wire(t *testing.T, message string) *jsonschema.Schema {
 	t.Helper()
 	doc, err := fixtures.Wire()
 	if err != nil {
@@ -40,7 +48,7 @@ func taskMessages(t *testing.T) *jsonschema.Schema {
 	if err := c.AddResource("wire.schema.json", raw); err != nil {
 		t.Fatal(err)
 	}
-	s, err := c.Compile("wire.schema.json#/$defs/taskMessage")
+	s, err := c.Compile("wire.schema.json#/$defs/" + message)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +250,388 @@ func TestAMessageWithoutItsGrantIsNotPublished(t *testing.T) {
 		c.with(&d)
 		if _, err := messageOf(d); err == nil {
 			t.Errorf("a dispatch with %s was turned into a message", c.name)
+		}
+	}
+}
+
+// What a runner sends back, held to the same document.
+//
+// The result was the half nobody checked, and the first version of this package put
+// controller.Answer on the queue as Go spells it: whole envelopes, no task_id, no key. The vendored
+// corpus did not decode into it, so a runner written against the schema would have had every
+// result taken off the queue as unreadable. The corpus is what the reader is held to now.
+
+// outgrown names the fixtures the corpus calls invalid and its own schema accepts, and says why.
+//
+// One is here because the schema moved and the fixture did not: "cancelled" joined the endings a
+// result reports when the page named all nine task states, and the fixture still pins the rule from
+// before. Such a fixture is held to the schema rather than to its own label, and the test fails the
+// day the schema refuses it again, which is the day the entry has to go.
+var outgrown = map[string]string{
+	"fixtures/wire/invalid/task-result-state-of-a-run.json": "cancelled is one of the five endings a result reports, so a cancelled result is one the schema accepts",
+}
+
+// Every result in the corpus is read the way the corpus says it is: a valid one is handed on as
+// what it says, whole and with its outputs as digests, and an invalid one is refused. A valid one
+// written back out is the document it was read from, so reading and writing are one shape.
+func TestAResultIsReadAsTheWireDescribesIt(t *testing.T) {
+	s := taskResults(t)
+	cases, err := fixtures.TaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 5 {
+		t.Fatalf("the vendored result corpus holds %d documents", len(cases))
+	}
+	for _, c := range cases {
+		body, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatalf("%s: %s", c.File, err)
+		}
+		bySchema := validates(t, s, body)
+		a, byReader := readResult(body)
+
+		if why, stale := outgrown[c.File]; stale {
+			if bySchema != nil {
+				t.Errorf("%s is refused by its schema again, so the corpus caught up and the exception for it (%s) can go: %s", c.File, why, bySchema)
+			}
+			continue
+		}
+		if !c.Valid {
+			if bySchema == nil {
+				t.Errorf("%s should be refused by the schema: %s", c.File, c.Rule)
+			}
+			if byReader == nil {
+				t.Errorf("%s was read as %+v, and it is refused because %s", c.File, a, c.Rule)
+			}
+			continue
+		}
+		if bySchema != nil {
+			t.Errorf("%s should be accepted by the schema: %s", c.File, bySchema)
+		}
+		if byReader != nil {
+			t.Errorf("%s, which covers %s, was refused: %s", c.File, c.Covers, byReader)
+			continue
+		}
+		saysWhatItSays(t, c.File, body, a)
+
+		var r TaskResult
+		if err := json.Unmarshal(body, &r); err != nil {
+			t.Fatal(err)
+		}
+		again, err := r.encode()
+		if err != nil {
+			t.Errorf("%s could not be written back out: %s", c.File, err)
+			continue
+		}
+		if !sameDocument(t, body, again) {
+			t.Errorf("%s was written back out as another document:\n%s\n\n%s", c.File, body, again)
+		}
+	}
+}
+
+// saysWhatItSays holds an answer to the document it was read from, field by field, as the fixture
+// spells each one.
+func saysWhatItSays(t *testing.T, file string, body []byte, a controller.Answer) {
+	t.Helper()
+	var doc struct {
+		TaskID         string `json:"task_id"`
+		IdempotencyKey string `json:"idempotency_key"`
+		Runner         string `json:"runner"`
+		State          string `json:"state"`
+		ExitCode       *int   `json:"exit_code"`
+		StartedAt      string `json:"started_at"`
+		FinishedAt     string `json:"finished_at"`
+		Outputs        []struct {
+			Port, Digest string
+			Items        int
+		} `json:"outputs"`
+		Log *struct {
+			URI       string `json:"uri"`
+			Lines     int    `json:"lines"`
+			Truncated bool   `json:"truncated"`
+		} `json:"log"`
+		Usage map[string]float64 `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	instant := func(s string) time.Time {
+		if s == "" {
+			return time.Time{}
+		}
+		at, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	if a.Row != doc.TaskID || string(a.Result.Task) != doc.IdempotencyKey || a.Runner != doc.Runner || a.Result.State.String() != doc.State {
+		t.Errorf("%s names dispatch %s of %s, by %s, %s, and was read as dispatch %s of %s, by %s, %s",
+			file, doc.TaskID, doc.IdempotencyKey, doc.Runner, doc.State, a.Row, a.Result.Task, a.Runner, a.Result.State)
+	}
+	if exit := doc.ExitCode; (exit == nil && a.Result.ExitCode != 0) || (exit != nil && *exit != a.Result.ExitCode) {
+		t.Errorf("%s exits %v and was read as exiting %d", file, exit, a.Result.ExitCode)
+	}
+	// An absent code is carried as 0, which is success, and the controller records no code
+	// for a success or a failure whose container never started. So the 0 is harmless only on
+	// an answer that says as much.
+	if ended := a.Result.State == agk.TaskSucceeded || a.Result.State == agk.TaskFailed; doc.ExitCode == nil && ended && !a.Result.StartedAt.IsZero() {
+		t.Errorf("%s reports no exit code and was read as a container that started and exited 0", file)
+	}
+	if !a.Result.StartedAt.Equal(instant(doc.StartedAt)) || !a.Result.FinishedAt.Equal(instant(doc.FinishedAt)) {
+		t.Errorf("%s runs from %q to %q and was read as %s to %s", file, doc.StartedAt, doc.FinishedAt, a.Result.StartedAt, a.Result.FinishedAt)
+	}
+	if len(a.Result.Outputs) != 0 {
+		t.Errorf("%s was handed on carrying envelopes", file)
+	}
+	if len(a.Outputs) != len(doc.Outputs) {
+		t.Errorf("%s names %d ports and was read as naming %d", file, len(doc.Outputs), len(a.Outputs))
+	} else {
+		for i, o := range doc.Outputs {
+			want := controller.Output{Port: agk.Port(o.Port), Digest: strings.TrimPrefix(o.Digest, "sha256:"), Items: o.Items}
+			if a.Outputs[i] != want {
+				t.Errorf("%s names %+v and was read as %+v", file, o, a.Outputs[i])
+			}
+		}
+	}
+	switch {
+	case doc.Log == nil && (a.Log != agk.LogURI{} || a.LogLines != 0 || a.LogCut):
+		t.Errorf("%s has no log and was read as having one at %s", file, a.Log)
+	case doc.Log != nil && (a.Log.String() != doc.Log.URI || a.LogLines != doc.Log.Lines || a.LogCut != doc.Log.Truncated):
+		t.Errorf("%s logs %+v and was read as %s, %d lines, cut %v", file, *doc.Log, a.Log, a.LogLines, a.LogCut)
+	}
+	if len(a.Usage) != len(doc.Usage) {
+		t.Errorf("%s measures %v and was read as %v", file, doc.Usage, a.Usage)
+	}
+	for name, want := range doc.Usage {
+		var got float64
+		switch v := a.Usage[name].(type) {
+		case float64:
+			got = v
+		case int64:
+			got = float64(v)
+		default:
+			t.Errorf("%s measures %s as %v and was read as %v", file, name, want, a.Usage[name])
+			continue
+		}
+		if got != want {
+			t.Errorf("%s measures %s as %v and was read as %v", file, name, want, got)
+		}
+	}
+}
+
+// sameDocument says whether two encodings are one document, whatever the order of their keys.
+func sameDocument(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		t.Fatal(err)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+// What a runner reports is what the document describes, in each of the shapes a result takes: a
+// task that ran, one that never reached a container, one stopped at its deadline, and one a runner
+// recovers as lost. A success that published nothing still says so.
+func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
+	s := taskResults(t)
+	task := aTask("invoice")
+	ran := aResult(task)
+
+	nothing := aResult(task)
+	nothing.Outputs = []Output{}
+
+	unreached := aResult(task)
+	unreached.State = agk.TaskFailed
+	unreached.ExitCode, unreached.StartedAt, unreached.FinishedAt = nil, time.Time{}, time.Time{}
+	unreached.Outputs, unreached.Usage = nil, nil
+	unreached.Log.Lines = 3
+
+	stopped := aResult(task)
+	stopped.State = agk.TaskTimedOut
+	stopped.ExitCode = nil
+
+	lost := TaskResult{
+		TaskID: ran.TaskID, IdempotencyKey: ran.IdempotencyKey, Runner: ran.Runner,
+		State: agk.TaskLost, StartedAt: ran.StartedAt,
+	}
+
+	for name, r := range map[string]TaskResult{
+		"a task that ran": ran, "a success that published nothing": nothing,
+		"a task that never reached a container": unreached, "a task stopped at its deadline": stopped,
+		"a task recovered as lost": lost,
+	} {
+		body, err := r.encode()
+		if err != nil {
+			t.Errorf("%s could not be written: %s", name, err)
+			continue
+		}
+		if err := validates(t, s, body); err != nil {
+			t.Errorf("%s is refused by the wire:\n%s\n\n%s", name, err, body)
+		}
+		if _, err := readResult(body); err != nil {
+			t.Errorf("%s was written and could not be read back: %s", name, err)
+		}
+	}
+
+	body, err := nothing.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen map[string]any
+	if err := json.Unmarshal(body, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if outputs, there := seen["outputs"].([]any); !there || len(outputs) != 0 {
+		t.Errorf("a success that published nothing travelled with outputs %v, and it says so with an empty list", seen["outputs"])
+	}
+}
+
+// A result the controller would refuse is refused before it is published, where the error reaches
+// the runner that wrote it, rather than on the queue, where all that is left is to take it off. And
+// read off the queue, it is refused there too. Each rule is held by a case only it refuses.
+func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
+	task := aTask("invoice")
+	artifact := strings.Repeat("c1f4", 16)
+	for _, c := range []struct {
+		name string
+		with func(*TaskResult)
+	}{
+		{"no task_id", func(r *TaskResult) { r.TaskID = "" }},
+		{"a task_id that is not an identifier", func(r *TaskResult) { r.TaskID = "01m2aaz9g62nqxfafcxkrpjeh5" }},
+		{"a key that is not one", func(r *TaskResult) { r.IdempotencyKey = "invoice/1" }},
+		{"no runner", func(r *TaskResult) { r.Runner = "" }},
+		{"a state it passes through", func(r *TaskResult) { r.State = agk.TaskRunning }},
+		{"a success with another exit code", func(r *TaskResult) { exit := 1; r.ExitCode = &exit }},
+		{"a success that names no ports", func(r *TaskResult) { r.Outputs = nil }},
+		{"an exit code with no container started", func(r *TaskResult) { r.StartedAt = time.Time{} }},
+		{"an exit with no instant", func(r *TaskResult) { r.FinishedAt = time.Time{} }},
+		{"a deadline's exit code with no instant", func(r *TaskResult) { r.State, r.FinishedAt = agk.TaskTimedOut, time.Time{} }},
+		{"a failure from a container that started and never exited", func(r *TaskResult) {
+			r.State, r.ExitCode, r.FinishedAt = agk.TaskFailed, nil, time.Time{}
+		}},
+		{"an exit code no container exits with", func(r *TaskResult) { exit := 256; r.State, r.ExitCode = agk.TaskFailed, &exit }},
+		{"a loss that describes an outcome", func(r *TaskResult) { r.State = agk.TaskLost }},
+		{"a loss that describes nothing but its log", func(r *TaskResult) {
+			*r = TaskResult{TaskID: r.TaskID, IdempotencyKey: r.IdempotencyKey, Runner: r.Runner, State: agk.TaskLost, StartedAt: r.StartedAt, Log: r.Log}
+		}},
+		{"a port twice", func(r *TaskResult) { r.Outputs = append(r.Outputs, r.Outputs[0]) }},
+		{"a port that is not a name", func(r *TaskResult) { r.Outputs[0].Port = "ok,error" }},
+		{"a digest without its algorithm", func(r *TaskResult) { r.Outputs[0].Digest = strings.TrimPrefix(r.Outputs[0].Digest, "sha256:") }},
+		{"a digest that would leave its prefix", func(r *TaskResult) { r.Outputs[0].Digest = "sha256:../../other/sha256/x" }},
+		{"a negative count", func(r *TaskResult) { r.Outputs[0].Items = -1 }},
+		{"an artifact that is not a digest", func(r *TaskResult) { r.Artifacts = []Artifact{{SHA256: "C1F4", Bytes: 1}} }},
+		{"an artifact of negative size", func(r *TaskResult) { r.Artifacts = []Artifact{{SHA256: artifact, Bytes: -1}} }},
+		{"a log that is not a log URI", func(r *TaskResult) { r.Log.URI = "https://logs.example.com/x" }},
+		{"a log of negative length", func(r *TaskResult) { r.Log.Lines = -1 }},
+		{"a log under another run", func(r *TaskResult) {
+			other, _ := agk.NewLogURI(agk.NewTaskID(agk.NewRunID(), "invoice", 1, agk.Shard{}))
+			r.Log.URI = other.String()
+		}},
+		{"a negative usage", func(r *TaskResult) { r.Usage.CPUSeconds = -1 }},
+	} {
+		r := aResult(task)
+		r.Outputs = append([]Output(nil), r.Outputs...)
+		log, usage := *r.Log, *r.Usage
+		r.Log, r.Usage = &log, &usage
+		c.with(&r)
+		if _, err := r.encode(); err == nil {
+			t.Errorf("a result with %s would be published", c.name)
+		}
+		if body, err := json.Marshal(r); err == nil {
+			if _, err := readResult(body); err == nil {
+				t.Errorf("a result with %s was read", c.name)
+			}
+		}
+	}
+
+	// Report is encode and then the bus, and a result encode refuses never reaches the bus,
+	// which a Bus with no connection would find out about the hard way.
+	refused := aResult(task)
+	refused.State = agk.TaskRunning
+	if err := (&Bus{}).Report(t.Context(), refused); err == nil {
+		t.Error("a result that is not an ending was published")
+	}
+
+	// What only a document can say: more than the wire describes, and more than one of it.
+	body, err := aResult(task).encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, doc := range map[string][]byte{
+		"a field the wire does not describe": append(bytes.TrimSuffix(body, []byte("}")), []byte(`,"host":"runner-dmz-02.example.com"}`)...),
+		"a second document after the first":  append(append([]byte{}, body...), body...),
+	} {
+		if _, err := readResult(doc); err == nil {
+			t.Errorf("a result with %s was read", name)
+		}
+	}
+}
+
+// And the whole of it on a real bus: every result in the corpus published as a runner would, the
+// valid ones handed to the controller as the answer they say, and the invalid ones taken off the
+// queue and reported without the controller ever seeing them.
+func TestAResultIsWhatTheWireDescribes(t *testing.T) {
+	b := open(t)
+	trouble := make(chan error, 16)
+	b.Trouble = func(_ string, err error) { trouble <- err }
+
+	cases, err := fixtures.TaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type sent struct {
+		file string
+		body []byte
+	}
+	heard := map[string]sent{}
+	refused := 0
+	for _, c := range cases {
+		body, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var named struct {
+			TaskID string `json:"task_id"`
+			Runner string `json:"runner"`
+			State  string `json:"state"`
+		}
+		if err := json.Unmarshal(body, &named); err != nil {
+			t.Fatal(err)
+		}
+		if _, stale := outgrown[c.File]; c.Valid || stale {
+			heard[named.TaskID+" "+named.State] = sent{c.File, body}
+		} else {
+			refused++
+		}
+		if _, err := b.js.Publish(t.Context(), ResultSubject(named.Runner), body); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := answering(t, b, func(controller.Answer) error { return nil })
+	deadline := time.After(15 * time.Second)
+	for len(heard) > 0 || refused > 0 {
+		select {
+		case a := <-got:
+			s, ok := heard[a.Row+" "+a.Result.State.String()]
+			if !ok {
+				t.Fatalf("the controller was handed %+v, which is not a result the corpus holds as valid or was handed twice", a)
+			}
+			delete(heard, a.Row+" "+a.Result.State.String())
+			saysWhatItSays(t, s.file, s.body, a)
+		case err := <-trouble:
+			if refused == 0 {
+				t.Fatalf("one more result was taken off the queue than the corpus refuses: %s", err)
+			}
+			refused--
+		case <-deadline:
+			t.Fatalf("%d valid results were never handed on and %d invalid ones never reported", len(heard), refused)
 		}
 	}
 }

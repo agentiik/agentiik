@@ -11,6 +11,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -77,7 +78,7 @@ type Options struct {
 // of what the engine promises, not part of how an operator chose to install it. An installation
 // that had configured a different retention would have a bus that kept work after it was done.
 func Open(ctx context.Context, o Options) (*Bus, error) {
-	conn, js, err := connect(o)
+	conn, js, err := connect(o, "")
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +110,7 @@ func Open(ctx context.Context, o Options) (*Bus, error) {
 	results, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:        Results,
 		Description: "One result per attempt, removed once the controller has recorded it.",
-		Subjects:    []string{ResultSubject},
+		Subjects:    []string{ResultSubject("*")},
 		Retention:   jetstream.WorkQueuePolicy,
 		Discard:     jetstream.DiscardOld,
 		Storage:     jetstream.FileStorage,
@@ -130,16 +131,40 @@ func Open(ctx context.Context, o Options) (*Bus, error) {
 // holds cannot create a stream or a consumer, and is refused the request that would ask whether
 // one is there. The streams are Open's and the pool's consumer is Consumer's, both on the control
 // plane, and a runner finds them there or finds out at its first Take that they are missing.
+//
+// Its replies come back under the inbox of the runner the credential was minted for, which is
+// the one inbox that credential may subscribe to. The name is read off the credential rather than
+// asked of the caller, so that the two cannot disagree.
 func OpenRunner(o Options) (*Bus, error) {
-	conn, js, err := connect(o)
+	var inbox string
+	if o.Credentials != nil {
+		runner, err := runnerOf(*o.Credentials)
+		if err != nil {
+			return nil, err
+		}
+		inbox = Inbox(runner)
+	}
+	conn, js, err := connect(o, inbox)
 	if err != nil {
 		return nil, err
 	}
 	return &Bus{conn: conn, js: js}, nil
 }
 
-// connect opens the connection both sides share.
-func connect(o Options) (*nats.Conn, jetstream.JetStream, error) {
+// runnerOf reads which runner a credential was minted for, which is the name its JWT carries.
+func runnerOf(c Credentials) (string, error) {
+	claims, err := jwt.DecodeUserClaims(c.JWT)
+	if err != nil {
+		return "", fmt.Errorf("bus: the credential could not be read: %w", err)
+	}
+	if err := validRunner(claims.Name); err != nil {
+		return "", fmt.Errorf("bus: the credential is not a runner's: %w", err)
+	}
+	return claims.Name, nil
+}
+
+// connect opens the connection both sides share, with replies under inbox where one is named.
+func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 	if o.URL == "" {
 		return nil, nil, errors.New("bus: no bus address")
 	}
@@ -156,6 +181,9 @@ func connect(o Options) (*nats.Conn, jetstream.JetStream, error) {
 		// whose bus takes no credential at all is profile A, where the bus is on the
 		// same host and reachable by nothing else.
 		options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
+	}
+	if inbox != "" {
+		options = append(options, nats.CustomInboxPrefix(inbox))
 	}
 	conn, err := nats.Connect(o.URL, options...)
 	if err != nil {
@@ -211,7 +239,9 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 // the task_id is given to JetStream as its deduplication key: a bus is at-least-once and the
 // runner is what makes that safe, but a publish retried by this process inside the duplicate
 // window is a retry this process knows about and there is no reason to make somebody else pay
-// for it.
+// for it. A task a later pass planned again, because the pass that published it could not record
+// the dispatch, is deduplicated the same way, and it carries a grant of its own: the message that
+// stays is the first, which is why a grant once issued is never replaced.
 //
 // The task_id and not the idempotency key, because "a requeue after loss keeps the idempotency
 // key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being
@@ -312,13 +342,34 @@ func validPool(pool string) error {
 	if pool == "" {
 		return errors.New("a runner pool with no name")
 	}
-	for _, r := range pool {
+	if !isToken(pool) {
+		return fmt.Errorf("%q is not a runner pool: letters, digits, hyphens and underscores, because a pool name is a subject token and a dot or a wildcard in one would reach another pool's work", pool)
+	}
+	return nil
+}
+
+// validRunner holds a runner's name to what can be a subject token, for the same reason: a
+// runner's results go on a subject of its own, and a name with a wildcard in it would be a
+// credential allowed to publish as every runner at once.
+func validRunner(runner string) error {
+	if runner == "" {
+		return errors.New("a runner with no name, and a result is taken from the runner that sent it")
+	}
+	if !isToken(runner) {
+		return fmt.Errorf("%q is not a runner: letters, digits, hyphens and underscores, because a runner's name is a subject token and a dot or a wildcard in one would reach another runner's results", runner)
+	}
+	return nil
+}
+
+// isToken says whether a name can be one token of a subject and nothing more.
+func isToken(s string) bool {
+	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		case r == '-', r == '_':
 		default:
-			return fmt.Errorf("%q is not a runner pool: letters, digits, hyphens and underscores, because a pool name is a subject token and a dot or a wildcard in one would reach another pool's work", pool)
+			return false
 		}
 	}
-	return nil
+	return true
 }

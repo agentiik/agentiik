@@ -98,6 +98,14 @@ var ErrTaskHeld = errors.New("db: that task is held by another runner")
 // The row is written by the controller inside the decision that planned the task, so a task that
 // exists has a grant and a grant belongs to a task that exists. The clear value is answered here
 // and nowhere else: it goes into the message and is then unrecoverable.
+//
+// Each call adds a grant beside those the row already has, and replaces none of them. A task is
+// issued one again when a pass published it and could not record the dispatch, so the next pass
+// plans it and publishes it again, and the message that went first may be the only one on the
+// queue: the stream deduplicates a task on its row. Replaced, the grant that message carries would
+// open nothing, and the runner taking it would be left to report a task that never reached a
+// container, which ends it. Kept, whichever message a runner takes redeems, and the first
+// redemption binds the task for all of them.
 func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID, id string, scope GrantScope, until time.Time) (Granted, error) {
 	if namespace == "" {
 		return Granted{}, errors.New("db: a grant with no namespace")
@@ -115,10 +123,7 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 	}
 	if _, err := w.tx.Exec(ctx,
 		`insert into task_grants (namespace, task_id, hash, expires_at, scope)
-		 values ($1, $2, $3, $4, $5)
-		 on conflict (namespace, task_id) do update
-		 set hash = excluded.hash, expires_at = excluded.expires_at,
-		     scope = excluded.scope, redeemed_at = null`,
+		 values ($1, $2, $3, $4, $5)`,
 		namespace, id, hashed, until, scope); err != nil {
 		return Granted{}, fmt.Errorf("db: the grant for %s could not be recorded: %w", task, err)
 	}
@@ -150,17 +155,20 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 		return Redeemed{}, ErrNoGrant
 	}
 
-	var namespace, hashed string
+	// Found by its hash as well as its task, because a task may have been issued several, one
+	// for every message prepared for it, and each redeems.
+	hashed := token.Hash(clear)
+	var namespace string
 	var scope GrantScope
 	var expires time.Time
 	var key agk.TaskID
 	var state string
 	var holder *string
 	err := w.tx.QueryRow(ctx, `
-		select g.namespace, g.hash, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
+		select g.namespace, g.expires_at, g.scope, t.idempotency_key, t.state, t.runner
 		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
-		where g.task_id = $1 for update of t`, id).
-		Scan(&namespace, &hashed, &expires, &scope, &key, &state, &holder)
+		where g.task_id = $1 and g.hash = $2 for update of t`, id, hashed).
+		Scan(&namespace, &expires, &scope, &key, &state, &holder)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Redeemed{}, ErrNoGrant
 	}
@@ -169,8 +177,6 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 	}
 
 	switch {
-	case !token.Same(clear, hashed):
-		return Redeemed{}, ErrNoGrant
 	case !now.Before(expires):
 		return Redeemed{}, ErrNoGrant
 	case task != "" && task != key:
@@ -197,8 +203,8 @@ func (w *Wide) Redeem(ctx context.Context, clear string, task agk.TaskID, runner
 	}
 
 	if _, err := w.tx.Exec(ctx,
-		`update task_grants set redeemed_at = $3 where namespace = $1 and task_id = $2`,
-		namespace, id, now); err != nil {
+		`update task_grants set redeemed_at = $4 where namespace = $1 and task_id = $2 and hash = $3`,
+		namespace, id, hashed, now); err != nil {
 		return Redeemed{}, fmt.Errorf("db: the redemption could not be recorded: %w", err)
 	}
 	if _, err := w.tx.Exec(ctx,

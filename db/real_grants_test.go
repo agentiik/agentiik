@@ -92,3 +92,152 @@ func TestAnEndedTaskIsNotRedeemedEvenByItsRunner(t *testing.T) {
 		}
 	}
 }
+
+// The binding a redemption makes is what a result is checked against on the way out, so it reads
+// back as the runner that redeemed, as nobody before any redemption, and not at all for a dispatch
+// named by the row of one task and the key of another.
+func TestADispatchIsHeldByTheRunnerThatRedeemedIt(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx,
+		`insert into steps (namespace, run_id, step) values ('finance', $1, 'render')`, financeRun); err != nil {
+		t.Fatalf("seeding: %s", err)
+	}
+	const row = "01M2GHAAAAAAAAAAAAAAAAAAAA"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', $1, $2, 'render', 1, 'dispatched')`, row, financeRun); err != nil {
+		t.Fatalf("seeding the task: %s", err)
+	}
+
+	now := time.Now().UTC()
+	var clear string
+	heldBy := func(key agk.TaskID, row string) (string, error) {
+		var runner string
+		err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			runner, err = w.HeldBy(ctx, "finance", key, row)
+			return err
+		})
+		return runner, err
+	}
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", key, row, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if runner, err := heldBy(key, row); err != nil || runner != "" {
+		t.Errorf("a dispatch nobody redeemed is held by %q, answering %v", runner, err)
+	}
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, "runner-dmz-02", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runner, err := heldBy(key, row); err != nil || runner != "runner-dmz-02" {
+		t.Errorf("a dispatch redeemed by runner-dmz-02 is held by %q, answering %v", runner, err)
+	}
+
+	for _, c := range []struct {
+		why string
+		key agk.TaskID
+		row string
+	}{
+		{"the key of another task", agk.NewTaskID(financeRun, "render", 2, agk.Shard{}), row},
+		{"a row nobody wrote", key, "01M2GHZZZZZZZZZZZZZZZZZZZZ"},
+		{"a row that is not an identifier at all", key, "not a ulid; drop table tasks"},
+	} {
+		if _, err := heldBy(c.key, c.row); !errors.Is(err, ErrNoDispatch) {
+			t.Errorf("a dispatch named by %s answered %v", c.why, err)
+		}
+	}
+}
+
+// A task that never reached a container ended before anybody redeemed it, and the first runner to
+// say so is bound to it, as a redemption would have bound it. A second runner saying the same is
+// told who holds it, and so is one reporting about a dispatch a redemption bound first.
+func TestADispatchNobodyRedeemedIsBoundToTheFirstRunnerToEndIt(t *testing.T) {
+	super, app := database(t)
+	seed(t, super)
+	pool, err := Open(t.Context(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx,
+		`insert into steps (namespace, run_id, step) values ('finance', $1, 'render')`, financeRun); err != nil {
+		t.Fatalf("seeding: %s", err)
+	}
+	const unredeemed, redeemed = "01M2GHAAAAAAAAAAAAAAAAAAAA", "01M2GHBBBBBBBBBBBBBBBBBBBB"
+	first := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	second := agk.NewTaskID(financeRun, "render", 2, agk.Shard{})
+	for row, attempt := range map[string]int{unredeemed: 1, redeemed: 2} {
+		if _, err := conn.Exec(ctx, `
+			insert into tasks (namespace, id, run_id, step, attempt, state)
+			values ('finance', $1, $2, 'render', $3, 'dispatched')`, row, financeRun, attempt); err != nil {
+			t.Fatalf("seeding the task: %s", err)
+		}
+	}
+
+	now := time.Now().UTC()
+	var clear string
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", second, redeemed, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, second, "runner-dmz-02", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bind := func(key agk.TaskID, row, runner string) (string, error) {
+		var holder string
+		err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			holder, err = w.BindUnreached(ctx, "finance", key, row, runner)
+			return err
+		})
+		return holder, err
+	}
+	if holder, err := bind(first, unredeemed, "runner-dmz-01"); err != nil || holder != "runner-dmz-01" {
+		t.Errorf("the first runner to end a dispatch nobody redeemed left it held by %q, answering %v", holder, err)
+	}
+	if holder, err := bind(first, unredeemed, "runner-dmz-03"); err != nil || holder != "runner-dmz-01" {
+		t.Errorf("a second runner ending it left it held by %q, answering %v", holder, err)
+	}
+	if holder, err := bind(second, redeemed, "runner-dmz-03"); err != nil || holder != "runner-dmz-02" {
+		t.Errorf("a dispatch redeemed by runner-dmz-02 is held by %q once another runner ended it, answering %v", holder, err)
+	}
+	if _, err := bind(second, unredeemed, "runner-dmz-03"); !errors.Is(err, ErrNoDispatch) {
+		t.Errorf("a dispatch named by the row of one task and the key of another answered %v", err)
+	}
+}

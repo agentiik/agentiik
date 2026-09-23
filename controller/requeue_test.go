@@ -199,6 +199,9 @@ func TestALossReportedTwiceIsRequeuedOnce(t *testing.T) {
 			t.Errorf("a loss reported naming %s answered %v", c.why, err)
 		}
 	}
+	if err := core.Answer(t.Context(), Answer{Result: loss.Result, Row: again[0].Row, Runner: "runner-lan-01"}); !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("a loss reported by a runner that never held the task answered %v, and it is speaking for somebody else's", err)
+	}
 	if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 lost runner-dmz-02", "1 dispatched runner-dmz-02"}; !slices.Equal(got, want) {
 		t.Errorf("after the refusals the key holds %q, want %q", got, want)
 	}
@@ -312,9 +315,13 @@ func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
 		t.Errorf("an ending naming no dispatch of its key answered %v", err)
 	}
 
-	if err := core.Answer(t.Context(), Answer{
-		Result: succeeded(t, again[0].Task, core.now()), Row: again[0].Row, Runner: "runner-2",
-	}); err != nil {
+	// Its envelopes uploaded and named by digest, as the wire carries them, by the runner the
+	// requeue is bound to.
+	ending := core.answerOf(t, succeeded(t, again[0].Task, core.now()))
+	if ending.Row != again[0].Row || ending.Runner != "runner-2" {
+		t.Fatalf("the requeue's ending names dispatch %s from %s", ending.Row, ending.Runner)
+	}
+	if err := core.Answer(t.Context(), ending); err != nil {
 		t.Fatal(err)
 	}
 	if got := stateOf(t, core); got != agk.Succeeded {
@@ -365,5 +372,258 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 				t.Errorf("the key holds %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// lostAndRequeued is a run whose one task went out, was redeemed by runner-1, was declared lost
+// when runner-1 went quiet, and went out again under the same key. It answers the dispatch that
+// was lost and the requeue, which nobody has redeemed yet.
+func lostAndRequeued(t *testing.T) (*Core, *fakeQueue, *pgx.Conn, Dispatch, Dispatch) {
+	t.Helper()
+	core, q, pool, super := decidingOn(t, requeueingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
+		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	again := q.dispatched()
+	if len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row {
+		t.Fatalf("after the loss the controller dispatched %+v, want %s again under a new task_id", again, first[0].Task.ID)
+	}
+	return core, q, dbtest.Superuser(t, super), first[0], again[0]
+}
+
+// The runner a dispatch was bound to is the one its ending is taken from, and that stays true of a
+// dispatch the key was requeued past: runner-1 held it, went quiet, and comes back with the
+// success its container had after all, envelopes uploaded and named by digest. It is runner-1's to
+// report and it is taken, and it is not news, since the attempt waits on the requeue. So nothing is
+// decided or published, and nothing lands on the requeue's row, neither the log nor a runner that
+// never redeemed it. The same success from runner-2, which holds the requeue and never held this
+// dispatch, is not late but somebody else's, and refused.
+func TestALateEndingOfARequeuedPastDispatchFromItsOwnRunnerIsNotNews(t *testing.T) {
+	core, q, conn, lost, requeued := lostAndRequeued(t)
+	if err := core.redeem(t, requeued, "runner-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// answerOf uploads the envelopes and names the latest dispatch, which runner-2 holds; the
+	// late ending is the same bytes about the dispatch before it.
+	late := core.answerOf(t, succeeded(t, lost.Task, core.now()))
+	if len(late.Outputs) == 0 {
+		t.Fatal("the late success names no envelope, so this is not the case under test")
+	}
+	late.Row = lost.Row
+
+	before := seqOf(t, conn)
+	late.Runner = "runner-2"
+	if err := core.Answer(t.Context(), late); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("the requeue's holder reporting the dispatch it replaced answered %v", err)
+	}
+	late.Runner = "runner-1"
+	if err := core.Answer(t.Context(), late); err != nil {
+		t.Fatalf("the late success of the runner the lost dispatch was bound to was refused: %s", err)
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("a late ending of a dispatch requeued past took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("a late ending of a dispatch requeued past published %+v", got)
+	}
+	if got := stateOf(t, core); got != agk.Running {
+		t.Errorf("the run is %s, and the requeue is still owed its ending", got)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+	var lines *int
+	if err := conn.QueryRow(t.Context(),
+		`select log_lines from tasks where idempotency_key = $1 and requeue = 1`, string(lost.Task.ID)).
+		Scan(&lines); err != nil {
+		t.Fatal(err)
+	}
+	if lines != nil {
+		t.Errorf("the requeue's row counts %d lines of log from the dispatch it replaced", *lines)
+	}
+
+	// And the requeue's own ending is the one that counts.
+	ending := core.answerOf(t, succeeded(t, requeued.Task, core.now()))
+	if ending.Row != requeued.Row || ending.Runner != "runner-2" {
+		t.Fatalf("the requeue's ending names dispatch %s from %s", ending.Row, ending.Runner)
+	}
+	if err := core.Answer(t.Context(), ending); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Errorf("the run is %s after the requeue succeeded", got)
+	}
+}
+
+// A requeue keeps the key and takes a new task_id, and the binding is the task_id's. runner-1 held
+// the dispatch that was lost, which gives it nothing of the requeue, and runner-2 redeems the
+// requeue: an ending from a container runner-1 says ran for the requeue, or a loss of it, is
+// refused as somebody else's, before runner-2 has redeemed it and after, and binds runner-1 to
+// nothing. Only runner-2's ending is taken. An ending that never reached a container is not this
+// case: the first runner to report one is bound by it, whichever dispatch it held before.
+func TestTheRequeuesEndingIsRefusedFromARunnerNotBoundToItsTaskID(t *testing.T) {
+	core, q, conn, lost, requeued := lostAndRequeued(t)
+	before := seqOf(t, conn)
+
+	ran := failed(requeued.Task, 1, core.now())
+	ran.DispatchedAt = time.Time{}
+	fromRunner1 := []Answer{
+		{Result: ran, Row: requeued.Row, Runner: "runner-1"},
+		{Result: graph.Result{Task: requeued.Task.ID, State: agk.TaskLost}, Row: requeued.Row, Runner: "runner-1"},
+	}
+	refused := func(when string) {
+		t.Helper()
+		for _, a := range fromRunner1 {
+			if err := core.Answer(t.Context(), a); !errors.Is(err, ErrNotAResult) || !errors.Is(err, ErrNotTheHolder) {
+				t.Errorf("%s, runner-1 reporting the requeue %s answered %v", when, a.Result.State, err)
+			}
+		}
+	}
+
+	refused("before anybody redeemed it")
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched -"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+	if err := core.redeem(t, requeued, "runner-2"); err != nil {
+		t.Fatalf("runner-2 could not redeem the requeue after runner-1's refused reports: %s", err)
+	}
+	refused("once runner-2 redeemed it")
+
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("refused reports took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("refused reports published %+v", got)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+
+	// runner-2's failure is taken, and max: 1 owes the second attempt.
+	mine := fromRunner1[0]
+	mine.Runner = "runner-2"
+	if err := core.Answer(t.Context(), mine); err != nil {
+		t.Fatalf("the failure of the runner holding the requeue was refused: %s", err)
+	}
+	if second := q.taken(); len(second) != 1 || second[0].Attempt != 2 {
+		t.Errorf("after the requeue failed the controller published %+v, want attempt 2", second)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-2"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+}
+
+// Holding the dispatch that was lost neither gives a runner the requeue nor keeps it from it. The
+// requeue's message may reach runner-1 as well as anybody, and a pull refused there ends it before
+// any redemption: runner-1 is the first to report that ending, so it is bound to the requeue by
+// it, and runner-2 redeeming the requeue's grant afterwards is told the work is somebody else's.
+func TestTheRunnerThatLostADispatchMayEndItsRequeueUnreached(t *testing.T) {
+	core, _, conn, lost, requeued := lostAndRequeued(t)
+	pulled := Answer{Result: graph.Result{Task: requeued.Task.ID, State: agk.TaskFailed}, Row: requeued.Row, Runner: "runner-1"}
+	if err := core.Answer(t.Context(), pulled); err != nil {
+		t.Fatalf("runner-1 reporting the requeue never reached a container answered %v", err)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 failed runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
+	}
+	if err := core.redeem(t, requeued, "runner-2"); !errors.Is(err, db.ErrTaskHeld) {
+		t.Errorf("runner-2 redeeming a requeue runner-1 ended answered %v", err)
+	}
+}
+
+// A task result on the wire names its dispatch by task_id and its unit of work by idempotency_key,
+// two fields a runner writes separately, and the bus hands them on unchanged as Row and the key.
+// One whose task_id is no dispatch of its key is refused for good, even where both halves are real
+// and the runner that sent it holds each of them: it is an answer assembled out of two, and neither
+// half says anything about the other. It is refused as no dispatch rather than as somebody else's,
+// and it moves neither task, whether it reports an ending or a loss.
+func TestAWireResultWhoseTaskIDIsNoDispatchOfItsKeyIsRefused(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 || first[0].Task.Step != "normalize" {
+		t.Fatalf("the first pass dispatched %+v", first)
+	}
+	normalize := first[0]
+	core.answer(t, succeeded(t, normalize.Task, core.now()))
+	next := q.dispatched()
+	if len(next) != 1 || next[0].Task.Step != "archive" {
+		t.Fatalf("normalize's success dispatched %+v", next)
+	}
+	archive := next[0]
+	if err := core.redeem(t, archive, theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	// What the bus hands on from a taskResult: task_id as Row, idempotency_key as the task, and
+	// the rest of what a container that exited 1 reports.
+	at := core.now()
+	fromTheWire := func(taskID string, key agk.TaskID, state agk.TaskState) Answer {
+		r := graph.Result{Task: key, State: state}
+		if state != agk.TaskLost {
+			r.ExitCode, r.StartedAt, r.FinishedAt = 1, at, at
+		}
+		return Answer{Result: r, Row: taskID, Runner: theRunner}
+	}
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	for _, c := range []struct {
+		answer Answer
+		why    string
+	}{
+		{fromTheWire(normalize.Row, archive.Task.ID, agk.TaskFailed), "normalize's task_id under archive's key"},
+		{fromTheWire(archive.Row, normalize.Task.ID, agk.TaskFailed), "archive's task_id under normalize's key"},
+		{fromTheWire(normalize.Row, archive.Task.ID, agk.TaskLost), "a loss of normalize's task_id under archive's key"},
+		{fromTheWire("01M2HZZZZZZZZZZZZZZZZZZZZZ", archive.Task.ID, agk.TaskFailed), "a task_id nobody minted"},
+	} {
+		err := core.Answer(t.Context(), c.answer)
+		switch {
+		case !errors.Is(err, ErrNotAResult) || !errors.Is(err, db.ErrNoDispatch):
+			t.Errorf("%s answered %v, and it names no dispatch on every delivery", c.why, err)
+		case errors.Is(err, ErrNotTheHolder):
+			t.Errorf("%s was refused as somebody else's, and the runner holds both halves: %s", c.why, err)
+		}
+	}
+
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("results naming no dispatch of their key took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("results naming no dispatch of their key published %+v", got)
+	}
+	for key, want := range map[agk.TaskID][]string{
+		normalize.Task.ID: {"0 succeeded " + theRunner},
+		archive.Task.ID:   {"0 dispatched " + theRunner},
+	} {
+		if got := dispatchesOf(t, conn, key); !slices.Equal(got, want) {
+			t.Errorf("%s holds %q, want %q", key, got, want)
+		}
+	}
+
+	// And the pair that belongs together is taken.
+	if err := core.Answer(t.Context(), fromTheWire(archive.Row, archive.Task.ID, agk.TaskFailed)); err != nil {
+		t.Fatalf("archive's own task_id under its own key was refused: %s", err)
+	}
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Errorf("the run is %s after archive failed", got)
 	}
 }
