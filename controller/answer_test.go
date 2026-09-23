@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
 )
@@ -126,5 +127,62 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	}
 	if got := q.taken(); len(got) != 1 || got[0].Step != "archive" {
 		t.Errorf("the sweep published %+v, want archive, which the result made runnable", got)
+	}
+}
+
+// "A heartbeat is what says a task is still running, and a result saying so would be a result
+// for work that has not finished." One that says so anyway is refused, and so is one whose key
+// names no task, both before anything is read and with an error the bus can tell apart from a
+// result that could not be recorded yet.
+func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(taken))
+	}
+	task := taken[0].ID
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	for _, c := range []struct {
+		result graph.Result
+		why    string
+	}{
+		{graph.Result{Task: task, State: agk.TaskRunning}, "running, which a heartbeat says"},
+		{graph.Result{Task: task, State: agk.TaskPending}, "pending, which no runner has seen"},
+		{graph.Result{Task: task, State: agk.TaskState(99)}, "a state that is not one"},
+		{graph.Result{Task: "normalize", State: agk.TaskSucceeded}, "a key that is a step and not a task"},
+		{graph.Result{Task: "", State: agk.TaskSucceeded}, "no key at all"},
+		// A run nobody holds, which would be db.ErrNoRun had anything been read first.
+		{graph.Result{Task: agk.NewTaskID(agk.NewRunID(), "normalize", 1, agk.Shard{}), State: agk.TaskRunning}, "running, for a run nobody holds"},
+	} {
+		err := core.Answer(t.Context(), Answer{Result: c.result, Runner: "runner-dmz-02"})
+		if !errors.Is(err, ErrNotAResult) {
+			t.Errorf("%s: the answer came back as %v, want ErrNotAResult", c.why, err)
+		}
+	}
+
+	if after := seqOf(t, conn); after != before {
+		t.Errorf("answers that were not results took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Errorf("answers that were not results published %+v", got)
+	}
+	var state string
+	var runner *string
+	if err := conn.QueryRow(t.Context(),
+		`select state, runner from tasks where idempotency_key = $1`, string(task)).
+		Scan(&state, &runner); err != nil {
+		t.Fatal(err)
+	}
+	if state != "dispatched" {
+		t.Errorf("the task reads %s, and nothing it was told was a result", state)
+	}
+	if runner != nil {
+		t.Errorf("the task is stamped as held by %s from an answer that was not a result", *runner)
 	}
 }
