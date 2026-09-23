@@ -98,8 +98,12 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 // go command builds an import of any of those like any other, so a package that links the store
 // through one links it all the same.
 //
-// Neither the API nor the store's own packages are named, and neither is a package whose only way
-// to the store is a test file, nor one in a testdata directory that nothing imports.
+// The walk reads every file of a package and goes through every package it reaches. The
+// controller is three files, and the one that imports the store is read neither first nor last.
+// The API is not named, and the command line importing it is, for what the API reaches.
+//
+// Nothing else is named: not the store's own packages, not a package whose only way to the store
+// is a test file, and not one in a testdata directory that nothing imports.
 func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 	root := t.TempDir()
 	for path, imports := range map[string][]string{
@@ -113,7 +117,10 @@ func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 		"artifact/artifact.go":         {"agk", "artifact/linked"},
 		"brick/brick.go":               {"agk", ".leak"},
 		"bus/bus.go":                   {"."},
+		"cmd/agk/push.go":              {"agk", "api"},
+		"controller/a.go":              {"agk"},
 		"controller/core.go":           {"agk", "api/store", "db"},
+		"controller/z.go":              {"db"},
 		"db/db.go":                     {"agk"},
 		"driver/driver.go":             {"agk", "secret/vault"},
 		"graph/graph.go":               {"agk"},
@@ -165,6 +172,7 @@ func TestTheSecretBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 		"artifact":   {"artifact", "artifact/linked", "secret"},
 		"brick":      {"brick", ".leak", "secret"},
 		"bus":        {"bus", ".", "secret"},
+		"cmd/agk":    {"cmd/agk", "api", "secret"},
 		"controller": {"controller", "api/store", "secret"},
 		"driver":     {"driver", "secret/vault"},
 		"runner":     {"runner", "runner/testdata/leak", "secret"},
