@@ -495,20 +495,34 @@ func TestARequeueIsAnsweredWithTheEndingItsHostRecorded(t *testing.T) {
 	recorded := aResult(task)
 	recorded.TaskID = rowOf(step(t))
 
+	// Read off the pool's consumer rather than by taking again: a message nobody acknowledged
+	// is only offered again once AckWait has passed, a minute, and a take that waited less
+	// would find nothing either way.
+	pending := func() int {
+		t.Helper()
+		consumer, err := b.js.Consumer(t.Context(), Stream, Durable(DefaultPool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.NumAckPending
+	}
+
 	other := aResult(aTask(step(t) + "-other"))
 	if err := b.Ended(t.Context(), taken[0], other); err == nil {
 		t.Error("the ending of another key was sent as the answer to the requeue")
 	}
+	if n := pending(); n != 1 {
+		t.Errorf("an ending of another key was refused and the pool's consumer has NumAckPending %d, where the requeue still waits on its acknowledgement", n)
+	}
 	if err := b.Ended(t.Context(), taken[0], recorded); err != nil {
 		t.Fatalf("answering the requeue with the recorded ending: %s", err)
 	}
-
-	again, err := b.Take(t.Context(), DefaultPool, 1, 300*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(again) != 0 {
-		t.Errorf("a requeue answered from the record was offered again: %+v", again)
+	if n := pending(); n != 0 {
+		t.Errorf("the requeue was answered from the record and the pool's consumer has NumAckPending %d, and one left unacknowledged is handed on to a runner with no record of its key", n)
 	}
 
 	got := answering(t, b, func(controller.Answer) error { return nil })
