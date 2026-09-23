@@ -41,8 +41,10 @@ type NewRun struct {
 
 	// Inputs are the workflow's declared inputs as they were bound, "already held to their
 	// declared schemas with required and default applied", which is package schema's work
-	// and happens before a run exists.
-	Inputs map[string]any
+	// and happens before a run exists. A JSON object, written down as it arrived: the API
+	// counts its values and decodes none of them, since nothing between the request and this
+	// row reads them and decoding is what a document costs. Empty is none.
+	Inputs json.RawMessage
 
 	// Steps are every step of the graph, so that a step nobody has reached is a pending row
 	// rather than a missing one. The evaluator seeds its own state the same way and for the
@@ -66,9 +68,9 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	if len(r.Steps) == 0 {
 		return fmt.Errorf("db: run %s has no steps, and a graph with nothing in it is refused at validation", r.ID)
 	}
-	inputs, err := json.Marshal(orEmpty(r.Inputs))
-	if err != nil {
-		return fmt.Errorf("db: the inputs of run %s could not be written: %w", r.ID, err)
+	inputs := r.Inputs
+	if len(inputs) == 0 {
+		inputs = json.RawMessage(`{}`)
 	}
 
 	if _, err := n.tx.Exec(ctx,

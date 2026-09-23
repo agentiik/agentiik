@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
@@ -61,7 +62,7 @@ func createSecond(t *testing.T, pool *db.Pool) {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: second, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Trigger: agk.TriggerSchedule, TriggeredBy: "schedule",
-			Inputs: map[string]any{"orders": []any{}},
+			Inputs: json.RawMessage(`{"orders": []}`),
 			Steps:  []agk.Step{"normalize"},
 		})
 	})

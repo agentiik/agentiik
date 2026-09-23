@@ -45,6 +45,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
 - A workflow, step, port or secret name is stored as the `identifier` domain. `0001` had called the domain `name`, so its columns got PostgreSQL's own `name` type, which checked nothing and cut a name at 63 bytes; one of up to 255 characters is now kept whole, and a longer one or one off the grammar is refused.
 - `Wide.Redeemable` makes every check `Wide.Redeem` makes and writes nothing, so a redemption can be checked before it is answered and bound once it is.
+- `db.NewRun.Inputs` is the JSON object a run was started with, written down as it arrived rather than decoded and encoded again.
 
 ### Bus
 
@@ -108,6 +109,14 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Every `env` prefix begins with `AGK_DEV_`, under which the API reads nothing for itself, so no namespace reaches the API's own variables.
 - A secret's name is at most 255 characters, since a step is given its value in a file named after it, and a path at most 1 KiB.
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
+- A request body is read a token at a time, into what its route keeps, and every collection is counted as it is read. Reading one costs at most two and a half times its route's cap, where a 16 MiB push of empty tree entries cost 295 MiB and 8 MiB of inputs written `[{},{},...]` 508 MiB.
+- Each route has a cap of its own: 64 KiB for a pool, a join token, a join, a redemption and a bus credential, 1 MiB for a heartbeat, and 4 MiB, one envelope, for starting a run. A body past its cap, or a list past its count, is refused with 413: 1,024 labels or namespaces, 4,096 keys in a heartbeat, 4,096 includes or manifests in a push.
+- A run's inputs are counted, at most 100,000 values, and written down as they were sent rather than decoded. A number no 64-bit float holds is refused.
+- A field, a tree file, an include or a manifest written twice is refused, and so are a field named in another case and text that is not UTF-8.
+- A body is held as it arrives, not as it declares: a push declared and never sent holds 4 KiB rather than 16 MiB. A body sent in chunks costs what one declaring its length does, where it cost up to five times its cap.
+- A number in a run's inputs that a 64-bit float holds only as zero, or that reaches more than 340 digits from the point, is refused with 400. PostgreSQL writes a number back at the scale it was sent with, so `0e-16383` was read back as 16 KB at every decision, and `1e-16384` was a 500.
+- Inputs holding U+0000 in a string or a name are refused with 400, where PostgreSQL refused them with a 500.
+- A body that is not JSON is refused saying where it stops being JSON, and no longer repeats the bytes there, which could be part of a secret's value.
 
 ### Secrets
 

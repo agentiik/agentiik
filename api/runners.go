@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -177,10 +178,30 @@ type Join struct {
 	AgentVersion string `json:"agent_version"`
 }
 
+func (j *Join) field(b *body, name string) error {
+	switch name {
+	case "token":
+		return text(b, &j.Token)
+	case "labels":
+		return texts(b, &j.Labels, namesMax, fmt.Sprintf("a machine claims at most %d labels, all of them ones its join token permits", namesMax))
+	case "cpu":
+		return integer(b, &j.CPU)
+	case "memory_bytes":
+		return integer(b, &j.MemoryBytes)
+	case "disk_bytes":
+		return integer(b, &j.DiskBytes)
+	case "architecture":
+		return text(b, &j.Architecture)
+	case "agent_version":
+		return text(b, &j.AgentVersion)
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	var j Join
-	if err := read(r, &j); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &j, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 
@@ -221,10 +242,30 @@ type Beat struct {
 	Tasks []agk.TaskID `json:"tasks"`
 }
 
+// beatMaxTasks is how many keys one heartbeat may name.
+//
+// A runner names the tasks it is holding, and it holds the containers it is running: one per vCPU
+// to start, raised until memory or disk binds. Four thousand containers at once is past what one
+// host runs, and the count is what bounds reading a heartbeat, since a key costs a header of
+// sixteen bytes however short it is.
+const beatMaxTasks = 4096
+
+// beatMaxBytes is how large a heartbeat may be: beatMaxTasks keys of 256 bytes each, which is
+// more than a run's identifier, a step's name, an attempt and a shard come to.
+const beatMaxBytes = beatMaxTasks * 256
+
+func (bt *Beat) field(b *body, name string) error {
+	switch name {
+	case "tasks":
+		return texts(b, &bt.Tasks, beatMaxTasks, fmt.Sprintf("a heartbeat names at most %d tasks, which is more containers than one host runs at once", beatMaxTasks))
+	}
+	return unknown(name)
+}
+
 func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) {
 	var b Beat
-	if err := read(r, &b); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+	if err := readAtMost(r, &b, beatMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
 		return
 	}
 
