@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -351,6 +352,60 @@ func TestAnAdoptedContainerIsRemovedWithItsWorkingDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("%s is still there after the delivery that adopted the container, and a task's working directory is removed with it", dir)
+	}
+}
+
+// A task delivered again while its first delivery is still in hand is refused, before it
+// looks for anything or creates anything: two Runs carrying one container would each
+// collect it and each remove it.
+func TestAKeyInFlightIsNotRunTwice(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		once.Do(func() { close(running) })
+		<-release
+		return 0, nil
+	})
+
+	task := oneTask(ref)
+	first := make(chan error, 1)
+	go func() {
+		_, err := r.Run(context.Background(), task)
+		first <- err
+	}()
+	select {
+	case <-running:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first delivery's container never ran")
+	}
+	created := len(r.daemon.Created())
+
+	// Bounded, because a second delivery that was not refused joins the first one's
+	// container and waits on it for as long as it runs.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err := r.Run(ctx, task)
+	if !errors.Is(err, ErrTaskInFlight) {
+		t.Fatalf("the second delivery answered %v, and a task in flight on this runner is refused", err)
+	}
+	if n := len(r.daemon.Created()); n != created {
+		t.Errorf("the refused delivery created %d containers", n-created)
+	}
+	if r.lookup(task.ID) == nil {
+		t.Error("the refusal let go of the first delivery's hold, which is what a stop reaches the task through")
+	}
+
+	close(release)
+	select {
+	case err := <-first:
+		if err != nil {
+			t.Errorf("the first delivery: %s", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first delivery never came back")
 	}
 }
 

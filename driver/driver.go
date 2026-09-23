@@ -206,17 +206,32 @@ func (d *Docker) dispatch(e docker.Event) {
 	}
 }
 
+// ErrTaskInFlight is a second Run for a task this driver is already running.
+//
+// At-least-once delivery can hand one task to one host twice while the first delivery is
+// still in hand: a message not acknowledged inside its window is delivered again, and the
+// window can pass during a cold image pull. The second is refused rather than run beside
+// the first, because two Runs carrying one container would each collect it and each remove
+// it, and the one that removed it first would take it away under the other. The first
+// delivery is the one that reports.
+var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
+
 // register records a task as being in flight, and answers with what to call when it is
-// not.
-func (d *Docker) register(id agk.TaskID, h *held) func() {
+// not. A task already in flight is refused and nothing is recorded, which leaves the
+// first delivery holding it: a stop still reaches it through the registry, and its own
+// done is what lets it go.
+func (d *Docker) register(id agk.TaskID, h *held) (func(), bool) {
 	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, taken := d.inflight[id]; taken {
+		return nil, false
+	}
 	d.inflight[id] = h
-	d.mu.Unlock()
 	return func() {
 		d.mu.Lock()
 		delete(d.inflight, id)
 		d.mu.Unlock()
-	}
+	}, true
 }
 
 // lookup answers with the task in flight, where this process is holding it.

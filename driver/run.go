@@ -61,7 +61,10 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// arriving while it is being prepared lands on something. That window is the image
 	// pull and it is minutes wide on a cold registry; a stop answered nil inside it
 	// would leave the container to be created afterwards and to run to its deadline.
-	done := d.register(t.ID, &held{})
+	done, ok := d.register(t.ID, &held{})
+	if !ok {
+		return graph.Result{}, fault(t.Step, ErrTaskInFlight, ChargePlatform, "task %s", t.ID)
+	}
 	defer done()
 
 	// Everything that can be refused without creating anything is refused first, and
