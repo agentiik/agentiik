@@ -3,11 +3,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
 )
@@ -99,8 +101,8 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := succeeded(t, taken[0], core.now())
-	if err := dies.Answer(t.Context(), Answer{Result: result, Runner: "runner-dmz-02"}); err == nil {
+	answer := core.answerOf(t, succeeded(t, taken[0], core.now()))
+	if err := dies.Answer(t.Context(), answer); err == nil {
 		t.Fatal("a controller that died before deciding the run again answered as if it had")
 	}
 	written := seqOf(t, conn)
@@ -112,7 +114,7 @@ func TestARedeliveryAfterTheDecisionCommittedIsANoOp(t *testing.T) {
 	}
 
 	// The redelivery, to a controller that is alive.
-	if err := core.Answer(t.Context(), Answer{Result: result, Runner: "runner-dmz-02"}); err != nil {
+	if err := core.Answer(t.Context(), answer); err != nil {
 		t.Fatalf("a result redelivered after its decision committed was refused: %s", err)
 	}
 	if after := seqOf(t, conn); after != written {
@@ -184,5 +186,97 @@ func TestAResultThatIsNotAnEndingIsRefused(t *testing.T) {
 	}
 	if runner != nil {
 		t.Errorf("the task is stamped as held by %s from an answer that was not a result", *runner)
+	}
+}
+
+// "It carries no item and no artifact content: what travels is a digest per port." The runner
+// uploads what it produced and names it, and the controller reads it back before the evaluator is
+// shown the result, so what the next step is handed is what the store holds under those digests.
+// A digest the store does not hold is an error rather than a refusal, because an upload may not
+// have landed yet: the message is left for the next delivery and nothing is written. One whose
+// envelope contradicts what the result says of it is refused, since no delivery will change it.
+func TestAResultNamesItsOutputsByDigest(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 || taken[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v", taken)
+	}
+	result := succeeded(t, taken[0], core.now())
+	answer := core.answerOf(t, result)
+	if len(answer.Outputs) != 2 {
+		t.Fatalf("the answer names %+v, and normalize declares two ports", answer.Outputs)
+	}
+	named := map[agk.Port]Output{}
+	for _, o := range answer.Outputs {
+		named[o.Port] = o
+	}
+
+	conn := dbtest.Superuser(t, super)
+	before := seqOf(t, conn)
+	for _, c := range []struct {
+		why     string
+		with    func(*Answer)
+		refused bool
+	}{
+		{"a digest the store does not hold", func(a *Answer) { a.Outputs[0].Digest = strings.Repeat("0", 64) }, false},
+		{"a digest that is not one", func(a *Answer) { a.Outputs[0].Digest = "../../secrets" }, true},
+		{"a count its envelope does not carry", func(a *Answer) { a.Outputs[0].Items = 7 }, true},
+		{"one port's envelope on another port", func(a *Answer) {
+			a.Outputs[0].Digest, a.Outputs[1].Digest = a.Outputs[1].Digest, a.Outputs[0].Digest
+			a.Outputs[0].Items, a.Outputs[1].Items = a.Outputs[1].Items, a.Outputs[0].Items
+		}, true},
+		{"one port twice", func(a *Answer) { a.Outputs[1] = a.Outputs[0] }, true},
+	} {
+		wrong := answer
+		wrong.Outputs = append([]Output(nil), answer.Outputs...)
+		c.with(&wrong)
+		err := core.Answer(t.Context(), wrong)
+		switch {
+		case err == nil:
+			t.Errorf("%s was recorded", c.why)
+		case c.refused && !errors.Is(err, ErrNotAResult):
+			t.Errorf("%s answered %v, and it is the same on every delivery", c.why, err)
+		case !c.refused && errors.Is(err, ErrNotAResult):
+			t.Errorf("%s was refused for good, and the upload may land before the next delivery: %s", c.why, err)
+		}
+	}
+	if after := seqOf(t, conn); after != before {
+		t.Fatalf("answers whose envelopes could not be read took the run from seq %d to %d", before, after)
+	}
+	if got := q.taken(); len(got) != 0 {
+		t.Fatalf("answers whose envelopes could not be read published %+v", got)
+	}
+
+	if err := core.Answer(t.Context(), answer); err != nil {
+		t.Fatalf("the answer naming what the store holds was refused: %s", err)
+	}
+	var ports db.Ports
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		ports, err = ns.PublishedPorts(ctx, decidedRun, "normalize")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for port, o := range named {
+		if got := ports[port]; got.Digest != o.Digest || got.Items != o.Items {
+			t.Errorf("port %s is recorded as %+v, and the result named %s holding %d", port, got, o.Digest, o.Items)
+		}
+	}
+
+	// And the next step is handed the envelope the store holds under the digest ok was named by.
+	next := q.dispatched()
+	if len(next) != 1 || next[0].Task.Step != "archive" {
+		t.Fatalf("the result made runnable %+v", next)
+	}
+	if in := next[0].Inputs["orders"]; in.Digest != named["ok"].Digest || in.Items != 1 {
+		t.Errorf("archive is handed %+v, and normalize published %+v on ok", in, named["ok"])
+	}
+	if got := next[0].Task.Inputs["orders"].Items; len(got) != 1 || got[0].ID != result.Outputs["ok"].Items[0].ID {
+		t.Errorf("archive is handed the items %+v", got)
 	}
 }

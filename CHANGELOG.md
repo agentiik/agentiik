@@ -13,6 +13,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
 - Results are recorded idempotently: states, holder, log, usage, the digest of every port and the artifacts they reference.
 - A result whose state is not an ending, or whose key names no task, is refused with `controller.ErrNotAResult`; the bus takes it off the queue and reports it rather than redelivering it.
+- `controller.Answer` names outputs by digest. A success's envelopes are read back from the store, and one not there yet leaves the result for redelivery.
 - `queued` now waits on something: a concurrency group holds one started run, later ones queue in creation order, and `cancel_in_progress` cancels the running one first.
 - `max_concurrent_tasks` holds tasks back rather than failing them.
 - Retries wait out their backoff. A task carries the deadline of its step's timeout, and a run past its root timeout is `timed_out` and stops what it holds. Cancelling twice is not an error.

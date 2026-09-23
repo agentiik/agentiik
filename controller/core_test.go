@@ -311,17 +311,37 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 // answer feeds one result back the way the bus will, through the door a bus consumer calls.
 func (co *Core) answer(t *testing.T, r graph.Result) {
 	t.Helper()
+	if err := co.Answer(t.Context(), co.answerOf(t, r)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// answerOf is what a runner says about r, as the bus hands it on: its envelopes are uploaded
+// first and named by digest, and the instant it was handed out is left out, since that is the
+// controller's to know and not the runner's to say.
+func (co *Core) answerOf(t *testing.T, r graph.Result) Answer {
+	t.Helper()
+	ctx := t.Context()
 	log, err := agk.NewLogURI(r.Task)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := co.Answer(t.Context(), Answer{
-		Result: r, Runner: "runner-dmz-02",
-		Log: log, LogLines: 412,
+	a := Answer{
+		Runner: "runner-dmz-02",
+		Log:    log, LogLines: 412,
 		Usage: map[string]any{"cpu_seconds": 12.4, "max_rss_bytes": 198443008, "image_pull_ms": 0},
-	}); err != nil {
-		t.Fatal(err)
 	}
+	for _, port := range sortedPorts(r.Outputs) {
+		e := r.Outputs[port]
+		digest, _, err := artifact.PutEnvelope(ctx, co.objects, "finance", e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Outputs = append(a.Outputs, Output{Port: port, Digest: digest, Items: e.Meta.Count})
+	}
+	r.Outputs, r.DispatchedAt = nil, time.Time{}
+	a.Result = r
+	return a
 }
 
 // succeeded is what a runner sends back for a task that worked, with one item on ok.
