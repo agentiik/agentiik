@@ -40,7 +40,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `bus` fills `controller.Queue` over NATS JetStream: one WorkQueue stream, one subject per runner pool, results on a stream of their own.
 - A task message matches `wire.schema.json`, vendored with its fixtures, and carries names and digests rather than the input envelopes.
 - A message nobody can decode is taken off the queue and reported, never dropped silently.
-- A result travels as `wire.schema.json` `$defs/taskResult`, with its outputs as digests. `bus.Report` takes a `bus.TaskResult`, and a result the wire refuses is taken off the queue and reported.
+- A result travels as `wire.schema.json` `$defs/taskResult`, with its outputs as digests. `bus.Report` takes a `bus.TaskResult`, and a result the reader refuses (an unknown field, not an ending, what no container could report, a malformed name or digest, a log outside its run) is taken off the queue and reported. The reader takes a runner by the ULID the API mints, which the wire's lowercase pattern for `runner` refuses.
 - A runner publishes its results on `agentiik.results.<runner>`, the one results subject its bus credential allows, and a result naming another runner is taken off the queue and reported.
 - A result the controller could not record comes back after a pause, from a second doubling to a minute, rather than at once.
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.

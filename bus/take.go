@@ -171,16 +171,17 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 //
 // One durable consumer, because there is one active controller. fn is called before the message
 // is acknowledged and never after, so a controller dying in the middle gets the result again
-// rather than losing it, and fn returning an error leaves the message for a later delivery, which
-// again times, unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
+// rather than losing it, and fn returning an error leaves the message for a later delivery, timed
+// by again, unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
 // deduplicates: "the same result delivered twice writes the same thing" is the controller's
 // promise, made good by the evaluator answering a duplicate with no decision.
 //
 // A result is read as the wire describes it, and handed on with its outputs as digests. One the
-// wire refuses is taken off the queue and said out loud, as one nobody can decode is: a result
+// reader refuses is taken off the queue and said out loud, as one nobody can decode is: a result
 // that is not an ending, or that says what no container could, reads the same on every delivery.
 // So is one naming a runner other than the one whose subject it came on, for the reason
-// ResultSubject gives.
+// ResultSubject gives. The reader is not the schema, and readResult and check say where the two
+// part.
 func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")

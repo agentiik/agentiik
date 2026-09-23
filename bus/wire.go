@@ -285,7 +285,10 @@ func (r TaskResult) encode() ([]byte, error) {
 //
 // Closed, as the document is. A field nobody here knows is refused rather than dropped, because a
 // result that says more than the wire describes comes from a runner written against something
-// else, and whatever the extra field meant would be lost without anybody hearing of it.
+// else, and whatever the extra field meant would be lost without anybody hearing of it. Closed as
+// far as encoding/json closes a document, which is not quite as far as the schema: a field spelled
+// in another case is read as the field it spells, and a null where an optional field could be is
+// read as its absence. Neither says anything the field would not.
 func readResult(body []byte) (controller.Answer, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
