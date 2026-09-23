@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,12 @@ func (co *Core) silence(t *testing.T) {
 	if err := co.Wake(t.Context(), Wake{Swept: true}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// bounded gives a workflow a root timeout of an hour, which is a clock its run waits on: a sweep
+// inside the hour finds the run only where something woke it.
+func bounded(workflow string) string {
+	return strings.Replace(workflow, "\ninputs:", "\ntimeout: 1h\ninputs:", 1)
 }
 
 // redeem binds a dispatch to a runner, which is what the runner's first call does and what the
@@ -360,6 +367,53 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 			conn := dbtest.Superuser(t, super)
 			if got, want := dispatchesOf(t, conn, first[0].Task.ID), []string{"0 dispatched -"}; !slices.Equal(got, want) {
 				t.Errorf("the key holds %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// The sweep that declares a loss decides the run the loss woke, on the same pass. Both runs wait on
+// a root timeout an hour off, so a sweep inside the hour decides one only where something woke it:
+// declared after the runs were chosen, or without a wake, the loss would wait for the next sweep
+// that found the run due, which here is its deadline. A step that requeues sends the task out again
+// under its key; one that does not fails for it.
+func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
+	for _, c := range []struct {
+		name, workflow string
+		run            agk.RunState
+		dispatches     []string
+	}{
+		{"no retry policy", bounded(theWorkflow), agk.Failed, []string{"0 lost runner-1"}},
+		{"retry on lost", bounded(requeueingWorkflow), agk.Running, []string{"0 lost runner-1", "1 dispatched -"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, c.workflow)
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			first := q.dispatched()
+			if len(first) != 1 {
+				t.Fatalf("the first pass dispatched %d tasks", len(first))
+			}
+			if err := core.redeem(t, first[0], "runner-1"); err != nil {
+				t.Fatal(err)
+			}
+
+			core.silence(t)
+			conn := dbtest.Superuser(t, super)
+			if got := dispatchesOf(t, conn, first[0].Task.ID); !slices.Equal(got, c.dispatches) {
+				t.Errorf("after the sweep the key holds %q, want %q", got, c.dispatches)
+			}
+			if got := stateOf(t, core); got != c.run {
+				t.Errorf("after the sweep the run is %s, want %s", got, c.run)
+			}
+			again := q.dispatched()
+			switch {
+			case c.run == agk.Failed && len(again) != 0:
+				t.Errorf("a step that does not requeue sent its task out again as %+v", again)
+			case c.run == agk.Running && (len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row):
+				t.Errorf("the requeue went out as %+v, want %s again under a new task_id", again, first[0].Task.ID)
 			}
 		})
 	}
