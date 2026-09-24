@@ -27,6 +27,11 @@ type Info struct {
 	Architecture    string   `json:"Architecture,omitempty"`
 	NCPU            int      `json:"NCPU,omitempty"`
 	MemTotal        int64    `json:"MemTotal,omitempty"`
+
+	// DefaultRuntime is the runtime a container that names none is created with, runc
+	// unless the daemon was configured otherwise. It is what a runner reports at join as
+	// the runtime its containers run under.
+	DefaultRuntime string `json:"DefaultRuntime,omitempty"`
 }
 
 // Info asks the daemon what it is.

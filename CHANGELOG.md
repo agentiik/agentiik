@@ -137,7 +137,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Runner
 
-- `agk-runner` is the agent, one static binary with the verbs `join`, `serve` and `version`. `join` is named and refused until the API's side of it is built.
+- `agk-runner` is the agent, one static binary with the verbs `join`, `serve` and `version`.
+- `agk-runner join` generates the host's Ed25519 key, measures its vCPU, memory and work root's disk, reads the daemon's runtime and remapping, and joins. It writes `/var/lib/agentiik/runner.key` and `/etc/agentiik/runner.env` (the identity, `AGK_API`, the labels and namespaces sent, and settings already there), mode 0600, owned by `--user` when run as root, and only once the API has answered. An existing identity is replaced only with `--replace`.
 - `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE` (no quotes, escapes, substitutions or trailing comments, which another reader would read differently), refused when it is a symbolic link, owned by another account or readable by its group or anybody else, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
 - `serve` loads `/etc/agentiik/runner.toml`, keeps every default and the userns floor where there is none, and refuses one it cannot read. A daemon without user namespace remapping is refused before any call to the API, and no flag or variable lifts the floor. It refuses to run as root.
 - `serve` refuses a remapped daemon without the three capabilities and a secrets directory that is not a tmpfs mounted `noexec,nosuid,nodev`, before any call to the API.
