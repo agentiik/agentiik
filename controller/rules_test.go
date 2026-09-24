@@ -425,10 +425,10 @@ steps:
     outputs: [ok]
 `
 
-// A task a merge: first superseded is only asked to stop, and its run can end, succeeded or
-// failed, before its runner answers. The run's ending ends it: its row reads cancelled rather
-// than in flight for ever, it holds no slot of the namespace, its runner is sent the superseded
-// stop, and the code its container exited with lands on the row when the runner reports it late.
+// A task a merge: first superseded is asked to stop on every pass, and its run can end, succeeded
+// or failed, before its runner answers. The run's ending ends it: its row reads cancelled rather
+// than in flight for ever, it holds no slot of the namespace, the heartbeat's cancel names it, and
+// the code its container exited with lands on the row when the runner reports it late.
 func TestARunsEndingEndsTheTasksAMergeFirstSuperseded(t *testing.T) {
 	for _, c := range []struct {
 		verdict agk.RunState
@@ -513,6 +513,65 @@ func TestARunsEndingEndsTheTasksAMergeFirstSuperseded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A task whose message the bus took but whose acknowledgement never reached the controller is not
+// recorded as dispatched, and stays pending in the document, where the evaluator names nothing to
+// stop; a runner may have redeemed it all the same. Superseded, and its run ended succeeded, it is
+// stopped from the row its redemption bound, with the stop its supersession calls for rather than
+// a deadline's.
+func TestARunsEndingStopsASupersededTaskWhoseDispatchWasNeverRecorded(t *testing.T) {
+	core, _, pool, _ := decidingOn(t, supersedingWorkflow)
+	createRunOf(t, pool, "normalize", "archive", "pick")
+	q := &unanswered{step: "archive"}
+	core.queue = q
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	fast := q.dispatched()
+	if len(fast) != 1 || fast[0].Task.Step != "normalize" || len(q.lost) != 1 {
+		t.Fatalf("the first pass published %+v, and the bus took %+v without saying so", fast, q.lost)
+	}
+	slow := q.lost[0]
+	if err := core.redeem(t, slow, theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	core.answer(t, succeeded(t, fast[0].Task, core.now()))
+	picked := q.taken()
+	if len(picked) != 1 || picked[0].Step != "pick" {
+		t.Fatalf("the barrier lifted on normalize and published %+v", picked)
+	}
+	if stops := q.stops(); len(stops) != 0 {
+		t.Fatalf("a task the document never saw dispatched was stopped before the run ended: %+v", stops)
+	}
+	core.answer(t, succeeded(t, picked[0], core.now()))
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Fatalf("the run is %s", got)
+	}
+	stops := q.stops()
+	if len(stops) != 1 || stops[0] != (graph.Stop{Task: slow.Task.ID, Reason: graph.StopSuperseded}) {
+		t.Errorf("the run's ending stopped %+v, and %s had redeemed the superseded %s", stops, theRunner, slow.Task.ID)
+	}
+}
+
+// unanswered is a bus that takes the message of one step and whose answer never arrives, so the
+// controller counts it as not sent.
+type unanswered struct {
+	fakeQueue
+	step agk.Step
+	lost []Dispatch
+}
+
+func (u *unanswered) Publish(ctx context.Context, d Dispatch) error {
+	if d.Task.Step != u.step {
+		return u.fakeQueue.Publish(ctx, d)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.lost = append(u.lost, d)
+	issued.Store(d.Row, d.Grant)
+	return context.DeadlineExceeded
 }
 
 // The stop a run's ending sends to a runner still holding one of its tasks is the one the table of
