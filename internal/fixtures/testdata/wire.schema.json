@@ -3047,7 +3047,7 @@
     },
     "network": {
       "title": "Network posture",
-      "description": "What the container may reach. none is the default and is what a deterministic tool needs; internal reaches the installation's own services and nothing outside; egress reaches the hosts the step's allow list names, through the runner's proxy, and is refused by a runner that has no such proxy rather than opened and called filtered.",
+      "description": "What the container may reach. none is the default and is what a deterministic tool needs; internal is a network of the task's own with no route out and no address of the runner host in it; egress reaches the hosts the step's allow list names, through the runner's proxy, and is refused by a runner that has no such proxy rather than opened and called filtered.",
       "type": "string",
       "enum": [
         "none",
