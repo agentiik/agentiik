@@ -62,6 +62,13 @@ require (
 	// refused when it leaves it; and it returns a structured error whose keyword and
 	// instance location are what a refusal message names.
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	// The PRECIS OpaqueString profile, used by package db alone, to prepare a password before
+	// the SCRAM verifier of the role the application connects as is computed from it. pgx
+	// prepares a password with this profile when it authenticates, so the verifier is computed
+	// from the bytes the login is checked against rather than from a second reading of the
+	// same RFC, which would disagree with it on some password nobody tested. It was already
+	// here as an indirect dependency of pgx.
+	golang.org/x/text v0.42.0
 )
 
 require (
@@ -81,7 +88,6 @@ require (
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
