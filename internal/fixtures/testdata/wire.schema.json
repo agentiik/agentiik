@@ -424,7 +424,7 @@
                 ]
               }
             },
-            "description": "One file of the repository tree, and where the container sees it.",
+            "description": "One path or glob of the repository tree, and where the container sees it.",
             "examples": [
               {
                 "from": "config/rates.json",
@@ -436,7 +436,7 @@
               }
             ]
           },
-          "description": "The repository files this step asked for, named by where they are and where they go. The bytes are not here: they are fetched from the tree by redeeming the grant, exactly as an input is, which is what keeps a copy of this message worth nothing on its own.",
+          "description": "The repository files this step asked for, named by where they are and, for a relocation, where they go. The bytes are not here: they are fetched from the tree by redeeming the grant, exactly as an input is, which is what keeps a copy of this message worth nothing on its own.",
           "examples": [
             [
               {
