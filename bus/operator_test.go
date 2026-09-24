@@ -22,9 +22,9 @@ import (
 // the way its program reads it, and a server is started from a configuration file that includes the
 // one NewInstallation wrote, as an installation's does, rather than from options a test assembled.
 
-// serveInstallation starts a server whose own configuration enables JetStream and includes the
+// serveFrom starts a server whose own configuration enables JetStream and includes the
 // accounts file, the way an installation's server configuration does, and answers its address.
-func serveInstallation(t *testing.T, in Installation, features ...string) string {
+func serveFrom(t *testing.T, in Installation, features ...string) string {
 	t.Helper()
 	// Beside the accounts file, since a server resolves an include against the directory of
 	// the file that includes it.
@@ -78,7 +78,7 @@ func TestTheControlPlanesCredentialCreatesTheStreamsAndAPoolsConsumer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	url := serveInstallation(t, in)
+	url := serveFrom(t, in)
 	control := controlPlane(t, in, url)
 
 	b, err := Open(t.Context(), Options{URL: url, Name: "controller", Credentials: &control})
@@ -106,7 +106,7 @@ func TestARunnerMintedWithTheInstallationsSeedTakesFromItsPoolAlone(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	url := serveInstallation(t, in)
+	url := serveFrom(t, in)
 	control := controlPlane(t, in, url)
 	b, err := Open(t.Context(), Options{URL: url, Name: "controller", Credentials: &control})
 	if err != nil {

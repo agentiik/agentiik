@@ -34,7 +34,7 @@ func withAccounts(t *testing.T, features ...string) authenticated {
 	if err != nil {
 		t.Fatal(err)
 	}
-	url := serveInstallation(t, in, features...)
+	url := serveFrom(t, in, features...)
 	seed, err := os.ReadFile(in.AccountSeed)
 	if err != nil {
 		t.Fatal(err)
