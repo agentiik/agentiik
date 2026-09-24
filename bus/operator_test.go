@@ -119,10 +119,10 @@ func TestARunnerMintedWithTheInstallationsSeedTakesFromItsPoolAlone(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	if err := b.Publish(t.Context(), message("mine", "pool=dmz")); err != nil {
+	if err := b.Publish(t.Context(), "dmz", message("mine", "zone=dmz")); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Publish(t.Context(), message("theirs", "pool=lan")); err != nil {
+	if err := b.Publish(t.Context(), "lan", message("theirs", "zone=lan")); err != nil {
 		t.Fatal(err)
 	}
 

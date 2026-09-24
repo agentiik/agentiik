@@ -118,12 +118,7 @@ func anInstallation(t *testing.T) installation {
 		t.Fatal(err)
 	}
 	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: "dmz", Labels: []string{"zone=dmz"}, CreatedBy: "alice"}); err != nil {
-			return err
-		}
-		// And the pool a step that names none runs on, which the controller refuses to
-		// publish to until it exists.
-		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "default", CreatedBy: "alice"})
+		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "dmz", Labels: []string{"zone=dmz"}, CreatedBy: "alice"})
 	}); err != nil {
 		t.Fatal(err)
 	}

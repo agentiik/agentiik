@@ -43,7 +43,7 @@ func pooled(t *testing.T, p *Pool) {
 	err := p.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		for _, made := range []RunnerPool{
 			{Name: "dmz", Labels: []string{"zone=dmz", "arch=amd64"}, CreatedBy: "admin"},
-			{Name: "default", Labels: []string{"arch=amd64"}, CreatedBy: "admin"},
+			{Name: "lan", Labels: []string{"arch=amd64"}, CreatedBy: "admin"},
 		} {
 			if err := w.CreateRunnerPool(ctx, made); err != nil {
 				return err
@@ -116,7 +116,7 @@ func TestAJoinTokenIsSpentOnce(t *testing.T) {
 	now := time.Now().UTC()
 
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", []string{"arch=amd64"}, "admin", now, now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "lan", []string{"arch=amd64"}, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -317,7 +317,7 @@ func TestAHostCannotNarrowItselfToANamespaceItsPoolDoesNotAccept(t *testing.T) {
 
 	// A pool accepting every namespace, which is one that lists none, takes any narrowing.
 	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -340,7 +340,7 @@ func TestTwoJoinsWithOneTokenAtOnceMakeOneRunner(t *testing.T) {
 	var issued JoinToken
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		var err error
-		issued, err = w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		issued, err = w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 		return err
 	})
 	if err != nil {
@@ -513,7 +513,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 
 	var runner string
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -624,7 +624,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 	var mine, theirs string
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		for i, into := range []*string{&mine, &theirs} {
-			issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+			issued, err := w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 			if err != nil {
 				return err
 			}
@@ -1078,7 +1078,7 @@ func TestAHeartbeatIsAnsweredWithWhatItsRunnerIsToStop(t *testing.T) {
 	var mine, theirs string
 	err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
 		for i, into := range []*string{&mine, &theirs} {
-			issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+			issued, err := w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 			if err != nil {
 				return err
 			}
@@ -1194,12 +1194,12 @@ func TestAHeartbeatIsAnsweredWithWhatItsRunnerIsToStop(t *testing.T) {
 	}
 }
 
-// joinedWith joins one host of the default pool, its credential accepted for rotateAfter from now.
+// joinedWith joins one host of the lan pool, its credential accepted for rotateAfter from now.
 func joinedWith(t *testing.T, pool *Pool, key ed25519.PrivateKey, rotateAfter time.Duration, now time.Time) Joined {
 	t.Helper()
 	var joined Joined
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "lan", nil, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}

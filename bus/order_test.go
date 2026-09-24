@@ -168,10 +168,10 @@ func dispatched(t *testing.T) taking {
 			Image:     "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
 			Outputs:   []agk.Port{"ok"},
 			Resources: graph.Resources{CPU: "1", Memory: "512Mi", PIDs: 256},
-			RunsOn:    []string{"pool=dmz"},
+			RunsOn:    []string{"zone=dmz"},
 			Deadline:  now.Add(time.Hour),
 		},
-		Row: row, Grant: granted.Clear, Inputs: map[agk.Port]controller.InputRef{},
+		Row: row, Grant: granted.Clear, Inputs: map[agk.Port]controller.InputRef{}, Pool: "dmz",
 	}); err != nil {
 		t.Fatal(err)
 	}

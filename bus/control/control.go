@@ -32,7 +32,7 @@ func New(b *bus.Bus) *Queue { return &Queue{bus: b} }
 
 var _ controller.Queue = (*Queue)(nil)
 
-// Publish puts one task on the queue its labels select.
+// Publish puts one task on the queue of the pool the controller chose for it.
 //
 // The message carries the task as the wire describes it, which messageOf writes, and bus.Publish
 // says what the stream deduplicates it on and why.
@@ -41,7 +41,7 @@ func (q *Queue) Publish(ctx context.Context, d controller.Dispatch) error {
 	if err != nil {
 		return fmt.Errorf("bus: %w", err)
 	}
-	return q.bus.Publish(ctx, m)
+	return q.bus.Publish(ctx, d.Pool, m)
 }
 
 // Stop asks for a task in flight to be stopped, as bus.Stop does and says why.

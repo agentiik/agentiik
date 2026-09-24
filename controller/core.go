@@ -536,11 +536,11 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		// The pool's policy before the grant, so that a task no runner may be handed is
 		// given no credential either, and read in the transaction that issues it.
-		resources, err := policed(ctx, w, namespace, t)
+		pool, resources, err := policed(ctx, w, namespace, t)
 		if err != nil {
 			return err
 		}
-		d.Task.Resources = resources
+		d.Pool, d.Task.Resources = pool, resources
 		row, err := w.TaskRow(ctx, namespace, t.ID)
 		if err != nil {
 			return err

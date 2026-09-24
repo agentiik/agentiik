@@ -104,10 +104,15 @@ type Input struct {
 }
 
 // Resources are the ceilings the container is created with.
+//
+// Each is left out where nothing decided it, neither the step nor its pool's ceiling: "a ceiling
+// the controller did not decide is absent rather than guessed at", and the runner falls back to its
+// own policy. Written empty instead, "cpu": "" and "pids": 0 are values the wire's patterns and
+// its minimum refuse, so the message would be one no reader of the wire accepts.
 type Resources struct {
-	CPU    string `json:"cpu"`
-	Memory string `json:"memory"`
-	PIDs   int    `json:"pids"`
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+	PIDs   int    `json:"pids,omitempty"`
 }
 
 // TaskResult is agentiik/schemas wire.schema.json, $defs/taskResult: what a runner publishes when

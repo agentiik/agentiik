@@ -137,8 +137,10 @@ func TestAPoolAndItsTokenAreWhatTheWireDescribes(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("the pools answered %d: %s", w.Code, w.Body)
 	}
+	// The pool default is listed too, which the installation creates, and in a shape the wire
+	// accepts like any other.
 	pools, _ := listing["runner_pools"].([]any)
-	if len(pools) != 2 {
+	if len(pools) != 3 {
 		t.Fatalf("the listing holds %v", listing)
 	}
 	for _, p := range pools {

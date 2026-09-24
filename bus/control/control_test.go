@@ -93,7 +93,7 @@ func aTask(step agk.Step, runsOn ...string) graph.Task {
 	}
 }
 
-// dispatch is a task with the three things only the controller can add.
+// dispatch is a task with the four things only the controller can add, on the pool default.
 func dispatch(step agk.Step, runsOn ...string) controller.Dispatch {
 	return dispatchAs(rowOf(step), step, runsOn...)
 }
@@ -106,6 +106,7 @@ func dispatchAs(row string, step agk.Step, runsOn ...string) controller.Dispatch
 		Row:    row,
 		Grant:  "agkgrant_" + row + "_dGFza2dyYW50ZXhhbXBsZTAxMjM0NTY3ODlhYmNkZWZnaGk",
 		Inputs: map[agk.Port]controller.InputRef{},
+		Pool:   bus.DefaultPool,
 	}
 }
 
@@ -193,12 +194,13 @@ func publishing(t *testing.T, url string) jetstream.JetStream {
 var errTest = errors.New("the controller could not record it")
 
 // The round trip, which is the whole of controller.Queue: the controller publishes a dispatch, and a
-// runner of the pool its labels select takes the message messageOf writes, grant and all.
-func TestADispatchGoesToThePoolItsLabelsSelect(t *testing.T) {
+// runner of the pool it names takes the message messageOf writes, grant and all.
+func TestADispatchGoesToThePoolItNames(t *testing.T) {
 	b, _ := served(t)
 	q := New(b)
 
-	d := dispatch(step(t), "pool=dmz", "arch=amd64")
+	d := dispatch(step(t), "zone=dmz", "arch=amd64")
+	d.Pool = "dmz"
 	if err := q.Publish(t.Context(), d); err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +237,8 @@ func TestADispatchGoesToThePoolItsLabelsSelect(t *testing.T) {
 }
 
 // A dispatch missing what only the controller can supply is refused before anything is published,
-// so no runner is handed a task it could not fetch the inputs for.
-func TestADispatchWithoutItsGrantIsNotPublished(t *testing.T) {
+// so no runner is handed a task it could not fetch the inputs for, nor one no pool was chosen for.
+func TestADispatchWithoutItsGrantOrItsPoolIsNotPublished(t *testing.T) {
 	b, _ := served(t)
 	q := New(b)
 
@@ -244,6 +246,11 @@ func TestADispatchWithoutItsGrantIsNotPublished(t *testing.T) {
 	d.Grant = ""
 	if err := q.Publish(t.Context(), d); err == nil {
 		t.Fatal("a dispatch with no grant was published")
+	}
+	d = dispatch(step(t))
+	d.Pool = ""
+	if err := q.Publish(t.Context(), d); err == nil {
+		t.Fatal("a dispatch naming no pool was published")
 	}
 	taken, err := b.Take(t.Context(), bus.DefaultPool, 8, 500*time.Millisecond)
 	if err != nil {

@@ -147,8 +147,7 @@ spec:
 // push stores them.
 func seeded(t *testing.T, pool *db.Pool, super string) {
 	t.Helper()
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance');
-		insert into runner_pools (name, created_by) values ('default', 'admin')`); err != nil {
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
 		t.Fatal(err)
 	}
 	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {

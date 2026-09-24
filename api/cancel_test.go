@@ -33,8 +33,7 @@ type oneRun struct {
 func withOneRun(t *testing.T) oneRun {
 	t.Helper()
 	pool, super := dbtest.Open(t)
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops');
-		 insert into runner_pools (name, created_by) values ('default', 'admin')`); err != nil {
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
 		t.Fatal(err)
 	}
 	store, err := version.New(pool, version.Options{})
