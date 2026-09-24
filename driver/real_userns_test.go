@@ -245,3 +245,32 @@ func TestARealRemappedDaemonGivesTheSecretMountTheTmpfsFlags(t *testing.T) {
 		}
 	}
 }
+
+// A runner holding CAP_FOWNER can change the mode of a directory it does not own, so the
+// chmod that once refused a secrets base somebody else made first would now close it and
+// keep it, that account still its owner. The owner is read instead, and the base refused.
+// Only a process holding CAP_CHOWN can make a directory another account owns, so this runs
+// where the userns job gives it the three.
+func TestARealRunnerHostRefusesASecretsBaseAnotherAccountOwns(t *testing.T) {
+	held, err := effectiveCapabilities()
+	if err != nil || held&(1<<0|1<<3) != 1<<0|1<<3 {
+		usernsUnavailable(t, "this process does not hold CAP_CHOWN and CAP_FOWNER, so it can neither make a directory another account owns nor close one: %v", err)
+	}
+	secrets := t.TempDir()
+	base := secrets + "/" + secretsBase
+	if err := os.Mkdir(base, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(base, os.Geteuid()+1, os.Getegid()); err != nil {
+		t.Fatalf("giving %s to another account: %s", base, err)
+	}
+	t.Cleanup(func() { os.Chown(base, os.Geteuid(), os.Getegid()) })
+
+	_, err = newWorkdir(t.TempDir(), shardedTask, secrets)
+	if err == nil {
+		t.Fatalf("a secrets base another account owns was taken")
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("belongs to uid %d", os.Geteuid()+1)) {
+		t.Errorf("the refusal does not name the account that owns it: %s", err)
+	}
+}

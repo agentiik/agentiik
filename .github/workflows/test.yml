@@ -151,4 +151,4 @@ jobs:
             env HOME="$HOME" TMPDIR=/tmp DOCKER_HOST=unix:///var/run/docker.sock \
               AGENTIIK_TEST_REQUIRE_DOCKER=1 AGENTIIK_TEST_REQUIRE_USERNS=1 \
               AGENTIIK_TEST_SECRETS_DIR=/run/agentiik/secrets \
-              sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run RealRemappedDaemon' "$RUNNER_TEMP/driver.test"
+              sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run "RealRemappedDaemon|RealRunnerHost"' "$RUNNER_TEMP/driver.test"
