@@ -242,6 +242,8 @@ func TestAnInstallationIsCreatedOnce(t *testing.T) {
 	}
 	if _, err := NewInstallation(dir, time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("a second installation was written over the first")
+	} else if !strings.Contains(err.Error(), "created once") {
+		t.Errorf("a second installation is refused with %q", err)
 	}
 	for name, content := range before {
 		if now, _ := os.ReadFile(filepath.Join(dir, name)); !bytes.Equal(now, content) {
@@ -254,8 +256,12 @@ func TestAnInstallationIsCreatedOnce(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("kept"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		// One file of three is not an identity, and calling it one would send a person
+		// looking for the other two rather than removing it.
 		if _, err := NewInstallation(dir, time.Now().Add(time.Hour)); err == nil {
 			t.Errorf("an installation was written beside an existing %s", name)
+		} else if !strings.Contains(err.Error(), "cut off part way") {
+			t.Errorf("beside an existing %s, the refusal reads %q", name, err)
 		}
 		entries, _ := os.ReadDir(dir)
 		if len(entries) != 1 {
@@ -267,15 +273,24 @@ func TestAnInstallationIsCreatedOnce(t *testing.T) {
 	}
 }
 
+// A credential that has expired is refused before anything is written, since the API and the
+// controller would refuse it on their first start and the files it left would refuse the call
+// that should replace them. Nor does a refusal make the directory it would have written in.
 func TestWhatAnInstallationIsNotCreatedWith(t *testing.T) {
 	if _, err := NewInstallation("", time.Now().Add(time.Hour)); err == nil {
 		t.Error("an installation was written in no directory")
 	}
-	dir := t.TempDir()
-	if _, err := NewInstallation(dir, time.Time{}); err == nil {
-		t.Error("an installation was written with a control plane credential that never expires")
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Errorf("a refused installation left %d files behind", len(entries))
+	for what, until := range map[string]time.Time{
+		"never expires": {},
+		"has expired":   time.Now().Add(-time.Minute),
+		"expires now":   time.Now(),
+	} {
+		dir := filepath.Join(t.TempDir(), "bus")
+		if _, err := NewInstallation(dir, until); err == nil {
+			t.Errorf("an installation was written with a control plane credential that %s", what)
+		}
+		if _, err := os.Stat(dir); err == nil {
+			t.Errorf("refusing a control plane credential that %s, it made the directory", what)
+		}
 	}
 }

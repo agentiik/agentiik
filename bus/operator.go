@@ -54,28 +54,39 @@ type Installation struct {
 // It writes each file once and never over another, so a second call on the same directory, or on
 // one holding any of the three, is refused: an operator created twice is two sets of keys, the
 // server would trust the one and the API mint with the other, and every runner would be refused at
-// the bus with nothing on the API's side to say why. A call refused or failing part way removes
-// what it wrote and nothing else, so the directory is as it found it and the call can be run again.
+// the bus with nothing on the API's side to say why. A directory holding some of the three and not
+// the others is a creation cut off part way, which no program can start on, and the refusal says
+// so rather than calling it an identity. A call refused or failing part way removes the files it
+// wrote and nothing else, so it can be run again; the directory it made, if it made one, is left
+// empty. An until already passed is refused before anything is written, since the API and the
+// controller would refuse the credential on their first start and the identity could not then be
+// created again over it.
 //
 // The operator's seed and the system account's are not written anywhere. Nothing in an
 // installation signs with either after this: the server reads the accounts from the configuration
 // file rather than from a resolver it can be handed a new one on, so changing one means writing
-// that configuration again, and a key kept
-// only for that day is a key that could sign an account the server would trust, on a disk, for
-// every other day. The day an installation needs new accounts, it creates a new identity in a new
-// directory, restarts the server on it and hands the API and the controller their new files, and
-// every runner is given a credential under the new account the next time it asks.
+// that configuration again, and a key kept only for that day is a key that could sign an account
+// the server would trust, on a disk, for every other day. The day an installation needs new
+// accounts, it creates a new identity in a new directory, restarts the server on it and hands the
+// API and the controller their new files, and every runner is given a credential under the new
+// account the next time it asks.
 func NewInstallation(dir string, until time.Time) (Installation, error) {
 	if dir == "" {
 		return Installation{}, errors.New("bus: no directory to write the installation's bus identity in")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Installation{}, fmt.Errorf("bus: the directory for the bus identity could not be made: %w", err)
+	if until.IsZero() {
+		return Installation{}, errors.New("bus: a control plane credential that never expires, and one that never expires is one a stolen disk still holds")
+	}
+	if !until.After(time.Now()) {
+		return Installation{}, fmt.Errorf("bus: a control plane credential that expired at %s, which the API and the controller refuse to start on", until.UTC().Format(time.RFC3339))
 	}
 	in := Installation{
 		Accounts:     filepath.Join(dir, AccountsFile),
 		AccountSeed:  filepath.Join(dir, AccountSeedFile),
 		ControlPlane: filepath.Join(dir, ControlPlaneFile),
+	}
+	if err := unwritten(dir, in); err != nil {
+		return Installation{}, err
 	}
 	operator, err := nkeys.CreateOperator()
 	if err != nil {
@@ -162,6 +173,9 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 	conf.WriteString("resolver: MEMORY\n")
 	fmt.Fprintf(&conf, "resolver_preload: {\n  %q: %q\n  %q: %q\n}\n", in.Account, appJWT, in.System, sysJWT)
 
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Installation{}, fmt.Errorf("bus: the directory for the bus identity could not be made: %w", err)
+	}
 	var written []string
 	for _, f := range []struct {
 		path    string
@@ -179,7 +193,55 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 		}
 		written = append(written, f.path)
 	}
+	// The directory's entries as well as the files' contents, or a power cut after this
+	// answered could come back to a directory missing a file the call said it wrote.
+	if err := syncDir(dir); err != nil {
+		for _, path := range written {
+			os.Remove(path)
+		}
+		return Installation{}, err
+	}
 	return in, nil
+}
+
+// unwritten refuses a directory already holding any of the three files, and tells an identity from
+// the remains of a creation cut off part way, which only the second can be repaired by removing.
+// Every file is written exclusively after this all the same, so a call running at the same moment
+// is refused there.
+func unwritten(dir string, in Installation) error {
+	var present, missing []string
+	for _, path := range []string{in.Accounts, in.AccountSeed, in.ControlPlane} {
+		_, err := os.Lstat(path)
+		switch {
+		case err == nil:
+			present = append(present, filepath.Base(path))
+		case errors.Is(err, fs.ErrNotExist):
+			missing = append(missing, filepath.Base(path))
+		default:
+			return fmt.Errorf("bus: %s could not be looked for: %w", path, err)
+		}
+	}
+	switch {
+	case len(present) == 0:
+		return nil
+	case len(missing) == 0:
+		return fmt.Errorf("bus: %s already holds an installation's bus identity, which is created once: an operator created twice is one the server trusts and another the API mints with", dir)
+	default:
+		return fmt.Errorf("bus: %s holds %s and not %s, which is what a creation cut off part way leaves and no program can start on: remove what it holds and create the identity again", dir, strings.Join(present, " and "), strings.Join(missing, " and "))
+	}
+}
+
+// syncDir puts a directory's entries on the disk.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("bus: %s could not be opened to be written to the disk: %w", dir, err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("bus: %s could not be written to the disk: %w", dir, err)
+	}
+	return nil
 }
 
 // writeOnce writes a file that did not exist, readable by its owner alone, and on the disk before
