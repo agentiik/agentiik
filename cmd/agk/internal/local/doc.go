@@ -146,8 +146,8 @@
 //	          payload, and nothing reaches an environment variable
 //	Logs      one file per task
 //	Observer  the dispatched, running and publishing transitions, onto the loop's queue
-//	Policy    a value built here. driver.DefaultPolicy with the userns floor lifted and
-//	          Helper set, and /etc/agentiik/runner.toml is never read
+//	Policy    a value built here. driver.DefaultPolicy with the userns and seccomp floors
+//	          lifted and Helper set, and /etc/agentiik/runner.toml is never read
 //	WorkRoot  Layout.WorkRoot, which is outside the tree bound at /agk/repo and is the
 //	          one path of the layout that is
 //

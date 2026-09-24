@@ -31,7 +31,9 @@ type masker struct {
 	values [][]byte
 }
 
-// newMasker takes the values a task was given, as Config.Secrets redeemed them.
+// newMasker takes the values a task was given, as its secret source redeemed them:
+// Sources.Secrets, or Config.Secrets where a runner gave none, and for a container a
+// delivery adopted, the values the first delivery wrote for it as well.
 //
 // Each value is held twice where the two differ: as it arrived, and with the whitespace
 // around it removed. A secret is mounted as a file, and a script reading it with

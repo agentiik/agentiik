@@ -58,7 +58,7 @@ func TestAMachineJoinsWithATokenAndGetsACredential(t *testing.T) {
 	var joined Joined
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		var err error
-		issued, err = w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "arch=amd64"}, "admin", now.Add(time.Hour))
+		issued, err = w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "arch=amd64"}, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func TestAJoinTokenIsSpentOnce(t *testing.T) {
 	now := time.Now().UTC()
 
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", []string{"arch=amd64"}, "admin", now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "default", []string{"arch=amd64"}, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -136,7 +136,7 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 	now := time.Now().UTC()
 
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -156,7 +156,7 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 
 	// An expired token is refused like one that never existed.
 	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", now.Add(time.Minute))
+		issued, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Minute))
 		if err != nil {
 			return err
 		}
@@ -194,7 +194,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 
 	var runner string
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 	var mine, theirs string
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		for i, into := range []*string{&mine, &theirs} {
-			issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now.Add(time.Hour))
+			issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
 			if err != nil {
 				return err
 			}
@@ -608,7 +608,7 @@ func TestARevokedCredentialOpensNothing(t *testing.T) {
 	now := time.Now().UTC()
 
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}

@@ -38,15 +38,17 @@ require (
 	// the control plane's credential file and the account seed with it for the same reason:
 	// the file is in the format this library writes and the nats and nsc tools read.
 	github.com/nats-io/jwt/v2 v2.8.2
-	// The NATS server, used by package bus in tests alone, and never linked into anything
-	// this module ships. What a runner credential may do is a permission set an installation
-	// depends on, and asserting the claims this module writes would be asserting its own
-	// JSON: the property that matters is what a server does with them. The first version of
-	// that set allowed $JS.API.> and let a runner create a stream, which is how this
-	// dependency came to be here.
+	// The NATS server, used by packages bus and bus/control in tests alone, and never linked
+	// into anything this module ships. What a runner credential may do is a permission set
+	// an installation depends on, and asserting the claims this module writes would be
+	// asserting its own JSON: the property that matters is what a server does with them. The
+	// first version of that set allowed $JS.API.> and let a runner create a stream, which is
+	// how this dependency came to be here. Package bus/control runs its tests on a server of
+	// its own, since package bus empties the shared one before each of its tests.
 	github.com/nats-io/nats-server/v2 v2.15.0
-	// NATS, used by package bus alone. The documentation names the broker and names the two
-	// properties it is chosen for: "NATS JetStream, with WorkQueue retention, where a
+	// NATS, used by package bus alone, and in tests by bus/control, which publishes where a
+	// runner's credential would refuse to. The documentation names the broker and names the
+	// two properties it is chosen for: "NATS JetStream, with WorkQueue retention, where a
 	// message is removed as soon as it has been consumed, which is precisely what work
 	// distribution needs", and pull consumers, so that "a runner asks for a batch of tasks
 	// when it has room, which makes distribution naturally proportional to each host's real
@@ -59,14 +61,29 @@ require (
 	// its public half, and this is what mints one and what signs with an account key. It was
 	// already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
+	// TOML, used by package driver alone, to read /etc/agentiik/runner.toml. The
+	// documentation names the format and writes the file's [hooks] block with arrays of
+	// strings and a table, which a line reader cannot parse. A runner reads the file
+	// strictly, and this decoder refuses a key its target does not declare and says on
+	// which line, which is what turns a misspelled setting into a refusal rather than a
+	// default nobody chose. It takes no dependency of its own.
+	github.com/pelletier/go-toml/v2 v2.4.3
 	// JSON Schema 2020-12, used by package schema, and in tests by packages bus and api,
 	// which hold what they put on the wire to the vendored wire.schema.json rather than to a
-	// copy of it written in Go. The workflow language defines an input's schema as a 2020-12
-	// document, and this implementation is the draft itself rather than an older one; it
-	// takes a custom loader, which is how a $ref is resolved against the commit's tree and
-	// refused when it leaves it; and it returns a structured error whose keyword and
-	// instance location are what a refusal message names.
+	// copy of it written in Go, as bus/control does in its tests for the controller's half.
+	// The workflow language defines an input's schema as a 2020-12 document, and this
+	// implementation is the draft itself rather than an older one; it takes a custom loader,
+	// which is how a $ref is resolved against the commit's tree and refused when it leaves
+	// it; and it returns a structured error whose keyword and instance location are what a
+	// refusal message names.
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	// The PRECIS OpaqueString profile, used by package db alone, to prepare a password before
+	// the SCRAM verifier of the role the application connects as is computed from it. pgx
+	// prepares a password with this profile when it authenticates, so the verifier is computed
+	// from the bytes the login is checked against rather than from a second reading of the
+	// same RFC, which would disagree with it on some password nobody tested. It was already
+	// here as an indirect dependency of pgx.
+	golang.org/x/text v0.42.0
 )
 
 require (
@@ -86,7 +103,6 @@ require (
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect

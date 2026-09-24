@@ -24,8 +24,9 @@ import (
 )
 
 // What a temporary directory cannot prove, run against the daemon on this machine and
-// skipped where there is none, exactly as driver/real_test.go does, so that CI stays green
-// and this machine tests for real.
+// skipped where there is none, exactly as driver/real_test.go does, so that a machine with
+// nothing installed still runs the rest. Where AGENTIIK_TEST_REQUIRE_DOCKER is 1, as it is
+// in CI, a test that cannot run fails rather than skips.
 //
 // Two things, and they are the two the unit tests take on trust. That the binary runs in an
 // image this project does not control, which is the whole of what static was for: the first
@@ -44,7 +45,7 @@ func daemonArch(t *testing.T, socket string) string {
 	t.Helper()
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("opening a client on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a client on %s: %v", socket, err)
 	}
 	defer cli.Close()
 
@@ -52,7 +53,7 @@ func daemonArch(t *testing.T, socket string) string {
 	defer cancel()
 	info, err := cli.Info(ctx)
 	if err != nil {
-		t.Skipf("asking the daemon what it is: %v", err)
+		dockertest.Unavailable(t, "asking the daemon what it is: %v", err)
 	}
 	if info.OSType != "" && info.OSType != "linux" {
 		t.Skipf("the daemon runs %s containers, and this is mounted into linux ones", info.OSType)
@@ -98,10 +99,10 @@ func contractDir(t *testing.T, envelope agk.Envelope, port agk.Port) string {
 func TestTheHelperRunsInAnImageWithNothingInIt(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("no docker command to build the image with")
+		dockertest.Unavailable(t, "no docker command to build the image with")
 	}
 	arch := daemonArch(t, socket)
 
@@ -186,7 +187,7 @@ func TestTheHelperRunsInAnImageWithNothingInIt(t *testing.T) {
 func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	arch := daemonArch(t, socket)
 	image := smallImage(t, socket)
@@ -201,8 +202,8 @@ func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := driver.DefaultPolicy()
-	// Docker Desktop offers no user namespace remapping, and this is the machine the
-	// floor is lifted for.
+	// Neither Docker Desktop nor the daemon of a CI runner remaps user namespaces, and
+	// these are the machines the floor is lifted for.
 	policy.RequireUsernsRemap = driver.RemapLifted
 	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
@@ -219,7 +220,7 @@ func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 		Announce: func(s string) { t.Log(s) },
 	})
 	if err != nil {
-		t.Skipf("opening a driver on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a driver on %s: %v", socket, err)
 	}
 	t.Cleanup(func() { d.Close() })
 
@@ -336,7 +337,7 @@ func buildScratch(t *testing.T, binary string) {
 	}
 	out, err := exec.Command("docker", "build", "-t", scratchImage, dir).CombinedOutput()
 	if err != nil {
-		t.Skipf("the image with nothing in it could not be built: %v\n%s", err, out)
+		dockertest.Unavailable(t, "the image with nothing in it could not be built: %v\n%s", err, out)
 	}
 }
 
@@ -370,7 +371,7 @@ func smallImage(t *testing.T, socket string) string {
 	t.Helper()
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("opening a client on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a client on %s: %v", socket, err)
 	}
 	defer cli.Close()
 	for _, ref := range []string{"alpine:3.21", "alpine:latest", "busybox:latest", "debian:stable-slim"} {
@@ -378,6 +379,6 @@ func smallImage(t *testing.T, socket string) string {
 			return ref
 		}
 	}
-	t.Skip("no small image on this machine to run a script step in: docker pull alpine")
+	dockertest.Unavailable(t, "no small image on this machine to run a script step in: docker pull alpine:3.21")
 	return ""
 }

@@ -29,6 +29,32 @@ type runner struct {
 	daemon   *dockertest.Daemon
 	work     string
 	observed *recorder
+	said     *sayings
+}
+
+// sayings keeps what the driver announced, from whichever goroutine said it.
+type sayings struct {
+	mu sync.Mutex
+	s  []string
+}
+
+func (s *sayings) say(line string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.s = append(s.s, line)
+}
+
+// count is how many of the announcements say want.
+func (s *sayings) count(want string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, line := range s.s {
+		if strings.Contains(line, want) {
+			n++
+		}
+	}
+	return n
 }
 
 // recorder keeps what the observer was told, which is where the transitions a heartbeat
@@ -83,6 +109,7 @@ func newRunner(t *testing.T, images map[string]dockertest.Image, run func(docker
 		t.Fatalf("opening the store: %s", err)
 	}
 	observed := &recorder{}
+	said := &sayings{}
 
 	policy := DefaultPolicy()
 	// The fake daemon does not remap, which is what Docker Desktop answers, so the
@@ -102,14 +129,14 @@ func newRunner(t *testing.T, images map[string]dockertest.Image, run func(docker
 		Observer: observed,
 		Policy:   policy,
 		WorkRoot: work,
-		Announce: func(string) {},
+		Announce: said.say,
 	})
 	if err != nil {
 		t.Fatalf("opening the driver: %s", err)
 	}
 	t.Cleanup(func() { d.Close() })
 
-	return &runner{Docker: d, daemon: daemon, work: work, observed: observed}
+	return &runner{Docker: d, daemon: daemon, work: work, observed: observed, said: said}
 }
 
 // oneTask is one task of one brick, with an envelope on one input port and one declared

@@ -63,6 +63,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
+- A runner pool's name is lowercase and hyphenated, at most 255 characters, and its labels, its namespaces and a join token's labels are held to the wire's grammar by the table. Its ceilings are cpu, memory and pids, kept as written, and there is no disk ceiling, since nothing can enforce one. Migration `0019_pool_shape.sql`.
+- A pool's pids ceiling is a `bigint`, 64 bits as the wire and `PidsLimit` allow, so one past 32 bits is kept where it was a 500. Migration `0019_pool_shape.sql`.
+- `Wide.IssueJoinToken` takes the moment a token is issued, and the row keeps it, so its expiry counts from the API's clock and not the database's.
+- `db.Provision` applies the migrations and creates, or brings back to shape, the `NOSUPERUSER NOBYPASSRLS` role the API and the controller connect as, with read and write on the tables the migrations created and read on `schema_migrations`, so a binary can tell a database ahead of it. It needs no superuser, the password reaches PostgreSQL as a SCRAM verifier, and the tests provision through it.
+- `db.Provision` holds an advisory lock while it runs, so two replicas migrating one database at once take turns rather than one of them failing.
+- `db.Provision` refuses a role that owns the database or anything in it, before applying anything, since no revoke reaches an owner. It names what the role owns and the `REASSIGN OWNED BY` that hands it on.
+- `db.Provision` grants only the tables of `public` that belong to no extension and whose owner the migrating role answers for, so an extension's view neither stops a managed administrator nor reaches the application.
+- `db.Provision` takes the role out of every role it is a member of, and back from what it holds on the database, on a parameter and on any relation of `public`, columns included, before granting it anything.
+- A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
 
 ### Bus
 
@@ -88,6 +97,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Bus.Ended` publishes the recorded ending before it acknowledges the message, so a requeue whose report did not go out stays on the queue. Acknowledged first, it left the queue bound to nobody, out of any sweep's reach.
 - A redemption that failed without refusing the task, with no answer, the runner's own credential refused or the API failing on its side, is not acknowledged, and the runner keeps the key, names it in its heartbeat and redeems again. Letting go, it left a task its lost answer had bound for the sweep to declare lost before the message came round, spending a requeue on a host that was never lost.
 - A test holds `bus.AckWait` to the documented minute.
+- The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
 
 ### Driver
 
@@ -104,6 +114,26 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
 - A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
+- `driver.WithSources` gives one task's `Run` the store, secret source and tree its redemption answered, in place of `Config.Store`, `Config.Secrets` and `Config.Repo`, adoption included, so two tasks in flight that both name `billing` each get their own value. A store opened for another namespace is refused; `agk run --local` gives none and is unchanged.
+- A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
+- An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
+- A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
+
+### Artifacts
+
+- `artifact/granted` is how a runner reads and writes objects. It reads through the presigned GET its task's redemption named for each key, and refuses any other key with `granted.ErrNotGranted` without sending anything. It writes through the task's upload policy: the policy's fields, then `key`, then `file`, last. It cannot ask what the store holds, so it posts every object, and the built-in store writes one it already held again under the same key: a replay costs the upload and the write, never a second copy.
+- The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
+- A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
+- Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+- `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
+- `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
+- `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
+- A runner refuses a daemon that applies no seccomp profile with `driver.ErrSeccompRequired`, and no setting lifts it; `agk run --local`, `agk validate` and `agk brick test` say so instead. A daemon with neither AppArmor nor SELinux is taken and said out loud, and a profile or label it would ignore is refused.
+- A `seccomp_profile` that cannot be read refuses the file without wrapping `fs.ErrNotExist`, which says there is no `runner.toml` and has its caller drop every setting.
+- `[hooks]` is held to `timeout`, `pre_task` and `post_task` and runs nothing until v0.9.0, and the driver says so. A setting written below its header, which TOML puts inside it, is refused and told to move above it rather than dropped.
+- A `seccomp_profile` that lets every system call through, or names an action seccomp does not have, is refused, and a `Policy.Seccomp` that filters nothing counts as no profile under the floor. `selinux_label` refuses the unconfined types `spc_t`, `unconfined_t` and `container_runtime_t` as it refuses `disable`.
+- A cap the daemon would refuse for every step naming no resources is refused before any container exists: a `memory_cap` under 6Mi or a `cpu_cap` under 0.01 by `LoadPolicy`, and a `cpu_cap` above the daemon's CPUs by `New`. A hard `nofile` above 1048576, the kernel's default `fs.nr_open`, is refused too.
+- After the daemon's event stream drops, which is what a restart looks like, the floors are read again before the next container is created or first started. A daemon restarted without seccomp or the remapping refuses each task with the sentinel `New` would have answered, on the platform's account, until it is put right. `dockertest.Daemon.Restart` and `Streams` stage it.
 
 ### API
 
@@ -115,6 +145,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
+- The pool and join token routes speak the `runnerPool` shape of `wire.schema.json`: a pool is `name`, `labels`, `namespaces`, `resource_ceilings` (`cpu`, `memory`, `pids`) and `containment`, the first four always written, and a token is answered beside its pool with `id`, `single_use`, `issued_at` and `expires_at`. A name already taken is a 409, and `sandboxed` and `separated` are refused until v1.0.0. The listing no longer counts runners.
+- A join token asked to live more seconds than a duration holds is refused as longer than a day, where it was issued already dead, or living a fraction of a second, or failed with a 500.
+- A pool's `cpu`, `memory`, `pids` or `containment` written `null`, or any of them but `pids` written `""`, is refused with 400, where it was read as no ceiling or as `hardened`. Only a ceiling left out is no ceiling.
 - Runner routes have a guard of their own, and every bad runner credential is the same 401. Draining is told in the heartbeat; a revoked credential just stops working.
 - A heartbeat keeps alive only the runner's own tasks. A runner silent for three intervals leaves its tasks `lost`, not `failed`.
 - Only a task a runner has redeemed can be `lost`, counted from its last heartbeat or its redemption, so a task waiting on the queue of a full pool is neither failed nor requeued for the wait.
@@ -191,9 +224,18 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- `bus` has a boundary test: no controller, database, API or secret store. `bus/control` runs on a NATS server of its own, since `bus` empties the shared one before each test.
+- `bus/control` expects at the controller every result of the corpus its schema accepts, so a fixture `bus` lists as outgrown needs no second list.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
+- The real-daemon tests run in CI, which pulls `alpine:3.21` and sets `AGENTIIK_TEST_REQUIRE_DOCKER=1`. Under it, `dockertest.Unavailable` fails a test that would have skipped for want of the daemon, an image or the `docker` command.
+- The probe holding `network: internal` to no way out fails where its image lacks `wget` or `nc`, rather than passing as a network that held, and the `network: none` probe must list the loopback.
+- The no-way-out probe is held to reporting its HTTP request and its TCP connection each on its own, so a probe that drops either one fails.
+- `agk run --local`'s leftover-network check has a step on `network: internal` to find, and the repository-mount adversary no longer fails on Linux over a file it may not read.
+- The pool routes are held to the vendored runner pool corpus, a join token's default hour to its `issued_at` and `expires_at`, and every administrator route to a 403 for anybody without `grant:manage` over the installation.
+- That 403 is given to a principal holding every other permission over the installation, so an administrator route asking for anything but `grant:manage` there fails the test.
+- The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 
 ## v0.1.2, 2026-09-13
 

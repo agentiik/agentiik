@@ -106,6 +106,10 @@ func WithUsernsRemap(uid, gid int) Behaviour {
 	}
 }
 
+// WithoutSeccomp is an /info listing no name=seccomp, which is a daemon built without it
+// or on a kernel that has none, and the seccomp floor refusing.
+var WithoutSeccomp Behaviour = func(o *Options) { o.noSeccomp = true }
+
 // OOMKills is a container killed for its memory: an oom event, then a die carrying 137,
 // and a wait that never answers. It is the exit the event stream exists to catch.
 var OOMKills Behaviour = func(o *Options) { o.oomKills = true }
@@ -133,6 +137,7 @@ type behaviours struct {
 
 	userns               bool
 	usernsUID, usernsGID int
+	noSeccomp            bool
 
 	apiVersion string
 	delay      time.Duration
