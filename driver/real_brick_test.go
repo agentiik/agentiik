@@ -74,7 +74,7 @@ func (f fixedSecrets) Value(_ context.Context, name string) ([]byte, error) {
 func TestARealDaemonWithoutTheRemappingIsRefusedByDefault(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	_, err := New(Config{
 		Socket:   socket,
@@ -102,10 +102,10 @@ func TestARealDaemonWithoutTheRemappingIsRefusedByDefault(t *testing.T) {
 func TestARealBrickIsGivenWhatTheContractPromises(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("no docker command to build the probe image with")
+		dockertest.Unavailable(t, "no docker command to build the probe image with")
 	}
 	buildProbe(t, probeImage, "probe")
 
@@ -355,14 +355,15 @@ func TestNetworkInternalGivesARealTaskANetworkOfItsOwn(t *testing.T) {
 
 	out, err := exec.Command("docker", "network", "ls", "--format", "{{.Name}}").Output()
 	if err != nil {
-		t.Skipf("docker network ls: %v", err)
+		dockertest.Unavailable(t, "docker network ls: %v", err)
 	}
 	if strings.Contains(string(out), networkName(id)) {
 		t.Errorf("the task's own network %s outlived the task", networkName(id))
 	}
 }
 
-// buildProbe builds one of the bricks under testdata, and skips where it cannot.
+// buildProbe builds one of the bricks under testdata, or ends the test through
+// dockertest.Unavailable where it cannot.
 //
 // It is built rather than pulled because the point of it is to be a plain image that was
 // never pushed anywhere, which is the image agk run --local meets. An image the daemon
@@ -374,7 +375,7 @@ func buildProbe(t *testing.T, image, dir string) {
 	}
 	out, err := exec.Command("docker", "build", "-t", image, filepath.Join("testdata", dir)).CombinedOutput()
 	if err != nil {
-		t.Skipf("the probe brick in testdata/%s could not be built: %v\n%s", dir, err, out)
+		dockertest.Unavailable(t, "the probe brick in testdata/%s could not be built: %v\n%s", dir, err, out)
 	}
 }
 
@@ -608,7 +609,7 @@ func TestARedeliveredTaskAdoptsTheRealContainerItAlreadyStarted(t *testing.T) {
 		"--mount", "type=bind,source="+w.Out+",target=/agk/out",
 		image, "/bin/sh", "-e", "-c", script).Output()
 	if err != nil {
-		t.Skipf("could not start the first delivery's container: %v", err)
+		dockertest.Unavailable(t, "could not start the first delivery's container: %v", err)
 	}
 	container := strings.TrimSpace(string(started))
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
@@ -629,7 +630,7 @@ func TestARedeliveredTaskAdoptsTheRealContainerItAlreadyStarted(t *testing.T) {
 	// the step twice.
 	listed, err := exec.Command("docker", "ps", "-a", "--filter", "label="+LabelTask+"="+string(id), "--format", "{{.ID}}").Output()
 	if err != nil {
-		t.Skipf("docker ps: %v", err)
+		dockertest.Unavailable(t, "docker ps: %v", err)
 	}
 	if left := strings.TrimSpace(string(listed)); left != "" {
 		t.Errorf("a container carrying the task label outlived the redelivery: %s", left)
@@ -670,7 +671,7 @@ func TestARealExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 		"--mount", "type=bind,source="+counter+",target=/counter",
 		image, "/bin/sh", "-e", "-c", script).Output()
 	if err != nil {
-		t.Skipf("could not start the first delivery's container: %v", err)
+		dockertest.Unavailable(t, "could not start the first delivery's container: %v", err)
 	}
 	container := strings.TrimSpace(string(started))
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
@@ -700,7 +701,7 @@ func TestARealExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 
 	listed, err := exec.Command("docker", "ps", "-a", "--filter", "label="+LabelTask+"="+string(id), "--format", "{{.ID}}").Output()
 	if err != nil {
-		t.Skipf("docker ps: %v", err)
+		dockertest.Unavailable(t, "docker ps: %v", err)
 	}
 	if left := strings.TrimSpace(string(listed)); left != "" {
 		t.Errorf("a container carrying the task label outlived the redelivery: %s", left)
@@ -737,7 +738,7 @@ func TestARealExitedContainersOutputIsReadBackOffItsLog(t *testing.T) {
 		"--mount", "type=bind,source="+w.Out+",target=/agk/out",
 		image, "/bin/sh", "-e", "-c", "echo hello-from-first").Output()
 	if err != nil {
-		t.Skipf("could not start the first delivery's container: %v", err)
+		dockertest.Unavailable(t, "could not start the first delivery's container: %v", err)
 	}
 	container := strings.TrimSpace(string(started))
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", container).Run() })
