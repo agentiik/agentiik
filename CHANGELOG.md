@@ -144,6 +144,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` refuses a remapped daemon without the three capabilities and a secrets directory that is not a tmpfs mounted `noexec,nosuid,nodev`, before any call to the API.
 - `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
 - Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
+- `Client.Redeem` redeems a task's grant as the wire's `grantRedemption` and holds the answer to the message it answers. `runner.NextAfter` reads each answer as the page's table does: 200 runs, 403 puts the message back, 409 lets it go, 422 or the API's 200 the task cannot be run on reports that no container ran, and anything else, a 200 that does not echo the task among it, asks again.
+- `runner.Assemble` turns a task message and its redemption into the `graph.Task` and `driver.Sources` the driver runs. Inputs are held to their digest and item count, each assembly's tree is laid out apart under `.trees`, 0755 and 0444 (0555 where executable), and each secret is decoded from `utf-8` or `base64`, so a `base64` value is mounted and masked as its bytes.
+- `runner.TaskOf` reads a task message back as the task the controller wrote it from, and a test holds it to `messageOf` over the corpus and over tasks drawn at random.
 
 ### Artifacts
 
