@@ -111,8 +111,13 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		say = func(string) {}
 	}
 	_, err := c.Driver.Run(a.Context(ctx), a.Task)
-	told, ended := c.Endings.take(a.Task.ID)
-	if errors.Is(err, driver.ErrTaskInFlight) && !ended {
+
+	// Endings is keyed by the task, which is the key, and two deliveries of one key are two
+	// Carries. A Run that refused this delivery, for a key another delivery is running or has
+	// just ended, ran nothing of its own, so it takes no ending: the one there is the other
+	// delivery's, which that delivery reports.
+	var completed *driver.Completed
+	if errors.Is(err, driver.ErrTaskInFlight) {
 		// Another delivery on this host is running the key, in a container bound to a
 		// tree of the key, and Remove takes every tree of the key: this delivery's goes
 		// with that one's, once it ends.
@@ -124,19 +129,22 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		// no less the result.
 		say(rerr.Error())
 	}
-
-	var r bus.TaskResult
-	var completed *driver.Completed
-	switch {
-	case ended:
-		r = resultOf(m, c.Runner, told, c.Logs)
-	case errors.As(err, &completed):
+	if errors.As(err, &completed) {
 		// A key this host had ended between Hold and Run, which is a second delivery of
 		// the key that got past Hold before the first wrote its ending. That ending is
 		// the answer, as it is where Hold finds it.
-		if r, err = EndingOf(m, c.Runner, completed.Ending); err != nil {
+		r, err := EndingOf(m, c.Runner, completed.Ending)
+		if err != nil {
 			return err
 		}
+		return c.Results.Report(ctx, r)
+	}
+
+	var r bus.TaskResult
+	told, ended := c.Endings.take(a.Task.ID)
+	switch {
+	case ended:
+		r = resultOf(m, c.Runner, told, c.Logs)
 	case err != nil && ctx.Err() != nil:
 		// The agent is stopping, and the task did not fail: nothing is said of it, the
 		// agent stops naming its key, and the heartbeat's sweep declares it lost, which is

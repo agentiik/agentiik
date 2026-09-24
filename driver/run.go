@@ -669,9 +669,9 @@ func (d *Docker) replay(ctx context.Context, container string, log *taskLog, std
 // exited and its span is part of its ending. Where the daemon cannot say, the span is the
 // one this side can vouch for, from the dispatch to the moment the exit was read, which
 // the key is written down with so that a second report says the same. A container that
-// exited with no span at all would read as one that never started, and a result that says
-// so turns a brick's success or failure into the platform's, which is retried: the brick
-// would run a second time for a question the daemon did not answer.
+// exited with no span at all would read as one that never started, and its exit code would
+// go with the span: a success would read as a failure no retry names, and a transient
+// failure as one that is never retried, for a question the daemon did not answer.
 func (d *Docker) moments(ctx context.Context, t graph.Task, container string, dispatched time.Time) (started, finished time.Time) {
 	ask, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
 	defer cancel()

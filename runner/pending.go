@@ -69,9 +69,11 @@ type Results struct {
 //
 // A file that does not read as a result, or reads as one no publication would ever take, is taken
 // away and said in the error, since keeping it would name its key in the heartbeat for ever and
-// publish nothing. A file that could not be read at all is left where it is and said, since it may
+// publish nothing. A result of another runner is one of them: a host joined again under a new
+// name keeps its work root, and the old name's subject is one only the old credential may publish
+// on, and a result naming a runner other than its subject's one the controller refuses. A file that could not be read at all is left where it is and said, since it may
 // be a result the next agent can read. The rest are kept, and the results are opened all the same.
-func OpenResults(workRoot string, p Publisher) (*Results, error) {
+func OpenResults(workRoot, runner string, p Publisher) (*Results, error) {
 	if workRoot == "" {
 		return nil, errors.New("runner: no work root: results the bus has not taken are kept under one")
 	}
@@ -111,8 +113,12 @@ func OpenResults(workRoot string, p Publisher) (*Results, error) {
 			continue
 		}
 		res, err := readKept(b)
-		if err == nil && res.TaskID != id {
+		switch {
+		case err != nil:
+		case res.TaskID != id:
 			err = fmt.Errorf("it is kept as %s and is the result of %s", id, res.TaskID)
+		case res.Runner != runner:
+			err = fmt.Errorf("it is %s's, and this runner is %s", res.Runner, runner)
 		}
 		if err != nil {
 			os.Remove(path)

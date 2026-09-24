@@ -35,7 +35,7 @@ var errUnreachable = errors.New("nats: no responders available for request")
 func TestAResultTheBusDidNotTakeIsKeptUntilItGoesOut(t *testing.T) {
 	root := t.TempDir()
 	b := &published{refuse: errUnreachable}
-	results, err := OpenResults(root, b)
+	results, err := OpenResults(root, "runner-dmz-02", b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestAResultTheBusDidNotTakeIsKeptUntilItGoesOut(t *testing.T) {
 func TestAResultIsKeptOnlyUntilTheBusTakesItAndOnlyIfItCouldGoOut(t *testing.T) {
 	root := t.TempDir()
 	b := &published{}
-	results, err := OpenResults(root, b)
+	results, err := OpenResults(root, "runner-dmz-02", b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestAResultIsKeptOnlyUntilTheBusTakesItAndOnlyIfItCouldGoOut(t *testing.T) 
 // result, a write cut short or a file that is not one, is taken away rather than named for ever.
 func TestAKeptResultOutlivesTheAgent(t *testing.T) {
 	root := t.TempDir()
-	first, err := OpenResults(root, &published{refuse: errUnreachable})
+	first, err := OpenResults(root, "runner-dmz-02", &published{refuse: errUnreachable})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestAKeptResultOutlivesTheAgent(t *testing.T) {
 	}
 
 	b := &published{}
-	again, err := OpenResults(root, b)
+	again, err := OpenResults(root, "runner-dmz-02", b)
 	if err == nil {
 		t.Error("a kept file that is no result was taken away without a word")
 	}
@@ -216,7 +216,7 @@ func TestAKeptResultGoesOutOnceAfterARestart(t *testing.T) {
 	b, stream := jetStream(t)
 	root := t.TempDir()
 
-	before, err := OpenResults(root, &published{refuse: errUnreachable})
+	before, err := OpenResults(root, "runner-dmz-02", &published{refuse: errUnreachable})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestAKeptResultGoesOutOnceAfterARestart(t *testing.T) {
 	if err := before.Report(t.Context(), failed); err == nil {
 		t.Fatal("a result the bus refused was reported")
 	}
-	gone, err := OpenResults(root, unheard{b})
+	gone, err := OpenResults(root, "runner-dmz-02", unheard{b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestAKeptResultGoesOutOnceAfterARestart(t *testing.T) {
 	}
 
 	// The agent comes back.
-	after, err := OpenResults(root, b)
+	after, err := OpenResults(root, "runner-dmz-02", b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestAKeptResultThatCouldNotBeReadIsLeftWhereItIs(t *testing.T) {
 		t.Skip("root reads a file whatever its mode, so nothing here can be left unreadable")
 	}
 	root := t.TempDir()
-	first, err := OpenResults(root, &published{refuse: errUnreachable})
+	first, err := OpenResults(root, "runner-dmz-02", &published{refuse: errUnreachable})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,10 +277,35 @@ func TestAKeptResultThatCouldNotBeReadIsLeftWhereItIs(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(kept, 0o600) })
 
-	if _, err := OpenResults(root, &published{}); err == nil {
+	if _, err := OpenResults(root, "runner-dmz-02", &published{}); err == nil {
 		t.Error("a kept result that could not be read was passed over without a word")
 	}
 	if _, err := os.Lstat(kept); err != nil {
 		t.Errorf("a kept result that could not be read was taken away: %s", err)
+	}
+}
+
+// A result kept under another runner's name, by the runner this host was before it joined again,
+// is one no publication would ever take, since its subject is the old credential's, and it is taken
+// away rather than named in the heartbeat for ever.
+func TestAKeptResultOfAnotherRunnerIsTakenAway(t *testing.T) {
+	root := t.TempDir()
+	before, err := OpenResults(root, "runner-dmz-01", &published{refuse: errUnreachable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := ending("01M2AAZ9G62NQXFAFCXKRPJEH5", "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1")
+	r.Runner = "runner-dmz-01"
+	before.Report(t.Context(), r)
+
+	after, err := OpenResults(root, "runner-dmz-02", &published{})
+	if err == nil {
+		t.Error("another runner's result was taken away without a word")
+	}
+	if keys := after.Keys(); len(keys) != 0 {
+		t.Errorf("the runner joined again would name %v", keys)
+	}
+	if left, _ := os.ReadDir(filepath.Join(root, ResultsDir)); len(left) != 0 {
+		t.Errorf("%d files are left under the results", len(left))
 	}
 }

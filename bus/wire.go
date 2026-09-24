@@ -125,8 +125,9 @@ type TaskResult struct {
 	State          agk.TaskState `json:"state"`
 
 	// ExitCode and the two instants describe a container, and are present exactly where one
-	// ran: "succeeded and failed report an exit code and a span, lost reports neither, because
-	// the point of lost is that there is no outcome to report".
+	// ran: "succeeded and failed report an exit code and a span; timed_out and cancelled report
+	// both wherever a container started, since a stopped container exits too; lost reports
+	// neither, because the point of lost is that there is no outcome to report".
 	ExitCode   *int      `json:"exit_code,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`

@@ -126,7 +126,8 @@ type Ending struct {
 	// is the platform's, an upload that did not go through, is written with none.
 	ExitCode *int `json:"exit_code,omitempty"`
 
-	// StartedAt and FinishedAt are the daemon's own, as the Result carried them.
+	// StartedAt and FinishedAt are the daemon's own, as the Result carried them, or where the
+	// daemon could not say after the exit, the dispatch and the moment the exit was read.
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 

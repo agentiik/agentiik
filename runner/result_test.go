@@ -134,7 +134,7 @@ func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carryin
 	}
 	t.Cleanup(func() { d.Close() })
 	b := &published{}
-	results, err := OpenResults(root, b)
+	results, err := OpenResults(root, "runner-dmz-02", b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,18 +432,20 @@ func TestATaskTheAgentStoppedUnderIsNotReported(t *testing.T) {
 	}
 }
 
-// inFlight is a driver on which another delivery of every key is still running.
-type inFlight struct{}
+// refusing is a driver that refuses every delivery with err, as it refuses one of a key another
+// delivery on this host is running or has just ended.
+type refusing struct{ err error }
 
-func (inFlight) Run(context.Context, graph.Task) (graph.Result, error) {
-	return graph.Result{}, fmt.Errorf("driver: task: %w", driver.ErrTaskInFlight)
+func (d refusing) Run(context.Context, graph.Task) (graph.Result, error) {
+	return graph.Result{}, d.err
 }
 
-func (inFlight) Stop(context.Context, graph.Stop) error { return nil }
+func (refusing) Stop(context.Context, graph.Stop) error { return nil }
 
 // A delivery of a key another delivery on this host is still running reports nothing, since the
 // other reports the ending, and leaves every tree of the key where it is, since the running
-// container is bound to one of them.
+// container is bound to one of them. Nor does it take the other delivery's ending, which the other
+// is about to report under its own task_id.
 func TestADeliveryOfAKeyInFlightLeavesItsTreesAndReportsNothing(t *testing.T) {
 	root := t.TempDir()
 	s := newObjectStore(t)
@@ -458,11 +460,13 @@ func TestADeliveryOfAKeyInFlightLeavesItsTreesAndReportsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &published{}
-	results, err := OpenResults(root, b)
+	results, err := OpenResults(root, "runner-dmz-02", b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Carrier{Runner: "runner-dmz-02", Driver: inFlight{}, Endings: &Endings{}, Results: results}
+	endings := &Endings{}
+	endings.Observe(t.Context(), driver.Event{Task: running.Task.ID, State: agk.TaskSucceeded})
+	c := &Carrier{Runner: "runner-dmz-02", Driver: refusing{fmt.Errorf("driver: task: %w", driver.ErrTaskInFlight)}, Endings: endings, Results: results}
 	if err := c.Carry(t.Context(), m, again); !errors.Is(err, ErrNotReported) {
 		t.Errorf("a delivery of a key in flight answered %v", err)
 	}
@@ -471,5 +475,43 @@ func TestADeliveryOfAKeyInFlightLeavesItsTreesAndReportsNothing(t *testing.T) {
 	}
 	if got := b.all(); len(got) != 0 {
 		t.Errorf("a delivery of a key in flight reported %+v", got)
+	}
+	if _, kept := endings.take(running.Task.ID); !kept {
+		t.Error("a delivery of a key in flight took the ending of the delivery running it")
+	}
+}
+
+// A delivery Run refused for a key this host has already ended reports the ending the record
+// holds, under its own task_id, and leaves alone an ending the driver told of the delivery that
+// ended the key, which that delivery reports.
+func TestADeliveryOfAKeyAlreadyEndedReportsTheRecordedEnding(t *testing.T) {
+	root := t.TempDir()
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	a, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &published{}
+	results, err := OpenResults(root, "runner-dmz-02", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := 108
+	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	recorded := driver.Ending{Key: a.Task.ID, State: agk.TaskFailed, ExitCode: &code, StartedAt: started, FinishedAt: started.Add(time.Second), At: started.Add(time.Second)}
+	endings := &Endings{}
+	other := code + 1
+	endings.Observe(t.Context(), driver.Event{Task: a.Task.ID, State: agk.TaskFailed, ExitCode: &other, StartedAt: started, FinishedAt: started.Add(time.Second)})
+	c := &Carrier{Runner: "runner-dmz-02", Driver: refusing{&driver.Completed{Ending: recorded}}, Endings: endings, Results: results}
+	if err := c.Carry(t.Context(), m, a); err != nil {
+		t.Fatal(err)
+	}
+	got := b.all()
+	if len(got) != 1 || got[0].TaskID != m.TaskID || got[0].ExitCode == nil || *got[0].ExitCode != 108 {
+		t.Errorf("a delivery of a key already ended reported %+v, and the record says it exited 108", got)
+	}
+	if _, kept := endings.take(a.Task.ID); !kept {
+		t.Error("a delivery of a key already ended took the ending the driver told of another delivery")
 	}
 }
