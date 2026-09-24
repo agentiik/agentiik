@@ -97,21 +97,30 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		Geteuid:    func() int { return 1000 },
 		EnvFile:    envFile,
 		PolicyFile: policyFile,
+		// Where the image installs the helper, and nothing there until a test puts one.
+		HelperFile: filepath.Join(dir, "agk-helper"),
 		Host:       installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoExec: true, NoSUID: true, NoDev: true}},
 	}
 	return h
 }
 
 // installed is the machine an agent installed as the page says finds, whoever runs the test:
-// the three capabilities its unit grants, and a secrets directory on a tmpfs mounted
-// noexec,nosuid,nodev. A test takes one away to see the start refused.
+// the three capabilities its unit grants, a secrets directory on a tmpfs mounted
+// noexec,nosuid,nodev, and every other directory, the work root among them, on a plain disk. A
+// test takes one away to see the start refused.
 type installed struct {
 	caps uint64
 	fs   driver.Filesystem
+	disk driver.Filesystem
 }
 
-func (m installed) Capabilities() (uint64, error)                { return m.caps, nil }
-func (m installed) Filesystem(string) (driver.Filesystem, error) { return m.fs, nil }
+func (m installed) Capabilities() (uint64, error) { return m.caps, nil }
+func (m installed) Filesystem(dir string) (driver.Filesystem, error) {
+	if dir == "/run/agentiik/secrets" {
+		return m.fs, nil
+	}
+	return m.disk, nil
+}
 
 // ownership is CAP_CHOWN, CAP_DAC_OVERRIDE and CAP_FOWNER, bits 0, 1 and 3 of the kernel's sets.
 const ownership = 1<<0 | 1<<1 | 1<<3
@@ -459,5 +468,112 @@ func TestTheVerbsAreTheDocumentedThree(t *testing.T) {
 	h.out.b.Reset()
 	if code := run(context.Background(), h.e, []string{"version"}); code != exitSucceeded || h.out.String() != runner.Version()+"\n" {
 		t.Errorf("version exited %d printing %q", code, h.out)
+	}
+}
+
+// opened is the configuration serve opens the driver with, once it has.
+func opened(t *testing.T) func() driver.Config {
+	t.Helper()
+	var (
+		mu  sync.Mutex
+		got driver.Config
+	)
+	t.Cleanup(func() { newDriver = driver.New })
+	newDriver = func(cfg driver.Config) (*driver.Docker, error) {
+		mu.Lock()
+		got = cfg
+		mu.Unlock()
+		return driver.New(cfg)
+	}
+	return func() driver.Config {
+		mu.Lock()
+		defer mu.Unlock()
+		return got
+	}
+}
+
+// "/agk/bin/agk is mounted read-only" in every script step, so a runner binds the helper installed
+// beside it without a line of runner.toml, from a copy under the work root: in the container form
+// the installed path is inside the agent's image, where the daemon, which resolves a bind's source
+// on the host, would not find it.
+func TestTheHelperInstalledBesideTheAgentIsBoundFromUnderTheWorkRoot(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := opened(t)
+	h.serving(t)
+
+	work, _ := h.e.Lookup("AGK_RUNNER_WORKDIR")
+	want := filepath.Join(work, runner.HelperDir, "agk")
+	if got := cfg().Policy.Helper; got != want {
+		t.Errorf("the driver was opened with helper %q, want the copy %s", got, want)
+	}
+	if b, err := os.ReadFile(want); err != nil || string(b) != "\x7fELF the helper" {
+		t.Errorf("the copy holds %q, %v", b, err)
+	}
+	if !strings.Contains(h.err.String(), "the static helper "+h.e.HelperFile+" is bound read-only at /agk/bin/agk") {
+		t.Errorf("the agent's log does not say which helper it binds:\n%s", h.err)
+	}
+}
+
+// A helper runner.toml names is the operator's choice, and taken as written.
+func TestAHelperRunnerTomlNamesIsTakenAsWritten(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs+"helper = \"/opt/agk/agk-linux-amd64\"\n")
+	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := opened(t)
+	h.serving(t)
+
+	if got := cfg().Policy.Helper; got != "/opt/agk/agk-linux-amd64" {
+		t.Errorf("the driver was opened with helper %q, want the one runner.toml names", got)
+	}
+	work, _ := h.e.Lookup("AGK_RUNNER_WORKDIR")
+	if _, err := os.Stat(filepath.Join(work, runner.HelperDir)); !os.IsNotExist(err) {
+		t.Errorf("the installed helper was laid down although runner.toml names another: %v", err)
+	}
+}
+
+// No helper installed and none named is a runner that binds none, which the page allows: the
+// helper "is a convenience, never a requirement".
+func TestNoHelperInstalledStartsAndSaysScriptsHaveNone(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	cfg := opened(t)
+	h.serving(t)
+	if got := cfg().Policy.Helper; got != "" {
+		t.Errorf("the driver was opened with helper %q, and none is installed", got)
+	}
+	if !strings.Contains(h.err.String(), "there is no "+h.e.HelperFile+" and runner.toml names no helper") {
+		t.Errorf("the agent's log does not say script steps have no helper:\n%s", h.err)
+	}
+}
+
+func TestADirectoryWhereTheHelperIsInstalledRefusesTheStart(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	if err := os.Mkdir(h.e.HelperFile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if said := h.refused(t); !strings.Contains(said, h.e.HelperFile+" is where the static helper is installed") {
+		t.Errorf("the refusal does not name %s:\n%s", h.e.HelperFile, said)
+	}
+}
+
+// A copy bound from a work root mounted noexec is bound noexec, which a script can read and not run.
+func TestAWorkRootMountedNoexecBindsNoHelper(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := h.e.Host.(installed)
+	m.disk = driver.Filesystem{NoExec: true, NoDev: true}
+	h.e.Host = m
+	cfg := opened(t)
+	h.serving(t)
+	if got := cfg().Policy.Helper; got != "" {
+		t.Errorf("the driver was opened with helper %q from a work root mounted noexec", got)
+	}
+	if !strings.Contains(h.err.String(), "is on a filesystem mounted noexec") {
+		t.Errorf("the agent's log does not say why script steps have no helper:\n%s", h.err)
 	}
 }

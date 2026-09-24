@@ -140,6 +140,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task network the daemon would not remove is said, naming the step, the network and the task, where it was dropped.
 - `Docker.Sweep` removes the `agk-` networks a runner that died left: those older than two minutes, which no container carrying their task's label is on and no task in flight here names. It says what it removed and what the daemon refused.
 - The refusal of `network: egress` names v0.9.0 for the proxy.
+- `driver.KernelHost` is the `Host` a `Config` without one uses, for a caller asking the same of another directory.
 
 ### Runner
 
@@ -154,6 +155,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Client.Redeem` redeems a task's grant as the wire's `grantRedemption` and holds the answer to the message it answers. `runner.NextAfter` reads each answer as the page's table does: 200 runs, 403 puts the message back, 409 lets it go, 422 or the API's 200 the task cannot be run on reports that no container ran, and anything else, a 200 that does not echo the task among it, asks again.
 - `runner.Assemble` turns a task message and its redemption into the `graph.Task` and `driver.Sources` the driver runs. Inputs are held to their digest and item count, each assembly's tree is laid out apart under `.trees`, 0755 and 0444 (0555 where executable), and each secret is decoded from `utf-8` or `base64`, so a `base64` value is mounted and masked as its bytes.
 - `runner.TaskOf` reads a task message back as the task the controller wrote it from, and a test holds it to `messageOf` over the corpus and over tasks drawn at random.
+- `agk-runner` is also an image for `linux/amd64` and `linux/arm64` (`build/runner.Dockerfile`): the agent and the static helper on scratch, run as `agentiik` (65532), holding the three capabilities as file capabilities on `agk-runner`, so the Compose form keeps `cap_drop: [ALL]` and adds only those three.
+- `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
 
 ### Artifacts
 
@@ -290,6 +293,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
 - The fake daemon answers a second network of a name already taken with 409, removes a network by its name, refuses to remove one a running container is on with 403, and dates each network, which `Daemon.Backdate` moves back.
 - The real-daemon tests hold `network: internal` to what the kernel does: the container is on its task's network and no other with no default route, two tasks at once cannot reach each other, the runner host is not reachable through the gateway, and a name outside the host is not resolved while the container's own is.
+- A CI job builds the runner's image for both architectures, arm64 under QEMU, and runs `version` and `serve` in each as the Compose sample runs it, refused at the floor. On a remapped daemon, `serve` runs past the floor on the image's file capabilities alone, and the same image without them is refused naming them.
 
 ## v0.1.2, 2026-09-13
 

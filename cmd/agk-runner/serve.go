@@ -48,6 +48,19 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 
+	if policy.Helper == "" {
+		host := e.Host
+		if host == nil {
+			host = driver.KernelHost()
+		}
+		helper, err := layHelper(e.HelperFile, cfg.WorkDir, host, log)
+		if err != nil {
+			fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
+			return exitRefused
+		}
+		policy.Helper = helper
+	}
+
 	// Limits is left at its zero value, which is agk's own size rules: no installation setting
 	// changes them, and the controller holds a task's envelopes to the same ones.
 	socket, _ := e.Lookup("DOCKER_HOST")
@@ -107,7 +120,7 @@ func openDriver(ctx context.Context, cfg driver.Config) (*driver.Docker, error) 
 	}
 	done := make(chan opened, 1)
 	go func() {
-		d, err := driver.New(cfg)
+		d, err := newDriver(cfg)
 		done <- opened{d, err}
 	}()
 	select {
@@ -122,6 +135,10 @@ func openDriver(ctx context.Context, cfg driver.Config) (*driver.Docker, error) 
 		return nil, context.Canceled
 	}
 }
+
+// newDriver is driver.New, and a variable so that a test can read the configuration serve opens the
+// driver with, which is where every host setting it settled on ends up.
+var newDriver = driver.New
 
 // loadPolicy reads the host's runner.toml.
 //
@@ -140,6 +157,40 @@ func loadPolicy(path string, log func(string)) (driver.Policy, error) {
 		return driver.DefaultPolicy(), nil
 	}
 	return driver.Policy{}, err
+}
+
+// layHelper is the helper a script step is given where runner.toml names none: the one installed
+// beside the agent, laid down under the work root, or none where none is installed.
+//
+// The default is the installed helper rather than none because the page offers /agk/bin/agk to
+// every script step, and a runner that binds it only where an operator thought to write a line is
+// one whose scripts work on some hosts of a pool and say agk: not found on others. A helper that
+// runner.toml names is taken as written, since the operator who wrote it has chosen the file; the
+// driver stats it in the agent's filesystem and the daemon binds it from the host's, so in the
+// container form it has to be at the same path in both.
+//
+// A work root on a filesystem mounted noexec binds none. The copy's bind carries the mount's
+// flags, so /agk/bin/agk would be a program no script may run, and every script step that called
+// it would fail on the brick's account for a choice about the host's disk.
+func layHelper(installed, workDir string, host driver.Host, log func(string)) (string, error) {
+	fs, err := host.Filesystem(workDir)
+	if err != nil {
+		return "", fmt.Errorf("%s, the work root, could not be asked what it is mounted as: %w", workDir, err)
+	}
+	if fs.NoExec {
+		log("the work root " + workDir + " is on a filesystem mounted noexec, which a bind of the static helper from it would carry, so a script step finds no " + driver.BinPath + ": name a helper outside it with helper in runner.toml")
+		return "", nil
+	}
+	path, ok, err := runner.LayHelper(installed, workDir)
+	switch {
+	case err != nil:
+		return "", err
+	case !ok:
+		log("there is no " + installed + " and runner.toml names no helper, so a script step finds no " + driver.BinPath + ", and reads its inputs with jq instead")
+		return "", nil
+	}
+	log("the static helper " + installed + " is bound read-only at " + driver.BinPath + " for a script step, from its copy " + path + " under the work root, where the daemon finds it in either form")
+	return path, nil
 }
 
 // logger writes one line of the agent's log at a time, from whichever goroutine says it.

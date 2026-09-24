@@ -46,6 +46,10 @@ type env struct {
 	// /var/lib/agentiik/runner.key and /proc/meminfo.
 	KeyFile, MemInfo string
 
+	// HelperFile is where the static helper is installed beside the agent,
+	// /usr/local/lib/agentiik/agk-helper, which serve binds where runner.toml names none.
+	HelperFile string
+
 	// Account finds an account of this host by its name, which is who join gives what it
 	// writes to.
 	Account func(name string) (runner.Owner, error)
@@ -100,7 +104,8 @@ func main() {
 		Geteuid: os.Geteuid,
 		EnvFile: runner.EnvPath, PolicyFile: driver.PolicyPath,
 		KeyFile: runner.KeyPath, MemInfo: runner.MemInfoPath,
-		Account: lookupAccount,
+		HelperFile: runner.HelperPath,
+		Account:    lookupAccount,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)
