@@ -474,3 +474,83 @@ func TestAJoinTheAPIDidNotAnswerSaysTheTokenMayBeSpent(t *testing.T) {
 		t.Errorf("a join the API did not answer left %v", files)
 	}
 }
+
+// What join writes, serve reads beside the same environment: an address given with a trailing
+// slash, in both places, is written as given rather than as the client reaches it.
+func TestRunnerEnvAgreesWithTheEnvironmentJoinWasGiven(t *testing.T) {
+	url, _ := fakeAPI(t, aJoined)
+	vars := map[string]string{API: url + "/", Labels: "zone=dmz", WorkDir: t.TempDir()}
+	h := aJoiningHost(t, url+"/", aToken)
+	h.Lookup = environment(vars)
+	if _, err := Join(t.Context(), h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfig(environment(vars), h.EnvPath); err != nil {
+		t.Errorf("serve, in the environment join ran in, refuses what join wrote: %s", err)
+	}
+}
+
+// A flag the environment disagrees with would be a runner.env serve refuses beside it, so it is
+// refused before the token is spent.
+func TestAFlagTheEnvironmentDisagreesWithIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	for name, c := range map[string]struct {
+		vars  map[string]string
+		names string
+	}{
+		"another address":   {map[string]string{API: "https://elsewhere.example.com"}, "--api"},
+		"other labels":      {map[string]string{Labels: "zone=dmz,arch=amd64"}, "--labels"},
+		"the address again": {map[string]string{API: ""}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			url, sent := fakeAPI(t, aJoined)
+			h := aJoiningHost(t, url, aToken)
+			c.vars[WorkDir] = t.TempDir()
+			if c.names == "" {
+				c.vars[API] = url
+			}
+			h.Lookup = environment(c.vars)
+			_, err := Join(t.Context(), h)
+			if c.names == "" {
+				if err != nil {
+					t.Fatalf("a flag the environment agrees with was refused: %s", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.names) {
+				t.Fatalf("the join answered %v, and should have refused naming %s", err, c.names)
+			}
+			if sent() != nil {
+				t.Error("the join reached the API")
+			}
+			if strings.Contains(err.Error(), "elsewhere") {
+				t.Error("the refusal repeats the environment's value")
+			}
+		})
+	}
+}
+
+// Replacing, the old runner.env goes before the new key arrives: a host stopped between the two
+// renames has no identity, rather than the new key beside the old runner.
+func TestAReplaceThatFailsHalfwayLeavesNoOldRunnerEnvBesideTheNewKey(t *testing.T) {
+	url, _ := fakeAPI(t, aJoined)
+	h := aJoiningHost(t, url, aToken)
+	if _, err := Join(t.Context(), h); err != nil {
+		t.Fatal(err)
+	}
+	// The key's rename is made to fail by a directory in the key's place that is not empty,
+	// which no rename replaces.
+	if err := os.Remove(h.KeyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(h.KeyPath, "full"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.Replace = true
+	_, err := Join(t.Context(), h)
+	if err == nil || !strings.Contains(err.Error(), "--replace") {
+		t.Fatalf("the join answered %v", err)
+	}
+	if _, err := os.Lstat(h.EnvPath); err == nil {
+		t.Error("the old runner.env is still in place, beside a key that is not its own")
+	}
+}

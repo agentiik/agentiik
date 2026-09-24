@@ -150,10 +150,13 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 	}
 
 	spent := func(err error) error {
-		return fmt.Errorf("runner: the API created runner %.64q in pool %.64q and spent the token, and this host could not keep what it was given, so it has not joined: %w. Revoke that runner and join again with a new token", answer.Runner, answer.Pool, err)
+		return fmt.Errorf("runner: the API created runner %.64q in pool %.64q and spent the token, and this host could not keep what it was given, so it has not joined: %w. Revoke that runner, and join again with a new token and --replace", answer.Runner, answer.Pool, err)
 	}
+	// AGK_API is written as it was given rather than as the client reaches it, without its
+	// trailing slashes: serve compares the file with its environment as written, and a unit
+	// setting the same address join was given would otherwise be refused as another.
 	text, err := renderEnv(j.EnvPath, []variable{
-		{API, settings.API},
+		{API, settings.written},
 		{RunnerID, answer.Runner},
 		{RunnerPool, answer.Pool},
 		{Labels, strings.Join(settings.Labels, ",")},
@@ -167,7 +170,17 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 		return Joined{}, spent(err)
 	}
 	// The key first, so that a runner.env is never in place without the key it was joined
-	// with.
+	// with. A replaced runner.env goes before either, since the two renames are not one: a
+	// host that stops between them has no identity and joins again, where one holding the
+	// new key beside the old runner.env would start as a runner whose key it no longer has.
+	if j.Replace {
+		if err := os.Remove(j.EnvPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return Joined{}, spent(fmt.Errorf("runner: %s cannot be replaced: %s", j.EnvPath, reasonOf(err)))
+		}
+		if err := syncDir(filepath.Dir(j.EnvPath)); err != nil {
+			return Joined{}, spent(err)
+		}
+	}
 	if err := keyFile.commit(j.Replace); err != nil {
 		return Joined{}, spent(err)
 	}
@@ -177,8 +190,16 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 	return Joined{Runner: answer.Runner, Pool: answer.Pool, RotateBy: answer.RotateBy}, nil
 }
 
+// joinSettings are the settings join sends and writes.
+type joinSettings struct {
+	Config
+
+	// written is AGK_API as it was given, which is what runner.env carries.
+	written string
+}
+
 // settings reads what join sends and writes, held to the grammars serve reads them in.
-func (j Joining) settings() (Config, error) {
+func (j Joining) settings() (joinSettings, error) {
 	lookup := j.Lookup
 	if lookup == nil {
 		lookup = os.LookupEnv
@@ -195,9 +216,18 @@ func (j Joining) settings() (Config, error) {
 		return lookup(name)
 	}
 
-	var c Config
-	if _, set := r.env(API); set {
-		c.API = r.api()
+	// A flag that disagrees with the environment join runs in is refused, since serve reads
+	// both and refuses the two written differently: joining would spend the token on a host
+	// that could then never start. Neither value is repeated, since either may carry a secret.
+	for _, given := range []struct{ flag, name, value string }{{"--api", API, j.API}, {"--labels", Labels, j.Labels}} {
+		if v, set := lookup(given.name); set && v != "" && given.value != "" && v != given.value {
+			r.refuse(given.flag, "is not what "+given.name+" is set to in this environment, and serve, reading both it and "+j.EnvPath+", would refuse the two: give the same value, or unset "+given.name)
+		}
+	}
+
+	var c joinSettings
+	if written, set := r.env(API); set {
+		c.API, c.written = r.api(), written
 	} else {
 		r.refuse("--api", "is not given and "+API+" is not set, and it is the address of the API this host joins, such as https://agentiik.example.com")
 	}
@@ -218,8 +248,8 @@ func (j Joining) settings() (Config, error) {
 
 	// The address is written to runner.env, so it is held to what every reader of that file
 	// reads the same, as the file's own lines are. It is not repeated: it may carry a secret.
-	if c.API != "" {
-		if fault := valueFault(c.API); fault != "" {
+	if c.written != "" && c.API != "" {
+		if fault := valueFault(c.written); fault != "" {
 			r.refuse(API, fault+", and it is written to "+j.EnvPath)
 		}
 	}
