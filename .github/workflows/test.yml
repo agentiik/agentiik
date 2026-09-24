@@ -104,3 +104,53 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+  # A runner as the page installs one, which the job above cannot be: its daemon does not
+  # remap user namespaces, and it runs as an account that holds no capability. Here the
+  # daemon is set to userns-remap, the secret values have a tmpfs mounted noexec,nosuid,nodev,
+  # and the tests run as the runner's own account holding CAP_CHOWN, CAP_FOWNER and
+  # CAP_DAC_OVERRIDE and nothing else, which is what the systemd unit's AmbientCapabilities
+  # and CapabilityBoundingSet give the agent. Only the tests written for that host run here;
+  # the rest are the job above's.
+  userns:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      # userns-remap: default has the daemon create the dockremap account and take its range
+      # from /etc/subuid. A remapped daemon keeps its images apart from the ones it held
+      # before, so the image is pulled after the restart and not before. The second image is
+      # the same one run as 65532, the account a brick is required to run as.
+      - name: daemon
+        run: |
+          echo '{"userns-remap": "default"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.SecurityOptions}}' | grep -q userns
+          docker pull alpine:3.21
+          printf 'FROM alpine:3.21\nUSER 65532:65532\n' | docker build -t agentiik-test/nonroot:3.21 -
+
+      # The tmpfs the runner writes secret values on, with the flags the floor asks for,
+      # owned by the account the tests run as.
+      - name: secrets tmpfs
+        run: |
+          sudo mkdir -p /run/agentiik/secrets
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=0700,uid=$(id -u),gid=$(id -g) tmpfs /run/agentiik/secrets
+
+      # The test binary is built as the account itself, so that the toolchain and its cache
+      # are the ones setup-go installed, and then run under setpriv as that same account with
+      # the three capabilities ambient and every other one out of its bounding set.
+      - name: test
+        run: |
+          go test -c -o "$RUNNER_TEMP/driver.test" ./driver
+          three=+chown,+fowner,+dac_override
+          sudo setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
+            --inh-caps=-all,$three --ambient-caps=-all,$three --bounding-set=-all,$three \
+            env HOME="$HOME" TMPDIR=/tmp DOCKER_HOST=unix:///var/run/docker.sock \
+              AGENTIIK_TEST_REQUIRE_DOCKER=1 AGENTIIK_TEST_REQUIRE_USERNS=1 \
+              AGENTIIK_TEST_SECRETS_DIR=/run/agentiik/secrets \
+              sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run "RealRemappedDaemon|RealRunnerHost"' "$RUNNER_TEMP/driver.test"

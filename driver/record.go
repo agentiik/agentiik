@@ -120,8 +120,10 @@ type Ending struct {
 	State agk.TaskState `json:"state"`
 
 	// ExitCode is there wherever a container exited and its code was read, which is a
-	// success and a failure, as a result carries one. A failure met after the exit, a
-	// collection or an upload that did not go through, is written with none.
+	// success and a failure, as a result carries one. Outputs the collection refused are
+	// written with ExitContractBroken, since the container ran. A failure met after the
+	// exit that is the platform's, an upload that did not go through, is written with
+	// none.
 	ExitCode *int `json:"exit_code,omitempty"`
 
 	// StartedAt and FinishedAt are the daemon's own, as the Result carried them.
@@ -408,7 +410,7 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 		d.cli.ContainerRemove(tidy, left, true)
 	}
 	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
-		w.remove()
+		d.tidy(t, w)
 	}
 	return &Completed{Ending: e}
 }
@@ -422,9 +424,11 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 // afterExit marks. The brick ran, the removal on the way out takes what it left whether
 // or not it was collected, and a key left unrecorded there is a key whose next delivery
 // runs the brick from the beginning. It is written failed, which is how a caller records
-// a Run that answered an error, and with no exit code, since none reached a Result. Only
-// an error from before the container ran leaves the key as it was: nothing ran, so there
-// is nothing a second delivery would run twice.
+// a Run that answered an error. Where the exit was read before the error, which is a
+// collection that failed, it is written with the exit code and the span refused reports,
+// since a result that says a container ran carries both; otherwise with neither. Only an
+// error from before the container ran leaves the key as it was: nothing ran, so there is
+// nothing a second delivery would run twice.
 //
 // An entry that could not be written does not turn the result into an error. The
 // container ran and this is what became of it, and an error here would say that no
@@ -435,6 +439,9 @@ func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
 	var e Ending
 	var late *afterExit
 	switch {
+	case errors.As(err, &late) && late.ran != nil:
+		e = d.ending(*late.ran)
+		r, err = graph.Result{}, late.err
 	case errors.As(err, &late):
 		e = Ending{Key: late.task, State: agk.TaskFailed}
 		r, err = graph.Result{}, late.err
@@ -500,6 +507,10 @@ func (d *Docker) ending(r graph.Result) Ending {
 type afterExit struct {
 	task agk.TaskID
 	err  error
+
+	// ran is the ending the error came after, where the exit had been read: failed, with
+	// the code and the span the key is written down with.
+	ran *graph.Result
 }
 
 // Error is the error it carries, word for word.
@@ -511,4 +522,10 @@ func (e *afterExit) Unwrap() error { return e.err }
 // exited marks err as met after the container of task had run to its end.
 func exited(task agk.TaskID, err error) error {
 	return &afterExit{task: task, err: err}
+}
+
+// exitedWith marks err as met after the container had run to the ending r, which is what
+// the key is written down with.
+func exitedWith(r graph.Result, err error) error {
+	return &afterExit{task: r.Task, err: err, ran: &r}
 }

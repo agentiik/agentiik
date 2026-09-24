@@ -11,7 +11,8 @@
     "runner-heartbeat": "../wire.schema.json",
     "grant-redemption": "../wire.schema.json",
     "log-shipment": "../wire.schema.json",
-    "runner-pool": "../wire.schema.json"
+    "runner-pool": "../wire.schema.json",
+    "stop": "../wire.schema.json"
   },
   "notes": [
     "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
@@ -763,6 +764,21 @@
         {
           "file": "wire/invalid/runner-pool-label-without-value.json",
           "rule": "a label is key=value, and a runner may only ever claim labels its token allowed, so a half written one is refused before it can be claimed",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "stop": {
+      "valid": [
+        {
+          "file": "wire/valid/stop.json",
+          "covers": "a stop as the controller publishes it on agentiik.stops: the key of the task in flight and one of the four reasons"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/stop-reason-a-task-state.json",
+          "rule": "a reason is why a task is stopped and not what it ends as: timed_out is the state a deadline stop ends in, and deadline is the reason",
           "refused_by": "schema"
         }
       ]

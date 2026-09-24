@@ -336,3 +336,190 @@ func TestAWriteFailingPartWayLeavesNothingItWrote(t *testing.T) {
 		t.Error("the file written before the refusal was left behind")
 	}
 }
+
+// Renewing the control plane's credential changes that file and nothing else: the server still
+// trusts the account, what the control plane created on it is still there, the new credential
+// reaches it, and the one it replaced keeps working until its own expiry.
+func TestARenewedCredentialReachesTheSameBusAndWhatItHolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "bus")
+	in, err := NewInstallation(dir, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := serveFrom(t, in)
+	old := controlPlane(t, in, url)
+	first, err := Open(t.Context(), Options{URL: url, Name: "api", Credentials: &old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := first.Consumer(t.Context(), "dmz"); err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string][]byte{}
+	for _, name := range []string{AccountsFile, AccountSeedFile} {
+		kept[name], _ = os.ReadFile(filepath.Join(dir, name))
+	}
+
+	until := time.Now().Add(90 * 24 * time.Hour)
+	path, expires, err := RenewControlPlane(dir, until)
+	if err != nil {
+		t.Fatalf("the credential could not be renewed: %s", err)
+	}
+	if path != in.ControlPlane {
+		t.Errorf("the renewed credential was written to %s, and the programs read %s", path, in.ControlPlane)
+	}
+	if !expires.Equal(time.Unix(until.Unix(), 0)) {
+		t.Errorf("the renewed credential is said to expire at %s, and it was asked to at %s", expires, until)
+	}
+	for name, content := range kept {
+		if now, _ := os.ReadFile(filepath.Join(dir, name)); !bytes.Equal(now, content) {
+			t.Errorf("renewing the credential changed %s", name)
+		}
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("the renewed credential is %v: %v", info.Mode().Perm(), err)
+	}
+	// Nothing left beside it, since a file written aside and never renamed is a second copy of a
+	// secret nobody knows is there.
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			t.Errorf("renewing left %s behind", entry.Name())
+		}
+	}
+
+	renewed := controlPlane(t, in, url)
+	if renewed.JWT == old.JWT || renewed.Seed == old.Seed {
+		t.Fatal("the credential was not replaced")
+	}
+	claims, err := jwt.DecodeUserClaims(renewed.JWT)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Issuer != in.Account || claims.Expires != until.Unix() {
+		t.Errorf("the renewed credential was signed by %s until %d", claims.Issuer, claims.Expires)
+	}
+	second, err := Open(t.Context(), Options{URL: url, Name: "controller", Credentials: &renewed})
+	if err != nil {
+		t.Fatalf("the server refused the renewed credential: %s", err)
+	}
+	defer second.Close()
+	if _, err := second.js.Consumer(t.Context(), Stream, Durable("dmz")); err != nil {
+		t.Errorf("the pool's consumer is not there under the renewed credential: %s", err)
+	}
+	again, err := Open(t.Context(), Options{URL: url, Name: "api", Credentials: &old})
+	if err != nil {
+		t.Errorf("the credential it replaced stopped working before its expiry: %s", err)
+	} else {
+		again.Close()
+	}
+}
+
+// A renewal needs the identity it renews under, and the account the server trusts: a seed from
+// another installation would mint a credential the server refuses. Every refusal leaves the
+// credential that was there as it was.
+func TestARenewalIsRefusedWhereTheIdentityIsNotThere(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := NewInstallation(dir, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	creds := filepath.Join(dir, ControlPlaneFile)
+	before, _ := os.ReadFile(creds)
+	unchanged := func(what string) {
+		t.Helper()
+		if now, _ := os.ReadFile(creds); !bytes.Equal(now, before) {
+			t.Errorf("refusing %s, the credential was changed", what)
+		}
+	}
+
+	for what, until := range map[string]time.Time{
+		"a credential that never expires": {},
+		"one that has expired":            time.Now().Add(-time.Minute),
+	} {
+		if _, _, err := RenewControlPlane(dir, until); err == nil {
+			t.Errorf("%s was written", what)
+		}
+		unchanged(what)
+	}
+	if _, _, err := RenewControlPlane("", time.Now().Add(time.Hour)); err == nil {
+		t.Error("a credential was renewed in no directory")
+	}
+	if _, _, err := RenewControlPlane(filepath.Join(dir, "absent"), time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("a directory that is not there is refused with %v", err)
+	}
+	if _, _, err := RenewControlPlane(t.TempDir(), time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "created first") {
+		t.Errorf("a directory holding no identity is refused with %v", err)
+	}
+
+	// Another installation's seed, in this one's directory.
+	other := t.TempDir()
+	if _, err := NewInstallation(other, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	seed := filepath.Join(dir, AccountSeedFile)
+	ours, _ := os.ReadFile(seed)
+	theirs, _ := os.ReadFile(filepath.Join(other, AccountSeedFile))
+	if err := os.WriteFile(seed, theirs, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RenewControlPlane(dir, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "does not trust") {
+		t.Errorf("another installation's seed is refused with %v", err)
+	}
+	unchanged("another installation's seed")
+
+	// Its own seed, readable by others.
+	if err := os.WriteFile(seed, ours, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(seed, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RenewControlPlane(dir, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Errorf("a seed its group may read is refused with %v", err)
+	}
+	unchanged("a seed its group may read")
+}
+
+// Whoever may write to the directory may replace the operator the server trusts or the credential
+// the control plane signs in with, so creating an identity in one, or renewing the credential in
+// one, is refused and writes nothing.
+func TestABusDirectoryOthersMayWriteToIsRefused(t *testing.T) {
+	for _, mode := range []os.FileMode{0o770, 0o702, 0o1777} {
+		dir := filepath.Join(t.TempDir(), "bus")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewInstallation(dir, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "chmod 700") {
+			t.Errorf("an identity was created in a directory of mode %v, or refused with %v", mode, err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("refused in a directory of mode %v, it wrote %d files", mode, len(entries))
+		}
+	}
+
+	dir := t.TempDir()
+	if _, err := NewInstallation(dir, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(dir, ControlPlaneFile))
+	if err := os.Chmod(dir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RenewControlPlane(dir, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "chmod 700") {
+		t.Errorf("a credential was renewed in a directory its group may write to, or refused with %v", err)
+	}
+	if now, _ := os.ReadFile(filepath.Join(dir, ControlPlaneFile)); !bytes.Equal(now, before) {
+		t.Error("refused, the credential was changed all the same")
+	}
+	// Readable by others is not writable by them, and the files hold their own modes.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RenewControlPlane(dir, time.Now().Add(time.Hour)); err != nil {
+		t.Errorf("a directory others may read and not write to is refused: %s", err)
+	}
+}

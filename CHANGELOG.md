@@ -42,6 +42,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The sweep locks a run before its tasks, as a decision does, and passes over a run or a task somebody else holds rather than wait on it, so it never deadlocks with a decision.
 - A loss a runner reports locks its run before its task, as a decision does, and waits for a decision on the run rather than deadlocking with it.
 - A sweep that cannot look for lost tasks reports why, through `Controller.Trouble` with no run, and still decides the runs that are due.
+- `agentiik-controller` runs the controller as a program of its own, a static binary and an image run as a user that is not root, linking no secret store. It stands by until it holds the lock, then watches, sweeps and takes results off the bus, with `max_requeues` from `AGK_MAX_REQUEUES` and the ceiling from `AGK_TASK_CEILING`. A run it cannot decide is reported and left to the sweep; a fenced write or an expired bus credential ends it.
+- `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking and unlistening on the way out wait five seconds at most.
+- `agentiik-controller` asks PostgreSQL to probe its connections every few seconds, so a controller cut off without a reset frees the lock within half a minute rather than two hours. A second SIGINT or SIGTERM ends a process still stopping.
 
 ### State
 
@@ -84,6 +87,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner publishes its results on `agentiik.results.<runner>`, the one results subject its bus credential allows, and a result naming another runner is taken off the queue and reported.
 - A result the controller could not record comes back after a pause, from a second doubling to a minute, rather than at once.
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
+- `Bus.Stops` hands a runner every stop on `agentiik.stops` over the connection `bus.OpenRunner` opened, answering once the server holds the subscription and refusing a credential that may not hear stops, whatever else that connection is refused meanwhile. A stop it cannot read, and stops dropped because they were handed over too slowly, are reported.
+- A stop travels as `wire.schema.json` `$defs/stop`, vendored with its fixtures, and `graph.StopReason` reads its spelling back. A malformed key, or a reason with none of the four spellings, is not published.
 - A task is deduplicated on its `task_id` rather than its key, so a requeue published within two minutes of the dispatch it replaces still goes out.
 - A result is deduplicated on its runner, its `task_id` and its ending rather than its key, so the requeue's ending still reaches the controller after a late one of the dispatch it replaced, and a holder's ending still reaches it after another runner's refused report of the same dispatch. A result naming no dispatch is not published.
 - A runner gets an hour-long bus credential from the API for the pool its runner credential names, never one the request names. It may pull from that pool's consumer, acknowledge, publish results and hear stops, and nothing else. The consumer belongs to the pool and only the control plane creates it.
@@ -101,6 +106,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds `bus.AckWait` to the documented minute.
 - The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
 - `bus.NewInstallation` creates an installation's NATS operator, application account and system account, and writes its three files once, readable by their owner alone: `accounts.conf` for the server to include, `account.seed` for the API to mint runner credentials with, and `control-plane.creds` for the API and the controller. The operator's seed is kept nowhere. The bus tests run on a server started from that configuration, and the API and the controller read the files as written.
+- `bus.RenewControlPlane` mints the control plane a new credential under the account a bus directory holds and puts it in place of the old one in one rename, leaving the operator, the accounts and every queued task as they were. A seed the directory's `accounts.conf` does not trust is refused. It and `bus.NewInstallation` refuse a directory its group or anybody else may write to.
 
 ### Driver
 
@@ -121,6 +127,21 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
+- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick, and its key is written down with that code and its span. Run's error keeps the `*agk.Refusal` for `errors.As` and is `driver.ErrOutputsRefused`, since `driver.Fault.Unwrap` now answers the error its detail wraps beside its sentinel. A store that will not take outputs that passed is charged to the platform.
+- A container stopped at its deadline or by a stop is logged as `timed_out` or `cancelled`, and no longer as the runtime's failure its kill code reads as.
+- A remapped daemon is refused, when it is opened and again after a restart, to a process that lacks `CAP_CHOWN`, `CAP_FOWNER` or `CAP_DAC_OVERRIDE`, read with `capget`. The refusal is `driver.ErrOwnershipCapabilities` and names the unit lines that grant the three, and for a container the file capabilities its binary needs, since `cap_add` alone leaves a user that is not root none. `agk validate`, `agk run --local` and `agk brick test` are not asked. `driver.Config.Host` answers in place of the kernel in a test.
+- A runner's secrets directory must be a tmpfs mounted `noexec,nosuid,nodev` that it may write to, read with `statfs` when the daemon is opened and again before a value is written; otherwise it is `driver.ErrSecretsTmpfsRequired`. A secret is a bind from there and keeps those flags, so the default `/dev/shm` is refused where it lacks `noexec`. `Policy.RequireSecretsTmpfs` is the floor; no line of `runner.toml` lifts it, and `agk run --local`, `agk brick test` and `agk validate` do.
+- What a task's directory leaves on the host is said, naming the step, the task and the path, and the secrets directory is removed whatever became of the working directory. A directory under `SecretsDir` owned by another account is refused.
+- A link in the place of `/agk/out/ports` or `/agk/out/files` is refused, where the collection read whatever it pointed at on the host.
+
+### Runner
+
+- `agk-runner` is the agent, one static binary with the verbs `join`, `serve` and `version`. `join` is named and refused until the API's side of it is built.
+- `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE` (no quotes, escapes, substitutions or trailing comments, which another reader would read differently), refused when it is a symbolic link, owned by another account or readable by its group or anybody else, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
+- `serve` loads `/etc/agentiik/runner.toml`, keeps every default and the userns floor where there is none, and refuses one it cannot read. A daemon without user namespace remapping is refused before any call to the API, and no flag or variable lifts the floor. It refuses to run as root.
+- `serve` refuses a remapped daemon without the three capabilities and a secrets directory that is not a tmpfs mounted `noexec,nosuid,nodev`, before any call to the API.
+- `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
+- Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
 
 ### Artifacts
 
@@ -128,6 +149,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+- `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
@@ -193,6 +215,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
 - A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
 - A push is answered with `images`, the digest each tag of the version is recorded with. For a commit pushed before, those are its first push's, whatever the tag names now.
+- `agentiik-api` is the API as a program of its own, a static binary and an image run as a user that is not root, and the one program that links the secret store. `serve` serves every route built so far with the built-in object store and the secret providers, finishes the requests under way for up to 30 seconds at SIGINT or SIGTERM, and warns once a day from 14 days before the control plane's bus credential expires; `migrate` applies the migrations and creates the application role; `bus-init` writes the bus identity with a 90-day control plane credential, and `bus-credential` renews it. Until v0.3.0, the token whose SHA-256 `AGK_OPERATOR_TOKEN_FILE` holds is allowed everything, and nobody else anything.
 
 ### Secrets
 
@@ -222,6 +245,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `AGK_PUBLIC_URL` ending in a bare `?` or `#` is refused, since every path added to it would land in the query or the fragment, and every slash at its end is trimmed rather than one.
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
+- `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
 
 ### Command line
 
@@ -229,17 +253,20 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
+- `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
 
 ### Tests
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- `agk-runner` has a boundary test over its linked closure (no database, controller, API, secret store or server configuration) and over its symbols, so nothing in it can open an inbound port. A static test holds it to a static ELF for `linux/amd64` and `linux/arm64`.
 - `bus` has a boundary test: no controller, database, API or secret store. `bus/control` runs on a NATS server of its own, since `bus` empties the shared one before each test.
 - `bus/control` expects at the controller every result of the corpus its schema accepts, so a fixture `bus` lists as outgrown needs no second list.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
 - The real-daemon tests run in CI, which pulls `alpine:3.21` and sets `AGENTIIK_TEST_REQUIRE_DOCKER=1`. Under it, `dockertest.Unavailable` fails a test that would have skipped for want of the daemon, an image or the `docker` command.
+- A CI job of its own sets the daemon to `userns-remap: default`, mounts a secrets tmpfs and runs the driver's remapped-daemon tests under `setpriv` with the three capabilities, for a brick run as its root and as 65532, with `AGENTIIK_TEST_REQUIRE_USERNS=1` so they cannot skip. Elsewhere they skip and say why.
 - The probe holding `network: internal` to no way out fails where its image lacks `wget` or `nc`, rather than passing as a network that held, and the `network: none` probe must list the loopback.
 - The no-way-out probe is held to reporting its HTTP request and its TCP connection each on its own, so a probe that drops either one fails.
 - `agk run --local`'s leftover-network check has a step on `network: internal` to find, and the repository-mount adversary no longer fails on Linux over a file it may not read.

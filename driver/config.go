@@ -67,7 +67,7 @@ type Config struct {
 	// still in flight.
 	Observer Observer
 
-	// Policy is the runner's own configuration, and its zero value is both floors in
+	// Policy is the runner's own configuration, and its zero value is every floor in
 	// place. New never reads a file: reading /etc/agentiik/runner.toml belongs where
 	// a runner is configured, and doing it here would make this package refuse to be
 	// a library on a machine with no such file. LoadPolicy is the reader.
@@ -92,6 +92,12 @@ type Config struct {
 	// where they go is the caller's: a terminal for agk run --local, the runner's
 	// own log for a server.
 	Announce func(string)
+
+	// Host answers what the floors ask of this machine rather than of the daemon: the
+	// capabilities this process holds, which a remapped daemon needs three of, and
+	// what the secrets directory is mounted as. Nil is the kernel's own answers, and
+	// only a test gives another.
+	Host Host
 }
 
 // Logs is where a task's log is written, opened by whoever knows where it lands.

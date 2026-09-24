@@ -496,6 +496,16 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		}
 		return path
 	}
+	aDirectoryNobodyWrites := func(t *testing.T, i *installation) string {
+		if os.Geteuid() == 0 {
+			t.Skip("root writes in a directory whatever its mode says")
+		}
+		path := filepath.Join(i.dir, "read-only")
+		if err := os.Mkdir(path, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
 	api, controller, both, all := []program{theAPI}, []program{theController}, []program{theAPI, theController}, everyProgram
 
 	faults := map[string]fault{
@@ -534,6 +544,7 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"objects at a relative path":            {config.ObjectsDir, objectsWhereTheProgramStarts, both},
 		"objects that are not there":            {config.ObjectsDir, is("/nonexistent/agentiik/objects"), both},
 		"objects that are a file":               {config.ObjectsDir, aFile, both},
+		"objects nobody may write":              {config.ObjectsDir, aDirectoryNobodyWrites, both},
 		"no public URL":                         {config.PublicURL, unset, api},
 		"a public URL with no scheme":           {config.PublicURL, is("agentiik.example.com"), api},
 		"a public URL of another scheme":        {config.PublicURL, is("ftp://agentiik.example.com"), api},

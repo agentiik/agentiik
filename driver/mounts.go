@@ -100,7 +100,7 @@ type given struct {
 // and then the two writable paths. Nothing here starts anything or talks to a daemon: it
 // is files on a disk and a slice of mounts, which is why every one of these rules is
 // tested with no Docker in reach.
-func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *artifact.Store, run agk.Run, repo string, secrets Secrets) (*given, error) {
+func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, h Host, store *artifact.Store, run agk.Run, repo string, secrets Secrets) (*given, error) {
 	g := &given{Tmpfs: map[string]string{}}
 
 	in, err := brick.WriteInputs(ctx, store, w.In, t.Inputs)
@@ -145,6 +145,14 @@ func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *art
 	}
 	g.Mounts = append(g.Mounts, helper...)
 
+	// The secrets directory is held to the floor again before a value is written on
+	// it. New held it when the daemon was opened, and a tmpfs unmounted since leaves a
+	// directory of the same name on whatever was beneath it, which is a disk.
+	if len(t.Secrets) > 0 {
+		if err := readSecretsDir(p, h); err != nil {
+			return nil, &Fault{Step: t.Step, Charge: ChargePlatform, Detail: "no secret value was written: " + strings.TrimPrefix(err.Error(), "driver: "), err: err}
+		}
+	}
 	secretMounts, values, err := writeSecrets(ctx, t, w, secrets)
 	if err != nil {
 		return nil, err
@@ -314,7 +322,9 @@ func inside(repo, rel string) (string, error) {
 // instead, for a reason that is a property of the daemon: a tmpfs the daemon creates at
 // container start is empty and cannot be pre-populated, so a value could not be placed in
 // one before the container's first instruction runs. The host side is the tmpfs instead,
-// Policy.SecretsDir, and where the platform has none the driver says so once.
+// Policy.SecretsDir, and where the platform has none the driver says so once. A bind keeps
+// the flags of the mount its source sits on, so a runner, which holds that directory to a
+// tmpfs mounted noexec,nosuid,nodev, gives the brick a secret mount with those flags.
 func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets) ([]docker.Mount, [][]byte, error) {
 	if len(t.Secrets) == 0 {
 		return nil, nil, nil

@@ -94,6 +94,50 @@ func TestOnlyOneControllerLeadsAtATime(t *testing.T) {
 	wg.Wait()
 }
 
+// A lock is a session's, and a session can end under a controller that is still deciding: a
+// backend terminated, a connection a proxy recycled. Nothing the term does uses that session, so
+// the holder asks it on every poll whether it still holds the lock, and the term ends with
+// ErrLockLost when it cannot say so, rather than going on deciding with no lock held.
+func TestATermEndsWhenItsLockSessionEnds(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	c, err := New(pool, "cut-off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Poll = 50 * time.Millisecond
+
+	leading := make(chan struct{})
+	ended := make(chan error, 1)
+	go func() {
+		ended <- c.Lead(t.Context(), func(ctx context.Context, term db.Term) error {
+			close(leading)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	select {
+	case <-leading:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the controller never took the lock")
+	}
+
+	var terminated bool
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select coalesce(bool_and(pg_terminate_backend(pid)), false) from pg_locks
+		 where locktype = 'advisory' and granted
+		   and database = (select oid from pg_database where datname = current_database())`).Scan(&terminated); err != nil || !terminated {
+		t.Fatalf("the session holding the lock could not be terminated: %v", err)
+	}
+	select {
+	case err := <-ended:
+		if !errors.Is(err, ErrLockLost) {
+			t.Errorf("the term whose lock session was terminated ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the term went on for 10s after the session holding its lock was terminated")
+	}
+}
+
 // "every controller write carries the lock's acquisition counter as a fencing token and a
 // write bearing an older counter is refused. Election alone would not be safe; the fencing
 // token is what makes it so."

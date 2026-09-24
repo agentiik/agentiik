@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -286,6 +288,35 @@ func TestSomethingThatIsNotAFileUnderTheFilesDirectoryIsRefused(t *testing.T) {
 	}
 }
 
+// The two directories under /agk/out are the brick's to replace, and a link put in the
+// place of either would have the runner read, on the host, whatever it points at: here a
+// directory standing for /etc/agentiik, holding the runner's credential. A script's
+// shorthand would upload every file in it, and an envelope would reference one by name.
+// Neither is read.
+func TestALinkInThePlaceOfTheFilesOrPortsDirectoryIsRefused(t *testing.T) {
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "runner.env"), []byte("AGK_RUNNER_CREDENTIAL=not-the-bricks"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{filesDir, portsDir} {
+		dir := outRoot(t)
+		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(host, filepath.Join(dir, sub)); err != nil {
+			t.Fatal(err)
+		}
+		s := collectStore(t)
+		_, err := collect(context.Background(), s, aCollection(collectScriptTask("out"), dir))
+		if !errors.Is(err, agk.ErrEnvelopeRejected) {
+			t.Fatalf("a link in the place of %s was read through: %v", sub, err)
+		}
+		if !strings.Contains(err.Error(), "/agk/out/"+sub+" is a symbolic link") {
+			t.Errorf("the refusal does not say which directory was a link: %s", err)
+		}
+	}
+}
+
 // A script that writes nothing and exits 0 publishes, on out, one item carrying its
 // captured standard output and any file it left in /agk/out/files/.
 func TestTheShorthandPublishesStandardOutputAndWhatWasLeftBesideIt(t *testing.T) {
@@ -474,9 +505,14 @@ func TestWhatIsPublishedIsMeasuredAsItWillTravel(t *testing.T) {
 }
 
 // A collection with no store is a collection that cannot upload what the container left.
+// It is the runner's trouble and not the brick's, which was not given a store to fail.
 func TestCollectingWithoutAStore(t *testing.T) {
-	if _, err := collect(context.Background(), nil, aCollection(brickTask("out"), outRoot(t))); err == nil {
+	_, err := collect(context.Background(), nil, aCollection(brickTask("out"), outRoot(t)))
+	if err == nil {
 		t.Fatal("the collection ran with no store to upload to")
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("a collection with no store is charged to %s, and no brick is at fault for it", charge)
 	}
 }
 
@@ -526,5 +562,249 @@ func TestTheCaptureMasksWhatItKeeps(t *testing.T) {
 	c.Write([]byte("token=s3cr3t\n"))
 	if got := string(c.Bytes()); strings.Contains(got, "s3cr3t") {
 		t.Fatalf("the capture handed back a value in the clear: %q", got)
+	}
+}
+
+// writesCounted is the byte layer of a store, counting the objects written to it. has says
+// what Has answers: the directory's own answer, or false for every key, which is what a
+// runner writing through an upload policy gets, since it cannot ask.
+type writesCounted struct {
+	artifact.Objects
+	mu     sync.Mutex
+	writes int
+	has    func(context.Context, string) (bool, error)
+}
+
+func (w *writesCounted) Has(ctx context.Context, key string) (bool, error) {
+	if w.has != nil {
+		return w.has(ctx, key)
+	}
+	return w.Objects.Has(ctx, key)
+}
+
+func (w *writesCounted) Put(ctx context.Context, key string, r io.Reader) error {
+	w.mu.Lock()
+	w.writes++
+	w.mu.Unlock()
+	return w.Objects.Put(ctx, key, r)
+}
+
+func (w *writesCounted) count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writes
+}
+
+// countedStore opens a store over a directory of this test's own, whose writes are counted.
+func countedStore(t *testing.T) (*artifact.Store, *writesCounted) {
+	t.Helper()
+	objects := &writesCounted{Objects: artifact.Dir(t.TempDir())}
+	s, err := artifact.New(objects, "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, objects
+}
+
+// limitsWith is the defaults with the one rule a test is about brought down to size.
+func limitsWith(change func(*agk.Limits)) agk.Limits {
+	l := agk.DefaultLimits()
+	change(&l)
+	return l
+}
+
+// The size rules are held before the first upload, so an envelope a rule refuses leaves the
+// store as it found it: an artifact written for an envelope that is never published is
+// bytes nothing addresses. Each rule is held on a brick's own envelope naming a file it
+// left, and on the shorthand, where the envelope is assembled here, around the files a
+// script left and the value its standard output spilled.
+func TestAnEnvelopeARuleRefusesLeavesTheStoreUntouched(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		task    graph.Task
+		limits  agk.Limits
+		left    func(t *testing.T, dir string) []byte
+		rule    string
+		outcome agk.Outcome
+	}{
+		{
+			name:   "a brick's value above inline_max_bytes",
+			task:   brickTask("out"),
+			limits: limitsWith(func(l *agk.Limits) { l.InlineMaxBytes = 64 }),
+			left: func(t *testing.T, dir string) []byte {
+				f := containerLeft(t, dir, "report.csv", "a,b\n1,2\n", "out")
+				containerWrote(t, dir, "out", anItem("r1", map[string]any{"body": strings.Repeat("x", 256)}, f))
+				return nil
+			},
+			rule:    agk.RuleInlineMaxBytes,
+			outcome: agk.Reject,
+		},
+		{
+			name:   "a brick's envelope above envelope_max_bytes",
+			task:   brickTask("out"),
+			limits: limitsWith(func(l *agk.Limits) { l.EnvelopeMaxBytes = 1024 }),
+			left: func(t *testing.T, dir string) []byte {
+				f := containerLeft(t, dir, "report.csv", "a,b\n1,2\n", "out")
+				containerWrote(t, dir, "out", anItem("r1", map[string]any{"body": strings.Repeat("x", 2048)}, f))
+				return nil
+			},
+			rule:    agk.RuleEnvelopeMaxBytes,
+			outcome: agk.Fail,
+		},
+		{
+			name:   "a brick's envelope above max_items",
+			task:   brickTask("out"),
+			limits: limitsWith(func(l *agk.Limits) { l.MaxItems = 1 }),
+			left: func(t *testing.T, dir string) []byte {
+				f := containerLeft(t, dir, "report.csv", "a,b\n1,2\n", "out")
+				containerWrote(t, dir, "out", anItem("r1", nil, f), anItem("r2", nil))
+				return nil
+			},
+			rule:    agk.RuleMaxItems,
+			outcome: agk.Fail,
+		},
+		{
+			// The entries name the files under another step's short address, which
+			// brick.Collect takes, and attach rewrites each to this step's longer one:
+			// the envelope passes as the brick wrote it and breaks the rule only as
+			// it will be published.
+			name: "a brick's envelope above envelope_max_bytes only once its files are attached",
+			task: brickTask("out"),
+			left: func(t *testing.T, dir string) []byte {
+				var items []agk.Item
+				for i := range 16 {
+					f := containerLeft(t, dir, fmt.Sprintf("page-%02d.csv", i), fmt.Sprintf("page,%d\n", i), "out")
+					f.URI.Step = "a"
+					items = append(items, anItem(fmt.Sprintf("p%02d", i), nil, f))
+				}
+				containerWrote(t, dir, "out", items...)
+				return nil
+			},
+			rule:    agk.RuleEnvelopeMaxBytes,
+			outcome: agk.Fail,
+		},
+		{
+			name:   "the shorthand around the files a script left, above envelope_max_bytes",
+			task:   collectScriptTask("out"),
+			limits: limitsWith(func(l *agk.Limits) { l.EnvelopeMaxBytes = 2048 }),
+			left: func(t *testing.T, dir string) []byte {
+				for i := range 16 {
+					containerLeft(t, dir, fmt.Sprintf("page-%02d.csv", i), fmt.Sprintf("page,%d\n", i), "out")
+				}
+				return []byte("sixteen pages\n")
+			},
+			rule:    agk.RuleEnvelopeMaxBytes,
+			outcome: agk.Fail,
+		},
+		{
+			name:   "the shorthand with its standard output spilled, above envelope_max_bytes",
+			task:   collectScriptTask("out"),
+			limits: limitsWith(func(l *agk.Limits) { l.InlineMaxBytes = 64; l.EnvelopeMaxBytes = 2048 }),
+			left: func(t *testing.T, dir string) []byte {
+				for i := range 16 {
+					containerLeft(t, dir, fmt.Sprintf("page-%02d.csv", i), fmt.Sprintf("page,%d\n", i), "out")
+				}
+				return []byte(strings.Repeat("x", 4096))
+			},
+			rule:    agk.RuleEnvelopeMaxBytes,
+			outcome: agk.Fail,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := outRoot(t)
+			s, objects := countedStore(t)
+			col := aCollection(c.task, dir)
+			col.Stdout = c.left(t, dir)
+			col.Limits = c.limits
+			if col.Limits == (agk.Limits{}) {
+				// The envelope as the brick wrote it, and not a byte more.
+				info, err := os.Stat(filepath.Join(dir, portsDir, "out.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				col.Limits = limitsWith(func(l *agk.Limits) { l.EnvelopeMaxBytes = info.Size() })
+			}
+
+			_, err := collect(context.Background(), s, col)
+			var refusal *agk.Refusal
+			if !errors.As(err, &refusal) || refusal.Rule != c.rule || refusal.Outcome != c.outcome {
+				t.Fatalf("the collection answered %v, and the envelope breaks %s, which is %s", err, c.rule, c.outcome)
+			}
+			if n := objects.count(); n != 0 {
+				t.Errorf("the store took %d objects for an envelope %s refused", n, c.rule)
+			}
+		})
+	}
+}
+
+// What passes is written, and once per digest: the same bytes attached on two ports are
+// two entries and one object, even where the store cannot say what it already holds.
+func TestWhatPassesIsWrittenOncePerDigest(t *testing.T) {
+	dir := outRoot(t)
+	objects := &writesCounted{
+		Objects: artifact.Dir(t.TempDir()),
+		has:     func(context.Context, string) (bool, error) { return false, nil },
+	}
+	s, err := artifact.New(objects, "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := containerLeft(t, dir, "shared.csv", "a,b\n1,2\n", "left")
+	containerWrote(t, dir, "left", anItem("l1", nil, a))
+	b := a
+	b.URI.Port = "right"
+	containerWrote(t, dir, "right", anItem("r1", nil, b))
+
+	got := gather(t, s, aCollection(brickTask("left", "right"), dir))
+
+	if n := objects.count(); n != 1 {
+		t.Errorf("the store took %d objects for one set of bytes", n)
+	}
+	for _, port := range []agk.Port{"left", "right"} {
+		f := got.Outputs[port].Items[0].Files[0]
+		if body := storedBytes(t, s, f); body != "a,b\n1,2\n" {
+			t.Errorf("port %s names an artifact holding %q", port, body)
+		}
+	}
+}
+
+// A store that will not take what passed is this side's trouble: the brick left what it was
+// asked to leave, so the refusal is charged to the platform and not to the brick.
+func TestAStoreThatWillNotTakeTheOutputsIsChargedToThePlatform(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		left func(t *testing.T, dir string) collection
+	}{
+		{
+			name: "a file a brick left",
+			left: func(t *testing.T, dir string) collection {
+				f := containerLeft(t, dir, "report.csv", "a,b\n1,2\n", "out")
+				containerWrote(t, dir, "out", anItem("r1", nil, f))
+				return aCollection(brickTask("out"), dir)
+			},
+		},
+		{
+			name: "a value the spill moved",
+			left: func(t *testing.T, dir string) collection {
+				c := aCollection(collectScriptTask("out"), dir)
+				c.Stdout = []byte(strings.Repeat("x", 4096))
+				c.Limits = limitsWith(func(l *agk.Limits) { l.InlineMaxBytes = 64 })
+				return c
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := artifact.New(storeGone{}, "finance", agk.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = collect(context.Background(), s, c.left(t, outRoot(t)))
+			if err == nil || !strings.Contains(err.Error(), "the object store could not be reached") {
+				t.Fatalf("the collection answered %v, and the store could not be reached", err)
+			}
+			if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+				t.Errorf("the store's refusal is charged to %s (decided %t), and the brick did what it was asked", charge, decided)
+			}
+		})
 	}
 }
