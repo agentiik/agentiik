@@ -141,7 +141,7 @@ func TestAStopNobodyCouldReadIsNotWritten(t *testing.T) {
 func TestARunnerHearsStopsOverItsOwnConnection(t *testing.T) {
 	a := withAccounts(t)
 	until := time.Now().UTC().Add(time.Hour)
-	control := controlPlane(t, a, until)
+	control := openControlPlane(t, a, until)
 
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
 	if err != nil {
@@ -269,7 +269,7 @@ func TestARefusalToHearStopsIsToldWhateverElseIsRefused(t *testing.T) {
 func TestARefusalOfSomethingElseIsNotARefusalToHearStops(t *testing.T) {
 	a := withAccounts(t)
 	until := time.Now().UTC().Add(time.Hour)
-	control := controlPlane(t, a, until)
+	control := openControlPlane(t, a, until)
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestARefusalOfSomethingElseIsNotARefusalToHearStops(t *testing.T) {
 func TestAStopWaitingWhenListeningEndsIsNotHandedOver(t *testing.T) {
 	a := withAccounts(t)
 	until := time.Now().UTC().Add(time.Hour)
-	control := controlPlane(t, a, until)
+	control := openControlPlane(t, a, until)
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestAStopWaitingWhenListeningEndsIsNotHandedOver(t *testing.T) {
 func TestStopsDroppedForFallingBehindAreSaid(t *testing.T) {
 	a := withAccounts(t)
 	until := time.Now().UTC().Add(time.Hour)
-	control := controlPlane(t, a, until)
+	control := openControlPlane(t, a, until)
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +469,7 @@ func TestASubscriptionThatKeepsFailingIsSaidOnce(t *testing.T) {
 func TestAStopNobodyCanReadIsSaidAndPassedOver(t *testing.T) {
 	a := withAccounts(t)
 	until := time.Now().UTC().Add(time.Hour)
-	control := controlPlane(t, a, until)
+	control := openControlPlane(t, a, until)
 
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
 	if err != nil {
@@ -519,8 +519,8 @@ func TestAStopNobodyCanReadIsSaidAndPassedOver(t *testing.T) {
 	}
 }
 
-// controlPlane opens the bus as the controller does, under the credential it is minted.
-func controlPlane(t *testing.T, a authenticated, until time.Time) *Bus {
+// openControlPlane opens the bus as the controller does, under the credential it is minted.
+func openControlPlane(t *testing.T, a authenticated, until time.Time) *Bus {
 	t.Helper()
 	minted, err := a.issuer.ForControlPlane("controller", until)
 	if err != nil {
