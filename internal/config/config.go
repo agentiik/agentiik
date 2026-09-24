@@ -321,7 +321,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	var c Controller
 	c.Database = r.database(DatabaseURL, DatabasePasswordFile, true)
 	c.Bus = r.bus()
-	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which the controller reads envelopes from")
+	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which the controller reads envelopes from and writes every task's inputs to")
 	c.MaxRequeues = r.maxRequeues()
 	c.TaskCeiling = r.taskCeiling()
 	return c, r.err()
@@ -444,7 +444,8 @@ func (r *reader) listen() string {
 	return v
 }
 
-// directory is a directory named by an absolute path, which exists.
+// directory is a directory named by an absolute path, which exists and which this program can
+// write in.
 func (r *reader) directory(name, why string) string {
 	v, set := r.required(name, why)
 	if !set {
@@ -463,6 +464,18 @@ func (r *reader) directory(name, why string) string {
 		r.refuse(name, fmt.Sprintf("names %s, which is not a directory", v))
 		return ""
 	}
+	// Written to rather than read for its mode, because whether this program may write there
+	// is its user's, its groups', the mount's and the security module's to say at once, and a
+	// write is the one question all of them answer. The object store's directory is written by
+	// both programs, and one they could not write would be found on the first task, by a
+	// program that had started and looked well.
+	probe, err := os.CreateTemp(v, ".agentiik-writable-*")
+	if err != nil {
+		r.refuse(name, "names a directory this program cannot write in: "+reasonOf(err))
+		return ""
+	}
+	probe.Close()
+	os.Remove(probe.Name())
 	return v
 }
 

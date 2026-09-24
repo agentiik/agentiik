@@ -73,7 +73,7 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 	if len(tr.packages) < 20 {
 		t.Fatalf("found %d packages, and the module holds more than that", len(tr.packages))
 	}
-	for _, pkg := range []string{".", "api", "secret", "controller", "cmd/agk"} {
+	for _, pkg := range []string{".", "api", "secret", "controller", "cmd/agk", "cmd/agentiik-controller"} {
 		if !slices.Contains(tr.packages, pkg) {
 			t.Fatalf("the walk did not find %s, so it is not reading the module it is meant to", named(pkg))
 		}
