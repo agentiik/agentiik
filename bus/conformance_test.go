@@ -11,6 +11,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/fixtures"
+	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -218,6 +219,8 @@ func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 		{"a task_id that is not an identifier", func(r *TaskResult) { r.TaskID = "01m2aaz9g62nqxfafcxkrpjeh5" }},
 		{"a key that is not one", func(r *TaskResult) { r.IdempotencyKey = "invoice/1" }},
 		{"no runner", func(r *TaskResult) { r.Runner = "" }},
+		{"a runner in capitals", func(r *TaskResult) { r.Runner = "01M2Z8V1P9C4XQ7K2N4D6F8H0B" }},
+		{"a runner with an underscore", func(r *TaskResult) { r.Runner = "runner_dmz_02" }},
 		{"a state it passes through", func(r *TaskResult) { r.State = agk.TaskRunning }},
 		{"a success with another exit code", func(r *TaskResult) { exit := 1; r.ExitCode = &exit }},
 		{"a success that names no ports", func(r *TaskResult) { r.Outputs = nil }},
@@ -281,6 +284,56 @@ func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 	} {
 		if _, err := readResult(doc); err == nil {
 			t.Errorf("a result with %s was read", name)
+		}
+	}
+}
+
+// A runner answers to the identifier the API minted it at join, which is a ULID in lowercase: the
+// grammar the wire prints a runner in, and the one the reader holds a result to. A result naming
+// one is read, and the grammar is the wire's own, pattern for pattern, since a looser copy would
+// hand the controller a runner the wire refuses and a narrower one would refuse every runner the
+// API mints.
+func TestAResultFromARunnerTheAPIMintedIsRead(t *testing.T) {
+	r := aResult(aTask("invoice"))
+	r.Runner = strings.ToLower(ulid.New())
+	body, err := r.encode()
+	if err != nil {
+		t.Fatalf("a result from %s would not be published: %s", r.Runner, err)
+	}
+	if err := validates(t, taskResults(t), body); err != nil {
+		t.Errorf("a result from %s is refused by the wire: %s", r.Runner, err)
+	}
+	read, err := readResult(body)
+	if err != nil {
+		t.Fatalf("a result from %s was refused: %s", r.Runner, err)
+	}
+	if read.Runner != r.Runner {
+		t.Errorf("a result from %s was read as from %s", r.Runner, read.Runner)
+	}
+
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Pattern    string `json:"pattern"`
+				Properties map[string]struct {
+					Pattern string `json:"pattern"`
+				} `json:"properties"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(doc, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for what, wire := range map[string]string{
+		"a result's runner":             schema.Defs["taskResult"].Properties["runner"].Pattern,
+		"the runner a join is answered": schema.Defs["runnerRegistration"].Properties["response"].Properties["runner"].Pattern,
+	} {
+		if wire != runnerName.String() {
+			t.Errorf("a runner is read as %s, and the wire writes %s as %q", runnerName, what, wire)
 		}
 	}
 }
