@@ -1,11 +1,14 @@
 package driver
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
@@ -300,5 +303,210 @@ func TestAnImageTheDaemonAlreadyHoldsIsNotPulled(t *testing.T) {
 	}
 	if got.PullMillis != 0 {
 		t.Errorf("the pull took %dms, and an image already held is not pulled", got.PullMillis)
+	}
+}
+
+// taskContainers are the containers created for a task, as opposed to the throwaway one a
+// manifest is read through.
+func taskContainers(d *dockertest.Daemon) int {
+	n := 0
+	for _, c := range d.Created() {
+		if c.Labels[LabelTask] != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// "A runner refuses a message whose image is not a digest; agk run --local keeps accepting
+// tags." The refusal comes before anything is asked of the host, and it is the platform's:
+// a task message naming a tag is the control plane's doing, never the brick's.
+func TestATagIsRefusedUnderTheDigestFloorAndRunWhereItIsLifted(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request:1.4.0"
+	r := newRunner(t, oneImage(ref, goodManifest), nil)
+
+	_, err := r.Run(t.Context(), oneTask(ref))
+	if !errors.Is(err, ErrImageNotByDigest) {
+		t.Fatalf("a tag was run under the digest floor, or refused for another reason: %v", err)
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and a message naming a tag is the platform's", charge)
+	}
+	if created := r.daemon.Created(); len(created) != 0 {
+		t.Errorf("%d containers were created for a task refused before anything is", len(created))
+	}
+
+	r.cfg.Policy.RequireDigest = DigestLifted
+	result, err := r.Run(t.Context(), oneTask(ref))
+	if err != nil {
+		t.Fatalf("a tag was refused where the floor is lifted: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the state is %s", result.State)
+	}
+}
+
+// "On a server, a non-script step whose image has no /agk/brick.yaml is refused rather than
+// run as the image's own account, root included." A script step runs in the same image,
+// which is what a base image is for, and agk run --local reads every brick's manifest
+// before anything runs, so it lifts the floor.
+func TestABrickWithNoManifestIsRefusedOnAServer(t *testing.T) {
+	const ref = "ghcr.io/agentiik/base@" + imageDigest
+	images := map[string]dockertest.Image{ref: {Digest: imageDigest, Config: docker.ImageConfig{User: "root"}}}
+	r := newRunner(t, images, nil)
+
+	_, err := r.Run(t.Context(), oneTask(ref))
+	if !errors.Is(err, ErrContractBroken) || !strings.Contains(err.Error(), "carries no /agk/brick.yaml") {
+		t.Fatalf("a brick with no manifest was not refused as one: %v", err)
+	}
+	if n := taskContainers(r.daemon); n != 0 {
+		t.Errorf("%d containers were created for a brick with no manifest, which would run as root", n)
+	}
+
+	script := oneTask(ref)
+	script.ID = agk.NewTaskID("01JMZ8V1P9C4", "fetch", 2, agk.Shard{})
+	script.Attempt = 2
+	script.Script = []string{"true"}
+	if _, err := r.Run(t.Context(), script); err != nil {
+		t.Errorf("a script step was refused the base image it runs in: %s", err)
+	}
+
+	r.cfg.Policy.RequireDigest = DigestLifted
+	lifted := oneTask(ref)
+	lifted.ID = agk.NewTaskID("01JMZ8V1P9C4", "fetch", 3, agk.Shard{})
+	lifted.Attempt = 3
+	if _, err := r.Run(t.Context(), lifted); err != nil {
+		t.Errorf("an image with no manifest was refused where the floor is lifted: %s", err)
+	}
+}
+
+// A pull still running at the task's deadline is cut short, and the task ends timed_out
+// with no container, as one whose grant could not be redeemed before it does: an ending
+// and not an error, since nothing failed but the clock. The log says why, the observer is
+// told how long the pull ran, and the key is written down as ended.
+func TestAPullPastTheDeadlineEndsTimedOutWithNoContainer(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	images := map[string]dockertest.Image{ref: {Digest: imageDigest, Manifest: []byte(goodManifest), Remote: true, Layers: 4}}
+	r := newRunner(t, images, nil, dockertest.SlowPull(time.Second))
+	logs := &memLogs{}
+	r.cfg.Logs = logs
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(300 * time.Millisecond)
+	started := time.Now()
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("a pull past the deadline answered an error rather than an ending: %s", err)
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Errorf("the task took %s, and the pull is cut short at its deadline", took)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Errorf("the state is %s, want timed_out", result.State)
+	}
+	if n := len(r.daemon.Created()); n != 0 {
+		t.Errorf("%d containers were created for a task whose deadline passed during the pull", n)
+	}
+
+	var ended *Event
+	for _, e := range r.observed.es {
+		if e.State == agk.TaskTimedOut {
+			ended = &e
+		}
+	}
+	switch {
+	case ended == nil:
+		t.Fatalf("the observer was told %v, and never of the ending", r.observed.states())
+	case ended.Usage.ImagePullMS < 250:
+		t.Errorf("the pull ran %dms by the usage, and it ran until the deadline", ended.Usage.ImagePullMS)
+	case !ended.StartedAt.IsZero():
+		t.Error("the ending says a container started")
+	}
+	if log := logs.String(); !strings.Contains(log, "deadline passed while its image") {
+		t.Errorf("the log says %q, and not why no container ran", log)
+	}
+
+	var completed *Completed
+	if err := r.Hold(task.ID); !errors.As(err, &completed) || completed.Ending.State != agk.TaskTimedOut {
+		t.Errorf("the key is held as %v, and it ended timed_out", err)
+	}
+}
+
+// A pull inside its deadline is not cut short, and how long it took is the usage's
+// image_pull_ms, as it is where no deadline bounds it.
+func TestAPullInsideItsDeadlineIsMeasured(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	images := map[string]dockertest.Image{ref: {Digest: imageDigest, Manifest: []byte(goodManifest), Remote: true, Layers: 2}}
+	r := newRunner(t, images, nil, dockertest.SlowPull(100*time.Millisecond))
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(time.Minute)
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s", result.State)
+	}
+	var pulled int64
+	for _, e := range r.observed.es {
+		if e.State.Terminal() {
+			pulled = e.Usage.ImagePullMS
+		}
+	}
+	if pulled < 200 || pulled > 10000 {
+		t.Errorf("the pull took %dms by the usage, and two layers at 100ms each take at least 200", pulled)
+	}
+}
+
+// "A registry's 401 fails the task on the platform's account and names v0.8.0." A runner
+// pulls with no credentials, so the refusal says where credentials will come from rather
+// than leaving somebody to look for a setting that does not exist.
+func TestARegistrys401IsChargedToThePlatformAndNamesV080(t *testing.T) {
+	const ref = "registry.example/acme/private@" + imageDigest
+	cli, _ := withDaemon(t, dockertest.PullAnswers401, dockertest.With(dockertest.Options{
+		Images: map[string]dockertest.Image{ref: {Digest: imageDigest, Manifest: []byte(goodManifest), Remote: true}},
+	}))
+
+	_, err := resolveImage(t.Context(), cli, newManifests(), imageTask(ref), "", nil)
+	if !errors.Is(err, ErrImagePullFailed) {
+		t.Fatalf("a pull the registry refused reads as %v", err)
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and a pull the registry refused is the platform's", charge)
+	}
+	for _, want := range []string{"401 Unauthorized", "v0.8.0", "namespace secrets"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+}
+
+// A container an earlier delivery left is adopted whatever the deadline says, since only the
+// pull is bounded by it: a deadline already past ends the adopted container through the
+// watch, which stops it and removes it, and never through the ending of a task whose pull
+// ran out of time, which would leave the container where it is.
+func TestAnAdoptedContainerPastItsDeadlineIsNotLeftBehind(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-c.Signalled()
+		return 137, nil
+	})
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(-time.Second)
+	container, _ := stageFirstDelivery(t, r, task)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result, err := r.Run(ctx, task)
+	if err != nil {
+		t.Fatalf("the redelivered task: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Errorf("the state is %s, and the container was stopped at its deadline", result.State)
+	}
+	if !slices.Contains(r.daemon.Removed(), container) {
+		t.Errorf("the adopted container %s was left behind", container[:12])
 	}
 }

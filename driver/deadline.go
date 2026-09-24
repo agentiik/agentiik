@@ -2,10 +2,12 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/docker"
 )
 
@@ -18,8 +20,8 @@ import (
 // implementation of the rule, which is why it fires after the grace and not at it.
 const killSlack = 5 * time.Second
 
-// sweepInterval is how often a container that has been silent past its deadline is
-// inspected.
+// sweepInterval is how often a container is inspected once it has been silent past its
+// deadline, its wait has ended with nothing, or an event about it was dropped.
 //
 // The wait is the fast path, the event stream catches an exit this driver did not cause,
 // and the inspect is the correctness guarantee under both. That is the same shape the
@@ -53,8 +55,9 @@ type exit struct {
 // Three things can report it and they are not equivalent. The wait was opened before the
 // start and is the ordinary answer. The event stream carries a die this driver did not
 // cause, an out-of-memory kill included, which is the case the wait can miss entirely.
-// The inspect is asked only when a task has been silent past its deadline, and it is the
-// one that cannot be wrong.
+// The inspect is asked only when a task has been silent past its deadline, when its wait
+// ended with nothing, or when an event about it was dropped, and it is the one that cannot
+// be wrong.
 type watch struct {
 	cli  *docker.Client
 	id   string
@@ -72,6 +75,10 @@ type watch struct {
 	stopped bool
 	oom     bool
 	events  chan docker.Event
+
+	// dropped says an event was dropped, which arms the sweep: the dropped one may be
+	// the die of a container whose wait never answers.
+	dropped chan struct{}
 }
 
 // newWatch is the watch of one container.
@@ -85,7 +92,8 @@ func newWatch(cli *docker.Client, id string, step agk.Step, l *taskLog, deadline
 	return &watch{
 		cli: cli, id: id, step: step, log: l,
 		deadline: deadline, grace: grace, now: now,
-		events: make(chan docker.Event, 16),
+		events:  make(chan docker.Event, 16),
+		dropped: make(chan struct{}, 1),
 	}
 }
 
@@ -94,11 +102,16 @@ func newWatch(cli *docker.Client, id string, step agk.Step, l *taskLog, deadline
 //
 // A watch that is not keeping up drops the event rather than holding up every other
 // task, and loses nothing by it: the die is also on the wait, and where it is not, the
-// sweep's inspect finds the same exit a moment later.
+// drop arms the sweep, whose inspect finds the same exit a moment later rather than at
+// the deadline, where it would read as timed_out.
 func (w *watch) event(e docker.Event) {
 	select {
 	case w.events <- e:
 	default:
+		select {
+		case w.dropped <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -171,6 +184,11 @@ func (w *watch) await(ctx context.Context, waited <-chan docker.Waited) (exit, e
 				continue
 			}
 			return w.finish(got.StatusCode, false, "the wait"), nil
+
+		case <-w.dropped:
+			if sweep == nil {
+				sweep = time.After(sweepInterval)
+			}
 
 		case e := <-w.events:
 			if e.Actor.ID != w.id || e.Type != docker.EventTypeContainer {
@@ -334,4 +352,46 @@ func (e exit) state() agk.TaskState {
 	default:
 		return exitState(e.Code)
 	}
+}
+
+// pastDeadline is a task whose deadline passed while its image was being resolved, before
+// any container was created for it.
+type pastDeadline struct {
+	deadline time.Time
+	ref      string
+
+	// pulled is how long the pull ran before the deadline cut it short, and zero where
+	// none had begun.
+	pulled int64
+
+	// err is what the resolution answered once its context was done.
+	err error
+}
+
+func (p *pastDeadline) Error() string {
+	return fmt.Sprintf("the deadline %s passed while %s was being pulled: %v", p.deadline.UTC().Format(time.RFC3339), p.ref, p.err)
+}
+
+func (p *pastDeadline) Unwrap() error { return p.err }
+
+// timedOutPulling ends a task whose deadline passed during its pull: timed_out, with no
+// container, as a task whose deadline passed before its grant could be redeemed ends.
+//
+// It is an ending and not an error, unlike every other way a task reaches no container,
+// because the reason is the task's own clock and not a failure of anything: the step's
+// retry reads it as a timeout, as it would a container stopped at the same moment, and a
+// retry that finds the image already pulled starts at once. The log says why, since a
+// person reading a timed_out step with no container would otherwise look for one, and the
+// usage says how long the pull ran, although a result that ran no container carries none.
+func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadline) (graph.Result, error) {
+	sink, closeSink, err := d.openLog(ctx, t)
+	if err != nil {
+		return graph.Result{}, err
+	}
+	defer closeSink()
+	log := newLog(sink, newMasker(), d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log.note("the step's deadline passed while its image %s was being pulled, so no container was created for it: %v", p.ref, p.err)
+	ref, _ := log.finish()
+	d.observe(ctx, Event{Task: t.ID, State: agk.TaskTimedOut, Log: ref, Usage: Usage{ImagePullMS: p.pulled}})
+	return graph.Result{Task: t.ID, State: agk.TaskTimedOut}, nil
 }

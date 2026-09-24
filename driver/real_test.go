@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,8 +47,13 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 }
 
 // realDriverWith opens a driver under a policy of the test's own, or skips.
+//
+// The images these tests run are the ones this machine holds under their tags, built here
+// or pulled by hand, so the digest floor is lifted as agk run --local lifts it. Only
+// TestARealPullByDigestRunsWhatTheDigestNames holds a real daemon to it.
 func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, string) {
 	t.Helper()
+	policy.RequireDigest = DigestLifted
 	socket, ok := dockertest.Socket()
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")
@@ -395,5 +401,52 @@ seccomp_profile = "`+profile+`"
 	}
 	if strings.Contains(got, "mkdir: allowed") {
 		t.Errorf("mkdir succeeded, so the container did not run under the profile the file names")
+	}
+}
+
+// TestARealPullByDigestRunsWhatTheDigestNames holds a real daemon and a real registry to the
+// digest floor: the image is pulled by the digest its registry serves it under, which the
+// registry answers even where the daemon holds it already, a script step naming that
+// digest runs under the floor a runner holds, and the tag it was pinned from is refused
+// before anything is created.
+func TestARealPullByDigestRunsWhatTheDigestNames(t *testing.T) {
+	d, image := realDriver(t)
+	d.cfg.Policy.RequireDigest = DigestRequired
+
+	held, err := d.cli.ImageInspect(t.Context(), image)
+	if err != nil {
+		t.Fatalf("inspecting %s: %s", image, err)
+	}
+	pinned := held.RegistryDigests(image)
+	if len(pinned) == 0 {
+		dockertest.Unavailable(t, "%s is held under no digest of its registry, so there is nothing to pull it by", image)
+	}
+	if err := d.cli.ImagePull(t.Context(), pinned[0], "", nil); err != nil {
+		dockertest.Unavailable(t, "the registry behind %s could not be pulled from: %v", pinned[0], err)
+	}
+
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "pinned", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "pinned",
+		Attempt:   1,
+		Image:     pinned[0],
+		Script:    []string{"true"},
+		Network:   graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running %s under the digest floor: %s", pinned[0], err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+
+	task.ID = agk.NewTaskID("01JMZ8V1P9C4", "tagged", 1, agk.Shard{})
+	task.Step = "tagged"
+	task.Image = image
+	if _, err := d.Run(t.Context(), task); !errors.Is(err, ErrImageNotByDigest) {
+		t.Errorf("%s, a tag, was run under the digest floor, or refused for another reason: %v", image, err)
 	}
 }

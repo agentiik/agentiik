@@ -3,6 +3,7 @@ package driver
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -171,6 +172,35 @@ func TestTheInspectIsTheBackstopWhenTheWaitEndedFirst(t *testing.T) {
 	}
 	if e.Code != 42 {
 		t.Errorf("the exit code is %d, want 42", e.Code)
+	}
+}
+
+// A die the watch had no room for is not left to the deadline. The wait can stay silent on
+// a real daemon, and the event was the only other source, so the drop arms the sweep, whose
+// inspect reads the exit a moment later, by its code, rather than an hour on as timed_out.
+func TestADieDroppedWhileTheWaitIsSilentIsReadBeforeTheDeadline(t *testing.T) {
+	cli, _, id, _ := started(t, func(dockertest.Container) (int, error) { return 42, nil })
+	silent := make(chan docker.Waited)
+
+	w := newWatch(cli, id, "fetch", quiet(), time.Now().Add(time.Hour), time.Second, nil)
+	// Events the watch has not read yet fill it, as a burst of them does while a task
+	// is busy elsewhere, and the die arrives with no room left for it.
+	for range cap(w.events) {
+		w.event(docker.Event{Type: docker.EventTypeContainer, Action: docker.ActionStart, Actor: docker.EventActor{ID: id}})
+	}
+	w.event(docker.Event{Type: docker.EventTypeContainer, Action: docker.ActionDie, Actor: docker.EventActor{ID: id, Attributes: map[string]string{"exitCode": "42"}}})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	e, err := w.await(ctx, silent)
+	if err != nil {
+		t.Fatalf("the exit of a container whose die was dropped was not read before the deadline: %s", err)
+	}
+	if e.Code != 42 || e.TimedOut {
+		t.Errorf("the exit reads as %+v, and the container exited 42 long before its deadline", e)
+	}
+	if e.Source != "an inspect" {
+		t.Errorf("the exit was seen by %s, and with the die dropped and the wait silent only an inspect can see it", e.Source)
 	}
 }
 
