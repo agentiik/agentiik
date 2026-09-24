@@ -803,19 +803,39 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 // meanwhile has redeemed its grant and started the container. The row knows, because the
 // redemption bound it.
 func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
+	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
+}
+
+// TimeOutTasks moves to timed_out every task of a run that is not over, for a run whose deadline
+// has passed, and answers the keys of those a runner had redeemed.
+//
+// "Once it passes, the tasks still running are stopped and the run ends there." It is
+// CancelTasks for the other way a run ends under its tasks, and for the same reasons: a message
+// still on the queue would otherwise redeem its grant for a run that has ended, the run's tasks
+// would count against max_concurrent_tasks for good, and the row is what names a runner's
+// dispatch the document does not. It is also what the heartbeat answers cancel from, so that a
+// runner that missed the deadline's stop on agentiik.stops hears it at its next heartbeat rather
+// than running the container to its own deadline.
+func (w *Wide) TimeOutTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
+	return w.endTasks(ctx, namespace, run, agk.TaskTimedOut, at)
+}
+
+// endTasks writes the ending given over every task of a run that is not over, and answers the
+// keys of those a runner had redeemed.
+func (w *Wide) endTasks(ctx context.Context, namespace string, run agk.RunID, ending agk.TaskState, at time.Time) ([]agk.TaskID, error) {
 	rows, err := w.tx.Query(ctx,
-		`with cancelled as (
-		   update tasks set state = 'cancelled', finished_at = coalesce(finished_at, $3)
+		`with ended as (
+		   update tasks set state = $4, finished_at = coalesce(finished_at, $3)
 		   where namespace = $1 and run_id = $2 and state in ('pending', 'dispatched', 'running', 'publishing')
 		   returning idempotency_key, runner)
-		 select idempotency_key from cancelled where runner is not null order by idempotency_key`,
-		namespace, string(run), at)
+		 select idempotency_key from ended where runner is not null order by idempotency_key`,
+		namespace, string(run), at, ending.String())
 	if err != nil {
-		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+		return nil, fmt.Errorf("db: the tasks of run %s could not be ended %s: %w", run, ending, err)
 	}
 	held, err := pgx.CollectRows(rows, pgx.RowTo[agk.TaskID])
 	if err != nil {
-		return nil, fmt.Errorf("db: the tasks of run %s could not be cancelled: %w", run, err)
+		return nil, fmt.Errorf("db: the tasks of run %s could not be ended %s: %w", run, ending, err)
 	}
 	return held, nil
 }
