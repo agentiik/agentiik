@@ -134,6 +134,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner's secrets directory must be a tmpfs mounted `noexec,nosuid,nodev` that it may write to, read with `statfs` when the daemon is opened and again before a value is written; otherwise it is `driver.ErrSecretsTmpfsRequired`. A secret is a bind from there and keeps those flags, so the default `/dev/shm` is refused where it lacks `noexec`. `Policy.RequireSecretsTmpfs` is the floor; no line of `runner.toml` lifts it, and `agk run --local`, `agk brick test` and `agk validate` do.
 - What a task's directory leaves on the host is said, naming the step, the task and the path, and the secrets directory is removed whatever became of the working directory. A directory under `SecretsDir` owned by another account is refused.
 - A link in the place of `/agk/out/ports` or `/agk/out/files` is refused, where the collection read whatever it pointed at on the host.
+- `driver.KernelHost` is the `Host` a `Config` without one uses, for a caller asking the same of another directory.
 
 ### Runner
 
@@ -145,7 +146,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
 - Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
 - `agk-runner` is also an image for `linux/amd64` and `linux/arm64` (`build/runner.Dockerfile`): the agent and the static helper on scratch, run as `agentiik` (65532), holding the three capabilities as file capabilities on `agk-runner`, so the Compose form keeps `cap_drop: [ALL]` and adds only those three.
-- `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed binds none; a directory there refuses the start.
+- `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
 
 ### Artifacts
 
