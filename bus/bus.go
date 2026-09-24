@@ -351,8 +351,8 @@ func (u *Unrouted) Error() string {
 // Route is the one pool a task's runs_on selects among the pools given, which are the pools the
 // run's namespace may reach.
 //
-// A task goes to the pool whose labels include every label it names: a pool's labels are what each
-// of its runners may claim, so a runner of that pool carries everything the step asked for. One
+// A task goes to the pool whose labels include every label it names: a pool's labels are the most
+// any of its runners may claim, and the pool is what a step is written against. One
 // pool and never each pool that matches, because the pool is the queue: a task on two queues runs
 // twice, and a choice made here between two would be a choice nobody wrote down. A task that names
 // no label goes to DefaultPool, which the installation creates, rather than to whichever pool

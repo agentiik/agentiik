@@ -46,33 +46,43 @@ func (u unpublishable) Error() string { return u.why }
 // "A step goes to the pool whose labels include every label of its runs_on, among the namespace's
 // allowed pools", and bus.Route is that rule: the pool found here is the pool the dispatch names and
 // the bus publishes to, so the pool whose policy is applied and the pool whose runners are handed
-// the task cannot be two different pools. Among every pool the installation has, because no
-// namespace carries a list of allowed pools yet; each pool's own list of the namespaces it accepts
-// is applied to the one found. The policy is the step's, since every shard of a step carries its
-// labels and its run's namespace, so a refusal of one task is a refusal of each of them.
+// the task cannot be two different pools. The policy is the step's, since every shard of a step
+// carries its labels and its run's namespace, so a refusal of one task is a refusal of each of them.
+//
+// A namespace reaches a pool only where both sides agree: the namespace allows the pool and the pool
+// accepts the namespace. No namespace carries a list of allowed pools yet, so the pools chosen among
+// are every pool that accepts it. A pool that does not is never a candidate, since a pool dedicated
+// to one namespace, carrying the labels a shared pool carries, would otherwise make every other
+// namespace's steps on those labels ambiguous. Only where no pool that accepts the namespace carries
+// the labels and one that refuses it does is the step told which pool refused it, as it was before
+// labels chose the pool.
 func poolOf(namespace string, t graph.Task, pools []db.RunnerPool) (db.RunnerPool, error) {
-	routable := make([]bus.Pool, len(pools))
-	for i, p := range pools {
-		routable[i] = bus.Pool{Name: p.Name, Labels: p.Labels}
+	var reachable, refusing []bus.Pool
+	for _, p := range pools {
+		if p.Accepts(namespace) {
+			reachable = append(reachable, bus.Pool{Name: p.Name, Labels: p.Labels})
+		} else {
+			refusing = append(refusing, bus.Pool{Name: p.Name, Labels: p.Labels})
+		}
 	}
-	name, err := bus.Route(t.RunsOn, routable)
+	name, err := bus.Route(t.RunsOn, reachable)
 	var unrouted *bus.Unrouted
+	if errors.As(err, &unrouted) && len(unrouted.Pools) == 0 {
+		if other, err := bus.Route(t.RunsOn, refusing); err == nil {
+			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, other, namespace)}
+		}
+	}
 	switch {
 	case errors.As(err, &unrouted) && len(unrouted.RunsOn) == 0:
 		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s names no runner label and runs on the runner pool %s, which does not exist, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates the pool", t.Step, bus.DefaultPool)}
 	case errors.As(err, &unrouted) && len(unrouted.Pools) == 0:
-		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on [%s], and no runner pool carries every one of those labels, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates a pool that does", t.Step, strings.Join(t.RunsOn, ", "))}
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on [%s], and no runner pool the namespace %s may use carries every one of those labels, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates a pool that does", t.Step, strings.Join(t.RunsOn, ", "), namespace)}
 	case errors.As(err, &unrouted):
 		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on [%s], and the runner pools %s each carry every one of those labels, so no runner may be handed it: a step goes to one pool, and it fails on the infrastructure's account until its runs_on names a label only one of them carries", t.Step, strings.Join(t.RunsOn, ", "), strings.Join(unrouted.Pools, " and "))}
 	case err != nil:
 		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s names no runner pool that can exist, so no runner may be handed it: %s", t.Step, err)}
 	}
-	i := slices.IndexFunc(pools, func(p db.RunnerPool) bool { return p.Name == name })
-	pool := pools[i]
-	if !pool.Accepts(namespace) {
-		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, name, namespace)}
-	}
-	return pool, nil
+	return pools[slices.IndexFunc(pools, func(p db.RunnerPool) bool { return p.Name == name })], nil
 }
 
 // refuseUnpooled ends every step whose pool will not run the namespace, each of its pending shards

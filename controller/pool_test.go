@@ -45,12 +45,17 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 		{
 			"labels no pool carries", onPool("site=nowhere", `{ cpu: "1" }`),
 			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin')`,
-			[]string{"[site=nowhere]", "no runner pool carries every one of those labels"},
+			[]string{"[site=nowhere]", "no runner pool the namespace finance may use carries every one of those labels"},
 		},
 		{
 			"labels two pools carry", onPool("site=ops", `{ cpu: "1" }`),
 			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin'), ('ops-arm', '{site=ops,arch=arm64}', 'admin')`,
 			[]string{"[site=ops]", "runner pools ops and ops-arm each carry every one of those labels"},
+		},
+		{
+			"no label, and a pool default that does not accept finance", theWorkflow,
+			`update runner_pools set accepted_namespaces = '{team-ops}' where name = 'default'`,
+			[]string{"runner pool default", "does not accept the namespace finance"},
 		},
 		{
 			"no label, and no pool default", theWorkflow,
@@ -113,21 +118,30 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 // "A step goes to the pool whose labels include every label of its runs_on": the pool the dispatch
 // names, which is the queue the bus publishes it on, is the one pool carrying every label the step
 // asked for, the use cases' site=home among them, and a step that names none goes to the pool
-// default the installation was created with.
+// default the installation was created with. A pool that does not accept the run's namespace is
+// none of its choices, so a pool dedicated to another namespace on the same labels leaves the step
+// one pool rather than two.
 func TestAStepGoesToThePoolWhoseLabelsIncludeItsRunsOn(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		document string
+		also     string
 		want     string
 	}{
-		{"a label one pool carries among others", onPool("site=home", `{ cpu: "1" }`), "home"},
-		{"no label at all", theWorkflow, "default"},
+		{"a label one pool carries among others", onPool("site=home", `{ cpu: "1" }`), "", "home"},
+		{"no label at all", theWorkflow, "", "default"},
+		{
+			"a label a pool dedicated to another namespace carries too", onPool("site=home", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('home-ops', '{site=home}', '{team-ops}', 'admin')`,
+			"home",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			core, q, pool, super := decidingOn(t, c.document)
 			if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `
 				insert into runner_pools (name, labels, created_by) values
-				  ('home', '{site=home,arch=arm64}', 'admin'), ('dmz', '{zone=dmz,arch=arm64}', 'admin')`); err != nil {
+				  ('home', '{site=home,arch=arm64}', 'admin'), ('dmz', '{zone=dmz,arch=arm64}', 'admin');
+				`+c.also); err != nil {
 				t.Fatal(err)
 			}
 			createRun(t, pool)
