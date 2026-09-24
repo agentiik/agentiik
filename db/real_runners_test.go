@@ -1236,3 +1236,26 @@ func TestARunnerCredentialRotatesWithTheKeyItJoinedWith(t *testing.T) {
 		t.Errorf("rotating with the old credential, after the new one was used, answered %v", err)
 	}
 }
+
+// A request time written to the nanosecond is kept to the microsecond, and the same request sent
+// again is still the same request: compared with what was kept, it would read as a later one.
+func TestARotationSignedFinerThanAMicrosecondIsStillGoodOnce(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := privateKey(1)
+	joined := joinedWith(t, pool, key, 30*24*time.Hour, now)
+
+	rotate := func(ro Rotating) error {
+		return pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+			_, err := w.Rotate(ctx, ro, 30*24*time.Hour, now.Add(time.Minute))
+			return err
+		})
+	}
+	signed := rotating(joined.Credential, joined.Runner, key, now.Add(time.Second+999*time.Nanosecond))
+	if err := rotate(signed); err != nil {
+		t.Fatal(err)
+	}
+	if err := rotate(signed); !errors.Is(err, ErrRotationReplayed) {
+		t.Errorf("the same rotation, signed to the nanosecond, sent again answered %v", err)
+	}
+}

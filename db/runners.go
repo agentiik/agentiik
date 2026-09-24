@@ -440,6 +440,9 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 	if current != hashed {
 		rotateBy = *previousBy
 	}
+	// To the microsecond, which is what PostgreSQL keeps of it. Judged finer than what was kept,
+	// the same request sent again would read as a later one, and be good twice.
+	signedAt := ro.SignedAt.Truncate(time.Microsecond)
 	switch {
 	case state == "revoked", !now.Before(rotateBy), id != ro.Runner:
 		// Everything Authenticate refuses, judged again under the lock, since a rotation
@@ -448,7 +451,7 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 		return Rotated{}, ErrNoRunner
 	case !ed25519.Verify(ed25519.PublicKey(key), ro.Signed, ro.Signature):
 		return Rotated{}, ErrNotItsKey
-	case lastSigned != nil && !ro.SignedAt.After(*lastSigned):
+	case lastSigned != nil && !signedAt.After(*lastSigned):
 		return Rotated{}, ErrRotationReplayed
 	}
 
@@ -461,7 +464,7 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 		`update runners set credential_hash = $2, rotate_by = $3,
 		        previous_credential_hash = $4, previous_rotate_by = $5, rotation_signed_at = $6
 		 where id = $1`,
-		id, credential, rotate, hashed, rotateBy, ro.SignedAt); err != nil {
+		id, credential, rotate, hashed, rotateBy, signedAt); err != nil {
 		return Rotated{}, fmt.Errorf("db: runner %s could not be given its new credential: %w", id, err)
 	}
 	return Rotated{Credential: clear, RotateBy: rotate}, nil
