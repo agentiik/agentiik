@@ -778,8 +778,8 @@ func withPartition(t *testing.T, target string) *partition {
 
 // A leader whose database stops answering, with no reset to say so, stops leading within a few
 // polls rather than going on with every statement waiting on a network that does not answer, and
-// its way out is bounded as well: the unlock and the unlisten go on a connection nothing answers
-// on either.
+// its way out is bounded as well: the rollback of a transaction the stop came in the middle of,
+// the unlisten and the unlock go on connections nothing answers on either.
 //
 // Asked to stop while cut off, before it has noticed, it stops as well, and says nothing went wrong.
 func TestALeaderCutOffFromItsDatabaseStops(t *testing.T) {
@@ -824,6 +824,10 @@ func TestALeaderCutOffFromItsDatabaseStops(t *testing.T) {
 				case !c.stopped && !errors.Is(err, controller.ErrLockLost):
 					t.Errorf("cut off from its database, the controller ended with %v\n%s", err, log.String())
 				}
+			// The bounds on the way out, end to end: the rollback, the unlisten and the
+			// unlock at five seconds each, one after the other, then the fifteen pgx gives
+			// a connection it closed, which closing the pool waits for. Thirty seconds in
+			// all, so 45 is room for a slow machine and not for a wait with no bound.
 			case <-time.After(45 * time.Second):
 				t.Fatalf("the controller was still running 45s after its database stopped answering\n%s", log.String())
 			}
