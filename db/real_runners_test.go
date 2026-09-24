@@ -920,49 +920,149 @@ func declaredLost(t *testing.T, pool *Pool, now time.Time) (int, error) {
 	return lost, err
 }
 
-// A revoked credential stops being accepted, which is what "revoking it from the console stops the
-// runner at its next heartbeat" comes down to.
-func TestARevokedCredentialOpensNothing(t *testing.T) {
-	pool, _ := joining(t)
-	now := time.Now().UTC()
+// A drain takes a runner out of service and leaves it heard; a revocation hears it until its grace
+// ends, and refuses it everywhere from then on. Who ordered each, and when, is on the row.
+func TestARevokedRunnerIsHeardUntilItsGraceEnds(t *testing.T) {
+	pool, super := joining(t)
+	// To the microsecond, which is what PostgreSQL keeps of every instant here.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	joined := joinedWith(t, pool, privateKey(1), 30*24*time.Hour, now)
+	in := func(fn func(ctx context.Context, w *Wide) error) {
+		t.Helper()
+		if err := pool.Installation(t.Context(), RunnerInventory, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
-		if err != nil {
-			return err
+	// A task in its hands, which it reports at every heartbeat.
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(t.Context(), `
+		insert into tasks (namespace, id, run_id, step, attempt, state, runner, dispatched_at)
+		values ('finance', '01M2HAAAAAAAAAAAAAAAAAAAAA', $1, 'render', 1, 'running', $2, $3)`,
+		string(financeRun), joined.Runner, now); err != nil {
+		t.Fatal(err)
+	}
+
+	in(func(ctx context.Context, w *Wide) error {
+		for what, drain := range map[string]func() (Runner, error){
+			"by nobody":     func() (Runner, error) { return w.Drain(ctx, joined.Runner, "", "retired", now) },
+			"for no reason": func() (Runner, error) { return w.Drain(ctx, joined.Runner, "admin", "", now) },
+			"at no moment":  func() (Runner, error) { return w.Drain(ctx, joined.Runner, "admin", "retired", time.Time{}) },
+		} {
+			if _, err := drain(); err == nil {
+				t.Errorf("a drain ordered %s was taken", what)
+			}
 		}
-		joined, err := w.Join(ctx, Joining{
-			Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
-			Architecture: "amd64", AgentVersion: "0.2.0",
-		}, time.Hour, now)
-		if err != nil {
-			return err
+		if _, err := w.Drain(ctx, "nobody", "admin", "retired", now); !errors.Is(err, ErrNoRunner) {
+			t.Errorf("draining a runner that is not there answered %v", err)
 		}
 
-		if err := w.Drain(ctx, joined.Runner, "the host is being retired"); err != nil {
-			return err
-		}
-		r, err := w.Authenticate(ctx, joined.Credential, now)
+		// Drained, and still opened and heard: it finishes what it holds.
+		r, err := w.Drain(ctx, joined.Runner, "admin", "the host is being retired", now)
 		if err != nil {
 			return err
 		}
-		if r.State != "draining" || r.DrainReason == "" {
+		if r.State != "draining" || r.DrainReason != "the host is being retired" || r.DrainedBy != "admin" || !r.DrainedAt.Equal(now) {
 			t.Errorf("a drained runner reads %+v", r)
 		}
-
-		if err := w.Revoke(ctx, joined.Runner, "the credential leaked"); err != nil {
+		if _, err := w.Authenticate(ctx, joined.Credential, now); err != nil {
+			t.Errorf("a drained runner's credential answered %v", err)
+		}
+		// Drained again, it is answered as it stands: the first order is the one it obeys.
+		again, err := w.Drain(ctx, joined.Runner, "bob", "another reason", now.Add(time.Minute))
+		if err != nil {
 			return err
 		}
-		if _, err := w.Authenticate(ctx, joined.Credential, now); !errors.Is(err, ErrNoRunner) {
-			t.Errorf("a revoked credential answered %v", err)
-		}
-		if _, err := w.Beat(ctx, joined.Runner, beating(), now); !errors.Is(err, ErrNoRunner) {
-			t.Errorf("a revoked runner's heartbeat answered %v", err)
+		if again.DrainedBy != "admin" || again.DrainReason != "the host is being retired" {
+			t.Errorf("a runner drained twice reads %+v", again)
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
+
+	// Revoked, with a grace of an hour.
+	grace := time.Hour
+	at := now.Add(time.Minute)
+	in(func(ctx context.Context, w *Wide) error {
+		if _, err := w.Revoke(ctx, joined.Runner, "admin", "the credential leaked", at, 0); err == nil {
+			t.Error("a revocation with no grace was taken")
+		}
+		if _, err := w.Revoke(ctx, "nobody", "admin", "the credential leaked", at, grace); !errors.Is(err, ErrNoRunner) {
+			t.Errorf("revoking a runner that is not there answered %v", err)
+		}
+		r, err := w.Revoke(ctx, joined.Runner, "bob", "the credential leaked", at, grace)
+		if err != nil {
+			return err
+		}
+		if r.State != "revoked" || r.RevokedBy != "bob" || !r.RevokedAt.Equal(at) || !r.ResultsAcceptedUntil.Equal(at.Add(grace)) {
+			t.Errorf("a revoked runner reads %+v", r)
+		}
+		if r.DrainedBy != "admin" || r.DrainReason != "the credential leaked" {
+			t.Errorf("a runner drained and then revoked reads %+v, and keeps who drained it beside why it was revoked", r)
+		}
+		// Revoked again, it is given no more time.
+		again, err := w.Revoke(ctx, joined.Runner, "carol", "again", at.Add(10*time.Minute), grace)
+		if err != nil {
+			return err
+		}
+		if !again.ResultsAcceptedUntil.Equal(at.Add(grace)) || again.RevokedBy != "bob" {
+			t.Errorf("a runner revoked twice reads %+v", again)
+		}
+		// And a drain is not a way back.
+		if _, err := w.Drain(ctx, joined.Runner, "admin", "back to draining", at); !errors.Is(err, ErrRunnerRevoked) {
+			t.Errorf("draining a revoked runner answered %v", err)
+		}
+		return nil
+	})
+
+	// In its grace, it is opened as revoked and heard, and its heartbeat keeps its task alive.
+	last := at.Add(grace - time.Microsecond)
+	in(func(ctx context.Context, w *Wide) error {
+		r, err := w.Authenticate(ctx, joined.Credential, last)
+		if err != nil {
+			t.Errorf("a revoked runner a moment before its grace ends answered %v", err)
+		} else if r.State != "revoked" || !r.ResultsAcceptedUntil.Equal(at.Add(grace)) {
+			t.Errorf("a revoked runner in its grace reads %+v", r)
+		}
+		return nil
+	})
+	if err := pool.Installation(t.Context(), Heartbeat, func(ctx context.Context, w *Wide) error {
+		beaten, err := w.Beat(ctx, joined.Runner, beating(key), last)
+		if err != nil {
+			return err
+		}
+		if beaten.Runner.State != "revoked" {
+			t.Errorf("a revoked runner's heartbeat is answered from %+v", beaten.Runner)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("a revoked runner's heartbeat in its grace answered %s", err)
+	}
+	if lost, err := declaredLost(t, pool, last.Add(LostAfter-time.Second)); err != nil || lost != 0 {
+		t.Fatalf("a task its revoked runner reported in the grace was declared lost: %d, %v", lost, err)
+	}
+
+	// From the end of the grace, it is opened nowhere and heard no more, and the task it still
+	// holds is lost three intervals after it last said so.
+	end := at.Add(grace)
+	in(func(ctx context.Context, w *Wide) error {
+		if _, err := w.Authenticate(ctx, joined.Credential, end); !errors.Is(err, ErrNoRunner) {
+			t.Errorf("a revoked runner at the end of its grace answered %v", err)
+		}
+		return nil
+	})
+	if err := pool.Installation(t.Context(), Heartbeat, func(ctx context.Context, w *Wide) error {
+		_, err := w.Beat(ctx, joined.Runner, beating(key), end)
+		return err
+	}); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("a revoked runner's heartbeat at the end of its grace answered %v", err)
+	}
+	if lost, err := declaredLost(t, pool, last.Add(LostAfter+time.Second)); err != nil || lost != 1 {
+		t.Fatalf("the task a revoked runner still held after its grace was not declared lost: %d, %v", lost, err)
 	}
 }
 
@@ -1210,7 +1310,10 @@ func TestARunnerCredentialRotatesWithTheKeyItJoinedWith(t *testing.T) {
 	if _, err := rotate(rotating(first.Credential, joined.Runner, key, now.Add(2*time.Minute)), first.RotateBy); !errors.Is(err, ErrNoRunner) {
 		t.Errorf("a rotation at its credential's rotate_by answered %v", err)
 	}
-	in(func(ctx context.Context, w *Wide) error { return w.Revoke(ctx, other.Runner, "the host was retired") })
+	in(func(ctx context.Context, w *Wide) error {
+		_, err := w.Revoke(ctx, other.Runner, "admin", "the host was retired", now, time.Hour)
+		return err
+	})
 	if _, err := rotate(rotating(other.Credential, other.Runner, privateKey(2), now), now); !errors.Is(err, ErrNoRunner) {
 		t.Errorf("a rotation by a revoked runner answered %v", err)
 	}
@@ -1302,5 +1405,35 @@ func TestTheRotateByAnsweredIsTheOneEnforced(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A draining runner rotates, since a drain takes no credential away and a drained runner stays up
+// for as long as it is left drained. A revoked one does not, even in its grace.
+func TestADrainingRunnerRotatesAndARevokedOneDoesNot(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	drained := joinedWith(t, pool, privateKey(1), 30*24*time.Hour, now)
+	revoked := joinedWith(t, pool, privateKey(2), 30*24*time.Hour, now)
+	if err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		if _, err := w.Drain(ctx, drained.Runner, "admin", "the host is being retired", now); err != nil {
+			return err
+		}
+		_, err := w.Revoke(ctx, revoked.Runner, "admin", "the credential leaked", now, time.Hour)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rotate := func(ro Rotating) error {
+		return pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+			_, err := w.Rotate(ctx, ro, 30*24*time.Hour, now.Add(time.Minute))
+			return err
+		})
+	}
+	if err := rotate(rotating(drained.Credential, drained.Runner, privateKey(1), now)); err != nil {
+		t.Errorf("a draining runner's rotation answered %v", err)
+	}
+	if err := rotate(rotating(revoked.Credential, revoked.Runner, privateKey(2), now)); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("a revoked runner's rotation, in its grace, answered %v", err)
 	}
 }

@@ -79,6 +79,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
 - A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0020_version_images.sql`.
 - `runners` keeps the credential a runner rotated from and its `rotate_by` until the new one is first used, and the time its last rotation signed. `credential_hash` and `rotate_by` are required, and both credentials are looked up by an index. `Wide.Authenticate` takes the moment it judges at, and `Wide.Rotate` renews a credential. Migration `0023_credential_rotation.sql`.
+- `runners` keeps who drained and who revoked a runner and when, until the audit log does, and the end of a revocation's grace. `Wide.Drain` and `Wide.Revoke` take who, why and when, and answer the runner; `Wide.Authenticate` and `Wide.Beat` take a revoked runner until its grace ends, and a redemption by a runner that is not ready is `db.ErrRunnerNotTaking`. Migration `0024_revocation.sql`.
 
 ### Bus
 

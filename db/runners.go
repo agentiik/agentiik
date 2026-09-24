@@ -271,6 +271,18 @@ type Runner struct {
 	State       string `json:"state"`
 	DrainReason string `json:"drain_reason,omitempty"`
 
+	// Who ordered a drain and a revocation, and when, which the row keeps until the audit log
+	// records both.
+	DrainedBy string    `json:"drained_by,omitempty"`
+	DrainedAt time.Time `json:"drained_at,omitzero"`
+	RevokedBy string    `json:"revoked_by,omitempty"`
+	RevokedAt time.Time `json:"revoked_at,omitzero"`
+
+	// ResultsAcceptedUntil is the end of a revocation's grace: the runner is answered, told to
+	// drain, and its results taken until then, and refused everywhere from then on. Zero for a
+	// runner nobody revoked.
+	ResultsAcceptedUntil time.Time `json:"results_accepted_until,omitzero"`
+
 	// What the runner last said of itself at a heartbeat: what it will do with new work, which
 	// is not State (the installation's word on it), and how many tasks it will run at once.
 	// Neither is written until its first heartbeat.
@@ -285,7 +297,8 @@ type Runner struct {
 // runnerColumns are what scanRunner reads, in its order.
 const runnerColumns = `id, pool, labels, public_key, cpu, memory_bytes, disk_bytes,
 	architecture, agent_version, accepted_namespaces::text[], containment_runtime, userns_remap,
-	state, drain_reason, reported_state, concurrency, joined_at, last_heartbeat_at, rotate_by`
+	state, drain_reason, reported_state, concurrency, joined_at, last_heartbeat_at, rotate_by,
+	drained_by, drained_at, revoked_by, revoked_at, results_accepted_until`
 
 // scanRunner reads one row of runnerColumns, and whatever a query selects after them into more.
 func scanRunner(row pgx.Row, more ...any) (Runner, error) {
@@ -295,9 +308,12 @@ func scanRunner(row pgx.Row, more ...any) (Runner, error) {
 	var remap *bool
 	var concurrency *int64
 	var seen, rotate *time.Time
+	var drainedBy, revokedBy *string
+	var drainedAt, revokedAt, accepted *time.Time
 	into := append([]any{&r.ID, &r.Pool, &r.Labels, &key, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
 		&r.Architecture, &r.AgentVersion, &r.Namespaces, &runtime, &remap,
-		&r.State, &reason, &reported, &concurrency, &r.JoinedAt, &seen, &rotate}, more...)
+		&r.State, &reason, &reported, &concurrency, &r.JoinedAt, &seen, &rotate,
+		&drainedBy, &drainedAt, &revokedBy, &revokedAt, &accepted}, more...)
 	if err := row.Scan(into...); err != nil {
 		return Runner{}, err
 	}
@@ -317,14 +333,22 @@ func scanRunner(row pgx.Row, more ...any) (Runner, error) {
 	if rotate != nil {
 		r.RotateBy = *rotate
 	}
+	if drainedBy != nil && drainedAt != nil {
+		r.DrainedBy, r.DrainedAt = *drainedBy, *drainedAt
+	}
+	if revokedBy != nil && revokedAt != nil && accepted != nil {
+		r.RevokedBy, r.RevokedAt, r.ResultsAcceptedUntil = *revokedBy, *revokedAt, *accepted
+	}
 	return r, nil
 }
 
-// Authenticate answers which runner a credential belongs to, and refuses a revoked one and one
-// past its rotate_by.
+// Authenticate answers which runner a credential belongs to, and refuses one revoked past its grace
+// and one past its rotate_by.
 //
-// "revoking it from the console stops the runner at its next heartbeat", so a revoked credential
-// is refused here rather than left to a check somewhere else. So is a credential past its
+// "Revoking a credential never destroys work already done", so a revoked runner is still opened
+// until its ResultsAcceptedUntil, as revoked: what that lets it do is each route's to say, and none
+// of them lets it take anything new. From that instant it is refused here rather than left to a
+// check somewhere else, since after the grace "every call is 401". So is a credential past its
 // rotate_by, which is the whole of the rotation window: "A credential past its rotate_by is refused
 // everywhere, and that host joins again", because "a machine that has been dark for a month should
 // be reconsidered rather than readmitted". The moment is the caller's, as every moment this package
@@ -358,7 +382,7 @@ func (w *Wide) Authenticate(ctx context.Context, credential string, now time.Tim
 		r.RotateBy = *previousBy
 	}
 	switch {
-	case r.State == "revoked":
+	case r.State == "revoked" && !now.Before(r.ResultsAcceptedUntil):
 		return Runner{}, ErrNoRunner
 	case !now.Before(r.RotateBy):
 		return Runner{}, ErrNoRunner
@@ -415,6 +439,12 @@ type Rotated struct {
 // presented, whichever comes first, so that an answer lost on the way back locks nobody out: the
 // runner rotates again with what it still holds, and the credential it never received is dropped.
 // A runner therefore holds at most two, the one it last rotated with and the one that answered.
+//
+// A revoked runner rotates nothing, in its grace or after it: its credential is ending, and renewing
+// it would carry the runner past the grace it was given. A draining one rotates. A drain takes no
+// credential away, and a drained runner "stays up", heartbeating for as long as it is left drained,
+// which may be longer than its rotate_by: refused, it would be locked out at that instant and have
+// to join again, and a drain would be a revocation that took a month.
 //
 // The runner is locked while it is judged, so that two rotations at once cannot both keep the
 // credential they presented: the second waits, and finds what the first left.
@@ -536,9 +566,13 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 		return Beaten{}, fmt.Errorf("db: a runner that runs anything runs one task or more at once, and not %d", b.Concurrency)
 	}
 
+	// A revoked runner is heard until its grace ends, and its heartbeat keeps its tasks from
+	// being declared lost until then, so that what it finishes inside the grace is still
+	// taken. From that instant it is heard no more, and three intervals later the sweep finds
+	// whatever it was still holding.
 	r, err := scanRunner(w.tx.QueryRow(ctx,
 		`update runners set last_heartbeat_at = $2, agent_version = $3, reported_state = $4, concurrency = $5
-		 where id = $1 and state <> 'revoked'
+		 where id = $1 and (state <> 'revoked' or results_accepted_until > $2)
 		 returning `+runnerColumns,
 		runner, at, b.AgentVersion, b.State, b.Concurrency))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -589,24 +623,100 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 	return beaten, nil
 }
 
-// Drain tells a runner to stop taking work and finish what it holds.
-func (w *Wide) Drain(ctx context.Context, runner, why string) error {
-	if _, err := w.tx.Exec(ctx,
-		`update runners set state = 'draining', drain_reason = $2 where id = $1 and state = 'ready'`,
-		runner, nilIfEmpty(why)); err != nil {
-		return fmt.Errorf("db: runner %s could not be drained: %w", runner, err)
+// ErrRunnerRevoked is a drain ordered for a runner that is already revoked.
+var ErrRunnerRevoked = errors.New("db: that runner is revoked, which a drain would only undo part of")
+
+// Drain tells a runner to stop taking work and finish what it holds, and answers the runner as it
+// now stands.
+//
+// "Results are accepted as usual; the runner takes nothing new but stays up." Who ordered it, when
+// and why are written on the row, where they are kept until the audit log records the order, and
+// the reason is what the heartbeat hands the runner for its own log. A runner already draining is
+// answered as it stands, since the first order is the one it is obeying and a second would change
+// nothing it does. A revoked one is refused with ErrRunnerRevoked, because a drain is less than it
+// was already told and answering it would read as though the revocation had been lifted, and one
+// that is not there with ErrNoRunner.
+func (w *Wide) Drain(ctx context.Context, runner, by, why string, at time.Time) (Runner, error) {
+	switch {
+	case by == "":
+		return Runner{}, errors.New("db: a drain nobody ordered")
+	case why == "":
+		return Runner{}, errors.New("db: a drain for no reason, and the reason is what the runner writes to its own log")
+	case at.IsZero():
+		return Runner{}, errors.New("db: a drain ordered at no moment")
 	}
-	return nil
+	r, err := scanRunner(w.tx.QueryRow(ctx,
+		`update runners set state = 'draining', drain_reason = $2, drained_by = $3, drained_at = $4
+		 where id = $1 and state = 'ready'
+		 returning `+runnerColumns,
+		runner, why, by, at))
+	if err == nil {
+		return r, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, fmt.Errorf("db: runner %s could not be drained: %w", runner, err)
+	}
+	if r, err = w.runnerNamed(ctx, runner); err != nil {
+		return Runner{}, err
+	}
+	if r.State == "revoked" {
+		return Runner{}, ErrRunnerRevoked
+	}
+	return r, nil
 }
 
-// Revoke stops a runner's credential being accepted at all.
-func (w *Wide) Revoke(ctx context.Context, runner, why string) error {
-	if _, err := w.tx.Exec(ctx,
-		`update runners set state = 'revoked', drain_reason = $2 where id = $1`,
-		runner, nilIfEmpty(why)); err != nil {
-		return fmt.Errorf("db: runner %s could not be revoked: %w", runner, err)
+// Revoke stops a runner taking anything new at once, and stops its credential being accepted at all
+// once grace has passed, and answers the runner as it now stands.
+//
+// "Revoking a credential never destroys work already done." Until the revocation plus the grace,
+// ResultsAcceptedUntil, the runner is still heard at the heartbeat and told to drain, may publish
+// the results of what it holds and hear stops, and redeems nothing; from then on every call it
+// makes is refused, and the sweep declares lost whatever it still holds. The end of the grace is
+// written as an instant, so that an installation changing its setting afterwards moves no grace
+// already given. A runner already revoked is answered as it stands, since revoking it again would
+// otherwise be a way of lengthening its grace, and one that is not there is ErrNoRunner.
+func (w *Wide) Revoke(ctx context.Context, runner, by, why string, at time.Time, grace time.Duration) (Runner, error) {
+	switch {
+	case by == "":
+		return Runner{}, errors.New("db: a revocation nobody ordered")
+	case why == "":
+		return Runner{}, errors.New("db: a revocation for no reason, and the reason is what the runner writes to its own log")
+	case at.IsZero():
+		return Runner{}, errors.New("db: a revocation ordered at no moment")
 	}
-	return nil
+	// To the microsecond, which is what PostgreSQL keeps and Authenticate judges by, so that the
+	// instant the heartbeat answers is the instant enforced.
+	at = at.Truncate(time.Microsecond)
+	until := at.Add(grace).Truncate(time.Microsecond)
+	if !until.After(at) {
+		return Runner{}, fmt.Errorf("db: a revocation grace of %s, and revoking a runner never destroys work already done: a grace of no time refuses the results of what it is finishing", grace)
+	}
+	r, err := scanRunner(w.tx.QueryRow(ctx,
+		`update runners set state = 'revoked', drain_reason = $2, revoked_by = $3, revoked_at = $4,
+		        results_accepted_until = $5
+		 where id = $1 and state <> 'revoked'
+		 returning `+runnerColumns,
+		runner, why, by, at, until))
+	if err == nil {
+		return r, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, fmt.Errorf("db: runner %s could not be revoked: %w", runner, err)
+	}
+	return w.runnerNamed(ctx, runner)
+}
+
+// runnerNamed reads one runner as the inventory holds it, and answers ErrNoRunner for one that is
+// not there.
+func (w *Wide) runnerNamed(ctx context.Context, runner string) (Runner, error) {
+	r, err := scanRunner(w.tx.QueryRow(ctx, `select `+runnerColumns+` from runners where id = $1`, runner))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, ErrNoRunner
+	}
+	if err != nil {
+		return Runner{}, fmt.Errorf("db: runner %s could not be read: %w", runner, err)
+	}
+	return r, nil
 }
 
 // Runners is the inventory.
