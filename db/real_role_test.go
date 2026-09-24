@@ -49,8 +49,9 @@ func login(t *testing.T, super, role, password string) error {
 }
 
 // shape is everything Provision decides about a role, as one list a test can compare: its
-// attributes, whether it may connect, whether it may use the schema and create in it, and each
-// privilege it holds on each table of the schema and on each column.
+// attributes, the roles it is a member of, what it holds on the database and on a parameter,
+// whether it may use the schema and create in it, and each privilege it holds on each table of
+// the schema and on each column.
 func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 	t.Helper()
 	rows, err := conn.Query(t.Context(), `
@@ -59,7 +60,17 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 		              rolcreatedb::text, rolcreaterole::text, rolreplication::text)
 		  from pg_roles where rolname = $1::text
 		union all
-		select format('database connect=%s', has_database_privilege($1::text, current_database(), 'connect')::text)
+		select format('member of %s', r.rolname)
+		  from pg_auth_members m join pg_roles r on r.oid = m.roleid
+		 where m.member = to_regrole($1::text)
+		union all
+		select format('database %s', lower(a.privilege_type))
+		  from pg_database d cross join lateral aclexplode(d.datacl) a
+		 where d.datname = current_database() and a.grantee = to_regrole($1::text)
+		union all
+		select format('parameter %s %s', p.parname, lower(a.privilege_type))
+		  from pg_parameter_acl p cross join lateral aclexplode(p.paracl) a
+		 where a.grantee = to_regrole($1::text)
 		union all
 		select format('schema usage=%s create=%s',
 		              has_schema_privilege($1::text, 'public', 'usage')::text,
@@ -85,8 +96,8 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 }
 
 // provisioned is the shape Provision promises, written out: a login that bypasses nothing and
-// creates nothing, and read and write on every table the migrations created but the migration
-// record.
+// creates nothing and is a member of nothing, and read and write on every table the migrations
+// created but the migration record.
 //
 // The tables the migrations created are the ones owned by whoever recorded them, which is how
 // this tells them from a table somebody else put in the schema.
@@ -105,7 +116,7 @@ func provisioned(t *testing.T, conn *pgx.Conn) []string {
 		t.Fatal(err)
 	}
 	want := []string{
-		"database connect=true",
+		"database connect",
 		"role login=true super=false bypassrls=false createdb=false createrole=false replication=false",
 		"schema usage=true create=false",
 	}
@@ -187,22 +198,49 @@ func TestOpenAcceptsTheProvisionedRoleAndRefusesTheAdministrator(t *testing.T) {
 	}
 }
 
-// A role somebody widened by hand is brought back, attribute by attribute and grant by grant, a
-// column's included, and a password given again replaces the one it had.
+// A role somebody widened by hand is brought back, attribute by attribute, membership by
+// membership and grant by grant, and a password given again replaces the one it had.
+//
+// The membership in a superuser role is one another role granted, which a superuser's REVOKE
+// passes over unless it names that grantor, and is what would let the application SET ROLE out
+// of every policy.
 func TestProvisioningNarrowsAWidenedRoleBack(t *testing.T) {
 	super, role := blank(t)
 	ctx := t.Context()
+	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
+	powerful := role[:min(len(role), maxIdentifier-len("_super"))] + "_super"
+	granter := role[:min(len(role), maxIdentifier-len("_granter"))] + "_granter"
+
+	// Registered after blank's, so they run before its: the role that holds the memberships
+	// goes before the roles it holds them in, and a grant on a parameter, which no database
+	// holds, goes before the role, should a failing Provision have left it there.
+	t.Cleanup(func() {
+		drop(ctx, url, `drop database if exists `+role+` with (force)`)
+		drop(ctx, url, `revoke all on parameter session_replication_role from `+role)
+		drop(ctx, url, `drop role if exists `+role)
+		drop(ctx, url, `drop role if exists `+granter)
+		drop(ctx, url, `drop role if exists `+powerful)
+	})
 	conn := connect(t, super)
 	if _, err := Provision(ctx, conn, role, "test"); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, stmt := range []string{
+		`drop role if exists ` + granter,
+		`drop role if exists ` + powerful,
+		`create role ` + powerful + ` nologin superuser`,
+		`create role ` + granter + ` nologin`,
+		`grant ` + powerful + ` to ` + granter + ` with admin option`,
+		`grant ` + powerful + ` to ` + role + ` granted by ` + granter,
+		`grant pg_write_all_data to ` + role,
 		`alter role ` + role + ` nologin bypassrls createdb createrole replication`,
 		`grant truncate, references, trigger on runs to ` + role,
 		`grant all on schema_migrations to ` + role,
 		`grant update (name) on schema_migrations to ` + role,
 		`grant create on schema public to ` + role,
+		`grant create, temporary on database ` + role + ` to ` + role,
+		`grant set on parameter session_replication_role to ` + role,
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("%s: %s", stmt, err)

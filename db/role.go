@@ -55,10 +55,12 @@ const provisionLock int64 = 0x6d696772617465
 // The role is LOGIN NOSUPERUSER NOBYPASSRLS, and creates no database, no role and no replication
 // slot. It may connect to this database, use the schema, and read and write every table the
 // migrations created but schema_migrations, which the application never reads and which a role
-// that could delete a row of would have the next upgrade apply that migration again. What it
-// holds on the schema and on every relation in it is revoked before it is granted, in one
-// transaction, so the role ends with exactly these whatever it held there before: a role somebody
-// widened by hand is narrowed back, and a second call changes nothing.
+// that could delete a row of would have the next upgrade apply that migration again. Before any
+// of that is granted, in the same transaction, the role is taken out of every role it is a member
+// of and loses what it holds on the database, on a parameter, on the schema and on every relation
+// in it, so it ends with exactly these whatever it held there before: a role somebody widened by
+// hand is narrowed back, and a second call changes nothing. What it may hold elsewhere, in
+// another schema or another database, is not this installation's to reset.
 //
 // A role that owns the database or anything in it is refused before anything is applied, and the
 // refusal names what it owns. No revoke reaches an owner: the owner of a table may switch off its
@@ -249,12 +251,59 @@ func privileges(ctx context.Context, tx pgx.Tx, role string) ([]string, error) {
 	}
 	of := []any{role}
 
+	// Each membership is revoked under the grantor that made it. Without GRANTED BY, a
+	// superuser's REVOKE is taken as the bootstrap superuser's, and it passes over a membership
+	// another role granted with a warning nobody reads, which leaves a role the application
+	// could SET ROLE to.
+	memberships, err := read("which roles "+role+" is a member of", `
+		select r.rolname::text, g.rolname::text
+		  from pg_auth_members m
+		  join pg_roles r on r.oid = m.roleid
+		  join pg_roles g on g.oid = m.grantor
+		 where m.member = (select oid from pg_roles where rolname = $1)
+		 order by 1, 2`, of,
+		func(row pgx.CollectableRow) (string, error) {
+			var in, by string
+			err := row.Scan(&in, &by)
+			return "revoke " + pgx.Identifier{in}.Sanitize() + " from " + name + " granted by " + pgx.Identifier{by}.Sanitize(), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, memberships...)
+
+	// A parameter took grants in PostgreSQL 15, and an older server has none to revoke. SET on
+	// session_replication_role would switch off the triggers that keep secret_values. A
+	// placeholder's name is two identifiers, as plpgsql.extra_warnings is, so it is quoted part by
+	// part.
+	var parameters bool
+	if err := tx.QueryRow(ctx, `select to_regclass('pg_catalog.pg_parameter_acl') is not null`).Scan(&parameters); err != nil {
+		return nil, fmt.Errorf("db: the connection could not be asked whether parameters take grants: %w", err)
+	}
+	if parameters {
+		revokes, err := read("which parameters "+role+" holds a grant on", `
+			select distinct p.parname::text
+			  from pg_parameter_acl p cross join lateral aclexplode(p.paracl) a
+			 where a.grantee = (select oid from pg_roles where rolname = $1)
+			 order by 1`, of,
+			func(row pgx.CollectableRow) (string, error) {
+				var parameter string
+				err := row.Scan(&parameter)
+				return "revoke all on parameter " + pgx.Identifier(strings.Split(parameter, ".")).Sanitize() + " from " + name, err
+			})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, revokes...)
+	}
+
 	var database string
 	if err := tx.QueryRow(ctx, `select current_database()`).Scan(&database); err != nil {
 		return nil, fmt.Errorf("db: the connection could not be asked which database it is on: %w", err)
 	}
 	database = pgx.Identifier{database}.Sanitize()
 	out = append(out,
+		"revoke all on database "+database+" from "+name,
 		// Granted rather than left to PUBLIC, since a hardened cluster revokes it from PUBLIC.
 		"grant connect on database "+database+" to "+name,
 		"revoke all on schema public from "+name,
