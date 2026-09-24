@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -43,6 +45,11 @@ type RunnerOptions struct {
 	// should be reconsidered rather than readmitted." The page fixes no interval; thirty
 	// days is what this installs with and what an installation overrides.
 	JoinRotation time.Duration
+
+	// RevocationGrace is how long a revoked runner's results are still taken: "an installation
+	// setting defaulting to the task ceiling (one hour), since no task legitimately runs longer".
+	// An hour where it is unset, the ceiling an installation that says nothing runs with.
+	RevocationGrace time.Duration
 
 	// What a redemption answers with. Objects and URLs go together: one reads the input
 	// envelopes so that the artifacts they name can be resolved, the other mints the URLs
@@ -73,6 +80,7 @@ type RunnerOptions struct {
 type RunnerAPI struct {
 	pool      *db.Pool
 	rotation  time.Duration
+	grace     time.Duration
 	objects   artifact.Objects
 	urls      artifact.Presigner
 	secrets   Secrets
@@ -102,6 +110,9 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	if o.JoinRotation <= 0 {
 		o.JoinRotation = 30 * 24 * time.Hour
 	}
+	if o.RevocationGrace <= 0 {
+		o.RevocationGrace = time.Hour
+	}
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
@@ -112,7 +123,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		o.Limits = agk.DefaultLimits()
 	}
 	s := &RunnerAPI{
-		pool: o.Pool, rotation: o.JoinRotation,
+		pool: o.Pool, rotation: o.JoinRotation, grace: o.RevocationGrace,
 		objects: o.Objects, urls: o.URLs, secrets: o.Secrets, limits: o.Limits,
 		issuer: o.BusIssuer, consumers: o.BusConsumers,
 		trouble: o.Trouble, now: o.Now,
@@ -142,7 +153,8 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 
 	// And the administrator's half: the inventory, which is the installation's rather than a
 	// runner's ("A user never learns which host executed a task beyond its runner name and
-	// labels"), the pools, and the tokens that let a machine into one.
+	// labels"), the pools, the tokens that let a machine into one, and the two orders that take
+	// one out of service.
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
 		method  string
@@ -153,6 +165,8 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		{"POST", "/api/v1/runner-pools", s.createPool},
 		{"GET", "/api/v1/runner-pools", s.pools},
 		{"POST", "/api/v1/runner-pools/{pool}/join-tokens", s.issue},
+		{"POST", "/api/v1/runners/{runner}/drain", s.drain},
+		{"POST", "/api/v1/runners/{runner}/revoke", s.revoke},
 	} {
 		if err := rt.Handle(r.method, r.pattern, admin, r.handler); err != nil {
 			return nil, err
@@ -175,7 +189,10 @@ func (s *RunnerAPI) Runner(ctx context.Context, credential string) (Runner, erro
 	if err != nil {
 		return Runner{}, err
 	}
-	return Runner{ID: found.ID, Pool: found.Pool, State: found.State, RotateBy: found.RotateBy}, nil
+	return Runner{
+		ID: found.ID, Pool: found.Pool, State: found.State, RotateBy: found.RotateBy,
+		ResultsAcceptedUntil: found.ResultsAcceptedUntil,
+	}, nil
 }
 
 // Join is what a machine presents, in the shape wire.schema.json gives it:
@@ -690,11 +707,26 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 		"drain":       false,
 		"cancel":      beaten.Cancel,
 	}
-	// reason belongs to a drain order and is written with one alone, as the wire requires.
-	if beaten.Runner.State == "draining" {
+	// A drain and a revocation are one order to a runner, "take nothing new; finish what is
+	// held", and a revocation adds how long it has to finish in. reason and
+	// results_accepted_until belong to a drain order and are written with one alone, as the
+	// wire requires.
+	switch r := beaten.Runner; r.State {
+	case "draining", "revoked":
 		answer["drain"] = true
-		if beaten.Runner.DrainReason != "" {
-			answer["reason"] = beaten.Runner.DrainReason
+		if r.DrainReason != "" {
+			answer["reason"] = r.DrainReason
+		}
+		if r.State == "revoked" {
+			// The instant the credential this heartbeat carried is refused from, which is
+			// its rotate_by where that comes first: a revoked runner rotates nothing, so
+			// its grace ends there too, and "the grace period is stated on the wire rather
+			// than left to each side's arithmetic".
+			until := r.ResultsAcceptedUntil
+			if !runner.RotateBy.IsZero() && runner.RotateBy.Before(until) {
+				until = runner.RotateBy
+			}
+			answer["results_accepted_until"] = until.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	write(w, http.StatusOK, answer)
@@ -804,6 +836,13 @@ func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner
 		fail(w, http.StatusForbidden, fmt.Sprintf("the rotation speaks for runner %s, and its credential is runner %s's: a runner renews its own credential alone", ro.Runner, runner.ID))
 		return
 	}
+	// A revoked runner is still opened in its grace, and is told why it renews nothing rather
+	// than that its credential opens nothing, which it still does until then. A draining one
+	// rotates, for the reason db.Wide.Rotate gives.
+	if runner.State == "revoked" {
+		refuseRevokedRotation(w, runner.ID)
+		return
+	}
 	now := s.now()
 	if skew := now.Sub(at); skew > RotationSkew || skew < -RotationSkew {
 		fail(w, http.StatusBadRequest, fmt.Sprintf("the rotation was signed at %s, and the API's clock reads %s: a rotation is signed within %s of it, so that a copy of one is not a way to rotate later. Correct the host's clock, which the heartbeat's received_at is there to compare with, and sign again",
@@ -831,6 +870,10 @@ func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "that credential opens nothing")
 		return
+	case errors.Is(err, db.ErrRunnerRevoked):
+		// Revoked between the hook and the lock, and still in its grace.
+		refuseRevokedRotation(w, runner.ID)
+		return
 	case errors.Is(err, db.ErrNotItsKey):
 		fail(w, http.StatusForbidden, fmt.Sprintf("the signature is not by the key runner %s joined with: the key proves the machine, and a host whose key is gone is a new runner, which joins again", runner.ID))
 		return
@@ -848,6 +891,126 @@ func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner
 		"credential": rotated.Credential,
 		"rotate_by":  rotated.RotateBy.UTC().Format(time.RFC3339Nano),
 	})
+}
+
+// Order is what an administrator sends to drain or revoke a runner: why, which the runner is
+// handed at its next heartbeat "for the runner to write to its own log", since "the owner of the
+// machine is rarely the person who revoked the credential in the console".
+type Order struct {
+	Reason string `json:"reason"`
+}
+
+func (o *Order) field(b *body, name string) error {
+	if name == "reason" {
+		return text(b, &o.Reason)
+	}
+	return unknown(name)
+}
+
+// reasonMax is how long a reason may be, in characters: one line of a journal, which is where the
+// runner writes it, and short enough for the console to show beside the runner.
+const reasonMax = 256
+
+// reason checks an order's reason the way the wire holds the heartbeat's: "in one line", and there.
+func (o Order) reason() (string, error) {
+	switch {
+	case o.Reason == "":
+		return "", errors.New("the order gives no reason: it is one line saying why, which the runner writes to its own log, since whoever owns the machine is rarely whoever gave the order")
+	case utf8.RuneCountInString(o.Reason) > reasonMax:
+		return "", fmt.Errorf("the reason is %d characters, and it is one line of at most %d, for a journal and the console", utf8.RuneCountInString(o.Reason), reasonMax)
+	case strings.ContainsFunc(o.Reason, unicode.IsControl):
+		return "", errors.New("the reason holds a line break or another control character, and it is one line, written as it is into the runner's log")
+	}
+	return o.Reason, nil
+}
+
+// orderOf reads an order and the runner its path names, and answers false once it has refused it.
+func orderOf(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	var o Order
+	if err := readAtMost(r, &o, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return "", "", false
+	}
+	why, err := o.reason()
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return "", "", false
+	}
+	// A name no runner can have is no runner, and is answered as one that is not there rather
+	// than looked up.
+	runner := r.PathValue("runner")
+	if !runnerForm.MatchString(runner) {
+		fail(w, http.StatusNotFound, "no runner of that identifier")
+		return "", "", false
+	}
+	return runner, why, true
+}
+
+// drain orders a runner to take nothing new and finish what it holds, and answers it as the
+// inventory lists it.
+//
+// "Drain sets the state to draining and answers drain: true at the heartbeat. Results are accepted
+// as usual; the runner takes nothing new but stays up." Who ordered it is recorded on the runner
+// until the audit log records it, and a runner already draining is answered as it stands.
+func (s *RunnerAPI) drain(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
+	runner, why, ok := orderOf(w, r)
+	if !ok {
+		return
+	}
+	var drained db.Runner
+	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		drained, err = wide.Drain(ctx, runner, string(who), why, s.now())
+		return err
+	})
+	switch {
+	case errors.Is(err, db.ErrNoRunner):
+		// The inventory is the administrator's already, so there is nothing to hide: 404 here
+		// means the runner, not the route.
+		fail(w, http.StatusNotFound, "no runner of that identifier")
+		return
+	case errors.Is(err, db.ErrRunnerRevoked):
+		fail(w, http.StatusConflict, fmt.Sprintf("runner %s is revoked, which already takes nothing new and ends its credential with its grace: a drain would only undo part of that, and a revocation is not undone", runner))
+		return
+	case err != nil:
+		fail(w, http.StatusInternalServerError, "the runner could not be drained")
+		return
+	}
+	write(w, http.StatusOK, drained)
+}
+
+// revoke orders a runner out: it takes nothing new at once, and is refused everywhere once its
+// grace has passed. It answers the runner as the inventory lists it.
+//
+// "Revoke sets the state to revoked with a grace that ends at the revocation plus
+// revocation_grace." Until then it is told to drain at its heartbeat and its results are taken,
+// because "revoking a credential never destroys work already done". A runner already revoked is
+// answered as it stands, so that revoking it again gives it no more time.
+func (s *RunnerAPI) revoke(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
+	runner, why, ok := orderOf(w, r)
+	if !ok {
+		return
+	}
+	var revoked db.Runner
+	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		revoked, err = wide.Revoke(ctx, runner, string(who), why, s.now(), s.grace)
+		return err
+	})
+	switch {
+	case errors.Is(err, db.ErrNoRunner):
+		fail(w, http.StatusNotFound, "no runner of that identifier")
+		return
+	case err != nil:
+		fail(w, http.StatusInternalServerError, "the runner could not be revoked")
+		return
+	}
+	write(w, http.StatusOK, revoked)
+}
+
+// refuseRevokedRotation answers a rotation by a runner that is revoked and still in its grace.
+func refuseRevokedRotation(w http.ResponseWriter, runner string) {
+	fail(w, http.StatusForbidden, fmt.Sprintf("runner %s is revoked, and a revoked credential is not renewed: it is accepted until the end of its grace, which the heartbeat answers as results_accepted_until, and refused everywhere after", runner))
 }
 
 func (s *RunnerAPI) inventory(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {

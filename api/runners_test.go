@@ -212,7 +212,8 @@ func TestAJoinLargerThanAMachineIsDescribedByIsTooLarge(t *testing.T) {
 }
 
 // A drained runner is told so at its next heartbeat, which is the only channel there is:
-// "there is no separate liveness channel to keep in sync".
+// "there is no separate liveness channel to keep in sync". So is a revoked one, which is still
+// heard in its grace, because "revoking a credential never destroys work already done".
 func TestADrainedRunnerIsToldAtItsNextHeartbeat(t *testing.T) {
 	h, pool := withRunners(t)
 	token := issue(t, pool, nil)
@@ -221,12 +222,9 @@ func TestADrainedRunnerIsToldAtItsNextHeartbeat(t *testing.T) {
 	credential, _ := answer["credential"].(string)
 	runner, _ := answer["runner"].(string)
 
-	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-		return w.Drain(ctx, runner, "the host is being retired")
-	}); err != nil {
-		t.Fatal(err)
+	if w, _ := call(t, h, "POST", "/api/v1/runners/"+runner+"/drain", "admin", api.Order{Reason: "the host is being retired"}); w.Code != http.StatusOK {
+		t.Fatalf("draining answered %d: %s", w.Code, w.Body)
 	}
-
 	w, said := call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
 	if w.Code != http.StatusOK {
 		t.Fatalf("the heartbeat answered %d", w.Code)
@@ -234,16 +232,19 @@ func TestADrainedRunnerIsToldAtItsNextHeartbeat(t *testing.T) {
 	if said["drain"] != true || said["reason"] != "the host is being retired" {
 		t.Errorf("a drained runner was told %v", said)
 	}
-
-	// And a revoked one is told nothing at all, because its credential opens nothing.
-	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-		return w.Revoke(ctx, runner, "the credential leaked")
-	}); err != nil {
-		t.Fatal(err)
+	if _, there := said["results_accepted_until"]; there {
+		t.Errorf("a drained runner nobody revoked was given a grace: %v", said)
 	}
-	w, _ = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("a revoked runner's heartbeat answered %d", w.Code)
+
+	if w, _ := call(t, h, "POST", "/api/v1/runners/"+runner+"/revoke", "admin", api.Order{Reason: "the credential leaked"}); w.Code != http.StatusOK {
+		t.Fatalf("revoking answered %d: %s", w.Code, w.Body)
+	}
+	w, said = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
+	if w.Code != http.StatusOK {
+		t.Fatalf("a revoked runner's heartbeat in its grace answered %d", w.Code)
+	}
+	if said["drain"] != true || said["reason"] != "the credential leaked" || said["results_accepted_until"] == nil {
+		t.Errorf("a revoked runner was told %v", said)
 	}
 }
 

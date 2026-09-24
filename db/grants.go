@@ -94,6 +94,14 @@ type Redeemed struct {
 // retrying or putting the message back for the next runner to be refused in its turn.
 var ErrTaskHeld = errors.New("db: that task is held by another runner")
 
+// ErrRunnerNotTaking is a redemption by a runner that is draining or revoked of a task it does not
+// hold yet, since neither takes anything new.
+//
+// Separate from ErrTaskHeld because the runner does the opposite with the message: the task is
+// nobody's yet and some other runner of the pool should have it, so it is put back rather than
+// acknowledged.
+var ErrRunnerNotTaking = errors.New("db: that runner is draining or revoked, and takes no new task")
+
 // IssueGrant mints the grant for one task and records what it takes to check it.
 //
 // The row is written by the controller inside the decision that planned the task, so a task that
@@ -237,6 +245,27 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 		// completed", and refusing the grant is the same rule applied where it cannot
 		// be forgotten.
 		return Redeemed{}, ErrTaskHeld
+	}
+
+	// "A redemption by a draining or revoked runner gets 403, binds nothing", since both take
+	// nothing new. What they already hold is not new: the holder asking again, after a lost
+	// answer or a restart, is finishing what it holds, which is what a drain and a grace are
+	// for, and refused it would put back a message nobody else may redeem and leave its task to
+	// be declared lost. So only a redemption that would bind is refused. It is read here, where
+	// the binding reads it again under the lock, so that a drain or a revocation that commits
+	// while a redemption is under way is obeyed and the secrets read in between go nowhere. The
+	// runner is read by what its row says of it, and the names this package is handed carry no
+	// promise of a row: the API hands it the runner a credential opened, which has one.
+	if holder == nil {
+		var withdrawn bool
+		if err := w.tx.QueryRow(ctx,
+			`select exists (select 1 from runners where id = $1 and state <> 'ready')`, runner).
+			Scan(&withdrawn); err != nil {
+			return Redeemed{}, fmt.Errorf("db: the runner redeeming the grant could not be read: %w", err)
+		}
+		if withdrawn {
+			return Redeemed{}, ErrRunnerNotTaking
+		}
 	}
 	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
 }

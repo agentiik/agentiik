@@ -97,7 +97,8 @@ func inventoried(t *testing.T, h http.Handler, runner string) map[string]any {
 
 // A heartbeat written from the wire is taken, and answered the three fields the wire requires of
 // every answer and no other while nobody has drained the runner, reason joining them once somebody
-// has. What the runner said of itself is what the inventory then holds.
+// has, and results_accepted_until once somebody has revoked it. What the runner said of itself is
+// what the inventory then holds.
 func TestAHeartbeatAndItsAnswerAreWhatTheWireDescribes(t *testing.T) {
 	cases, err := fixtures.RunnerHeartbeats()
 	if err != nil {
@@ -164,7 +165,8 @@ func TestAHeartbeatAndItsAnswerAreWhatTheWireDescribes(t *testing.T) {
 
 		// Drained, it is told so, with the reason and nothing else.
 		if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-			return w.Drain(ctx, runner, "pool zone=dmz is being retired")
+			_, err := w.Drain(ctx, runner, "admin", "pool zone=dmz is being retired", time.Now().UTC())
+			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -180,6 +182,27 @@ func TestAHeartbeatAndItsAnswerAreWhatTheWireDescribes(t *testing.T) {
 		}
 		if answer["drain"] != true || answer["reason"] != "pool zone=dmz is being retired" {
 			t.Errorf("a drained runner is told %v", answer)
+		}
+
+		// Revoked, it is told to drain too, and until when what it finishes is taken.
+		if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+			_, err := w.Revoke(ctx, runner, "admin", "credential revoked from the console", time.Now().UTC(), time.Hour)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		w, answer = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, request)
+		if w.Code != http.StatusOK {
+			t.Fatalf("the heartbeat of a revoked runner in its grace answered %d: %s", w.Code, w.Body)
+		}
+		if err := conforms(t, "/$defs/runnerHeartbeat/properties/response", answer); err != nil {
+			t.Errorf("a revoked runner is not answered as the wire describes: %s: %v", err, answer)
+		}
+		if keys := slices.Sorted(maps.Keys(answer)); !slices.Equal(keys, []string{"cancel", "drain", "reason", "received_at", "results_accepted_until"}) {
+			t.Errorf("a revoked runner is answered with %v", keys)
+		}
+		if answer["drain"] != true || answer["reason"] != "credential revoked from the console" {
+			t.Errorf("a revoked runner is told %v", answer)
 		}
 	}
 	if beaten == 0 {
