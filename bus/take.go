@@ -15,7 +15,7 @@ import (
 // The two ends that are not the controller publishing: a runner taking work, and a result coming
 // back.
 
-// Results is the stream a task result travels back on.
+// Results is the stream a task result travels back on, and the progress that precedes it.
 //
 // A second stream rather than a second subject on the first, because the two have different
 // consumers and different lifetimes: tasks are taken by many runners filtered by pool, results
@@ -338,25 +338,26 @@ func (b *Bus) Progress(ctx context.Context, p TaskProgress) error {
 // Reports hands every result to fn, and every progress message to progress, until ctx is done, with
 // the runner whose subject it arrived on.
 //
-// It is the other end of Report and Progress, and the control plane's: package bus/control is what calls it, and
-// what turns each result into the answer the controller takes. One durable consumer, because there
-// is one active controller. fn is called before the message is acknowledged and never after, so a
-// controller dying in the middle gets the result again rather than losing it, and fn returning an
-// error leaves the message for a later delivery, timed by again, unless the error is one Drop made,
-// which no delivery would change. Nothing deduplicates: "the same result delivered twice writes the
-// same thing" is the controller's promise, made good by the evaluator answering a duplicate with no
-// decision.
+// It is the other end of Report and Progress, and the control plane's: package bus/control is what
+// calls it, and what turns each result into the answer the controller takes. One durable consumer,
+// because there is one active controller. fn is called before the message is acknowledged and never
+// after, so a controller dying in the middle gets the result again rather than losing it, and fn
+// returning an error leaves the message for a later delivery, timed by again, unless the error is
+// one Drop made, which no delivery would change. Nothing deduplicates: "the same result delivered
+// twice writes the same thing" is the controller's promise, made good by the evaluator answering a
+// duplicate with no decision.
 //
-// A result is read as the wire describes it, with its outputs as digests. One the reader refuses
-// is taken off the queue and said out loud, as one nobody can decode is: a result that is not an
-// ending, or that says what no container could, reads the same on every delivery. The reader is
-// not the schema, and readResult and check say where the two part.
+// A result is read as the wire describes it, with its outputs as digests. One the reader refuses is
+// taken off the queue and said out loud, as one nobody can decode is: a result that is not an
+// ending, or that says what no container could, reads the same on every delivery. The reader is not
+// the schema, and readResult and check say where the two part.
 //
-// A progress message is told from a result by its keyword, as isProgress reads it, and goes the same
-// way: read closed, handed to progress before it is acknowledged, taken off the queue and said out
-// loud where it cannot be read or progress answers with Drop, and left for a later delivery where
-// progress answers any other error. A progress message left for later is overtaken by the result
-// it preceded, which is why the controller writes one only forwards and never over an ending.
+// A progress message is told from a result by its keyword, as isProgress reads it, and goes the
+// same way: read closed, handed to progress before it is acknowledged, taken off the queue and said
+// out loud where it cannot be read or progress answers with Drop, and left for a later delivery
+// where progress answers any other error. A progress message left for later is overtaken by the
+// result it preceded, which is why the controller writes one only forwards and never over an
+// ending.
 //
 // The runner is handed on beside the result rather than held to it here. The subject is who sent
 // it, for the reason ResultSubject gives, and a result naming anybody else is a result from a

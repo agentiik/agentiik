@@ -267,6 +267,19 @@ func TestProgressOnARunThatHasEndedMovesNothing(t *testing.T) {
 	if got := shown(t, pool, normalize.Task.ID); got != agk.TaskDispatched {
 		t.Errorf("progress on a run that has ended moved its task to %s", got)
 	}
+
+	// Nor is it early on a dispatch the pass that published it never recorded: no later
+	// delivery will find it recorded, so it is no news rather than a message that comes round
+	// for as long as the stream keeps it.
+	if _, err := conn.Exec(t.Context(), `update tasks set state = 'pending' where id = $1`, normalize.Row); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Progress(t.Context(), progress(normalize, agk.TaskRunning, theRunner)); err != nil {
+		t.Errorf("progress on a run that has ended, for a dispatch never recorded, answered %v", err)
+	}
+	if got := shown(t, pool, normalize.Task.ID); got != agk.TaskPending {
+		t.Errorf("progress on a run that has ended moved its task to %s", got)
+	}
 }
 
 // Every controller write carries the term, and so does this one: a former holder that has not
