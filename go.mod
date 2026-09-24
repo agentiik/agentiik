@@ -56,6 +56,13 @@ require (
 	// pair and a JWT naming its public half, and this is what mints one and what signs with
 	// an account key. It was already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
+	// TOML, used by package driver alone, to read /etc/agentiik/runner.toml. The
+	// documentation names the format and writes the file's [hooks] block with arrays of
+	// strings and a table, which a line reader cannot parse. A runner reads the file
+	// strictly, and this decoder refuses a key its target does not declare and says on
+	// which line, which is what turns a misspelled setting into a refusal rather than a
+	// default nobody chose. It takes no dependency of its own.
+	github.com/pelletier/go-toml/v2 v2.4.3
 	// JSON Schema 2020-12, used by package schema, and in tests by packages bus and api,
 	// which hold what they put on the wire to the vendored wire.schema.json rather than to a
 	// copy of it written in Go, as bus/control does in its tests for the controller's half.

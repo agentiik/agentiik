@@ -434,6 +434,7 @@ func TestTheSettingsTableIsWhatARealContainerLivesUnder(t *testing.T) {
 			`touch /probe 2>/dev/null && echo "rootfs: writable" || echo "rootfs: read only"`,
 			`echo "caps: $(grep CapEff /proc/self/status | awk '{print $2}')"`,
 			`echo "nnp: $(grep NoNewPrivs /proc/self/status | awk '{print $2}')"`,
+			`echo "seccomp: $(grep '^Seccomp:' /proc/self/status | awk '{print $2}')"`,
 			`touch /tmp/probe && echo "tmp: writable"`,
 			`touch /agk/out/probe && echo "out: writable"`,
 			`echo "tmpfs: $(grep ' /tmp ' /proc/mounts)"`,
@@ -454,8 +455,10 @@ func TestTheSettingsTableIsWhatARealContainerLivesUnder(t *testing.T) {
 		"rootfs: read only",
 		// CapDrop: ALL, so the effective set is empty.
 		"caps: 0000000000000000",
-		// SecurityOpt: no-new-privileges.
+		// SecurityOpt: no-new-privileges, and the daemon's default seccomp profile,
+		// where 2 is SECCOMP_MODE_FILTER.
 		"nnp: 1",
+		"seccomp: 2",
 		"tmp: writable",
 		"out: writable",
 		"noexec",

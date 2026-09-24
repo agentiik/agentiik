@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -33,6 +35,18 @@ import (
 // tests run on under a branch nobody touched.
 func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	t.Helper()
+	policy := DefaultPolicy()
+	// Docker Desktop does not offer user namespace remapping, and this is the machine
+	// the floor is lifted for.
+	policy.RequireUsernsRemap = RemapLifted
+	policy.SecretsDir = ""
+	policy.StopGrace = 2 * time.Second
+	return realDriverWith(t, policy, images...)
+}
+
+// realDriverWith opens a driver under a policy of the test's own, or skips.
+func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, string) {
+	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")
@@ -58,13 +72,6 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	if err != nil {
 		t.Fatalf("opening the store: %s", err)
 	}
-
-	policy := DefaultPolicy()
-	// Neither Docker Desktop nor the daemon of a CI runner remaps user namespaces, and
-	// these are the machines the floor is lifted for.
-	policy.RequireUsernsRemap = RemapLifted
-	policy.SecretsDir = ""
-	policy.StopGrace = 2 * time.Second
 
 	d, err := New(Config{
 		Socket:   socket,
@@ -311,5 +318,80 @@ func TestTheSettingsTableIsReadBackOffTheContainerTheDaemonHolds(t *testing.T) {
 	}
 	if m, ok := bound[brick.OutDir]; !ok || m.ReadOnly {
 		t.Errorf("%s is bound %+v, and it is where the brick writes", brick.OutDir, m)
+	}
+}
+
+// TestARealContainerRunsUnderTheSeccompProfileRunnerTomlNames is the path from the file to
+// the kernel: a profile named by seccomp_profile in runner.toml is read by LoadPolicy,
+// carried on the create as its JSON, which is what the daemon decodes, and applied to the
+// container. The profile refuses mkdir and mkdirat and allows everything else, so a
+// directory the brick cannot make on a /tmp it can write to is the profile and nothing
+// else. A daemon handed the path instead of the JSON refuses to start the container.
+func TestARealContainerRunsUnderTheSeccompProfileRunnerTomlNames(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "seccomp.json")
+	// Both names, because arm64 has no mkdir system call and the runtime passes over
+	// a name the architecture does not have, as it does for Docker's own profile.
+	if err := os.WriteFile(profile, []byte(`{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    { "names": ["mkdir", "mkdirat"], "action": "SCMP_ACT_ERRNO", "errnoRet": 1 }
+  ]
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "runner.toml")
+	if err := os.WriteFile(file, []byte(`# Docker Desktop does not offer the remapping, and this is the machine it is lifted for.
+require_userns_remap = false
+stop_grace = "2s"
+seccomp_profile = "`+profile+`"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadPolicy(file)
+	if err != nil {
+		t.Fatalf("LoadPolicy: %s", err)
+	}
+	policy.SecretsDir = ""
+	d, image := realDriverWith(t, policy)
+
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "seccomp", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "seccomp",
+		Attempt:   1,
+		Image:     image,
+		Script: []string{
+			`echo "seccomp: $(grep '^Seccomp:' /proc/self/status | awk '{print $2}')"`,
+			`touch /tmp/file && echo "tmp: writable"`,
+			`mkdir /tmp/dir 2>/tmp/err && echo "mkdir: allowed" || echo "mkdir: $(cat /tmp/err)"`,
+		},
+		Outputs: []agk.Port{"out"},
+		Network: graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running under the profile runner.toml names: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	got, _ := result.Outputs["out"].Items[0].Data["stdout"].(string)
+	t.Logf("the container reports:\n%s", got)
+	for _, want := range []string{
+		// Seccomp: 2 is SECCOMP_MODE_FILTER.
+		"seccomp: 2",
+		"tmp: writable",
+		// EPERM, which is errnoRet 1, and not the read-only root's EROFS.
+		"Operation not permitted",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the container does not report %q", want)
+		}
+	}
+	if strings.Contains(got, "mkdir: allowed") {
+		t.Errorf("mkdir succeeded, so the container did not run under the profile the file names")
 	}
 }

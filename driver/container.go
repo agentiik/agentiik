@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -131,7 +133,12 @@ func hostConfig(t graph.Task, p Policy, g *given, networkMode string) (docker.Ho
 // no-new-privileges is unconditional. The other three are named only where the policy
 // names one: a daemon applies its own default seccomp and AppArmor profiles to every
 // container, and passing an empty profile name would replace a default that is already
-// the right answer with nothing at all.
+// the right answer with nothing at all. Whether the daemon applies any is read once, when
+// it is opened, by readConfinement.
+//
+// A seccomp profile travels as its JSON, which is what the daemon decodes. The path of the
+// file it came from would be decoded as a profile and refused when the container starts,
+// every container, every time.
 func securityOptions(p Policy) []string {
 	opt := []string{"no-new-privileges:true"}
 	if p.Seccomp != "" {
@@ -226,6 +233,23 @@ func memoryBytes(step agk.Step, v string) (int64, error) {
 	if v == "" {
 		return 0, nil
 	}
+	n, err := binarySize(v)
+	switch {
+	case errors.Is(err, errSizeTooLarge):
+		return 0, fault(step, nil, ChargeBrick, "resources.memory is %q, which is more memory than a host has", v)
+	case err != nil:
+		return 0, fault(step, nil, ChargeBrick, "resources.memory is %q: memory is a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, so that 512Mi cannot be read as 512 bytes", v)
+	}
+	return n, nil
+}
+
+// errSizeTooLarge is a size written correctly and larger than a host has.
+var errSizeTooLarge = errors.New("more than a host has")
+
+// binarySize reads a whole number with a binary suffix, the one grammar a step's memory
+// and a runner's size settings share. It answers errSizeTooLarge for a size no host has,
+// past four exbibytes, and another error for anything that is not a size at all.
+func binarySize(v string) (int64, error) {
 	suffixes := []struct {
 		text string
 		unit int64
@@ -245,11 +269,11 @@ func memoryBytes(step agk.Step, v string) (int64, error) {
 			break
 		}
 		if n > (1<<62)/s.unit {
-			return 0, fault(step, nil, ChargeBrick, "resources.memory is %q, which is more memory than a host has", v)
+			return 0, errSizeTooLarge
 		}
 		return n * s.unit, nil
 	}
-	return 0, fault(step, nil, ChargeBrick, "resources.memory is %q: memory is a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, so that 512Mi cannot be read as 512 bytes", v)
+	return 0, fmt.Errorf("%q is not a whole number above zero with a binary suffix", v)
 }
 
 // nanoCPUs reads resources.cpu, which is written as text "so that half a core reads as

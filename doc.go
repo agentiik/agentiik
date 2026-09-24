@@ -78,10 +78,11 @@
 // Two decisions inside it are the operator's business rather than an author's. User
 // namespace remapping is a floor: a daemon without it is refused, and only
 // require_userns_remap = false in /etc/agentiik/runner.toml gets past the refusal, after
-// which the driver says once what the machine gives up. Network egress is refused
-// outright, because the proxy that would enforce an egress.allow list does not exist yet
-// and a workflow must not be able to believe its list is being enforced when nothing is
-// enforcing it. network: none and network: internal run.
+// which the driver says once what the machine gives up. Seccomp is a floor too, one no
+// line of that file lifts: a runner refuses a daemon that filters no system call. Network
+// egress is refused outright, because the proxy that would enforce an egress.allow list
+// does not exist yet and a workflow must not be able to believe its list is being
+// enforced when nothing is enforcing it. network: none and network: internal run.
 //
 // Dependencies run one way and there is no cycle: artifact and schema import agk, brick
 // imports agk and artifact, graph imports agk, brick, schema and internal/expr, driver

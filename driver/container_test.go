@@ -2,6 +2,8 @@ package driver
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -194,18 +196,63 @@ func TestCPUNotWrittenAsTheManifestWritesItIsRefused(t *testing.T) {
 // that is already the right answer with nothing at all.
 func TestTheSecurityProfilesComeFromThePolicy(t *testing.T) {
 	p := DefaultPolicy()
-	p.Seccomp = "/etc/agentiik/seccomp.json"
+	p.Seccomp = `{"defaultAction":"SCMP_ACT_ERRNO"}`
 	p.AppArmor = "agentiik-brick"
 	p.SELinuxLabel = "level:s0:c100,c200"
 
 	opt := strings.Join(securityOptions(p), " ")
-	for _, want := range []string{"no-new-privileges:true", "seccomp=/etc/agentiik/seccomp.json", "apparmor=agentiik-brick", "label=level:s0:c100,c200"} {
+	for _, want := range []string{"no-new-privileges:true", `seccomp={"defaultAction":"SCMP_ACT_ERRNO"}`, "apparmor=agentiik-brick", "label=level:s0:c100,c200"} {
 		if !strings.Contains(opt, want) {
 			t.Errorf("SecurityOpt is %q, with no %s in it", opt, want)
 		}
 	}
 	if got := securityOptions(Policy{}); len(got) != 1 || got[0] != "no-new-privileges:true" {
 		t.Errorf("a policy naming no profile gives %v, and the daemon's own defaults are what it should leave alone", got)
+	}
+}
+
+// The create carries the seccomp profile a runner's file names as the JSON in the file,
+// because that is what the Engine API decodes: seccomp=<path> is the docker command
+// reading the file on its caller's behalf, and a daemon handed the path fails to decode it
+// as a profile when the container starts. The profile goes through LoadPolicy and onto
+// the wire, so the path from the file to the create is the one under test.
+func TestTheCreateCarriesTheSeccompProfileAsJSON(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "seccomp.json")
+	written := "{\n  \"defaultAction\": \"SCMP_ACT_ALLOW\",\n  \"syscalls\": [\n    { \"names\": [\"mkdirat\"], \"action\": \"SCMP_ACT_ERRNO\" }\n  ]\n}\n"
+	if err := os.WriteFile(profile, []byte(written), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPolicy(writePolicyFile(t, "seccomp_profile = \""+profile+"\"\n"))
+	if err != nil {
+		t.Fatalf("LoadPolicy: %s", err)
+	}
+
+	h := settings(t, settingsTask(), p, networkModeNone)
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("marshalling the host configuration: %s", err)
+	}
+	var wire struct{ SecurityOpt []string }
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("reading the host configuration back: %s", err)
+	}
+
+	var sent string
+	for _, opt := range wire.SecurityOpt {
+		if v, ok := strings.CutPrefix(opt, "seccomp="); ok {
+			sent = v
+		}
+	}
+	if sent == "" {
+		t.Fatalf("SecurityOpt is %q, with no seccomp in it", wire.SecurityOpt)
+	}
+	if strings.Contains(sent, profile) {
+		t.Fatalf("the create carries the path of the profile, which the daemon cannot decode: %s", sent)
+	}
+	want := `{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[{"names":["mkdirat"],"action":"SCMP_ACT_ERRNO"}]}`
+	if sent != want {
+		t.Fatalf("the create carries seccomp=%s, and the file holds %s", sent, want)
 	}
 }
 

@@ -118,7 +118,8 @@
 //
 // One task is one conversation with the daemon, and its order is chosen so that the races
 // cannot happen rather than so that they are caught. Negotiate the API version and check
-// the userns floor, once per daemon. Refuse a key this host has already carried to an
+// the floors, once per daemon, and again after its event stream drops, which is what a
+// restart looks like. Refuse a key this host has already carried to an
 // ending, which the record under the work root answers. Adopt by label or create. Pull by
 // digest, reading every message of the progress stream, because the daemon reports a
 // failed pull as an error object inside a 200 that has already streamed half its layers.
@@ -182,6 +183,20 @@
 // tried and /etc/subuid, rather than creating a container that will silently fail to
 // write its outputs.
 //
+// Seccomp is read off the same info, and it is a floor no file lifts. A daemon that lists
+// no name=seccomp, or lists it with profile=unconfined while the policy names no profile
+// of its own, is refused with ErrSeccompRequired unless Policy.RequireSeccomp is
+// SeccompLifted, which only callers that are not runners set, and they are told what the
+// machine gives up instead. AppArmor and SELinux are the host's to offer, so a daemon with
+// neither is taken and said out loud, and a profile the policy names for a mechanism the
+// daemon does not apply is refused rather than silently ignored. A profile that lets every
+// call through counts as none.
+//
+// Both floors are read when the daemon is opened, and read again before the first container
+// after the event stream drops, since a daemon can only change its configuration by
+// restarting and a restart drops the stream. A daemon that no longer meets a floor refuses
+// each task with the sentinel New would have answered, and nothing is created on it.
+//
 // Network egress is refused for now. network: none takes the none network mode and
 // network: internal takes a per-task network with no outbound route. network: egress
 // returns ErrEgressProxyMissing before anything is created, saying the proxy does not
@@ -192,12 +207,16 @@
 //
 // # Why the policy is a value and the file has one reader
 //
-// Policy is a value whose zero value is the floor in place, and New never reads a file.
+// Policy is a value whose zero value is both floors in place, and New never reads a file.
 // Reading /etc/agentiik/runner.toml belongs where a runner is configured, and doing it in
 // New would make this package refuse to be a library on a machine with no such file,
 // which is the one property both #installing-a-runner and agk run --local depend on.
-// LoadPolicy is offered for the caller that does have the file, so that when the runner
-// arrives there is one reader of that format and not two.
+// LoadPolicy is offered for the caller that does have the file, so that there is one
+// reader of that format and not two. It reads every setting an operator owns about the
+// host, strictly: a key it does not read, a key in another case and a value of the wrong
+// type are each refused, naming the line where it has one, and [hooks] is held to its
+// three keys and runs nothing until the hooks arrive. It reads the seccomp profile the file
+// names, too, because the Engine API takes the profile's JSON and never a path.
 //
 // # What leaves through the observer
 //
@@ -268,8 +287,8 @@
 //	driver.go     Docker, New, Run, Stop, Close, the in-flight registry
 //	config.go     Config and what a Task deliberately does not carry
 //	sources.go    what a runner gives one task in place of Config: its store, its secrets, its tree
-//	policy.go     Policy, DefaultPolicy, LoadPolicy, the userns floor as an enum
-//	daemon.go     negotiate the API version, check the floor, announce a lifted one
+//	policy.go     Policy, DefaultPolicy, LoadPolicy and runner.toml, the two floors as enums
+//	daemon.go     hold the floors and the profiles to the daemon, announce what is given up
 //	image.go      resolve and pull by digest, read and cache the manifest, refuse root
 //	workdir.go    created fresh, owned inside the remapped range, removed with the container
 //	mounts.go     brick.WriteInputs, /agk/repo, /agk/run.json, /agk/params.json, /agk/secrets, /agk/bin/agk

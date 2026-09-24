@@ -135,6 +135,10 @@ func Open(ctx context.Context, d Daemon, l Layout) (*Session, error) {
 	if !d.RequireUsernsRemap {
 		policy.RequireUsernsRemap = driver.RemapLifted
 	}
+	// A local run is not a runner, so a daemon applying no seccomp profile is said out
+	// loud rather than refused, as the lifted userns floor is: the laptop is somebody's
+	// own, and what it gives up is theirs to hear about.
+	policy.RequireSeccomp = driver.SeccompLifted
 
 	dk, err := driver.New(driver.Config{
 		Socket:   d.Socket,
