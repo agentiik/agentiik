@@ -335,8 +335,8 @@ func saysWhatItSays(t *testing.T, file string, body []byte, a controller.Answer)
 		t.Errorf("%s names dispatch %s of %s, by %s, %s, and was read as dispatch %s of %s, by %s, %s",
 			file, doc.TaskID, doc.IdempotencyKey, doc.Runner, doc.State, a.Row, a.Result.Task, a.Runner, a.Result.State)
 	}
-	if exit := doc.ExitCode; (exit == nil && a.Result.ExitCode != 0) || (exit != nil && *exit != a.Result.ExitCode) {
-		t.Errorf("%s exits %v and was read as exiting %d", file, exit, a.Result.ExitCode)
+	if exit := doc.ExitCode; (exit == nil && (a.Result.ExitCode != 0 || !a.Result.NoExitCode)) || (exit != nil && (*exit != a.Result.ExitCode || a.Result.NoExitCode)) {
+		t.Errorf("%s exits %v and was read as exiting %d, with no code %t", file, exit, a.Result.ExitCode, a.Result.NoExitCode)
 	}
 	// An absent code is carried as 0, which is success, and the controller records no code
 	// for a success or a failure whose container never started. So the 0 is harmless only on

@@ -270,7 +270,7 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	// run, and the step it belongs to would never end.
 	sh.NextAttemptAt = time.Time{}
 	sh.Task = r.State
-	sh.ExitCode = r.ExitCode
+	sh.ExitCode, sh.NoExitCode = r.ExitCode, r.NoExitCode
 	if !r.DispatchedAt.IsZero() {
 		sh.DispatchedAt = r.DispatchedAt.UTC()
 	}
@@ -317,7 +317,7 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				// pending, and what it carried from the dispatch that ended goes
 				// with it.
 				sh.Task = agk.TaskPending
-				sh.ExitCode = 0
+				sh.ExitCode, sh.NoExitCode = 0, false
 				sh.Ports = nil
 				sh.NextAttemptAt = when
 				sh.DispatchedAt, sh.StartedAt, sh.FinishedAt = time.Time{}, time.Time{}, time.Time{}

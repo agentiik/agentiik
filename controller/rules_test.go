@@ -479,6 +479,7 @@ func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
 		{"a task whose deadline passed before it reached a container", graph.ShardState{Task: agk.TaskTimedOut}, nil},
 		{"a task cancelled before it reached a container", graph.ShardState{Task: agk.TaskCancelled}, nil},
 		{"a lost task", graph.ShardState{Task: agk.TaskLost, StartedAt: at}, nil},
+		{"a stopped container its runner reported no code for", graph.ShardState{Task: agk.TaskTimedOut, StartedAt: at, NoExitCode: true}, nil},
 	} {
 		c.shard.Attempt = 1
 		got := taskOf(decidedRun, "normalize", c.shard).ExitCode
