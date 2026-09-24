@@ -393,24 +393,23 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "from",
-              "to"
+              "from"
             ],
             "properties": {
               "from": {
                 "type": "string",
                 "minLength": 1,
-                "description": "The path in the repository tree, at the run's commit.",
+                "description": "The path or glob in the repository tree, at the run's commit.",
                 "examples": [
                   "config/rates.json",
-                  "templates/invoice.tmpl"
+                  "./sql/**"
                 ]
               },
               "to": {
                 "type": "string",
                 "pattern": "^/",
                 "minLength": 1,
-                "description": "Where it is mounted in the container, an absolute path.",
+                "description": "Where it is mounted in the container, an absolute path. Absent where the step asked for no relocation, as the short form of a selector never does: the file is then where it is under /agk/repo/.",
                 "examples": [
                   "/agk/files/rates.json"
                 ]
@@ -431,6 +430,9 @@
                 "from": "config/rates.json",
                 "to": "/agk/files/rates.json",
                 "mode": "0444"
+              },
+              {
+                "from": "./sql/**"
               }
             ]
           },
@@ -441,6 +443,9 @@
                 "from": "config/rates.json",
                 "to": "/agk/files/rates.json",
                 "mode": "0444"
+              },
+              {
+                "from": "./sql/**"
               }
             ]
           ]
