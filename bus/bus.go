@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -306,40 +304,6 @@ func (b *Bus) Publish(ctx context.Context, m TaskMessage) error {
 	}
 	return nil
 }
-
-// Stop asks for a task in flight to be stopped.
-//
-// A stop is not a queue message. The task it names is held by a runner that already took it, so
-// putting a stop on the work queue would be putting it where nobody holding that task is looking
-// and where a runner with room would take it as work. It goes out as a plain subject a runner
-// subscribes to for as long as it holds anything, which is the one thing the bus does that is
-// not work distribution.
-func (b *Bus) Stop(ctx context.Context, s graph.Stop) error {
-	body, err := json.Marshal(struct {
-		Task   agk.TaskID `json:"task"`
-		Reason string     `json:"reason"`
-	}{Task: s.Task, Reason: s.Reason.String()})
-	if err != nil {
-		return fmt.Errorf("bus: the stop for %s could not be written: %w", s.Task, err)
-	}
-	if err := b.conn.Publish(StopSubject, body); err != nil {
-		return fmt.Errorf("bus: the stop for %s could not be published: %w", s.Task, err)
-	}
-	// Flushed, because a plain publish is fire and forget and a stop that never left the
-	// buffer is a container that runs to its deadline. The flush is given a bound of its
-	// own: the client refuses a context with no deadline, and a caller passing one that has
-	// none is asking for a stop rather than asking to wait for ever.
-	flush, stop := context.WithTimeout(ctx, 10*time.Second)
-	defer stop()
-	if err := b.conn.FlushWithContext(flush); err != nil {
-		return fmt.Errorf("bus: the stop for %s was published and not flushed: %w", s.Task, err)
-	}
-	return nil
-}
-
-// StopSubject is where a stop goes. Not a stream: a stop is worth nothing to a runner that was
-// not holding the task, and worth nothing later.
-const StopSubject = "agentiik.stops"
 
 // PoolOf is the runner pool a task's labels select.
 //
