@@ -26,6 +26,9 @@ import (
 // taskMessages compiles the wire's task message schema out of the vendored document.
 func taskMessages(t *testing.T) *jsonschema.Schema { return wire(t, "taskMessage") }
 
+// taskResults compiles the wire's result schema, which is what a runner sends back.
+func taskResults(t *testing.T) *jsonschema.Schema { return wire(t, "taskResult") }
+
 // wire compiles one message of the vendored wire document.
 func wire(t *testing.T, message string) *jsonschema.Schema {
 	t.Helper()
@@ -384,18 +387,56 @@ func saysWhatItSays(t *testing.T, file string, body []byte, a controller.Answer)
 }
 
 // And the whole of it on a real bus: every result in the corpus published as a runner would, the
-// valid ones handed to the controller as the answer they say, and the invalid ones taken off the
-// queue and reported without the controller ever seeing them.
+// ones the wire accepts handed to the controller as the answer they say, and the others taken off
+// the queue and reported without the controller ever seeing them.
 func TestAResultIsWhatTheWireDescribes(t *testing.T) {
+	cases, err := fixtures.TaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handsOn(t, cases)
+}
+
+// A fixture the corpus still files as invalid once its schema has come to accept it, which package
+// bus names in outgrown, is read by the runner's half like any other document the schema accepts,
+// and is handed to the controller. Counted as refused here, it would fail this package's tests for
+// a reason they do not name while package bus's pass.
+func TestAResultTheCorpusHasOutgrownIsHandedOn(t *testing.T) {
+	cases, err := fixtures.TaskResults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	filed := false
+	for i := range cases {
+		if cases[i].Valid {
+			// The corpus as it stands when the schema moves and the fixture does not.
+			cases[i].Valid, cases[i].Covers, cases[i].Rule = false, "", "a rule the schema has since dropped"
+			filed = true
+			break
+		}
+	}
+	if !filed {
+		t.Fatal("the vendored result corpus holds no valid document to file as invalid")
+	}
+	handsOn(t, cases)
+}
+
+// handsOn publishes every result of cases as a runner would, and holds what the controller is
+// handed to the documents the wire accepts.
+//
+// Which those are is the schema's to say rather than the corpus's label. The two part when the
+// schema moves and a fixture does not, and package bus is where that is held: its outgrown names
+// each such fixture, and its tests fail the day the schema refuses one again. Reading the label
+// here would take a second copy of that list, kept in step by hand, and a fixture on one and not
+// the other would fail these tests on a result that was handed on as it should be.
+func handsOn(t *testing.T, cases []fixtures.Case) {
+	t.Helper()
+	results := taskResults(t)
 	b, url := served(t)
 	trouble := make(chan error, 16)
 	b.Trouble = func(_ string, err error) { trouble <- err }
 	js := publishing(t, url)
 
-	cases, err := fixtures.TaskResults()
-	if err != nil {
-		t.Fatal(err)
-	}
 	type sent struct {
 		file string
 		body []byte
@@ -415,7 +456,7 @@ func TestAResultIsWhatTheWireDescribes(t *testing.T) {
 		if err := json.Unmarshal(body, &named); err != nil {
 			t.Fatal(err)
 		}
-		if c.Valid {
+		if validates(t, results, body) == nil {
 			heard[named.TaskID+" "+named.State] = sent{c.File, body}
 		} else {
 			refused++
@@ -432,17 +473,17 @@ func TestAResultIsWhatTheWireDescribes(t *testing.T) {
 		case a := <-got:
 			s, ok := heard[a.Row+" "+a.Result.State.String()]
 			if !ok {
-				t.Fatalf("the controller was handed %+v, which is not a result the corpus holds as valid or was handed twice", a)
+				t.Fatalf("the controller was handed %+v, which is not a result the wire accepts or was handed twice", a)
 			}
 			delete(heard, a.Row+" "+a.Result.State.String())
 			saysWhatItSays(t, s.file, s.body, a)
 		case err := <-trouble:
 			if refused == 0 {
-				t.Fatalf("one more result was taken off the queue than the corpus refuses: %s", err)
+				t.Fatalf("one more result was taken off the queue than the wire refuses: %s", err)
 			}
 			refused--
 		case <-deadline:
-			t.Fatalf("%d valid results were never handed on and %d invalid ones never reported", len(heard), refused)
+			t.Fatalf("%d results the wire accepts were never handed on and %d it refuses never reported", len(heard), refused)
 		}
 	}
 }

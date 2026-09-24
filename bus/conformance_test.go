@@ -74,8 +74,10 @@ func validates(t *testing.T, s *jsonschema.Schema, body []byte) error {
 //
 // A fixture lands here when the schema moves and the fixture does not. It is held to the schema
 // rather than to its own label, and the test fails the day the schema refuses it again, which is
-// the day the entry has to go. It is empty: the one it held, a cancelled result filed as a run's
-// state, was rewritten around a state only a run has when the schemas caught up.
+// the day the entry has to go. It is the only such list: package bus/control expects at the
+// controller whatever the schema accepts, so an entry needs no counterpart there. It is empty: the
+// one it held, a cancelled result filed as a run's state, was rewritten around a state only a run
+// has when the schemas caught up.
 var outgrown = map[string]string{}
 
 // Every result in the corpus is read the way the corpus says it is: a valid one is read as what it
