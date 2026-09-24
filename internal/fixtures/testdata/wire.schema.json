@@ -289,7 +289,7 @@
         "runs_on": {
           "type": "array",
           "uniqueItems": true,
-          "description": "The label selectors the step was published under, which is what decided the queue this message went onto. They travel so that the runner can check the task against what it actually claims, which is worth something because labels are not self asserted: a runner may only ever claim the labels its join token allowed, so a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet. An empty list is a step that named no pool and is content with whichever runner the namespace is allowed to use.",
+          "description": "The label selectors the step was published under, which is what decided the queue this message went onto. They travel so that the runner can check the task against what it actually claims, which is worth something because labels are not self asserted: a runner may only ever claim the labels its join token allowed, so a machine cannot add zone=lan to itself and start receiving the steps that were kept off the internet. An empty list is a step that named no label, which goes to the pool default that every installation is created with.",
           "items": {
             "$ref": "#/$defs/label"
           },
@@ -894,7 +894,7 @@
           },
           "examples": [
             {
-              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
               "lines": 412,
               "truncated": false
             }
@@ -929,7 +929,7 @@
             },
             "max_rss_bytes": {
               "title": "Peak resident set",
-              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened. Absent, with cpu_seconds, where no sample was read.",
+              "description": "The largest resident set among the samples of the container's statistics read while it ran, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing. A peak between two samples is missed, so a task the kernel killed for memory may report less than its ceiling, and the exit code is what says that is what happened. Absent, with cpu_seconds, where no sample was read.",
               "type": "integer",
               "minimum": 0,
               "examples": [
@@ -971,7 +971,7 @@
           "outputs": [],
           "artifacts": [],
           "log": {
-            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
             "lines": 412,
             "truncated": false
           },
@@ -1024,7 +1024,7 @@
           "runner": "runner-dmz-02",
           "state": "failed",
           "log": {
-            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1%2F3%2F8",
             "lines": 3,
             "truncated": false
           }
@@ -2378,7 +2378,7 @@
     },
     "logShipment": {
       "title": "Log shipment",
-      "description": "What a runner ships to the API as a task's captured standard error, and what the API answers. The log travels as an outbound request from the host holding the container, because a runner opens no listening port and is never connected to; it goes to the API rather than to the object store, since the API is what indexes a log, applies the retention the workflow declared within the namespace's ceiling and serves it over SSE. Shipping happens in chunks while the container is still running, so that a step running for an hour is readable while it runs, and a last chunk closes the log once the container has exited. The runner credential authenticates the call and the per-task grant scopes it to one task, and neither is a member of either half, because a token written into a body is a token that ends up in the very log this message carries: a token written into a body is a token that ends up in the very log this message carries. Both halves are written here because they are one exchange, and a runner cannot be held to the request without the answer that tells it where it stands.",
+      "description": "What a runner ships to the API as a task's captured standard error, and what the API answers. The log travels as an outbound request from the host holding the container, because a runner opens no listening port and is never connected to; it goes to the API rather than to the object store, since the API is what indexes a log, applies the retention the workflow declared within the namespace's ceiling and serves it over SSE. Shipping happens in chunks while the container is still running, so that a step running for an hour is readable while it runs, and a last chunk closes the log once the container has exited. The runner credential authenticates the call and the per-task grant scopes it to one task, and neither is a member of either half, because a token written into a body is a token that ends up in the very log this message carries. Both halves are written here because they are one exchange, and a runner cannot be held to the request without the answer that tells it where it stands.",
       "type": "object",
       "required": [
         "request",
@@ -2545,7 +2545,7 @@
             "accepted": {
               "type": "integer",
               "minimum": 0,
-              "description": "How many lines of this chunk were written. It is the number shipped in the ordinary case, zero for a chunk the API already holds, which is what a redelivery reads as, and fewer than shipped when the cap fell inside the chunk. None of the three is an error and all three answer the same status: a runner that treated a zero as a failure would ship the chunk a third time and learn the same thing again.",
+              "description": "How many lines of this chunk were written. It is the number shipped in the ordinary case and fewer than shipped when the cap fell inside the chunk. It is zero for a chunk the API already holds, which is what a redelivery reads as, for a chunk past a gap, which is kept nowhere and answered with the next_seq of the chunk that is missing, and for a chunk that arrives once the cap has been reached. None of these is an error and all of them answer the same status: a runner that treated a zero as a failure would ship the chunk a third time and learn the same thing again.",
               "examples": [
                 3,
                 0
@@ -2554,7 +2554,7 @@
             "next_seq": {
               "type": "integer",
               "minimum": 1,
-              "description": "The sequence number the API expects next for this task. It is one more than the highest contiguous seq the API holds, so it never runs past a gap: a runner whose chunk five never arrived is told five and not eight. A runner that lost the answer to a shipment ships that chunk again and reads where it stands from here, which is why resuming needs no separate route to ask.",
+              "description": "The sequence number the API expects next for this task. It is one more than the highest contiguous seq the API holds, so it never runs past a gap while the log is still being written: a runner whose chunk five never arrived is told five and not eight. Once the cap has been reached nothing more is written, so a chunk moves next_seq past itself even past a gap, since there is nothing left for the missing chunk to fill. A runner that lost the answer to a shipment ships that chunk again and reads where it stands from here, which is why resuming needs no separate route to ask.",
               "examples": [
                 8,
                 1
@@ -2580,14 +2580,14 @@
           },
           "examples": [
             {
-              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
               "accepted": 3,
               "next_seq": 8,
               "lines": 391,
               "truncated": false
             },
             {
-              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+              "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
               "accepted": 0,
               "next_seq": 8,
               "lines": 391,
@@ -2619,7 +2619,7 @@
             ]
           },
           "response": {
-            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+            "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F2%2F3%2F8",
             "accepted": 3,
             "next_seq": 8,
             "lines": 391,

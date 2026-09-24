@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,15 +21,16 @@ const Stream = "AGENTIIK_TASKS"
 // Subject is where a task for one runner pool goes.
 //
 // One subject per pool, so that a runner's durable consumer filters on the work it can take
-// rather than reading everything and discarding most of it. The pool is a label value and is
-// held to a grammar here for the reason every name is: a pool carrying a dot or a wildcard would
-// be a pool that could read another pool's subject.
+// rather than reading everything and discarding most of it. The pool is the name an administrator
+// gave it, and is held to a grammar here for the reason every name is: a pool carrying a dot or a
+// wildcard would be a pool that could read another pool's subject.
 func Subject(pool string) string { return "agentiik.tasks." + pool }
 
-// DefaultPool is where a task with no runs_on goes.
+// DefaultPool is where a task with no runs_on goes, and the pool every installation is created
+// with, by the migration that creates it.
 //
-// "runs_on: [] or absent means the default pool", so a step that asks for nothing asks for the
-// pool an installation configured to take anything.
+// A step that names no label asks for nothing, and every pool carries nothing, so it needs a pool
+// named for it rather than one found by its labels.
 const DefaultPool = "default"
 
 // Bus is a connection to the task bus.
@@ -268,7 +270,12 @@ func (b *Bus) consumer(ctx context.Context, pool string, wait time.Duration) err
 	return nil
 }
 
-// Publish puts one task message on the queue its labels select.
+// Publish puts one task message on the queue of the pool Route chose for it.
+//
+// The pool is given rather than read off the message's runs_on, because choosing one needs the
+// pools, which the controller holds and the bus does not, and because the pool whose policy the
+// controller applied has to be the pool whose runners are handed the task. It is still held to
+// what a subject token can be, since it becomes one.
 //
 // It is the control plane's, and package bus/control is what calls it, once it has written what the
 // controller decided as the wire describes it: a runner's credential may not publish on a task
@@ -284,9 +291,8 @@ func (b *Bus) consumer(ctx context.Context, pool string, wait time.Duration) err
 // key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being
 // published would be requeued into a stream that answers it was already there, and the requeue
 // would go nowhere while the controller recorded it as handed out.
-func (b *Bus) Publish(ctx context.Context, m TaskMessage) error {
-	pool, err := PoolOf(m.RunsOn)
-	if err != nil {
+func (b *Bus) Publish(ctx context.Context, pool string, m TaskMessage) error {
+	if err := validPool(pool); err != nil {
 		return fmt.Errorf("bus: task %s: %w", m.IdempotencyKey, err)
 	}
 	if m.TaskID == "" {
@@ -311,27 +317,83 @@ func (b *Bus) Publish(ctx context.Context, m TaskMessage) error {
 	return nil
 }
 
-// PoolOf is the runner pool a task's labels select.
+// Pool is a runner pool as a task is routed to one: its name, which is its subject, and the labels
+// its runners may claim, which are what a step's runs_on selects it by.
+type Pool struct {
+	Name   string
+	Labels []string
+}
+
+// Unrouted is a task that no pool, or more than one, is selected by.
 //
-// "runs_on: [arch=amd64] ... Restricted to the runner pools the namespace is allowed to use." A
-// label is written key=value, and the pool is what a pool= label names; a task that names none
-// goes to the default pool.
-func PoolOf(runsOn []string) (string, error) {
-	pool := DefaultPool
+// It carries the pools rather than a sentence, because what a person should be told depends on
+// which it is: no pool is a pool nobody created, two are pools nobody told apart, and the
+// controller writes that into the step's reason in its own words.
+type Unrouted struct {
+	// RunsOn is what the task asked for, empty where it asked for nothing.
+	RunsOn []string
+
+	// Pools are the pools that carry every label of it, none or more than one, by name.
+	Pools []string
+}
+
+func (u *Unrouted) Error() string {
+	switch {
+	case len(u.RunsOn) == 0 && len(u.Pools) == 0:
+		return fmt.Sprintf("a task that names no label goes to the runner pool %s, which does not exist", DefaultPool)
+	case len(u.Pools) == 0:
+		return fmt.Sprintf("no runner pool carries every label of [%s]", strings.Join(u.RunsOn, ", "))
+	default:
+		return fmt.Sprintf("the runner pools %s each carry every label of [%s], and a task goes to one pool", strings.Join(u.Pools, ", "), strings.Join(u.RunsOn, ", "))
+	}
+}
+
+// Route is the one pool a task's runs_on selects among the pools given, which are the pools the
+// run's namespace may reach.
+//
+// A task goes to the pool whose labels include every label it names: a pool's labels are the most
+// any of its runners may claim, and the pool is what a step is written against. One
+// pool and never each pool that matches, because the pool is the queue: a task on two queues runs
+// twice, and a choice made here between two would be a choice nobody wrote down. A task that names
+// no label goes to DefaultPool, which the installation creates, rather than to whichever pool
+// matches it, since every pool does.
+//
+// The controller calls it on the pools it read in the transaction that issues the task's grant,
+// and hands the answer to Publish with the message, so that the pool whose policy was applied and
+// the pool whose runners are handed the task are one pool.
+func Route(runsOn []string, pools []Pool) (string, error) {
 	for _, label := range runsOn {
 		key, value, ok := strings.Cut(label, "=")
 		if !ok || key == "" || value == "" {
 			return "", fmt.Errorf("%q is not a runner label: one is written key=value", label)
 		}
-		if key != "pool" {
-			continue
-		}
-		if err := validPool(value); err != nil {
-			return "", err
-		}
-		pool = value
 	}
-	return pool, nil
+	var matching []string
+	for _, p := range pools {
+		switch {
+		case len(runsOn) == 0:
+			if p.Name == DefaultPool {
+				matching = append(matching, p.Name)
+			}
+		case carries(p.Labels, runsOn):
+			matching = append(matching, p.Name)
+		}
+	}
+	if len(matching) != 1 {
+		slices.Sort(matching)
+		return "", &Unrouted{RunsOn: runsOn, Pools: matching}
+	}
+	return matching[0], nil
+}
+
+// carries says whether labels include every one of asked.
+func carries(labels, asked []string) bool {
+	for _, label := range asked {
+		if !slices.Contains(labels, label) {
+			return false
+		}
+	}
+	return true
 }
 
 // validPool holds a pool name to what can be a subject token.

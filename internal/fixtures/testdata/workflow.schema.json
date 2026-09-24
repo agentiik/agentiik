@@ -1308,7 +1308,7 @@
     },
     "runsOn": {
       "title": "Runner selectors",
-      "description": "Runner labels a task of this step has to match, for work that has to happen somewhere particular: a zone, an architecture, a host holding a licence. A namespace can only select the runner pools it is allowed to use, so this narrows a choice and never widens it.",
+      "description": "Runner labels a task of this step has to match, for work that has to happen somewhere particular: a zone, an architecture, a host holding a licence. A namespace can only select the runner pools it is allowed to use, so this narrows a choice and never widens it. The task goes to the one pool whose labels include every one of these, because a pool is a queue and a task on two queues would run twice: none, or more than one, fails the step with exit code 125 on the infrastructure's account. A step that names none goes to the pool default.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,

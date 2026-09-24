@@ -50,8 +50,9 @@ func TestAPoolIsCreatedAndThenRead(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("the pools answered %d: %s", w.Code, w.Body)
 	}
+	// With the pool default, which the installation creates for a step that names no label.
 	pools, _ := listing["runner_pools"].([]any)
-	if len(pools) != 3 {
+	if len(pools) != 4 {
 		t.Fatalf("the listing holds %d pools: %v", len(pools), listing)
 	}
 	var names []string
@@ -63,7 +64,7 @@ func TestAPoolIsCreatedAndThenRead(t *testing.T) {
 		names = append(names, name)
 		found[name] = pool
 	}
-	if strings.Join(names, ", ") != "cpu-heavy, dmz, sandboxed" {
+	if strings.Join(names, ", ") != "cpu-heavy, default, dmz, sandboxed" {
 		t.Errorf("the listing is %v, and it is ordered by name", names)
 	}
 	if !reflect.DeepEqual(found["sandboxed"], want) {
@@ -126,9 +127,9 @@ func TestAPoolIsRefusedWhereTheWireRefusesIt(t *testing.T) {
 		}
 	}
 
-	// Nothing refused was written.
+	// Nothing refused was written: the listing holds dmz and the installation's default.
 	_, listing := call(t, h, "GET", "/api/v1/runner-pools", "admin", nil)
-	if pools, _ := listing["runner_pools"].([]any); len(pools) != 1 {
+	if pools, _ := listing["runner_pools"].([]any); len(pools) != 2 {
 		t.Errorf("after the refusals the listing holds %v", listing)
 	}
 }

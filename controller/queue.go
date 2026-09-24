@@ -15,9 +15,10 @@ import (
 //
 // "For each of them it creates one task per shard and publishes those tasks on the queue that
 // matches the step's runs_on labels. It does not choose a machine, and it does not start one."
-// That is the whole of the contract, and it is why Publish takes a graph.Task and nothing
-// beside it: the task already carries its RunsOn, so routing is something an implementation
-// reads rather than something a caller is asked to remember.
+// The queue is the pool's, and the pool is chosen by this package, in the transaction that issues
+// the task's grant and reads the pools: the one whose labels include every label of the step's
+// runs_on, among the pools the namespace may reach (pool.go). So a Dispatch names it, and an implementation publishes to it rather than choosing again from labels
+// alone, which would be a second choice free to differ from the one whose policy was applied.
 //
 // Stop is a method rather than a cancelled context for the reason graph.Driver gives: "a task
 // in flight may be held by a runner in another process, where a context does not reach".
@@ -25,7 +26,7 @@ import (
 // An implementation is the bus group's. A test fakes the whole of it in a dozen lines, which is
 // what keeps every rule in this package testable with no bus behind it.
 type Queue interface {
-	// Publish puts one dispatch on the queue its labels select. It is called after the
+	// Publish puts one dispatch on the queue of the pool it names. It is called after the
 	// decision that planned it has committed, never before, because the database is the
 	// record and the bus is a courier: a message published against a transaction that then
 	// rolled back is work on a queue that no row accounts for and that nothing can recall.
@@ -65,6 +66,10 @@ type Dispatch struct {
 	// are in the object store, put there by the controller before this was built, and the
 	// runner fetches them by redeeming the grant.
 	Inputs map[agk.Port]InputRef
+
+	// Pool is the runner pool the task goes to, chosen from the task's runs_on in the
+	// transaction that issued its grant, which is where the pool's policy was applied.
+	Pool string
 }
 
 // InputRef is one input port's envelope, named rather than carried.
