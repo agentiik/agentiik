@@ -75,6 +75,10 @@ type Log struct {
 	Namespace string
 	Task      string
 	URI       string
+
+	// Keys are the objects its lines were written to, one a chunk, for the caller to delete
+	// before it confirms: the index to them is the one thing that can name them.
+	Keys []string
 }
 
 // ExpireArtifacts retires every reference whose duration has run out.
@@ -208,7 +212,10 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 	var out []Log
 	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
 		rows, err := w.tx.Query(ctx, `
-			select t.namespace, t.id, t.log_uri
+			select t.namespace, t.id, t.log_uri,
+			       coalesce((select array_agg(c.object_key order by c.seq) from task_log_chunks c
+			                 where c.namespace = t.namespace and c.task_id = t.id
+			                   and c.object_key is not null), '{}')
 			from tasks t join runs r on r.namespace = t.namespace and r.id = t.run_id
 			where t.log_uri is not null
 			  and r.expires_at is not null and r.expires_at <= now()
@@ -220,7 +227,7 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var l Log
-			if err := rows.Scan(&l.Namespace, &l.Task, &l.URI); err != nil {
+			if err := rows.Scan(&l.Namespace, &l.Task, &l.URI, &l.Keys); err != nil {
 				return err
 			}
 			out = append(out, l)
@@ -234,6 +241,9 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 }
 
 // LogsPurged records that those logs are gone from the store.
+//
+// The index to their chunks goes with them, since it names objects that are no longer there, and
+// where each log stood stays: how many lines it held and whether the cap cut it short.
 func (p *Pool) LogsPurged(ctx context.Context, logs []Log) (int, error) {
 	if len(logs) == 0 {
 		return 0, nil
@@ -253,7 +263,11 @@ func (p *Pool) LogsPurged(ctx context.Context, logs []Log) (int, error) {
 			return err
 		}
 		cleared = int(tag.RowsAffected())
-		return nil
+		_, err = w.tx.Exec(ctx, `
+			delete from task_log_chunks c
+			using unnest($1::text[], $2::text[]) as g(namespace, id)
+			where c.namespace = g.namespace and c.task_id = g.id`, namespaces, tasks)
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("db: the purged logs could not be recorded: %w", err)
