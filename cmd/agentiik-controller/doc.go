@@ -1,0 +1,64 @@
+// Command agentiik-controller is the controller of an installation, as a program of its own: it
+// "leads by advisory lock, sweeps, consumes results and publishes tasks".
+//
+// Every rule it follows is somebody else's. Package controller elects, decides and sweeps,
+// package bus/control carries what was decided and hands back what runners answered, package
+// version rebuilds a graph from what a push stored, and package internal/config reads the
+// installation's settings. This package opens what they are given and runs them, and adds nothing
+// a test of theirs would have to know about.
+//
+// # Why a program apart from the API
+//
+// "The API and the controller are two programs rather than one because only the API may link the
+// secret store." The controller "names which secret a task may have and never sees its value", and
+// the sealed values sit in the database it shares with the API: the master key, held by the API
+// alone, is what keeps them from it. A process that linked both could open a value whatever its
+// configuration said, so the line is drawn at what the binary contains. secret/boundary_test.go
+// reads every package of the module, this one included, and fails on any that reaches the store;
+// internal/config refuses a controller whose environment names the master key's file.
+//
+// # Configuration
+//
+// Only its environment, read by config.ReadController: the database it connects to as the
+// application role, the bus and the control plane's credential, the object-store directory,
+// AGK_MAX_REQUEUES and AGK_TASK_CEILING. It takes no argument, since a flag would be a second way
+// to say what the environment says and a Compose file, a systemd unit and a container platform all
+// set an environment the same way. A setting that refuses the start is named, with every other one
+// that does, and nothing is opened.
+//
+// # Leading, and standing by
+//
+// "Runs as several instances with one active at a time, elected by a session-level PostgreSQL
+// advisory lock." Every instance opens the database and the bus, then waits for the lock, so a
+// standby that could not reach either says so when it starts rather than when it is needed. The
+// one that holds the lock watches for runs and sweeps on its interval, and takes results off the
+// bus; the others try the lock on a loop and take over the instant it frees, which is the moment
+// the holder's session ends, however it ended.
+//
+// Nothing a term does ends it but the fence, a stop, or the loss of what it stands on. A run that
+// could not be decided is reported and left to the next sweep, as the sweep already treats one,
+// and a result that could not be recorded is reported and delivered again. A write refused by the
+// fence is a term that has passed to somebody else, and the listening connection, the result
+// consumer or the lock's own session failing is a controller that can no longer hear or decide.
+// Each of those ends the program rather than the term alone: the lock is released on the way out,
+// a standby takes over from the database, where the state lives, and the process's supervisor
+// starts it again as a standby. A controller that retried in place would be the partitioned former
+// holder the fence exists to refuse.
+//
+// So does the control plane's bus credential running out, at the instant it does. The bus refuses
+// it from then on, and a controller left running would publish nothing and hear nothing while
+// looking alive.
+//
+// # Exit codes
+//
+// 0 once stopped by SIGINT or SIGTERM, having released the lock. 1 where the configuration refused
+// the start or something ended the program, which says why on standard error. 2 where it was
+// given an argument it does not take.
+//
+// # What it ships as
+//
+// A static binary, CGO_ENABLED=0, and an image, build/controller.Dockerfile, holding that same
+// file, the certificates it verifies the database and the bus with, and nothing else, run as a user
+// that is not root. static_test.go builds both and checks each property on what was built rather
+// than on the flags passed.
+package main
