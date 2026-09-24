@@ -141,6 +141,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Sweep` removes the `agk-` networks a runner that died left: those older than two minutes, which no container carrying their task's label is on and no task in flight here names. It says what it removed and what the daemon refused.
 - The refusal of `network: egress` names v0.9.0 for the proxy.
 - `driver.KernelHost` is the `Host` a `Config` without one uses, for a caller asking the same of another directory.
+- The terminal `driver.Event` of a container the driver watched run carries `cpu_seconds` and `max_rss_bytes`, sampled from the daemon's statistics (`GET /containers/{id}/stats`) while it runs: the last processor total, and the highest memory less its inactive page cache. A container gone before any sample reports neither rather than a guess.
+- A pull that happened reports at least 1 in `image_pull_ms`, since 0 says the host already held the image.
 
 ### Runner
 

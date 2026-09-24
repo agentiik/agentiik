@@ -823,3 +823,60 @@ func TestAStopEndsARealTaskInFlight(t *testing.T) {
 		t.Fatal("the stopped Run never came back")
 	}
 }
+
+// TestARealBusyContainerReportsWhatItConsumed holds the usage block to a daemon's own
+// statistics: a container that holds 64 MiB and spins for two seconds or more reports
+// processor time above nothing and a peak at least what it allocated, read while it ran.
+func TestARealBusyContainerReportsWhatItConsumed(t *testing.T) {
+	d, image := realDriver(t)
+	cfg := d.cfg
+	observed := &recorder{}
+	cfg.Observer = observed
+	d, err := New(cfg)
+	if err != nil {
+		t.Fatalf("opening the driver again with an observer: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	// awk doubles a kilobyte to 64 MiB, then spins until the clock, read in whole
+	// seconds, has moved on three, which is two seconds at least and so two of the
+	// daemon's collections, and names the string last so that it is held throughout.
+	const allocated = 64 << 20
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4XQ7K2N4D6F8H0A", "busy", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+		Namespace: "finance",
+		Step:      "busy",
+		Attempt:   1,
+		Image:     image,
+		Script: []string{
+			`awk 'BEGIN { s = sprintf("%1024s", ""); for (i = 0; i < 16; i++) s = s s; t = systime(); while (systime() - t < 3) n++; print length(s) > "/dev/stderr" }'`,
+		},
+		Outputs: []agk.Port{"out"},
+		Network: graph.NetworkNone,
+	}
+
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+
+	var u Usage
+	observed.mu.Lock()
+	for _, e := range observed.es {
+		if e.State.Terminal() {
+			u = e.Usage
+		}
+	}
+	observed.mu.Unlock()
+	t.Logf("the container spent %.3f CPU seconds and peaked at %d bytes over %s", u.CPUSeconds, u.MaxRSSBytes, result.FinishedAt.Sub(result.StartedAt))
+	if u.CPUSeconds <= 0 {
+		t.Errorf("a container that spun for two seconds reports %v CPU seconds", u.CPUSeconds)
+	}
+	if u.MaxRSSBytes < allocated {
+		t.Errorf("a container that held %d bytes reports a peak of %d", allocated, u.MaxRSSBytes)
+	}
+}

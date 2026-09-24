@@ -195,7 +195,10 @@ func hold(ctx context.Context, cli *docker.Client, step agk.Step, ref, auth stri
 		}
 		return docker.Image{}, 0, fault(step, ErrImagePullFailed, ChargePlatform, "%v", err)
 	}
-	pullMillis := time.Since(started).Milliseconds()
+	// A pull that happened is never reported as taking no time, since 0 is what the
+	// usage block says of an image the host already held. One quicker than a
+	// millisecond comes from a registry on the same machine, and is rounded up.
+	pullMillis := max(time.Since(started).Milliseconds(), 1)
 
 	image, err = cli.ImageInspect(ctx, ref)
 	if err != nil {
