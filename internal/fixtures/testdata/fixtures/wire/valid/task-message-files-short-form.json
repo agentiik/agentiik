@@ -1,0 +1,46 @@
+{
+  "task_id": "01M2CCZ9G62NQXFAFCXKRPJEH7",
+  "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/load/1",
+  "run_id": "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+  "namespace": "finance",
+  "workflow": "monthly-invoicing@a3f9c1e",
+  "step": "load",
+  "attempt": 1,
+  "image": "docker.io/library/postgres@sha256:8e21af18c6b590f2df7fa9bc364251212900a8d3493ed74f96bf418479a34b70",
+  "script": [
+    "psql -f /agk/repo/sql/orders.sql"
+  ],
+  "files": [
+    {
+      "from": "./sql/**"
+    },
+    {
+      "from": "./certs/internal-ca.pem",
+      "to": "/etc/ssl/certs/internal-ca.pem",
+      "mode": "0444"
+    }
+  ],
+  "params": {},
+  "secrets": [],
+  "inputs": [
+    {
+      "port": "in",
+      "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
+      "items": 1
+    }
+  ],
+  "outputs": [
+    "out"
+  ],
+  "resources": {
+    "cpu": "1",
+    "memory": "512Mi",
+    "pids": 256
+  },
+  "network": "none",
+  "runs_on": [
+    "arch=amd64"
+  ],
+  "deadline": "2026-09-10T06:10:00Z",
+  "grant": "agkgrant_01M2CCZ9G62NQXFAFCXKRPJEH7_dGFza2dyYW50ZXhhbXBsZTAz"
+}

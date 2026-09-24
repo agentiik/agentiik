@@ -49,7 +49,7 @@
         },
         "namespace": {
           "description": "Namespace that owns the workflow. It is the unit of ownership and the coarse scope for access grants, so it decides which secrets can be named here and which runner pools may be selected.",
-          "$ref": "#/$defs/identifier",
+          "$ref": "#/$defs/namespace",
           "examples": ["finance", "platform"]
         },
         "labels": {
@@ -276,6 +276,13 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
       "examples": ["monthly-invoicing", "create_invoice", "orders"]
     },
+    "namespace": {
+      "title": "Namespace",
+      "description": "The name of a namespace, an identifier other than a reserved word. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts cannot name a namespace, and are refused at namespace and login creation from v0.3.0.",
+      "$ref": "#/$defs/identifier",
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)$" },
+      "examples": ["finance", "platform"]
+    },
     "duration": {
       "title": "Duration",
       "description": "A length of time written as a number and a unit: ms, s, m, h or d. Written rather than counted in seconds so that a file says 90d where a reader would otherwise have to work out what 7776000 means.",
@@ -470,9 +477,10 @@
     },
     "workflowPath": {
       "title": "Workflow path",
-      "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use.",
+      "description": "A workflow addressed as <namespace>/<name>, the same identity a grant and a git remote use. The namespace is never a reserved word, as $defs/namespace lists them.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)/" },
       "examples": ["finance/common", "finance/monthly-invoicing"]
     },
     "scheduleTrigger": {
@@ -1089,7 +1097,8 @@
             {
               "description": "The workflow to call, as <namespace>/<name>, optionally at a ref after an @.",
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*(@\\S+)?$"
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*(@\\S+)?$",
+              "not": { "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)/" }
             },
             {
               "description": "The workflow to call and the ref it is read at, written apart.",
