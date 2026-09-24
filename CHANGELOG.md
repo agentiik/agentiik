@@ -104,6 +104,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
 - A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
+- `driver.WithSources` gives one task's `Run` the store, secret source and tree its redemption answered, in place of `Config.Store`, `Config.Secrets` and `Config.Repo`, adoption included, so two tasks in flight that both name `billing` each get their own value. A store opened for another namespace is refused; `agk run --local` gives none and is unchanged.
 
 ### API
 

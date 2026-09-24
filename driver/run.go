@@ -47,7 +47,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			"the step is a call to another workflow, which the evaluator expands and no container runs")
 	}
 
-	store, err := d.store(t)
+	store, err := d.store(ctx, t)
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -147,7 +147,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.cfg.Secrets)
+	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.secrets(ctx))
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -431,7 +431,9 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 
 	// The values are redeemed again rather than remembered, because the masker needs
 	// them and the first delivery's copy of them left with the process that had it.
-	// Nothing is written: this is the list the literal match runs against.
+	// They are this delivery's, from the sources Run was called with, since a runner
+	// that restarted holds the redemption it made and not the one the first delivery
+	// made. Nothing is written: this is the list the literal match runs against.
 	values, err := d.values(ctx, t)
 	if err != nil {
 		return fail(err)
@@ -583,8 +585,20 @@ func (d *Docker) openLog(ctx context.Context, t graph.Task) (io.Writer, func(), 
 	return sink, func() { sink.Close() }, nil
 }
 
-// store opens the artifact store of the task's namespace.
-func (d *Docker) store(t graph.Task) (*artifact.Store, error) {
+// store is the artifact store of the task's namespace: the one its sources carry, or the one
+// Config opens for the namespace.
+func (d *Docker) store(ctx context.Context, t graph.Task) (*artifact.Store, error) {
+	if s := sourcesOf(ctx).Store; s != nil {
+		// Config.Store is asked for the task's namespace, so what it answers is that
+		// namespace's by construction. A store handed over already opened is not, and a
+		// runner that paired a task with another task's store would upload one
+		// namespace's outputs under another's prefix.
+		if s.Namespace() != t.Namespace {
+			return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
+				"the artifact store this task was given is namespace %s's and the task is namespace %s's, and an artifact never crosses a namespace boundary", s.Namespace(), t.Namespace)
+		}
+		return s, nil
+	}
 	if d.cfg.Store == nil {
 		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
 			"this driver was built with no artifact store, and what a container leaves under %s is uploaded to one", brick.OutFilesDir)
@@ -613,8 +627,12 @@ func (d *Docker) runOf(ctx context.Context, t graph.Task) (agk.Run, error) {
 	return run, nil
 }
 
-// repo is the path of the workflow repository tree at the task's commit.
+// repo is the path of the workflow repository tree at the task's commit: the one its sources
+// name, or the one Config prepares.
 func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
+	if repo := sourcesOf(ctx).Repo; repo != "" {
+		return repo, nil
+	}
 	if d.cfg.Repo == nil {
 		return "", nil
 	}
@@ -627,14 +645,17 @@ func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
 }
 
 // values redeems the secrets of one task without writing any of them, which is what the
-// masker needs and all it needs.
+// masker needs and all it needs. They are asked of the source of the delivery doing the
+// asking, which on a server is the redemption it made itself, and never of the one that
+// started the container.
 func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
-	if d.cfg.Secrets == nil {
+	secrets := d.secrets(ctx)
+	if secrets == nil {
 		return nil, nil
 	}
 	var values [][]byte
 	for _, s := range t.Secrets {
-		value, err := d.cfg.Secrets.Value(ctx, s.Name)
+		value, err := secrets.Value(ctx, s.Name)
 		if err != nil {
 			// A value that cannot be redeemed is a value the masker cannot
 			// see, and a log written without it would carry the secret in
