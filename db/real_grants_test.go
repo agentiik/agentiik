@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"slices"
 	"testing"
@@ -581,4 +582,149 @@ func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
 	if holder == nil || *holder != ready.Runner {
 		t.Errorf("the task is held by %v, and was %s's", holder, ready.Runner)
 	}
+}
+
+// "The API checks the pool's namespaces again at the redemption (422)", and a host's own narrowing
+// as well (403), each before anything binds, checked and bound alike. The runner that holds the task
+// already passed them when it bound it, and is not asked again: a runner's standing decides who
+// takes a task, and a task taken is its holder's to finish.
+func TestARedemptionIsHeldToThePoolAndTheHostsNamespaces(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateRunnerPool(ctx, RunnerPool{Name: "ops", AcceptedNamespaces: []string{"team-ops"}, CreatedBy: "admin"}); err != nil {
+			return err
+		}
+		return w.CreateRunnerPool(ctx, RunnerPool{Name: "shared", AcceptedNamespaces: []string{"finance", "team-ops"}, CreatedBy: "admin"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outside := joinedTo(t, pool, "ops", nil, privateKey(1), now)
+	narrowed := joinedTo(t, pool, "shared", []string{"team-ops"}, privateKey(2), now)
+	within := joinedTo(t, pool, "shared", []string{"finance"}, privateKey(3), now)
+
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	const row = "01M2GHBBBBBBBBBBBBBBBBBBBB"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', $1, $2, 'render', 1, 'dispatched')`, row, financeRun); err != nil {
+		t.Fatalf("seeding the task: %s", err)
+	}
+	var clear string
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", key, row, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		runner string
+		want   error
+	}{
+		{outside.Runner, ErrPoolRefusesNamespace},
+		{narrowed.Runner, ErrRunnerNarrowed},
+	} {
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			if _, err := w.Redeemable(ctx, clear, key, c.runner, now); !errors.Is(err, c.want) {
+				t.Errorf("checking a redemption by %s answered %v, not %v", c.runner, err, c.want)
+			}
+			if _, err := w.Redeem(ctx, clear, key, c.runner, now); !errors.Is(err, c.want) {
+				t.Errorf("a redemption by %s answered %v, not %v", c.runner, err, c.want)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var holder *string
+	if err := conn.QueryRow(ctx, `select runner from tasks where id = $1`, row).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if holder != nil {
+		t.Fatalf("a refused redemption bound the task to %s", *holder)
+	}
+
+	// The checks come in an order: a draining runner is refused as one, before its pool is
+	// asked, since a 422 would have it report the task and so bind it; and a pool that does not
+	// run the namespace is answered as never answerable before a narrowing that leaves it out as
+	// well, which a pool narrowed after its runner joined produces, since putting the message
+	// back would only hand it round the pool.
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.Drain(ctx, outside.Runner, "admin", "the host is being retired", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'shared'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		runner string
+		want   error
+	}{
+		{outside.Runner, ErrRunnerNotTaking},
+		{narrowed.Runner, ErrPoolRefusesNamespace},
+	} {
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			_, err := w.Redeemable(ctx, clear, key, c.runner, now)
+			if !errors.Is(err, c.want) {
+				t.Errorf("checking a redemption by %s answered %v, not %v", c.runner, err, c.want)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, `update runner_pools set accepted_namespaces = '{finance, team-ops}' where name = 'shared'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, within.Runner, now)
+		return err
+	}); err != nil {
+		t.Fatalf("a redemption by a runner whose pool and narrowing both keep finance answered %v", err)
+	}
+
+	// Bound, the task is its holder's, and a narrowing that leaves its namespace out now, which
+	// only a hand on the database can write, does not take it back.
+	if _, err := conn.Exec(ctx, `update runners set accepted_namespaces = '{team-ops}' where id = $1`, within.Runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, within.Runner, now)
+		return err
+	}); err != nil {
+		t.Errorf("the holder's redemption again answered %v", err)
+	}
+}
+
+// joinedTo puts a machine in a pool, narrowed to the namespaces given where there are any.
+func joinedTo(t *testing.T, pool *Pool, into string, namespaces []string, key ed25519.PrivateKey, now time.Time) Joined {
+	t.Helper()
+	var joined Joined
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		issued, err := w.IssueJoinToken(ctx, into, nil, "admin", now, now.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		joined, err = w.Join(ctx, Joining{
+			Token: issued.Clear, PublicKey: key.Public().(ed25519.PublicKey),
+			CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Architecture: "amd64", AgentVersion: "0.2.0", Namespaces: namespaces,
+		}, time.Hour, now)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return joined
 }

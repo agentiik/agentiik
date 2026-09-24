@@ -757,6 +757,27 @@ func TestALostTaskOfAStepThatIsNotIdempotentIsNotRequeued(t *testing.T) {
 	}
 }
 
+// A failure no container explains carries its reason, the controller's refusal to publish a
+// task to a pool that will not run it for one, and the reason becomes the step's where the
+// failure stands. One that is retried says nothing of the step, which has an attempt to come.
+func TestAFailureThatStandsGivesItsStepItsReason(t *testing.T) {
+	e := started(t, requeueing, Options{})
+	first := next(t, e, runAt).Start[0]
+	record(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 100, FinishedAt: runAt, Reason: "the registry did not answer"}, runAt)
+	if st := e.State().Steps["invoice"]; st.Reason != "" {
+		t.Errorf("a failure that is retried gave its step the reason %q", st.Reason)
+	}
+
+	later := runAt.Add(time.Hour)
+	second := next(t, e, later).Start[0]
+	const why = "step invoice runs on the runner pool ops, which does not accept the namespace finance"
+	record(t, e, Result{Task: second.ID, State: agk.TaskFailed, ExitCode: 125, FinishedAt: later, Reason: why}, later)
+	next(t, e, later)
+	if st := e.State().Steps["invoice"]; st.Verdict != agk.VerdictFailed || st.Reason != why {
+		t.Errorf("the step is %s because %q", st.Verdict, st.Reason)
+	}
+}
+
 // lose dispatches a task and loses it on the dispatch named, as the controller records a
 // loss the heartbeat declared.
 func lose(t *testing.T, e *Evaluator, task Task, requeue int, at time.Time) {

@@ -161,7 +161,11 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	// once turn into every connection held and none to be had.
 	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		status := http.StatusInternalServerError
+		if errors.As(err, new(neverAnswerable)) {
+			status = http.StatusUnprocessableEntity
+		}
+		fail(w, status, err.Error())
 		return
 	}
 
@@ -217,16 +221,29 @@ func refuseRedemption(w http.ResponseWriter, err error) {
 		// secret is read. A task the runner already holds is not refused, since finishing what
 		// it holds is what a drain and a grace leave it to do.
 		fail(w, http.StatusForbidden, "this runner is draining or revoked and takes no new task: put the message back for another runner of the pool")
+	case errors.Is(err, db.ErrRunnerNarrowed):
+		// AGK_RUNNER_NAMESPACES, which the runner sent at join and checks itself before it
+		// redeems. Held to it here as well, so that a host's narrowing is the installation's
+		// word and not only the host's. The pool accepts the namespace, so the task is for
+		// another runner of it, and it goes back to the queue as a draining runner's does.
+		fail(w, http.StatusForbidden, "this runner narrows itself to namespaces that leave out this task's: put the message back for another runner of the pool")
+	case errors.Is(err, db.ErrPoolRefusesNamespace):
+		// This and the three below can never be answered, by this runner or any other: 422,
+		// "nothing to answer with, ever", so that a runner reports that no container ran and
+		// the task ends now rather than at its deadline, as a failure that may pass would.
+		// A pool's namespaces are its every runner's, so putting the message back would only
+		// hand it round the pool.
+		fail(w, http.StatusUnprocessableEntity, "this runner's pool does not accept the namespace of this task's run, so no runner of the pool may run it: report that no container ran")
 	case errors.Is(err, errNoCommit):
-		// This and the two below are the installation's rather than the runner's: the
-		// grant was real and what it was written with cannot be answered. Each says so
-		// rather than handing over an empty /agk/repo, which would start a step on a
-		// directory that looks like a repository and is not one.
-		fail(w, http.StatusInternalServerError, "this task was dispatched without the commit its run pinned, so there is no repository to give it")
+		// The installation's rather than the runner's: the grant was real and what it was
+		// written with cannot be answered. Each says so rather than handing over an empty
+		// /agk/repo, which would start a step on a directory that looks like a repository
+		// and is not one.
+		fail(w, http.StatusUnprocessableEntity, "this task was dispatched without the commit its run pinned, so there is no repository to give it")
 	case errors.Is(err, db.ErrNoTree):
-		fail(w, http.StatusInternalServerError, "the version this task runs was recorded without its tree, so there is nothing to lay out at /agk/repo")
+		fail(w, http.StatusUnprocessableEntity, "the version this task runs was recorded without its tree, so there is nothing to lay out at /agk/repo")
 	case errors.Is(err, db.ErrNoVersion):
-		fail(w, http.StatusInternalServerError, "the version this task runs is not recorded, so there is nothing to lay out at /agk/repo")
+		fail(w, http.StatusUnprocessableEntity, "the version this task runs is not recorded, so there is nothing to lay out at /agk/repo")
 	default:
 		fail(w, http.StatusInternalServerError, "the grant could not be redeemed")
 	}
@@ -323,6 +340,15 @@ type Grant struct {
 // a scope named one.
 var errNoCommit = errors.New("api: the grant's scope names no commit")
 
+// neverAnswerable is a redemption that asking again will not answer, since what it lacks is not
+// there to be read rather than unreadable this time: a secret the namespace does not declare, or
+// declares and holds no value for. It is answered 422 and not 500, because a runner reads a 500 as a
+// failure that may pass and asks again until the task's deadline, holding a slot of its host for a
+// task that was over from the start.
+type neverAnswerable struct{ why string }
+
+func (n neverAnswerable) Error() string { return n.why }
+
 // whatTheGrantIsFor turns the names the controller wrote into values, and refuses to go beyond
 // them. Every URL here is minted for one object, the policy for the namespace's prefix, and each
 // ends with the grant, so nothing the runner holds outlives the task it was given for.
@@ -417,7 +443,7 @@ func (s *RunnerAPI) whatTheGrantIsFor(ctx context.Context, got db.Redeemed, tree
 			// one who can put a key back on the ring or set a variable.
 			s.report(fmt.Errorf("api: task %s was not given %s/%s: %w", got.Row, got.Namespace, secret.Name, err))
 			if errors.Is(err, ErrNoSecret) {
-				return Grant{}, errors.New("the secret " + secret.Name + " is not held for this namespace")
+				return Grant{}, neverAnswerable{"the secret " + secret.Name + " is not held for this namespace"}
 			}
 			return Grant{}, errors.New("the secret " + secret.Name + " is held for this namespace and could not be read from its store")
 		}

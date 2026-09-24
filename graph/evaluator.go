@@ -321,6 +321,9 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				sh.Ports = nil
 				sh.NextAttemptAt = when
 				sh.DispatchedAt, sh.StartedAt, sh.FinishedAt = time.Time{}, time.Time{}, time.Time{}
+			} else if r.Reason != "" && ss.Reason == "" && ss.Verdict == agk.VerdictRunning {
+				// A failure that stands, and says why where no container could.
+				ss.Reason = r.Reason
 			}
 		}
 	}
