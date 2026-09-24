@@ -1269,7 +1269,7 @@
     },
     "network": {
       "title": "Network",
-      "description": "The network the container is given. none is the default and leaves it with no network at all. egress attaches a network whose outbound traffic goes through the runner proxy that enforces the egress list. internal attaches a network with no route out, for a step that only talks to a sidecar service. Every task gets its own network, so two containers on one host never see each other.",
+      "description": "The network the container is given. none is the default and leaves it with no network at all. egress attaches a network whose outbound traffic goes through the runner proxy that enforces the egress list. internal attaches a network with no route out and no address of the runner host in it, for a step that only talks to a sidecar service. Every task gets its own network, so two containers on one host never see each other.",
       "enum": ["none", "egress", "internal"],
       "default": "none",
       "examples": ["none", "egress", "internal"]

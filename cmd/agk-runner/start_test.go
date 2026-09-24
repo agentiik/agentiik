@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/driver"
+	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
 	"github.com/agentiik/agentiik/runner"
 )
@@ -294,6 +295,33 @@ func TestServeSaysReadyOnceTheFloorHoldsAndTheDaemonIsOpen(t *testing.T) {
 	}
 	if strings.Contains(h.err.String(), credential[len("agkrunner_"):]) {
 		t.Errorf("the agent's log carries its credential:\n%s", h.err)
+	}
+}
+
+// An agent that died leaves the network of every internal task it had in flight. The next
+// one removes those no container is on before it takes any work, and says so.
+func TestServeSweepsTheTaskNetworksAnEarlierAgentLeft(t *testing.T) {
+	d := daemon(t, true)
+	cli, err := docker.Dial(d.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	if _, err := cli.NetworkCreate(t.Context(), docker.NetworkSpec{
+		Name: "agk-01JMZ8V1P9C4_invoice_1", Internal: true,
+		Labels: map[string]string{driver.LabelTask: "01JMZ8V1P9C4/invoice/1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d.Backdate("agk-01JMZ8V1P9C4_invoice_1", time.Hour)
+
+	h := newHost(t, d, secretsTmpfs)
+	h.serving(t)
+	if list, err := cli.NetworkList(t.Context(), nil); err != nil || len(list) != 0 {
+		t.Errorf("the networks after the start are %v, %v", list, err)
+	}
+	if !strings.Contains(h.err.String(), "an earlier process left task networks on this daemon that no container is on, and they were removed: agk-01JMZ8V1P9C4_invoice_1") {
+		t.Errorf("the agent's log does not say what it swept:\n%s", h.err)
 	}
 }
 

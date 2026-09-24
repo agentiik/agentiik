@@ -66,11 +66,27 @@ var runnerMayImport = map[string]bool{
 	"internal/ulid":   true,
 	// The credential grammar, which says what kind a credential is without printing it.
 	"internal/token": true,
+	// The runner's half of the task bus, whose task message is what a runner takes and
+	// assembles into the task the driver runs. bus/boundary_test.go keeps the controller's half
+	// out of it.
+	"bus": true,
+	// The object store as one task's redemption lets it be reached: its presigned URLs and its
+	// upload policy, and no standing credential.
+	"artifact/granted": true,
 }
 
 // runnerMayDependOn is every third-party module the closure may hold. Each arrives through the
-// driver, whose own boundary test gives the reasons.
+// driver or the task bus, whose own boundary tests give the reasons.
 var runnerMayDependOn = []string{
+	// The NATS client, its credentials and its keys, which arrive through package bus and whose
+	// reasons go.mod gives, and the four modules the client itself takes.
+	"github.com/nats-io/nats.go",
+	"github.com/nats-io/jwt/v2",
+	"github.com/nats-io/nkeys",
+	"github.com/nats-io/nuid",
+	"github.com/klauspost/compress",
+	"golang.org/x/crypto",
+	"golang.org/x/sys",
 	"github.com/goccy/go-yaml",
 	"cel.dev",
 	"github.com/antlr4-go/antlr",

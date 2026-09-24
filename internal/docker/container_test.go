@@ -2,6 +2,7 @@ package docker_test
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -439,6 +440,47 @@ func TestTheContainerAndItsNetworkAreDestroyed(t *testing.T) {
 	}
 	if _, err := client.ContainerInspect(ctxOf(t), created.ID); !docker.IsNotFound(err) {
 		t.Errorf("the container is still there: %v", err)
+	}
+}
+
+// TestANetworkIsCreatedWithIPv6SaidAndItsOptions reads the create body as the daemon reads
+// it. EnableIPv6 is sent when it is false, because a field left out is the daemon's own
+// default and a daemon.json may turn IPv6 on for every network; and the driver's options
+// arrive where a bridge reads them.
+func TestANetworkIsCreatedWithIPv6SaidAndItsOptions(t *testing.T) {
+	client, daemon := dial(t)
+	var body map[string]any
+	daemon.Handle("POST", "/networks/create", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("the create body did not read: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"Id":"n1"}`))
+	})
+
+	if _, err := client.NetworkCreate(ctxOf(t), docker.NetworkSpec{
+		Name: "agk-task", Driver: "bridge", Internal: true,
+		Options: map[string]string{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"},
+	}); err != nil {
+		t.Fatalf("creating the network: %v", err)
+	}
+	if v, ok := body["EnableIPv6"]; !ok || v != false {
+		t.Errorf("EnableIPv6 went as %v, sent %v, and it is sent false rather than left to the daemon", v, ok)
+	}
+	options, _ := body["Options"].(map[string]any)
+	if options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" {
+		t.Errorf("the options went as %v", body["Options"])
+	}
+}
+
+// TestTheVersionSpokenIsAskedByNumber holds Speaks to the version settled on at the dial,
+// compared as two numbers rather than as text, where 1.9 comes after 1.48.
+func TestTheVersionSpokenIsAskedByNumber(t *testing.T) {
+	client, _ := dial(t, dockertest.APIVersion("1.48"))
+	for v, want := range map[string]bool{"1.41": true, "1.9": true, "1.48": true, "1.49": false, "2.0": false, "one": false} {
+		if got := client.Speaks(v); got != want {
+			t.Errorf("a client speaking 1.48 answers Speaks(%q) %v", v, got)
+		}
 	}
 }
 

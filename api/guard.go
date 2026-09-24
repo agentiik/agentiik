@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // What a route needs before its handler runs.
@@ -152,7 +153,8 @@ type Authorizer interface {
 	Allow(ctx context.Context, who Principal, what Permission, over Target) (bool, error)
 }
 
-// IdentifyRunner says which runner a credential belongs to, and refuses a revoked one.
+// IdentifyRunner says which runner a credential belongs to, and refuses a revoked one and one past
+// its rotate_by.
 //
 // It is the runner half of Identify, separate because the two answer different questions: one
 // asks who a person is and the other asks which machine this is. A runner that cannot be
@@ -166,10 +168,15 @@ type Runner struct {
 	ID    string
 	Pool  string
 	State string
+
+	// RotateBy is when the credential the request carried stops being accepted, which is as
+	// long as anything minted on the strength of it may last.
+	RotateBy time.Time
 }
 
-// ErrNoRunner is a credential that opens no runner, or one that was revoked. One error for both,
-// because telling a caller which it was tells somebody guessing whether they had a real one.
+// ErrNoRunner is a credential that opens no runner, one that was revoked, or one past its
+// rotate_by. One error for all of them, because telling a caller which it was tells somebody
+// guessing whether they had a real one.
 var ErrNoRunner = errors.New("api: no runner of that credential")
 
 // DenyAll refuses everything, and is what an installation with no access model has.

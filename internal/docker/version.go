@@ -116,3 +116,19 @@ func parseAPIVersion(s string) (apiVersion, error) {
 	}
 	return apiVersion{major: a, minor: b}, nil
 }
+
+// Speaks says whether the version this client settled on is v or later, which is how a
+// caller asks for something only a daemon of some release on understands. A daemon older
+// than v may take a request it cannot honour without saying so, as a bridge that predates
+// an option ignores it, so the version is the only thing that can be asked.
+func (c *Client) Speaks(v string) bool {
+	spoken, err := parseAPIVersion(c.version)
+	if err != nil {
+		return false
+	}
+	wanted, err := parseAPIVersion(v)
+	if err != nil {
+		return false
+	}
+	return !spoken.before(wanted)
+}

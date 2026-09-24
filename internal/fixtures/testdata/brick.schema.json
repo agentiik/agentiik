@@ -124,7 +124,7 @@
           ],
           "properties": {
             "network": {
-              "description": "Network posture the brick needs. none is the default and attaches no outbound route at all; egress attaches a dedicated network whose outbound traffic passes through the runner proxy enforcing the step's allow list; internal attaches a network with no outbound route, for a brick that only talks to a sidecar service. Every task gets its own network, so two containers on the same host never see each other.",
+              "description": "Network posture the brick needs. none is the default and attaches no outbound route at all; egress attaches a dedicated network whose outbound traffic passes through the runner proxy enforcing the step's allow list; internal attaches a network with no outbound route and no address of the runner host in it, for a brick that only talks to a sidecar service. Every task gets its own network, so two containers on the same host never see each other.",
               "type": "string",
               "enum": ["none", "egress", "internal"],
               "default": "none",
