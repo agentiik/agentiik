@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"reflect"
 	"strings"
@@ -214,6 +215,32 @@ func TestThePoolsAreNotSomethingARunnerReads(t *testing.T) {
 		w, _ := call(t, h, c.method, c.path, credential, c.body)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("a runner reaching %s %s answered %d", c.method, c.path, w.Code)
+		}
+	}
+}
+
+// ownsEveryNamespace holds every permission over every namespace and every workflow in them, and
+// nothing over the installation: as much as anybody can be given and still not be an
+// administrator.
+type ownsEveryNamespace struct{ who api.Principal }
+
+func (o ownsEveryNamespace) Allow(_ context.Context, who api.Principal, _ api.Permission, over api.Target) (bool, error) {
+	return who == o.who && over.Namespace != "", nil
+}
+
+// "Administrator only": grant:manage at the installation, and nothing held over a namespace
+// stands in for it, however much of it there is.
+func TestOnlyAnAdministratorReachesThePoolsAndTheInventory(t *testing.T) {
+	h, _ := withRunnersAuthorizedBy(t, ownsEveryNamespace{who: "alice"})
+
+	for _, c := range administration() {
+		w, _ := call(t, h, c.method, c.path, "alice", c.body)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("an owner of every namespace reaching %s %s answered %d: %s", c.method, c.path, w.Code, w.Body)
+		}
+		w, _ = call(t, h, c.method, c.path, "", c.body)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("nobody reaching %s %s answered %d: %s", c.method, c.path, w.Code, w.Body)
 		}
 	}
 }

@@ -17,6 +17,13 @@ import (
 
 func withRunners(t *testing.T) (http.Handler, *db.Pool) {
 	t.Helper()
+	return withRunnersAuthorizedBy(t, everything{who: "admin"})
+}
+
+// withRunnersAuthorizedBy is withRunners with the principals the authorizer allows, rather than
+// an administrator allowed everything.
+func withRunnersAuthorizedBy(t *testing.T, auth api.Authorizer) (http.Handler, *db.Pool) {
+	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
@@ -32,7 +39,7 @@ func withRunners(t *testing.T) (http.Handler, *db.Pool) {
 		t.Fatal(err)
 	}
 
-	rt, err := api.NewRouter(everything{who: "admin"}, bearer)
+	rt, err := api.NewRouter(auth, bearer)
 	if err != nil {
 		t.Fatal(err)
 	}
