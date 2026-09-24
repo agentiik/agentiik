@@ -167,6 +167,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `runner.TaskOf` reads a task message back as the task the controller wrote it from, and a test holds it to `messageOf` over the corpus and over tasks drawn at random.
 - `agk-runner` is also an image for `linux/amd64` and `linux/arm64` (`build/runner.Dockerfile`): the agent and the static helper on scratch, run as `agentiik` (65532), holding the three capabilities as file capabilities on `agk-runner`, so the Compose form keeps `cap_drop: [ALL]` and adds only those three.
 - `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
+- `runner.Carrier` runs an assembled task and reports its ending as the wire's `taskResult` once `driver.Run` has returned and the trees are gone, never from the terminal event: the exit code wherever a container ran, ports and artifacts by digest (empty lists where it did not succeed), the log at `agk.NewLogURI` and the usage. A task that reached no container is reported `failed` and nothing else. `runner.EndingOf` reports a recorded ending for `Bus.Ended`.
+- A result is written under `<work root>/.results` before it is published and taken away once the bus has it, so one the bus did not take goes out with `Results.Flush`, after a restart too, and `Results.Keys` names its key for the heartbeat until then.
 
 ### Artifacts
 
