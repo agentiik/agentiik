@@ -61,6 +61,11 @@ type RunnerOptions struct {
 	Secrets Secrets
 	Limits  agk.Limits
 
+	// LogMaxBytes and LogMaxLines cap each task's log where it is written, and are
+	// DefaultLogMaxBytes and DefaultLogMaxLines where they are zero. The chunks go to Objects.
+	LogMaxBytes int64
+	LogMaxLines int
+
 	// What a runner reaches the task bus with, and what makes sure its pool has
 	// somewhere to pull from.
 	BusIssuer    BusIssuer
@@ -78,17 +83,23 @@ type RunnerOptions struct {
 
 // RunnerAPI is the runner half of the API.
 type RunnerAPI struct {
-	pool      *db.Pool
-	rotation  time.Duration
-	grace     time.Duration
-	objects   artifact.Objects
-	urls      artifact.Presigner
-	secrets   Secrets
-	limits    agk.Limits
-	issuer    BusIssuer
-	consumers BusConsumers
-	trouble   func(error)
-	now       func() time.Time
+	pool        *db.Pool
+	rotation    time.Duration
+	grace       time.Duration
+	objects     artifact.Objects
+	urls        artifact.Presigner
+	secrets     Secrets
+	limits      agk.Limits
+	logMaxBytes int64
+	logMaxLines int
+
+	// betweenShip runs between the two transactions of a shipment, for a test to land another
+	// shipment there.
+	betweenShip func()
+	issuer      BusIssuer
+	consumers   BusConsumers
+	trouble     func(error)
+	now         func() time.Time
 }
 
 // report says one thing, through whatever Trouble was given.
@@ -122,9 +133,16 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 	if o.Limits == (agk.Limits{}) {
 		o.Limits = agk.DefaultLimits()
 	}
+	if o.LogMaxBytes <= 0 {
+		o.LogMaxBytes = DefaultLogMaxBytes
+	}
+	if o.LogMaxLines <= 0 {
+		o.LogMaxLines = DefaultLogMaxLines
+	}
 	s := &RunnerAPI{
 		pool: o.Pool, rotation: o.JoinRotation, grace: o.RevocationGrace,
 		objects: o.Objects, urls: o.URLs, secrets: o.Secrets, limits: o.Limits,
+		logMaxBytes: o.LogMaxBytes, logMaxLines: o.LogMaxLines,
 		issuer: o.BusIssuer, consumers: o.BusConsumers,
 		trouble: o.Trouble, now: o.Now,
 	}
@@ -144,6 +162,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		{"POST", "/api/v1/runners/heartbeat", s.beat},
 		{"POST", "/api/v1/runners/rotate", s.rotate},
 		{"POST", "/api/v1/tasks/redeem", s.redeem},
+		{"POST", "/api/v1/tasks/logs", s.shipLog},
 		{"POST", "/api/v1/bus/token", s.busToken},
 	} {
 		if err := rt.HandleRunner(r.method, r.pattern, ForRunner{}, r.handler); err != nil {
