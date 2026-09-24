@@ -1,6 +1,7 @@
 package docker_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -150,15 +151,20 @@ func TestAnImageIsPinnedUnderItsOwnRepository(t *testing.T) {
 }
 
 // TestTheRegistryIsAskedWhatItServes holds the question a push puts to the registry
-// behind an image, through the daemon, and the three answers it can get: the manifest,
-// a manifest the registry does not hold, and a repository it will not talk about.
+// behind an image, through the daemon, and the answers it can get: the manifest, a
+// manifest the registry does not hold in a repository it does, and a repository it holds
+// nothing of, which it will not talk about, with 403 or with 401 depending on the
+// registry. The last two are what an image built on a machine and never pushed gets.
 func TestTheRegistryIsAskedWhatItServes(t *testing.T) {
-	client, _ := dial(t, dockertest.With(dockertest.Options{
+	const otherDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	images := dockertest.With(dockertest.Options{
 		Images: map[string]dockertest.Image{
-			"ghcr.io/acme/brick:1.4.0": {Digest: digest},
-			"ghcr.io/acme/local:1.0.0": {Digest: digest, Unpushed: true},
+			"ghcr.io/acme/brick:1.4.0":     {Digest: digest},
+			"ghcr.io/acme/brick:1.5.0-dev": {Digest: otherDigest, Unpushed: true},
+			"ghcr.io/acme/local:1.0.0":     {Digest: digest, Unpushed: true},
 		},
-	}))
+	})
+	client, _ := dial(t, images)
 
 	d, err := client.DistributionInspect(ctxOf(t), "ghcr.io/acme/brick@"+digest, "")
 	if err != nil {
@@ -168,14 +174,30 @@ func TestTheRegistryIsAskedWhatItServes(t *testing.T) {
 		t.Errorf("the registry serves %q, want %q", d.Descriptor.Digest, digest)
 	}
 
-	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/local@"+digest, "")
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/brick@"+otherDigest, "")
 	if !docker.IsNotFound(err) {
-		t.Errorf("an image never pushed answered %v, and the registry holds no such manifest", err)
+		t.Errorf("an image never pushed to a repository the registry holds answered %v, and the registry holds no such manifest", err)
 	}
-	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/nobody@"+digest, "")
-	if !docker.IsDenied(err) {
-		t.Errorf("a repository the registry never heard of answered %v", err)
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/local@"+digest, "")
+	if !docker.IsDenied(err) || answered(err) != 403 {
+		t.Errorf("an image never pushed to a repository the registry never heard of answered %v", err)
 	}
+
+	client, _ = dial(t, images, dockertest.RegistryAnswers401)
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/local@"+digest, "")
+	if !docker.IsDenied(err) || answered(err) != 401 {
+		t.Errorf("a registry answering 401 for a repository it never heard of answered %v", err)
+	}
+}
+
+// answered is the status a refusal carries, so that a test holding a registry to 401 or
+// to 403 is not satisfied by IsDenied answering for the other.
+func answered(err error) int {
+	var refused *docker.Error
+	if errors.As(err, &refused) {
+		return refused.Status
+	}
+	return 0
 }
 
 // TestOnlyTheClassicStoreSaysAnImageWasNeverPushed holds why the registry is asked at all:

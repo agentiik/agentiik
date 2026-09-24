@@ -654,34 +654,36 @@ func (d *Daemon) imageInspect(w http.ResponseWriter, r *http.Request) {
 //
 // The registry holds every image of Options.Images but an Unpushed one, under its
 // registry digest, and refuses the way registries do otherwise: 404 for a repository it
-// holds at a digest it does not, 403 for a repository it has never heard of, since a
-// registry will not say to somebody with no credentials whether a private one exists.
+// holds something of, at a digest it does not, and 403 for a repository it holds nothing
+// of, since a registry will not say to somebody with no credentials whether a private one
+// exists. The second is the common case of an image never pushed, whose repository the
+// registry has usually never heard of either, and RegistryAnswers401 makes it 401.
 func (d *Daemon) distributionInspect(w http.ResponseWriter, r *http.Request) {
 	ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/distribution/"), "/json")
 	if d.opts.registryUnreachable {
 		writeError(w, http.StatusInternalServerError, `Get "https://registry.example/v2/": dial tcp: lookup registry.example: no such host`)
 		return
 	}
-	_, img, ok := d.image(ref)
-	if !ok {
-		for key := range d.opts.Images {
-			if agk.ImageRepository(key) == agk.ImageRepository(ref) {
-				writeError(w, http.StatusNotFound, "manifest unknown: manifest unknown")
-				return
-			}
+	if _, img, ok := d.image(ref); ok && !img.Unpushed {
+		served := img.registryDigest(img.Digest)
+		if _, asked, byDigest := strings.Cut(ref, "@"); served != "" && (!byDigest || asked == served) {
+			writeJSON(w, http.StatusOK, docker.Distribution{Descriptor: docker.Descriptor{
+				MediaType: "application/vnd.oci.image.index.v1+json", Digest: served, Size: 856,
+			}})
+			return
 		}
-		writeError(w, http.StatusForbidden, "denied: requested access to the resource is denied")
+	}
+	for key, img := range d.opts.Images {
+		if !img.Unpushed && agk.ImageRepository(key) == agk.ImageRepository(ref) {
+			writeError(w, http.StatusNotFound, "manifest unknown: manifest unknown")
+			return
+		}
+	}
+	if d.opts.registryAnswers401 {
+		writeError(w, http.StatusUnauthorized, "unauthorized: access to the requested resource is not authorized")
 		return
 	}
-	served := img.registryDigest(img.Digest)
-	_, asked, byDigest := strings.Cut(ref, "@")
-	if img.Unpushed || served == "" || byDigest && asked != served {
-		writeError(w, http.StatusNotFound, "manifest unknown: manifest unknown")
-		return
-	}
-	writeJSON(w, http.StatusOK, docker.Distribution{Descriptor: docker.Descriptor{
-		MediaType: "application/vnd.oci.image.index.v1+json", Digest: served, Size: 856,
-	}})
+	writeError(w, http.StatusForbidden, "denied: requested access to the resource is denied")
 }
 
 // image is the image a reference names and the key it is held under: the reference

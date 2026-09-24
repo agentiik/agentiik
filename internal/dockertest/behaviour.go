@@ -139,6 +139,11 @@ var ClassicImageStore Behaviour = func(o *Options) { o.classicStore = true }
 // is a laptop off its network: every question put to one answers 500 with the dial error.
 var RegistryUnreachable Behaviour = func(o *Options) { o.registryUnreachable = true }
 
+// RegistryAnswers401 is a registry that answers a question about a repository it holds
+// nothing of with 401, as quay.io does, where Docker Hub and ghcr.io answer 403. The
+// daemon passes on whichever of the two its registry chose.
+var RegistryAnswers401 Behaviour = func(o *Options) { o.registryAnswers401 = true }
+
 // APIVersion is a daemon answering a version other than the ceiling, which is every
 // daemon this has been run against so far.
 func APIVersion(v string) Behaviour {
@@ -165,6 +170,7 @@ type behaviours struct {
 
 	classicStore        bool
 	registryUnreachable bool
+	registryAnswers401  bool
 
 	apiVersion string
 	delay      time.Duration
