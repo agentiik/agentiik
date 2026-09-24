@@ -12,14 +12,14 @@ import (
 
 // What static means for the agent, spelled as something a machine can check.
 //
-// The runner "ships as a static binary and as a container image", and the binary is copied onto a
-// host whose libc nobody chose for it, then run by a unit before anything else about the host is
-// known. The image is built FROM scratch around it. An executable that needed a dynamic loader
-// would fail on either with an exec error the kernel reports as a missing file, which is the least
+// The agent is "one program shipped as a container and as a single static binary run as a system
+// service", and the binary is copied onto a host whose libc nobody chose for it, then run by a unit
+// before anything else about the host is known. An executable that needed a dynamic loader would
+// fail there with an exec error the kernel reports as a missing file, which is the least
 // informative failure available, so the property is checked rather than claimed, on the two
 // architectures a runner host is.
 
-// architectures are the machines the release builds the agent for, with the ELF machine each one
+// architectures are the machines the agent is built for, with the ELF machine each one
 // has to report.
 var architectures = []struct {
 	arch    string
@@ -49,7 +49,7 @@ func TestTheAgentIsAStaticLinuxELFForEveryArchitectureARunnerHostIs(t *testing.T
 				t.Errorf("the OS ABI is %s", f.OSABI)
 			}
 			// No PT_INTERP: nothing outside this file is loaded to run it, which is
-			// what a scratch image and a host of unknown libc can both rely on.
+			// what an image with no libc and a host of unknown libc can both rely on.
 			for _, p := range f.Progs {
 				if p.Type == elf.PT_INTERP {
 					t.Errorf("the binary carries a PT_INTERP segment, so it asks for a dynamic loader the host or the image may not have")
@@ -88,11 +88,11 @@ func TestTheBuiltAgentAnswersItsOwnCommandLine(t *testing.T) {
 
 // buildRunner builds this program for one platform, statically, and answers with the path.
 //
-// CGO_ENABLED=0 is the setting that makes it static, and it is here rather than in a script so
-// that the test and the release build cannot disagree about what was tested. stripped is the
-// release's -s -w; the symbol check in boundary_test.go builds without it, since a stripped binary
-// has no symbol table to read and would pass any check of one. A machine with no Go toolchain in
-// reach skips rather than fails.
+// CGO_ENABLED=0 is the setting that makes it static, and it is written here so that whatever
+// builds the shipped binary has one place to take its flags from. stripped is -s -w, as
+// cmd/agk-helper is built; the symbol check in boundary_test.go builds without it, since a
+// stripped binary has no symbol table to read and would pass any check of one. A machine with no
+// Go toolchain in reach skips rather than fails.
 func buildRunner(t *testing.T, goos, goarch string, stripped bool) string {
 	t.Helper()
 	tool, err := exec.LookPath("go")

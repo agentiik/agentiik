@@ -70,9 +70,10 @@ func (e *APIError) Unwrap() error { return e.class }
 // answerMaxBytes is the most a success is read to.
 //
 // The largest answer a runner reads is a redemption, which names every file of the task's tree
-// with a presigned URL for each: a few hundred bytes a file, and a repository of tens of thousands
-// of files. Past this bound an answer is refused rather than held, since a runner reads it into
-// memory whole.
+// with a presigned URL for each: a few hundred bytes a file, for at most the 4096 files the API
+// takes in a tree at push, which is a few megabytes. The bound leaves room for URLs longer than
+// the store's own, and past it an answer is refused rather than held, since a runner reads it
+// into memory whole.
 const answerMaxBytes = 32 << 20
 
 // refusalMaxBytes is the most a refusal is read to. The API writes one sentence.

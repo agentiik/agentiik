@@ -123,10 +123,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Runner
 
 - `agk-runner` is the agent, one static binary with the verbs `join`, `serve` and `version`. `join` is named and refused until the API's side of it is built.
-- `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE`, refused when its group or anybody else can read it, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
+- `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE` (no quotes, escapes, substitutions or trailing comments, which another reader would read differently), refused when it is a symbolic link, owned by another account or readable by its group or anybody else, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
 - `serve` loads `/etc/agentiik/runner.toml`, keeps every default and the userns floor where there is none, and refuses one it cannot read. A daemon without user namespace remapping is refused before any call to the API, and no flag or variable lifts the floor. It refuses to run as root.
-- `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one.
-- Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next.
+- `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
+- Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
 
 ### Artifacts
 
