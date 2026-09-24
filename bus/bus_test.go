@@ -393,14 +393,16 @@ func aResult(task graph.Task) TaskResult {
 	}
 }
 
-// heard is one result Reports handed on, and the runner whose subject it came on.
+// heard is one result or progress message Reports handed on, and the runner whose subject it came
+// on. progress is nil where it was a result.
 type heard struct {
-	sender string
-	result TaskResult
+	sender   string
+	result   TaskResult
+	progress *TaskProgress
 }
 
-// reporting runs Reports until the test ends, handing each result to fn and on to the channel it
-// answers.
+// reporting runs Reports until the test ends, handing each result and progress message to fn and
+// on to the channel it answers.
 func reporting(t *testing.T, b *Bus, fn func(heard) error) <-chan heard {
 	t.Helper()
 	ctx, stop := context.WithCancel(t.Context())
@@ -410,6 +412,10 @@ func reporting(t *testing.T, b *Bus, fn func(heard) error) <-chan heard {
 		defer close(done)
 		if err := b.Reports(ctx, func(_ context.Context, sender string, r TaskResult) error {
 			h := heard{sender: sender, result: r}
+			got <- h
+			return fn(h)
+		}, func(_ context.Context, sender string, p TaskProgress) error {
+			h := heard{sender: sender, progress: &p}
 			got <- h
 			return fn(h)
 		}); err != nil && ctx.Err() == nil {
@@ -510,7 +516,7 @@ func TestTwoDispatchesOfOneKeyEachReportTheirEnding(t *testing.T) {
 		b.Reports(ctx, func(_ context.Context, _ string, r TaskResult) error {
 			got <- r
 			return nil
-		})
+		}, func(context.Context, string, TaskProgress) error { return nil })
 	}()
 	rows := map[string]bool{}
 	for len(rows) < 2 {

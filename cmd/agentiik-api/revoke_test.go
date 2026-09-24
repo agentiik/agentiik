@@ -134,7 +134,7 @@ func TestARevokedRunnerFinishesItsGraceOnTheInstallationsBus(t *testing.T) {
 	go control.Reports(listening, func(_ context.Context, sender string, r bus.TaskResult) error {
 		heard <- sender + " " + r.TaskID
 		return nil
-	})
+	}, func(context.Context, string, bus.TaskProgress) error { return nil })
 	key := agk.TaskID("01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/1")
 	log, _ := agk.NewLogURI(key)
 	exit := 0

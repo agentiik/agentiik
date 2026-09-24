@@ -101,6 +101,7 @@ type index struct {
 		// message separately and so does this.
 		TaskMessage        corpus `json:"task-message"`
 		TaskResult         corpus `json:"task-result"`
+		TaskProgress       corpus `json:"task-progress"`
 		RunnerRegistration corpus `json:"runner-registration"`
 		RunnerHeartbeat    corpus `json:"runner-heartbeat"`
 		GrantRedemption    corpus `json:"grant-redemption"`
@@ -134,6 +135,12 @@ func TaskMessages() ([]Case, error) {
 // TaskResults returns the result corpus, which is what a runner sends back.
 func TaskResults() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.TaskResult })
+}
+
+// TaskProgresses returns the progress corpus, which is what a runner says of a task it holds on
+// its way to an ending, on the same subject as its results.
+func TaskProgresses() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.TaskProgress })
 }
 
 // GrantRedemptions returns the redemption corpus: what a runner sends to turn a grant into the

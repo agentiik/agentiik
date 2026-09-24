@@ -288,6 +288,80 @@ func (r TaskResult) check() error {
 	return nil
 }
 
+// TaskProgress is agentiik/schemas wire.schema.json, $defs/taskProgress: what a runner publishes
+// when a task it holds moves on without ending, running once its container has started and
+// publishing once the container has exited and its outputs are being uploaded.
+//
+// It goes on the runner's results subject, because that subject is what says who sent it, and a
+// runner that could say a task was running on a subject anybody may publish on could show work
+// running that nobody runs. Two kinds of message on one subject have to be told apart before either
+// is read, so this one says progress where a result says state, and neither carries the other's
+// keyword. It carries no instant: the ending carries the container's span as the container reports
+// it, and a second clock writing started_at would be a second answer to one question.
+type TaskProgress struct {
+	TaskID         string        `json:"task_id"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	Runner         string        `json:"runner"`
+	Progress       agk.TaskState `json:"progress"`
+}
+
+// encode writes a progress message the way it travels, once it is one a controller would read.
+func (p TaskProgress) encode() ([]byte, error) {
+	if err := p.check(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(p)
+}
+
+// check holds a progress message to the rules the controller acts on: which dispatch, which
+// runner, and a state between dispatched and an ending.
+func (p TaskProgress) check() error {
+	if !isULID(p.TaskID) {
+		return fmt.Errorf("task_id %q is not a dispatch identifier: a progress message carries back the one its task message carried", p.TaskID)
+	}
+	if err := agk.TaskID(p.IdempotencyKey).Validate(); err != nil {
+		return fmt.Errorf("idempotency_key: %w", err)
+	}
+	if err := validRunner(p.Runner); err != nil {
+		return fmt.Errorf("the progress of %s: %w", p.IdempotencyKey, err)
+	}
+	if p.Progress != agk.TaskRunning && p.Progress != agk.TaskPublishing {
+		return fmt.Errorf("the progress of %s is %s, and a task only reports running or publishing on its way to an ending, which a result reports", p.IdempotencyKey, p.Progress)
+	}
+	return nil
+}
+
+// readProgress reads one progress message off the bus, closed as readResult reads a result and for
+// the same reasons.
+func readProgress(body []byte) (TaskProgress, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	var p TaskProgress
+	if err := dec.Decode(&p); err != nil {
+		return TaskProgress{}, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return TaskProgress{}, errors.New("a progress message is one document, and this message carries more after it")
+	}
+	if err := p.check(); err != nil {
+		return TaskProgress{}, err
+	}
+	return p, nil
+}
+
+// isProgress says whether a document off a results subject is a progress message rather than a
+// result, which is whether it carries the keyword progress at its top level. Only the keyword is
+// read, and nothing about its value: a document that is neither is refused by whichever reader it
+// goes to, and one carrying both keywords by readProgress, which knows no state.
+func isProgress(body []byte) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return false
+	}
+	_, ok := top["progress"]
+	return ok
+}
+
 // isULID holds an identifier to the alphabet the engine mints in, and not to a length: the
 // documentation prints shorter ones than it mints, and the wire's own pattern takes both.
 func isULID(s string) bool {

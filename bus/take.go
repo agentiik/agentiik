@@ -15,7 +15,7 @@ import (
 // The two ends that are not the controller publishing: a runner taking work, and a result coming
 // back.
 
-// Results is the stream a task result travels back on.
+// Results is the stream a task result travels back on, and the progress that precedes it.
 //
 // A second stream rather than a second subject on the first, because the two have different
 // consumers and different lifetimes: tasks are taken by many runners filtered by pool, results
@@ -300,30 +300,78 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 	return nil
 }
 
-// Reports hands every result to fn until ctx is done, with the runner whose subject it arrived on.
+// Progress says a task this runner holds has moved on without ending: running once its container
+// has started, publishing once the container has exited and its outputs are being collected.
 //
-// It is Report's other end, and the control plane's: package bus/control is what calls it, and
-// what turns each result into the answer the controller takes. One durable consumer, because there
-// is one active controller. fn is called before the message is acknowledged and never after, so a
-// controller dying in the middle gets the result again rather than losing it, and fn returning an
-// error leaves the message for a later delivery, timed by again, unless the error is one Drop made,
-// which no delivery would change. Nothing deduplicates: "the same result delivered twice writes the
-// same thing" is the controller's promise, made good by the evaluator answering a duplicate with no
-// decision.
+// On the runner's own results subject, for the reason ResultSubject gives: the subject is who sent
+// it, and the controller writes it on the dispatch's row only where that dispatch is bound to the
+// same runner. A runner's credential, and the narrower one a revoked runner finishes its grace with,
+// both publish there already, so saying how a task is getting on needs nothing a result does not.
 //
-// A result is read as the wire describes it, with its outputs as digests. One the reader refuses
-// is taken off the queue and said out loud, as one nobody can decode is: a result that is not an
-// ending, or that says what no container could, reads the same on every delivery. The reader is
-// not the schema, and readResult and check say where the two part.
+// It is said for a person reading the run, and nothing waits on it. The controller writes it only
+// forwards and never over an ending, so one published late, twice, out of order or after the result
+// changes nothing, and one that never arrives leaves the task reading dispatched until its ending,
+// as it read before there was such a message. So a runner does not hold a container back for it,
+// and one that could not be published is not worth publishing again once the task has moved on.
+//
+// The stream deduplicates it on the runner, the dispatch and the state, which is what a runner
+// publishing again after an answer it never heard sends, as Report says of a result; the prefix
+// keeps it apart from a result's identifier, though no state is both.
+func (b *Bus) Progress(ctx context.Context, p TaskProgress) error {
+	body, err := p.encode()
+	if err != nil {
+		return fmt.Errorf("bus: %w", err)
+	}
+	msg := &nats.Msg{
+		Subject: ResultSubject(p.Runner),
+		Data:    body,
+		Header: nats.Header{
+			jetstream.MsgIDHeader: []string{"progress-" + p.Runner + "-" + p.TaskID + "-" + p.Progress.String()},
+		},
+	}
+	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
+		return fmt.Errorf("bus: the progress of %s could not be published: %w", p.IdempotencyKey, err)
+	}
+	return nil
+}
+
+// Reports hands every result to fn, and every progress message to progress, until ctx is done, with
+// the runner whose subject it arrived on.
+//
+// It is the other end of Report and Progress, and the control plane's: package bus/control is what
+// calls it, and what turns each result into the answer the controller takes. One durable consumer,
+// because there is one active controller. fn is called before the message is acknowledged and never
+// after, so a controller dying in the middle gets the result again rather than losing it, and fn
+// returning an error leaves the message for a later delivery, timed by again, unless the error is
+// one Drop made, which no delivery would change. Nothing deduplicates: "the same result delivered
+// twice writes the same thing" is the controller's promise, made good by the evaluator answering a
+// duplicate with no decision.
+//
+// A result is read as the wire describes it, with its outputs as digests. One the reader refuses is
+// taken off the queue and said out loud, as one nobody can decode is: a result that is not an
+// ending, or that says what no container could, reads the same on every delivery. The reader is not
+// the schema, and readResult and check say where the two part.
+//
+// A progress message is told from a result by its keyword, as isProgress reads it, and goes the
+// same way: read closed, handed to progress before it is acknowledged, taken off the queue and said
+// out loud where it cannot be read or progress answers with Drop, and left for a later delivery
+// where progress answers any other error. A progress message left for later is overtaken by the
+// result it preceded, which is why the controller writes one only forwards and never over an
+// ending.
 //
 // The runner is handed on beside the result rather than held to it here. The subject is who sent
 // it, for the reason ResultSubject gives, and a result naming anybody else is a result from a
 // runner that does not hold the task, which is the controller's to name, as
 // controller.ErrNotTheHolder. Naming it here would link the controller into every runner, so
 // package bus/control compares the two and drops such a result.
-func (b *Bus) Reports(ctx context.Context, fn func(ctx context.Context, sender string, r TaskResult) error) error {
+func (b *Bus) Reports(ctx context.Context, fn func(ctx context.Context, sender string, r TaskResult) error, progress func(ctx context.Context, sender string, p TaskProgress) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
+	}
+	if progress == nil {
+		// Acknowledged unread, a task's progress would be lost without anybody hearing of
+		// it, and left on the queue it would be delivered for ever.
+		return errors.New("bus: consuming results with nothing to hand progress to")
 	}
 	if b.results == nil {
 		return errors.New("bus: a runner's connection takes no results back: the controller opens the bus with Open, which is what makes sure the result stream is there")
@@ -348,16 +396,28 @@ func (b *Bus) Reports(ctx context.Context, fn func(ctx context.Context, sender s
 			return fmt.Errorf("bus: results could not be taken: %w", err)
 		}
 		for msg := range msgs.Messages() {
-			r, err := readResult(msg.Data())
-			if err != nil {
-				b.report(msg.Subject(), fmt.Errorf("a result could not be read: %w", err))
-				msg.Term()
-				continue
-			}
 			sender := strings.TrimPrefix(msg.Subject(), resultPrefix)
-			if err := fn(ctx, sender, r); err != nil {
+			var handled error
+			if isProgress(msg.Data()) {
+				p, err := readProgress(msg.Data())
+				if err != nil {
+					b.report(msg.Subject(), fmt.Errorf("a progress message could not be read: %w", err))
+					msg.Term()
+					continue
+				}
+				handled = progress(ctx, sender, p)
+			} else {
+				r, err := readResult(msg.Data())
+				if err != nil {
+					b.report(msg.Subject(), fmt.Errorf("a result could not be read: %w", err))
+					msg.Term()
+					continue
+				}
+				handled = fn(ctx, sender, r)
+			}
+			if handled != nil {
 				var drop *dropped
-				if errors.As(err, &drop) {
+				if errors.As(handled, &drop) {
 					// Readable, and still nothing a controller could ever
 					// record: it would be the same on every delivery, and
 					// this consumer delivers without limit. So it goes the
@@ -385,9 +445,9 @@ func (b *Bus) Reports(ctx context.Context, fn func(ctx context.Context, sender s
 	return ctx.Err()
 }
 
-// Drop is what the function Reports hands a result to answers for one no delivery would change,
-// err saying why. Reports takes that result off the queue and says err through Trouble, where it
-// leaves one answered with any other error for a later delivery.
+// Drop is what a function Reports hands a result or a progress message to answers for one no
+// delivery would change, err saying why. Reports takes that message off the queue and says err
+// through Trouble, where it leaves one answered with any other error for a later delivery.
 //
 // Which results no controller could ever record is for the controller's rules to say, and this
 // package links no controller, so the function says it: package bus/control drops a result the
