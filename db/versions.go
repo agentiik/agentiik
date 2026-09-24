@@ -262,9 +262,9 @@ func (n *NS) CheckVersion(ctx context.Context, v Version) error {
 // read out of it or resolved around it, like the manifests of the images it names and the digests
 // their tags were resolved to, which may have moved since without the commit having changed. The
 // first push of a commit is the one that settles them, so that every run of a version runs what
-// its first run ran. A version recorded without its tree differs
-// from every tree a push carries, because a version is written once, and a second push is not how
-// it acquires the files it was recorded without.
+// its first run ran. A version recorded without its tree differs from every tree a push carries,
+// because a version is written once, and a second push is not how it acquires the files it was
+// recorded without.
 func compareTree(ctx context.Context, tx pgx.Tx, namespace, workflow, commit string, tree []TreeFile) error {
 	held, err := readTree(ctx, tx, namespace, workflow, commit)
 	if err != nil && !errors.Is(err, ErrNoTree) {
