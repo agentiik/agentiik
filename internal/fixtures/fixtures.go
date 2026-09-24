@@ -106,6 +106,7 @@ type index struct {
 		GrantRedemption    corpus `json:"grant-redemption"`
 		LogShipment        corpus `json:"log-shipment"`
 		RunnerPool         corpus `json:"runner-pool"`
+		Stop               corpus `json:"stop"`
 	} `json:"fixtures"`
 }
 
@@ -148,10 +149,10 @@ func RunnerPools() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.RunnerPool })
 }
 
-// RunnerRegistrations returns the join corpus: what a machine sends the API to become a runner, and
-// what the API answers, each document the pair.
-func RunnerRegistrations() ([]Case, error) {
-	return read(func(i index) corpus { return i.Fixtures.RunnerRegistration })
+// Stops returns the stop corpus: what the controller publishes on agentiik.stops to have a task in
+// flight stopped, and what a runner reads.
+func Stops() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.Stop })
 }
 
 // Wire is the schema document every message above is held to.
@@ -214,4 +215,10 @@ func manifestPath(name string) string {
 		return ""
 	}
 	return "fixtures/" + name
+}
+
+// RunnerRegistrations returns the join corpus: what a machine sends the API to become a runner, and
+// what the API answers, each document the pair.
+func RunnerRegistrations() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.RunnerRegistration })
 }

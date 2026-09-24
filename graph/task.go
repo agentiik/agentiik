@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -162,8 +163,33 @@ func (s StopReason) String() string {
 	return stopReasons[s]
 }
 
-// MarshalText writes the reason as it is spelled.
-func (s StopReason) MarshalText() ([]byte, error) { return []byte(s.String()), nil }
+// MarshalText writes the reason as it is spelled, and refuses one that has no spelling.
+//
+// String names such a reason "stopped", which is a word for a log line and not a reason
+// anybody can read back: written on the wire it would be a stop no runner could decode,
+// for a container that then runs to its deadline.
+func (s StopReason) MarshalText() ([]byte, error) {
+	if s < 0 || int(s) >= len(stopReasons) {
+		return nil, fmt.Errorf("stop reason %d is none of the four a stop is sent for", int(s))
+	}
+	return []byte(stopReasons[s]), nil
+}
+
+// UnmarshalText reads a reason back from its spelling, which is what a runner hearing a
+// stop does with the one the controller wrote.
+//
+// Only the four spellings are read. Anything else is refused rather than read as some
+// reason, because the reason decides what the stopped task becomes, timed_out for the
+// deadline and cancelled for the other three, and a guess would be a guess about that.
+func (s *StopReason) UnmarshalText(text []byte) error {
+	for reason, spelled := range stopReasons {
+		if string(text) == spelled {
+			*s = StopReason(reason)
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is not a stop reason: one is superseded, sibling_failed, deadline or cancelled", text)
+}
 
 // Result is what became of one task. It is the only thing that enters the evaluator
 // after a run has started.

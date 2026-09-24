@@ -1005,6 +1005,9 @@ func TestAStopGoesToWhoeverIsHolding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no stop arrived: %s", err)
 	}
+	if err := validates(t, wire(t, "stop"), msg.Data); err != nil {
+		t.Errorf("the stop published, %s, is refused by the wire: %s", msg.Data, err)
+	}
 	var got struct {
 		Task   agk.TaskID `json:"task"`
 		Reason string     `json:"reason"`
