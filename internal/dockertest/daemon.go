@@ -41,6 +41,10 @@ type Daemon struct {
 	events     []docker.Event
 	watchers   map[chan docker.Event]struct{}
 	vanished   bool
+
+	// described is what /info answers, kept apart from opts because Restart changes it
+	// while the daemon is serving and opts is read without the lock.
+	described docker.Info
 }
 
 // NewDaemon starts a daemon on a temporary socket. Close removes both.
@@ -78,6 +82,7 @@ func NewDaemon(bs ...Behaviour) (*Daemon, error) {
 		pulled:     map[string]bool{},
 		networks:   map[string]docker.NetworkSpec{},
 		watchers:   map[chan docker.Event]struct{}{},
+		described:  describe(o),
 	}
 	d.routes()
 	d.srv = &http.Server{Handler: http.HandlerFunc(d.serve)}
@@ -100,6 +105,38 @@ func (d *Daemon) Close() error {
 		delete(d.watchers, ch)
 	}
 	return err
+}
+
+// Restart is the daemon restarted under whoever is talking to it, configured with the
+// behaviours given laid over the ones it was started with. Every event stream is dropped,
+// as a restart drops them, and /info answers as the daemon is now configured. Only what
+// /info says is taken from the behaviours: WithoutSeccomp, WithUsernsRemap and
+// WithoutUsernsRemap. Containers, images and networks are kept, as a daemon restarted
+// with live restore keeps them.
+func (d *Daemon) Restart(bs ...Behaviour) {
+	o := d.opts
+	for _, b := range bs {
+		if b != nil {
+			b(&o)
+		}
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.described = describe(o)
+	for ch := range d.watchers {
+		close(ch)
+		delete(d.watchers, ch)
+	}
+}
+
+// Streams is how many event streams the daemon holds open. A test waits on it before a
+// Restart that has to drop one, since a client opens its stream in a goroutine of its own
+// and a restart that lands first drops nothing.
+func (d *Daemon) Streams() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.watchers)
 }
 
 // Handle replaces one route, which is how a test asks for a failure this package does
@@ -188,8 +225,17 @@ func (d *Daemon) ping(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// info answers with the two fields the userns floor is read from.
+// info answers with the two fields the userns floor is read from, and the security
+// options seccomp is read from.
 func (d *Daemon) info(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	i := d.described
+	d.mu.Unlock()
+	writeJSON(w, http.StatusOK, i)
+}
+
+// describe is the /info of a daemon configured with o.
+func describe(o Options) docker.Info {
 	i := docker.Info{
 		ID:            "DAEM:ON00:FAKE",
 		Name:          "dockertest",
@@ -200,13 +246,14 @@ func (d *Daemon) info(w http.ResponseWriter, r *http.Request) {
 		MemTotal:      2 << 30,
 		DockerRootDir: "/var/lib/docker",
 	}
-	if d.opts.userns {
-		i.SecurityOptions = []string{"name=seccomp,profile=builtin", "name=userns"}
-		i.DockerRootDir = fmt.Sprintf("/var/lib/docker/%d.%d", d.opts.usernsUID, d.opts.usernsGID)
-	} else {
-		i.SecurityOptions = []string{"name=seccomp,profile=builtin"}
+	if !o.noSeccomp {
+		i.SecurityOptions = append(i.SecurityOptions, "name=seccomp,profile=builtin")
 	}
-	writeJSON(w, http.StatusOK, i)
+	if o.userns {
+		i.SecurityOptions = append(i.SecurityOptions, "name=userns")
+		i.DockerRootDir = fmt.Sprintf("/var/lib/docker/%d.%d", o.usernsUID, o.usernsGID)
+	}
+	return i
 }
 
 // networkCreate records one network.

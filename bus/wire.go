@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/controller"
-	"github.com/agentiik/agentiik/graph"
 )
 
 // The wire, which is what actually travels.
@@ -28,6 +26,12 @@ import (
 // does, and dropped every value that happened to be a zero. None of it was visible, because
 // nothing checked what went out against the document that describes it. A conformance test does
 // now.
+//
+// The types are here and the translation is not. Writing what the controller decided as a task
+// message, and reading a result back as the answer the controller takes, name the controller's
+// types, and package bus/control does both. What stays is what a runner needs: the message it
+// takes, the result it reports, and the rules a result is held to on the way out and on the way
+// back.
 
 // TaskMessage is agentiik/schemas wire.schema.json, $defs/taskMessage.
 //
@@ -102,116 +106,6 @@ type Resources struct {
 	PIDs   int    `json:"pids"`
 }
 
-// messageOf turns what the evaluator decided into what the wire describes.
-//
-// Everything the schema requires is written, including the empty list and the zero, because a
-// required key dropped for being empty is a message a closed document refuses: "a runner reading
-// an absent field would be deciding something the controller had already decided".
-func messageOf(d controller.Dispatch) (TaskMessage, error) {
-	t := d.Task
-	if d.Grant == "" {
-		return TaskMessage{}, fmt.Errorf("task %s carries no grant, and a message without one asks a runner to do work it cannot fetch the inputs for", t.ID)
-	}
-	if d.Row == "" {
-		return TaskMessage{}, fmt.Errorf("task %s names no row, and task_id is what a grant and a log are addressed by", t.ID)
-	}
-	if t.Deadline.IsZero() {
-		return TaskMessage{}, fmt.Errorf("task %s carries no deadline, and the runner has nothing to stop the container at", t.ID)
-	}
-
-	m := TaskMessage{
-		TaskID:         d.Row,
-		IdempotencyKey: string(t.ID),
-		RunID:          string(t.Run),
-		Namespace:      t.Namespace,
-		Workflow:       t.Workflow,
-		Step:           string(t.Step),
-		Attempt:        t.Attempt,
-		Image:          t.Image,
-
-		Script:       t.Script,
-		BeforeScript: t.BeforeScript,
-		AfterScript:  t.AfterScript,
-		Shell:        t.Shell,
-
-		Params:  orEmptyMap(t.Params),
-		Secrets: []SecretMount{},
-		Inputs:  []Input{},
-		Outputs: []string{},
-
-		Resources: Resources{
-			CPU:    t.Resources.CPU,
-			Memory: t.Resources.Memory,
-			PIDs:   t.Resources.PIDs,
-		},
-		Network:     t.Network.String(),
-		EgressAllow: t.EgressAllow,
-		RunsOn:      orEmptyList(t.RunsOn),
-
-		Idempotent: t.Idempotent,
-		CacheKey:   t.CacheKey,
-		Deadline:   t.Deadline.UTC().Format(time.RFC3339Nano),
-		Grant:      d.Grant,
-	}
-	// The workflow travels as name@commit, which is one string a person reads and one thing a
-	// runner fetches the tree at.
-	if t.Commit != "" {
-		m.Workflow = t.Workflow + "@" + t.Commit
-	}
-	if !t.Shard.IsZero() {
-		m.Shard = &Shard{Index: t.Shard.Index, Of: t.Shard.Of}
-	}
-	if t.Timeout > 0 {
-		m.Timeout = t.Timeout.String()
-	}
-	for _, f := range t.Files {
-		m.Files = append(m.Files, File{From: f.From, To: f.To, Mode: f.Mode})
-	}
-	for _, s := range t.Secrets {
-		m.Secrets = append(m.Secrets, SecretMount{Name: s.Name, Mount: s.Mount})
-	}
-	for _, port := range t.Outputs {
-		m.Outputs = append(m.Outputs, string(port))
-	}
-	for _, port := range sortedPorts(d.Inputs) {
-		in := d.Inputs[port]
-		m.Inputs = append(m.Inputs, Input{
-			Port: string(port), Digest: "sha256:" + in.Digest, Items: in.Items,
-		})
-	}
-	return m, nil
-}
-
-func orEmptyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return map[string]any{}
-	}
-	return m
-}
-
-func orEmptyList(l []string) []string {
-	if l == nil {
-		return []string{}
-	}
-	return l
-}
-
-// sortedPorts keeps one message one message: Go randomises map iteration, and two encodings of
-// one task that differed only in the order of a list would be two messages to anything comparing
-// them.
-func sortedPorts(m map[agk.Port]controller.InputRef) []agk.Port {
-	out := make([]agk.Port, 0, len(m))
-	for port := range m {
-		out = append(out, port)
-	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
-}
-
 // TaskResult is agentiik/schemas wire.schema.json, $defs/taskResult: what a runner publishes when
 // a task ends, and "the only message the controller reads to decide what happens next".
 //
@@ -281,7 +175,7 @@ func (r TaskResult) encode() ([]byte, error) {
 	return json.Marshal(r)
 }
 
-// readResult reads one result off the bus and answers it as the controller takes it.
+// readResult reads one result off the bus, as the wire describes it.
 //
 // Closed, as the document is. A field nobody here knows is refused rather than dropped, because a
 // result that says more than the wire describes comes from a runner written against something
@@ -289,20 +183,20 @@ func (r TaskResult) encode() ([]byte, error) {
 // far as encoding/json closes a document, which is not quite as far as the schema: a field spelled
 // in another case is read as the field it spells, and a null where an optional field could be is
 // read as its absence. Neither says anything the field would not.
-func readResult(body []byte) (controller.Answer, error) {
+func readResult(body []byte) (TaskResult, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	var r TaskResult
 	if err := dec.Decode(&r); err != nil {
-		return controller.Answer{}, err
+		return TaskResult{}, err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return controller.Answer{}, errors.New("a result is one document, and this message carries more after it")
+		return TaskResult{}, errors.New("a result is one document, and this message carries more after it")
 	}
 	if err := r.check(); err != nil {
-		return controller.Answer{}, err
+		return TaskResult{}, err
 	}
-	return answerOf(r)
+	return r, nil
 }
 
 // check holds a result to the rules the controller acts on.
@@ -388,48 +282,6 @@ func (r TaskResult) check() error {
 		return fmt.Errorf("the result of %s measures a negative usage", r.IdempotencyKey)
 	}
 	return nil
-}
-
-// answerOf is a result as the controller takes it.
-//
-// The artifacts are not handed on. The references the controller records are the files the
-// published envelopes name, which carry the URI and the port whose retention they live by, and a
-// digest and a size say neither; the list is held to its shape here and read by nothing yet.
-func answerOf(r TaskResult) (controller.Answer, error) {
-	a := controller.Answer{
-		Result: graph.Result{
-			Task:       agk.TaskID(r.IdempotencyKey),
-			State:      r.State,
-			StartedAt:  r.StartedAt,
-			FinishedAt: r.FinishedAt,
-		},
-		Row:    r.TaskID,
-		Runner: r.Runner,
-	}
-	if r.ExitCode != nil {
-		a.Result.ExitCode = *r.ExitCode
-	}
-	for _, o := range r.Outputs {
-		digest, _ := hexOf(o.Digest)
-		a.Outputs = append(a.Outputs, controller.Output{Port: agk.Port(o.Port), Digest: digest, Items: o.Items})
-	}
-	if r.Log != nil {
-		l, err := agk.ParseLogURI(r.Log.URI)
-		if err != nil {
-			return controller.Answer{}, err
-		}
-		a.Log, a.LogLines, a.LogCut = l, r.Log.Lines, r.Log.Truncated
-	}
-	if r.Usage != nil {
-		// Under the names the wire gives them, since the column holding it is read by a
-		// person and a console and never by the engine.
-		a.Usage = map[string]any{
-			"cpu_seconds":   r.Usage.CPUSeconds,
-			"max_rss_bytes": r.Usage.MaxRSSBytes,
-			"image_pull_ms": r.Usage.ImagePullMS,
-		}
-	}
-	return a, nil
 }
 
 // isULID holds an identifier to the alphabet the engine mints in, and not to a length: the

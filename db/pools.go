@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The pool, which is the thing an administrator creates before any machine exists.
@@ -20,34 +21,56 @@ import (
 // ErrNoRunnerPool is a pool nobody created.
 var ErrNoRunnerPool = errors.New("db: no runner pool of that name")
 
+// ErrRunnerPoolExists is a pool created under a name another pool already has.
+var ErrRunnerPoolExists = errors.New("db: a runner pool of that name exists")
+
+// Containment is what runs a pool's containers.
+const (
+	// ContainmentHardened is "the default runtime with user-namespace remapping", which every
+	// installation gets always, and what a pool that says nothing is given.
+	ContainmentHardened = "hardened"
+	// ContainmentSandboxed is gVisor's runsc on a pool of its own.
+	ContainmentSandboxed = "sandboxed"
+	// ContainmentSeparated is a pool on hosts of their own.
+	ContainmentSeparated = "separated"
+)
+
 // RunnerPool is a set of hosts and the policy they carry.
 type RunnerPool struct {
-	Name   string   `json:"pool"`
-	Labels []string `json:"labels"`
+	Name   string
+	Labels []string
 
 	// AcceptedNamespaces is whose work this pool runs. Empty is every namespace, which is
-	// what an installation with one pool has and what it should not have to write down.
-	AcceptedNamespaces []string `json:"accepted_namespaces"`
+	// what an installation with one pool has.
+	AcceptedNamespaces []string
 
-	// The ceilings, over what a task asks for rather than over the host. Zero is no ceiling
-	// of that kind, which is the ordinary case for a pool of uniform hosts where the host
-	// itself is the limit.
-	MaxCPU         int   `json:"max_cpu,omitempty"`
-	MaxMemoryBytes int64 `json:"max_memory_bytes,omitempty"`
-	MaxDiskBytes   int64 `json:"max_disk_bytes,omitempty"`
+	// Ceilings are the most one task may be given here, over what it asks for rather than
+	// over the host.
+	Ceilings Ceilings
 
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by"`
+	// Containment is the tier, and empty is ContainmentHardened.
+	Containment string
 
-	// Runners and Ready are what the pool actually holds. A pool with no ready runner is
-	// what a namespace writing allowed_runner_pools against it needs to see, because a
-	// selector naming it would queue for ever and say nothing about why.
-	Runners int `json:"runners"`
-	Ready   int `json:"ready"`
+	CreatedAt time.Time
+	CreatedBy string
+}
+
+// Ceilings are cpu, memory and pids, written as a step writes them: cpu a decimal number of
+// cores, "0.5", memory a whole number with a binary suffix, "8Gi". Each is no ceiling of its kind
+// where it is empty or zero, which is the ordinary case for a pool of uniform hosts where the
+// host itself is the limit.
+type Ceilings struct {
+	CPU    string
+	Memory string
+	PIDs   int
 }
 
 // CreateRunnerPool writes one. It is the first thing that happens, before any token and any
 // machine.
+//
+// The table holds a pool to the grammar the wire gives it, the name, each label and each
+// namespace, and refuses anything else with PostgreSQL's own error. The API says why in words of
+// its own before it gets here.
 func (w *Wide) CreateRunnerPool(ctx context.Context, p RunnerPool) error {
 	switch {
 	case p.Name == "":
@@ -55,49 +78,68 @@ func (w *Wide) CreateRunnerPool(ctx context.Context, p RunnerPool) error {
 	case p.CreatedBy == "":
 		return errors.New("db: a runner pool nobody created")
 	}
+	containment := p.Containment
+	if containment == "" {
+		containment = ContainmentHardened
+	}
 	_, err := w.tx.Exec(ctx,
 		`insert into runner_pools (name, labels, accepted_namespaces,
-		                           max_cpu, max_memory_bytes, max_disk_bytes, created_by)
-		 values ($1, $2, $3, $4, $5, $6, $7)`,
+		                           ceiling_cpu, ceiling_memory, ceiling_pids, containment, created_by)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		p.Name, orEmptyStrings(p.Labels), orEmptyStrings(p.AcceptedNamespaces),
-		zeroIsNull(p.MaxCPU), zeroIsNull64(p.MaxMemoryBytes), zeroIsNull64(p.MaxDiskBytes),
-		p.CreatedBy)
+		nilIfEmpty(p.Ceilings.CPU), nilIfEmpty(p.Ceilings.Memory), zeroIsNull(p.Ceilings.PIDs),
+		containment, p.CreatedBy)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == uniqueViolation && pg.ConstraintName == "runner_pools_pkey" {
+		return fmt.Errorf("%w: %s", ErrRunnerPoolExists, p.Name)
+	}
 	if err != nil {
 		return fmt.Errorf("db: runner pool %s could not be created: %w", p.Name, err)
 	}
 	return nil
 }
 
-// RunnerPoolNamed answers one, without its counts, which is what a check before a write needs.
-func (w *Wide) RunnerPoolNamed(ctx context.Context, name string) (RunnerPool, error) {
+// uniqueViolation is PostgreSQL's code for a row a unique index already holds.
+const uniqueViolation = "23505"
+
+// poolColumns are what a pool is read as, in the order scanPool reads them.
+const poolColumns = `name, labels, accepted_namespaces,
+	ceiling_cpu, ceiling_memory, ceiling_pids, containment, created_at, created_by`
+
+// scanPool reads one row of poolColumns.
+func scanPool(row pgx.Row) (RunnerPool, error) {
 	var p RunnerPool
-	var cpu *int
-	var memory, disk *int64
-	err := w.tx.QueryRow(ctx, `
-		select name, labels, accepted_namespaces, max_cpu, max_memory_bytes, max_disk_bytes,
-		       created_at, created_by
-		from runner_pools where name = $1`, name).
-		Scan(&p.Name, &p.Labels, &p.AcceptedNamespaces, &cpu, &memory, &disk,
-			&p.CreatedAt, &p.CreatedBy)
+	var cpu, memory *string
+	var pids *int
+	if err := row.Scan(&p.Name, &p.Labels, &p.AcceptedNamespaces, &cpu, &memory, &pids,
+		&p.Containment, &p.CreatedAt, &p.CreatedBy); err != nil {
+		return RunnerPool{}, err
+	}
+	if cpu != nil {
+		p.Ceilings.CPU = *cpu
+	}
+	if memory != nil {
+		p.Ceilings.Memory = *memory
+	}
+	p.Ceilings.PIDs = orZero(pids)
+	return p, nil
+}
+
+// RunnerPoolNamed answers one.
+func (w *Wide) RunnerPoolNamed(ctx context.Context, name string) (RunnerPool, error) {
+	p, err := scanPool(w.tx.QueryRow(ctx, `select `+poolColumns+` from runner_pools where name = $1`, name))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunnerPool{}, ErrNoRunnerPool
 	}
 	if err != nil {
 		return RunnerPool{}, fmt.Errorf("db: runner pool %s could not be read: %w", name, err)
 	}
-	p.MaxCPU, p.MaxMemoryBytes, p.MaxDiskBytes = orZero(cpu), orZero64(memory), orZero64(disk)
 	return p, nil
 }
 
-// RunnerPools is the listing, with what each pool holds.
+// RunnerPools is the listing, ordered by name.
 func (w *Wide) RunnerPools(ctx context.Context) ([]RunnerPool, error) {
-	rows, err := w.tx.Query(ctx, `
-		select p.name, p.labels, p.accepted_namespaces,
-		       p.max_cpu, p.max_memory_bytes, p.max_disk_bytes, p.created_at, p.created_by,
-		       count(r.id) filter (where r.state <> 'revoked'),
-		       count(r.id) filter (where r.state = 'ready')
-		from runner_pools p left join runners r on r.pool = p.name
-		group by p.name order by p.name`)
+	rows, err := w.tx.Query(ctx, `select `+poolColumns+` from runner_pools order by name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: the runner pools could not be read: %w", err)
 	}
@@ -105,14 +147,10 @@ func (w *Wide) RunnerPools(ctx context.Context) ([]RunnerPool, error) {
 
 	var pools []RunnerPool
 	for rows.Next() {
-		var p RunnerPool
-		var cpu *int
-		var memory, disk *int64
-		if err := rows.Scan(&p.Name, &p.Labels, &p.AcceptedNamespaces, &cpu, &memory, &disk,
-			&p.CreatedAt, &p.CreatedBy, &p.Runners, &p.Ready); err != nil {
+		p, err := scanPool(rows)
+		if err != nil {
 			return nil, fmt.Errorf("db: a runner pool could not be read: %w", err)
 		}
-		p.MaxCPU, p.MaxMemoryBytes, p.MaxDiskBytes = orZero(cpu), orZero64(memory), orZero64(disk)
 		pools = append(pools, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -133,21 +171,7 @@ func zeroIsNull(n int) *int {
 	return &n
 }
 
-func zeroIsNull64(n int64) *int64 {
-	if n == 0 {
-		return nil
-	}
-	return &n
-}
-
 func orZero(n *int) int {
-	if n == nil {
-		return 0
-	}
-	return *n
-}
-
-func orZero64(n *int64) int64 {
 	if n == nil {
 		return 0
 	}

@@ -67,7 +67,9 @@ func Prefix(namespace string) string {
 //     are safe: two steps computing identical bytes is the ordinary case here rather
 //     than a race to be avoided.
 //   - Has answers false and no error for a key that is absent. Absence is the expected
-//     answer, not a failure.
+//     answer, not a failure. One that cannot ask may answer false for every key, as a
+//     runner's does in package artifact/granted: Put of a key already held stores the
+//     same bytes, so what that costs is a write and never a second copy.
 //   - Open returns an error satisfying errors.Is(err, fs.ErrNotExist) for a key that is
 //     absent, which is how a caller tells an artifact that is gone from a store that is
 //     broken.

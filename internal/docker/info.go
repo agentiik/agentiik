@@ -8,9 +8,11 @@ import (
 
 // Info is the daemon describing itself. Two of its fields are why this call exists.
 //
-// SecurityOptions is where user namespace remapping is read: a daemon with the remapping
-// on carries name=userns in the list, and a daemon without it does not. That is the
-// floor the runner refuses to start under.
+// SecurityOptions is where the daemon says how it confines a container, one option per
+// mechanism: name=userns where user namespace remapping is on, which is the floor the
+// runner refuses to start under, and name=seccomp, name=apparmor and name=selinux for the
+// three profiles the settings table's SecurityOpt row speaks of. An option the daemon does
+// not list is a mechanism it does not apply.
 //
 // DockerRootDir ends in <uid>.<gid> when the remapping is on, which is the one place the
 // remapped range is readable without parsing /etc/subuid, and it is the ownership a
@@ -44,14 +46,58 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 // a daemon writes is this package's business, and what to do when it is missing is the
 // driver's.
 func (i Info) UsernsRemapped() bool {
+	_, ok := i.securityOption("userns")
+	return ok
+}
+
+// SeccompProfile is the seccomp profile the daemon gives a container that names none, and
+// whether the daemon filters system calls at all.
+//
+// The daemon lists name=seccomp,profile=<p> where it was built with seccomp and the kernel
+// offers it, and leaves the option out otherwise. The profile is builtin for Docker's own
+// default, the path of the file it was started with where an operator named one, and
+// unconfined where it was started with --seccomp-profile=unconfined, which lists the
+// option and filters nothing: a daemon that answers ok with unconfined confines no
+// container that does not bring a profile of its own.
+func (i Info) SeccompProfile() (profile string, ok bool) {
+	fields, ok := i.securityOption("seccomp")
+	if !ok {
+		return "", false
+	}
+	return fields["profile"], true
+}
+
+// AppArmor says whether the daemon confines a container with an AppArmor profile, which it
+// does, and lists name=apparmor for, wherever the host kernel has AppArmor enabled.
+func (i Info) AppArmor() bool {
+	_, ok := i.securityOption("apparmor")
+	return ok
+}
+
+// SELinux says whether the daemon labels a container for SELinux. It lists name=selinux
+// only where it was started with --selinux-enabled on a host where SELinux is enabled,
+// which is narrower than the host having SELinux: a daemon started without the flag labels
+// nothing on a host that has it.
+func (i Info) SELinux() bool {
+	_, ok := i.securityOption("selinux")
+	return ok
+}
+
+// securityOption finds the option called name among the daemon's security options and
+// answers its fields: name=seccomp,profile=builtin is the option seccomp, whose profile
+// field is builtin.
+func (i Info) securityOption(name string) (map[string]string, bool) {
 	for _, option := range i.SecurityOptions {
+		fields := map[string]string{}
 		for _, field := range strings.Split(option, ",") {
-			if strings.TrimSpace(field) == "name=userns" {
-				return true
-			}
+			key, value, _ := strings.Cut(strings.TrimSpace(field), "=")
+			fields[key] = value
+		}
+		if fields["name"] == name {
+			return fields, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 // RemappedRange is the uid and gid a remapped daemon owns its root directory with, read
