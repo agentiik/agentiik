@@ -63,7 +63,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
-- A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0024_version_images.sql`.
+- A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0020_version_images.sql`.
 
 ### Bus
 
