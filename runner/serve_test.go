@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +49,46 @@ type served struct {
 	runner     string
 	credential Secret
 	run        agk.RunID
+
+	// forward is how far the API's clock is ahead of the time of day, in nanoseconds.
+	forward atomic.Int64
+}
+
+// now is the API's clock.
+func (in *served) now() time.Time {
+	return time.Now().UTC().Add(time.Duration(in.forward.Load()))
+}
+
+// ahead moves the API's clock forward by d.
+func (in *served) ahead(d time.Duration) { in.forward.Add(int64(d)) }
+
+// heardAt is the last heartbeat that named a dispatch, by the API's clock.
+func (in *served) heardAt(t *testing.T, row string) time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := in.conn.QueryRow(context.Background(),
+		`select last_heartbeat_at from tasks where id = $1`, row).Scan(&at); err != nil {
+		t.Error(err)
+	}
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
+}
+
+// swept is the controller's sweep for silence at a moment of the test's choosing, and answers how
+// many tasks it declared lost.
+func (in *served) swept(t *testing.T, at time.Time) int {
+	t.Helper()
+	var lost int
+	if err := in.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		lost, err = w.Lost(ctx, at, 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return lost
 }
 
 const servedCommit = "a3f9c1e"
@@ -110,7 +151,7 @@ func anInstallationServing(t *testing.T) *served {
 		t.Fatal(err)
 	}
 	if _, err := server.NewRunners(rt, server.RunnerOptions{
-		Pool: pool, Objects: in.objects, URLs: in.signed, BusIssuer: issuer, BusConsumers: control,
+		Pool: pool, Objects: in.objects, URLs: in.signed, BusIssuer: issuer, BusConsumers: control, Now: in.now,
 	}); err != nil {
 		t.Fatal(err)
 	}

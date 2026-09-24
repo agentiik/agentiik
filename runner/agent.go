@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/driver"
 )
 
@@ -28,21 +30,35 @@ type Agent struct {
 	// journal.
 	Log func(string)
 
-	// Ready is called once the agent is ready to be counted as started, which tells systemd. A
-	// failure to say so ends Serve: a unit of Type=notify that never hears it is timed out and
-	// restarted anyway, and a start that fails saying why is read where a timeout is not.
+	// Ready is called once the agent is ready to be counted as started, which is once its first
+	// heartbeat is answered, and tells systemd. A failure to say so ends Serve: a unit of
+	// Type=notify that never hears it is timed out and restarted anyway, and a start that fails
+	// saying why is read where a timeout is not.
 	Ready func() error
+
+	// every is the heartbeat's interval and earlierFor how long an earlier agent's keys are
+	// named, zero being HeartbeatInterval and bus.AckWait, which a test shortens.
+	every, earlierFor time.Duration
 }
 
 // Serve runs the agent until its context ends.
 //
-// Ready is said once the floor holds and the driver is open, which is everything the agent refuses
-// a start for before it asks the API anything: those two are what a runner that should not be
-// taking work refuses at. Then it asks the API for its bus credential, publishes whatever results
-// an earlier agent on this host kept and never saw published, and takes work until it is stopped,
-// returning once every task it holds has been answered or given up with it. The heartbeat, a later
-// part, moves Ready to after its first answer, since a runner whose API refuses it is not one to
-// count as started.
+// The floor and the daemon are held before it is called, which is everything the agent refuses a
+// start for before it asks the API anything. It then names, in a first heartbeat, every key an
+// earlier agent on this host held when it stopped and every result it kept, and says Ready once
+// that heartbeat is answered: a runner whose API refuses it is not one to count as started, and a
+// restart that waited on anything else first would leave what the earlier agent held unnamed for
+// longer than the three intervals that have it declared lost. Then it asks the API for its bus
+// credential, publishes the kept results, and takes work until it is stopped, heartbeating every
+// interval throughout, and returns once every task it holds has been answered or given up with it.
+//
+// Ready comes before the bus credential and not after it. The heartbeat is where the API says it
+// accepts this runner, and the credential is asked for with the same one; a bus not reachable yet is
+// waited for, as OpenBus says, and a Ready held back on it would have systemd time the start out
+// and restart an agent doing the right thing, its heartbeat stopping with every restart.
+//
+// A heartbeat answered 401 ends the agent with an error saying to join again: the credential opens
+// nothing, and an agent asking again for ever would only ask again.
 func Serve(ctx context.Context, a Agent) error {
 	switch {
 	case a.Driver == nil:
@@ -70,28 +86,82 @@ func Serve(ctx context.Context, a Agent) error {
 	if ctx.Err() != nil {
 		return nil
 	}
-	if a.Ready != nil {
-		if err := a.Ready(); err != nil {
-			return err
-		}
-	}
+	// The agent stops on its own context ending and on a heartbeat refused, and the second is
+	// what it then returns.
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 
-	b, err := OpenBus(ctx, a.Client, a.Config, say)
-	if err != nil || b == nil {
-		return err
-	}
-	defer b.Close()
-
-	// A result an earlier agent kept is published before anything new is taken, and one the bus
-	// does not take now goes out with the loop's later flushes. One that could not be read back
-	// is said, and does not stop the rest.
-	results, err := OpenResults(a.Config.WorkDir, a.Config.Runner, b)
+	// The results an earlier agent kept are read now, so that the first heartbeat names their
+	// keys, and published once the bus is open. A result that could not be read back is said,
+	// and does not stop the rest.
+	later := &laterBus{}
+	results, err := OpenResults(a.Config.WorkDir, a.Config.Runner, later)
 	if results == nil {
 		return err
 	}
 	if err != nil {
 		say(err.Error())
 	}
+	earlier, err := a.Driver.Dispatched()
+	if err != nil {
+		say(err.Error() + ": the keys an earlier agent held are not named, and the sweep declares lost those still bound to this runner")
+	}
+
+	loop := &Loop{
+		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
+		Redeemer: a.Client, Holder: a.Driver,
+		Carrier: &Carrier{
+			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
+			// The driver is given nowhere to write a task's log yet, so a result addresses
+			// none.
+			Logs: false, Log: say,
+		},
+		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
+		Log:      say,
+	}
+	beat := &Heartbeat{
+		Client: a.Client, Runner: a.Config.Runner, Concurrency: a.Config.Concurrency,
+		Holding: func() []string { return append(loop.Held(), results.Keys()...) },
+		Earlier: earlier, EarlierFor: a.earlierFor,
+		Stopper: a.Driver, Log: say, Every: a.every,
+	}
+	defer beat.Wait()
+	if err := beat.First(ctx); err != nil || ctx.Err() != nil {
+		return err
+	}
+	if a.Ready != nil {
+		if err := a.Ready(); err != nil {
+			return err
+		}
+	}
+
+	// Each wait below is preceded by a stop, so that a return that is not the context ending,
+	// a bus refused or a loop that could not start, ends what it waits on first.
+	var beating sync.WaitGroup
+	defer beating.Wait()
+	defer stop(nil)
+	beating.Add(1)
+	go func() {
+		defer beating.Done()
+		if err := beat.Run(ctx); err != nil {
+			stop(err)
+		}
+	}()
+
+	b, err := OpenBus(ctx, a.Client, a.Config, say)
+	switch {
+	case errors.Is(err, ErrCredentialRefused):
+		return fmt.Errorf("runner: %s: %w", joinAgain, err)
+	case err != nil:
+		return err
+	case b == nil:
+		return refused(ctx)
+	}
+	defer b.Close()
+	later.attach(b)
+
+	// A result an earlier agent kept is published before anything new is taken, and one the bus
+	// does not take now goes out with the loop's later flushes.
 	if err := results.Flush(ctx); err != nil && ctx.Err() == nil {
 		say(err.Error())
 	}
@@ -100,24 +170,48 @@ func Serve(ctx context.Context, a Agent) error {
 	a.Endings.Next = progress
 	var publishing sync.WaitGroup
 	defer publishing.Wait()
+	defer stop(nil)
 	publishing.Add(1)
 	go func() {
 		defer publishing.Done()
 		progress.Run(ctx)
 	}()
 
-	loop := &Loop{
-		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
-		Queue: b, Redeemer: a.Client, Holder: a.Driver,
-		Carrier: &Carrier{
-			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
-			// The driver is given nowhere to write a task's log yet, so a result addresses
-			// none.
-			Logs: false, Log: say,
-		},
-		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
-		Progress: progress,
-		Log:      say,
+	loop.Queue, loop.Progress = b, progress
+	if err := loop.Run(ctx); err != nil {
+		return err
 	}
-	return loop.Run(ctx)
+	return refused(ctx)
+}
+
+// refused is the heartbeat's refusal where that is what ended the agent, and nil where its own
+// context did.
+func refused(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	return nil
+}
+
+// laterBus is where the kept results are published through once the bus is open. They are read
+// before it is, for the first heartbeat to name, and nothing publishes one until it is.
+type laterBus struct {
+	mu sync.Mutex
+	b  Publisher
+}
+
+func (l *laterBus) attach(b Publisher) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b = b
+}
+
+func (l *laterBus) Report(ctx context.Context, r bus.TaskResult) error {
+	l.mu.Lock()
+	b := l.b
+	l.mu.Unlock()
+	if b == nil {
+		return fmt.Errorf("runner: the result of %s: %w: the task bus is not open yet", r.TaskID, ErrUnavailable)
+	}
+	return b.Report(ctx, r)
 }
