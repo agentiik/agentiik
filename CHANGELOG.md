@@ -99,6 +99,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redemption that failed without refusing the task, with no answer, the runner's own credential refused or the API failing on its side, is not acknowledged, and the runner keeps the key, names it in its heartbeat and redeems again. Letting go, it left a task its lost answer had bound for the sweep to declare lost before the message came round, spending a requeue on a host that was never lost.
 - A test holds `bus.AckWait` to the documented minute.
 - The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
+- `bus.NewInstallation` creates an installation's NATS operator, application account and system account, and writes its three files once, readable by their owner alone: `accounts.conf` for the server to include, `account.seed` for the API to mint runner credentials with, and `control-plane.creds` for the API and the controller. The operator's seed is kept nowhere. The bus tests run on a server started from that configuration, and the API and the controller read the files as written.
 
 ### Driver
 
