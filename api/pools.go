@@ -114,13 +114,23 @@ func (p *Pool) field(b *body, name string) error {
 		p.Ceilings = &c
 		return nil
 	case "containment":
-		return text(b, &p.Containment)
+		if err := notNull(b, "a tier of containment"); err != nil {
+			return err
+		}
+		if err := text(b, &p.Containment); err != nil {
+			return err
+		}
+		return tier(p.Containment)
 	}
 	return unknown(name)
 }
 
 // Ceilings are the most one task may be given on a pool, "whatever its step asked for", written
 // as a step writes them. One left out is no ceiling of that kind.
+//
+// Each is held to its grammar as it is read, because only then can one written empty be told from
+// one left out: "" is no number of cores, and read as absent it would be a pool with no ceiling
+// that nobody wrote as one.
 type Ceilings struct {
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
@@ -130,12 +140,30 @@ type Ceilings struct {
 func (c *Ceilings) field(b *body, name string) error {
 	switch name {
 	case "cpu":
-		return text(b, &c.CPU)
+		if err := notNull(b, "a number of cores written as a string"); err != nil {
+			return err
+		}
+		if err := text(b, &c.CPU); err != nil {
+			return err
+		}
+		if !cpuForm.MatchString(c.CPU) {
+			return fmt.Errorf("the pool's cpu ceiling is %.64q: it is a decimal number of cores above zero, written as a string, \"0.5\" or \"4\"", c.CPU)
+		}
+		return nil
 	case "memory":
-		return text(b, &c.Memory)
+		if err := notNull(b, "a size written as a string"); err != nil {
+			return err
+		}
+		if err := text(b, &c.Memory); err != nil {
+			return err
+		}
+		if !memoryForm.MatchString(c.Memory) {
+			return fmt.Errorf("the pool's memory ceiling is %.64q: it is a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, so that 512Mi cannot be read as 512 bytes", c.Memory)
+		}
+		return nil
 	case "pids":
-		if b.d.PeekKind() == jsontext.KindNull {
-			return integer(b, &c.PIDs)
+		if err := notNull(b, "a whole number of processes"); err != nil {
+			return err
 		}
 		if err := integer(b, &c.PIDs); err != nil {
 			return err
@@ -150,7 +178,9 @@ func (c *Ceilings) field(b *body, name string) error {
 	return unknown(name)
 }
 
-// check refuses a pool the wire would refuse, or one this installation cannot give what it says.
+// check refuses a pool the wire would refuse, in what can only be judged once all of it is read.
+// Its ceilings and its tier are judged as they are read, where one written empty or null can
+// still be told from one left out.
 func (p Pool) check() error {
 	switch {
 	case p.Name == "":
@@ -174,27 +204,40 @@ func (p Pool) check() error {
 	}); err != nil {
 		return err
 	}
-	if err := distinct(p.Namespaces, "namespace", func(namespace string) error {
+	return distinct(p.Namespaces, "namespace", func(namespace string) error {
 		if !givenName.MatchString(namespace) {
 			return fmt.Errorf("%.64q is not a namespace: a namespace is named in lowercase words joined by hyphens, and a pool accepting one named otherwise would accept nothing", namespace)
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-	if c := p.Ceilings; c.CPU != "" && !cpuForm.MatchString(c.CPU) {
-		return fmt.Errorf("the pool's cpu ceiling is %.64q: it is a decimal number of cores above zero, written as a string, \"0.5\" or \"4\"", c.CPU)
-	}
-	if c := p.Ceilings; c.Memory != "" && !memoryForm.MatchString(c.Memory) {
-		return fmt.Errorf("the pool's memory ceiling is %.64q: it is a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, so that 512Mi cannot be read as 512 bytes", c.Memory)
-	}
-	switch p.Containment {
-	case "", db.ContainmentHardened:
+	})
+}
+
+// tier refuses a tier of containment the wire does not name, and one this installation cannot
+// give yet. It is held as it is read, like a ceiling, so that "" is refused as no tier rather than
+// read as containment left out, which is hardened.
+func tier(containment string) error {
+	switch containment {
+	case db.ContainmentHardened:
 		return nil
 	case db.ContainmentSandboxed, db.ContainmentSeparated:
-		return fmt.Errorf("%s is a tier of containment this installation cannot give yet: it ships in v1.0.0, and until then nothing checks that a pool's hosts give it, so a pool saying so would be trusted for an isolation it does not have. Every pool is hardened until then", p.Containment)
+		return fmt.Errorf("%s is a tier of containment this installation cannot give yet: it ships in v1.0.0, and until then nothing checks that a pool's hosts give it, so a pool saying so would be trusted for an isolation it does not have. Every pool is hardened until then", containment)
 	}
-	return fmt.Errorf("%.64q is not a tier of containment: a pool is hardened, sandboxed or separated", p.Containment)
+	return fmt.Errorf("%.64q is not a tier of containment: a pool is hardened, sandboxed or separated, and one that names none leaves containment out and is hardened", containment)
+}
+
+// notNull refuses null where a pool writes a ceiling or a tier, and reads nothing otherwise.
+//
+// The wire types each of them and allows no null, and a pool that sets none leaves it out. Read as
+// left out, null would give a pool no ceiling, or the default tier, from a value somebody meant
+// to set, which is what a client sends for a variable it left unset.
+func notNull(b *body, want string) error {
+	if b.d.PeekKind() != jsontext.KindNull {
+		return nil
+	}
+	if _, err := b.d.ReadToken(); err != nil {
+		return malformed(err)
+	}
+	return fmt.Errorf("the request body holds null at %.100q, where it holds %s: a pool that sets none leaves it out, and null is refused rather than read as that, so that a pool goes without a ceiling, or takes the default tier, only where somebody left one out", b.d.StackPointer(), want)
 }
 
 // distinct refuses a list naming one entry twice, and anything each refuses. The wire holds a
