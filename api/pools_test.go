@@ -186,6 +186,17 @@ func TestAJoinTokenIsIssuedIntoAPoolAndShownOnce(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("a token asked to live a month answered %d", w.Code)
 	}
+
+	// Nor so long that the seconds wrap as a duration, which is the same refusal and not a
+	// token dead as it is issued, one that lives a third of a second, or a failure of the API's
+	// own.
+	for _, seconds := range []int{9223372037, 18446744074, 1 << 55} {
+		w, _ = call(t, h, "POST", "/api/v1/runner-pools/dmz/join-tokens", "admin",
+			api.Issue{ExpiresInSeconds: seconds})
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "longer than a day") {
+			t.Errorf("a token asked to live %d seconds answered %d: %s", seconds, w.Code, w.Body)
+		}
+	}
 }
 
 // lifeOf is how long a token was answered as living: its expiry less the moment it was issued.

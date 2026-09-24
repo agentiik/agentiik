@@ -324,13 +324,16 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 		fail(w, statusOf(err), err.Error())
 		return
 	}
+	// Compared in seconds before it is made a duration, because a count of seconds larger than a
+	// duration holds wraps when it is multiplied, to a token dead as it is issued or one that
+	// lives a fraction of a second, rather than being refused as longer than a day.
+	if ask.ExpiresInSeconds > int(TokenLife/time.Second) {
+		fail(w, http.StatusBadRequest, "a join token only has to survive the minutes between an administrator copying it and a machine presenting it, and this one asks for longer than a day")
+		return
+	}
 	life := TokenDefaultLife
 	if ask.ExpiresInSeconds > 0 {
 		life = time.Duration(ask.ExpiresInSeconds) * time.Second
-	}
-	if life > TokenLife {
-		fail(w, http.StatusBadRequest, "a join token only has to survive the minutes between an administrator copying it and a machine presenting it, and this one asks for longer than a day")
-		return
 	}
 	if err := distinct(ask.Labels, "label", func(string) error { return nil }); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
