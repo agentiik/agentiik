@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +57,9 @@ type someRuns struct {
 	objects artifact.Objects
 	signed  *artifact.Signed
 
+	// dir is where objects keeps its bytes, for a test that has to put others there.
+	dir string
+
 	// finance are the runs of finance/monthly-invoicing, oldest first, and payroll and teamOps
 	// the one run of finance/payroll and of team-ops/monthly-invoicing.
 	finance []string
@@ -72,14 +77,15 @@ func withSomeRuns(t *testing.T) someRuns {
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects := artifact.Dir(t.TempDir())
+	dir := t.TempDir()
+	objects := artifact.Dir(dir)
 	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{
 		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := someRuns{pool: pool, super: super, store: store, objects: objects, signed: signed}
+	s := someRuns{pool: pool, super: super, store: store, objects: objects, signed: signed, dir: dir}
 
 	h := s.servedTo(t, everything{who: "admin"})
 	start := func(namespace, workflow string) string {
@@ -497,6 +503,32 @@ func TestAnArtifactWithABudgetIsServedAndCountedWhenItCompletes(t *testing.T) {
 	}
 }
 
+// Bytes that are not the ones the digest names are no fetch of the artifact: a store that handed
+// back something else under its key has served nothing the budget was for, so the fetch is given
+// back.
+func TestBytesThatAreNotTheArtifactSpendNothing(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("payslip 2026-01")
+	u := s.anArtifact(t, s.finance[0], "payslip.txt", 1, content)
+	sum := sha256.Sum256(content)
+	stored := filepath.Join(s.dir, filepath.FromSlash(artifact.Key("finance", hex.EncodeToString(sum[:]))))
+	corrupt := bytes.ToUpper(content)
+	if err := os.Remove(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stored, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := s.servedTo(t, everything{who: "alice"})
+	if w, _ := call(t, h, "GET", artifactPath(u), "alice", nil); w.Code != http.StatusOK || w.Body.String() != string(corrupt) {
+		t.Fatalf("the fetch answered %d %q", w.Code, w.Body)
+	}
+	var left *int
+	if err := dbtest.Superuser(t, s.super).QueryRow(t.Context(), `select fetches_left from artifacts where name = 'payslip.txt' and status = 'live'`).Scan(&left); err != nil || left == nil || *left != 1 {
+		t.Errorf("bytes other than the artifact's spent its fetch: %v, %v", left, err)
+	}
+}
+
 // leaving is a client that has everything and goes, as curl does: the request's context is
 // cancelled the moment the last byte is written, before anything after it runs.
 type leaving struct {
@@ -575,6 +607,13 @@ func TestTheLastFetchOfABudgetIsServedOnce(t *testing.T) {
 	h.ServeHTTP(second, request())
 	if second.Code != http.StatusConflict {
 		t.Errorf("a second fetch of the last one, while the first was being served, answered %d %q", second.Code, second.Body)
+	}
+	asking := request()
+	asking.Method = "HEAD"
+	head := httptest.NewRecorder()
+	h.ServeHTTP(head, asking)
+	if head.Code != http.StatusConflict {
+		t.Errorf("a HEAD of the last one, while it was being served, answered %d where a GET answers 409", head.Code)
 	}
 	close(first.release)
 	done.Wait()

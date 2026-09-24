@@ -188,14 +188,15 @@ func TestWhatCannotBeRegisteredAboutAnArtifact(t *testing.T) {
 // installation, is an error rather than an answer.
 func TestARouteAcrossTheInstallationAsksAboutItsOwnPermission(t *testing.T) {
 	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
-	rt := router(t, holder{who: "alice", what: api.RunRead, over: invoicing})
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	rt := router(t, granted{"alice": {{api.RunReadData, invoicing}, {api.RunRead, payroll}}})
 
 	var answers []bool
 	var asked error
-	rt.MustHandleAcross("GET", "/api/v1/runs", api.Across{Permission: api.RunRead},
+	rt.MustHandleAcross("GET", "/api/v1/runs", api.Across{Permission: api.RunReadData},
 		func(w http.ResponseWriter, r *http.Request, who api.Principal, holds api.Holds) {
 			answers = nil
-			for _, over := range []api.Target{invoicing, {Namespace: "finance", Workflow: "payroll"}} {
+			for _, over := range []api.Target{invoicing, payroll} {
 				allowed, err := holds(r.Context(), over)
 				if err != nil {
 					t.Fatal(err)
@@ -210,7 +211,7 @@ func TestARouteAcrossTheInstallationAsksAboutItsOwnPermission(t *testing.T) {
 		t.Fatalf("the route answered %d", code)
 	}
 	if len(answers) != 2 || !answers[0] || answers[1] {
-		t.Errorf("holds answered %v about a workflow she holds run:read on and one she does not", answers)
+		t.Errorf("holds answered %v about a workflow she holds run:read_data on and one she holds only run:read on", answers)
 	}
 	if asked == nil {
 		t.Error("holds answered about the installation itself")
@@ -232,7 +233,7 @@ func TestARouteAcrossTheInstallationAsksAboutItsOwnPermission(t *testing.T) {
 	}
 
 	for _, route := range rt.Routes() {
-		if route.Pattern == "/api/v1/runs" && (!route.Across || route.Permission != api.RunRead) {
+		if route.Pattern == "/api/v1/runs" && (!route.Across || route.Permission != api.RunReadData) {
 			t.Errorf("the surface lists the route as %+v", route)
 		}
 	}

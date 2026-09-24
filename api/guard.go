@@ -83,9 +83,9 @@ func (o OnArtifact) guards() guard {
 // what the caller may see is a question asked of each thing the answer could hold. The router asks
 // it rather than the handler: a route taking Across is registered with HandleAcross, and its handler
 // is given Holds, which asks the authorizer about this permission for this principal and nothing
-// else. A handler that forgot to ask would answer nothing it was allowed to, since what it answers
-// is only what Holds let through; one asking about another permission cannot, since Holds is bound
-// to the one the route declared.
+// else, so a handler cannot ask about another permission or another caller. That it answers only
+// what Holds let through is the handler's to keep, and its tests' to hold it to: nothing here can
+// see what it answers.
 type Across struct {
 	Permission Permission
 }

@@ -181,19 +181,32 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request, who Principal, o
 // that has everything closes its connection, which is what a client that has everything does.
 const fetchSettling = 30 * time.Second
 
+// fetchTransfer is how long the bytes of an artifact with a fetch budget may take to go, and
+// fetchHold how long the fetch is held for them.
+//
+// An hour carries artifact_max_bytes, 5 GiB at its default, at twelve megabits a second, which is
+// a slow link rather than a fast one. The hold outlasts the transfer and its settling, so that a
+// transfer still going never finds its fetch taken by another. It is also how long a fetch stays
+// held where the API serving it died before giving it back: an hour and five minutes of 409, after
+// which the next transfer takes it again.
+const (
+	fetchTransfer = time.Hour
+	fetchHold     = fetchTransfer + fetchSettling + 4*time.Minute + 30*time.Second
+)
+
 // artifactOf answers GET /api/v1/artifacts/{uri}, as How long an artifact lives sets it out: a
 // redirect to a short-lived presigned URL where the artifact has no fetch budget, the bytes
 // themselves where it has one, 410 once it has expired or its budget is spent, and 404 where it
 // never existed.
 //
 // A budget is served rather than redirected because "a redirect ends when issued, so a client that
-// never arrived would have spent its fetch". One fetch is reserved before the bytes go and given
-// back unless the whole of them went and matched their digest, so the last fetch is served once
-// however many ask for it at the same moment, the others being told it is being served, and a
-// transfer that did not complete spends nothing. Nothing of the database is held while the bytes
-// go. A HEAD is answered what a GET would be, bytes aside, and reserves nothing, since nothing is
-// fetched. A Range is not honoured: the whole artifact is answered, which is the one transfer
-// that can count.
+// never arrived would have spent its fetch". One fetch is held before the bytes go, spent if the
+// whole of them went and matched their digest and given back otherwise, so the last fetch is
+// served once however many ask for it at the same moment, the others being told it is being
+// served, and a transfer that did not complete spends nothing. Nothing of the database is held
+// while the bytes go, and the bytes have fetchTransfer to go in. A HEAD is answered what a GET
+// would be, bytes aside, and holds nothing, since nothing is fetched. A Range is not honoured: the
+// whole artifact is answered, which is the one transfer that can count.
 func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	u, err := agk.ParseURI(r.PathValue("uri"))
 	if err != nil || !utf8.ValidString(u.Name) {
@@ -235,31 +248,43 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 		return
 	}
 	if r.Method == http.MethodHead {
+		if got.Held >= got.Fetches {
+			s.fetchable(w, db.ErrInFlight)
+			return
+		}
 		bytesOf(w, u, got.Size)
 		return
 	}
 
+	var held time.Time
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		got, err = ns.Reserve(ctx, u)
+		got, held, err = ns.Reserve(ctx, u, fetchHold)
 		return err
 	})
 	if !s.fetchable(w, err) {
 		return
 	}
-	// From here the fetch is taken, and every way out either records it delivered or gives it
-	// back, on a context the request going away does not cancel.
+	// From here the fetch is held, and every way out either spends it or gives it back, on a
+	// context the request going away does not cancel. One that does neither, the API dying
+	// first, is given back when its hold lapses.
 	delivered := false
 	defer func() {
 		settle, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fetchSettling)
 		defer cancel()
 		s.pool.In(settle, over.Namespace, func(ctx context.Context, ns *db.NS) error {
 			if delivered {
-				return ns.Delivered(ctx, u)
+				return ns.Delivered(ctx, u, held)
 			}
-			return ns.Release(ctx, u)
+			return ns.Release(ctx, u, held)
 		})
 	}()
+	// Bounded, so that the transfer ends before its hold does. A writer that cannot be given a
+	// deadline is one no connection stands behind.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(fetchTransfer)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
+		return
+	}
 
 	rc, err := s.objects.Open(r.Context(), got.Key)
 	if err != nil {
