@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
@@ -1068,6 +1069,37 @@ func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
 		if !strings.Contains(out, line) {
 			t.Errorf("the push does not say %q: %s", line, out)
 		}
+	}
+}
+
+// Each manifest is read out of the digest its tag was resolved to, and never out of the tag, so a
+// tag moved on this machine between the two, by a build or a pull of it finishing, cannot pair the
+// digest of one image with the manifest of another: what the version holds a step to is the image
+// the version names.
+func TestAManifestIsReadOutOfTheDigestItsTagWasResolvedTo(t *testing.T) {
+	const tag = "ghcr.io/acme/agk-invoice:1.4.0"
+	const movedDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		tag:           {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21": {Digest: alpineDigest},
+	}, dockertest.TagMoves(tag, dockertest.Image{
+		Digest: movedDigest, Manifest: []byte(strings.Replace(invoiceManifest, "version: 1.4.0", "version: 1.4.1", 1)),
+	}))
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if want := "ghcr.io/acme/agk-invoice@" + invoiceDigest; got.Images[tag] != want {
+		t.Fatalf("the tag was pushed as %s, and it named %s when it was resolved", got.Images[tag], want)
+	}
+	m, err := brick.ParseManifest(got.Manifests[tag])
+	if err != nil {
+		t.Fatalf("the manifest pushed for %s: %v", tag, err)
+	}
+	if m.Metadata.Version != "1.4.0" {
+		t.Errorf("the version names %s with the manifest of %s %s, the image the tag moved to", got.Images[tag], m.Metadata.Name, m.Metadata.Version)
 	}
 }
 
