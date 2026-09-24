@@ -26,6 +26,9 @@ var ErrNoRunner = errors.New("db: no runner of that identifier")
 // ErrNoJoinToken is a join token that is wrong, spent or expired.
 var ErrNoJoinToken = errors.New("db: that join token cannot be redeemed")
 
+// ErrNotThePoolsLabel is a join token asked to permit a label its pool does not carry.
+var ErrNotThePoolsLabel = errors.New("db: a join token permits only labels its pool carries")
+
 // JoinToken is what an administrator hands to a machine that is about to become a runner.
 type JoinToken struct {
 	ID     string
@@ -39,19 +42,28 @@ type JoinToken struct {
 	ExpiresAt time.Time
 }
 
-// IssueJoinToken mints one, bound to one pool and one set of labels.
+// IssueJoinToken mints one, bound to one pool and one set of labels, issued at one moment and
+// good until another.
 //
 // "bound both to that pool and to the exact set of labels a runner may claim with it", because
 // "a machine cannot add zone=lan to itself and start receiving the steps that were kept off the
 // internet".
-func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string, by string, until time.Time) (JoinToken, error) {
+//
+// Both moments are the caller's, as a join's is, because the wire writes issued_at "on the clock
+// of the API that created it" and the expiry is read against it: a token stamped by one clock and
+// timed by another would say it lived a different hour from the one it was given.
+func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string, by string, at, until time.Time) (JoinToken, error) {
 	switch {
 	case pool == "":
 		return JoinToken{}, errors.New("db: a join token for no pool")
 	case by == "":
 		return JoinToken{}, errors.New("db: a join token nobody issued")
+	case at.IsZero():
+		return JoinToken{}, errors.New("db: a join token issued at no moment")
 	case until.IsZero():
 		return JoinToken{}, errors.New("db: a join token that never expires, and one only has to survive the minutes between an administrator copying it and a machine presenting it")
+	case !until.After(at):
+		return JoinToken{}, errors.New("db: a join token that has expired by the moment it is issued")
 	}
 
 	// A token draws its labels from its pool, which is where somebody wrote them down. A
@@ -64,7 +76,7 @@ func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string,
 	}
 	for _, claimed := range labels {
 		if !slices.Contains(p.Labels, claimed) {
-			return JoinToken{}, fmt.Errorf("db: pool %s does not carry the label %s", pool, claimed)
+			return JoinToken{}, fmt.Errorf("%w, and pool %s does not carry %s", ErrNotThePoolsLabel, pool, claimed)
 		}
 	}
 
@@ -74,12 +86,12 @@ func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string,
 	}
 	t := JoinToken{
 		ID: ulid.New(), Pool: pool, Labels: labels, Clear: clear,
-		IssuedBy: by, IssuedAt: time.Now().UTC(), ExpiresAt: until,
+		IssuedBy: by, IssuedAt: at, ExpiresAt: until,
 	}
 	if _, err := w.tx.Exec(ctx,
-		`insert into join_tokens (id, pool, labels, hash, issued_by, expires_at)
-		 values ($1, $2, $3, $4, $5, $6)`,
-		t.ID, pool, orEmptyStrings(labels), hashed, by, until); err != nil {
+		`insert into join_tokens (id, pool, labels, hash, issued_by, issued_at, expires_at)
+		 values ($1, $2, $3, $4, $5, $6, $7)`,
+		t.ID, pool, orEmptyStrings(labels), hashed, by, at, until); err != nil {
 		return JoinToken{}, fmt.Errorf("db: the join token could not be recorded: %w", err)
 	}
 	return t, nil

@@ -2,7 +2,6 @@ package docker_test
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -13,20 +12,21 @@ import (
 )
 
 // Everything in this file needs a daemon that is actually there. It is skipped where
-// there is none, so that the suite stays green in CI, and it runs where there is one, so
-// that the fake is held to what the real daemon does rather than to what this package
-// believes about it.
+// there is none, so that a machine with nothing installed still runs the rest, and it runs
+// where there is one, so that the fake is held to what the real daemon does rather than to
+// what this package believes about it. CI has one and sets AGENTIIK_TEST_REQUIRE_DOCKER,
+// so there a test that cannot run fails rather than skips.
 
-// real dials the daemon on this machine, or skips.
+// real dials the daemon on this machine, or ends the test through dockertest.Unavailable.
 func real(t *testing.T) *docker.Client {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	c, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("the daemon at %s did not answer: %v", socket, err)
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
 	t.Cleanup(func() { c.Close() })
 	return c
@@ -260,15 +260,16 @@ func TestARealDaemonPinsAPulledImageToWhatItsRegistryServes(t *testing.T) {
 	}
 }
 
-// localImage is a small image that is already on this machine, or a skip. Pulling one
-// would make this a test of somebody's registry.
+// localImage is a small image that is already on this machine, or the end of the test.
+// Pulling one would make this a test of somebody's registry, so CI pulls alpine:3.21, the
+// image every fixture names, before the tests start.
 func localImage(t *testing.T, c *docker.Client) string {
 	t.Helper()
-	for _, ref := range []string{"alpine:latest", "busybox:latest", "alpine", "busybox", "debian:stable-slim"} {
+	for _, ref := range []string{"alpine:3.21", "alpine:latest", "busybox:latest", "alpine", "busybox", "debian:stable-slim"} {
 		if _, err := c.ImageInspect(t.Context(), ref); err == nil {
 			return ref
 		}
 	}
-	t.Skip(fmt.Sprintf("no small image on this machine to run a container from: %s", "docker pull alpine"))
+	dockertest.Unavailable(t, "no small image on this machine to run a container from: docker pull alpine:3.21")
 	return ""
 }

@@ -6,10 +6,21 @@
 // naturally proportional to each host's real capacity without the controller having to model
 // load."
 //
-// It fills controller.Queue and nothing in the controller knows it exists, which is the same
-// arrangement graph.Driver and package driver already have. That seam is not decoration: the
-// deployment chapter substitutes SQS for the whole of this on one profile, and a substitution
-// is only possible where the contract is narrow enough to state.
+// Package bus/control fills controller.Queue over it, and nothing in the controller knows either
+// exists, which is the same arrangement graph.Driver and package driver already have. That seam is
+// not decoration: the deployment chapter substitutes SQS for the whole of this on one profile, and
+// a substitution is only possible where the contract is narrow enough to state.
+//
+// # Why the controller's half is a package of its own
+//
+// A runner links this package, and a runner "holds no database credential, no secret-store
+// credential and no standing object-store credential": the program on its host links none of the
+// code that would use one. The controller links the database driver, so this package names none of
+// its types. What the control plane does on the bus is here: publishing a task message, making a
+// pool's consumer and taking results back. Writing what the controller decided as a message, and
+// reading a result as the answer the controller takes, is bus/control's. boundary_test.go holds
+// the line, since it was crossed once without anybody noticing: the runner's half linked the
+// controller, and the database with it, for as long as both halves were one package.
 //
 // # Why pull and not push
 //

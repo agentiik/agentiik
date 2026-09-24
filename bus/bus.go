@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
@@ -42,7 +41,8 @@ type Bus struct {
 
 	// Trouble is where a message goes that no delivery would ever change: one nobody can
 	// read, and a result that reads well and that no controller could ever record, which
-	// arrives wrapping controller.ErrNotAResult. Such a message is taken off the queue,
+	// the function Reports hands it to answers with Drop, as package bus/control does for
+	// controller.ErrNotAResult. Such a message is taken off the queue,
 	// because redelivering it for ever would cost the pool, and that is exactly why it has
 	// to be said out loud: a queue that quietly swallowed it would hide a wire that stopped
 	// matching, or a runner answering with what is not a result. The two point at different
@@ -264,45 +264,45 @@ func (b *Bus) consumer(ctx context.Context, pool string, wait time.Duration) err
 	return nil
 }
 
-// Publish puts one task on the queue its labels select.
+// Publish puts one task message on the queue its labels select.
 //
-// This is controller.Queue's half. The message carries the task as the wire describes it, and
-// the task_id is given to JetStream as its deduplication key: a bus is at-least-once and the
-// runner is what makes that safe, but a publish retried by this process inside the duplicate
-// window is a retry this process knows about and there is no reason to make somebody else pay
-// for it. A task a later pass planned again, because the pass that published it could not record
-// the dispatch, is deduplicated the same way, and it carries a grant of its own: the message that
-// stays is the first, which is why a grant once issued is never replaced.
+// It is the control plane's, and package bus/control is what calls it, once it has written what the
+// controller decided as the wire describes it: a runner's credential may not publish on a task
+// subject at all. The task_id is given to JetStream as its deduplication key, read off the message
+// rather than asked of the caller so that the two cannot disagree. A bus is at-least-once and the
+// runner is what makes that safe, but a publish retried by this process inside the duplicate window
+// is a retry this process knows about and there is no reason to make somebody else pay for it. A
+// task a later pass planned again, because the pass that published it could not record the
+// dispatch, is deduplicated the same way, and it carries a grant of its own: the message that stays
+// is the first, which is why a grant once issued is never replaced.
 //
 // The task_id and not the idempotency key, because "a requeue after loss keeps the idempotency
 // key and takes a new task_id". Deduplicated on the key, a task lost within two minutes of being
 // published would be requeued into a stream that answers it was already there, and the requeue
 // would go nowhere while the controller recorded it as handed out.
-func (b *Bus) Publish(ctx context.Context, d controller.Dispatch) error {
-	t := d.Task
-	pool, err := PoolOf(t.RunsOn)
+func (b *Bus) Publish(ctx context.Context, m TaskMessage) error {
+	pool, err := PoolOf(m.RunsOn)
 	if err != nil {
-		return fmt.Errorf("bus: task %s: %w", t.ID, err)
+		return fmt.Errorf("bus: task %s: %w", m.IdempotencyKey, err)
 	}
-	m, err := messageOf(d)
-	if err != nil {
-		return fmt.Errorf("bus: %w", err)
+	if m.TaskID == "" {
+		return fmt.Errorf("bus: task %s names no task_id, and a publish is deduplicated on it", m.IdempotencyKey)
 	}
 	body, err := json.Marshal(m)
 	if err != nil {
-		return fmt.Errorf("bus: task %s could not be written: %w", t.ID, err)
+		return fmt.Errorf("bus: task %s could not be written: %w", m.IdempotencyKey, err)
 	}
 	msg := &nats.Msg{
 		Subject: Subject(pool),
 		Data:    body,
 		Header: nats.Header{
-			jetstream.MsgIDHeader: []string{d.Row},
-			"Agentiik-Namespace":  []string{t.Namespace},
-			"Agentiik-Run":        []string{string(t.Run)},
+			jetstream.MsgIDHeader: []string{m.TaskID},
+			"Agentiik-Namespace":  []string{m.Namespace},
+			"Agentiik-Run":        []string{m.RunID},
 		},
 	}
 	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
-		return fmt.Errorf("bus: task %s could not be published: %w", t.ID, err)
+		return fmt.Errorf("bus: task %s could not be published: %w", m.IdempotencyKey, err)
 	}
 	return nil
 }

@@ -32,7 +32,7 @@
 // # The behaviours it can be asked for
 //
 // They are the list of things that actually go wrong, so that the failure modes that
-// matter are covered in CI where no daemon exists:
+// matter are covered on every run, whether a real daemon is there or not:
 //
 //	PullFailsHalfway     a 200 whose progress stream carries an error object in the middle
 //	ExitsDuringAttach    a container that exits while the attach is being established
@@ -40,6 +40,7 @@
 //	EventStreamDrops     an event stream that drops and must be resumed from since
 //	WithoutUsernsRemap   an /info carrying no name=userns, which is the floor refusing
 //	WithUsernsRemap      an /info that carries it, with a root directory ending <uid>.<gid>
+//	WithoutSeccomp       an /info listing no name=seccomp, the seccomp floor refusing
 //	APIVersion           a daemon answering an older version than the ceiling
 //	OOMKills             a die event with an oom before it, which the wait never sees
 //	ClassicImageStore    no RepoDigests for an image built on the machine and never pushed
@@ -47,19 +48,29 @@
 //	RegistryAnswers401   a 401 where a registry that never heard of a repository answers 403
 //	TagMoves             a tag pointed at another image once it has been inspected
 //
+// Restart is the one change made to a daemon already serving: it drops every event stream
+// and answers /info as configured by the behaviours it is given, which is a daemon
+// restarted with another configuration under a driver that read the first. Streams says
+// whether there is a stream to drop yet.
+//
 // # The real daemon
 //
 // Socket() answers where a real daemon is and whether there is one, consulting DOCKER_HOST
 // first, then the per-user path Docker Desktop uses, then /var/run/docker.sock. A test
-// that needs one asks and skips when it answers false. That is what keeps the suite green
-// in CI and honest on a machine with Docker, and it is one function rather than a skip
-// condition copied into every file that needs it.
+// that needs one asks, and ends through Unavailable() when the answer is false or when
+// what it needs on the daemon is missing.
+//
+// Unavailable() skips, so that a machine with nothing installed still runs the rest, and
+// fails where AGENTIIK_TEST_REQUIRE_DOCKER is 1, which CI sets. A skip is silent, and a job
+// that skipped every real test was as green as one that ran them. Both are one function
+// rather than a condition copied into every file that needs it.
 //
 // # Layout
 //
-//	daemon.go     Daemon, NewDaemon, Socket, Close, Handle, and the routing
+//	daemon.go     Daemon, NewDaemon, Socket, Close, Restart, Streams, Handle, and the routing
 //	container.go  Container, what a created container is and what running one means
 //	record.go     Created and Removed, which is what happened, as it happened
 //	behaviour.go  the prepared failures, each one a thing that actually goes wrong
-//	real.go       Socket, the one place that decides whether a real daemon is present
+//	real.go       Socket and Unavailable, the one place that decides whether a real daemon
+//	              is present and what its absence means
 package dockertest

@@ -343,8 +343,8 @@ func theShapeTheWorkflowDescribes(t *testing.T, layout local.Layout, r milestone
 	}
 }
 
-// theMilestoneFixture builds the three bricks and the helper, copies the tree, and skips where
-// this machine cannot run containers at all.
+// theMilestoneFixture builds the three bricks and the helper, copies the tree, and ends the test
+// through dockertest.Unavailable where this machine cannot run containers at all.
 //
 // The tree is a copy because a run writes its working directory beside the entry point, and
 // the committed fixture is not a place to write into. Both runs share the one copy, which is
@@ -352,14 +352,14 @@ func theShapeTheWorkflowDescribes(t *testing.T, layout local.Layout, r milestone
 func theMilestoneFixture(t *testing.T) (tree, helper string) {
 	t.Helper()
 	if _, ok := dockertest.Socket(); !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("no docker command to build the fixture bricks with")
+		dockertest.Unavailable(t, "no docker command to build the fixture bricks with")
 	}
 	daemon, err := driver.Probe(t.Context(), "")
 	if err != nil {
-		t.Skipf("the daemon did not answer: %v", err)
+		dockertest.Unavailable(t, "the daemon did not answer: %v", err)
 	}
 	t.Logf("the daemon at %s speaks API %s and runs %s/%s", daemon.Socket, daemon.APIVersion, daemon.OSType, daemon.Architecture)
 
@@ -370,7 +370,7 @@ func theMilestoneFixture(t *testing.T) (tree, helper string) {
 		// layer cache makes it cost a moment.
 		out, err := exec.Command("docker", "build", "-t", brick.image, filepath.Join(milestoneFixture, "bricks", brick.dir)).CombinedOutput()
 		if err != nil {
-			t.Skipf("the fixture brick %s could not be built: %v\n%s", brick.image, err, out)
+			dockertest.Unavailable(t, "the fixture brick %s could not be built: %v\n%s", brick.image, err, out)
 		}
 	}
 

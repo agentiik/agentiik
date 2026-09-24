@@ -162,7 +162,8 @@ func (g grants) joined(t *testing.T) string {
 	var token db.JoinToken
 	if err := g.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		token, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		token, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)

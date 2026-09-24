@@ -45,14 +45,16 @@ var driverMayImport = map[string]bool{
 	"internal/ulid":   true,
 }
 
-// driverMayDependOn is every third party package the closure may hold. All of them arrive
-// through the evaluator rather than through anything this package writes, which is worth
-// noticing: the driver itself takes no dependency at all.
+// driverMayDependOn is every third party package the closure may hold. All of them but one
+// arrive through the evaluator rather than through anything this package writes. The one
+// is the TOML parser LoadPolicy reads /etc/agentiik/runner.toml with, which is a file
+// format and nothing that decides, holds state or listens, and whose reason is in go.mod.
 var driverMayDependOn = []string{
 	"github.com/goccy/go-yaml",
 	"github.com/google/cel-go",
 	"cel.dev",
 	"github.com/santhosh-tekuri/jsonschema",
+	"github.com/pelletier/go-toml/v2",
 }
 
 // driverRefuses is what this package would have become had any of these appeared in its
@@ -196,6 +198,7 @@ func TestTheDriverBoundaryIsCheckedAndNotAssumed(t *testing.T) {
 		"github.com/goccy/go-yaml",
 		"github.com/google/cel-go/cel",
 		"github.com/santhosh-tekuri/jsonschema/v6",
+		"github.com/pelletier/go-toml/v2",
 	} {
 		if why := whyTheDriverRefuses(imported); why != "" {
 			t.Errorf("%s is refused as %s, and the layout says the driver may reach for it", imported, why)

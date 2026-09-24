@@ -139,10 +139,10 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte {
 				return filled(`{"inputs":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
 			}, 8, 176.8, 5.334},
-		{"a pool of empty labels", func() request { return new(Pool) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
-		{"a pool of empty namespaces", func() request { return new(Pool) }, smallMaxBytes,
-			func(l int64) []byte { return filled(`{"accepted_namespaces":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
+		{"a pool of empty labels", func() request { return new(RunnerPool) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"pool":{"labels":[`, `]}}`, l, empty) }, 8, 273.8, 0.141},
+		{"a pool of empty namespaces", func() request { return new(RunnerPool) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"pool":{"namespaces":[`, `]}}`, l, empty) }, 8, 273.8, 0.141},
 		{"a join token of empty labels", func() request { return new(Issue) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"labels":[`, `]}`, l, empty) }, 8, 273.8, 0.141},
 		{"a join of empty labels, from anybody", func() request { return new(Join) }, smallMaxBytes,
@@ -195,7 +195,11 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 			},
 			Parent: "b4a0d2f6e1c9483a7d52b0e8f3a6c1d9e4b7a025", Branch: "main",
 		},
-		&Pool{Name: "dmz", Labels: []string{"zone=dmz", "arch=arm64"}, AcceptedNamespaces: []string{"finance"}, MaxCPU: 8, MaxMemoryBytes: 1 << 34, MaxDiskBytes: 1 << 40},
+		&RunnerPool{Pool: Pool{
+			Name: "dmz", Labels: []string{"zone=dmz", "arch=arm64"}, Namespaces: []string{"finance"},
+			Ceilings: &Ceilings{CPU: "8", Memory: "16Gi", PIDs: 512}, Containment: "hardened",
+		}},
+		&RunnerPool{Pool: Pool{Name: "default", Labels: []string{}, Namespaces: []string{}, Ceilings: &Ceilings{}}},
 		&Issue{Labels: []string{"zone=dmz"}, ExpiresInSeconds: 600},
 		&Join{Token: "agkjoin_x", Labels: []string{"zone=dmz"}, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 38, Architecture: "arm64", AgentVersion: "0.2.0"},
 		&Beat{Tasks: []agk.TaskID{"01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1", "01M2Z8V1P9C4XQ7K2N4D6F8H0B/charge/1/2/3"}},
@@ -371,8 +375,8 @@ func TestACollectionPastItsCountIsTooLarge(t *testing.T) {
 		{"images", TreeMaxFiles, func(n int) string {
 			return entries(`{"images":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
 		}, func() request { return new(Push) }, pushMaxBytes},
-		{"a pool's labels", namesMax, labels("labels"), func() request { return new(Pool) }, smallMaxBytes},
-		{"a pool's namespaces", namesMax, labels("accepted_namespaces"), func() request { return new(Pool) }, smallMaxBytes},
+		{"a pool's labels", namesMax, inPool(labels("labels")), func() request { return new(RunnerPool) }, smallMaxBytes},
+		{"a pool's namespaces", namesMax, inPool(labels("namespaces")), func() request { return new(RunnerPool) }, smallMaxBytes},
 		{"a join token's labels", namesMax, labels("labels"), func() request { return new(Issue) }, smallMaxBytes},
 		{"a machine's labels", namesMax, labels("labels"), func() request { return new(Join) }, smallMaxBytes},
 		{"a heartbeat's tasks", beatMaxTasks, labels("tasks"), func() request { return new(Beat) }, beatMaxBytes},
@@ -411,6 +415,12 @@ func labels(field string) func(n int) string {
 	return func(n int) string {
 		return entries(`{"`+field+`":[`, n, func(i int) string { return fmt.Sprintf(`"l%d"`, i) }) + `]}`
 	}
+}
+
+// inPool puts a body inside the pool half of a runner pool document, where a pool's lists are
+// written.
+func inPool(body func(n int) string) func(n int) string {
+	return func(n int) string { return `{"pool":` + body(n) + `}` }
 }
 
 // A body past its route's cap is refused with a 413 that wraps *http.MaxBytesError, whether it

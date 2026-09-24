@@ -149,10 +149,11 @@ func readManifests(ctx context.Context, e Env, referenced []reference) (map[stri
 func imageReader(e Env) (*driver.Docker, int) {
 	policy := driver.DefaultPolicy()
 	// A laptop is the machine this command is typed on and Docker Desktop does not remap,
-	// so the floor is lifted here exactly as it is for a local run and the driver says
-	// once what the machine gives up. Reading a manifest creates a container from the
-	// image and never starts it, which is why the floor is read at all.
+	// so the floors are lifted here exactly as they are for a local run and the driver
+	// says once what the machine gives up. Reading a manifest creates a container from the
+	// image and never starts it, which is why the floors are read at all.
 	policy.RequireUsernsRemap = driver.RemapLifted
+	policy.RequireSeccomp = driver.SeccompLifted
 
 	d, err := driver.New(driver.Config{
 		Policy: policy,

@@ -64,7 +64,7 @@
 // /{name}/json, POST /images/create, the network calls, and GET /events.
 //
 //	GET  /_ping                          negotiate the version, once per daemon
-//	GET  /info                           SecurityOptions, for the userns floor
+//	GET  /info                           SecurityOptions, for userns and the profiles applied
 //	POST /images/create                  pull by digest, a progress stream of JSON lines
 //	GET  /images/{name}/json             the image config, for the user it declares
 //	POST /containers/create              the settings table, as HostConfig writes it
@@ -109,7 +109,7 @@
 //
 //	client.go     Dial, the two transports, the version negotiation, the request helpers
 //	version.go    Ceiling, Floor, Ping and the refusal that names both versions
-//	info.go       Info and SecurityOptions, which is where the userns signal is read
+//	info.go       Info and SecurityOptions, where userns, seccomp, AppArmor and SELinux are read
 //	image.go      ImagePull reading every progress message, and ImageInspect
 //	container.go  create, start, wait, logs, inspect, list, stop, kill, remove, archive
 //	attach.go     the hijacked upgrade, dialed raw and spoken by hand

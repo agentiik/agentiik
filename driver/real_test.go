@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,27 +18,46 @@ import (
 )
 
 // This file is the one that needs a daemon that is actually there. It is skipped where
-// there is none, so that the suite stays green in CI, and it runs where there is one.
+// there is none, so that a machine with nothing installed still runs the rest, and it runs
+// where there is one. CI has one, pulls the image and sets AGENTIIK_TEST_REQUIRE_DOCKER, so
+// there a test that cannot run fails rather than skips.
 //
 // What it holds that the fake cannot is that the sequence works against the daemon rather
 // than against this project's reading of it: the bind mounts land, the account the image
 // declares can write into /agk/out, the hijacked attach carries standard input, and the
 // exit code comes back through a wait that was opened before the start.
 
-// realDriver opens a driver on the daemon of this machine, or skips.
+// realDriver opens a driver on the daemon of this machine, or ends the test through
+// dockertest.Unavailable.
+//
+// alpine:3.21 comes first because it is the image every other real test and fixture
+// names, and the one CI pulls: a tag that moves, as latest does, would change what these
+// tests run on under a branch nobody touched.
 func realDriver(t *testing.T, images ...string) (*Docker, string) {
+	t.Helper()
+	policy := DefaultPolicy()
+	// Docker Desktop does not offer user namespace remapping, and this is the machine
+	// the floor is lifted for.
+	policy.RequireUsernsRemap = RemapLifted
+	policy.SecretsDir = ""
+	policy.StopGrace = 2 * time.Second
+	return realDriverWith(t, policy, images...)
+}
+
+// realDriverWith opens a driver under a policy of the test's own, or skips.
+func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, string) {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("the daemon at %s did not answer: %v", socket, err)
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
 	image := ""
-	for _, ref := range append(images, "alpine:latest", "busybox:latest") {
+	for _, ref := range append(images, "alpine:3.21", "alpine:latest", "busybox:latest") {
 		if _, err := cli.ImageInspect(t.Context(), ref); err == nil {
 			image = ref
 			break
@@ -44,20 +65,13 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	}
 	cli.Close()
 	if image == "" {
-		t.Skip("no small image on this machine to run a script step in: docker pull alpine")
+		dockertest.Unavailable(t, "no small image on this machine to run a script step in: docker pull alpine:3.21")
 	}
 
 	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
 	if err != nil {
 		t.Fatalf("opening the store: %s", err)
 	}
-
-	policy := DefaultPolicy()
-	// Docker Desktop does not offer user namespace remapping, and this is the machine
-	// the floor is lifted for.
-	policy.RequireUsernsRemap = RemapLifted
-	policy.SecretsDir = ""
-	policy.StopGrace = 2 * time.Second
 
 	d, err := New(Config{
 		Socket:   socket,
@@ -68,7 +82,7 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 		Announce: func(s string) { t.Log(s) },
 	})
 	if err != nil {
-		t.Skipf("opening a driver on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a driver on %s: %v", socket, err)
 	}
 	t.Cleanup(func() { d.Close() })
 	return d, image
@@ -198,7 +212,7 @@ func TestTheSettingsTableIsReadBackOffTheContainerTheDaemonHolds(t *testing.T) {
 	socket, _ := dockertest.Socket()
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("dialing %s to read the container back: %v", socket, err)
+		dockertest.Unavailable(t, "dialing %s to read the container back: %v", socket, err)
 	}
 	t.Cleanup(func() { cli.Close() })
 
@@ -304,5 +318,80 @@ func TestTheSettingsTableIsReadBackOffTheContainerTheDaemonHolds(t *testing.T) {
 	}
 	if m, ok := bound[brick.OutDir]; !ok || m.ReadOnly {
 		t.Errorf("%s is bound %+v, and it is where the brick writes", brick.OutDir, m)
+	}
+}
+
+// TestARealContainerRunsUnderTheSeccompProfileRunnerTomlNames is the path from the file to
+// the kernel: a profile named by seccomp_profile in runner.toml is read by LoadPolicy,
+// carried on the create as its JSON, which is what the daemon decodes, and applied to the
+// container. The profile refuses mkdir and mkdirat and allows everything else, so a
+// directory the brick cannot make on a /tmp it can write to is the profile and nothing
+// else. A daemon handed the path instead of the JSON refuses to start the container.
+func TestARealContainerRunsUnderTheSeccompProfileRunnerTomlNames(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "seccomp.json")
+	// Both names, because arm64 has no mkdir system call and the runtime passes over
+	// a name the architecture does not have, as it does for Docker's own profile.
+	if err := os.WriteFile(profile, []byte(`{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    { "names": ["mkdir", "mkdirat"], "action": "SCMP_ACT_ERRNO", "errnoRet": 1 }
+  ]
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "runner.toml")
+	if err := os.WriteFile(file, []byte(`# Docker Desktop does not offer the remapping, and this is the machine it is lifted for.
+require_userns_remap = false
+stop_grace = "2s"
+seccomp_profile = "`+profile+`"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadPolicy(file)
+	if err != nil {
+		t.Fatalf("LoadPolicy: %s", err)
+	}
+	policy.SecretsDir = ""
+	d, image := realDriverWith(t, policy)
+
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "seccomp", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "seccomp",
+		Attempt:   1,
+		Image:     image,
+		Script: []string{
+			`echo "seccomp: $(grep '^Seccomp:' /proc/self/status | awk '{print $2}')"`,
+			`touch /tmp/file && echo "tmp: writable"`,
+			`mkdir /tmp/dir 2>/tmp/err && echo "mkdir: allowed" || echo "mkdir: $(cat /tmp/err)"`,
+		},
+		Outputs: []agk.Port{"out"},
+		Network: graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running under the profile runner.toml names: %v", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	got, _ := result.Outputs["out"].Items[0].Data["stdout"].(string)
+	t.Logf("the container reports:\n%s", got)
+	for _, want := range []string{
+		// Seccomp: 2 is SECCOMP_MODE_FILTER.
+		"seccomp: 2",
+		"tmp: writable",
+		// EPERM, which is errnoRet 1, and not the read-only root's EROFS.
+		"Operation not permitted",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the container does not report %q", want)
+		}
+	}
+	if strings.Contains(got, "mkdir: allowed") {
+		t.Errorf("mkdir succeeded, so the container did not run under the profile the file names")
 	}
 }
