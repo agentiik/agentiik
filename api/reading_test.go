@@ -142,12 +142,19 @@ func (s someRuns) servedTo(t *testing.T, auth api.Authorizer) http.Handler {
 	return rt
 }
 
-// listed is the runs a listing answered, by identifier and in order, with the namespace each is in.
+// listed is the runs a listing across the installation answered, by identifier and in order, with
+// the namespace each is in.
 func listed(t *testing.T, h http.Handler, as, query string) []string {
 	t.Helper()
-	w, _ := call(t, h, "GET", "/api/v1/runs"+query, as, nil)
+	return listedAt(t, h, as, "/api/v1/runs"+query)
+}
+
+// listedAt is listed for a listing at any path.
+func listedAt(t *testing.T, h http.Handler, as, path string) []string {
+	t.Helper()
+	w, _ := call(t, h, "GET", path, as, nil)
 	if w.Code != http.StatusOK {
-		t.Fatalf("listing %q answered %d: %s", query, w.Code, w.Body)
+		t.Fatalf("listing %s answered %d: %s", path, w.Code, w.Body)
 	}
 	var answer struct {
 		Runs []struct {
@@ -213,6 +220,72 @@ func TestRunsAreListedAcrossEveryNamespaceTheCallerCanRead(t *testing.T) {
 
 	if w, _ := call(t, h, "GET", "/api/v1/runs", "", nil); w.Code != http.StatusUnauthorized {
 		t.Errorf("a caller with no credential answered %d", w.Code)
+	}
+}
+
+// The namespaced routes answer a namespace's runs per workflow, as the ones across the installation
+// do, rather than per namespace: "a workflow-scope grant only adds; only an explicit deny removes,
+// and it wins over any allow at any scope". run:read held on the namespace and denied on one
+// workflow lists and reads none of that workflow's runs, and a run of it reads exactly as a run
+// nobody started; run:read held on one workflow alone lists and reads that workflow's runs there;
+// and a namespace the caller holds nothing in lists what one that does not exist lists, whatever
+// its query names.
+func TestANamespacesRunsAreReadPerWorkflow(t *testing.T) {
+	s := withSomeRuns(t)
+	finance := api.Target{Namespace: "finance"}
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	h := s.servedTo(t, denying{
+		allowed: granted{
+			"alice": {{api.RunRead, finance}},
+			"bob":   {{api.RunRead, payroll}},
+			"carol": {{api.RunRead, api.Target{Namespace: "team-ops"}}},
+		},
+		denied: granted{"alice": {{api.RunRead, payroll}}},
+	})
+
+	for _, c := range []struct {
+		as, path string
+		want     []string
+	}{
+		{"alice", "/api/v1/finance/runs", []string{"finance/" + s.finance[1], "finance/" + s.finance[0]}},
+		{"alice", "/api/v1/finance/runs?workflow=payroll", []string{}},
+		{"bob", "/api/v1/finance/runs", []string{"finance/" + s.payroll}},
+		{"bob", "/api/v1/finance/runs?workflow=monthly-invoicing", []string{}},
+		{"carol", "/api/v1/finance/runs", []string{}},
+		{"carol", "/api/v1/finance/runs?namespace=team-ops", []string{}},
+		{"carol", "/api/v1/team-ops/runs", []string{"team-ops/" + s.teamOps}},
+	} {
+		if got := listedAt(t, h, c.as, c.path); !same(got, c.want) {
+			t.Errorf("%s listing %s was answered %v, want %v", c.as, c.path, got, c.want)
+		}
+	}
+	unreadable, _ := call(t, h, "GET", "/api/v1/finance/runs", "carol", nil)
+	nowhere, _ := call(t, h, "GET", "/api/v1/nowhere/runs", "carol", nil)
+	if unreadable.Body.String() != nowhere.Body.String() {
+		t.Errorf("a namespace she holds nothing in lists %s, and one that does not exist %s", unreadable.Body, nowhere.Body)
+	}
+
+	absent, _ := call(t, h, "GET", "/api/v1/finance/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ", "alice", nil)
+	if absent.Code != http.StatusNotFound {
+		t.Fatalf("a run nobody started answered %d", absent.Code)
+	}
+	for _, c := range []struct {
+		as, run string
+		read    bool
+	}{
+		{"alice", s.finance[0], true},
+		{"alice", s.payroll, false},
+		{"bob", s.payroll, true},
+		{"bob", s.finance[0], false},
+		{"carol", s.finance[0], false},
+	} {
+		w, detail := call(t, h, "GET", "/api/v1/finance/runs/"+c.run, c.as, nil)
+		switch {
+		case c.read && (w.Code != http.StatusOK || detail["run"] != c.run):
+			t.Errorf("%s reading run %s was answered %d: %s", c.as, c.run, w.Code, w.Body)
+		case !c.read && (w.Code != absent.Code || w.Body.String() != absent.Body.String()):
+			t.Errorf("%s, who cannot read run %s, was answered %d %s, and a run nobody started %d %s", c.as, c.run, w.Code, w.Body, absent.Code, absent.Body)
+		}
 	}
 }
 

@@ -249,6 +249,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/runs/{run}/outputs/{name}` answers one workflow output's envelope, with `run:read_data`. An output the run has not recorded is 404, and one whose envelope was purged is 410.
 - `GET /api/v1/artifacts/{uri}` redirects to a presigned URL of five minutes, or serves the bytes where the artifact has a fetch budget, within an hour. A fetch is held before the bytes go and spent only if all of them went, so the last one is served once, and an artifact whose every remaining fetch is being served is 409. 410 once expired, spent or past its duration, swept or not. `api.OnArtifact` authorises it with `run:read_data` on the run the URI names.
 - A route under a word of its own, `/api/v1/runs/{run}` or `/api/v1/artifacts/{uri}`, is served beside the routes under `/api/v1/{namespace}/`, which net/http cannot hold on one mux. A namespace named after such a word is reached by nothing under `/api/v1/`.
+- `GET /api/v1/{ns}/runs` and `GET /api/v1/{ns}/runs/{run}` ask about each run's workflow rather than the namespace, so a deny of `run:read` on one workflow hides its runs there too, and `run:read` held on one workflow reads its runs there. A namespace the caller holds nothing in lists nothing, where it was a 404, and a run of another namespace is the 404 of a run that is not there. `api.OnRun` and `api.Across` take a `{namespace}` in their pattern for it.
 
 ### Secrets
 
