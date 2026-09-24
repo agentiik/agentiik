@@ -1078,3 +1078,108 @@ func (nopCloser) Close() error { return nil }
 // unusedDocker keeps the docker import honest where the assertions above do not reach for
 // a wire type directly.
 var _ = docker.Ceiling
+
+// A container that exited 0 and left an envelope a size rule refuses is a failed task with a
+// code of its own, 121, charged to the brick and never retried. Run still answers with the
+// error, and the error keeps the refusal: errors.As finds the rule and what it does to the
+// run, which a caller reads rather than the prose. The key is written down as a container
+// that ran, with its code and its span, and the log names the rule.
+func TestAnEnvelopeARuleRefusesIsAFailedTaskThatKeepsItsRule(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	for _, c := range []struct {
+		rule    string
+		outcome agk.Outcome
+		limit   func(*agk.Limits)
+		items   []agk.Item
+	}{
+		{
+			rule:    agk.RuleMaxItems,
+			outcome: agk.Fail,
+			limit:   func(l *agk.Limits) { l.MaxItems = 1 },
+			items:   []agk.Item{agk.NewItem(map[string]any{"page": 1}), agk.NewItem(map[string]any{"page": 2})},
+		},
+		{
+			rule:    agk.RuleInlineMaxBytes,
+			outcome: agk.Reject,
+			limit:   func(l *agk.Limits) { l.InlineMaxBytes = 64 },
+			items:   []agk.Item{agk.NewItem(map[string]any{"body": strings.Repeat("x", 256)})},
+		},
+	} {
+		t.Run(c.rule, func(t *testing.T) {
+			var written strings.Builder
+			r := newRunner(t, oneImage(ref, goodManifest), func(ctr dockertest.Container) (int, error) {
+				return 0, wrote(ctr, "out", c.items...)
+			})
+			r = reopen(t, r, func(cfg *Config) {
+				cfg.Limits = agk.DefaultLimits()
+				c.limit(&cfg.Limits)
+				cfg.Logs = &sinkFor{b: &written}
+			})
+			task := oneTask(ref)
+
+			_, err := r.Run(t.Context(), task)
+			var refusal *agk.Refusal
+			if !errors.As(err, &refusal) || refusal.Rule != c.rule || refusal.Outcome != c.outcome {
+				t.Fatalf("the delivery answered %v, and the envelope breaks %s, which is %s", err, c.rule, c.outcome)
+			}
+			if !errors.Is(err, ErrOutputsRefused) {
+				t.Errorf("the delivery answered %v, which does not say the outputs of a container that ran were refused", err)
+			}
+			if charge, decided := Charged(err); !decided || charge != ChargeBrick {
+				t.Errorf("the refusal is charged to %s, and the brick broke the output contract", charge)
+			}
+
+			e, found, err := r.keys.read(task.ID)
+			if err != nil || !found {
+				t.Fatalf("the key is not in the record after its container ran to its end: %v", err)
+			}
+			if e.State != agk.TaskFailed || e.ExitCode == nil || *e.ExitCode != ExitContractBroken || e.StartedAt.IsZero() {
+				t.Errorf("the key is recorded %s exiting %v from %s, want failed exiting %d with the span it ran for", e.State, e.ExitCode, e.StartedAt, ExitContractBroken)
+			}
+			if log := written.String(); !strings.Contains(log, c.rule) || !strings.Contains(log, "exit code 121") {
+				t.Errorf("the log reads %q, and it names the rule and the code", log)
+			}
+
+			r.observed.mu.Lock()
+			last := r.observed.es[len(r.observed.es)-1]
+			r.observed.mu.Unlock()
+			if last.State != agk.TaskFailed || last.Err == nil {
+				t.Errorf("the observer was last told %s with %v, and the task failed for the refusal", last.State, last.Err)
+			}
+		})
+	}
+}
+
+// A container stopped at its deadline timed out, and the log says so. The code the kill
+// left is one the table reads as the runtime's failure, and a log that read it that way
+// would charge the runner with a timeout the step's own timeout decided.
+func TestTheLogOfAContainerStoppedAtItsDeadlineNamesTheDeadline(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var written strings.Builder
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-c.Signalled()
+		return 143, nil
+	})
+	r.cfg.Logs = &sinkFor{b: &written}
+	task := oneTask(ref)
+	task.Timeout = graph.Duration(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result, err := r.Run(ctx, task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Fatalf("the task reports %s, and its container was stopped at its deadline", result.State)
+	}
+	log := written.String()
+	if !strings.Contains(log, "stopped at its deadline") {
+		t.Errorf("the log reads %q, and it says the container was stopped at its deadline", log)
+	}
+	if strings.Contains(log, "infrastructure failure") {
+		t.Errorf("the log reads %q, and a timeout is not the runtime's failure", log)
+	}
+}

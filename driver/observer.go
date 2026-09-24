@@ -51,9 +51,11 @@ type Event struct {
 
 	Usage Usage `json:"usage,omitzero"`
 
-	// Err is why, on a task that produced no container at all. It is nil on every
-	// other event, including a task that failed: a container that exited reported,
-	// and the exit code is not an error.
+	// Err is why, on a task that produced no container at all, and on the failed
+	// ending of a container that exited 0 and whose outputs were refused or could not
+	// be written, which is the error Run answers with. It is nil on every other event,
+	// including a task whose container failed: a container that exited reported, and
+	// the exit code is not an error.
 	Err error `json:"-"`
 }
 

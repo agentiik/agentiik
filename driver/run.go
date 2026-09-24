@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -32,15 +33,18 @@ const drainGrace = 5 * time.Second
 // input from its own goroutine and half-close. Read the demultiplexed stream, keeping
 // standard output for the shorthand and passing standard error through the masker into
 // the log. Take the exit code from the wait that was already open, or from the event
-// stream where the wait missed it, or from an inspect under both. Collect, upload, spill,
-// and write each port's envelope to the store. Write the ending down under the work root. Then remove the container, the network and
-// the working directory, in defers that run on every path.
+// stream where the wait missed it, or from an inspect under both. Collect and spill, hold
+// every envelope to the size rules, and only then upload the artifacts and write each
+// port's envelope to the store. Write the ending down under the work root. Then remove the
+// container, the network and the working directory, in defers that run on every path.
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
 // and the rule. No exit code is invented for a failure that produced none, because a
 // driver reporting its own trouble as a brick failure fails somebody else's step. Where a
 // container did run to its end and what it left could not be collected, Run answers with
-// that error all the same, and the key is written down as ended.
+// that error all the same, and the key is written down as ended: failed, and where what it
+// left broke the output contract, with ExitContractBroken and the span it ran for, which is
+// the ending a result reports for it.
 func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if t.Call != nil && t.Image == "" {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
@@ -340,12 +344,15 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, log *taskLog, mask *masker, stdout *capture, e exit, out string, dispatched time.Time) (graph.Result, error) {
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskPublishing, Container: container})
 
-	state := readExit(log, e.Code)
-	if override := e.state(); override != state {
-		// A deadline that fired and a stop that landed are what the task was,
-		// whatever code the kill left behind: the code of a killed container says
-		// how it was killed and not why.
-		state = override
+	// A deadline that fired and a stop that landed are what the task was, whatever code
+	// the kill left behind: the code of a killed container says how it was killed and
+	// not why. So they are read first, and the exit code table is not asked about a code
+	// it would read as the runtime's failure when it was this side that stopped it.
+	state := e.state()
+	if state == agk.TaskTimedOut || state == agk.TaskCancelled {
+		log.note("%s", stoppedNote(e.Code, state))
+	} else {
+		state = readExit(log, e.Code)
 	}
 
 	result := graph.Result{Task: t.ID, State: state, DispatchedAt: dispatched}
@@ -366,9 +373,6 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 			Code:       e.Code,
 			Mask:       mask,
 		})
-		if err != nil {
-			return graph.Result{}, exited(t.ID, fault(t.Step, ErrContractBroken, ChargeBrick, "%v", err))
-		}
 		// The ports go into the store here, before ended writes the ending down, which is
 		// the runner's order: it "posts the outputs under the upload policy, and records
 		// the key's ending". The record names each envelope by the digest this answers,
@@ -376,8 +380,11 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		// digest recorded before the store had it would be a result the controller could
 		// never read back. One that cannot be written is an error after the exit, and the
 		// key is written down failed, naming nothing.
-		if ports, err = publishPorts(ctx, store, t.Step, got.Outputs); err != nil {
-			return graph.Result{}, exited(t.ID, err)
+		if err == nil {
+			ports, err = publishPorts(ctx, store, t.Step, got.Outputs)
+		}
+		if err != nil {
+			return graph.Result{}, d.refused(ctx, t, container, image, log, result, err)
 		}
 		result.Outputs, artifacts = got.Outputs, got.Artifacts
 	}
@@ -394,6 +401,59 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		Usage: Usage{ImagePullMS: image.PullMillis},
 	})
 	return result, nil
+}
+
+// refused ends a task whose container exited 0 and whose outputs were not published, and
+// answers with the error Run returns for it.
+//
+// The container ran to its end, so this is an ending like any other: the log says why and
+// is closed, the observer is told the task failed, and the key is written down.
+//
+// Where the brick broke the output contract, the error is an ErrOutputsRefused and the key
+// is written down with ExitContractBroken and the span the container ran for, since a
+// failed result with neither reads as a task where no container ran. The exit code table
+// charges the code to the brick and never retries it.
+//
+// Where the store would not take what passed, or the collection was cut short because the
+// runner's own context ended, the brick did what it was asked and the failure is the
+// platform's. The key is written down failed with no code, as it was before any code
+// existed for this: the container exited 0, and no row of the table says what a runner
+// reports for outputs it could not write.
+//
+// The error keeps what refused. A size rule's *agk.Refusal is reachable through errors.As,
+// so a caller can tell which rule it was and what the rule does to the run.
+func (d *Docker) refused(ctx context.Context, t graph.Task, container string, image resolved, log *taskLog, r graph.Result, err error) error {
+	charge, decided := Charged(err)
+	switch {
+	case decided:
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		// A collection cut short because the runner is going away says nothing about
+		// what the brick left.
+		err = fault(t.Step, err, ChargePlatform, "the outputs were being collected when the runner's context ended")
+		charge = ChargePlatform
+	default:
+		err = fault(t.Step, ErrOutputsRefused, ChargeBrick, "%w", err)
+		charge = ChargeBrick
+	}
+
+	if charge == ChargeBrick {
+		log.note("the outputs were refused, so the task failed with exit code %d, which the exit code table reserves for the runner: the brick broke the output contract, and the step is not retried: %v", ExitContractBroken, err)
+	} else {
+		log.note("the outputs could not be written to the store, so the task failed, charged to the runner and not to the brick: %v", err)
+	}
+	ref, logErr := log.finish()
+	if logErr != nil {
+		d.say("driver: task " + string(t.ID) + ": the log sink failed: " + logErr.Error())
+	}
+	d.observe(ctx, Event{
+		Task: t.ID, State: agk.TaskFailed, Container: container,
+		Log: ref, Usage: Usage{ImagePullMS: image.PullMillis}, Err: err,
+	})
+	if charge != ChargeBrick {
+		return exited(t.ID, err)
+	}
+	r.State, r.ExitCode = agk.TaskFailed, ExitContractBroken
+	return exitedWith(r, err)
 }
 
 // rejoin re-attaches to the container an earlier delivery of this task left behind, which
