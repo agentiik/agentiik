@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/agentiik/agentiik/internal/token"
 )
@@ -52,6 +53,10 @@ const DefaultWorkDir = "/var/lib/agentiik/work"
 // it sizes as more containers than one host runs at once. A concurrency above it would be a host
 // whose heartbeat is refused the moment it is full, which is the moment it matters most.
 const MaxConcurrency = 4096
+
+// geteuid is who the agent runs as, which the owner of runner.env is held to. It is a variable so
+// that a test, which cannot give a file away without being root, can be somebody else.
+var geteuid = os.Geteuid
 
 // envFileMaxBytes is the most runner.env is read to. What join writes is a few hundred bytes, and
 // a file of more is not the one join wrote.
@@ -112,6 +117,20 @@ func (s Secret) String() string { return s.shown() }
 
 // GoString is what %#v prints, which would otherwise quote the value.
 func (s Secret) GoString() string { return strconv.Quote(s.shown()) }
+
+// Format is what every verb prints, %d and %x included. fmt reaches the bytes of a string through
+// a verb that is wrong for one without calling String, so a %d given its arguments out of order
+// would otherwise put the credential in the log.
+func (s Secret) Format(f fmt.State, verb rune) {
+	switch {
+	case verb == 'q':
+		io.WriteString(f, strconv.Quote(s.shown()))
+	case verb == 'v' && f.Flag('#'):
+		io.WriteString(f, s.GoString())
+	default:
+		io.WriteString(f, s.shown())
+	}
+}
 
 // MarshalText is what an encoder writes, so that a Config marshalled into a log line carries no
 // credential either.
@@ -204,6 +223,9 @@ type reader struct {
 	// setting it is refused whatever the first one said.
 	written map[string]bool
 	refused []error
+	// unread says the file is there and was refused whole, so that a setting it may hold is
+	// not refused a second time as missing: the refusal of the file is the one to act on.
+	unread bool
 }
 
 func (r *reader) refuse(name, reason string) {
@@ -245,34 +267,66 @@ func (r *reader) value(name string) (string, bool) {
 // is refused. Blank lines and lines beginning with # are skipped, which every reader agrees on.
 func (r *reader) readFile() bool {
 	path := r.path
-	info, err := os.Stat(path)
+	// Lstat rather than Stat, so that a symbolic link is refused rather than followed: the
+	// mode and the owner checked below are the file's, and a link's are nobody's.
+	checked, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		r.refused = append(r.refused, ErrNotJoined)
 		return false
 	case err != nil:
 		r.refuse(path, "cannot be read: "+reasonOf(err))
+		r.unread = true
 		return false
-	case !info.Mode().IsRegular():
+	case checked.Mode()&fs.ModeSymlink != 0:
+		r.refuse(path, "is a symbolic link, and it holds this runner's credential, which is read from the file join wrote, whose mode and owner are checked, and not from wherever a link points")
+		r.unread = true
+		return false
+	case !checked.Mode().IsRegular():
 		r.refuse(path, "is not a file, and it is where join wrote this runner's credential")
-		return false
-	case info.Mode().Perm()&0o077 != 0:
-		r.refuse(path, fmt.Sprintf("has mode %#o, and it holds this runner's credential, which is readable by the agent's account alone: chmod 600 it, because a credential anybody on the host can read is one anybody on the host has", info.Mode().Perm()))
+		r.unread = true
 		return false
 	}
-	f, err := os.Open(path)
+	// Opened without blocking, so that a FIFO put in its place after the check cannot hold
+	// the start for ever, and held to being the file that was checked. The mode and the owner
+	// are read from the descriptor, so that what is read is what they were checked on.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		r.refuse(path, "cannot be read: "+reasonOf(err))
+		r.unread = true
 		return false
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		r.refuse(path, "cannot be read: "+reasonOf(err))
+		r.unread = true
+		return false
+	}
+	owner, owned := ownerOf(info)
+	switch {
+	case !os.SameFile(checked, info) || !info.Mode().IsRegular():
+		r.refuse(path, "was replaced while it was being read, so what would be read is not what was checked")
+		r.unread = true
+		return false
+	case info.Mode().Perm()&0o077 != 0:
+		r.refuse(path, fmt.Sprintf("has mode %#o, and it holds this runner's credential, which is readable by the agent's account alone: chmod 600 it, because a credential anybody on the host can read is one anybody on the host has", info.Mode().Perm()))
+		r.unread = true
+		return false
+	case owned && owner != geteuid():
+		r.refuse(path, fmt.Sprintf("is owned by account %d and the agent runs as account %d, and it holds this runner's credential, which is the agent's account's alone: chown it to that account, because whoever owns the file can read the credential and point %s wherever they like", owner, geteuid(), API))
+		r.unread = true
+		return false
+	}
 	text, err := io.ReadAll(io.LimitReader(f, envFileMaxBytes+1))
 	switch {
 	case err != nil:
 		r.refuse(path, "cannot be read: "+reasonOf(err))
+		r.unread = true
 		return false
 	case len(text) > envFileMaxBytes:
 		r.refuse(path, fmt.Sprintf("is more than %d bytes, and what join writes there is a few hundred", envFileMaxBytes))
+		r.unread = true
 		return false
 	}
 
@@ -303,6 +357,10 @@ func (r *reader) readFile() bool {
 			r.refuse(path, fmt.Sprintf("line %d sets %s a second time, and a file whose readers could each take a different one of the two is refused", n, key))
 		case strings.ContainsAny(value, "\r\x00"):
 			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a carriage return or a NUL, which one reader keeps and another drops: write the file with plain line endings", n, key))
+		case strings.ContainsAny(value, "\\$`"):
+			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a backslash, a $ or a backquote, which a systemd EnvironmentFile= or a Compose env_file reads as an escape or a substitution and this file keeps as written", n, key))
+		case strings.Contains(value, " #") || strings.Contains(value, "\t#"):
+			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a # after white space, which a Compose env_file reads as the start of a comment and this file keeps as part of the value", n, key))
 		case value != strings.TrimSpace(value):
 			r.refuse(path, fmt.Sprintf("line %d, setting %s, has white space around its value, which one reader keeps and another strips", n, key))
 		case strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`):
@@ -329,7 +387,7 @@ func (r *reader) readFile() bool {
 func (r *reader) api() string {
 	v, set := r.value(API)
 	if !set {
-		if !r.conflicted(API) {
+		if !r.conflicted(API) && !r.unread {
 			r.refuse(API, "is not set, and it is the one address a runner is given: join writes it to "+r.path+", or the unit sets it")
 		}
 		return ""
@@ -385,7 +443,7 @@ func loopback(host string) bool {
 func (r *reader) labels() []string {
 	v, set := r.value(Labels)
 	if !set {
-		if !r.conflicted(Labels) {
+		if !r.conflicted(Labels) && !r.unread {
 			r.refuse(Labels, "is not set, and it is what a step's runs_on selects this runner on, claimed at join within what the token permits, such as zone=dmz,arch=amd64")
 		}
 		return nil
@@ -407,12 +465,14 @@ func (r *reader) list(name, v string, form *regexp.Regexp, grammar string) []str
 	items := strings.Split(v, ",")
 	seen := map[string]bool{}
 	for i, item := range items {
+		// The item is not repeated, only where it is: what was pasted there may be a
+		// credential.
 		switch {
 		case !form.MatchString(item):
-			r.refuse(name, fmt.Sprintf("has %q as its item %d, and %s, separated by commas with no space", item, i+1, grammar))
+			r.refuse(name, fmt.Sprintf("has an item %d that is not one, and %s, separated by commas with no space", i+1, grammar))
 			return nil
 		case seen[item]:
-			r.refuse(name, fmt.Sprintf("names %s twice", item))
+			r.refuse(name, fmt.Sprintf("has an item %d that an earlier item already names", i+1))
 			return nil
 		}
 		seen[item] = true
@@ -430,7 +490,7 @@ func (r *reader) concurrency() int {
 	n, err := strconv.Atoi(v)
 	switch {
 	case err != nil || n < 1:
-		r.refuse(Concurrency, fmt.Sprintf("is %q, and it is how many tasks this host holds at once, a whole number of one or more: a runner holding none is one that takes nothing", v))
+		r.refuse(Concurrency, "is not a whole number of one or more, and it is how many tasks this host holds at once: a runner holding none is one that takes nothing")
 		return 0
 	case n > MaxConcurrency:
 		r.refuse(Concurrency, fmt.Sprintf("is %d, and a heartbeat names at most %d tasks, which is more containers than one host runs at once: a host holding more would have its heartbeat refused once it was full", n, MaxConcurrency))
@@ -446,7 +506,7 @@ func (r *reader) workDir() string {
 		return DefaultWorkDir
 	}
 	if !filepath.IsAbs(v) {
-		r.refuse(WorkDir, fmt.Sprintf("is %q, and it is an absolute path, so that where task directories and the record of keys are does not depend on the directory the agent was started from", v))
+		r.refuse(WorkDir, "is not an absolute path, and it is one, so that where task directories and the record of keys are does not depend on the directory the agent was started from")
 		return ""
 	}
 	return filepath.Clean(v)

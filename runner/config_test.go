@@ -136,7 +136,9 @@ func TestACredentialFileAnybodyElseCanReadIsRefused(t *testing.T) {
 	for _, mode := range []os.FileMode{0o640, 0o604, 0o644, 0o660} {
 		path := envFile(t, joined, mode)
 		_, err := ReadConfig(environment(nil), path)
-		if !slices.Contains(refusedFor(err), path) {
+		// The file alone: AGK_API and the labels are written in it, and refusing them
+		// as missing too would send an operator after two settings that are there.
+		if !slices.Equal(refusedFor(err), []string{path}) {
 			t.Errorf("runner.env of mode %#o gave %v, and a credential its group or anybody else can read is refused", mode, err)
 		}
 		if err != nil && strings.Contains(err.Error(), credential) {
@@ -164,6 +166,11 @@ func TestRunnerEnvIsReadStrictlyAndNoLineOfItIsRepeated(t *testing.T) {
 		{"a quoted value", `AGK_RUNNER_NAMESPACES="finance"`, "is quoted"},
 		{"space around a value", "AGK_RUNNER_NAMESPACES= finance", "white space"},
 		{"a carriage return", "AGK_RUNNER_NAMESPACES=finance\r", "carriage return"},
+		{"a NUL", "AGK_RUNNER_NAMESPACES=fin\x00ance", "NUL"},
+		{"a backslash joining the next line", "AGK_RUNNER_WORKDIR=/srv/work\\", "backslash"},
+		{"a substitution", "AGK_RUNNER_WORKDIR=/srv/$HOME", "substitution"},
+		{"a backquote", "AGK_RUNNER_WORKDIR=/srv/`id`", "backquote"},
+		{"a comment after the value", "AGK_RUNNER_WORKDIR=/srv/work #fast disk", "comment"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := envFile(t, joined+c.line+"\n", 0o600)
@@ -231,6 +238,9 @@ func TestTheAPIIsReachedOverTLSOrOnThisMachine(t *testing.T) {
 		{api: "https://agentiik.example.com?", refused: true},
 		{api: "https://agentiik.example.com/#", refused: true},
 		{api: "https://runner:Xy9/Qk@agentiik.example.com", refused: true},
+		// Parsed, this is the host runner:1234 and no user at all, so only a reading of
+		// the text finds the password.
+		{api: "https://runner:1234/Xy9@agentiik.example.com", refused: true},
 	} {
 		text := strings.Replace(joined, "AGK_API=https://agentiik.example.com\n", "", 1)
 		cfg, err := ReadConfig(environment(map[string]string{"AGK_API": c.api}), envFile(t, text, 0o600))
@@ -325,15 +335,77 @@ func TestACredentialIsNeverPrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, printed := range []string{
+	printed := []string{
 		fmt.Sprint(c), fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c),
 		fmt.Sprintf("%s", c.Credential), c.Credential.String(), string(encoded),
-	} {
+	}
+	// A verb that is wrong for a string, which a line with its arguments out of order
+	// gives, prints the credential too unless it is told not to.
+	for _, verb := range []string{"%d", "%x", "%X", "%q", "%t", "%c", "%10.3f"} {
+		for _, v := range []any{c, &c, c.Credential, []Secret{c.Credential}, map[string]Secret{"k": c.Credential}} {
+			printed = append(printed, fmt.Sprintf(verb, v))
+		}
+	}
+	for _, printed := range printed {
 		if strings.Contains(printed, credential[len("agkrunner_"):]) {
 			t.Errorf("the credential is printed: %s", printed)
 		}
 		if !strings.Contains(printed, "agkrunner_[redacted]") {
 			t.Errorf("what the credential is is not printed either: %s", printed)
 		}
+	}
+}
+
+func TestNoRefusalRepeatsWhatWasPastedWhereASettingBelongs(t *testing.T) {
+	for _, name := range []string{Labels, Namespaces, Concurrency, WorkDir} {
+		text := strings.Replace(joined, "AGK_RUNNER_LABELS=zone=dmz,arch=amd64\n", "", 1)
+		if name != Labels {
+			text += "AGK_RUNNER_LABELS=zone=dmz\n"
+		}
+		for _, pasted := range []string{credential, "zone=dmz," + credential} {
+			_, err := ReadConfig(environment(nil), envFile(t, text+name+"="+pasted+"\n", 0o600))
+			if err == nil {
+				t.Errorf("%s=%s was read", name, pasted)
+				continue
+			}
+			if strings.Contains(err.Error(), credential[len("agkrunner_"):]) {
+				t.Errorf("the refusal of %s repeats the credential pasted there: %s", name, err)
+			}
+		}
+	}
+}
+
+func TestASymbolicLinkIsRefusedAsRunnerEnv(t *testing.T) {
+	target := envFile(t, joined, 0o600)
+	link := filepath.Join(t.TempDir(), "runner.env")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadConfig(environment(nil), link)
+	if !slices.Contains(refusedFor(err), link) || !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("a link to runner.env gave %v", err)
+	}
+}
+
+func TestRunnerEnvOwnedBySomebodyElseIsRefused(t *testing.T) {
+	path := envFile(t, joined, 0o600)
+	if _, err := ReadConfig(environment(nil), path); err != nil {
+		t.Fatalf("runner.env owned by the account reading it was refused: %v", err)
+	}
+	// A test cannot give a file away without being root, so it is the agent that is
+	// somebody else.
+	defer func(was func() int) { geteuid = was }(geteuid)
+	geteuid = func() int { return os.Geteuid() + 1 }
+	_, err := ReadConfig(environment(nil), path)
+	if !slices.Contains(refusedFor(err), path) || !strings.Contains(err.Error(), "is owned by account") {
+		t.Errorf("runner.env owned by another account gave %v", err)
+	}
+}
+
+func TestRunnerEnvLargerThanJoinWritesIsRefused(t *testing.T) {
+	path := envFile(t, joined+strings.Repeat("# padding\n", 7000), 0o600)
+	_, err := ReadConfig(environment(nil), path)
+	if !slices.Equal(refusedFor(err), []string{path}) || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("a runner.env of more than 64 KiB gave %v", err)
 	}
 }
