@@ -154,3 +154,130 @@ jobs:
               AGENTIIK_TEST_REQUIRE_DOCKER=1 AGENTIIK_TEST_REQUIRE_USERNS=1 \
               AGENTIIK_TEST_SECRETS_DIR=/run/agentiik/secrets \
               sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run "RealRemappedDaemon|RealRunnerHost"' "$RUNNER_TEMP/driver.test"
+
+  # The runner's image, as the page's Compose sample runs it, for both architectures a runner host
+  # is: arm64 under QEMU, since a hosted runner is amd64. Each image runs version, and serve, which
+  # this daemon refuses at the floor, since it does not remap: the refusal comes after the agent has
+  # read its settings from the host's paths as the account the image names and asked the daemon
+  # what it is through the socket's group, so it is the whole Compose form but the floor.
+  #
+  # Then, on amd64, the daemon is set to userns-remap and serve runs past the floor. That is what
+  # proves the three capabilities: cap_add leaves an account that is not root none, and the ones
+  # the agent holds are the file capabilities the image set on it, which a multi-stage COPY has to
+  # have kept. The same run with no-new-privileges, which drops them at exec, is refused naming
+  # them, so the one that passed passed on the file's and not on anything else.
+  #
+  # The shell runs with pipefail, so no pipeline here ends in grep -q, which stops reading at its
+  # first match and would fail the command writing to it with SIGPIPE.
+  runner-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The binaries the image is built from, built as the release builds them and as the
+      # Dockerfile's own comment says, then one image per architecture loaded into the daemon.
+      - name: build
+        run: |
+          mkdir -p "$RUNNER_TEMP/image"
+          for arch in amd64 arm64; do
+            for cmd in agk-runner agk-helper; do
+              CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags='-s -w' \
+                -o "$RUNNER_TEMP/image/$cmd-linux-$arch" ./cmd/$cmd
+            done
+            docker buildx build --platform linux/$arch --load -t agentiik-test/runner:$arch \
+              -f build/runner.Dockerfile "$RUNNER_TEMP/image"
+          done
+
+      # The host as the page lays it out: the work root, runner.env and runner.toml owned by the
+      # image's account, 65532, and the secrets tmpfs mounted noexec,nosuid,nodev. runner.env is
+      # what join writes, with an API nothing listens at, since serve calls none before it is ready.
+      - name: host
+        run: |
+          sudo mkdir -p /etc/agentiik /var/lib/agentiik /run/agentiik/secrets
+          sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 tmpfs /run/agentiik/secrets
+          printf '%s\n' AGK_API=http://127.0.0.1:9 AGK_RUNNER_ID=runner-ci-01 AGK_RUNNER_POOL=ci \
+            AGK_RUNNER_LABELS=zone=ci AGK_RUNNER_CREDENTIAL=agkrunner_Xy9QkZ3v0bq8LrT2mN5pW7sD1fG4hJ6kA9cE0uI3oY2 \
+            | sudo tee /etc/agentiik/runner.env >/dev/null
+          echo 'secrets_dir = "/run/agentiik/secrets"' | sudo tee /etc/agentiik/runner.toml >/dev/null
+          sudo chown 65532:65532 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik
+          sudo chmod 600 /etc/agentiik/runner.env /etc/agentiik/runner.toml
+
+          # The Compose sample's runner service, as docker run options.
+          cat > "$RUNNER_TEMP/compose.sh" <<'SH'
+          compose_form() {
+            echo --user agentiik --group-add "$(stat -c %g /var/run/docker.sock)" --userns host \
+              --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
+              -v /var/run/docker.sock:/var/run/docker.sock:ro \
+              -v /var/lib/agentiik:/var/lib/agentiik \
+              -v /run/agentiik/secrets:/run/agentiik/secrets \
+              -v /etc/agentiik:/etc/agentiik
+          }
+          SH
+
+      - name: both architectures
+        run: |
+          . "$RUNNER_TEMP/compose.sh"
+          for arch in amd64 arm64; do
+            image=agentiik-test/runner:$arch
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' $image)
+            test "$platform" = linux/$arch || { echo "$image is $platform"; exit 1; }
+
+            # The helper is the image's own architecture and static, which is what lets a
+            # script step exec it.
+            c=$(docker create --platform linux/$arch $image)
+            docker cp "$c:/usr/local/lib/agentiik/agk-helper" "$RUNNER_TEMP/helper-$arch"
+            docker rm "$c" >/dev/null
+            machine=$([ $arch = amd64 ] && echo x86-64 || echo aarch64)
+            file "$RUNNER_TEMP/helper-$arch" | tee /dev/stderr | grep "$machine" | grep 'statically linked' >/dev/null
+
+            version=$(docker run --rm --platform linux/$arch $(compose_form) $image version)
+            echo "$arch: agk-runner $version"
+            echo "$version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' >/dev/null
+
+            if said=$(docker run --rm --platform linux/$arch $(compose_form) $image 2>&1); then
+              echo "serve started on a daemon that does not remap user namespaces:"; echo "$said"; exit 1
+            fi
+            echo "$said"
+            echo "$said" | grep 'does not remap user namespaces' >/dev/null
+          done
+
+      - name: past the floor
+        run: |
+          docker save agentiik-test/runner:amd64 -o "$RUNNER_TEMP/runner.tar"
+          echo '{"userns-remap": "default"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker info --format '{{.SecurityOptions}}' | grep userns >/dev/null
+          docker load -i "$RUNNER_TEMP/runner.tar"
+
+          . "$RUNNER_TEMP/compose.sh"
+          image=agentiik-test/runner:amd64
+
+          docker run -d --name agk-runner $(compose_form) $image
+          for i in $(seq 1 30); do
+            docker logs agk-runner 2>&1 | grep 'serving as runner-ci-01' >/dev/null && break
+            [ "$(docker inspect --format '{{.State.Running}}' agk-runner)" = true ] || break
+            sleep 1
+          done
+          docker logs agk-runner
+          docker logs agk-runner 2>&1 | grep 'serving as runner-ci-01' >/dev/null
+          docker stop agk-runner >/dev/null
+          test "$(docker inspect --format '{{.State.ExitCode}}' agk-runner)" = 0
+
+          # The helper the image installs, laid down under the work root, where the daemon
+          # finds it at the same path.
+          sudo file /var/lib/agentiik/work/.bin/agk | tee /dev/stderr | grep x86-64 >/dev/null
+
+          if said=$(docker run --rm $(compose_form) --security-opt no-new-privileges $image 2>&1); then
+            echo "serve started with no-new-privileges, which drops the file capabilities:"; echo "$said"; exit 1
+          fi
+          echo "$said"
+          echo "$said" | grep 'lacks CAP_CHOWN' >/dev/null
