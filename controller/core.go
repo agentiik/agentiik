@@ -345,8 +345,8 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// Committed. Only now does anything leave this process, and everything that does is
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
-	sent := co.hand(ctx, e.Namespace, run, plan)
-	if len(sent) == 0 {
+	sent, refused := co.hand(ctx, e.Namespace, run, plan)
+	if len(sent) == 0 && len(refused) == 0 {
 		return nil
 	}
 
@@ -369,6 +369,26 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return fmt.Errorf("controller: the dispatch of %s could not be recorded: %w", t.ID, err)
 		}
 	}
+	// And a task the pool's policy refused ends here, never handed out, on the
+	// infrastructure's account and saying which pool. Recorded as an ending of the dispatch
+	// its shard is on, which a requeue after a loss has moved past the first.
+	ended := false
+	for _, t := range plan.Start {
+		why, ok := refused[t.ID]
+		if !ok {
+			continue
+		}
+		sh, _ := shardOf(state, t.Step, t.Shard)
+		if err := ev.Record(graph.Result{
+			Task: t.ID, State: agk.TaskFailed, ExitCode: platformFailure, Requeue: sh.Requeue,
+			FinishedAt: now, Reason: why,
+		}, now); err != nil {
+			return fmt.Errorf("controller: the refusal of %s could not be recorded: %w", t.ID, err)
+		}
+		if after, _ := shardOf(state, t.Step, t.Shard); after.Task.Terminal() {
+			ended = true
+		}
+	}
 	if state.Seq == saved {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
@@ -387,7 +407,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	}
 	steps, tasks = project(state)
 	stampDeadlines(tasks, plan)
-	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
 			Was: saved, Seq: state.Seq,
@@ -404,7 +424,14 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		}
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
-	})
+	}); err != nil || !ended {
+		return err
+	}
+	// And round again, as a result does: a refused task ends its step only once the evaluator
+	// is asked what follows, and what follows may be a step that runs when: [failed]. Only
+	// once one has ended, so that a refusal the evaluator did not take is not planned, refused
+	// and decided again for ever inside one pass.
+	return co.Decide(ctx, run)
 }
 
 // contains says whether an identifier is in a list, which two places here need.
@@ -444,12 +471,15 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	return ev, nil
 }
 
-// hand publishes what was planned, asks for what should stop, and answers what actually went.
+// hand publishes what was planned, asks for what should stop, and answers what actually went and
+// what the pool's policy refused.
 //
 // A failure here is not a failure of the decision: the decision is committed, and what is left
 // is a courier's job. So it is reported, the pass is not unwound, and what did not go stays
-// pending in the state, which is what makes the next pass send it again.
-func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) []agk.TaskID {
+// pending in the state, which is what makes the next pass send it again. A task the pool refuses
+// is the one exception, since sending it again would be refused again: it is answered with why,
+// for the pass to end it.
+func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) ([]agk.TaskID, map[agk.TaskID]string) {
 	for _, s := range plan.Stop {
 		if err := co.queue.Stop(ctx, s); err != nil {
 			co.controller.report(run, fmt.Errorf("stopping %s: %w", s.Task, err))
@@ -457,8 +487,14 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 	}
 
 	var sent []agk.TaskID
+	refused := map[agk.TaskID]string{}
 	for _, t := range plan.Start {
 		d, err := co.dispatchOf(ctx, namespace, t)
+		var never unpublishable
+		if errors.As(err, &never) {
+			refused[t.ID] = never.why
+			continue
+		}
 		if err != nil {
 			co.controller.report(run, fmt.Errorf("preparing %s: %w", t.ID, err))
 			continue
@@ -469,7 +505,7 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 		}
 		sent = append(sent, t.ID)
 	}
-	return sent
+	return sent, refused
 }
 
 // dispatchOf turns a task the evaluator decided into everything that leaves this process.
@@ -503,12 +539,19 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 	}
 
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		// The pool's policy before the grant, so that a task no runner may be handed is
+		// given no credential either, and read in the transaction that issues it.
+		resources, err := policed(ctx, w, namespace, t)
+		if err != nil {
+			return err
+		}
+		d.Task.Resources = resources
 		row, err := w.TaskRow(ctx, namespace, t.ID)
 		if err != nil {
 			return err
 		}
 		d.Row = row
-		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, scopeOf(t, d.Inputs), t.Deadline)
+		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, scopeOf(d.Task, d.Inputs), t.Deadline)
 		if err != nil {
 			return err
 		}
