@@ -52,6 +52,25 @@ type Image struct {
 	// it. It is the cold machine, and it is the only way a test reaches the pull at
 	// all, since a driver does not pull an image the daemon already has.
 	Remote bool
+
+	// RegistryDigest is the digest the image's registry serves its manifest under,
+	// which the classic image store holds apart from Digest, the image's own. Empty
+	// is Digest itself, which is how the containerd store holds the two.
+	RegistryDigest string
+
+	// Unpushed is an image built on this machine and never pushed, which its registry
+	// serves nothing of. The containerd store reports a digest in RepoDigests for it
+	// all the same, and ClassicImageStore reports none.
+	Unpushed bool
+}
+
+// registryDigest is the digest the registry serves the image under, where id is the
+// digest the daemon holds it by.
+func (i Image) registryDigest(id string) string {
+	if i.RegistryDigest != "" {
+		return i.RegistryDigest
+	}
+	return id
 }
 
 // Behaviour is one thing a daemon does, whether it is what a test supplies or a way
@@ -110,6 +129,16 @@ func WithUsernsRemap(uid, gid int) Behaviour {
 // and a wait that never answers. It is the exit the event stream exists to catch.
 var OOMKills Behaviour = func(o *Options) { o.oomKills = true }
 
+// ClassicImageStore is a daemon on the image store Docker had before containerd's, which
+// holds an image built on the machine and never pushed under no registry digest at all.
+// The default is the containerd store, the daemon's own since Docker 29, which reports
+// one for every image it holds, pushed or not.
+var ClassicImageStore Behaviour = func(o *Options) { o.classicStore = true }
+
+// RegistryUnreachable is a daemon that cannot reach a registry it is asked about, which
+// is a laptop off its network: every question put to one answers 500 with the dial error.
+var RegistryUnreachable Behaviour = func(o *Options) { o.registryUnreachable = true }
+
 // APIVersion is a daemon answering a version other than the ceiling, which is every
 // daemon this has been run against so far.
 func APIVersion(v string) Behaviour {
@@ -133,6 +162,9 @@ type behaviours struct {
 
 	userns               bool
 	usernsUID, usernsGID int
+
+	classicStore        bool
+	registryUnreachable bool
 
 	apiVersion string
 	delay      time.Duration

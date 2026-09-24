@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/docker"
 )
 
@@ -538,7 +541,7 @@ func (d *Daemon) containerArchive(w http.ResponseWriter, r *http.Request) {
 	}
 	wanted := r.URL.Query().Get("path")
 
-	img, ok := d.opts.Images[l.config.Image]
+	_, img, ok := d.image(l.config.Image)
 	if !ok || len(img.Manifest) == 0 {
 		writeError(w, http.StatusNotFound, "Could not find the file "+wanted+" in container "+l.id)
 		return
@@ -559,7 +562,7 @@ func (d *Daemon) containerArchive(w http.ResponseWriter, r *http.Request) {
 // already committed to.
 func (d *Daemon) imageCreate(w http.ResponseWriter, r *http.Request) {
 	ref := referenceOf(r)
-	img, ok := d.opts.Images[ref]
+	key, img, ok := d.image(ref)
 	if !ok {
 		writeError(w, http.StatusNotFound, "pull access denied for "+ref+", repository does not exist or may require 'docker login'")
 		return
@@ -600,7 +603,7 @@ func (d *Daemon) imageCreate(w http.ResponseWriter, r *http.Request) {
 	// same reference finds it and does not pull again, which is the daemon's own
 	// behaviour and what the manifest cache is read against.
 	d.mu.Lock()
-	d.pulled[ref] = true
+	d.pulled[key] = true
 	d.mu.Unlock()
 }
 
@@ -615,14 +618,14 @@ func (d *Daemon) hasPulled(ref string) bool {
 // resolved to.
 func (d *Daemon) imageInspect(w http.ResponseWriter, r *http.Request) {
 	ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/images/"), "/json")
-	img, ok := d.opts.Images[ref]
+	key, img, ok := d.image(ref)
 	if !ok {
 		writeError(w, http.StatusNotFound, "No such image: "+ref)
 		return
 	}
 	// An image the daemon does not hold yet is not there to be inspected, whatever
 	// the registry behind it has. That is what makes the pull happen at all.
-	if img.Remote && !d.hasPulled(ref) {
+	if img.Remote && !d.hasPulled(key) {
 		writeError(w, http.StatusNotFound, "No such image: "+ref)
 		return
 	}
@@ -631,14 +634,76 @@ func (d *Daemon) imageInspect(w http.ResponseWriter, r *http.Request) {
 	if digest == "" {
 		digest = "sha256:" + newID()
 	}
-	name, _, _ := strings.Cut(ref, "@")
+	// The containerd store holds every image under a digest of its repository, pushed
+	// or not, and the classic store only one it pulled or pushed.
+	var held []string
+	if !img.Unpushed || !d.opts.classicStore {
+		held = []string{agk.ImageRepository(key) + "@" + img.registryDigest(digest)}
+	}
 	writeJSON(w, http.StatusOK, docker.Image{
 		ID:           digest,
-		RepoDigests:  []string{name + "@" + digest},
+		RepoDigests:  held,
 		Config:       img.Config,
 		Architecture: "arm64",
 		Os:           "linux",
 	})
+}
+
+// distributionInspect is the daemon asking the registry what it serves under a
+// reference, and answering what the registry said.
+//
+// The registry holds every image of Options.Images but an Unpushed one, under its
+// registry digest, and refuses the way registries do otherwise: 404 for a repository it
+// holds at a digest it does not, 403 for a repository it has never heard of, since a
+// registry will not say to somebody with no credentials whether a private one exists.
+func (d *Daemon) distributionInspect(w http.ResponseWriter, r *http.Request) {
+	ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/distribution/"), "/json")
+	if d.opts.registryUnreachable {
+		writeError(w, http.StatusInternalServerError, `Get "https://registry.example/v2/": dial tcp: lookup registry.example: no such host`)
+		return
+	}
+	_, img, ok := d.image(ref)
+	if !ok {
+		for key := range d.opts.Images {
+			if agk.ImageRepository(key) == agk.ImageRepository(ref) {
+				writeError(w, http.StatusNotFound, "manifest unknown: manifest unknown")
+				return
+			}
+		}
+		writeError(w, http.StatusForbidden, "denied: requested access to the resource is denied")
+		return
+	}
+	served := img.registryDigest(img.Digest)
+	_, asked, byDigest := strings.Cut(ref, "@")
+	if img.Unpushed || served == "" || byDigest && asked != served {
+		writeError(w, http.StatusNotFound, "manifest unknown: manifest unknown")
+		return
+	}
+	writeJSON(w, http.StatusOK, docker.Distribution{Descriptor: docker.Descriptor{
+		MediaType: "application/vnd.oci.image.index.v1+json", Digest: served, Size: 856,
+	}})
+}
+
+// image is the image a reference names and the key it is held under: the reference
+// itself, or for a reference by digest, the image of that repository held under that
+// digest. That is how a daemon resolves repo@sha256:... against an image it pulled by
+// tag.
+func (d *Daemon) image(ref string) (string, Image, bool) {
+	if img, ok := d.opts.Images[ref]; ok {
+		return ref, img, true
+	}
+	_, digest, ok := strings.Cut(ref, "@")
+	if !ok {
+		return "", Image{}, false
+	}
+	for _, key := range slices.Sorted(maps.Keys(d.opts.Images)) {
+		img := d.opts.Images[key]
+		if agk.ImageRepository(key) == agk.ImageRepository(ref) && img.Digest != "" &&
+			(img.Digest == digest || img.registryDigest(img.Digest) == digest) {
+			return key, img, true
+		}
+	}
+	return "", Image{}, false
 }
 
 // referenceOf puts a pull's reference back together from the two parameters it travels

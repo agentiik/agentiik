@@ -42,6 +42,8 @@
 //	WithUsernsRemap      an /info that carries it, with a root directory ending <uid>.<gid>
 //	APIVersion           a daemon answering an older version than the ceiling
 //	OOMKills             a die event with an oom before it, which the wait never sees
+//	ClassicImageStore    no RepoDigests for an image built on the machine and never pushed
+//	RegistryUnreachable  a registry the daemon cannot reach when it is asked what it serves
 //
 // # The real daemon
 //
