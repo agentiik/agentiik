@@ -225,6 +225,7 @@ func TestTheSecretsFloorNamesWhatTheMountLacks(t *testing.T) {
 		{Filesystem{Tmpfs: true, NoExec: true}, []string{"is a tmpfs mounted without nosuid and nodev."}},
 		{Filesystem{Tmpfs: true}, []string{"is a tmpfs mounted without noexec, nosuid and nodev."}},
 		{Filesystem{NoExec: true, NoSUID: true, NoDev: true}, []string{"is not on a tmpfs"}},
+		{Filesystem{Tmpfs: true, ReadOnly: true, NoExec: true, NoSUID: true, NoDev: true}, []string{"is a tmpfs this runner may not write to", "ReadWritePaths"}},
 	} {
 		err := judgeSecretsFilesystem(p, c.fs)
 		if c.says == nil {

@@ -289,8 +289,10 @@ func DefaultPolicy() Policy {
 
 // defaultSecretsDir answers where a secret value may be written without touching a disk.
 //
-// /dev/shm is a tmpfs on every Linux distribution that matters, and it is what a runner
-// installed as a container or as a systemd unit has. Elsewhere, and macOS is the case
+// /dev/shm is a tmpfs on every Linux distribution that matters, which is what agk run
+// --local writes on there. It is not what a runner writes on: most distributions mount it
+// without noexec, so a runner is refused it and names a tmpfs of its own with secrets_dir.
+// Elsewhere, and macOS is the case
 // that matters because agk run --local has to work there, there is no equivalent path,
 // so this is empty and the value lands in the task's working directory instead. That is
 // a real difference and the driver announces it rather than pretending otherwise.
@@ -430,7 +432,7 @@ type fileUlimit struct {
 // the file has no use for.
 var fileKeys = map[string]string{
 	"require_userns_remap": "true or false",
-	"secrets_dir":          `an absolute path in quotation marks, such as "/dev/shm"`,
+	"secrets_dir":          `an absolute path in quotation marks, such as "/run/agentiik/secrets"`,
 	"stop_grace":           `a whole number of seconds written as a duration in quotation marks, such as "10s"`,
 	"helper":               `an absolute path in quotation marks, such as "/usr/local/lib/agentiik/agk-helper"`,
 	"seccomp_profile":      `the absolute path of a JSON seccomp profile in quotation marks, such as "/etc/agentiik/seccomp.json"`,

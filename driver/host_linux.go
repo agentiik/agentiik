@@ -37,9 +37,10 @@ const tmpfsMagic = 0x01021994
 
 // The ST_ flags statfs answers in f_flags, which carry the mount's own flags.
 const (
-	stNoSUID = 0x2
-	stNoDev  = 0x4
-	stNoExec = 0x8
+	stReadOnly = 0x1
+	stNoSUID   = 0x2
+	stNoDev    = 0x4
+	stNoExec   = 0x8
 )
 
 // filesystemOf asks statfs what the mount a directory sits on is.
@@ -50,9 +51,10 @@ func filesystemOf(dir string) (Filesystem, error) {
 	}
 	flags := uint64(s.Flags)
 	return Filesystem{
-		Tmpfs:  uint64(s.Type) == tmpfsMagic,
-		NoExec: flags&stNoExec != 0,
-		NoSUID: flags&stNoSUID != 0,
-		NoDev:  flags&stNoDev != 0,
+		Tmpfs:    uint64(s.Type) == tmpfsMagic,
+		ReadOnly: flags&stReadOnly != 0,
+		NoExec:   flags&stNoExec != 0,
+		NoSUID:   flags&stNoSUID != 0,
+		NoDev:    flags&stNoDev != 0,
 	}, nil
 }

@@ -131,8 +131,9 @@ const (
 
 // inRange is one task that reports, on its port out, what it found: the owners of what it
 // was given as the container reads them, whether its input and its secret read back, and
-// the flags of its secret mount. It leaves a nested directory it closed behind it, which a
-// runner without CAP_DAC_OVERRIDE could not remove.
+// the flags of its secret mount. It leaves behind a nested directory it closed, which a
+// runner without CAP_DAC_OVERRIDE could not remove, and a file in a directory it made
+// sticky, which a runner without CAP_FOWNER could not.
 func inRange(image string) graph.Task {
 	return graph.Task{
 		ID:        agk.NewTaskID("01JMZ8V1P9C4", "invoice", 1, agk.Shard{}),
@@ -158,6 +159,9 @@ func inRange(image string) graph.Task {
 			`mkdir -p /agk/out/scratch/nested`,
 			`echo residue > /agk/out/scratch/nested/left.txt`,
 			`chmod 0500 /agk/out/scratch/nested /agk/out/scratch`,
+			`mkdir /agk/out/sticky`,
+			`chmod 1777 /agk/out/sticky`,
+			`echo residue > /agk/out/sticky/left.txt`,
 			`printf '{"meta":{"run_id":"%s","step":"%s","port":"out","attempt":1,"count":1,"produced_at":"2026-01-01T00:00:00Z"},"items":[{"id":"01JMZ8V1P9C5","data":{"input":"%s","secret":"%s","out":"%s","flags":"%s"},"files":[]}]}' "$AGK_RUN_ID" "$AGK_STEP" "$input" "$secret" "$out" "$flags" > /agk/out/ports/out.json`,
 		},
 		Outputs: []agk.Port{"out"},
@@ -198,8 +202,8 @@ func runInRange(t *testing.T, d *Docker, task graph.Task) found {
 // range before it creates the container", and removes it with the container. The task's
 // files belong to the base of the range on the host, which the container reads as its own
 // root; the brick reads its input and its secret and writes its output; and the working
-// directory, the secret and the nested directory the brick closed are gone once the task
-// has ended.
+// directory, the secret, the nested directory the brick closed and the file it left in a
+// sticky one are gone once the task has ended.
 func TestARealRemappedDaemonRunsATaskInsideItsRange(t *testing.T) {
 	for _, image := range []string{rootImage, nonRootImage} {
 		t.Run(image, func(t *testing.T) {

@@ -196,7 +196,7 @@
 // lacks CAP_CHOWN, CAP_FOWNER or CAP_DAC_OVERRIDE, read with capget, since a task's
 // directory is given to the range and re-entered and removed afterwards; the refusal is
 // ErrOwnershipCapabilities and names the unit lines that grant them. The secrets directory
-// must be a tmpfs mounted noexec,nosuid,nodev, read with statfs, since a secret is a bind
+// must be a tmpfs mounted noexec,nosuid,nodev and writable, read with statfs, since a secret is a bind
 // from there and a bind keeps the flags of its source's mount; otherwise it is
 // ErrSecretsTmpfsRequired, unless Policy.RequireSecretsTmpfs is SecretsTmpfsLifted, which
 // only callers that are not runners set. Config.Host answers both in place of the kernel

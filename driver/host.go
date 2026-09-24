@@ -28,10 +28,12 @@ type agentCapability struct {
 // on the page writes them.
 //
 // CAP_CHOWN gives a task's directory to the base of the remapped range before the
-// container exists, which is a chown to a uid that is not this process's own. CAP_FOWNER
-// changes the mode of what it no longer owns. CAP_DAC_OVERRIDE re-enters those directories
-// to collect /agk/out and removes them when the task ends, including what a brick created
-// there under an account of the range, which nothing else could remove. Membership of the
+// container exists, which is a chown to a uid that is not this process's own.
+// CAP_DAC_OVERRIDE re-enters those directories to collect /agk/out and removes them when
+// the task ends, including what a brick created there under an account of the range, in
+// directories it closed. CAP_FOWNER removes what a brick left in a directory it made
+// sticky, where the kernel lets only the owner of the file or of the directory unlink, and
+// no mode bit or CAP_DAC_OVERRIDE gets past that. Membership of the
 // group that owns the daemon socket is already root-equivalent, so the three give a process
 // that has taken the agent over nothing the socket does not.
 var ownershipCapabilities = []agentCapability{
@@ -132,10 +134,11 @@ func capabilityNames(strip string) string {
 // Filesystem is what the kernel says of the mount a directory sits on, as far as a secret
 // value written there is concerned.
 type Filesystem struct {
-	Tmpfs  bool
-	NoExec bool
-	NoSUID bool
-	NoDev  bool
+	Tmpfs    bool
+	ReadOnly bool
+	NoExec   bool
+	NoSUID   bool
+	NoDev    bool
 }
 
 // readSecretsDir holds the secrets directory to the floor, where the policy holds it.
@@ -163,6 +166,12 @@ func readSecretsDir(p Policy, h Host) error {
 func judgeSecretsFilesystem(p Policy, fs Filesystem) error {
 	if !fs.Tmpfs {
 		return fmt.Errorf("driver: %w: %s is not on a tmpfs, so a value written there touches a disk somebody has to erase. %s", ErrSecretsTmpfsRequired, p.SecretsDir, mountOne(p))
+	}
+	// A tmpfs the runner may not write to passes every other check and refuses every
+	// task, which is the failure this floor is read at start to prevent. ProtectSystem=
+	// strict in a unit that does not name the directory in ReadWritePaths makes one.
+	if fs.ReadOnly {
+		return fmt.Errorf("driver: %w: %s is a tmpfs this runner may not write to, so every task given a secret would be refused. A systemd unit with ProtectSystem=strict names it in ReadWritePaths. %s", ErrSecretsTmpfsRequired, p.SecretsDir, mountOne(p))
 	}
 	var without []string
 	for _, flag := range []struct {
