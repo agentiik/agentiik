@@ -470,9 +470,10 @@ func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
 			t.Errorf("%d containers were created for a task every redemption refused", n)
 		}
 	}
-	// Four slots every half second is four takes of four, and a little over for the take
-	// under way as the first message was put back.
-	if redeemed < 4 || redeemed > 24 {
+	// Four slots every half second is four takes of four, and more for the takes that slots
+	// freed one by one make between two pauses; without the pause it is the whole queue every
+	// half second, forty eight.
+	if redeemed < 4 || redeemed > 32 {
 		t.Errorf("in two seconds four slots redeemed %d grants, where pausing half a second after each put back allows about sixteen", redeemed)
 	}
 }
