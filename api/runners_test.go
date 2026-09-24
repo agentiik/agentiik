@@ -48,7 +48,8 @@ func issue(t *testing.T, pool *db.Pool, labels []string) db.JoinToken {
 	var token db.JoinToken
 	err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		token, err = w.IssueJoinToken(ctx, "dmz", labels, "admin", time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		token, err = w.IssueJoinToken(ctx, "dmz", labels, "admin", now, now.Add(time.Hour))
 		return err
 	})
 	if err != nil {

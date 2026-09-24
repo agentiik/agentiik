@@ -131,11 +131,15 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 		return
 	}
 
+	// One moment for both ends of its life, read once, so that the expiry the token is
+	// answered with is the hour it was given and not an hour less the time between two reads
+	// of a clock.
+	now := s.now()
 	pool := r.PathValue("pool")
 	var issued db.JoinToken
 	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		issued, err = wide.IssueJoinToken(ctx, pool, ask.Labels, string(who), s.now().Add(life))
+		issued, err = wide.IssueJoinToken(ctx, pool, ask.Labels, string(who), now, now.Add(life))
 		return err
 	})
 	switch {
@@ -144,8 +148,11 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 		// is nothing to hide: 404 here means the pool, not the route.
 		fail(w, http.StatusNotFound, "no runner pool of that name")
 		return
+	case errors.Is(err, db.ErrNotThePoolsLabel):
+		fail(w, http.StatusBadRequest, "a join token permits only labels its pool carries, and this one asks for a label the pool does not: a label reaches a machine only where an administrator wrote it on a pool first")
+		return
 	case err != nil:
-		fail(w, http.StatusBadRequest, err.Error())
+		fail(w, http.StatusInternalServerError, "the join token could not be issued")
 		return
 	}
 

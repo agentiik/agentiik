@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The pool, which exists before any machine does.
@@ -60,7 +62,7 @@ func TestAPoolCarriesItsPolicyAndCountsWhatIsInIt(t *testing.T) {
 	// anything having to remember to write it.
 	var runner string
 	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now.Add(time.Hour))
+		issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now, now.Add(time.Hour))
 		if err != nil {
 			return err
 		}
@@ -117,19 +119,64 @@ func TestAPoolCarriesItsPolicyAndCountsWhatIsInIt(t *testing.T) {
 func TestATokenCannotPermitALabelItsPoolDoesNotCarry(t *testing.T) {
 	pool, _ := joining(t)
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		_, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "zone=lan"}, "admin",
-			time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		_, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "zone=lan"}, "admin", now, now.Add(time.Hour))
+		return err
+	})
+	if !errors.Is(err, ErrNotThePoolsLabel) {
+		t.Fatalf("a token permitting a label its pool does not carry answered %v", err)
+	}
+}
+
+// A token is issued at the moment its caller says, and expires when its caller says, so the hour
+// it is given is the hour it has.
+func TestATokenLivesFromTheMomentItIsIssued(t *testing.T) {
+	pool, super := joining(t)
+	at := time.Date(2026, 9, 10, 6, 12, 0, 0, time.UTC)
+
+	var issued JoinToken
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		issued, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", at, at.Add(time.Hour))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issued.IssuedAt.Equal(at) || !issued.ExpiresAt.Equal(at.Add(time.Hour)) {
+		t.Errorf("the token says it was issued at %s and expires at %s", issued.IssuedAt, issued.ExpiresAt)
+	}
+
+	// And the row says what the answer said, rather than the database's own clock.
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var stored time.Time
+	if err := conn.QueryRow(ctx, `select issued_at from join_tokens where id = $1`, issued.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Equal(at) {
+		t.Errorf("the row says the token was issued at %s, and it was issued at %s", stored, at)
+	}
+
+	// One that would expire before it is issued is not a token at all.
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", at, at)
 		return err
 	})
 	if err == nil {
-		t.Fatal("a token was issued permitting a label its pool does not carry")
+		t.Error("a token was issued that expires at the moment it is issued")
 	}
 }
 
 func TestAJoinTokenForAPoolNobodyCreated(t *testing.T) {
 	pool, _ := joining(t)
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		_, err := w.IssueJoinToken(ctx, "imaginary", nil, "admin", time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		_, err := w.IssueJoinToken(ctx, "imaginary", nil, "admin", now, now.Add(time.Hour))
 		return err
 	})
 	if !errors.Is(err, ErrNoRunnerPool) {
