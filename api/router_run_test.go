@@ -262,3 +262,91 @@ func TestWhatCannotBeRegisteredAcrossTheInstallation(t *testing.T) {
 		t.Error("a route across the installation was registered with a handler given no Holds")
 	}
 }
+
+// A route that answers some callers more than others asks about the one permission its guard names
+// as Reveals, for its own caller, over targets in the namespace it was authorised in and in no
+// other. A route naming none, and a request no router served, are answered false rather than asked
+// about, so a handler asking where nothing was declared withholds. A permission nobody documents
+// is refused at registration, and the surface lists what each route reveals more to.
+func TestARouteAsksOnlyAboutWhatItReveals(t *testing.T) {
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	elsewhere := api.Target{Namespace: "team-ops", Workflow: "monthly-invoicing"}
+	rt := router(t, granted{"alice": {
+		{api.RunRead, api.Target{Namespace: "finance"}},
+		{api.RunReadData, invoicing},
+		{api.RunReadData, elsewhere},
+		{api.WorkflowRun, payroll},
+	}})
+
+	var answers []bool
+	var failures []error
+	asking := func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+		answers, failures = nil, nil
+		for _, over := range []api.Target{invoicing, payroll, elsewhere} {
+			held, err := api.Revealing(r)(r.Context(), over)
+			answers, failures = append(answers, held), append(failures, err)
+		}
+	}
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs/{run}", api.Needs{Permission: api.RunRead, Scope: api.Namespace, Reveals: api.RunReadData}, asking)
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, asking)
+
+	if code, body := reached(t, rt, "GET", "/api/v1/finance/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0C", "alice"); code != http.StatusOK {
+		t.Fatalf("the route answered %d: %s", code, body)
+	}
+	if len(answers) != 3 || !answers[0] || answers[1] || answers[2] {
+		t.Errorf("a route revealing run:read_data was answered %v about a workflow she holds it on, one she holds workflow:run on, and one she holds it on in another namespace", answers)
+	}
+	if len(failures) != 3 || failures[0] != nil || failures[1] != nil || failures[2] == nil {
+		t.Errorf("asking about the namespace it was authorised in and about another failed with %v", failures)
+	}
+
+	if code, _ := reached(t, rt, "GET", "/api/v1/finance/runs", "alice"); code != http.StatusOK {
+		t.Fatalf("the route answered %d", code)
+	}
+	for i, held := range answers {
+		if held || failures[i] != nil {
+			t.Errorf("a route revealing nothing was answered %v and %v", answers, failures)
+			break
+		}
+	}
+	if held, err := api.Revealing(httptest.NewRequest("GET", "/api/v1/finance/runs", nil))(t.Context(), invoicing); held || err != nil {
+		t.Errorf("a request no router served was answered %t, %v", held, err)
+	}
+
+	// A request built from one a revealing route was given, and served again as a facade over
+	// the API serves one, asks what its own route declared.
+	rt.MustHandle("GET", "/api/v1/{namespace}/facade", api.Needs{Permission: api.RunRead, Scope: api.Namespace, Reveals: api.RunReadData},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+			again := r.Clone(r.Context())
+			again.URL.Path = "/api/v1/finance/runs"
+			rt.ServeHTTP(w, again)
+		})
+	answers = nil
+	if code, _ := reached(t, rt, "GET", "/api/v1/finance/facade", "alice"); code != http.StatusOK || len(answers) != 3 || answers[0] {
+		t.Errorf("a route revealing nothing, reached through one revealing run:read_data, was answered %v", answers)
+	}
+
+	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
+	rt.ServeRuns(&runsOf{})
+	for _, c := range []struct {
+		pattern string
+		guard   api.Guard
+	}{
+		{"/api/v1/{namespace}/runs/{run}/steps", api.Needs{Permission: api.RunRead, Scope: api.Namespace, Reveals: "run:everything"}},
+		{"/api/v1/runs/{run}", api.OnRun{Permission: api.RunRead, Reveals: "run:everything"}},
+	} {
+		if err := rt.Handle("GET", c.pattern, c.guard, ok); err == nil {
+			t.Errorf("%s was registered revealing more to a permission nobody documents", c.pattern)
+		}
+	}
+	for _, route := range rt.Routes() {
+		want := api.Permission("")
+		if route.Pattern == "/api/v1/{namespace}/runs/{run}" || route.Pattern == "/api/v1/{namespace}/facade" {
+			want = api.RunReadData
+		}
+		if route.Reveals != want {
+			t.Errorf("the surface lists %s as revealing more to %q", route.Pattern, route.Reveals)
+		}
+	}
+}

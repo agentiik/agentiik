@@ -116,11 +116,19 @@ func drawnTask(r *rand.Rand) (graph.Task, controller.Dispatch) {
 	for _, port := range someOf(r, "ok", "rejected", "out", "error") {
 		t.Outputs = append(t.Outputs, agk.Port(port))
 	}
-	// The long form alone: the wire requires every file it carries to name where it goes, and
-	// messageOf writes a short form, which only narrows the tree, with an empty to that the wire
-	// refuses. Narrowing is not served yet, and every task is given the whole tree.
-	for _, from := range someOf(r, "config/rates.json", "scripts/", "templates/*.tmpl") {
-		t.Files = append(t.Files, graph.FileSelector{From: from, To: "/agk/files/" + filepath.Base(from), Mode: pick(r, "", "0444", "0555")})
+	// Each form a workflow may write: the short form, which only narrows the tree and names
+	// neither where the file goes nor its mode; the long form relocating it, with or without a
+	// mode; and the long form setting a mode where the file already is. Only a relocation names
+	// where it goes, and the wire carries no to for the others.
+	for _, from := range someOf(r, "config/rates.json", "scripts/", "templates/*.tmpl", "./sql/**") {
+		f := graph.FileSelector{From: from}
+		switch r.IntN(3) {
+		case 1:
+			f.To, f.Mode = "/agk/files/"+filepath.Base(from), pick(r, "", "0444", "0555")
+		case 2:
+			f.Mode = pick(r, "0444", "0600")
+		}
+		t.Files = append(t.Files, f)
 	}
 	if t.Network == graph.NetworkEgress {
 		t.EgressAllow = someOf(r, "api.billing.example.com:443", "smtp.example.com:587")
