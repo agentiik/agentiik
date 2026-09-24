@@ -479,3 +479,106 @@ func TestAGrantIsCheckedWithoutBindingItsTask(t *testing.T) {
 		t.Errorf("checking the grant of a task that has ended answered %v", err)
 	}
 }
+
+// "A redemption by a draining or revoked runner gets 403, binds nothing": both take nothing new,
+// checked and bound alike, and the task stays free for a runner that does. What a runner already
+// holds is not new, and it redeems that again once drained or revoked, to finish it.
+func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	draining := joinedWith(t, pool, privateKey(1), time.Hour, now)
+	revoked := joinedWith(t, pool, privateKey(2), time.Hour, now)
+	ready := joinedWith(t, pool, privateKey(3), time.Hour, now)
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		if _, err := w.Drain(ctx, draining.Runner, "admin", "the host is being retired", now); err != nil {
+			return err
+		}
+		_, err := w.Revoke(ctx, revoked.Runner, "admin", "the credential leaked", now, time.Hour)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	const row = "01M2GHAAAAAAAAAAAAAAAAAAAA"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', $1, $2, 'render', 1, 'dispatched')`, row, financeRun); err != nil {
+		t.Fatalf("seeding the task: %s", err)
+	}
+	var clear string
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", key, row, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, runner := range []string{draining.Runner, revoked.Runner} {
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			if _, err := w.Redeemable(ctx, clear, key, runner, now); !errors.Is(err, ErrRunnerNotTaking) {
+				t.Errorf("checking a redemption by %s answered %v", runner, err)
+			}
+			if _, err := w.Redeem(ctx, clear, key, runner, now); !errors.Is(err, ErrRunnerNotTaking) {
+				t.Errorf("a redemption by %s answered %v", runner, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var holder *string
+	if err := conn.QueryRow(ctx, `select runner from tasks where id = $1`, row).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if holder != nil {
+		t.Fatalf("a refused redemption bound the task to %s", *holder)
+	}
+
+	// The grant was good all along, and a runner that takes work takes it.
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, ready.Runner, now)
+		return err
+	}); err != nil {
+		t.Errorf("a ready runner's redemption of the same grant answered %v", err)
+	}
+
+	// Drained, and then revoked, it redeems what it holds again, as it does after a lost answer
+	// or a restart, and the task stays its own.
+	for _, order := range []func(ctx context.Context, w *Wide) error{
+		func(ctx context.Context, w *Wide) error {
+			_, err := w.Drain(ctx, ready.Runner, "admin", "the host is being retired", now)
+			return err
+		},
+		func(ctx context.Context, w *Wide) error {
+			_, err := w.Revoke(ctx, ready.Runner, "admin", "the credential leaked", now, time.Hour)
+			return err
+		},
+	} {
+		if err := pool.Installation(ctx, RunnerInventory, order); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			if _, err := w.Redeemable(ctx, clear, key, ready.Runner, now); err != nil {
+				return err
+			}
+			_, err := w.Redeem(ctx, clear, key, ready.Runner, now)
+			return err
+		}); err != nil {
+			t.Errorf("the holder's redemption once withdrawn answered %v", err)
+		}
+	}
+	if err := conn.QueryRow(ctx, `select runner from tasks where id = $1`, row).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if holder == nil || *holder != ready.Runner {
+		t.Errorf("the task is held by %v, and was %s's", holder, ready.Runner)
+	}
+}

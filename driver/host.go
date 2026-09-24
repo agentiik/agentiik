@@ -60,6 +60,10 @@ type Host interface {
 // kernel is the Host that asks the kernel, with capget and statfs.
 type kernel struct{}
 
+// KernelHost is the Host that asks the kernel, which a Config with no Host uses. It is exported for
+// a runner that asks the same questions of its work root before it opens a driver.
+func KernelHost() Host { return kernel{} }
+
 func (kernel) Capabilities() (uint64, error)             { return effectiveCapabilities() }
 func (kernel) Filesystem(dir string) (Filesystem, error) { return filesystemOf(dir) }
 

@@ -299,5 +299,7 @@ func administration() []struct {
 		{"GET", "/api/v1/runner-pools", nil},
 		{"POST", "/api/v1/runner-pools", sandboxed()},
 		{"POST", "/api/v1/runner-pools/dmz/join-tokens", api.Issue{}},
+		{"POST", "/api/v1/runners/runner-dmz-02/drain", api.Order{Reason: "the host is being retired"}},
+		{"POST", "/api/v1/runners/runner-dmz-02/revoke", api.Order{Reason: "the credential leaked"}},
 	}
 }

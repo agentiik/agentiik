@@ -271,7 +271,7 @@ func TestAOneShotArtifactIsGoneOnTheLastFetch(t *testing.T) {
 		var left int
 		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
 			var err error
-			left, err = ns.Fetched(ctx, u)
+			left, err = fetched(ctx, ns, u)
 			return err
 		})
 		if err != nil {
@@ -414,7 +414,7 @@ func TestAnObjectIsCollectedOnlyAfterTheGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		_, err := ns.Fetched(ctx, uri(financeRun, "archive", "out", "gone.bin"))
+		_, err := fetched(ctx, ns, uri(financeRun, "archive", "out", "gone.bin"))
 		return err
 	})
 	if err != nil {
@@ -478,7 +478,7 @@ func TestAReferenceArrivingAfterAClaimKeepsTheObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		_, err := ns.Fetched(ctx, uri(financeRun, "archive", "out", "shared.bin"))
+		_, err := fetched(ctx, ns, uri(financeRun, "archive", "out", "shared.bin"))
 		return err
 	})
 	if err != nil {
@@ -799,4 +799,104 @@ func collectableNow(t *testing.T, pool *Pool, namespace, digest string) bool {
 		t.Fatalf("reading the collectability of %s: %s", digest, err)
 	}
 	return at != nil
+}
+
+// fetched spends one fetch of u as a transfer that completed spends it, and answers what is left.
+func fetched(ctx context.Context, ns *NS, u agk.URI) (int, error) {
+	_, held, err := ns.Reserve(ctx, u, time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	if err := ns.Delivered(ctx, u, held); err != nil {
+		return 0, err
+	}
+	got, err := ns.Resolve(ctx, u)
+	if errors.Is(err, ErrGone) {
+		return 0, nil
+	}
+	return got.Fetches, err
+}
+
+// A fetch held for a transfer is nobody else's until the transfer ends: spent where it completed,
+// given back where it did not, and taken again by the next transfer once its hold has lapsed, as
+// it has where the API holding it died. A transfer that did not complete never retires the
+// reference, however the others end, since only one that completed lowers what is left.
+func TestAHeldFetchIsSpentOnlyByATransferThatCompleted(t *testing.T) {
+	pool, super := opened(t)
+	u := uri(financeRun, "render", "out", "payslips.pdf")
+	in := func(fn func(ctx context.Context, ns *NS) error) error {
+		return pool.In(t.Context(), "finance", fn)
+	}
+	if err := in(func(ctx context.Context, ns *NS) error {
+		_, err := ns.WriteArtifact(ctx, Reference{URI: u, Digest: digestOf("f"), Size: 99, For: time.Hour, Fetches: 2})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hold := func() (time.Time, error) {
+		var held time.Time
+		err := in(func(ctx context.Context, ns *NS) error {
+			var err error
+			_, held, err = ns.Reserve(ctx, u, time.Minute)
+			return err
+		})
+		return held, err
+	}
+
+	stalled, err := hold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := hold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hold(); !errors.Is(err, ErrInFlight) {
+		t.Fatalf("a third transfer of a budget of two, both held, answered %v", err)
+	}
+	if err := in(func(ctx context.Context, ns *NS) error { return ns.Delivered(ctx, u, completed) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := in(func(ctx context.Context, ns *NS) error { return ns.Release(ctx, u, stalled) }); err != nil {
+		t.Fatal(err)
+	}
+
+	// One of two spent and one given back: the reference is live, with one fetch left.
+	var got Resolved
+	if err := in(func(ctx context.Context, ns *NS) error {
+		var err error
+		got, err = ns.Resolve(ctx, u)
+		return err
+	}); err != nil || got.Fetches != 1 || got.Held != 0 {
+		t.Fatalf("after one transfer completed and one did not, the reference reads %+v, %v", got, err)
+	}
+
+	// A hold whose API died is never given back, and lapses.
+	if _, err := hold(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hold(); !errors.Is(err, ErrInFlight) {
+		t.Fatalf("the last fetch, held, was held again: %v", err)
+	}
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(), `update artifacts set fetches_held_until = array[now() - interval '1 second']`); err != nil {
+		t.Fatal(err)
+	}
+	last, err := hold()
+	if err != nil {
+		t.Fatalf("the last fetch, its hold lapsed, could not be held again: %v", err)
+	}
+	if err := in(func(ctx context.Context, ns *NS) error { return ns.Delivered(ctx, u, last) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := in(func(ctx context.Context, ns *NS) error {
+		_, err := ns.Resolve(ctx, u)
+		return err
+	}); !errors.Is(err, ErrGone) {
+		t.Errorf("a budget of two, both spent, answers %v", err)
+	}
 }

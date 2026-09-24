@@ -142,6 +142,13 @@ const (
 	// the route itself reads and writes through In, in the namespace it was authorised in.
 	RunRoute Reason = "a route that names a run and not its namespace"
 
+	// RunListing is GET /api/v1/runs, "across every namespace the caller can read", whose
+	// path names no namespace because the whole point is that it names none. What it reads
+	// is which workflows there are, for the authorizer to be asked about each, and then the
+	// runs of the ones it allowed and of no others: the namespaces a listing reaches are the
+	// ones the authorisation decision named, as In's always are.
+	RunListing Reason = "a listing of runs across the namespaces its caller can read"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"
