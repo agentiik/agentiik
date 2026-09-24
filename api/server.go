@@ -34,6 +34,8 @@ type Server struct {
 	pool     *db.Pool
 	versions *version.Store
 	objects  artifact.Objects
+	urls     artifact.Presigner
+	limits   agk.Limits
 	now      func() time.Time
 }
 
@@ -48,6 +50,14 @@ type ServerOptions struct {
 	// one a push is answered 503, because a tree with nowhere to go is the installation's
 	// to fix and not the caller's.
 	Objects artifact.Objects
+
+	// URLs mints the presigned URL an artifact with no fetch budget is redirected to. Without
+	// one such an artifact is answered 503, for the reason a push with no object store is.
+	URLs artifact.Presigner
+
+	// Limits are what an output's envelope is read back under, and default to the
+	// documentation's.
+	Limits agk.Limits
 
 	// Now is the clock, an argument so that a test has one.
 	Now func() time.Time
@@ -70,7 +80,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, now: o.Now}
+	if o.Limits == (agk.Limits{}) {
+		o.Limits = agk.DefaultLimits()
+	}
+	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now}
 	rt.ServeRuns(runsIn{o.Pool})
 
 	for _, r := range []struct {
@@ -89,10 +102,21 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: RunRead, Scope: Namespace}, s.detail},
 		{"POST", "/api/v1/runs/{run}/cancel",
 			OnRun{Permission: WorkflowRun}, s.cancel},
+		// The run by its identifier alone, which is all a push notification carries, read
+		// exactly as the namespaced route reads it: the router found the namespace.
+		{"GET", "/api/v1/runs/{run}",
+			OnRun{Permission: RunRead}, s.detail},
+		{"GET", "/api/v1/runs/{run}/outputs/{name}",
+			OnRun{Permission: RunReadData}, s.output},
+		{"GET", "/api/v1/artifacts/{uri}",
+			OnArtifact{Permission: RunReadData}, s.artifactOf},
 	} {
 		if err := rt.Handle(r.method, r.pattern, r.guard, r.handler); err != nil {
 			return nil, err
 		}
+	}
+	if err := rt.HandleAcross("GET", "/api/v1/runs", Across{Permission: RunRead}, s.across); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
