@@ -208,6 +208,10 @@ func (b *Bus) Ended(ctx context.Context, t Taken, ending TaskResult) error {
 // it has room, which makes distribution naturally proportional to each host's real capacity
 // without the controller having to model load".
 //
+// A ctx that ends ends the wait as well, so that an agent being stopped is not held for the rest of
+// a long poll. A message the server handed out as the wait was given up is not lost: nobody
+// acknowledged it, so it comes round once AckWait has passed.
+//
 // Creating one here would fail twice over. A runner's credential reaches this consumer and no
 // other and creates nothing, for the reason Consumer gives, and a WorkQueue stream refuses a
 // second consumer on a subject one already filters on. So AckWait and MaxDeliver are what
@@ -227,7 +231,12 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 		return nil, fmt.Errorf("bus: the consumer of pool %s could not be reached: %w", pool, err)
 	}
 
-	msgs, err := consumer.Fetch(batch, jetstream.FetchMaxWait(wait))
+	if wait <= 0 {
+		return nil, fmt.Errorf("bus: a runner waiting %s for work", wait)
+	}
+	waiting, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	msgs, err := consumer.Fetch(batch, jetstream.FetchContext(waiting))
 	if err != nil {
 		return nil, fmt.Errorf("bus: pool %s could not be asked for work: %w", pool, err)
 	}
@@ -247,7 +256,13 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 		}
 		out = append(out, Taken{Task: t, msg: msg})
 	}
-	if err := msgs.Error(); err != nil {
+	// The wait running out is a take that found nothing more, which is no failure, and the
+	// server says as much just before it runs out. The caller's ctx ending is, whatever the
+	// server said, and what was taken by then is answered with it.
+	if err := ctx.Err(); err != nil {
+		return out, fmt.Errorf("bus: pool %s was asked for work and the wait was given up: %w", pool, err)
+	}
+	if err := msgs.Error(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return out, fmt.Errorf("bus: pool %s was asked for work and answered: %w", pool, err)
 	}
 	return out, nil
