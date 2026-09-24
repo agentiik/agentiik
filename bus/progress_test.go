@@ -89,6 +89,44 @@ func TestProgressIsWhatTheWireDescribes(t *testing.T) {
 	}
 }
 
+// Every progress message in the corpus is read the way the corpus says it is, by the schema and by
+// the reader alike, and a valid one written back out is the document it was read from.
+func TestProgressIsReadAsTheCorpusSaysItIs(t *testing.T) {
+	s := wire(t, "taskProgress")
+	cases, err := fixtures.TaskProgresses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) < 4 {
+		t.Fatalf("the vendored progress corpus holds %d documents", len(cases))
+	}
+	for _, c := range cases {
+		body, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bySchema := validates(t, s, body)
+		p, byReader := readProgress(body)
+		if !c.Valid {
+			if bySchema == nil {
+				t.Errorf("%s should be refused by the schema: %s", c.File, c.Rule)
+			}
+			if byReader == nil {
+				t.Errorf("%s was read as %+v, and it is refused because %s", c.File, p, c.Rule)
+			}
+			continue
+		}
+		if bySchema != nil || byReader != nil {
+			t.Errorf("%s, which covers %s, was refused: %v, %v", c.File, c.Covers, bySchema, byReader)
+			continue
+		}
+		again, err := p.encode()
+		if err != nil || !sameDocument(t, body, again) {
+			t.Errorf("%s was written back out as %s (%v)", c.File, again, err)
+		}
+	}
+}
+
 // Two kinds of message share a runner's results subject, and neither is ever read as the other,
 // by the schema or by the reader: every result in the corpus and every example of a result is no
 // progress message, every example of a progress message is no result, and a document carrying both
