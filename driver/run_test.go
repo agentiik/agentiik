@@ -1193,6 +1193,38 @@ func TestTheLogOfAContainerStoppedAtItsDeadlineNamesTheDeadline(t *testing.T) {
 	}
 }
 
+// A container whose span the daemon cannot give after its exit still ran and exited, so its ending
+// carries a span, the one this side can vouch for, from the dispatch to the moment the exit was
+// read. Without one it would read as a container that never started, which charges the brick's
+// verdict to the platform and runs it again.
+func TestAnExitWhoseSpanTheDaemonCannotGiveStillHasOne(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 108, nil })
+	r.daemon.Handle(http.MethodGet, "/containers/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"message":"the daemon is restarting"}`, http.StatusInternalServerError)
+	})
+	task := oneTask(ref)
+	before := time.Now()
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskFailed || result.ExitCode != 108 {
+		t.Fatalf("the task reports %s with code %d, and its container exited 108", result.State, result.ExitCode)
+	}
+	if result.StartedAt.Before(before.Add(-time.Second)) || result.FinishedAt.Before(result.StartedAt) || result.FinishedAt.After(time.Now()) {
+		t.Errorf("the container ran from %s to %s, which is not a span inside the run", result.StartedAt, result.FinishedAt)
+	}
+	e, found, err := r.keys.read(task.ID)
+	if err != nil || !found {
+		t.Fatalf("the key is not in the record: %v", err)
+	}
+	if e.ExitCode == nil || *e.ExitCode != 108 || !e.StartedAt.Equal(result.StartedAt) {
+		t.Errorf("the key is recorded exiting %v from %s, want 108 from %s", e.ExitCode, e.StartedAt, result.StartedAt)
+	}
+}
+
 // "A timed_out or cancelled task carries an exit code wherever a container ran." A Result reads
 // one for succeeded and failed alone, so the code the stop left is told to the observer with the
 // span, and written down with the key, where a requeue answered from the record finds it.

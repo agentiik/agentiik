@@ -372,7 +372,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 	if state == agk.TaskSucceeded || state == agk.TaskFailed {
 		result.ExitCode = e.Code
 	}
-	result.StartedAt, result.FinishedAt = d.moments(ctx, container)
+	result.StartedAt, result.FinishedAt = d.moments(ctx, t, container, dispatched)
 
 	var artifacts []agk.File
 	var ports []EndedPort
@@ -664,12 +664,23 @@ func (d *Docker) replay(ctx context.Context, container string, log *taskLog, std
 
 // moments are the two the daemon itself recorded, rather than a clock on this side, so
 // that the same task read twice reports the same pair.
-func (d *Docker) moments(ctx context.Context, container string) (started, finished time.Time) {
-	in, err := d.cli.ContainerInspect(ctx, container)
-	if err != nil {
-		return time.Time{}, time.Time{}
+//
+// They are asked for whatever became of the task's context, since the container has
+// exited and its span is part of its ending. Where the daemon cannot say, the span is the
+// one this side can vouch for, from the dispatch to the moment the exit was read, which
+// the key is written down with so that a second report says the same. A container that
+// exited with no span at all would read as one that never started, and a result that says
+// so turns a brick's success or failure into the platform's, which is retried: the brick
+// would run a second time for a question the daemon did not answer.
+func (d *Docker) moments(ctx context.Context, t graph.Task, container string, dispatched time.Time) (started, finished time.Time) {
+	ask, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
+	defer cancel()
+	in, err := d.cli.ContainerInspect(ask, container)
+	if err == nil && !in.State.StartedAt.IsZero() && !in.State.FinishedAt.IsZero() {
+		return in.State.StartedAt, in.State.FinishedAt
 	}
-	return in.State.StartedAt, in.State.FinishedAt
+	d.say("driver: task " + string(t.ID) + ": the daemon did not say when its container ran, so its span is taken from the dispatch to the moment its exit was read")
+	return dispatched, d.now()
 }
 
 // openLog opens the task's log sink, and answers with a close that is safe to call
