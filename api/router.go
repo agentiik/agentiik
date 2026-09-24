@@ -202,7 +202,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		return err
 	}
 	if guard.across {
-		return fmt.Errorf("api: %s %s answers across the installation, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
+		return fmt.Errorf("api: %s %s answers across what its caller holds, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
 	}
 	if !guard.public && !guard.run {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
@@ -248,8 +248,8 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	return nil
 }
 
-// HandleAcross registers one route answering across the installation what its caller holds one
-// permission over.
+// HandleAcross registers one route answering, across the installation or one namespace, what its
+// caller holds one permission over.
 //
 // Separate from Handle for the reason HandleRunner is: the handler is given something else, here
 // Holds in place of a target to authorise, since there is no one target to give it. A pattern may
@@ -414,9 +414,10 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			}
 			run = string(u.Run)
 		}
-		// Looked up across the installation, since the path names no namespace, before
-		// anything is authorised, and answered to nobody but the authorizer: a run that is not
-		// there is refused exactly as one the caller may not reach is.
+		// Looked up across the installation, since the path names no namespace or names one
+		// the run has to be in, before anything is authorised, and answered to nobody but the
+		// router and the authorizer: a run that is not there is refused exactly as one the
+		// caller may not reach is.
 		of, err := rt.runs.RunOf(r.Context(), run)
 		switch {
 		case errors.Is(err, ErrNoRun):

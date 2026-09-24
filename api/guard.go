@@ -59,8 +59,8 @@ func (n Needs) guards() guard {
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
 //
-// Its path names the run and nothing the run is of, as the documentation lists every route about
-// one: /api/v1/runs/{id}/cancel. "Agentiik sends the push service an identifier and a state", and
+// Its path names the run, as the documentation lists every route about one:
+// /api/v1/runs/{id}/cancel. "Agentiik sends the push service an identifier and a state", and
 // the application a notification opens holds that identifier and nothing else. A permission such
 // as workflow:run is held on a single workflow as well as on a whole namespace: "access is granted
 // by binding a principal to a role, either on the whole namespace or on a single workflow". So the
@@ -97,10 +97,10 @@ func (o OnArtifact) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true, artifact: true}
 }
 
-// Across is a route answering, across the installation, what its caller holds one permission over:
-// GET /api/v1/runs, "across every namespace the caller can read".
+// Across is a route answering, across the installation or one namespace, what its caller holds one
+// permission over: GET /api/v1/runs, "across every namespace the caller can read".
 //
-// Its path names no namespace, so there is no one target to authorise before the handler runs, and
+// Its path names no workflow, so there is no one target to authorise before the handler runs, and
 // what the caller may see is a question asked of each thing the answer could hold. The router asks
 // it rather than the handler: a route taking Across is registered with HandleAcross, and its handler
 // is given Holds, which asks the authorizer about this permission for this principal and nothing
@@ -155,8 +155,9 @@ type revealingKey struct{}
 // FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
 // authorised against. A run nobody minted is ErrNoRun.
 //
-// It is asked before anything is authorised, across the installation since the path names no
-// namespace, and its answer goes to the authorizer and nowhere else: a run that is not there and a
+// It is asked before anything is authorised, across the installation since a path naming a run
+// names no namespace or names one to be checked against the answer, and its answer goes to the
+// router and the authorizer and nowhere else: a run that is not there and a
 // run the caller may not reach are the same 404, so asking tells a caller nothing the refusal
 // would not.
 type FindRun interface {
