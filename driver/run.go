@@ -429,11 +429,11 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 			"the container adopted for this task has nothing bound at %s, so there is nowhere to collect its outputs from", brick.OutDir))
 	}
 
-	// The values are redeemed again rather than remembered, because the masker needs
-	// them and the first delivery's copy of them left with the process that had it.
-	// They are this delivery's, from the sources Run was called with, since a runner
-	// that restarted holds the redemption it made and not the one the first delivery
-	// made. Nothing is written: this is the list the literal match runs against.
+	// The masker needs the values the container was given, and the first delivery's
+	// copy of them in memory left with the process that had it. Its files are still in
+	// the task's secrets directory, which is removed only once this returns, and they are
+	// read back, with this delivery's own redemption beside them. Nothing is written:
+	// this is the list the literal match runs against.
 	values, err := d.values(ctx, t)
 	if err != nil {
 		return fail(err)
@@ -644,23 +644,49 @@ func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
 	return repo, nil
 }
 
-// values redeems the secrets of one task without writing any of them, which is what the
-// masker needs and all it needs. They are asked of the source of the delivery doing the
-// asking, which on a server is the redemption it made itself, and never of the one that
-// started the container.
+// values are what the masker of an adopted container needs and all it needs: the values
+// the first delivery wrote for the container, where they are still on this host, and the
+// ones this delivery's own source redeems. Nothing is written.
+//
+// Both, because a secret rotated between the two redemptions leaves the container holding
+// the first value and this delivery the second, and the container can print only the
+// first: masked with the second alone, it would reach the log and the published outputs
+// in the clear. The second is kept for the host that no longer has the first, a tmpfs a
+// restart cleared, where it is the closest to the container's there is.
 func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 	if len(t.Secrets) == 0 {
 		return nil, nil
 	}
-	secrets := d.secrets(ctx)
-	if secrets == nil {
-		// A server runner leaves Config.Secrets nil and gives each task its own, so a
-		// redelivery that came without them would otherwise mask nothing. It is refused
-		// for the reason a value that cannot be redeemed is.
-		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
-			"%d secrets to mask and no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", len(t.Secrets))
+	// The directory is named from the task identifier rather than read off the
+	// container, as the one Run takes away is: a container carrying the task's label
+	// may have been started by anything, and what is read here is only ever this
+	// runner's own.
+	w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
+	if err != nil {
+		w = nil
 	}
 	var values [][]byte
+	missing := ""
+	for _, s := range t.Secrets {
+		if value, ok := w.written(s); ok {
+			values = append(values, value)
+		} else if missing == "" {
+			missing = s.Name
+		}
+	}
+
+	secrets := d.secrets(ctx)
+	if secrets == nil {
+		if missing == "" {
+			return values, nil
+		}
+		// A server runner leaves Config.Secrets nil and gives each task its own, so a
+		// redelivery that came without them to a host that no longer holds what the
+		// first delivery wrote would otherwise mask nothing. It is refused for the
+		// reason a value that cannot be redeemed is.
+		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
+			"secret %s is no longer where the first delivery wrote it and there is no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", missing)
+	}
 	for _, s := range t.Secrets {
 		value, err := secrets.Value(ctx, s.Name)
 		if err != nil {

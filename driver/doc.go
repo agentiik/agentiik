@@ -219,6 +219,12 @@
 // is whole before the match runs; a value split across lines is not, which is what the
 // documentation already says of it.
 //
+// An adopted container is masked with the values the first delivery wrote for it, read
+// back from the task's secrets directory before that is removed, beside the ones the
+// adopting delivery redeemed. The documentation names a secret rotated between the two
+// redemptions as a limit of masking, and the value the container holds is on the host all
+// along; only a host that lost it, a tmpfs a restart cleared, is still left with the limit.
+//
 // /agk/out is a bind mount from the task's working directory and not a tmpfs. A tmpfs is
 // unmounted when the container stops, so an output written to one is gone before anything
 // can collect it, and collecting before exit is not sound because a brick writes until

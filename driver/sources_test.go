@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -236,9 +237,9 @@ func TestTwoTasksThatNameOneSecretAreEachGivenTheirOwnValue(t *testing.T) {
 	}
 }
 
-// A redelivery that adopts a container an earlier delivery left behind masks its log with
-// the values it redeemed itself. The earlier delivery's copy left with the process that
-// held it, and a restarted runner holds its own redemption and no other.
+// A redelivery that adopts a container an earlier delivery left behind asks its own sources
+// for the values it masks with, beside what the earlier delivery wrote, and never the
+// daemon's: a restarted runner holds its own redemption and no other.
 func TestAnAdoptedContainerIsMaskedWithTheValuesOfTheDeliveryThatAdoptsIt(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
@@ -284,10 +285,70 @@ func TestAnAdoptedContainerIsMaskedWithTheValuesOfTheDeliveryThatAdoptsIt(t *tes
 	}
 }
 
-// A server runner leaves Config.Secrets nil and gives each task its own. A redelivery that
-// came without them has nothing to mask an adopted container's log with, and is refused
-// rather than writing that log in the clear.
-func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *testing.T) {
+// A secret rotated between two deliveries leaves the container holding the value the
+// first one wrote for it, and the second one redeeming the new value. The container can
+// print only the first, so an adopted container is masked with the value it was given,
+// which is still on this host, as well as with the one this delivery redeemed, in its log
+// and in the outputs published from it alike.
+func TestAnAdoptedContainerIsMaskedWithTheValueItWasGivenAfterARotation(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		m, ok := c.Mount(SecretsDir + "/bearer")
+		if !ok {
+			return 1, errors.New("nothing is mounted at /agk/secrets/bearer")
+		}
+		b, err := os.ReadFile(m.Source)
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintf(c.Stderr, "authorising with %s\n", b)
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"token": string(b)}))
+	})
+	logs := &logsByTask{}
+	r.cfg.Logs = logs
+
+	// The first delivery is given s3cr3t-value, the value newRunner's own source holds.
+	task := taskWithASecret(ref)
+	exitedFirstDelivery(t, r, task)
+
+	// The namespace rotated the value before the redelivery redeemed its grant.
+	refuseConfig(r)
+	objects := artifact.Dir(t.TempDir())
+	store, err := artifact.New(objects, task.Namespace, agk.DefaultLimits())
+	if err != nil {
+		t.Fatalf("opening the store: %s", err)
+	}
+	sources := Sources{Store: store, Secrets: secretSource{"bearer": "rotated-value"}}
+
+	result, err := r.Run(WithSources(t.Context(), sources), task)
+	if err != nil {
+		t.Fatalf("the redelivery: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the redelivery reports %s, and the container exited 0", result.State)
+	}
+
+	log := logs.of(task.ID)
+	if strings.Contains(log, "s3cr3t-value") {
+		t.Errorf("the log carries the value the container was given, in the clear: %q", log)
+	}
+	if !strings.Contains(log, "authorising with "+maskToken) {
+		t.Errorf("the log reads %q, and it is what the container wrote, masked", log)
+	}
+
+	e, err := publishedIn(t, r, task.ID, "out", objects, task.Namespace)
+	if err != nil {
+		t.Fatalf("the adopted container's port is not in the store the redelivery was given: %s", err)
+	}
+	if len(e.Items) != 1 || e.Items[0].Data["token"] != maskToken {
+		t.Errorf("the envelope published to the store holds %+v, and the value the container was given is masked there", e.Items)
+	}
+}
+
+// With no secret source, an adopted container is masked with the values the first
+// delivery wrote for it, which are the values it can print, and nothing is refused.
+func TestAnAdoptedContainerWithNoSecretSourceIsMaskedWithWhatItWasGiven(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
@@ -301,9 +362,78 @@ func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *tes
 	exitedFirstDelivery(t, r, task)
 	r.cfg.Secrets = nil
 
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("a redelivery that finds the values the container was given answered %v", err)
+	}
+	if strings.Contains(written.String(), "s3cr3t-value") {
+		t.Errorf("the log carries the secret value: %q", written.String())
+	}
+	if !strings.Contains(written.String(), "authorising with "+maskToken) {
+		t.Errorf("the log reads %q, and it is what the container wrote, masked", written.String())
+	}
+}
+
+// A server runner leaves Config.Secrets nil and gives each task its own. A redelivery that
+// came without them, to a host that no longer holds the values the first delivery wrote,
+// as after a restart that cleared the tmpfs, has nothing to mask an adopted container's
+// log with, and is refused rather than writing that log in the clear.
+func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
+		return 0, nil
+	})
+	var written strings.Builder
+	r.cfg.Logs = &sinkFor{b: &written}
+
+	task := taskWithASecret(ref)
+	_, root := exitedFirstDelivery(t, r, task)
+	r.cfg.Secrets = nil
+	if err := os.RemoveAll(filepath.Join(root, "secrets")); err != nil {
+		t.Fatalf("taking away what the first delivery wrote: %s", err)
+	}
+
 	_, err := r.Run(t.Context(), task)
 	if !errors.Is(err, ErrContractBroken) {
 		t.Fatalf("a redelivery with no secret source answered %v", err)
+	}
+	if strings.Contains(written.String(), "s3cr3t-value") {
+		t.Errorf("the log carries the secret value: %q", written.String())
+	}
+}
+
+// What the first delivery wrote is read back only as a file. A link left under its name is
+// not followed, so with no secret source either there is nothing to mask with, and the
+// redelivery is refused rather than masking with whatever the link points at.
+func TestAnAdoptedContainersSecretIsNotReadBackThroughALink(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
+		return 0, nil
+	})
+	var written strings.Builder
+	r.cfg.Logs = &sinkFor{b: &written}
+
+	task := taskWithASecret(ref)
+	_, root := exitedFirstDelivery(t, r, task)
+	r.cfg.Secrets = nil
+
+	elsewhere := filepath.Join(t.TempDir(), "bearer")
+	if err := os.WriteFile(elsewhere, []byte("s3cr3t-value"), 0o600); err != nil {
+		t.Fatalf("writing the file the link points at: %s", err)
+	}
+	secret := filepath.Join(root, "secrets", "bearer")
+	if err := os.Remove(secret); err != nil {
+		t.Fatalf("taking the first delivery's value away: %s", err)
+	}
+	if err := os.Symlink(elsewhere, secret); err != nil {
+		t.Fatalf("leaving a link in its place: %s", err)
+	}
+
+	if _, err := r.Run(t.Context(), task); err == nil {
+		t.Fatal("a redelivery that found a link where a value was written masked with what it points at")
 	}
 	if strings.Contains(written.String(), "s3cr3t-value") {
 		t.Errorf("the log carries the secret value: %q", written.String())

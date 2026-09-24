@@ -333,10 +333,7 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 	var values [][]byte
 	seen := map[string]bool{}
 	for _, s := range wanted {
-		target := s.Mount
-		if target == "" {
-			target = SecretsDir + "/" + s.Name
-		}
+		target := secretTarget(s)
 		if !secretMountPattern.MatchString(target) {
 			return nil, nil, fault(t.Step, ErrContractBroken, ChargeBrick, "secret %s is mounted at %q: a secret is mounted on tmpfs at /agk/secrets/<name>, %s, and a mount elsewhere, /run/secrets/bearer out of habit, is refused", s.Name, target, secretMountRule)
 		}
@@ -349,11 +346,7 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 		if err != nil {
 			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s has no value to give the task: a runner has it from the redemption of the per-task grant, made before the image was pulled, and agk run --local from the command line", s.Name)
 		}
-		// The file is named by the mount point and not by the secret's own name.
-		// The manifest chooses where a value is read from, and two secrets of
-		// different names may not collide on the host any more than they may
-		// collide in the container.
-		source := filepath.Join(w.Secrets, path.Base(target))
+		source := w.secret(target)
 		if err := writeSecret(source, value); err != nil {
 			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s could not be written where it is bound from", s.Name)
 		}
@@ -361,6 +354,24 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 		values = append(values, value)
 	}
 	return mounts, values, nil
+}
+
+// secretTarget is where in the container a secret is mounted: where the manifest said, or
+// /agk/secrets/<name> where it said nothing.
+func secretTarget(s graph.SecretMount) string {
+	if s.Mount != "" {
+		return s.Mount
+	}
+	return SecretsDir + "/" + s.Name
+}
+
+// secret is the host file a secret mounted at target is bound from.
+//
+// The file is named by the mount point and not by the secret's own name. The manifest
+// chooses where a value is read from, and two secrets of different names may not collide
+// on the host any more than they may collide in the container.
+func (w *workdir) secret(target string) string {
+	return filepath.Join(w.Secrets, path.Base(target))
 }
 
 // writeSecret puts one value on the disk, or on the tmpfs where the platform has one.
@@ -385,6 +396,31 @@ func writeSecret(path string, value []byte) error {
 		return err
 	}
 	return os.Chmod(path, secretMode)
+}
+
+// written is the value writeSecrets put down for one secret, read back for a delivery that
+// adopted the container it was written for, and false where there is none. A nil workdir
+// names nowhere and holds nothing, and a mount off the grammar never had a value: the
+// delivery that met it refused it before it created anything.
+//
+// Lstat and not Stat: a value is a file this runner created under a directory private to
+// it, so a link found under that name is not one, and following it would have the masker
+// read whatever it points at.
+func (w *workdir) written(s graph.SecretMount) ([]byte, bool) {
+	if w == nil {
+		return nil, false
+	}
+	target := secretTarget(s)
+	if !secretMountPattern.MatchString(target) {
+		return nil, false
+	}
+	where := w.secret(target)
+	info, err := os.Lstat(where)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
+	value, err := os.ReadFile(where)
+	return value, err == nil
 }
 
 // writeJSON writes one document of the contract, read-only to the container.
