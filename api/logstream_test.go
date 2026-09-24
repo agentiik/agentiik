@@ -372,7 +372,9 @@ func TestAStepLogIsItsHistoryThenWhatIsShippedWhileItIsRead(t *testing.T) {
 	s.ship(t, second, secondGrant, 2, 2, false, "still going")
 	rd.line(t, secondRow, 2, 2, "still going")
 
-	s.sql(t, `update tasks set state = 'succeeded' where id = $1`, secondRow)
+	// The step's verdict, then the chunk that closes the last log, whose shipment is what the
+	// stream hears: a runner closes a log before it reports, so the task is still running when
+	// its last chunk lands.
 	s.ended(t, "succeeded")
 	s.ship(t, second, secondGrant, 3, 3, true)
 	if end := rd.expect(t, "dispatch_end", ""); end["final"] != true || end["lines"] != float64(2) {
