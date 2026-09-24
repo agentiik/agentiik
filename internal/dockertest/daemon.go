@@ -208,6 +208,7 @@ func (d *Daemon) routes() {
 	d.mux.HandleFunc("GET /containers/{id}/logs", d.containerLogs)
 	d.mux.HandleFunc("GET /containers/{id}/archive", d.containerArchive)
 	d.mux.HandleFunc("GET /containers/{id}/json", d.containerInspect)
+	d.mux.HandleFunc("GET /containers/{id}/stats", d.containerStats)
 	d.mux.HandleFunc("POST /containers/{id}/stop", d.containerStop)
 	d.mux.HandleFunc("POST /containers/{id}/kill", d.containerKill)
 	d.mux.HandleFunc("DELETE /containers/{id}", d.containerRemove)
