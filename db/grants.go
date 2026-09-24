@@ -110,7 +110,8 @@ var ErrRunnerNotTaking = errors.New("db: that runner is draining or revoked, and
 // its runners carries it, so it is not put back for the next one: the redemption can never be
 // answered, and the runner reports that no container ran. The controller refuses to publish such a
 // task in the first place, so this is a pool whose policy changed while the task waited, or a grant
-// presented by a runner the task was never offered to.
+// presented by a runner of a pool that does not run the namespace. It is the runner's pool that is
+// read and not the one the task was published to, which neither the task nor its grant records.
 var ErrPoolRefusesNamespace = errors.New("db: that runner's pool does not accept the task's namespace")
 
 // ErrRunnerNarrowed is a redemption of a task whose namespace the redeeming runner's own narrowing,

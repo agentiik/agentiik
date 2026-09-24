@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
@@ -22,7 +24,8 @@ import (
 // Here rather than on the runner, because a runner of the pool would only ever refuse the task
 // once it held it, and every runner of the pool refuses it alike: the task would go round the pool
 // until its deadline. The API checks the namespace again at the redemption, for a pool whose policy
-// changed while the task waited and for a grant presented by somebody the task was never offered to.
+// changed while the task waited and for a grant presented by a runner of a pool that does not run
+// the namespace.
 
 // platformFailure is the exit code a task refused at dispatch ends with: 125, the first code of the
 // band "read as an infrastructure failure, charged to the runner and not to the brick", which no
@@ -35,26 +38,95 @@ type unpublishable struct{ why string }
 
 func (u unpublishable) Error() string { return u.why }
 
-// policed reads the pool a task's labels select and holds the task to it: refused where the pool
-// does not exist or does not accept the namespace, and capped to its ceilings otherwise.
+// poolOf is the pool a task's labels select, found among those given, or why no runner of any
+// pool may be handed it.
 //
 // The pool is the one package bus routes the message to, read off the same labels by the same
 // function, so that the pool whose policy is applied and the pool whose runners are handed the task
-// cannot be two different pools.
-func policed(ctx context.Context, w *db.Wide, namespace string, t graph.Task) (graph.Resources, error) {
+// cannot be two different pools. The policy is the step's, since every shard of a step carries its
+// labels and its run's namespace, so a refusal of one task is a refusal of each of them.
+func poolOf(namespace string, t graph.Task, pools map[string]db.RunnerPool) (db.RunnerPool, error) {
 	name, err := bus.PoolOf(t.RunsOn)
 	if err != nil {
-		return graph.Resources{}, unpublishable{fmt.Sprintf("step %s names no runner pool that can exist, so no runner may be handed it: %s", t.Step, err)}
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s names no runner pool that can exist, so no runner may be handed it: %s", t.Step, err)}
 	}
-	pool, err := w.RunnerPoolNamed(ctx, name)
-	if errors.Is(err, db.ErrNoRunnerPool) {
-		return graph.Resources{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not exist, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates the pool", t.Step, name)}
-	}
-	if err != nil {
-		return graph.Resources{}, err
+	pool, found := pools[name]
+	if !found {
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not exist, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates the pool", t.Step, name)}
 	}
 	if !pool.Accepts(namespace) {
-		return graph.Resources{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, name, namespace)}
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, name, namespace)}
+	}
+	return pool, nil
+}
+
+// refuseUnpooled ends every step whose pool will not run the namespace, each of its pending shards
+// failed with platformFailure and the reason, and asks the evaluator again, since what follows a
+// failed step may be a step that runs when: [failed], until the plan holds nothing it refuses.
+//
+// The whole step at once and not the tasks the plan holds, because max_parallel and the quota cut a
+// plan down to a slice of a fan-out: refused a slice at a time, a step of ten thousand shards would
+// take a decision per slice, each writing every task of the run again. Each round ends at least one
+// step for good, since 125 is retried by no policy and requeued only after a loss, so there are at
+// most as many rounds as steps.
+func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
+	byName := make(map[string]db.RunnerPool, len(pools))
+	for _, p := range pools {
+		byName[p.Name] = p
+	}
+	for {
+		refused := map[agk.Step]string{}
+		for _, t := range plan.Start {
+			if _, err := poolOf(namespace, t, byName); err != nil {
+				refused[t.Step] = err.Error()
+			}
+		}
+		if len(refused) == 0 {
+			return plan, nil
+		}
+		state := ev.State()
+		var ending []graph.Result
+		for step, why := range refused {
+			for _, sh := range state.Steps[step].Shards {
+				if sh.Task != agk.TaskPending {
+					continue
+				}
+				ending = append(ending, graph.Result{
+					Task: agk.NewTaskID(state.Run.ID, step, sh.Attempt, sh.Shard), State: agk.TaskFailed,
+					ExitCode: platformFailure, Requeue: sh.Requeue, FinishedAt: now, Reason: why,
+				})
+			}
+		}
+		for _, r := range ending {
+			if err := ev.Record(r, now); err != nil {
+				return graph.Plan{}, fmt.Errorf("the refusal of %s could not be recorded: %w", r.Task, err)
+			}
+		}
+		var err error
+		if plan, err = ev.Next(now); err != nil {
+			return graph.Plan{}, err
+		}
+	}
+}
+
+// policed reads the pool a task's labels select in the transaction that issues its grant, and
+// answers what the task may be given there: the step's resources capped to the pool's ceilings. A
+// pool that will not run it, which the pass found running it when it read the pools, is refused
+// here too, and the task stays pending for the next pass to end.
+func policed(ctx context.Context, w *db.Wide, namespace string, t graph.Task) (graph.Resources, error) {
+	pools := map[string]db.RunnerPool{}
+	if name, err := bus.PoolOf(t.RunsOn); err == nil {
+		pool, err := w.RunnerPoolNamed(ctx, name)
+		switch {
+		case err == nil:
+			pools[name] = pool
+		case !errors.Is(err, db.ErrNoRunnerPool):
+			return graph.Resources{}, err
+		}
+	}
+	pool, err := poolOf(namespace, t, pools)
+	if err != nil {
+		return graph.Resources{}, err
 	}
 	return capped(t.Resources, pool.Ceilings), nil
 }

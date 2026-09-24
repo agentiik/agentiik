@@ -203,12 +203,16 @@ func (co *Core) Wake(ctx context.Context, w Wake) error {
 func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	var e db.Evaluation
 	var losses []db.Loss
+	var pools []db.RunnerPool
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		if e, err = w.Run(ctx, run); err != nil {
 			return err
 		}
-		losses, err = w.Losses(ctx, e.Namespace, run)
+		if losses, err = w.Losses(ctx, e.Namespace, run); err != nil {
+			return err
+		}
+		pools, err = w.RunnerPools(ctx)
 		return err
 	}); err != nil {
 		return err
@@ -264,6 +268,13 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 
 	plan, err := ev.Next(now)
 	if err != nil {
+		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
+	}
+
+	// A step whose pool will not run the namespace ends before anything is counted against
+	// the quota, since it will never hold a slot, and before the decision is written, so that
+	// the pass that finds it is the pass that fails it.
+	if plan, err = refuseUnpooled(ev, e.Namespace, pools, plan, now); err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
@@ -345,8 +356,8 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// Committed. Only now does anything leave this process, and everything that does is
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
-	sent, refused := co.hand(ctx, e.Namespace, run, plan)
-	if len(sent) == 0 && len(refused) == 0 {
+	sent := co.hand(ctx, e.Namespace, run, plan)
+	if len(sent) == 0 {
 		return nil
 	}
 
@@ -369,26 +380,6 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return fmt.Errorf("controller: the dispatch of %s could not be recorded: %w", t.ID, err)
 		}
 	}
-	// And a task the pool's policy refused ends here, never handed out, on the
-	// infrastructure's account and saying which pool. Recorded as an ending of the dispatch
-	// its shard is on, which a requeue after a loss has moved past the first.
-	ended := false
-	for _, t := range plan.Start {
-		why, ok := refused[t.ID]
-		if !ok {
-			continue
-		}
-		sh, _ := shardOf(state, t.Step, t.Shard)
-		if err := ev.Record(graph.Result{
-			Task: t.ID, State: agk.TaskFailed, ExitCode: platformFailure, Requeue: sh.Requeue,
-			FinishedAt: now, Reason: why,
-		}, now); err != nil {
-			return fmt.Errorf("controller: the refusal of %s could not be recorded: %w", t.ID, err)
-		}
-		if after, _ := shardOf(state, t.Step, t.Shard); after.Task.Terminal() {
-			ended = true
-		}
-	}
 	if state.Seq == saved {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
@@ -407,7 +398,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	}
 	steps, tasks = project(state)
 	stampDeadlines(tasks, plan)
-	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
 			Was: saved, Seq: state.Seq,
@@ -424,14 +415,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		}
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
-	}); err != nil || !ended {
-		return err
-	}
-	// And round again, as a result does: a refused task ends its step only once the evaluator
-	// is asked what follows, and what follows may be a step that runs when: [failed]. Only
-	// once one has ended, so that a refusal the evaluator did not take is not planned, refused
-	// and decided again for ever inside one pass.
-	return co.Decide(ctx, run)
+	})
 }
 
 // contains says whether an identifier is in a list, which two places here need.
@@ -471,15 +455,14 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	return ev, nil
 }
 
-// hand publishes what was planned, asks for what should stop, and answers what actually went and
-// what the pool's policy refused.
+// hand publishes what was planned, asks for what should stop, and answers what actually went.
 //
 // A failure here is not a failure of the decision: the decision is committed, and what is left
 // is a courier's job. So it is reported, the pass is not unwound, and what did not go stays
-// pending in the state, which is what makes the next pass send it again. A task the pool refuses
-// is the one exception, since sending it again would be refused again: it is answered with why,
-// for the pass to end it.
-func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) ([]agk.TaskID, map[agk.TaskID]string) {
+// pending in the state, which is what makes the next pass send it again. That includes a task
+// its pool refuses here, which the pass refused none of when it read the pools: the next pass
+// reads them again and ends the step.
+func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) []agk.TaskID {
 	for _, s := range plan.Stop {
 		if err := co.queue.Stop(ctx, s); err != nil {
 			co.controller.report(run, fmt.Errorf("stopping %s: %w", s.Task, err))
@@ -487,14 +470,8 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 	}
 
 	var sent []agk.TaskID
-	refused := map[agk.TaskID]string{}
 	for _, t := range plan.Start {
 		d, err := co.dispatchOf(ctx, namespace, t)
-		var never unpublishable
-		if errors.As(err, &never) {
-			refused[t.ID] = never.why
-			continue
-		}
 		if err != nil {
 			co.controller.report(run, fmt.Errorf("preparing %s: %w", t.ID, err))
 			continue
@@ -505,7 +482,7 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 		}
 		sent = append(sent, t.ID)
 	}
-	return sent, refused
+	return sent
 }
 
 // dispatchOf turns a task the evaluator decided into everything that leaves this process.

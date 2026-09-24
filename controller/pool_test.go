@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -83,6 +86,65 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 				t.Errorf("the run is %s", got)
 			}
 		})
+	}
+}
+
+// A step's pool is the step's, so a fan-out refused is refused whole on the pass that finds it,
+// every shard, and not a slice at a time as max_parallel and the quota hand them out: one pass per
+// slice, each writing every task of the run again, would hold the controller on one run for as
+// long as a fan-out of ten thousand takes. Nor does a namespace with no slot free keep a refused
+// step waiting for one it would never use.
+func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
+	document := strings.Replace(onPool("nowhere", `{ cpu: "1" }`), `    runs_on: [pool=nowhere]
+`, `    runs_on: [pool=nowhere]
+    strategy: { fan_out: item, max_parallel: 1 }
+`, 1)
+	core, q, pool, super := decidingOn(t, document)
+	conn := dbtest.Superuser(t, super)
+	// The namespace's one slot is held by a task of another run.
+	createSecond(t, pool)
+	if _, err := conn.Exec(t.Context(), `
+		update namespaces set max_concurrent_tasks = 1 where name = 'finance';
+		insert into tasks (namespace, id, run_id, step, attempt, state, published_at)
+		values ('finance', '01M2H0AAAAAAAAAAAAAAAAAAAA', '`+string(second)+`', 'normalize', 1, 'dispatched', now())`); err != nil {
+		t.Fatal(err)
+	}
+	orders := make([]map[string]any, 40)
+	for i := range orders {
+		orders[i] = map[string]any{"customer_id": fmt.Sprintf("C-%d", i)}
+	}
+	inputs, err := json.Marshal(map[string]any{"orders": orders})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice", Inputs: inputs,
+			Steps: []agk.Step{"normalize", "archive"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if published := q.dispatched(); len(published) != 0 {
+		t.Fatalf("%d tasks no runner may be handed were published", len(published))
+	}
+	var failed, other int
+	if err := conn.QueryRow(t.Context(), `
+		select count(*) filter (where state = 'failed' and exit_code = 125),
+		       count(*) filter (where not (state = 'failed' and exit_code = 125))
+		from tasks where run_id = $1 and step = 'normalize'`, decidedRun).Scan(&failed, &other); err != nil {
+		t.Fatal(err)
+	}
+	if failed != len(orders) || other != 0 {
+		t.Errorf("after one pass %d shards failed on the pool and %d did not", failed, other)
+	}
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Errorf("the run is %s", got)
 	}
 }
 
