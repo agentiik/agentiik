@@ -301,7 +301,7 @@ func TestAFullHostTakesNothingAndAFreedSlotTakesOne(t *testing.T) {
 		served <- Serve(ctx, Agent{
 			Config: Config{
 				API: in.url, Runner: in.runner, Pool: in.poolName, Concurrency: 1,
-				WorkDir: c.root, Credential: in.credential, Labels: []string{"zone=dmz"},
+				WorkDir: c.root, Credential: in.credential, Labels: []string{"pool=" + in.poolName, "zone=dmz"},
 			},
 			Driver: c.carrier.Driver.(*driver.Docker), Client: client, Endings: c.carrier.Endings,
 			Log: func(s string) { logged.Lock(); log.WriteString(s + "\n"); logged.Unlock() },

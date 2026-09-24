@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,16 +24,17 @@ import (
 //
 //	the record holds the key's ending   Bus.Ended, with that ending, and nothing redeemed
 //	the record holds the key in flight  nothing, and the message comes round after AckWait
-//	the key could not be written down   Again, for another runner of the pool
+//	the key could not be written down   AgainAfter, for another runner of the pool
+//	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
 //	200                                 Held, then assemble, run and report
-//	403                                 Release and Again, for another runner of the pool
+//	403                                 Release and AgainAfter, for another runner of the pool
 //	409                                 Refused and Release, and nothing reported
 //	422, or a 200 it cannot run on      report that no container ran, then Refused and Release
 //	no answer, a 401 or another 5xx     keep the key and redeem again until the deadline, then
 //	                                    report timed_out with no container ran, Refused, Release
 //
-// Nothing is put back once a redemption may have bound the task: Again comes only before the
-// redemption and after a 403, which binds nothing.
+// Nothing is put back once a redemption may have bound the task: a message is put back only before
+// the redemption and after a 403, which binds nothing, and held back a moment from every runner.
 
 // Queue is the task bus as the loop uses it, which is bus.Bus.
 type Queue interface {
@@ -60,6 +62,12 @@ type Loop struct {
 	// Concurrency is how many tasks this host holds at once, AGK_RUNNER_CONCURRENCY.
 	Concurrency int
 
+	// Labels are the labels this runner claims, AGK_RUNNER_LABELS, which its join token allowed.
+	// A task whose runs_on names a label outside them is put back before anything is written
+	// down: a token may allow fewer labels than its pool carries, so a runner of the pool a task
+	// was published to is not for that reason a runner the task may run on.
+	Labels []string
+
 	Queue    Queue
 	Redeemer Redeemer
 	Holder   Holder
@@ -78,16 +86,18 @@ type Loop struct {
 	// Log is where the agent writes a line.
 	Log func(string)
 
-	// Wait is how long one take waits for work, and Retry the first wait before asking again
-	// after an answer that may change. Zero is takeWait and retryFirst.
+	// Wait is how long one take waits for work. Retry is the first wait before asking again after
+	// an answer that may change, and how long a message put back is held back and the loop takes
+	// nothing more. Zero is takeWait and retryFirst.
 	Wait  time.Duration
 	Retry time.Duration
 
 	// Now is the clock the deadlines are read against. Nil is the time of day.
 	Now func() time.Time
 
-	mu   sync.Mutex
-	held map[string]int
+	mu    sync.Mutex
+	held  map[string]int
+	quiet time.Time
 }
 
 const (
@@ -190,6 +200,11 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	backoff := l.retryFirst()
 	for {
+		// A message was just put back, and the next ones on the queue are likely to be
+		// refused the same way.
+		if d := l.quietFor(); d > 0 && !sleep(ctx, d) {
+			return nil
+		}
 		select {
 		case slots <- struct{}{}:
 		case <-ctx.Done():
@@ -286,6 +301,14 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back, since its key could not be written down: %s", m.TaskID, m.IdempotencyKey, err))
 		return
 	}
+	// After the record, which answers a key this host ended or still has in flight whatever it
+	// claims now, and before anything is redeemed. What Hold wrote down is let go of, and the
+	// record keeps the key only as taken, which refuses nothing when the message comes round.
+	if missing := uncovered(m.RunsOn, l.Labels); len(missing) > 0 {
+		l.Holder.Release(id)
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since it runs on %s and this runner does not claim it", m.TaskID, m.IdempotencyKey, strings.Join(missing, ", ")))
+		return
+	}
 	l.holding(m.IdempotencyKey)
 	defer l.letGo(m.IdempotencyKey)
 
@@ -314,24 +337,47 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 	default:
 		// Asked again until the deadline, when the grant expired with it and no answer
 		// can come.
-		l.say(fmt.Sprintf("task %s (%s) is reported timed_out, since its deadline passed before its grant was redeemed: %s", m.TaskID, m.IdempotencyKey, err))
+		l.say(fmt.Sprintf("task %s (%s) is reported timed_out, since its deadline %q passed, or does not read as an instant, before its grant was redeemed: %s", m.TaskID, m.IdempotencyKey, m.Deadline, err))
 		l.reportThenRefuse(ctx, t, timedOut(m, l.Runner))
 		l.Holder.Release(id)
 	}
 }
 
+// uncovered are the labels a task runs on that a runner does not claim.
+func uncovered(runsOn, claimed []string) []string {
+	var missing []string
+	for _, label := range runsOn {
+		if !slices.Contains(claimed, label) {
+			missing = append(missing, label)
+		}
+	}
+	return missing
+}
+
 // putBack puts a message back for another runner of the pool, held back a moment from every
-// runner.
+// runner, and keeps this loop from taking anything more for as long.
 //
-// This runner would be refused the same message again for the same reason: its credential
-// draining, its disk full. Put back at once, the message would come straight back to its next free
-// slot, and a pool with no other runner would spin on it, writing a key down and redeeming a grant
-// as fast as the API answers.
+// This runner would be refused the same message again for the same reason, and likely the next
+// ones too: its credential draining, its disk full, labels it does not claim. Put back at once, the
+// message would come straight back to its next free slot, and freed at once, the slot would take
+// the next message on the queue to be refused in its turn, so a pool with no other runner would
+// spin through its queue, writing keys down and redeeming grants as fast as the API answers. Held
+// back and paused, a runner refused everything asks for at most its free slots every Retry.
 func (l *Loop) putBack(t bus.Taken, why string) {
 	l.say(why)
 	if err := t.AgainAfter(l.retryFirst()); err != nil {
 		l.say(err.Error())
 	}
+	l.mu.Lock()
+	l.quiet = l.now().Add(l.retryFirst())
+	l.mu.Unlock()
+}
+
+// quietFor is how long the loop takes nothing more, after a message was put back.
+func (l *Loop) quietFor() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.quiet.Sub(l.now())
 }
 
 // redeem redeems a task's grant, and asks again, as the holder it may already be, for as long as

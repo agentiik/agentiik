@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,7 +85,7 @@ func aPoolOnTheBus(t *testing.T, ackWait time.Duration) *aPool {
 // publish puts a task message on the pool's queue, as the controller does.
 func (p *aPool) publish(t *testing.T, m bus.TaskMessage) {
 	t.Helper()
-	m.RunsOn = []string{"pool=" + p.name}
+	m.RunsOn = append([]string{"pool=" + p.name}, m.RunsOn...)
 	if err := p.control.Publish(t.Context(), m); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,7 @@ func aLoop(t *testing.T, c *carrying, p *aPool, api *anAPI) *looping {
 	l := &looping{
 		carrying: c, pool: p, queue: q, progress: pr,
 		loop: &Loop{
-			Runner: "runner-dmz-02", Pool: p.name, Concurrency: 2,
+			Runner: "runner-dmz-02", Pool: p.name, Concurrency: 2, Labels: []string{"pool=" + p.name, "zone=dmz"},
 			Queue: q, Holder: c.carrier.Driver.(*driver.Docker), Carrier: c.carrier,
 			Assembly: Assembly{WorkRoot: c.root},
 			Progress: progress,
@@ -285,11 +286,12 @@ func (l *looping) containersOf(key string) int {
 
 // Each answer a redemption can get leads to what the page's table names, read on the pool's
 // consumer: a message acknowledged is one the bus will never hand out again, and one put back is
-// handed out again at once.
+// handed out again once its hold-back has passed.
 func TestEachRedemptionAnswerLeadsToTheBusActionTheTableNames(t *testing.T) {
 	type outcome struct {
 		// acknowledged says the message is off the queue, put back that it is handed out
-		// again at once; neither is a message left to come round after AckWait.
+		// again once its hold-back has passed; neither is a message left to come round after
+		// AckWait.
 		acknowledged, putBack bool
 		// state is the one result reported, or TaskPending for none.
 		state      agk.TaskState
@@ -364,7 +366,7 @@ func TestEachRedemptionAnswerLeadsToTheBusActionTheTableNames(t *testing.T) {
 			case row.want.putBack:
 				again, ok := l.pool.take(t, time.Second)
 				if !ok || again.Task.TaskID != m.TaskID {
-					t.Errorf("the message put back was not handed out again at once: %d waiting and %d unacknowledged", waiting, unacknowledged)
+					t.Errorf("the message put back was not handed out again once its hold-back had passed: %d waiting and %d unacknowledged", waiting, unacknowledged)
 				}
 			}
 			results := l.bus.all()
@@ -437,9 +439,10 @@ func TestAHostWithRoomForSeveralTakesATaskAsSoonAsItIsThere(t *testing.T) {
 	}
 }
 
-// A runner the API refuses every task, because it is draining, puts each back held back a moment,
-// and does not take it straight back into another of its free slots: a pool with no other runner
-// would otherwise spin on the message as fast as the API answers.
+// A runner the API refuses every task, because it is draining, holds each message it puts back
+// from every runner for a moment and takes nothing more meanwhile: a pool with no other runner
+// would otherwise spin through its queue as fast as the API answers, one freed slot taking the next
+// message to be refused as soon as the last was put back.
 func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
 	api := anAPIAnswering(t, func(int, string) (int, any) {
 		return http.StatusForbidden, refusedWith("this runner is draining and takes nothing new")
@@ -447,18 +450,61 @@ func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
 	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
 	l.loop.Concurrency, l.loop.Retry = 4, 500*time.Millisecond
 	l.loop.Log = nil
-	m, _ := l.task(t, nil)
+	var tasks []bus.TaskMessage
+	for i := range 12 {
+		m, _ := l.task(t, func(m *bus.TaskMessage) {
+			m.Step = fmt.Sprintf("invoice-%d", i)
+			m.IdempotencyKey = string(storeRun) + "/" + m.Step + "/1"
+		})
+		tasks = append(tasks, m)
+	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := l.loop.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := l.api.redemptions(m.TaskID); n < 2 || n > 6 {
-		t.Errorf("in two seconds the grant was redeemed %d times, where holding each put back for half a second allows four or five, however many slots are free", n)
+	redeemed := 0
+	for _, m := range tasks {
+		redeemed += l.api.redemptions(m.TaskID)
+		if n := l.containersOf(m.IdempotencyKey); n != 0 {
+			t.Errorf("%d containers were created for a task every redemption refused", n)
+		}
 	}
-	if n := l.containersOf(m.IdempotencyKey); n != 0 {
-		t.Errorf("%d containers were created for a task every redemption refused", n)
+	// Four slots every half second is four takes of four, and a little over for the take
+	// under way as the first message was put back.
+	if redeemed < 4 || redeemed > 24 {
+		t.Errorf("in two seconds four slots redeemed %d grants, where pausing half a second after each put back allows about sixteen", redeemed)
+	}
+}
+
+// A join token may allow fewer labels than its pool carries, so a runner of the pool a task went to
+// may still not claim every label the task runs on. It puts such a task back for another runner of
+// the pool before it redeems anything, and holds nothing of its key.
+func TestATaskOnALabelThisRunnerDoesNotClaimIsPutBackUnredeemed(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	m, _ := l.task(t, func(m *bus.TaskMessage) { m.RunsOn = []string{"zone=dmz", "gpu=true"} })
+
+	l.carryOne(t)
+
+	again, ok := l.pool.take(t, 3*time.Second)
+	if !ok || again.Task.TaskID != m.TaskID {
+		t.Fatal("the task was not put back for another runner of the pool")
+	}
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("the grant of a task this runner may not run was redeemed %d times", n)
+	}
+	if held := l.loop.Held(); len(held) != 0 {
+		t.Errorf("the loop names %v for a task it put back", held)
+	}
+	if err := l.loop.Holder.Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
+		t.Errorf("the key cannot be written down again once its task was put back: %s", err)
+	}
+	if len(l.bus.all()) != 0 {
+		t.Errorf("a task put back was reported: %+v", l.bus.all())
 	}
 }
 
@@ -504,6 +550,63 @@ func TestAMessageWhoseDeadlinePassesDuringRedemptionIsReportedTimedOut(t *testin
 	}
 	if n := l.containersOf(m.IdempotencyKey); n != 0 {
 		t.Errorf("%d containers were created for a task whose grant never redeemed", n)
+	}
+}
+
+// A fetch that fails after a 200 is tried again with the same redemption, whose URLs hold until the
+// deadline, and a fetch still failing when the deadline passes is reported timed_out with no
+// container ran. The message was acknowledged at the redemption, and nothing puts it back.
+func TestAFetchThatFailsIsTriedAgainUntilTheDeadline(t *testing.T) {
+	var fetched atomic.Int32
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetched.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(store.Close)
+	var r atomic.Pointer[Redemption]
+	api := anAPIAnswering(t, func(int, string) (int, any) { return http.StatusOK, r.Load() })
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	m, redemption := l.task(t, func(m *bus.TaskMessage) {
+		m.Deadline = time.Now().Add(1500 * time.Millisecond).UTC().Format(time.RFC3339Nano)
+	})
+	redemption.Tree[0].URL = store.URL + "/objects/finance/sha256/" + redemption.Tree[0].SHA256
+	r.Store(&redemption)
+
+	l.carryOne(t)
+
+	if n := fetched.Load(); n < 2 {
+		t.Errorf("the tree was fetched %d times before the deadline", n)
+	}
+	if n := l.api.redemptions(m.TaskID); n != 1 {
+		t.Errorf("the grant was redeemed %d times, and a fetch is tried again with the same redemption", n)
+	}
+	results := l.bus.all()
+	if len(results) != 1 || results[0].State != agk.TaskTimedOut || !results[0].StartedAt.IsZero() {
+		t.Fatalf("the results reported are %+v, want one timed_out that reached no container", results)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting+unacknowledged != 0 {
+		t.Errorf("the message is still on the queue: %d waiting and %d unacknowledged", waiting, unacknowledged)
+	}
+}
+
+// A runner that speaks first, reporting that no container ran, acknowledges the message only once
+// the report is out. One the bus did not take is kept for a later flush, and the message is left to
+// come round, so a runner that dies meanwhile leaves it to the next runner of the pool.
+func TestAMessageIsAcknowledgedOnlyOnceItsReportIsOut(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusUnprocessableEntity, refusedWith("the namespace declares no secret billing")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.bus.refuse = errors.New("the bus is not answering")
+	l.task(t, nil)
+
+	l.carryOne(t)
+
+	if waiting, unacknowledged := l.pool.outstanding(t); unacknowledged != 1 || waiting != 0 {
+		t.Errorf("a message whose report the bus did not take reads %d waiting and %d unacknowledged, want it handed out and not acknowledged", waiting, unacknowledged)
+	}
+	if kept := l.carrier.Results.Keys(); len(kept) != 1 {
+		t.Errorf("the report the bus did not take is not kept for a later flush: %v", kept)
 	}
 }
 
@@ -582,8 +685,9 @@ func TestARedeliveredMessageNeverStartsASecondContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if holder.inFlight.Load() == 0 {
-		t.Fatal("no delivery was refused as one in flight, so nothing here tested a redelivery")
+	// Left for AckWait each time, and not put back to come straight round again.
+	if n := holder.inFlight.Load(); n == 0 || n > 4 {
+		t.Fatalf("%d deliveries were refused as in flight, where AckWait brings the message round about three times while its first delivery redeems", n)
 	}
 	if n := l.containersOf(m.IdempotencyKey); n != 1 {
 		t.Errorf("%d containers were created for a key delivered more than once", n)

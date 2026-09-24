@@ -82,13 +82,17 @@ func Serve(ctx context.Context, a Agent) error {
 	}
 	defer b.Close()
 
-	// A result an earlier agent kept is published before anything new is taken, by the loop's
-	// first flush. One that could not be read back is said, and does not stop the rest.
+	// A result an earlier agent kept is published before anything new is taken, and one the bus
+	// does not take now goes out with the loop's later flushes. One that could not be read back
+	// is said, and does not stop the rest.
 	results, err := OpenResults(a.Config.WorkDir, a.Config.Runner, b)
 	if results == nil {
 		return err
 	}
 	if err != nil {
+		say(err.Error())
+	}
+	if err := results.Flush(ctx); err != nil && ctx.Err() == nil {
 		say(err.Error())
 	}
 
@@ -103,7 +107,7 @@ func Serve(ctx context.Context, a Agent) error {
 	}()
 
 	loop := &Loop{
-		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency,
+		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
 		Queue: b, Redeemer: a.Client, Holder: a.Driver,
 		Carrier: &Carrier{
 			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
