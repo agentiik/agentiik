@@ -1492,7 +1492,7 @@
         },
         "response": {
           "title": "Heartbeat response",
-          "description": "What the API answers, and the only way an order reaches a runner. Every arrow in this architecture starts at the runner or at the controller: a runner opens no listening port and is never connected to, so there is nothing to push an instruction down. Anything the installation wants a runner to do therefore waits for its next heartbeat, which fixes the worst case at one interval, ten seconds, and is the price of a runner that is a firewall rule rather than a project.",
+          "description": "What the API answers, and the one channel every order is sure to reach a runner on. Every arrow in this architecture starts at the runner or at the controller: a runner opens no listening port and is never connected to, so there is nothing to push an instruction down. Anything the installation wants a runner to do is therefore said here at its next heartbeat, which fixes the worst case at one interval, ten seconds, and is the price of a runner that is a firewall rule rather than a project. A stop is the one order that can arrive sooner, on agentiik.stops, which a runner hears over the bus connection it opened itself; that subject keeps nothing, so cancel repeats it here.",
           "type": "object",
           "required": [
             "received_at",
@@ -1563,7 +1563,7 @@
             },
             "cancel": {
               "title": "Tasks to stop",
-              "description": "The keys the runner is to stop now, by sending the container SIGTERM and then SIGKILL after the grace period the runner policy sets. Cancelling a run sends SIGTERM to running containers, and this is where that reaches the host, since nothing ever connects inbound to a runner and the heartbeat is its only periodic exchange with the API. The same list carries a task the control plane has already given up on: a key declared lost and requeued elsewhere is one this runner should no longer be working on. Only keys the request listed ever appear here, so a runner is never asked about work it does not have. It is always present and usually empty, so that a runner reads a list rather than testing whether a field arrived.",
+              "description": "The keys the runner is to stop now, by sending the container SIGTERM and then SIGKILL after the grace period the runner policy sets. A key is here when the dispatch of it bound to this runner has been ended cancelled or timed_out by the control plane. The same stop goes out first on agentiik.stops, which keeps nothing, so this list is the backstop: a runner that was disconnected when the stop went out hears it within one interval rather than running the container to its deadline, since nothing ever connects inbound to a runner and the heartbeat is its only periodic exchange with the API. A lost dispatch is never here: a host that was only cut off finishes its key, and the ending it records is what answers a requeue that comes back to it, so stopping it would throw away work the requeue is waiting for. Only keys the request listed ever appear here, so a runner is never asked about work it does not have. It is always present and usually empty, so that a runner reads a list rather than testing whether a field arrived.",
               "type": "array",
               "uniqueItems": true,
               "items": {
@@ -2707,6 +2707,51 @@
             "issued_at": "2026-09-10T06:12:00Z",
             "expires_at": "2026-09-10T07:12:00Z"
           }
+        }
+      ]
+    },
+    "stop": {
+      "title": "Stop",
+      "description": "What the controller publishes on agentiik.stops to have a task in flight stopped: the key, and why. A stop is not work, so it never goes on the task queue, where the runner holding the task is not looking and a runner with room would take it as a task. It goes out on one plain subject that every runner hears over its own bus connection, and the runner holding the key sends its container SIGTERM and then SIGKILL after the grace its runner policy sets, while every other runner has nothing to do. The subject keeps nothing, so a runner that was disconnected when a stop went out never hears it there: the heartbeat's cancel list is the backstop and carries the same meaning. Like the task message, a stop carries no payload and no secret, and the object is closed so that it cannot come to.",
+      "type": "object",
+      "required": [
+        "task",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/idempotencyKey",
+          "description": "The key of the task to stop, run_id/step/attempt/shard. The key rather than the task_id because it is what the runner keys its own record on and what its heartbeat lists, so the holder recognises it without a lookup, and a requeue keeps the key, so a stop reaches whichever dispatch of it is running on the host that holds it.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8"
+          ]
+        },
+        "reason": {
+          "title": "Stop reason",
+          "description": "Why the task is being stopped, one of the four rules that call off work already running. superseded: a merge: first lifted its barrier on another edge and nobody else needs what this task would publish. sibling_failed: fail_fast, where the first shard to fail stops the shards still running beside it. deadline: the root timeout of the run passed. cancelled: somebody holding workflow:run cancelled the run, or a concurrency group did. The reason decides what the stopped task becomes, timed_out for deadline and cancelled for the other three, which is why it travels as a closed enumeration rather than free text: a runner reads it, and a reason it cannot read is one it would have to guess about. It is not a task state, and timed_out and lost are not reasons: a loss is never stopped, since a host that was only cut off finishes its key.",
+          "type": "string",
+          "enum": [
+            "superseded",
+            "sibling_failed",
+            "deadline",
+            "cancelled"
+          ],
+          "examples": [
+            "cancelled",
+            "deadline"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "reason": "cancelled"
+        },
+        {
+          "task": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "reason": "sibling_failed"
         }
       ]
     },

@@ -154,6 +154,13 @@ func RunnerRegistrations() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.RunnerRegistration })
 }
 
+// RunnerHeartbeats returns the heartbeat corpus: what a runner says every ten seconds, and what the
+// API answers, each document the pair, since every order the answer carries is about the keys the
+// request listed.
+func RunnerHeartbeats() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.RunnerHeartbeat })
+}
+
 // Wire is the schema document every message above is held to.
 func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 
