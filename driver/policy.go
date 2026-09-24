@@ -1,18 +1,29 @@
 package driver
 
 import (
-	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // PolicyPath is the file an operator writes a runner's settings in. The documentation
-// names it for one setting and one reason: require_userns_remap "is a line in
-// /etc/agentiik/runner.toml and not a command line flag, so the decision survives in
-// something reviewable rather than in somebody's shell history".
+// names it for the floor and gives the reason every other setting shares with it:
+// require_userns_remap "is a line in /etc/agentiik/runner.toml and not a command line
+// flag, so the decision survives in something reviewable rather than in somebody's shell
+// history".
 const PolicyPath = "/etc/agentiik/runner.toml"
 
 // UsernsFloor says whether a daemon without user namespace remapping is refused.
@@ -48,19 +59,33 @@ func (u UsernsFloor) String() string {
 // question being asked there, which is not the same question the field name asks.
 func (u UsernsFloor) Lifted() bool { return u == RemapLifted }
 
-// ParseUsernsFloor reads the value of require_userns_remap. TOML has one spelling of a
-// boolean, lowercase, and anything else is refused naming the key rather than defaulted,
-// because defaulting a value somebody meant to set is how a floor gets lifted by a typo.
-func ParseUsernsFloor(s string) (UsernsFloor, error) {
-	switch s {
-	case "true":
-		return RemapRequired, nil
-	case "false":
-		return RemapLifted, nil
-	default:
-		return RemapRequired, fmt.Errorf("require_userns_remap is %q in %s: it is written true or false", s, PolicyPath)
-	}
-}
+// SeccompFloor says whether a daemon that filters no system call is refused.
+//
+// It is an enumeration for the reason UsernsFloor is one: its zero value is the floor in
+// place, so a Policy nobody filled in refuses a daemon that would run every container with
+// the whole system call table open. The SecurityOpt row promises "the default seccomp
+// profile", and a daemon built without seccomp, or started with
+// --seccomp-profile=unconfined, applies none.
+//
+// Unlike the userns floor, no line of runner.toml lifts it. Docker's packages build
+// seccomp in and every mainstream kernel offers it, so a daemon without it is one somebody
+// switched off, which makes it a daemon to fix rather than one to configure around, and a
+// runner holds the floor whatever its file says. The callers that are not runners lift
+// it, agk run --local first among them, and the driver then says what the machine gives
+// up instead of refusing it.
+type SeccompFloor int
+
+const (
+	// SeccompRequired refuses a daemon that applies no seccomp profile. It is the zero
+	// value, so a Policy{} is a runner's and not a laptop's.
+	SeccompRequired SeccompFloor = iota
+
+	// SeccompLifted takes work on such a daemon, and the driver says so once.
+	SeccompLifted
+)
+
+// Lifted says whether the refusal has been lifted.
+func (s SeccompFloor) Lifted() bool { return s == SeccompLifted }
 
 // Ulimit is one soft and hard pair, as the daemon's Ulimits carry them.
 type Ulimit struct {
@@ -81,13 +106,16 @@ type Ulimits struct {
 // partly in values a step asks for and partly in values the runner sets, and this is the
 // second half.
 //
-// Its zero value is the floor in place and nothing else configured, which is what lets a
-// caller with no /etc/agentiik/runner.toml pass Policy{} and still be refused on a daemon
-// with no remapping. DefaultPolicy fills in the rest.
+// Its zero value is both floors in place and nothing else configured, which is what lets
+// a caller with no /etc/agentiik/runner.toml pass Policy{} and still be refused on a
+// daemon with no remapping or no seccomp. DefaultPolicy fills in the rest.
 type Policy struct {
 	// RequireUsernsRemap is the floor. It carries the file's own spelling so that
 	// the setting and the field read alike.
 	RequireUsernsRemap UsernsFloor
+
+	// RequireSeccomp is the seccomp floor, which no key of the file sets.
+	RequireSeccomp SeccompFloor
 
 	// StopGrace is the t of the daemon's own stop, the wait between SIGTERM and
 	// SIGKILL. The escalation belongs to the daemon rather than to a timer here, so
@@ -98,7 +126,9 @@ type Policy struct {
 	// the ceiling where it says more. The documentation's default is 256.
 	PidsLimit int64
 
-	// Ulimits are nofile and nproc, applied to every container.
+	// Ulimits are nofile and nproc, applied to every container. A file that sets
+	// pids_limit and no nproc moves nproc with it, for the reason DefaultPolicy gives
+	// the two one number.
 	Ulimits Ulimits
 
 	// MemoryCap and CPUCap are the runner's half of "capped by the runner policy and
@@ -138,6 +168,12 @@ type Policy struct {
 	// "the default seccomp profile, and an AppArmor profile or SELinux label
 	// depending on the host". Each is empty by default, which leaves the daemon its
 	// own defaults; naming one here replaces them.
+	//
+	// Seccomp is the profile itself, its JSON, and not the path of a file holding it,
+	// because that is what the Engine API takes. seccomp=<path> is a convenience of the
+	// docker command, which reads the file and sends what is in it; a daemon handed the
+	// path decodes the path as a profile and refuses to start any container carrying
+	// it. LoadPolicy reads the file seccomp_profile names and keeps what it holds.
 	Seccomp      string
 	AppArmor     string
 	SELinuxLabel string
@@ -159,14 +195,22 @@ type Policy struct {
 	// fact about the host and not about a workflow, and empty is a runner that has
 	// none to offer, which binds nothing.
 	Helper string
+
+	// HooksSkipped says the file carries a [hooks] table, which this version reads
+	// past and runs none of: the hooks of #runner-side-hooks arrive in v0.9.0. It is
+	// kept so that the driver can say so once, because an operator who wrote a pre_task
+	// that attaches a licence, or a post_task that wipes a scratch disk, is relying on
+	// it having run.
+	HooksSkipped bool
 }
 
-// DefaultPolicy is the runner as it is installed: the floor in place, the documented
+// DefaultPolicy is the runner as it is installed: both floors in place, the documented
 // pids default, and modest ceilings for the settings the documentation leaves to the
 // runner.
 func DefaultPolicy() Policy {
 	return Policy{
 		RequireUsernsRemap: RemapRequired,
+		RequireSeccomp:     SeccompRequired,
 
 		// The daemon's own default for POST /containers/{id}/stop. Taking a
 		// different number here would make the driver's grace and the grace of a
@@ -220,74 +264,493 @@ func defaultSecretsDir() string {
 
 // LoadPolicy reads the runner's configuration file.
 //
-// It reads the keys this package owns and ignores every other key and every table it
-// does not know, which is the permissive reading the file demands: the same file carries
-// the runner's own settings and will carry a [hooks] block, and a driver that refused
-// what it did not recognise would refuse a file a later version wrote.
+// Every setting an operator owns about the machine is a key of it, and the reading is
+// strict: a key this runner does not read is refused naming its line, and so is a value of
+// the wrong type or outside what its setting allows. The file belongs to one host and is
+// read at every start, and the permissive reading would buy nothing there but a
+// misspelled pids_limt that leaves the default in force without a word. A key is also
+// held to its exact spelling, because the decoder matches a key to a setting without
+// regard to case and Require_Userns_Remap would otherwise lift the floor under a name the
+// documentation never wrote.
 //
-// There is no TOML dependency behind it. One boolean is the whole of what this package
-// owns in that file today, and a parser for the rest belongs where the rest is read. When
-// the runner takes one, this moves behind it and its behaviour does not change.
+// The one table read past is [hooks]. The hooks of #runner-side-hooks arrive in v0.9.0,
+// and a file already written for them is not refused by the version before them;
+// HooksSkipped says it was there, so that the driver can say none of it runs.
+//
+// A key the file leaves out keeps its value from DefaultPolicy, and require_userns_remap
+// in particular keeps the floor: an absent line is not a decision.
 //
 // A missing file is returned as the error it is, wrapping fs.ErrNotExist, so that a
 // caller can tell "there is no file" from "the file says something I cannot read" and
 // fall back to DefaultPolicy for the first only. Reading a floor out of a file that is
-// not there would be the one mistake this whole shape exists to prevent.
+// not there would be the one mistake this whole shape exists to prevent. Every refusal
+// comes back with DefaultPolicy beside it, so a caller that drops the error still holds
+// the floor.
 func LoadPolicy(path string) (Policy, error) {
-	f, err := os.Open(path)
+	text, err := os.ReadFile(path)
 	if err != nil {
 		return DefaultPolicy(), err
 	}
-	defer f.Close()
+	p, err := readPolicy(path, text)
+	if err != nil {
+		return DefaultPolicy(), err
+	}
+	return p, nil
+}
+
+// readPolicy reads one file's text in three passes, each answering one question.
+//
+// The first reads the document and nothing else, so that a line that is not TOML is
+// refused in TOML's own words and the other two passes can take a document as given. The
+// second is strict and knows where things are: a key no setting has, and a value of the
+// wrong type, each come back with the line they are on. The third holds every key to its
+// spelling, which the second does not do.
+func readPolicy(path string, text []byte) (Policy, error) {
+	var raw map[string]any
+	if err := toml.Unmarshal(text, &raw); err != nil {
+		return Policy{}, notTOML(path, err)
+	}
+
+	var f runnerFile
+	d := toml.NewDecoder(bytes.NewReader(text))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&f); err != nil {
+		return Policy{}, misshapen(path, err)
+	}
+
+	if err := exactKeys(path, raw, ""); err != nil {
+		return Policy{}, err
+	}
 
 	p := DefaultPolicy()
 	// What was read, so that a message about a setting can name where the setting is
 	// written rather than where it would be written if anybody had read anything.
 	p.Source = path
-	s := bufio.NewScanner(f)
-	line := 0
-	// A key belongs to the table it is written under. Only the root table is read,
-	// because require_userns_remap is written at the top of the file and a
-	// require_userns_remap under [hooks] would be a different setting with the same
-	// name.
-	root := true
-	for s.Scan() {
-		line++
-		text := strings.TrimSpace(s.Text())
-		if text == "" || strings.HasPrefix(text, "#") {
-			continue
-		}
-		if strings.HasPrefix(text, "[") {
-			root = false
-			continue
-		}
-		key, value, ok := strings.Cut(text, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		if !root || key != "require_userns_remap" {
-			continue
-		}
-		floor, err := ParseUsernsFloor(bareValue(value))
-		if err != nil {
-			return DefaultPolicy(), fmt.Errorf("%s line %d: %w", path, line, err)
-		}
-		p.RequireUsernsRemap = floor
+	if err := f.apply(path, &p); err != nil {
+		return Policy{}, err
 	}
-	if err := s.Err(); err != nil {
-		return DefaultPolicy(), fmt.Errorf("%s: %w", path, err)
-	}
+	// Read off the document rather than the struct: an empty [hooks] decodes into
+	// nothing, and it is still a table somebody wrote.
+	_, p.HooksSkipped = raw["hooks"]
 	return p, nil
 }
 
-// bareValue takes the value off a key line: the first word, with a trailing comment
-// dropped. A boolean is one word, so this is the whole of what reading one needs, and it
-// does not pretend to read a quoted string or an array.
-func bareValue(v string) string {
-	v = strings.TrimSpace(v)
-	if i := strings.IndexAny(v, " \t#"); i >= 0 {
-		v = v[:i]
+// runnerFile is runner.toml as it is written, one field per key.
+//
+// Every field is a pointer so that a key the file leaves out keeps its default rather than
+// taking the zero value of its type. An absent require_userns_remap would otherwise read
+// as false, which is the floor lifted by a line nobody wrote.
+type runnerFile struct {
+	RequireUsernsRemap *bool        `toml:"require_userns_remap"`
+	SecretsDir         *string      `toml:"secrets_dir"`
+	StopGrace          *string      `toml:"stop_grace"`
+	Helper             *string      `toml:"helper"`
+	SeccompProfile     *string      `toml:"seccomp_profile"`
+	AppArmorProfile    *string      `toml:"apparmor_profile"`
+	SELinuxLabel       *string      `toml:"selinux_label"`
+	AllowCapAdd        *[]string    `toml:"allow_cap_add"`
+	PidsLimit          *int64       `toml:"pids_limit"`
+	MemoryCap          *string      `toml:"memory_cap"`
+	CPUCap             *string      `toml:"cpu_cap"`
+	TmpSize            *string      `toml:"tmp_size"`
+	LogMaxBytes        *int64       `toml:"log_max_bytes"`
+	LogMaxLines        *int64       `toml:"log_max_lines"`
+	Ulimits            *fileUlimits `toml:"ulimits"`
+
+	// Hooks is declared so that the strict pass takes [hooks] as a table rather than
+	// as keys nobody declared, and still refuses hooks = 3 as the wrong type. What is
+	// in it is not read.
+	Hooks map[string]any `toml:"hooks"`
+}
+
+type fileUlimits struct {
+	NoFile *fileUlimit `toml:"nofile"`
+	NProc  *fileUlimit `toml:"nproc"`
+}
+
+type fileUlimit struct {
+	Soft *int64 `toml:"soft"`
+	Hard *int64 `toml:"hard"`
+}
+
+// fileKeys is every key of runner.toml, dotted where it sits in a table, with how its
+// value is written.
+//
+// The description is what a refusal says. A value of the wrong type is answered with the
+// type it should have had, in the file's own terms, rather than with the Go type the
+// decoder failed to put it in, which is a fact about this package that the person editing
+// the file has no use for.
+var fileKeys = map[string]string{
+	"require_userns_remap": "true or false",
+	"secrets_dir":          `an absolute path in quotation marks, such as "/dev/shm"`,
+	"stop_grace":           `a whole number of seconds written as a duration in quotation marks, such as "10s"`,
+	"helper":               `an absolute path in quotation marks, such as "/usr/local/lib/agentiik/agk-helper"`,
+	"seccomp_profile":      `the absolute path of a JSON seccomp profile in quotation marks, such as "/etc/agentiik/seccomp.json"`,
+	"apparmor_profile":     `the name of an AppArmor profile loaded on the host, in quotation marks, such as "agentiik-brick"`,
+	"selinux_label":        `one SELinux label option in quotation marks, user, role, type, level or filetype, a colon and a value, such as "level:s0:c100,c200"`,
+	"allow_cap_add":        `a list of capability names in capitals and without the CAP_ prefix, such as ["NET_BIND_SERVICE"]`,
+	"pids_limit":           "a whole number above zero, such as 256",
+	"memory_cap":           `a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, in quotation marks, such as "8Gi"`,
+	"cpu_cap":              `a number of cores above zero in quotation marks, such as "4" or "0.5"`,
+	"tmp_size":             `a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, in quotation marks, such as "64Mi"`,
+	"log_max_bytes":        "a whole number of bytes above zero, such as 4194304",
+	"log_max_lines":        "a whole number above zero, such as 50000",
+	"ulimits":              "a table holding nofile and nproc",
+	"ulimits.nofile":       "a table of soft and hard, such as { soft = 1024, hard = 4096 }",
+	"ulimits.nofile.soft":  "a whole number above zero",
+	"ulimits.nofile.hard":  "a whole number above zero, and no lower than soft",
+	"ulimits.nproc":        "a table of soft and hard, such as { soft = 256, hard = 256 }",
+	"ulimits.nproc.soft":   "a whole number above zero",
+	"ulimits.nproc.hard":   "a whole number above zero, and no lower than soft",
+	"hooks":                "a table, which this version reads past",
+}
+
+// keysInOrder is what a refusal of an unknown key lists, in the order the reference
+// table on the page gives them.
+const keysInOrder = "require_userns_remap, secrets_dir, stop_grace, helper, seccomp_profile, apparmor_profile, selinux_label, allow_cap_add, pids_limit, memory_cap, cpu_cap, tmp_size, log_max_bytes, log_max_lines, [ulimits] with nofile and nproc, each a table of soft and hard, and [hooks]"
+
+// notTOML refuses a file the first pass could not read as a document at all.
+func notTOML(path string, err error) error {
+	var de *toml.DecodeError
+	if errors.As(err, &de) {
+		line, _ := de.Position()
+		return fmt.Errorf("%s line %d is not TOML: %s", path, line, strings.TrimPrefix(de.Error(), "toml: "))
 	}
-	return v
+	return fmt.Errorf("%s is not TOML: %w", path, err)
+}
+
+// misshapen refuses what the strict pass found: keys no setting has, or a value of the
+// wrong type, each with its line.
+func misshapen(path string, err error) error {
+	var missing *toml.StrictMissingError
+	if errors.As(err, &missing) {
+		var unknown []string
+		for _, e := range missing.Errors {
+			line, _ := e.Position()
+			unknown = append(unknown, fmt.Sprintf("%s on line %d", strings.Join(e.Key(), "."), line))
+		}
+		verb := "is not a setting"
+		if len(unknown) > 1 {
+			verb = "are not settings"
+		}
+		return fmt.Errorf("%s: %s %s this runner reads. A key it does not read is refused rather than ignored, because a misspelled setting would otherwise leave its default in force without a word. The settings are %s", path, andList(unknown), verb, keysInOrder)
+	}
+	var de *toml.DecodeError
+	if errors.As(err, &de) {
+		line, _ := de.Position()
+		key := strings.Join(de.Key(), ".")
+		if written, ok := fileKeys[key]; ok {
+			return fmt.Errorf("%s line %d: %s is %s", path, line, key, written)
+		}
+		return fmt.Errorf("%s line %d: %s", path, line, strings.TrimPrefix(de.Error(), "toml: "))
+	}
+	return fmt.Errorf("%s: %w", path, err)
+}
+
+// exactKeys holds every key of the document to its spelling.
+//
+// The strict pass has already refused a key that matches no setting at all, so a key that
+// fails here matches one in everything but case, and the refusal can name the spelling it
+// was meant to have. Keys are visited in order so that the same file is always refused
+// with the same sentence.
+func exactKeys(path string, raw map[string]any, table string) error {
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		dotted := key
+		if table != "" {
+			dotted = table + "." + key
+		}
+		if dotted == "hooks" {
+			continue
+		}
+		if _, ok := fileKeys[dotted]; !ok {
+			return fmt.Errorf("%s: %s is spelled %s. A key is read exactly as the documentation writes it, and one spelled otherwise is refused rather than guessed at", path, dotted, spelling(dotted))
+		}
+		if inner, ok := raw[key].(map[string]any); ok {
+			if err := exactKeys(path, inner, dotted); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// spelling is the setting a key matches in everything but case.
+func spelling(dotted string) string {
+	for key := range fileKeys {
+		if strings.EqualFold(key, dotted) {
+			return key
+		}
+	}
+	return "otherwise"
+}
+
+// andList joins a list the way a sentence does.
+func andList(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// apply lays what the file says over the defaults, holding each value to what its setting
+// allows. The type of every value was settled by the strict pass; what is checked here is
+// what a type cannot say, such as a path being absolute or a limit being above zero.
+func (f runnerFile) apply(path string, p *Policy) error {
+	refuse := func(key string, value any) error {
+		return fmt.Errorf("%s is %s in %s: it is %s", key, quoted(value), path, fileKeys[key])
+	}
+
+	if f.RequireUsernsRemap != nil {
+		p.RequireUsernsRemap = RemapRequired
+		if !*f.RequireUsernsRemap {
+			p.RequireUsernsRemap = RemapLifted
+		}
+	}
+
+	// A relative path would be read against wherever the runner happened to be started,
+	// which is a fact about a shell and not about the host.
+	for _, s := range []struct {
+		key   string
+		value *string
+		into  *string
+	}{
+		{"secrets_dir", f.SecretsDir, &p.SecretsDir},
+		{"helper", f.Helper, &p.Helper},
+	} {
+		if s.value == nil {
+			continue
+		}
+		if !filepath.IsAbs(*s.value) {
+			return refuse(s.key, *s.value)
+		}
+		*s.into = filepath.Clean(*s.value)
+	}
+
+	if f.StopGrace != nil {
+		// The daemon counts the grace in whole seconds, and a fraction would be
+		// rounded on the way, so the file is held to what is actually sent.
+		grace, err := time.ParseDuration(*f.StopGrace)
+		if err != nil || grace <= 0 || grace%time.Second != 0 {
+			return refuse("stop_grace", *f.StopGrace)
+		}
+		p.StopGrace = grace
+	}
+
+	if f.SeccompProfile != nil {
+		profile, err := seccompProfile(path, *f.SeccompProfile)
+		if err != nil {
+			return err
+		}
+		p.Seccomp = profile
+	}
+
+	if f.AppArmorProfile != nil {
+		v := *f.AppArmorProfile
+		if v == "" || strings.ContainsAny(v, " \t\n") {
+			return refuse("apparmor_profile", v)
+		}
+		// The key names what a container is confined by, and a runner offers no way to
+		// take away what the host gives. A host without AppArmor is said out loud when
+		// the daemon is opened; a host with it keeps it.
+		if v == "unconfined" {
+			return fmt.Errorf("apparmor_profile is %q in %s, which confines nothing: the key names the AppArmor profile every container is confined by, and a runner has no setting that lifts the confinement its host gives", v, path)
+		}
+		p.AppArmor = v
+	}
+
+	if f.SELinuxLabel != nil {
+		v := *f.SELinuxLabel
+		kind, value, ok := strings.Cut(v, ":")
+		if !ok || value == "" || !slices.Contains([]string{"user", "role", "type", "level", "filetype"}, kind) {
+			// disable is the one option this leaves out on purpose, for the reason
+			// apparmor_profile refuses unconfined.
+			return refuse("selinux_label", v)
+		}
+		p.SELinuxLabel = v
+	}
+
+	if f.AllowCapAdd != nil {
+		allowed := make([]string, 0, len(*f.AllowCapAdd))
+		for _, name := range *f.AllowCapAdd {
+			if err := capability(path, name); err != nil {
+				return err
+			}
+			allowed = append(allowed, name)
+		}
+		p.AllowCapAdd = allowed
+	}
+
+	if f.PidsLimit != nil {
+		if *f.PidsLimit <= 0 {
+			return refuse("pids_limit", *f.PidsLimit)
+		}
+		p.PidsLimit = *f.PidsLimit
+		// nproc says the pid ceiling's number unless the file says otherwise, for the
+		// reason DefaultPolicy gives: a process the pids cgroup will not let exist
+		// should not be one the ulimit would have allowed.
+		p.Ulimits.NProc = Ulimit{Soft: *f.PidsLimit, Hard: *f.PidsLimit}
+	}
+
+	for _, s := range []struct {
+		key   string
+		value *string
+		into  *int64
+	}{
+		{"memory_cap", f.MemoryCap, &p.MemoryCap},
+		{"tmp_size", f.TmpSize, &p.TmpSize},
+	} {
+		if s.value == nil {
+			continue
+		}
+		n, err := binarySize(*s.value)
+		if err != nil || !sizeGrammar.MatchString(*s.value) {
+			return refuse(s.key, *s.value)
+		}
+		*s.into = n
+	}
+
+	if f.CPUCap != nil {
+		cores, err := strconv.ParseFloat(*f.CPUCap, 64)
+		// The grammar is resources.cpu's, and the ceiling is what NanoCpus can count.
+		if err != nil || !coresGrammar.MatchString(*f.CPUCap) || cores > math.MaxInt64/1e9 {
+			return refuse("cpu_cap", *f.CPUCap)
+		}
+		p.CPUCap = cores
+	}
+
+	if f.LogMaxBytes != nil {
+		if *f.LogMaxBytes <= 0 {
+			return refuse("log_max_bytes", *f.LogMaxBytes)
+		}
+		p.LogMaxBytes = *f.LogMaxBytes
+	}
+	if f.LogMaxLines != nil {
+		if *f.LogMaxLines <= 0 || *f.LogMaxLines > math.MaxInt32 {
+			return refuse("log_max_lines", *f.LogMaxLines)
+		}
+		p.LogMaxLines = int(*f.LogMaxLines)
+	}
+
+	if f.Ulimits != nil {
+		for _, u := range []struct {
+			key   string
+			value *fileUlimit
+			into  *Ulimit
+		}{
+			{"ulimits.nofile", f.Ulimits.NoFile, &p.Ulimits.NoFile},
+			{"ulimits.nproc", f.Ulimits.NProc, &p.Ulimits.NProc},
+		} {
+			if u.value == nil {
+				continue
+			}
+			// Both halves, always. A soft limit alone would sit under a hard limit the
+			// file never mentioned, and the pair is what the daemon applies.
+			if u.value.Soft == nil || u.value.Hard == nil {
+				return fmt.Errorf("%s in %s writes %s, and it is %s: both halves, because the daemon applies them as one pair", u.key, path, halves(u.value), fileKeys[u.key])
+			}
+			soft, hard := *u.value.Soft, *u.value.Hard
+			if soft <= 0 {
+				return refuse(u.key+".soft", soft)
+			}
+			if hard < soft {
+				return refuse(u.key+".hard", hard)
+			}
+			*u.into = Ulimit{Soft: soft, Hard: hard}
+		}
+	}
+	return nil
+}
+
+// quoted writes a refused value the way the file writes it: a string in quotation marks
+// and a number without.
+func quoted(v any) string {
+	if s, ok := v.(string); ok {
+		return strconv.Quote(s)
+	}
+	return fmt.Sprint(v)
+}
+
+// halves says which half of a ulimit the file wrote.
+func halves(u *fileUlimit) string {
+	switch {
+	case u.Soft != nil:
+		return "soft alone"
+	case u.Hard != nil:
+		return "hard alone"
+	}
+	return "neither soft nor hard"
+}
+
+// sizeGrammar and coresGrammar are resources.memory and resources.cpu as the brick and
+// workflow schemas write them, so that a host's ceiling is spelled the way a step spells
+// what it asks for, and one reader could compare the two without converting.
+var (
+	sizeGrammar  = regexp.MustCompile(`^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$`)
+	coresGrammar = regexp.MustCompile(`^(?:[0-9]*[1-9][0-9]*(?:\.[0-9]+)?|[0-9]+\.[0-9]*[1-9][0-9]*)$`)
+)
+
+// seccompProfile reads the profile seccomp_profile names, and keeps it as the Engine API
+// takes it.
+//
+// It is read here, once, rather than at every task, so that a profile that is missing
+// or is not one refuses the start, and not every task after it. What is kept is the JSON
+// compacted, as the docker command sends it: the whitespace of a hand-formatted profile
+// is most of its bytes, and it would travel in the body of every create.
+func seccompProfile(path, file string) (string, error) {
+	if !filepath.IsAbs(file) {
+		return "", fmt.Errorf("seccomp_profile is %q in %s: it is %s", file, path, fileKeys["seccomp_profile"])
+	}
+	body, err := os.ReadFile(file)
+	if err != nil {
+		return "", fmt.Errorf("seccomp_profile in %s names %s, which could not be read: %w", path, file, err)
+	}
+	// A profile is a JSON object with a defaultAction, as the daemon's own is. Nothing
+	// more is checked, because the daemon is what reads the rest and what refuses it.
+	var profile struct {
+		DefaultAction string `json:"defaultAction"`
+	}
+	var compact bytes.Buffer
+	if json.Unmarshal(body, &profile) != nil || profile.DefaultAction == "" || json.Compact(&compact, body) != nil {
+		return "", fmt.Errorf("seccomp_profile in %s names %s, which is not a seccomp profile: a profile is a JSON object with a defaultAction, as the daemon's own is", path, file)
+	}
+	return compact.String(), nil
+}
+
+// capabilities are the Linux capabilities of capabilities(7), as the daemon's CapAdd takes
+// them: in capitals, without the CAP_ prefix.
+var capabilities = []string{
+	"CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID", "KILL", "SETGID",
+	"SETUID", "SETPCAP", "LINUX_IMMUTABLE", "NET_BIND_SERVICE", "NET_BROADCAST",
+	"NET_ADMIN", "NET_RAW", "IPC_LOCK", "IPC_OWNER", "SYS_MODULE", "SYS_RAWIO",
+	"SYS_CHROOT", "SYS_PTRACE", "SYS_PACCT", "SYS_ADMIN", "SYS_BOOT", "SYS_NICE",
+	"SYS_RESOURCE", "SYS_TIME", "SYS_TTY_CONFIG", "MKNOD", "LEASE", "AUDIT_WRITE",
+	"AUDIT_CONTROL", "SETFCAP", "MAC_OVERRIDE", "MAC_ADMIN", "SYSLOG", "WAKE_ALARM",
+	"BLOCK_SUSPEND", "AUDIT_READ", "PERFMON", "BPF", "CHECKPOINT_RESTORE",
+}
+
+// capability holds one name of allow_cap_add to the list.
+//
+// ALL is refused although CapDrop spells it: allowing every capability at once is most of
+// what Privileged is, and this product has no spelling for that. A name the daemon would
+// have taken in another case, or with the CAP_ prefix, is refused with its spelling
+// rather than folded into it, because one setting has one spelling in the file.
+func capability(path, name string) error {
+	if slices.Contains(capabilities, name) {
+		return nil
+	}
+	if strings.EqualFold(name, "ALL") {
+		return fmt.Errorf("allow_cap_add names %s in %s: a runner allows capabilities one at a time, and every capability at once is most of what Privileged is, which this product does not offer", name, path)
+	}
+	if spelled := strings.TrimPrefix(strings.ToUpper(name), "CAP_"); slices.Contains(capabilities, spelled) {
+		return fmt.Errorf("allow_cap_add names %q in %s: a capability is written as the daemon's CapAdd takes it, in capitals and without the CAP_ prefix, as %s", name, path, spelled)
+	}
+	return fmt.Errorf("allow_cap_add names %q in %s, which is not a Linux capability: the names are those of capabilities(7), in capitals and without the CAP_ prefix", name, path)
 }
