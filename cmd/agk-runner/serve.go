@@ -49,7 +49,11 @@ func serve(ctx context.Context, e env, args []string) int {
 	}
 
 	if policy.Helper == "" {
-		helper, err := layHelper(e.HelperFile, cfg.WorkDir, log)
+		host := e.Host
+		if host == nil {
+			host = driver.KernelHost()
+		}
+		helper, err := layHelper(e.HelperFile, cfg.WorkDir, host, log)
 		if err != nil {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 			return exitRefused
@@ -153,9 +157,22 @@ func loadPolicy(path string, log func(string)) (driver.Policy, error) {
 // The default is the installed helper rather than none because the page offers /agk/bin/agk to
 // every script step, and a runner that binds it only where an operator thought to write a line is
 // one whose scripts work on some hosts of a pool and say agk: not found on others. A helper that
-// runner.toml names is taken as written, since the operator who wrote it has chosen the file; in
-// the container form that is a path of the host, which the daemon resolves.
-func layHelper(installed, workDir string, log func(string)) (string, error) {
+// runner.toml names is taken as written, since the operator who wrote it has chosen the file; the
+// driver stats it in the agent's filesystem and the daemon binds it from the host's, so in the
+// container form it has to be at the same path in both.
+//
+// A work root on a filesystem mounted noexec binds none. The copy's bind carries the mount's
+// flags, so /agk/bin/agk would be a program no script may run, and every script step that called
+// it would fail on the brick's account for a choice about the host's disk.
+func layHelper(installed, workDir string, host driver.Host, log func(string)) (string, error) {
+	fs, err := host.Filesystem(workDir)
+	if err != nil {
+		return "", fmt.Errorf("%s, the work root, could not be asked what it is mounted as: %w", workDir, err)
+	}
+	if fs.NoExec {
+		log("the work root " + workDir + " is on a filesystem mounted noexec, which a bind of the static helper from it would carry, so a script step finds no " + driver.BinPath + ": name a helper outside it with helper in runner.toml")
+		return "", nil
+	}
 	path, ok, err := runner.LayHelper(installed, workDir)
 	switch {
 	case err != nil:

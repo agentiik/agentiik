@@ -104,15 +104,22 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 }
 
 // installed is the machine an agent installed as the page says finds, whoever runs the test:
-// the three capabilities its unit grants, and a secrets directory on a tmpfs mounted
-// noexec,nosuid,nodev. A test takes one away to see the start refused.
+// the three capabilities its unit grants, a secrets directory on a tmpfs mounted
+// noexec,nosuid,nodev, and every other directory, the work root among them, on a plain disk. A
+// test takes one away to see the start refused.
 type installed struct {
 	caps uint64
 	fs   driver.Filesystem
+	disk driver.Filesystem
 }
 
-func (m installed) Capabilities() (uint64, error)                { return m.caps, nil }
-func (m installed) Filesystem(string) (driver.Filesystem, error) { return m.fs, nil }
+func (m installed) Capabilities() (uint64, error) { return m.caps, nil }
+func (m installed) Filesystem(dir string) (driver.Filesystem, error) {
+	if dir == "/run/agentiik/secrets" {
+		return m.fs, nil
+	}
+	return m.disk, nil
+}
 
 // ownership is CAP_CHOWN, CAP_DAC_OVERRIDE and CAP_FOWNER, bits 0, 1 and 3 of the kernel's sets.
 const ownership = 1<<0 | 1<<1 | 1<<3
@@ -521,5 +528,24 @@ func TestADirectoryWhereTheHelperIsInstalledRefusesTheStart(t *testing.T) {
 	}
 	if said := h.refused(t); !strings.Contains(said, h.e.HelperFile+" is where the static helper is installed") {
 		t.Errorf("the refusal does not name %s:\n%s", h.e.HelperFile, said)
+	}
+}
+
+// A copy bound from a work root mounted noexec is bound noexec, which a script can read and not run.
+func TestAWorkRootMountedNoexecBindsNoHelper(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := h.e.Host.(installed)
+	m.disk = driver.Filesystem{NoExec: true, NoDev: true}
+	h.e.Host = m
+	cfg := opened(t)
+	h.serving(t)
+	if got := cfg().Policy.Helper; got != "" {
+		t.Errorf("the driver was opened with helper %q from a work root mounted noexec", got)
+	}
+	if !strings.Contains(h.err.String(), "is on a filesystem mounted noexec") {
+		t.Errorf("the agent's log does not say why script steps have no helper:\n%s", h.err)
 	}
 }
