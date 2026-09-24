@@ -155,6 +155,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `api.OnRun` authorises a route whose path names a run and nothing it is of against the namespace and workflow the run is of, found by its identifier alone. `POST /api/v1/runs/{run}/cancel` is the first to take it. A run that is not there, or an identifier no run was minted with, is the same 404 as a run the caller may not reach, where U+0000 or bytes that are not UTF-8 were a 500.
 - `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
 - A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
+- A push is answered with `images`, the digest each tag of the version is recorded with. For a commit pushed before, those are its first push's, whatever the tag names now.
 
 ### Secrets
 
@@ -175,6 +176,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
+- `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
 
 ### Tests
 
