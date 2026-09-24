@@ -1,9 +1,11 @@
 package driver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/agentiik/agentiik/agk"
@@ -264,6 +266,78 @@ func (c confinement) announce(say func(string)) {
 	if !c.AppArmor && !c.SELinux {
 		say("this daemon applies neither an AppArmor profile nor an SELinux label to a container, which is the host's to offer, so a container is held by " + held + " with no mandatory access control behind them.")
 	}
+}
+
+// unsettle records that the daemon may have changed under this process, so that the next
+// container waits for the floors to be read again.
+func (d *Docker) unsettle() {
+	d.posture.Lock()
+	defer d.posture.Unlock()
+	d.drops++
+}
+
+// currentFloor is the floor as the daemon was last read.
+func (d *Docker) currentFloor() *usernsFloor {
+	d.posture.Lock()
+	defer d.posture.Unlock()
+	return d.floor
+}
+
+// heldToFloors answers with the floor a container is created or started under, reading the
+// daemon again first where its event stream has dropped since it was last read.
+//
+// A runner lives for months and the daemon is a process of its own, restarted by an
+// administrator or by a package upgrade that ships a new daemon.json. What New refused is
+// refused here in the same words, charged to the platform, and nothing is created; the
+// next task reads the daemon again, so a daemon put right is taken back without the runner
+// restarting. The lock is not held while the daemon is asked, so that the event goroutine
+// is never kept waiting on a slow daemon, and a reading only settles the drops counted
+// before it began: one that lands while it is on its way is read again by the next.
+func (d *Docker) heldToFloors(ctx context.Context, step agk.Step) (*usernsFloor, error) {
+	d.posture.Lock()
+	drops := d.drops
+	if drops == d.read {
+		defer d.posture.Unlock()
+		return d.floor, nil
+	}
+	d.posture.Unlock()
+
+	info, err := d.cli.Info(ctx)
+	if err != nil {
+		return nil, fault(step, ErrDaemonUnreachable, ChargePlatform, "the daemon's event stream dropped, and it could not be asked what it is now, which is read before any container is created: %v", err)
+	}
+	floor, err := readUsernsFloor(info, d.cfg.Policy)
+	var confined confinement
+	if err == nil {
+		confined, err = readConfinement(info, d.cfg.Policy)
+	}
+	if err == nil {
+		err = readCapacity(info, d.cfg.Policy)
+	}
+	if err != nil {
+		return nil, &Fault{Step: step, Charge: ChargePlatform, Detail: "the daemon's event stream dropped, and read again the daemon is refused: " + strings.TrimPrefix(err.Error(), "driver: "), err: err}
+	}
+
+	d.posture.Lock()
+	defer d.posture.Unlock()
+	// What the machine gives up is said again only where it changed, and a floor that
+	// reads as it did is kept, with the sentences it has already said.
+	if !floor.same(d.floor) {
+		d.floor = floor
+		floor.announce(d.cfg.Policy, d.say)
+	}
+	if confined != d.confined {
+		d.confined = confined
+		confined.announce(d.say)
+	}
+	d.read = max(d.read, drops)
+	return d.floor, nil
+}
+
+// same says whether two readings of a daemon found the same floor, leaving out the
+// sentences each has said.
+func (f *usernsFloor) same(g *usernsFloor) bool {
+	return f.Remapped == g.Remapped && f.UID == g.UID && f.GID == g.GID && f.Lifted == g.Lifted
 }
 
 // ownership is the account a task's working directory is given, and whether there is one

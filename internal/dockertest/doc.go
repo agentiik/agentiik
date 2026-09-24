@@ -44,6 +44,11 @@
 //	APIVersion           a daemon answering an older version than the ceiling
 //	OOMKills             a die event with an oom before it, which the wait never sees
 //
+// Restart is the one change made to a daemon already serving: it drops every event stream
+// and answers /info as configured by the behaviours it is given, which is a daemon
+// restarted with another configuration under a driver that read the first. Streams says
+// whether there is a stream to drop yet.
+//
 // # The real daemon
 //
 // Socket() answers where a real daemon is and whether there is one, consulting DOCKER_HOST
@@ -54,7 +59,7 @@
 //
 // # Layout
 //
-//	daemon.go     Daemon, NewDaemon, Socket, Close, Handle, and the routing
+//	daemon.go     Daemon, NewDaemon, Socket, Close, Restart, Streams, Handle, and the routing
 //	container.go  Container, what a created container is and what running one means
 //	record.go     Created and Removed, which is what happened, as it happened
 //	behaviour.go  the prepared failures, each one a thing that actually goes wrong

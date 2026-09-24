@@ -27,8 +27,19 @@ var _ graph.Driver = (*Docker)(nil)
 type Docker struct {
 	cfg   Config
 	cli   *docker.Client
-	floor *usernsFloor
 	cache *manifests
+
+	// posture guards what the daemon was last read as. floor and confined are read
+	// when the daemon is opened, drops counts the times its event stream has dropped
+	// and read is the count they were last read at. A drop is what the daemon
+	// restarting under this process looks like, and one restarted with
+	// --seccomp-profile=unconfined, or without the remapping, is a daemon nobody has
+	// held to the floors, so the next container waits until it has been.
+	posture  sync.Mutex
+	floor    *usernsFloor
+	confined confinement
+	drops    int
+	read     int
 
 	// ctx bounds the event goroutine, which outlives any one task and ends with
 	// Close.
@@ -135,11 +146,13 @@ func (h *held) join(container string, w *watch) bool {
 
 // New opens a driver on a daemon.
 //
-// Three things happen once, here, rather than once per task: the API version is
-// negotiated, the userns floor and the confinement the daemon applies are read, and the
+// Three things happen here rather than once per task: the API version is negotiated, the
+// userns floor, the confinement the daemon applies and the cores it has are read, and the
 // machine says what it gives up. Each is a fact about the daemon and the policy, and a
 // task that re-read them would be a task that could answer differently from the one
-// beside it.
+// beside it. The one exception is the daemon changing under this process, which it can
+// only do by restarting: the floors are read again before the first container after the
+// event stream drops, in heldToFloors.
 func New(cfg Config) (*Docker, error) {
 	cli, err := docker.Dial(cfg.Socket)
 	if err != nil {
@@ -171,7 +184,7 @@ func New(cfg Config) (*Docker, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Docker{
-		cfg: cfg, cli: cli, floor: floor, cache: newManifests(),
+		cfg: cfg, cli: cli, floor: floor, confined: confined, cache: newManifests(),
 		ctx: ctx, cancel: cancel,
 		inflight: map[agk.TaskID]*held{},
 		keys:     &keys{root: cfg.WorkRoot},
@@ -229,8 +242,11 @@ func (d *Docker) follow() {
 			}
 			// The stream is a latency optimisation and the inspect under it is
 			// the correctness guarantee, so a stream that dropped is worth
-			// saying and is not worth failing anything for.
+			// saying and is not worth failing anything for. It is also the one
+			// sign of a daemon restarting, so the floors are read again before
+			// the next container is created or started.
 			if err != nil {
+				d.unsettle()
 				d.say("the Docker event stream dropped and is being resumed: " + err.Error())
 			}
 		}

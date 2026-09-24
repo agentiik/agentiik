@@ -57,7 +57,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// for it, and a person who reads the sentence on a run that declares none learns
 	// to scroll past it.
 	if len(t.Secrets) > 0 {
-		d.floor.announceSecrets(d.cfg.Policy, t.Step, d.say)
+		d.currentFloor().announceSecrets(d.cfg.Policy, t.Step, d.say)
 	}
 
 	// The task is held from here at the latest, before anything is pulled or created, so
@@ -77,6 +77,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// container a delivery still holding the key is carrying. Adoption below reaches a
 	// container that is still there; this reaches a key whose container is long gone.
 	if err := d.refuseCompleted(ctx, t); err != nil {
+		return graph.Result{}, err
+	}
+
+	// A daemon restarted into one that meets no floor is refused before anything is
+	// created on it, the container that reads the manifest included, and held to the
+	// floors again just before the task's own container, since the pull between the two
+	// is minutes wide.
+	if _, err := d.heldToFloors(ctx, t.Step); err != nil {
 		return graph.Result{}, err
 	}
 
@@ -156,8 +164,13 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// range before it creates the container", and a chown taken before the envelope,
 	// the run context and the secrets were written would leave every one of them
 	// owned by this process instead of by the range the container's processes live
-	// in.
-	if err := d.floor.ownWorkdir(w); err != nil {
+	// in. The floors are held first, because the range is the daemon's and the daemon
+	// may have been restarted into another since the task began.
+	floor, err := d.heldToFloors(ctx, t.Step)
+	if err != nil {
+		return graph.Result{}, err
+	}
+	if err := floor.ownWorkdir(w); err != nil {
 		return graph.Result{}, err
 	}
 
@@ -454,6 +467,12 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 	running := in.State.Running || in.State.Restarting
 	g := &given{Values: values}
 	if !running {
+		// A container is confined as the daemon starts it and not as it was created,
+		// so one about to be started for the first time is held to the floors as a
+		// container about to be created is.
+		if _, err := d.heldToFloors(ctx, t.Step); err != nil {
+			return graph.Result{}, err
+		}
 		if g.Stdin, err = stdinBytes(t); err != nil {
 			return graph.Result{}, err
 		}

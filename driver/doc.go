@@ -107,7 +107,8 @@
 //
 // One task is one conversation with the daemon, and its order is chosen so that the races
 // cannot happen rather than so that they are caught. Negotiate the API version and check
-// the userns floor, once per daemon. Refuse a key this host has already carried to an
+// the floors, once per daemon, and again after its event stream drops, which is what a
+// restart looks like. Refuse a key this host has already carried to an
 // ending, which the record under the work root answers. Adopt by label or create. Pull by
 // digest, reading every message of the progress stream, because the daemon reports a
 // failed pull as an error object inside a 200 that has already streamed half its layers.
@@ -177,7 +178,13 @@
 // SeccompLifted, which only callers that are not runners set, and they are told what the
 // machine gives up instead. AppArmor and SELinux are the host's to offer, so a daemon with
 // neither is taken and said out loud, and a profile the policy names for a mechanism the
-// daemon does not apply is refused rather than silently ignored.
+// daemon does not apply is refused rather than silently ignored. A profile that lets every
+// call through counts as none.
+//
+// Both floors are read when the daemon is opened, and read again before the first container
+// after the event stream drops, since a daemon can only change its configuration by
+// restarting and a restart drops the stream. A daemon that no longer meets a floor refuses
+// each task with the sentinel New would have answered, and nothing is created on it.
 //
 // Network egress is refused for now. network: none takes the none network mode and
 // network: internal takes a per-task network with no outbound route. network: egress

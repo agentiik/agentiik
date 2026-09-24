@@ -5,6 +5,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/agentiik/agentiik/agk"
 
 	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
@@ -498,5 +501,63 @@ func TestNewSaysTheHooksDoNotRun(t *testing.T) {
 	}
 	if hooks != 1 {
 		t.Fatalf("opening the daemon said %v, and the skipped hooks are said once", said)
+	}
+}
+
+// A runner lives longer than the configuration of the daemon under it. A daemon restarted
+// with seccomp switched off, after New held it to the floor, drops the event stream, and
+// the next container waits until the daemon has been read again: refused with
+// ErrSeccompRequired, on the platform's account, and never created. Put right and
+// restarted again, the daemon is taken back by the same driver.
+func TestADaemonRestartedWithoutSeccompIsRefusedBeforeTheNextContainer(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"ran": true}))
+	})
+
+	restart(t, r, dockertest.WithoutSeccomp)
+
+	_, err := r.Run(t.Context(), oneTask(ref))
+	if !errors.Is(err, ErrSeccompRequired) {
+		t.Fatalf("a task ran on a daemon restarted without seccomp, or was refused unrecognisably: %v", err)
+	}
+	if charge, _ := Charged(err); charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and the daemon is the platform's", charge)
+	}
+	if created := r.daemon.Created(); len(created) != 0 {
+		t.Fatalf("a container was created on a daemon that meets no floor: %v", created)
+	}
+
+	// The refused task started nothing, so its key is still to be run.
+	r.daemon.Restart()
+	result, err := r.Run(t.Context(), oneTask(ref))
+	if err != nil {
+		t.Fatalf("the daemon put right was not taken back: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the state is %s", result.State)
+	}
+}
+
+// restart restarts the runner's daemon once the driver's event stream is open, and waits
+// for the driver to hear the stream drop, which is what a restart looks like from this
+// side.
+func restart(t *testing.T, r *runner, bs ...dockertest.Behaviour) {
+	t.Helper()
+	within(t, "the driver never opened its event stream", func() bool { return r.daemon.Streams() > 0 })
+	dropped := r.said.count("event stream dropped")
+	r.daemon.Restart(bs...)
+	within(t, "the driver never heard its event stream drop", func() bool { return r.said.count("event stream dropped") > dropped })
+}
+
+// within waits for a condition, and fails saying what never happened.
+func within(t *testing.T, never string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(never)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
