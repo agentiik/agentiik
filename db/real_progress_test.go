@@ -59,6 +59,23 @@ func TestADispatchMovesOnlyForwardsOnTheWayToItsEnding(t *testing.T) {
 		return s
 	}
 
+	// Published and redeemed before the pass that published it recorded the dispatch: early,
+	// and left for a later delivery rather than taken as no news or written over pending.
+	decide(TaskRow{State: agk.TaskPending, Runner: "runner-1"})
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		var err error
+		row, err = w.TaskRow(ctx, "finance", key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := progress("runner-1", row, agk.TaskRunning); !errors.Is(err, ErrNotYetDispatched) || moved {
+		t.Errorf("progress on a dispatch not yet recorded moved %v, answering %v, want ErrNotYetDispatched", moved, err)
+	}
+	if got := state(); got != "pending" {
+		t.Fatalf("early progress left the dispatch %s", got)
+	}
+
 	decide(TaskRow{State: agk.TaskDispatched, Runner: "runner-1", DispatchedAt: now})
 	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
 		var err error
@@ -136,5 +153,78 @@ func TestADispatchMovesOnlyForwardsOnTheWayToItsEnding(t *testing.T) {
 	}
 	if got := state(); got != "succeeded" {
 		t.Errorf("the dispatch reads %s after its ending", got)
+	}
+}
+
+// A progress message that waits on a decision ending the run finds the run ended once that decision
+// commits, and moves nothing, as one that came after it would. Read against the run as the
+// statement found it, it moved the task of a run that had just ended.
+func TestProgressWaitingOnADecisionThatEndsTheRunMovesNothing(t *testing.T) {
+	pool, _ := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	decision := func(seq int, state agk.RunState) Decision {
+		return Decision{
+			Namespace: "finance", Run: theRun, Was: seq, Seq: seq + 1,
+			Document: json.RawMessage(`{"version":1}`), State: state, StartedAt: now,
+			Tasks: []TaskRow{{ID: key, Step: "invoice", Attempt: 1, State: agk.TaskDispatched, Runner: "runner-1", DispatchedAt: now}},
+		}
+	}
+	var row string
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		if err := w.SaveDecision(ctx, decision(0, agk.Running)); err != nil {
+			return err
+		}
+		var err error
+		row, err = w.TaskRow(ctx, "finance", key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	written, commit := make(chan struct{}), make(chan struct{})
+	ended := make(chan error, 1)
+	go func() {
+		ended <- pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			f := decision(1, agk.Failed)
+			f.FinishedAt = now
+			if err := w.SaveDecision(ctx, f); err != nil {
+				return err
+			}
+			close(written)
+			<-commit
+			return nil
+		})
+	}()
+	<-written
+	moved := make(chan bool, 1)
+	failed := make(chan error, 1)
+	go func() {
+		err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			m, err := w.Progress(ctx, "finance", key, row, "runner-1", agk.TaskRunning)
+			moved <- m
+			return err
+		})
+		failed <- err
+	}()
+	select {
+	case m := <-moved:
+		t.Fatalf("progress did not wait for the decision writing the run, and moved %v", m)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(commit)
+	if err := <-ended; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-failed; err != nil {
+		t.Fatal(err)
+	}
+	if <-moved {
+		t.Error("progress waiting on the decision that ended the run moved its task")
 	}
 }

@@ -820,6 +820,15 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 // runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld. The dispatch is
 // named by its task_id and its key together, for the reason HeldBy gives, so a host still running a
 // dispatch that was declared lost moves nothing on the requeue somebody else may hold.
+//
+// A dispatch bound to that runner and still pending is answered ErrNotYetDispatched, and moves
+// nothing. The controller publishes a task before it records the dispatch, so a runner quick enough
+// redeems, starts and reports a task the rows still hold as planned, and even more so where a pass
+// publishing a few hundred shards records them all at the end, or dies before it does and leaves
+// them to the next sweep. Written over pending, running would stand on a row Unpublished and
+// Actionable no longer find, and a message whose pass died would never be sent again; taken as no
+// news, it would be acknowledged and never said again, and the task would read dispatched until its
+// ending. So it is left for a later delivery, by when the dispatch is recorded.
 func (w *Wide) Progress(ctx context.Context, namespace string, key agk.TaskID, row, runner string, to agk.TaskState) (bool, error) {
 	var from []string
 	switch to {
@@ -836,6 +845,20 @@ func (w *Wide) Progress(ctx context.Context, namespace string, key agk.TaskID, r
 	case row == "":
 		return false, fmt.Errorf("%w: progress of %s that names no dispatch of it", ErrNotHeld, key)
 	}
+	// The run's row is locked before the task's, which is the order a decision takes them in,
+	// and for share, which a decision writing the run waits on and waits for. Without it a
+	// progress message waiting on the task's row while a decision ended the run would be written
+	// once that decision committed: the task's row is read again as it stands then, but the run
+	// in the condition below as it stood when the statement began, still going. With it, the
+	// statement begins once the decision has committed, and reads the run as that left it.
+	if _, err := w.tx.Exec(ctx,
+		`select 1 from runs
+		 where namespace = $1
+		   and id = (select run_id from tasks where namespace = $1 and id = $2::text)
+		 for share`,
+		namespace, row); err != nil {
+		return false, fmt.Errorf("db: the run of task %s could not be locked: %w", key, err)
+	}
 	// The row is compared as text, for the reason Lose gives.
 	tag, err := w.tx.Exec(ctx,
 		`update tasks set state = $5
@@ -851,18 +874,27 @@ func (w *Wide) Progress(ctx context.Context, namespace string, key agk.TaskID, r
 	if tag.RowsAffected() > 0 {
 		return true, nil
 	}
-	var held bool
-	if err := w.tx.QueryRow(ctx,
-		`select exists (select 1 from tasks
-		                where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4)`,
-		namespace, row, string(key), runner).Scan(&held); err != nil {
-		return false, fmt.Errorf("db: task %s could not be read: %w", key, err)
-	}
-	if !held {
+	var state string
+	var going bool
+	err = w.tx.QueryRow(ctx,
+		`select tasks.state::text, runs.state in ('queued', 'running', 'waiting')
+		 from tasks join runs on runs.namespace = tasks.namespace and runs.id = tasks.run_id
+		 where tasks.namespace = $1 and tasks.id = $2::text and tasks.idempotency_key = $3 and tasks.runner = $4`,
+		namespace, row, string(key), runner).Scan(&state, &going)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
 		return false, fmt.Errorf("%w: %s does not hold dispatch %s of %s", ErrNotHeld, runner, row, key)
+	case err != nil:
+		return false, fmt.Errorf("db: task %s could not be read: %w", key, err)
+	case state == agk.TaskPending.String() && going:
+		return false, fmt.Errorf("%w: dispatch %s of %s is still pending", ErrNotYetDispatched, row, key)
 	}
 	return false, nil
 }
+
+// ErrNotYetDispatched is progress on a dispatch its runner holds and the controller has not yet
+// recorded as dispatched, which a later delivery will find recorded.
+var ErrNotYetDispatched = errors.New("db: that dispatch is not recorded as dispatched yet")
 
 // CancelTasks moves to cancelled every task of a run that is not over, and answers the keys of
 // those a runner had redeemed.

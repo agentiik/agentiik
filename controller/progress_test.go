@@ -286,3 +286,33 @@ func TestProgressIsFenced(t *testing.T) {
 		t.Errorf("a former holder moved the task to %s", got)
 	}
 }
+
+// A runner quick enough reports a task running before the pass that published it has recorded the
+// dispatch. That is early rather than wrong: it is left for a later delivery, not refused and not
+// taken as no news, which would lose it for good.
+func TestProgressBeforeTheDispatchIsRecordedComesRoundAgain(t *testing.T) {
+	core, q, pool, super := decidingOn(t, twoAtOnce)
+	createRun(t, pool)
+	normalize, _ := firstPass(t, core, q)
+	if err := core.redeem(t, normalize, theRunner); err != nil {
+		t.Fatal(err)
+	}
+	// As the rows stand between the message going and the dispatch being recorded.
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(), `update tasks set state = 'pending' where id = $1`, normalize.Row); err != nil {
+		t.Fatal(err)
+	}
+	err := core.Progress(t.Context(), progress(normalize, agk.TaskRunning, theRunner))
+	if !errors.Is(err, db.ErrNotYetDispatched) || errors.Is(err, ErrNotAResult) {
+		t.Fatalf("progress before the dispatch was recorded answered %v, want db.ErrNotYetDispatched and no refusal", err)
+	}
+	if _, err := conn.Exec(t.Context(), `update tasks set state = 'dispatched' where id = $1`, normalize.Row); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Progress(t.Context(), progress(normalize, agk.TaskRunning, theRunner)); err != nil {
+		t.Fatal(err)
+	}
+	if got := shown(t, pool, normalize.Task.ID); got != agk.TaskRunning {
+		t.Errorf("progress delivered again once the dispatch was recorded left the task %s", got)
+	}
+}

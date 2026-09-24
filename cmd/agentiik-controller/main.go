@@ -332,6 +332,9 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 			case errors.Is(err, db.ErrFenced):
 				cancel(err)
 			case errors.Is(err, controller.ErrNotAResult):
+			case errors.Is(err, db.ErrNotYetDispatched):
+				// Early rather than wrong: the pass that published the task has not
+				// recorded it yet, and a later delivery finds it recorded.
 			default:
 				log.Warn("a task's progress could not be recorded, and it is delivered again", "task", p.Task, "runner", p.Runner, "state", p.State, "error", err)
 			}

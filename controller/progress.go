@@ -40,6 +40,10 @@ type Progress struct {
 // result it preceded changes nothing and is not an error, which is what the bus delivering at
 // least once needs. A binding made by an ending that never reached a container is over already,
 // so it moves nothing either.
+//
+// Progress on a dispatch whose message went before this controller recorded it as dispatched is
+// answered db.ErrNotYetDispatched, which is no refusal: the bus delivers it again, by when the
+// dispatch is recorded, as db.Wide.Progress says.
 func (co *Core) Progress(ctx context.Context, p Progress) error {
 	run, _, _, _, err := agk.ParseTaskID(string(p.Task))
 	if err != nil {
