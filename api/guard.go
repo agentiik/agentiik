@@ -13,8 +13,8 @@ import (
 
 // Guard is what stands in front of one route.
 //
-// The interface is closed: the only things that implement it are Needs, OnRun, Public and
-// ForRunner, because its one method is unexported. A further kind of guard is therefore a change
+// The interface is closed: the only things that implement it are Needs, OnRun, OnArtifact, Across,
+// Public and ForRunner, because its one method is unexported. A further kind of guard is therefore a change
 // to this file, which is a change somebody reads, rather than a struct somebody writes in a
 // handler package.
 type Guard interface {
@@ -28,6 +28,8 @@ type guard struct {
 	public     bool
 	runner     bool
 	run        bool
+	artifact   bool
+	across     bool
 	why        string
 }
 
@@ -58,6 +60,44 @@ type OnRun struct {
 func (o OnRun) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true}
 }
+
+// OnArtifact is a route about one artifact, named by its logical URI, which requires one permission
+// over the workflow of the run that URI names.
+//
+// It is OnRun with the run read out of agk://run/<run>/<step>/<port>/<name> rather than out of a
+// segment of its own, because GET /api/v1/artifacts/{uri} names an artifact as every envelope does
+// and nothing else. The URI is one segment of the path, percent-encoded, and one that does not parse
+// names no run, so it is refused exactly as a run that is not there is.
+type OnArtifact struct {
+	Permission Permission
+}
+
+func (o OnArtifact) guards() guard {
+	return guard{permission: o.Permission, scope: Workflow, run: true, artifact: true}
+}
+
+// Across is a route answering, across the installation, what its caller holds one permission over:
+// GET /api/v1/runs, "across every namespace the caller can read".
+//
+// Its path names no namespace, so there is no one target to authorise before the handler runs, and
+// what the caller may see is a question asked of each thing the answer could hold. The router asks
+// it rather than the handler: a route taking Across is registered with HandleAcross, and its handler
+// is given Holds, which asks the authorizer about this permission for this principal and nothing
+// else. A handler that forgot to ask would answer nothing it was allowed to, since what it answers
+// is only what Holds let through; one asking about another permission cannot, since Holds is bound
+// to the one the route declared.
+type Across struct {
+	Permission Permission
+}
+
+func (a Across) guards() guard {
+	return guard{permission: a.Permission, scope: Workflow, across: true}
+}
+
+// Holds answers whether the caller of a route taking Across holds its permission over one target.
+// A target naming no namespace is the installation, which no such route answers about, and is an
+// error rather than a refusal.
+type Holds func(ctx context.Context, over Target) (bool, error)
 
 // FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
 // authorised against. A run nobody minted is ErrNoRun.
