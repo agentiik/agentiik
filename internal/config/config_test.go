@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -239,16 +241,16 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantDatabase := config.Database{URL: i.env[config.DatabaseURL], Role: "agentiik", Password: i.databasePassword}
+	wantDatabase := config.Database{URL: i.env[config.DatabaseURL], Role: "agentiik", Password: config.Secret(i.databasePassword)}
 	if api.Database != wantDatabase {
 		t.Errorf("the API's database reads %#v", api.Database)
 	}
-	wantBus := config.Bus{URL: i.env[config.BusURL], JWT: i.busJWT, Seed: i.busSeed, Expires: i.busExpires}
+	wantBus := config.Bus{URL: i.env[config.BusURL], JWT: i.busJWT, Seed: config.Secret(i.busSeed), Expires: i.busExpires}
 	if api.Bus != wantBus {
 		t.Errorf("the API's bus reads %+v, and was written %+v", api.Bus, wantBus)
 	}
 	for what, c := range map[string]struct{ got, want any }{
-		"the account seed":      {api.AccountSeed, i.accountSeed},
+		"the account seed":      {string(api.AccountSeed), i.accountSeed},
 		"the objects":           {api.Objects, i.env[config.ObjectsDir]},
 		"the public URL":        {api.PublicURL, "https://agentiik.example.com"},
 		"the listen address":    {api.Listen, "127.0.0.1:9090"},
@@ -280,7 +282,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantMigration := config.Migration{
-		Admin:       config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: i.adminPassword},
+		Admin:       config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: config.Secret(i.adminPassword)},
 		Application: wantDatabase,
 	}
 	if migration != wantMigration {
@@ -312,9 +314,9 @@ func TestEverySettingLeftOutTakesItsDefault(t *testing.T) {
 		"the task ceiling, an hour":                   {controller.TaskCeiling, time.Hour},
 		"max_requeues, three":                         {controller.MaxRequeues, 3},
 		"max_requeues, the evaluator's own default":   {controller.MaxRequeues, graph.DefaultMaxRequeues},
-		"the database password, none":                 {api.Database.Password, ""},
-		"the admin's password, none":                  {migration.Admin.Password, ""},
-		"the application's password, none":            {migration.Application.Password, ""},
+		"the database password, none":                 {string(api.Database.Password), ""},
+		"the admin's password, none":                  {string(migration.Admin.Password), ""},
+		"the application's password, none":            {string(migration.Application.Password), ""},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s reads %v", what, c.got)
@@ -782,10 +784,10 @@ func TestASecretsFileIsReadAsItsToolsWriteIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(api.PresignKey, i.presignKey) {
+	if !bytes.Equal([]byte(api.PresignKey), i.presignKey) {
 		t.Error("a presign key read through a link, in base64 without padding, is not the key written")
 	}
-	if api.AccountSeed != i.accountSeed {
+	if string(api.AccountSeed) != i.accountSeed {
 		t.Error("a decorated account seed is not the seed written")
 	}
 
@@ -801,7 +803,7 @@ func TestASecretsFileIsReadAsItsToolsWriteIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !controller.Bus.Expires.IsZero() || controller.Bus.JWT != token || controller.Bus.Seed != seed {
+	if !controller.Bus.Expires.IsZero() || controller.Bus.JWT != token || string(controller.Bus.Seed) != seed {
 		t.Errorf("a credential that never expires reads %+v", controller.Bus)
 	}
 }
@@ -825,10 +827,8 @@ func TestADatabasePasswordReachesTheConnectionAndNothingElse(t *testing.T) {
 	if u.Host != "db:5432" || u.Path != "/agentiik" || u.Query().Get("sslmode") != "disable" {
 		t.Errorf("the connection lost part of its URL: %s", u.Redacted())
 	}
-	for _, printed := range []string{fmt.Sprint(api.Database), fmt.Sprintf("%v", api.Database), fmt.Sprintf("%s", api.Database)} {
-		if strings.Contains(printed, "p@ss") || strings.Contains(printed, url.QueryEscape(i.databasePassword)) {
-			t.Errorf("a Database prints its password: %s", printed)
-		}
+	for _, verb := range verbs {
+		printsNoSecret(t, fmt.Sprintf(verb, api.Database), i.databasePassword)
 	}
 
 	// Without a password, the connection is the URL as it was written.
@@ -890,6 +890,72 @@ func TestADatabaseURLIsReadAsPgxReadsIt(t *testing.T) {
 			saysNothingOf(t, err, "Tr0ub")
 		}
 	}
+}
+
+// verbs are the ways fmt prints a value, each of which prints a string differently.
+var verbs = []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X"}
+
+// Printing a configuration, whichever verb prints it and whether whole or a part of it, or
+// marshalling it as a log handler does, shows none of the secrets it holds, so that a program that
+// logs what it was configured with, or wraps it in an error, logs no secret.
+func TestPrintingAConfigurationShowsNoSecret(t *testing.T) {
+	i := anInstallation(t)
+	api, err := config.ReadAPI(theAPI.environment(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := config.ReadController(theController.environment(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration, err := config.ReadMigration(migrating.environment(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{
+		i.databasePassword, i.adminPassword, i.busSeed, i.accountSeed, string(i.presignKey),
+		base64.StdEncoding.EncodeToString(i.presignKey), string(i.masterKey),
+	}
+	for _, c := range []any{api, controller, migration, api.Database, api.Bus, migration.Admin, &api, &controller} {
+		for _, verb := range verbs {
+			printsNoSecret(t, fmt.Sprintf(verb, c), secrets...)
+		}
+		marshalled, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		printsNoSecret(t, string(marshalled), secrets...)
+	}
+}
+
+// printsNoSecret fails if printed shows any of secrets in any form fmt, encoding/json or net/url
+// writes a string or bytes in.
+func printsNoSecret(t *testing.T, printed string, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		quoted, marshalled := strconv.Quote(secret), must(json.Marshal(secret))
+		shown := []string{
+			secret, quoted[1 : len(quoted)-1], string(marshalled[1 : len(marshalled)-1]),
+			strings.Trim(fmt.Sprint([]byte(secret)), "[]"),
+			hex.EncodeToString([]byte(secret)), strings.ToUpper(hex.EncodeToString([]byte(secret))),
+			base64.StdEncoding.EncodeToString([]byte(secret)),
+			url.QueryEscape(secret), url.PathEscape(secret),
+			strings.TrimPrefix(url.UserPassword("role", secret).String(), "role:"),
+		}
+		for _, form := range shown {
+			if strings.Contains(printed, form) {
+				t.Errorf("%q is shown as %q in %s", secret, form, printed)
+				break
+			}
+		}
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // A program that checks a setting further than this package can still refuses the start naming

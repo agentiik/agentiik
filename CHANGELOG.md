@@ -177,6 +177,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A database URL's parameters are read as pgx reads them, so a `password` holding a `;` or a key written with spaces around it is refused, and the role is the one a `user` parameter names, which is the one pgx signs in as.
 - `PGPASSWORD` and `PGSSLPASSWORD` refuse the start of every program, since pgx would take a secret from either where the URL gives none.
 - A database's password file is read even when its URL is refused, so one start names both.
+- Every secret the configuration holds is a `config.Secret`, which prints and marshals as `[secret]` whatever the verb, so a configuration logged whole shows none of them.
 
 ### Command line
 

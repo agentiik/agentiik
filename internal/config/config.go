@@ -142,6 +142,39 @@ func Refuse(variable string, err error) error {
 	return &Error{Variable: variable, Reason: "cannot be used: " + err.Error(), Err: err}
 }
 
+// Secret is what a secret's file holds, as it was read.
+//
+// It prints as [secret] whichever verb prints it, and marshals as that too, so that a configuration
+// logged whole, printed with %+v or %#v, or wrapped in an error shows nothing it holds. An empty
+// Secret prints as nothing, which says there is none. A conversion to a string or to bytes is the
+// way to the value, and each is a place a secret leaves the configuration on purpose.
+type Secret string
+
+// shown is what a Secret prints as.
+func (s Secret) shown() string {
+	if s == "" {
+		return ""
+	}
+	return "[secret]"
+}
+
+// Format prints a Secret as it is shown for every verb, since %x and %q print a string in ways of
+// their own and %#v passes over String.
+func (s Secret) Format(f fmt.State, verb rune) {
+	shown := s.shown()
+	if verb == 'q' || verb == 'v' && f.Flag('#') {
+		shown = strconv.Quote(shown)
+	}
+	io.WriteString(f, shown)
+}
+
+// String is how a Secret is shown, for whatever prints a fmt.Stringer without fmt.
+func (s Secret) String() string { return s.shown() }
+
+// MarshalText is how a Secret is shown, for encoding/json and the log/slog handlers, which marshal
+// a value rather than format it.
+func (s Secret) MarshalText() ([]byte, error) { return []byte(s.shown()), nil }
+
 // Database is one connection to PostgreSQL: where, as whom, and what that role signs in with.
 type Database struct {
 	// URL is the address as written, which never carries a password.
@@ -153,7 +186,7 @@ type Database struct {
 	// Password is read from the file the matching _FILE variable names, and is empty where
 	// there is none: the role then signs in some other way, with a client certificate the URL
 	// names or as the operating system's user over a local socket.
-	Password string
+	Password Secret
 }
 
 // ConnString is the URL with the password in it, which is what db.Open takes. It is for opening a
@@ -167,11 +200,11 @@ func (d Database) ConnString() string {
 		// Unreachable for a Database this package read, whose URL it parsed already.
 		return d.URL
 	}
-	u.User = url.UserPassword(d.Role, d.Password)
+	u.User = url.UserPassword(d.Role, string(d.Password))
 	return u.String()
 }
 
-// String is the URL as written, so that printing a Database prints no password.
+// String is the URL as written, which is what printing a Database prints.
 func (d Database) String() string { return d.URL }
 
 // Bus is where the control plane reaches the bus, and the credential it reaches it with.
@@ -183,7 +216,7 @@ type Bus struct {
 	// JWT and Seed are the control plane's NATS user credential. Expires is when it stops
 	// working, and is zero for one that never does.
 	JWT     string
-	Seed    string
+	Seed    Secret
 	Expires time.Time
 }
 
@@ -193,7 +226,7 @@ type API struct {
 	Bus      Bus
 
 	// AccountSeed is the NATS account seed runner bus credentials are minted with.
-	AccountSeed string
+	AccountSeed Secret
 
 	// Objects is the directory the built-in object store keeps every object in.
 	Objects string
@@ -202,12 +235,13 @@ type API struct {
 	// Every presigned URL is minted on it rather than on a request's Host header.
 	PublicURL string
 
-	// PresignKey signs every presigned URL and upload policy.
-	PresignKey []byte
+	// PresignKey signs every presigned URL and upload policy. It is the key's bytes, decoded
+	// from the base64 its file holds.
+	PresignKey Secret
 
 	// MasterKey is the master key file as it was read. The API's main package parses it,
 	// because only the API may link the secret store that knows how.
-	MasterKey []byte
+	MasterKey Secret
 
 	// EnvPrefixes gives each namespace opted in to env the prefix its variables begin with. Nil
 	// opts in none, which is what an installation that is not for development is.
@@ -250,7 +284,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in")
 	c.PublicURL = r.publicURL()
 	c.PresignKey = r.presignKey()
-	c.MasterKey = r.file(MasterKeyFile, "and it names the file holding the master key the built-in secret store seals every value under")
+	c.MasterKey = Secret(r.file(MasterKeyFile, "and it names the file holding the master key the built-in secret store seals every value under"))
 	c.EnvPrefixes = r.envPrefixes()
 	c.Listen = r.listen()
 	c.JoinRotation = r.duration(JoinRotation, DefaultJoinRotation, "how long a runner credential is accepted for",
@@ -449,7 +483,7 @@ func (r *reader) publicURL() string {
 func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 	// The password's file is read whatever becomes of the URL, so that a start refused over both
 	// names both.
-	password := r.password(passwordFile)
+	password := Secret(r.password(passwordFile))
 	d := r.databaseURL(name, passwordFile, needsRole)
 	if d.URL != "" {
 		d.Password = password
@@ -618,7 +652,7 @@ func (r *reader) bus() Bus {
 			return b
 		}
 	}
-	b.JWT, b.Seed = token, string(seed)
+	b.JWT, b.Seed = token, Secret(seed)
 	return b
 }
 
@@ -639,7 +673,7 @@ func notABusServer(server string) string {
 }
 
 // accountSeed reads the NATS account seed, plain or between the lines nsc writes it in.
-func (r *reader) accountSeed() string {
+func (r *reader) accountSeed() Secret {
 	content := r.file(BusAccountSeedFile, "and it names the file holding the account seed the API mints runner bus credentials with")
 	if content == nil {
 		return ""
@@ -659,7 +693,7 @@ func (r *reader) accountSeed() string {
 		r.refuse(BusAccountSeedFile, "names a file whose seed cannot be read: "+err.Error())
 		return ""
 	}
-	return string(seed)
+	return Secret(seed)
 }
 
 // presignKey reads the signing key, written in base64 as openssl rand -base64 32 writes one.
@@ -667,10 +701,10 @@ func (r *reader) accountSeed() string {
 // Text rather than raw bytes, so that the newline an editor adds changes nothing. Every API of an
 // installation holds the same key, for a URL one of them minted to be honoured by another, and a
 // key that changed with a newline would be two keys.
-func (r *reader) presignKey() []byte {
+func (r *reader) presignKey() Secret {
 	content := r.file(PresignKeyFile, "and it names the file holding the key that signs every presigned URL and upload policy")
 	if content == nil {
-		return nil
+		return ""
 	}
 	text := strings.TrimSpace(string(content))
 	key, err := base64.StdEncoding.DecodeString(text)
@@ -680,12 +714,12 @@ func (r *reader) presignKey() []byte {
 	switch {
 	case err != nil:
 		r.refuse(PresignKeyFile, "names a file that is not base64, which is how the key is written")
-		return nil
+		return ""
 	case len(key) < presignKeyMinBytes:
 		r.refuse(PresignKeyFile, fmt.Sprintf("names a key of %d bytes, and a presign key is %d bytes or more, as openssl rand -base64 %d writes one", len(key), presignKeyMinBytes, presignKeyMinBytes))
-		return nil
+		return ""
 	}
-	return key
+	return Secret(key)
 }
 
 // operatorToken reads the hash of the interim operator token.
