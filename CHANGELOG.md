@@ -47,6 +47,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking, unlistening and rolling back on the way out wait five seconds at most.
 - `agentiik-controller` asks PostgreSQL to probe its connections every few seconds, so a controller cut off without a reset frees the lock within half a minute rather than two hours. A second SIGINT or SIGTERM ends a process still stopping.
 - A task reads `running` while its container runs and `publishing` while its outputs go up, rather than `dispatched` until it ends. `Core.Progress` writes what the runner holding the dispatch reports, only forwards and never over an ending or on a run that has ended; another runner's is refused with `controller.ErrNotTheHolder`, and one arriving before the dispatch is recorded comes round again. A decision no longer moves such a row back to `dispatched`.
+- A `timed_out` or `cancelled` task keeps on its row the exit code its container stopped with, 137 or 143, where only a success or a failure kept one, so the API answers it. A lost task, and an ending no container reached, still has none.
 
 ### State
 
@@ -82,6 +83,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `runners` keeps the credential a runner rotated from and its `rotate_by` until the new one is first used, and the time its last rotation signed. `credential_hash` and `rotate_by` are required, and both credentials are looked up by an index. `Wide.Authenticate` takes the moment it judges at, and `Wide.Rotate` renews a credential. Migration `0023_credential_rotation.sql`.
 - `artifacts.fetches_held_until` holds each fetch of a budget being served until an instant, so a transfer that does not complete never spends one, and one whose API died gives it back when its hold lapses. `db.NS.Fetched` gives way to `Reserve`, `Delivered` and `Release`.
 - `runners` keeps who drained and who revoked a runner and when, until the audit log does, and the end of a revocation's grace. `Wide.Drain` and `Wide.Revoke` take who, why and when, and the grace for a revocation, and answer the runner; a drain of a revoked runner is `db.ErrRunnerRevoked`; `Wide.Authenticate` and `Wide.Beat` take a revoked runner until its grace ends, `Wide.Rotate` refuses one in its grace with `db.ErrRunnerRevoked`, and a redemption binding a runner that is not ready is `db.ErrRunnerNotTaking`. Migration `0025_revocation.sql`.
+- A `timed_out` or `cancelled` row of `tasks` may carry an exit code, and a lost one still may not. Migration `0027_stopped_exit_codes.sql`.
 
 ### Bus
 

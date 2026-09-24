@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -359,6 +360,36 @@ func TestARunIsReadByItsIdentifierAlone(t *testing.T) {
 		if w, _ := call(t, h, "GET", "/api/v1/runs/"+id, "alice", nil); w.Code != http.StatusNotFound {
 			t.Errorf("a run named %s answered %d: %s", id, w.Code, w.Body)
 		}
+	}
+}
+
+// A task's exit code is answered with the run for every ending that carries one, a stopped
+// container's included: "a timed_out or cancelled task carries an exit code wherever a container
+// ran", 137 where it was killed after the grace and 143 where it obeyed SIGTERM.
+func TestARunAnswersAStoppedTasksExitCode(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	for i, c := range []struct {
+		state string
+		code  int
+	}{{"timed_out", 137}, {"cancelled", 143}, {"failed", 121}} {
+		s.sql(t, `insert into tasks (namespace, id, run_id, step, attempt, state, exit_code, started_at, finished_at)
+			values ('finance', $1, $2, 'normalize', $3, $4, $5, now(), now())`,
+			fmt.Sprintf("01M2F%021d", i), run, i+1, c.state, c.code)
+	}
+	w, detail := call(t, s.servedTo(t, everything{who: "admin"}), "GET", "/api/v1/runs/"+run, "admin", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the run answered %d: %s", w.Code, w.Body)
+	}
+	got := map[string]any{}
+	tasks, _ := detail["tasks"].([]any)
+	for _, task := range tasks {
+		task, _ := task.(map[string]any)
+		got[task["state"].(string)] = task["exit_code"]
+	}
+	want := map[string]any{"timed_out": 137.0, "cancelled": 143.0, "failed": 121.0}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the run's tasks exited %v, want %v", got, want)
 	}
 }
 

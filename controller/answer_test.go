@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -619,5 +620,67 @@ func TestAnAttemptARetryMovedPastIsWrittenAsItEnded(t *testing.T) {
 	}
 	if err := core.redeem(t, first[0], "runner-dmz-02"); !errors.Is(err, db.ErrTaskHeld) {
 		t.Errorf("the grant of an attempt that failed was redeemed again, answering %v", err)
+	}
+}
+
+// timingOutWorkflow retries its one step once where it is stopped at its deadline.
+var timingOutWorkflow = strings.Replace(retryingWorkflow, "on: [failed]", "on: [timeout]", 1)
+
+// "A timed_out or cancelled task carries an exit code wherever a container ran", and the tasks
+// table keeps it for a person to read through the API: on the row of an attempt a retry moved past,
+// and on the row of one that ended the step.
+func TestAStoppedTasksExitCodeIsRecordedAndRead(t *testing.T) {
+	stopped := func(task graph.Task, code int, at time.Time) graph.Result {
+		return graph.Result{Task: task.ID, State: agk.TaskTimedOut, ExitCode: code, StartedAt: at, FinishedAt: at}
+	}
+	codes := func(t *testing.T, pool *db.Pool) map[string]string {
+		t.Helper()
+		var detail db.RunDetail
+		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			var err error
+			detail, err = ns.RunDetail(ctx, decidedRun)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, task := range detail.Tasks {
+			code := "none"
+			if task.ExitCode != nil {
+				code = strconv.Itoa(*task.ExitCode)
+			}
+			out[string(task.Task)] = task.State.String() + " " + code
+		}
+		return out
+	}
+
+	// Moved past by a retry: the row of the attempt that timed out is written as it ended.
+	core, q, pool, _ := decidingOn(t, timingOutWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	core.answer(t, stopped(first[0].Task, 137, core.now()))
+	if got := codes(t, pool)[string(first[0].Task.ID)]; got != "timed_out 137" {
+		t.Errorf("an attempt killed after the grace at its deadline reads %q", got)
+	}
+
+	// Ending the step: nothing retries it, and the row keeps the code all the same.
+	core, q, pool, _ = deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first = q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	core.answer(t, stopped(first[0].Task, 143, core.now()))
+	if got := codes(t, pool)[string(first[0].Task.ID)]; got != "timed_out 143" {
+		t.Errorf("a task that obeyed the stop at its deadline reads %q", got)
 	}
 }
