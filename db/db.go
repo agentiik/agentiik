@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -194,18 +195,32 @@ func (p *Pool) Session(ctx context.Context, fn func(context.Context, *pgxpool.Co
 	return fn(ctx, conn)
 }
 
+// rollbackWithin bounds the rollback on the error path, which cannot be bounded by ctx.
+//
+// The connection it goes on may be one that no longer answers: a network cut off without a
+// reset leaves it open and silent, and a rollback with no bound of its own waits there for as
+// long as TCP does, which is hours. That is where a controller asked to stop in the middle of a
+// sweep while cut off from its database stayed. Past the bound pgx closes the connection and the
+// pool drops it, and PostgreSQL rolls the transaction back itself when the session ends, so
+// nothing fn did is kept either way. A rollback that is answered at all is answered in
+// milliseconds, so the bound only ever meets a connection that is gone.
+const rollbackWithin = 5 * time.Second
+
 // transaction is the one place a transaction is begun, committed and rolled back.
 //
 // A rollback on the error path uses a context of its own, because the usual reason fn
 // failed is that ctx was cancelled and a rollback on a cancelled context does not run,
-// which would leave the transaction open until the connection was recycled.
+// which would leave the transaction open until the connection was recycled. Its own is
+// bounded by rollbackWithin rather than by nothing.
 func (p *Pool) transaction(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("db: a transaction could not be begun: %w", err)
 	}
 	if err := fn(ctx, tx); err != nil {
-		tx.Rollback(context.WithoutCancel(ctx))
+		rollback, stop := context.WithTimeout(context.WithoutCancel(ctx), rollbackWithin)
+		defer stop()
+		tx.Rollback(rollback)
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

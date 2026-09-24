@@ -44,7 +44,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A loss a runner reports locks its run before its task, as a decision does, and waits for a decision on the run rather than deadlocking with it.
 - A sweep that cannot look for lost tasks reports why, through `Controller.Trouble` with no run, and still decides the runs that are due.
 - `agentiik-controller` runs the controller as a program of its own, a static binary and an image run as a user that is not root, linking no secret store. It stands by until it holds the lock, then watches, sweeps and takes results off the bus, with `max_requeues` from `AGK_MAX_REQUEUES` and the ceiling from `AGK_TASK_CEILING`. A run it cannot decide is reported and left to the sweep; a fenced write or an expired bus credential ends it.
-- `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking and unlistening on the way out wait five seconds at most.
+- `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking, unlistening and rolling back on the way out wait five seconds at most.
 - `agentiik-controller` asks PostgreSQL to probe its connections every few seconds, so a controller cut off without a reset frees the lock within half a minute rather than two hours. A second SIGINT or SIGTERM ends a process still stopping.
 
 ### State
