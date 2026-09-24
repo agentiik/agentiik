@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,7 +20,8 @@ import (
 // "The pool holds accepted namespaces and ceilings {cpu, memory, pids}, and the controller applies
 // both at dispatch. A step whose pool does not accept the run's namespace, or names no pool that
 // exists, is not published: it fails on the infrastructure's account and names the pool.
-// Resources are capped to the pool's ceilings on the task message."
+// Resources are capped to the pool's ceilings on the task message." A step whose labels select no
+// pool, or more than one, is refused the same way, since no runner could be handed it either.
 //
 // Here rather than on the runner, because a runner of the pool would only ever refuse the task
 // once it held it, and every runner of the pool refuses it alike: the task would go round the pool
@@ -30,34 +32,58 @@ import (
 // platformFailure is the exit code a task refused at dispatch ends with: 125, the first code of the
 // band "read as an infrastructure failure, charged to the runner and not to the brick", which no
 // retry policy can name. The brick never ran, and running it again changes nothing until an
-// administrator changes the pool.
+// administrator changes the pools or the step's author changes its runs_on.
 const platformFailure = 125
 
-// unpublishable is a task no runner may be handed, and why, in words that name the pool.
+// unpublishable is a task no runner may be handed, and why, in words that name the pool or the
+// labels no one pool answers.
 type unpublishable struct{ why string }
 
 func (u unpublishable) Error() string { return u.why }
 
-// poolOf is the pool a task's labels select, found among those given, or why no runner of any
-// pool may be handed it.
+// poolOf is the pool a task's labels select among those given, or why no runner of any pool may be
+// handed it.
 //
-// The pool is the one package bus routes the message to, read off the same labels by the same
-// function, so that the pool whose policy is applied and the pool whose runners are handed the task
-// cannot be two different pools. The policy is the step's, since every shard of a step carries its
-// labels and its run's namespace, so a refusal of one task is a refusal of each of them.
-func poolOf(namespace string, t graph.Task, pools map[string]db.RunnerPool) (db.RunnerPool, error) {
-	name, err := bus.PoolOf(t.RunsOn)
-	if err != nil {
+// "A step goes to the pool whose labels include every label of its runs_on, among the namespace's
+// allowed pools", and bus.Route is that rule: the pool found here is the pool the dispatch names and
+// the bus publishes to, so the pool whose policy is applied and the pool whose runners are handed
+// the task cannot be two different pools. The policy is the step's, since every shard of a step
+// carries its labels and its run's namespace, so a refusal of one task is a refusal of each of them.
+//
+// A namespace reaches a pool only where both sides agree: the namespace allows the pool and the pool
+// accepts the namespace. No namespace carries a list of allowed pools yet, so the pools chosen among
+// are every pool that accepts it. A pool that does not is never a candidate, since a pool dedicated
+// to one namespace, carrying the labels a shared pool carries, would otherwise make every other
+// namespace's steps on those labels ambiguous. Only where no pool that accepts the namespace carries
+// the labels and one that refuses it does is the step told which pool refused it, as it was before
+// labels chose the pool.
+func poolOf(namespace string, t graph.Task, pools []db.RunnerPool) (db.RunnerPool, error) {
+	var reachable, refusing []bus.Pool
+	for _, p := range pools {
+		if p.Accepts(namespace) {
+			reachable = append(reachable, bus.Pool{Name: p.Name, Labels: p.Labels})
+		} else {
+			refusing = append(refusing, bus.Pool{Name: p.Name, Labels: p.Labels})
+		}
+	}
+	name, err := bus.Route(t.RunsOn, reachable)
+	var unrouted *bus.Unrouted
+	if errors.As(err, &unrouted) && len(unrouted.Pools) == 0 {
+		if other, err := bus.Route(t.RunsOn, refusing); err == nil {
+			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, other, namespace)}
+		}
+	}
+	switch {
+	case errors.As(err, &unrouted) && len(unrouted.RunsOn) == 0:
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s names no runner label and runs on the runner pool %s, which does not exist, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates the pool", t.Step, bus.DefaultPool)}
+	case errors.As(err, &unrouted) && len(unrouted.Pools) == 0:
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on [%s], and no runner pool the namespace %s may use carries every one of those labels, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates a pool that does", t.Step, strings.Join(t.RunsOn, ", "), namespace)}
+	case errors.As(err, &unrouted):
+		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on [%s], and the runner pools %s each carry every one of those labels, so no runner may be handed it: a step goes to one pool, and it fails on the infrastructure's account until its runs_on names a label only one of them carries", t.Step, strings.Join(t.RunsOn, ", "), strings.Join(unrouted.Pools, " and "))}
+	case err != nil:
 		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s names no runner pool that can exist, so no runner may be handed it: %s", t.Step, err)}
 	}
-	pool, found := pools[name]
-	if !found {
-		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not exist, so no runner may be handed it: the step fails on the infrastructure's account until an administrator creates the pool", t.Step, name)}
-	}
-	if !pool.Accepts(namespace) {
-		return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, name, namespace)}
-	}
-	return pool, nil
+	return pools[slices.IndexFunc(pools, func(p db.RunnerPool) bool { return p.Name == name })], nil
 }
 
 // refuseUnpooled ends every step whose pool will not run the namespace, each of its pending shards
@@ -70,14 +96,10 @@ func poolOf(namespace string, t graph.Task, pools map[string]db.RunnerPool) (db.
 // step for good, since 125 is retried by no policy and requeued only after a loss, so there are at
 // most as many rounds as steps.
 func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
-	byName := make(map[string]db.RunnerPool, len(pools))
-	for _, p := range pools {
-		byName[p.Name] = p
-	}
 	for {
 		refused := map[agk.Step]string{}
 		for _, t := range plan.Start {
-			if _, err := poolOf(namespace, t, byName); err != nil {
+			if _, err := poolOf(namespace, t, pools); err != nil {
 				refused[t.Step] = err.Error()
 			}
 		}
@@ -109,26 +131,22 @@ func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool
 	}
 }
 
-// policed reads the pool a task's labels select in the transaction that issues its grant, and
-// answers what the task may be given there: the step's resources capped to the pool's ceilings. A
-// pool that will not run it, which the pass found running it when it read the pools, is refused
-// here too, and the task stays pending for the next pass to end.
-func policed(ctx context.Context, w *db.Wide, namespace string, t graph.Task) (graph.Resources, error) {
-	pools := map[string]db.RunnerPool{}
-	if name, err := bus.PoolOf(t.RunsOn); err == nil {
-		pool, err := w.RunnerPoolNamed(ctx, name)
-		switch {
-		case err == nil:
-			pools[name] = pool
-		case !errors.Is(err, db.ErrNoRunnerPool):
-			return graph.Resources{}, err
-		}
+// policed reads the pools in the transaction that issues a task's grant, and answers the pool the
+// task's labels select there and what the task may be given on it: the step's resources capped to
+// the pool's ceilings. A pool that will not run it, which the pass found running it when it read
+// the pools, is refused here too, and the task stays pending for the next pass to end. Every pool
+// and not the one the pass found, since the rule chooses among all of them: a pool created since
+// can make one that matched alone one of two.
+func policed(ctx context.Context, w *db.Wide, namespace string, t graph.Task) (string, graph.Resources, error) {
+	pools, err := w.RunnerPools(ctx)
+	if err != nil {
+		return "", graph.Resources{}, err
 	}
 	pool, err := poolOf(namespace, t, pools)
 	if err != nil {
-		return graph.Resources{}, err
+		return "", graph.Resources{}, err
 	}
-	return capped(t.Resources, pool.Ceilings), nil
+	return pool.Name, capped(t.Resources, pool.Ceilings), nil
 }
 
 // capped holds what a step asked for to a pool's ceilings, each of its own kind.

@@ -18,32 +18,55 @@ import (
 // or names no pool that exists, is not published: it fails on the infrastructure's account and
 // names the pool. Resources are capped to the pool's ceilings on the task message."
 
-// onPool is the workflow with its first step aimed at a pool and asking for resources, written as a
-// step writes them.
-func onPool(pool, resources string) string {
+// onPool is the workflow with its first step aimed at the pools carrying a label, and asking for
+// resources, written as a step writes them.
+func onPool(label, resources string) string {
 	return strings.Replace(theWorkflow, `    outputs: [ok, rejected]
 `, `    outputs: [ok, rejected]
-    runs_on: [pool=`+pool+`]
+    runs_on: [`+label+`]
     resources: `+resources+`
 `, 1)
 }
 
 // Real PostgreSQL: the step fails without a message, on the infrastructure's account, and says
-// which pool.
+// which pool, or why no one pool.
 func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		pool string
-		says string
+		name     string
+		document string
+		pools    string
+		says     []string
 	}{
-		{"a pool that does not accept finance", "ops", "does not accept the namespace finance"},
-		{"a pool nobody created", "nowhere", "does not exist"},
+		{
+			"a pool that does not accept finance", onPool("site=ops", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('ops', '{site=ops}', '{team-ops}', 'admin')`,
+			[]string{"runner pool ops", "does not accept the namespace finance"},
+		},
+		{
+			"labels no pool carries", onPool("site=nowhere", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin')`,
+			[]string{"[site=nowhere]", "no runner pool the namespace finance may use carries every one of those labels"},
+		},
+		{
+			"labels two pools carry", onPool("site=ops", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin'), ('ops-arm', '{site=ops,arch=arm64}', 'admin')`,
+			[]string{"[site=ops]", "runner pools ops and ops-arm each carry every one of those labels"},
+		},
+		{
+			"no label, and a pool default that does not accept finance", theWorkflow,
+			`update runner_pools set accepted_namespaces = '{team-ops}' where name = 'default'`,
+			[]string{"runner pool default", "does not accept the namespace finance"},
+		},
+		{
+			"no label, and no pool default", theWorkflow,
+			`delete from runner_pools where name = 'default'`,
+			[]string{"names no runner label", "runner pool default, which does not exist"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			core, q, pool, super := decidingOn(t, onPool(c.pool, `{ cpu: "1" }`))
+			core, q, pool, super := decidingOn(t, c.document)
 			conn := dbtest.Superuser(t, super)
-			if _, err := conn.Exec(t.Context(),
-				`insert into runner_pools (name, accepted_namespaces, created_by) values ('ops', '{team-ops}', 'admin')`); err != nil {
+			if _, err := conn.Exec(t.Context(), c.pools); err != nil {
 				t.Fatal(err)
 			}
 			createRun(t, pool)
@@ -73,18 +96,64 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 				t.Errorf("the refused task was issued %d grants", grants)
 			}
 
-			// And the step says why, naming the pool, and the run has ended on it.
+			// And the step says why, and the run has ended on it.
 			var reason string
 			if err := conn.QueryRow(t.Context(),
 				`select evaluation->'state'->'steps'->'normalize'->>'reason' from runs where id = $1`, decidedRun).
 				Scan(&reason); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(reason, "runner pool "+c.pool) || !strings.Contains(reason, c.says) {
-				t.Errorf("the step's reason is %q", reason)
+			for _, says := range c.says {
+				if !strings.Contains(reason, says) {
+					t.Errorf("the step's reason is %q, and it does not say %q", reason, says)
+				}
 			}
 			if got := stateOf(t, core); got != agk.Failed {
 				t.Errorf("the run is %s", got)
+			}
+		})
+	}
+}
+
+// "A step goes to the pool whose labels include every label of its runs_on": the pool the dispatch
+// names, which is the queue the bus publishes it on, is the one pool carrying every label the step
+// asked for, the use cases' site=home among them, and a step that names none goes to the pool
+// default the installation was created with. A pool that does not accept the run's namespace is
+// none of its choices, so a pool dedicated to another namespace on the same labels leaves the step
+// one pool rather than two.
+func TestAStepGoesToThePoolWhoseLabelsIncludeItsRunsOn(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		document string
+		also     string
+		want     string
+	}{
+		{"a label one pool carries among others", onPool("site=home", `{ cpu: "1" }`), "", "home"},
+		{"no label at all", theWorkflow, "", "default"},
+		{
+			"a label a pool dedicated to another namespace carries too", onPool("site=home", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('home-ops', '{site=home}', '{team-ops}', 'admin')`,
+			"home",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, c.document)
+			if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `
+				insert into runner_pools (name, labels, created_by) values
+				  ('home', '{site=home,arch=arm64}', 'admin'), ('dmz', '{zone=dmz,arch=arm64}', 'admin');
+				`+c.also); err != nil {
+				t.Fatal(err)
+			}
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			published := q.dispatched()
+			if len(published) != 1 {
+				t.Fatalf("the first pass published %d tasks", len(published))
+			}
+			if got := published[0].Pool; got != c.want {
+				t.Errorf("the task went to the pool %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -96,8 +165,8 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 // long as a fan-out of ten thousand takes. Nor does a namespace with no slot free keep a refused
 // step waiting for one it would never use.
 func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
-	document := strings.Replace(onPool("nowhere", `{ cpu: "1" }`), `    runs_on: [pool=nowhere]
-`, `    runs_on: [pool=nowhere]
+	document := strings.Replace(onPool("site=nowhere", `{ cpu: "1" }`), `    runs_on: [site=nowhere]
+`, `    runs_on: [site=nowhere]
     strategy: { fan_out: item, max_parallel: 1 }
 `, 1)
 	core, q, pool, super := decidingOn(t, document)
@@ -149,37 +218,49 @@ func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
 	}
 }
 
-// The pool is read again in the transaction that issues the grant, so a pool that stopped running
-// the namespace after the pass read the pools gives the task no credential and publishes nothing.
+// The pools are read again in the transaction that issues the grant, so a pool that stopped running
+// the namespace after the pass read the pools, or one created since that carries the step's labels
+// too, gives the task no credential and publishes nothing.
 func TestAPoolChangedBeforeTheGrantIssuesNone(t *testing.T) {
-	core, q, pool, super := decidingOn(t, onPool("ops", `{ cpu: "1" }`))
-	conn := dbtest.Superuser(t, super)
-	if _, err := conn.Exec(t.Context(),
-		`insert into runner_pools (name, accepted_namespaces, created_by) values ('ops', '{finance}', 'admin')`); err != nil {
-		t.Fatal(err)
-	}
-	createRun(t, pool)
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
-	published := q.dispatched()
-	if len(published) != 1 {
-		t.Fatalf("the first pass published %d tasks", len(published))
-	}
+	for _, c := range []struct {
+		name   string
+		change string
+		says   string
+	}{
+		{"a pool that stopped accepting the namespace", `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'ops'`, "runner pool ops"},
+		{"a second pool carrying the labels", `insert into runner_pools (name, labels, created_by) values ('ops-2', '{site=ops}', 'admin')`, "runner pools ops and ops-2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, onPool("site=ops", `{ cpu: "1" }`))
+			conn := dbtest.Superuser(t, super)
+			if _, err := conn.Exec(t.Context(),
+				`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('ops', '{site=ops}', '{finance}', 'admin')`); err != nil {
+				t.Fatal(err)
+			}
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			published := q.dispatched()
+			if len(published) != 1 || published[0].Pool != "ops" {
+				t.Fatalf("the first pass published %+v", published)
+			}
 
-	if _, err := conn.Exec(t.Context(), `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'ops'`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := core.dispatchOf(t.Context(), "finance", published[0].Task)
-	if !errors.As(err, new(unpublishable)) || !strings.Contains(err.Error(), "runner pool ops") {
-		t.Errorf("preparing the task again answered %v", err)
-	}
-	var grants int
-	if err := conn.QueryRow(t.Context(), `select count(*) from task_grants`).Scan(&grants); err != nil {
-		t.Fatal(err)
-	}
-	if grants != 1 {
-		t.Errorf("the task holds %d grants, and the refusal issued one", grants)
+			if _, err := conn.Exec(t.Context(), c.change); err != nil {
+				t.Fatal(err)
+			}
+			_, err := core.dispatchOf(t.Context(), "finance", published[0].Task)
+			if !errors.As(err, new(unpublishable)) || !strings.Contains(err.Error(), c.says) {
+				t.Errorf("preparing the task again answered %v", err)
+			}
+			var grants int
+			if err := conn.QueryRow(t.Context(), `select count(*) from task_grants`).Scan(&grants); err != nil {
+				t.Fatal(err)
+			}
+			if grants != 1 {
+				t.Errorf("the task holds %d grants, and the refusal issued one", grants)
+			}
+		})
 	}
 }
 
@@ -187,10 +268,10 @@ func TestAPoolChangedBeforeTheGrantIssuesNone(t *testing.T) {
 // capped, an ask below one is left alone, and a step that asks for nothing where the pool sets a
 // ceiling is given the ceiling, since nothing is more than any ceiling.
 func TestAnOversizedAskIsCappedOnTheMessage(t *testing.T) {
-	core, q, pool, super := decidingOn(t, onPool("small", `{ cpu: "8", memory: "256Mi" }`))
+	core, q, pool, super := decidingOn(t, onPool("size=small", `{ cpu: "8", memory: "256Mi" }`))
 	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `
-		insert into runner_pools (name, accepted_namespaces, ceiling_cpu, ceiling_memory, ceiling_pids, created_by)
-		values ('small', '{finance}', '2', '1Gi', 128, 'admin')`); err != nil {
+		insert into runner_pools (name, labels, accepted_namespaces, ceiling_cpu, ceiling_memory, ceiling_pids, created_by)
+		values ('small', '{size=small}', '{finance}', '2', '1Gi', 128, 'admin')`); err != nil {
 		t.Fatal(err)
 	}
 	createRun(t, pool)
