@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.agentiik.dev/wire.schema.json",
   "title": "The wire",
-  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage or $defs/taskResult and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
+  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
   "$defs": {
     "taskMessage": {
       "title": "Task message",
@@ -685,7 +685,7 @@
         },
         "state": {
           "$ref": "#/$defs/taskState",
-          "description": "How the task ended, which is one of the five endings and never a state it passed through: a heartbeat is what says a task is still running, and a result saying so would be a result for work that has not finished. succeeded and failed come from the container's own exit; lost is declared by the controller rather than reported here, and travels on a result only where a runner recovers one it had already lost; timed_out and cancelled are the runner stopping the container, the first at the step's deadline and the second because the run was cancelled.",
+          "description": "How the task ended, which is one of the five endings and never a state it passed through: a progress message, $defs/taskProgress, is what says a task is running or publishing, and a result saying so would be a result for work that has not finished. succeeded and failed come from the container's own exit; lost is declared by the controller rather than reported here, and travels on a result only where a runner recovers one it had already lost; timed_out and cancelled are the runner stopping the container, the first at the step's deadline and the second because the run was cancelled.",
           "enum": [
             "succeeded",
             "failed",
@@ -1036,6 +1036,73 @@
           "runner": "runner-dmz-02",
           "state": "lost",
           "started_at": "2026-09-10T06:41:09.104Z"
+        }
+      ]
+    },
+    "taskProgress": {
+      "title": "Task progress",
+      "description": "What a runner publishes when a task it holds moves on without ending: running once its container has started, and publishing once the container has exited and its outputs are being collected and uploaded. It travels on the same subject as that runner's results, so the subject vouches for who sent it exactly as it does for a result, and the controller writes it on the row of the dispatch it names, so that a run read through the API shows a step running while its container runs rather than dispatched until it ends. It is taken only from the runner the dispatch is bound to, only forwards, and never after an ending: a copy delivered late, or one overtaken by the result, changes nothing. It is told apart from a result by its progress keyword, which a result never carries, where a result carries state, which this never does, so a reader holding one document from the results subject knows which of the two it is before reading anything else. It carries no instant: the ending carries the container's span as the container reports it, and a second clock writing started_at would be a second answer to one question. The object is closed, as a result is, so that a progress message cannot come to carry an outcome.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "idempotency_key",
+        "runner",
+        "progress"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The dispatch that moved on, carried back unchanged from the task message, as a result carries it. A requeue after loss keeps the idempotency key and takes a new task_id, so this is what says which dispatch of the key the runner holds, and a host still running a dispatch that was declared lost moves nothing on the requeue somebody else holds.",
+          "examples": [
+            "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+            "01M2AAZ9G62NQXFAFCXKRPJEH5"
+          ]
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/idempotencyKey",
+          "description": "The unit of work the dispatch belongs to. It travels beside task_id, as in a result, and the two are compared with what the controller recorded, so that a message naming a dispatch of one key under another moves nothing.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+          ]
+        },
+        "runner": {
+          "title": "Runner",
+          "description": "The runner holding the task, under the name it joined with, which is also the last token of the subject the message arrives on. A message whose runner is not the one whose subject it came on is refused rather than believed, and so is one from a runner the dispatch is not bound to, because a machine of the pool able to move another machine's task would be able to show work running that nobody runs.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "examples": [
+            "runner-dmz-02",
+            "runner-lan-01"
+          ]
+        },
+        "progress": {
+          "title": "Progress",
+          "description": "The state the task has reached, one of the two between dispatched and an ending that only its runner can see. running: the container has started. publishing: the container has exited and its outputs are being collected and uploaded, a state of its own because the result is not yet safe and losing a runner here is not losing one mid-run. A task only moves forwards, so publishing after publishing, or running after publishing, is a copy and changes nothing. It is spelled progress rather than state so that no document is both a result and a progress message: a reader decides which it holds by the keyword and never by the value.",
+          "type": "string",
+          "enum": [
+            "running",
+            "publishing"
+          ],
+          "examples": [
+            "running",
+            "publishing"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "runner": "runner-dmz-02",
+          "progress": "running"
+        },
+        {
+          "task_id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "runner": "runner-lan-01",
+          "progress": "publishing"
         }
       ]
     },
