@@ -144,8 +144,8 @@ func readManifests(ctx context.Context, e Env, referenced []reference) (map[stri
 	return manifestsThrough(ctx, e, d, referenced)
 }
 
-// imageReader is the driver a command reads images through without running any of them, or the
-// exit code it could not be opened with, the refusal said.
+// imageReader opens the driver a command reads images through without running any of them. Where
+// it cannot, the refusal is said and the exit code it leaves with is answered instead.
 func imageReader(e Env) (*driver.Docker, int) {
 	policy := driver.DefaultPolicy()
 	// A laptop is the machine this command is typed on and Docker Desktop does not remap,

@@ -11,9 +11,9 @@ import (
 
 const aDigest = "sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"
 
-// What names an image by digest is what the wire's imageRef accepts, reference for reference,
-// read out of the vendored document rather than copied from it: a push that let through what a
-// task message cannot carry would record a version no runner may run.
+// What names an image by digest is what the wire's imageRef accepts, reference for
+// reference, read out of the vendored document rather than copied from it: a push that
+// let through what a task message cannot carry would record a version nobody can run.
 func TestAnImageByDigestIsWhatTheWireAccepts(t *testing.T) {
 	doc, err := fixtures.Wire()
 	if err != nil {
@@ -54,7 +54,7 @@ func TestAnImageByDigestIsWhatTheWireAccepts(t *testing.T) {
 	}
 }
 
-// A repository is a reference less its tag and its digest, and a registry's port is neither.
+// A repository is a reference less its tag and its digest, and a port is neither.
 func TestTheRepositoryOfAReference(t *testing.T) {
 	for ref, want := range map[string]string{
 		"alpine":                                      "alpine",

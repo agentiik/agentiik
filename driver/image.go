@@ -27,8 +27,8 @@ import (
 var ErrRootUser = errors.New("the container user is non-root, required by the manifest and checked at publication: root, 0 and 0:0 are refused, because a read-only root filesystem and dropped capabilities are worth little to a process running as uid 0")
 
 // ErrNotPushed is an image no registry serves under the digest this machine holds it by,
-// which Pin refuses. No credentials is this release's pull: a namespace's own registry
-// credentials, and the pulls they open, arrive with v0.8.0.
+// which Pin refuses. A pull with no credentials is this release's: a namespace's own
+// registry credentials, and the pulls they open, arrive with v0.8.0.
 var ErrNotPushed = errors.New("a server run names every image by the digest its registry serves it under, and a runner pulls it from there with no credentials")
 
 // ErrImagePullFailed is a pull that died. It is charged to the platform and never to the
