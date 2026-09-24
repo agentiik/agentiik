@@ -164,6 +164,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A pull that happened reports at least 1 in `image_pull_ms`, since 0 says the host already held the image.
 - The terminal `driver.Event` of a container that ran carries its exit code and span, so a container stopped at its deadline or cancelled tells the code its stop left (137 or 143), which the record of its key keeps, and one whose outputs were refused tells 121.
 - Where the daemon cannot give a container's span after its exit, the span runs from the dispatch to the moment the exit was read, rather than reading as a container that never started.
+- `Policy.RequireDigest`, a floor no line of `runner.toml` lifts: a task whose image is not `name@sha256` is refused with `driver.ErrImageNotByDigest` on the platform's account before anything is asked of the host, and a step that is not a script step, whose image carries no `/agk/brick.yaml`, is refused rather than run as the image's own account. `agk run --local` and `agk brick test` lift it.
+- The pull is bounded by the task's deadline. A deadline that passes during it ends the task `timed_out` with no container, and the log says why.
+- A pull a registry refused for want of credentials says so, and names v0.8.0's namespace credentials. `docker.IsPullDenied` reads the four ways the daemon passes such a refusal on.
+- A die event the watch had no room for arms the inspect, so the exit is read in seconds rather than at the deadline as `timed_out`.
 
 ### Runner
 
