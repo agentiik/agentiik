@@ -66,6 +66,12 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner pool's name is lowercase and hyphenated, at most 255 characters, and its labels, its namespaces and a join token's labels are held to the wire's grammar by the table. Its ceilings are cpu, memory and pids, kept as written, and there is no disk ceiling, since nothing can enforce one. Migration `0019_pool_shape.sql`.
 - A pool's pids ceiling is a `bigint`, 64 bits as the wire and `PidsLimit` allow, so one past 32 bits is kept where it was a 500. Migration `0019_pool_shape.sql`.
 - `Wide.IssueJoinToken` takes the moment a token is issued, and the row keeps it, so its expiry counts from the API's clock and not the database's.
+- `db.Provision` applies the migrations and creates, or brings back to shape, the `NOSUPERUSER NOBYPASSRLS` role the API and the controller connect as, with read and write on the tables the migrations created and read on `schema_migrations`, so a binary can tell a database ahead of it. It needs no superuser, the password reaches PostgreSQL as a SCRAM verifier, and the tests provision through it.
+- `db.Provision` holds an advisory lock while it runs, so two replicas migrating one database at once take turns rather than one of them failing.
+- `db.Provision` refuses a role that owns the database or anything in it, before applying anything, since no revoke reaches an owner. It names what the role owns and the `REASSIGN OWNED BY` that hands it on.
+- `db.Provision` grants only the tables of `public` that belong to no extension and whose owner the migrating role answers for, so an extension's view neither stops a managed administrator nor reaches the application.
+- `db.Provision` takes the role out of every role it is a member of, and back from what it holds on the database, on a parameter and on any relation of `public`, columns included, before granting it anything.
+- A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
 
 ### Bus
 
