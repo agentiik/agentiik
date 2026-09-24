@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ import (
 // A revocation on a real installation, against a real PostgreSQL and a real NATS under the
 // installation's operator: the operator revokes a runner, and at its next heartbeat the runner is
 // told to drain and until when its results are taken. The bus credential it is then given publishes
-// a result the controller hears as that runner's, and pulls nothing, and it redeems nothing.
+// a result the controller hears as that runner's, and pulls nothing.
 func TestARevokedRunnerFinishesItsGraceOnTheInstallationsBus(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -158,19 +157,10 @@ func TestARevokedRunnerFinishesItsGraceOnTheInstallationsBus(t *testing.T) {
 		t.Fatal("the revoked runner's result never reached the controller")
 	}
 
-	// It pulls nothing from its pool, and redeems nothing.
+	// It pulls nothing from its pool.
 	short, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if _, err := b.Take(short, "dmz", 1, 200*time.Millisecond); err == nil {
 		t.Error("the revoked runner took from its pool")
-	}
-	code, answer = c.do("POST", "/api/v1/tasks/redeem", credential, api.Redemption{
-		Grant: "agkgrant_notarealgrantbutlongenoughtolookplausible", TaskID: "01M2T1AAAAAAAAAAAAAAAAAAAA", IdempotencyKey: key,
-	})
-	if code != http.StatusForbidden {
-		t.Errorf("the revoked runner's redemption answered %d: %v", code, answer)
-	}
-	if said, _ := answer["error"].(string); !strings.Contains(said, "put the message back") {
-		t.Errorf("the revoked runner was told %q", said)
 	}
 }

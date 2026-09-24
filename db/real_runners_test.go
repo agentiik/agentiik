@@ -1314,7 +1314,7 @@ func TestARunnerCredentialRotatesWithTheKeyItJoinedWith(t *testing.T) {
 		_, err := w.Revoke(ctx, other.Runner, "admin", "the host was retired", now, time.Hour)
 		return err
 	})
-	if _, err := rotate(rotating(other.Credential, other.Runner, privateKey(2), now), now); !errors.Is(err, ErrNoRunner) {
+	if _, err := rotate(rotating(other.Credential, other.Runner, privateKey(2), now), now); !errors.Is(err, ErrRunnerRevoked) {
 		t.Errorf("a rotation by a revoked runner answered %v", err)
 	}
 
@@ -1409,7 +1409,8 @@ func TestTheRotateByAnsweredIsTheOneEnforced(t *testing.T) {
 }
 
 // A draining runner rotates, since a drain takes no credential away and a drained runner stays up
-// for as long as it is left drained. A revoked one does not, even in its grace.
+// for as long as it is left drained. A revoked one does not: in its grace it is told it is revoked,
+// since its credential still opens what the grace allows, and after it the credential opens nothing.
 func TestADrainingRunnerRotatesAndARevokedOneDoesNot(t *testing.T) {
 	pool, _ := joining(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -1424,16 +1425,19 @@ func TestADrainingRunnerRotatesAndARevokedOneDoesNot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rotate := func(ro Rotating) error {
+	rotate := func(ro Rotating, at time.Time) error {
 		return pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-			_, err := w.Rotate(ctx, ro, 30*24*time.Hour, now.Add(time.Minute))
+			_, err := w.Rotate(ctx, ro, 30*24*time.Hour, at)
 			return err
 		})
 	}
-	if err := rotate(rotating(drained.Credential, drained.Runner, privateKey(1), now)); err != nil {
+	if err := rotate(rotating(drained.Credential, drained.Runner, privateKey(1), now), now.Add(time.Minute)); err != nil {
 		t.Errorf("a draining runner's rotation answered %v", err)
 	}
-	if err := rotate(rotating(revoked.Credential, revoked.Runner, privateKey(2), now)); !errors.Is(err, ErrNoRunner) {
+	if err := rotate(rotating(revoked.Credential, revoked.Runner, privateKey(2), now), now.Add(time.Minute)); !errors.Is(err, ErrRunnerRevoked) {
 		t.Errorf("a revoked runner's rotation, in its grace, answered %v", err)
+	}
+	if err := rotate(rotating(revoked.Credential, revoked.Runner, privateKey(2), now.Add(time.Hour)), now.Add(time.Hour)); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("a revoked runner's rotation, at the end of its grace, answered %v", err)
 	}
 }

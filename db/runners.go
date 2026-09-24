@@ -456,13 +456,14 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 	var id, state, current string
 	var key []byte
 	var rotateBy time.Time
-	var previousBy, lastSigned *time.Time
+	var previousBy, lastSigned, accepted *time.Time
 	err := w.tx.QueryRow(ctx,
-		`select id, state, public_key, credential_hash, rotate_by, previous_rotate_by, rotation_signed_at
+		`select id, state, public_key, credential_hash, rotate_by, previous_rotate_by, rotation_signed_at,
+		        results_accepted_until
 		 from runners
 		 where credential_hash = $1 or previous_credential_hash = $1
 		 for update`, hashed).
-		Scan(&id, &state, &key, &current, &rotateBy, &previousBy, &lastSigned)
+		Scan(&id, &state, &key, &current, &rotateBy, &previousBy, &lastSigned, &accepted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Rotated{}, ErrNoRunner
 	}
@@ -476,6 +477,11 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 	// the same request sent again would read as a later one, and be good twice.
 	signedAt := ro.SignedAt.Truncate(time.Microsecond)
 	switch {
+	case state == "revoked" && accepted != nil && now.Before(*accepted) && now.Before(rotateBy) && id == ro.Runner:
+		// Revoked while the request was under way, and still in its grace: the credential
+		// opens what the grace allows, and the runner is told why it renews nothing rather
+		// than that it opens nothing, which would send it off to join again.
+		return Rotated{}, ErrRunnerRevoked
 	case state == "revoked", !now.Before(rotateBy), id != ro.Runner:
 		// Everything Authenticate refuses, judged again under the lock, since a rotation
 		// that committed after the request was authenticated may have left the credential
@@ -623,8 +629,9 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 	return beaten, nil
 }
 
-// ErrRunnerRevoked is a drain ordered for a runner that is already revoked.
-var ErrRunnerRevoked = errors.New("db: that runner is revoked, which a drain would only undo part of")
+// ErrRunnerRevoked is an order or a rotation for a runner that is revoked and still in its grace:
+// a drain would only undo part of the revocation, and a rotation would carry the runner past it.
+var ErrRunnerRevoked = errors.New("db: that runner is revoked")
 
 // Drain tells a runner to stop taking work and finish what it holds, and answers the runner as it
 // now stands.

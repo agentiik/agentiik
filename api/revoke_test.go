@@ -20,6 +20,13 @@ import (
 // accepted for rotation, and revocations whose grace is grace.
 func withGrace(t *testing.T, rotation, grace time.Duration) (rotations, *consumers) {
 	t.Helper()
+	return withGraceAndBefore(t, rotation, grace, new(func()))
+}
+
+// withGraceAndBefore is withGrace, running what before holds, once, the next time the API reads its
+// clock, so that a test can land something between two moments of one request.
+func withGraceAndBefore(t *testing.T, rotation, grace time.Duration, before *func()) (rotations, *consumers) {
+	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
 	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
@@ -40,7 +47,13 @@ func withGrace(t *testing.T, rotation, grace time.Duration) (rotations, *consume
 	if _, err := api.NewRunners(rt, api.RunnerOptions{
 		Pool: pool, JoinRotation: rotation, RevocationGrace: grace,
 		BusIssuer: minted, BusConsumers: made,
-		Now: func() time.Time { return *clock },
+		Now: func() time.Time {
+			if f := *before; f != nil {
+				*before = nil
+				f()
+			}
+			return *clock
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +210,39 @@ func TestTheGraceAnsweredEndsNoLaterThanTheCredential(t *testing.T) {
 	}
 }
 
+// A rotation the hook let through a moment before the runner was revoked is told the runner is
+// revoked, as one after it is, rather than that its credential opens nothing, which would send the
+// runner off to join again in the middle of its grace.
+func TestARotationCrossingARevocationIsToldTheRunnerIsRevoked(t *testing.T) {
+	before := new(func())
+	ro, _ := withGraceAndBefore(t, 30*24*time.Hour, time.Hour, before)
+	key := host(1)
+	runner, credential := ro.joinedAs(t, key)
+	*ro.clock = ro.clock.Add(time.Second)
+
+	// The hook reads the clock first, and the rotation next: the revocation lands between them.
+	*before = func() {
+		*before = func() {
+			if err := ro.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+				_, err := w.Revoke(ctx, runner, "admin", "the credential leaked", *ro.clock, time.Hour)
+				return err
+			}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	w, _ := call(t, ro.handler, "POST", "/api/v1/runners/rotate", credential, ro.signed(runner, key))
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "revoked") {
+		t.Errorf("a rotation crossing a revocation answered %d: %s", w.Code, w.Body)
+	}
+	if held := inventoried(t, ro.handler, runner); held["state"] != "revoked" {
+		t.Fatalf("the revocation did not land: %v", held["state"])
+	}
+	if code := ro.beats(t, runner, credential); code != http.StatusOK {
+		t.Errorf("after the refused rotation the revoked runner's heartbeat answered %d", code)
+	}
+}
+
 // A draining runner is only told to take nothing new: its bus credential is the one it always had,
 // and it renews its runner credential, since it stays up for as long as it is left drained.
 func TestADrainingRunnerKeepsItsCredentials(t *testing.T) {
@@ -220,7 +266,9 @@ func TestADrainingRunnerKeepsItsCredentials(t *testing.T) {
 }
 
 // "A redemption by a draining or revoked runner gets 403, binds nothing, and the runner puts the
-// message back with Again": the task is nobody's yet, and a runner that takes work redeems it.
+// message back with Again": the task is nobody's yet, and a runner that takes work redeems it. What
+// a runner already holds it redeems again once drained or revoked, after a lost answer or a
+// restart, since finishing it is what it is left to do.
 func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
 	g := withGrants(t, held{"finance/stripe": "sk_live_notreal"})
 	clear, _, _ := g.dispatched(t, []string{"stripe"})
@@ -244,7 +292,19 @@ func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
 	}
 
 	// The grant was good all along.
-	g.redeemed(t, g.joined(t), asking(clear))
+	holder := g.joined(t)
+	g.redeemed(t, holder, asking(clear))
+	for _, verb := range []string{"drain", "revoke"} {
+		if w, _ := call(t, g.handler, "POST", "/api/v1/runners/"+runnerOf(t, g, holder)+"/"+verb, "admin", api.Order{Reason: "the host is being retired"}); w.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", verb, w.Code, w.Body)
+		}
+		if answer := g.redeemed(t, holder, asking(clear)); len(answer.Secrets) != 1 {
+			t.Errorf("the holder's redemption after a %s answered %+v", verb, answer)
+		}
+	}
+	if bound := g.bound(t); bound == nil || *bound != runnerOf(t, g, holder) {
+		t.Errorf("the task is held by %v", bound)
+	}
 }
 
 // runnerOf is the runner a credential opens.

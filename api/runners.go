@@ -840,7 +840,7 @@ func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner
 	// than that its credential opens nothing, which it still does until then. A draining one
 	// rotates, for the reason db.Wide.Rotate gives.
 	if runner.State == "revoked" {
-		fail(w, http.StatusForbidden, fmt.Sprintf("runner %s is revoked, and a revoked credential is not renewed: it is accepted until %s, the end of its grace, and refused everywhere after", runner.ID, runner.ResultsAcceptedUntil.UTC().Format(time.RFC3339)))
+		refuseRevokedRotation(w, runner.ID)
 		return
 	}
 	now := s.now()
@@ -869,6 +869,10 @@ func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner
 		// have answered a moment later.
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "that credential opens nothing")
+		return
+	case errors.Is(err, db.ErrRunnerRevoked):
+		// Revoked between the hook and the lock, and still in its grace.
+		refuseRevokedRotation(w, runner.ID)
 		return
 	case errors.Is(err, db.ErrNotItsKey):
 		fail(w, http.StatusForbidden, fmt.Sprintf("the signature is not by the key runner %s joined with: the key proves the machine, and a host whose key is gone is a new runner, which joins again", runner.ID))
@@ -1002,6 +1006,11 @@ func (s *RunnerAPI) revoke(w http.ResponseWriter, r *http.Request, who Principal
 		return
 	}
 	write(w, http.StatusOK, revoked)
+}
+
+// refuseRevokedRotation answers a rotation by a runner that is revoked and still in its grace.
+func refuseRevokedRotation(w http.ResponseWriter, runner string) {
+	fail(w, http.StatusForbidden, fmt.Sprintf("runner %s is revoked, and a revoked credential is not renewed: it is accepted until the end of its grace, which the heartbeat answers as results_accepted_until, and refused everywhere after", runner))
 }
 
 func (s *RunnerAPI) inventory(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {

@@ -481,7 +481,8 @@ func TestAGrantIsCheckedWithoutBindingItsTask(t *testing.T) {
 }
 
 // "A redemption by a draining or revoked runner gets 403, binds nothing": both take nothing new,
-// checked and bound alike, and the task stays free for a runner that does.
+// checked and bound alike, and the task stays free for a runner that does. What a runner already
+// holds is not new, and it redeems that again once drained or revoked, to finish it.
 func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
 	pool, super := joining(t)
 	ctx := t.Context()
@@ -547,5 +548,37 @@ func TestADrainingOrRevokedRunnerRedeemsNothing(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Errorf("a ready runner's redemption of the same grant answered %v", err)
+	}
+
+	// Drained, and then revoked, it redeems what it holds again, as it does after a lost answer
+	// or a restart, and the task stays its own.
+	for _, order := range []func(ctx context.Context, w *Wide) error{
+		func(ctx context.Context, w *Wide) error {
+			_, err := w.Drain(ctx, ready.Runner, "admin", "the host is being retired", now)
+			return err
+		},
+		func(ctx context.Context, w *Wide) error {
+			_, err := w.Revoke(ctx, ready.Runner, "admin", "the credential leaked", now, time.Hour)
+			return err
+		},
+	} {
+		if err := pool.Installation(ctx, RunnerInventory, order); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			if _, err := w.Redeemable(ctx, clear, key, ready.Runner, now); err != nil {
+				return err
+			}
+			_, err := w.Redeem(ctx, clear, key, ready.Runner, now)
+			return err
+		}); err != nil {
+			t.Errorf("the holder's redemption once withdrawn answered %v", err)
+		}
+	}
+	if err := conn.QueryRow(ctx, `select runner from tasks where id = $1`, row).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if holder == nil || *holder != ready.Runner {
+		t.Errorf("the task is held by %v, and was %s's", holder, ready.Runner)
 	}
 }

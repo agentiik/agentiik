@@ -110,14 +110,6 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		fail(w, http.StatusBadRequest, "a redemption names the attempt that is asking, and this one has no idempotency_key")
 		return
 	}
-	// "A redemption by a draining or revoked runner gets 403, binds nothing, and the runner puts
-	// the message back with Again", for another runner of the pool: both take nothing new. It is
-	// refused before the grant is looked at, so that a runner told to drain reads no secret, and
-	// the binding asks again, for a drain or a revocation that lands while this one is under way.
-	if runner.State != "ready" {
-		refuseRedemption(w, db.ErrRunnerNotTaking)
-		return
-	}
 	// The row is held against the task the grant names inside its own text before anything
 	// is read, so that a body disagreeing with its grant has one refusal whatever the task is
 	// doing. Compared once the task was read, a wrong task_id would be told the work is
@@ -219,9 +211,11 @@ func refuseRedemption(w http.ResponseWriter, err error) {
 		// of the pool to be refused in its turn.
 		fail(w, http.StatusConflict, "that task is not this runner's to work on")
 	case errors.Is(err, db.ErrRunnerNotTaking):
-		// The runner's standing and not the task's: the task is nobody's yet, and another runner
-		// of the pool should have it, so the message goes back on the queue rather than being
-		// acknowledged.
+		// "A redemption by a draining or revoked runner gets 403, binds nothing, and the runner
+		// puts the message back with Again": the runner's standing and not the task's, which is
+		// nobody's yet and should go to another runner of the pool. It is refused before any
+		// secret is read. A task the runner already holds is not refused, since finishing what
+		// it holds is what a drain and a grace leave it to do.
 		fail(w, http.StatusForbidden, "this runner is draining or revoked and takes no new task: put the message back for another runner of the pool")
 	case errors.Is(err, errNoCommit):
 		// This and the two below are the installation's rather than the runner's: the
