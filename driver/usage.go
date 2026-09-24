@@ -69,7 +69,7 @@ func (d *Docker) sample(ctx context.Context, container string) *sampler {
 // for less than one.
 func (s *sampler) read(ctx context.Context, cli *docker.Client, container string) {
 	defer close(s.done)
-	if now, err := cli.ContainerStatsOnce(ctx, container); err == nil {
+	if now, err := cli.ContainerStatsOnce(ctx, container); err == nil && now.Sampled() {
 		s.fold(now)
 	}
 	stream, err := cli.ContainerStats(ctx, container)
