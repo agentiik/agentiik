@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // NetworkSpec is one network to create. Every task gets its own, so two containers on
@@ -43,6 +44,10 @@ type NetworkSummary struct {
 	Internal bool              `json:"Internal,omitempty"`
 	Options  map[string]string `json:"Options,omitempty"`
 	Labels   map[string]string `json:"Labels,omitempty"`
+
+	// Created is when the daemon made it, which is how a network that has only just
+	// been made is told from one that was left.
+	Created time.Time `json:"Created"`
 }
 
 // NetworkCreate creates one network.

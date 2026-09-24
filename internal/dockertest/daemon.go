@@ -39,6 +39,7 @@ type Daemon struct {
 	pulled     map[string]bool
 	moved      map[string]Image
 	networks   map[string]docker.NetworkSpec
+	madeAt     map[string]time.Time
 	events     []docker.Event
 	watchers   map[chan docker.Event]struct{}
 	vanished   bool
@@ -83,6 +84,7 @@ func NewDaemon(bs ...Behaviour) (*Daemon, error) {
 		pulled:     map[string]bool{},
 		moved:      map[string]Image{},
 		networks:   map[string]docker.NetworkSpec{},
+		madeAt:     map[string]time.Time{},
 		watchers:   map[chan docker.Event]struct{}{},
 		described:  describe(o),
 	}
@@ -279,6 +281,7 @@ func (d *Daemon) networkCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	d.networks[id] = spec
+	d.madeAt[id] = time.Now().UTC()
 	d.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, docker.NetworkCreated{ID: id})
@@ -298,6 +301,7 @@ func (d *Daemon) networkList(w http.ResponseWriter, r *http.Request) {
 		list = append(list, docker.NetworkSummary{
 			ID: id, Name: spec.Name, Driver: spec.Driver,
 			Internal: spec.Internal, Options: spec.Options, Labels: spec.Labels,
+			Created: d.madeAt[id],
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -314,6 +318,7 @@ func (d *Daemon) networkRemove(w http.ResponseWriter, r *http.Request) {
 	busy := ok && d.endpointsOn(id, spec.Name)
 	if ok && !busy {
 		delete(d.networks, id)
+		delete(d.madeAt, id)
 		d.removed = append(d.removed, id)
 	}
 	d.mu.Unlock()
@@ -326,6 +331,19 @@ func (d *Daemon) networkRemove(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// Backdate makes a network older than it is, by its identifier or its name, which is how a
+// test leaves one behind as a process that died a while ago left it. It answers false where
+// there is no such network.
+func (d *Daemon) Backdate(ref string, by time.Duration) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id, _, ok := d.network(ref)
+	if ok {
+		d.madeAt[id] = d.madeAt[id].Add(-by)
+	}
+	return ok
 }
 
 // network finds one network by its identifier or its name. The lock is held.
