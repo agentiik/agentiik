@@ -119,6 +119,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
+- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick; a store that will not take outputs that passed is `failed` with 125 (`driver.ExitOutputsUnwritten`), charged to the platform. Either key is written down with its code and span, and Run's error keeps the `*agk.Refusal` and `driver.ErrOutputsRefused` for `errors.As` and `errors.Is`.
+- A container stopped at its deadline or by a stop is logged as `timed_out` or `cancelled`, and no longer as the runtime's failure its kill code reads as.
 
 ### Artifacts
 
@@ -126,6 +128,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+- `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
