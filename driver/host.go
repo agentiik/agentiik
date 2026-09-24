@@ -3,6 +3,7 @@ package driver
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -77,8 +78,13 @@ func (c Config) host() Host {
 // healthy. A daemon that does not remap is given nothing to chown and asks nothing here.
 // The refusal names the lines that put it right, in the two forms a runner is installed
 // in, because the person who reads it is the one who wrote the unit.
-func readOwnership(f *usernsFloor, h Host) error {
-	if f == nil || !f.Remapped {
+//
+// Only a runner's policy is held to it. agk validate opens a daemon to read manifests and
+// owns no directory, and agk run --local and agk brick test are run by a person on a
+// machine of their own, where the chown of the first task that needs one refuses that task
+// in its own words; none of them has a unit to put a line in.
+func readOwnership(f *usernsFloor, p Policy, h Host) error {
+	if f == nil || !f.Remapped || !p.runner() {
 		return nil
 	}
 	held, err := h.Capabilities()
@@ -94,7 +100,23 @@ func readOwnership(f *usernsFloor, h Host) error {
 	if len(missing) == 0 {
 		return nil
 	}
-	return fmt.Errorf("driver: %w: it lacks %s. A task's directory is given to uid %d and gid %d, the base of the range, before its container is created, and is re-entered and removed when the task ends, which an account without them cannot do. A runner installed by its systemd unit holds them with AmbientCapabilities=%s and CapabilityBoundingSet=%s under [Service]; one installed as a container holds them with cap_add: [%s]", ErrOwnershipCapabilities, andList(missing), f.UID, f.GID, capabilityNames(""), capabilityNames(""), strings.ReplaceAll(capabilityNames("CAP_"), " ", ", "))
+	return fmt.Errorf("driver: %w: it lacks %s. A task's directory is given to uid %d and gid %d, the base of the range, before its container is created, and is re-entered and removed when the task ends, which an account without them cannot do. A runner installed by its systemd unit holds them with AmbientCapabilities=%s and CapabilityBoundingSet=%s under [Service]; one installed as a container runs as a user that is not root, so the daemon's cap_add alone leaves it none, and holds them as file capabilities on %s (setcap %s=ep) kept in its bounding set with cap_add: [%s]", ErrOwnershipCapabilities, andList(missing), f.UID, f.GID, capabilityNames(""), capabilityNames(""), executable(), strings.ToLower(strings.ReplaceAll(capabilityNames(""), " ", ",")), strings.ReplaceAll(capabilityNames("CAP_"), " ", ", "))
+}
+
+// executable is the file this process runs from, which is the one a setcap names, or the
+// name the runner is shipped under where it cannot say.
+func executable() string {
+	if path, err := os.Executable(); err == nil {
+		return path
+	}
+	return "agk-runner"
+}
+
+// runner says whether a policy is a runner's. The seccomp and secrets floors are lifted by
+// no line of runner.toml, only by a caller that is not a runner: agk run --local, agk brick
+// test and agk validate lift both.
+func (p Policy) runner() bool {
+	return !p.RequireSecretsTmpfs.Lifted() || !p.RequireSeccomp.Lifted()
 }
 
 // capabilityNames writes the three as a unit line writes them, space separated, with the

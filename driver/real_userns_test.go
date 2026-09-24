@@ -65,7 +65,7 @@ func (e *events) Observe(_ context.Context, ev Event) {
 
 // remappedDriver opens a driver as agk-runner serve opens one, every floor held, on the
 // daemon of this machine, or ends the test through usernsUnavailable.
-func remappedDriver(t *testing.T, observer Observer) (*Docker, string, string) {
+func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, string) {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
@@ -87,10 +87,10 @@ func remappedDriver(t *testing.T, observer Observer) (*Docker, string, string) {
 	if err != nil {
 		usernsUnavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
-	_, err = cli.ImageInspect(t.Context(), "alpine:3.21")
+	_, err = cli.ImageInspect(t.Context(), image)
 	cli.Close()
 	if err != nil {
-		usernsUnavailable(t, "alpine:3.21 is not on this daemon, and a remapped daemon keeps its images apart from the ones pulled before the remapping: docker pull alpine:3.21")
+		usernsUnavailable(t, "%s is not on this daemon, and a remapped daemon keeps its images apart from the ones it held before the remapping: the userns job pulls or builds it after the restart", image)
 	}
 
 	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
@@ -117,8 +117,17 @@ func remappedDriver(t *testing.T, observer Observer) (*Docker, string, string) {
 		t.Fatalf("a runner's host was refused: %s", err)
 	}
 	t.Cleanup(func() { d.Close() })
-	return d, "alpine:3.21", secrets
+	return d, secrets
 }
+
+// The two images a task in the range runs from: alpine as its own root, which is the base
+// of the range on the host, and the same image as 65532, the account a brick is required
+// to run as, which is another account of the range and owns nothing it was given. The
+// userns job builds the second after the restart.
+const (
+	rootImage    = "alpine:3.21"
+	nonRootImage = "agentiik-test/nonroot:3.21"
+)
 
 // inRange is one task that reports, on its port out, what it found: the owners of what it
 // was given as the container reads them, whether its input and its secret read back, and
@@ -192,43 +201,47 @@ func runInRange(t *testing.T, d *Docker, task graph.Task) found {
 // directory, the secret and the nested directory the brick closed are gone once the task
 // has ended.
 func TestARealRemappedDaemonRunsATaskInsideItsRange(t *testing.T) {
-	seen := &events{}
-	d, image, secretsDir := remappedDriver(t, seen)
-	task := inRange(image)
-	w, err := workdirFor(d.cfg.WorkRoot, task.ID, secretsDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The owner is read on the host while the container runs, between the chown and the
-	// removal.
-	var owner string
-	seen.on = func(e Event) {
-		if e.State != agk.TaskRunning {
-			return
-		}
-		info, err := os.Lstat(w.Root)
-		if err != nil {
-			owner = err.Error()
-			return
-		}
-		if uid, ok := ownerOf(info); ok {
-			owner = fmt.Sprint(uid)
-		}
-	}
+	for _, image := range []string{rootImage, nonRootImage} {
+		t.Run(image, func(t *testing.T) {
+			seen := &events{}
+			d, secretsDir := remappedDriver(t, seen, image)
+			task := inRange(image)
+			w, err := workdirFor(d.cfg.WorkRoot, task.ID, secretsDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The owner is read on the host while the container runs, between the chown
+			// and the removal.
+			var owner string
+			seen.on = func(e Event) {
+				if e.State != agk.TaskRunning {
+					return
+				}
+				info, err := os.Lstat(w.Root)
+				if err != nil {
+					owner = err.Error()
+					return
+				}
+				if uid, ok := ownerOf(info); ok {
+					owner = fmt.Sprint(uid)
+				}
+			}
 
-	f := runInRange(t, d, task)
-	if want := fmt.Sprint(d.floor.UID); owner != want {
-		t.Errorf("the working directory belonged to %s on the host while the container ran, and the base of the range is %s", owner, want)
-	}
-	for what, got := range map[string]string{"its input": f.Input, "its secret": f.Secret, "/agk/out": f.Out} {
-		if got != "0:0" {
-			t.Errorf("the container read %s as owned by %s, and what belongs to the base of the range is its own root, 0:0", what, got)
-		}
-	}
-	for _, tree := range w.trees() {
-		if _, err := os.Lstat(tree); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s survived the task: %v", tree, err)
-		}
+			f := runInRange(t, d, task)
+			if want := fmt.Sprint(d.floor.UID); owner != want {
+				t.Errorf("the working directory belonged to %s on the host while the container ran, and the base of the range is %s", owner, want)
+			}
+			for what, got := range map[string]string{"its input": f.Input, "its secret": f.Secret, "/agk/out": f.Out} {
+				if got != "0:0" {
+					t.Errorf("the container read %s as owned by %s, and what belongs to the base of the range is the container's root, 0:0", what, got)
+				}
+			}
+			for _, tree := range w.trees() {
+				if _, err := os.Lstat(tree); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s survived the task: %v", tree, err)
+				}
+			}
+		})
 	}
 }
 
@@ -236,8 +249,8 @@ func TestARealRemappedDaemonRunsATaskInsideItsRange(t *testing.T) {
 // from the runner's tmpfs rather than mounted as one, and a bind keeps the flags of the
 // mount its source sits on, so the container's own mount table carries the three.
 func TestARealRemappedDaemonGivesTheSecretMountTheTmpfsFlags(t *testing.T) {
-	d, image, _ := remappedDriver(t, nil)
-	f := runInRange(t, d, inRange(image))
+	d, _ := remappedDriver(t, nil, rootImage)
+	f := runInRange(t, d, inRange(rootImage))
 	flags := strings.Split(f.Flags, ",")
 	for _, want := range []string{"noexec", "nosuid", "nodev"} {
 		if !slices.Contains(flags, want) {

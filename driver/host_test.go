@@ -82,6 +82,7 @@ func TestARemappedDaemonIsRefusedToAProcessWithoutTheThreeCapabilities(t *testin
 		"uid 165536",
 		"AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE",
 		"CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE",
+		"setcap cap_chown,cap_fowner,cap_dac_override=ep",
 		"cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -94,6 +95,25 @@ func TestARemappedDaemonIsRefusedToAProcessWithoutTheThreeCapabilities(t *testin
 	d, err = New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir()})
 	if err != nil {
 		t.Fatalf("a process holding the three was refused: %s", err)
+	}
+	d.Close()
+}
+
+// agk validate opens a remapped daemon to read manifests and owns no directory, and it is
+// not a runner, which it says by lifting every floor: it is not asked for the three.
+func TestACallerThatIsNotARunnerIsNotAskedForTheCapabilities(t *testing.T) {
+	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
+	if err != nil {
+		t.Fatalf("starting a fake daemon: %s", err)
+	}
+	defer daemon.Close()
+	p := DefaultPolicy()
+	p.RequireUsernsRemap = RemapLifted
+	p.RequireSeccomp = SeccompLifted
+	p.RequireSecretsTmpfs = SecretsTmpfsLifted
+	d, err := New(Config{Socket: daemon.Socket(), Host: holding(0), Policy: p, WorkRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("a caller that lifted every floor was refused a remapped daemon: %s", err)
 	}
 	d.Close()
 }

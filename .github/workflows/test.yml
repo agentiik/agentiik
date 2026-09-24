@@ -124,13 +124,15 @@ jobs:
 
       # userns-remap: default has the daemon create the dockremap account and take its range
       # from /etc/subuid. A remapped daemon keeps its images apart from the ones it held
-      # before, so the image is pulled after the restart and not before.
+      # before, so the image is pulled after the restart and not before. The second image is
+      # the same one run as 65532, the account a brick is required to run as.
       - name: daemon
         run: |
           echo '{"userns-remap": "default"}' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
           docker info --format '{{.SecurityOptions}}' | grep -q userns
           docker pull alpine:3.21
+          printf 'FROM alpine:3.21\nUSER 65532:65532\n' | docker build -t agentiik-test/nonroot:3.21 -
 
       # The tmpfs the runner writes secret values on, with the flags the floor asks for,
       # owned by the account the tests run as.

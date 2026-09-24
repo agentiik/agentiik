@@ -308,7 +308,7 @@ func (d *Docker) heldToFloors(ctx context.Context, step agk.Step) (*usernsFloor,
 	}
 	floor, err := readUsernsFloor(info, d.cfg.Policy)
 	if err == nil {
-		err = readOwnership(floor, d.cfg.host())
+		err = readOwnership(floor, d.cfg.Policy, d.cfg.host())
 	}
 	var confined confinement
 	if err == nil {

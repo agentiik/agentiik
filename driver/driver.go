@@ -173,7 +173,7 @@ func New(cfg Config) (*Docker, error) {
 		cli.Close()
 		return nil, err
 	}
-	if err := readOwnership(floor, cfg.host()); err != nil {
+	if err := readOwnership(floor, cfg.Policy, cfg.host()); err != nil {
 		cli.Close()
 		return nil, err
 	}
