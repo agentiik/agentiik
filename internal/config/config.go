@@ -188,7 +188,8 @@ type Database struct {
 	// URL is the address as written, which never carries a password.
 	URL string
 
-	// Role is the user the URL names.
+	// Role is the user pgx signs in as: the one a user parameter names, or else the one before
+	// the URL's @.
 	Role string
 
 	// Password is read from the file the matching _FILE variable names, and is empty where
@@ -656,10 +657,16 @@ func (r *reader) bus() Bus {
 	var b Bus
 	if v, set := r.required(BusURL, "and it is the bus the controller publishes tasks on and every runner takes them from"); set {
 		b.URL = v
-		for _, server := range strings.Split(v, ",") {
-			if reason := notABusServer(strings.TrimSpace(server)); reason != "" {
-				r.refuse(BusURL, reason)
-				break
+		// Looked for in the whole value before it is cut at its commas, since a password may
+		// hold one.
+		if _, has := userinfo(v); has {
+			r.refuse(BusURL, fmt.Sprintf("carries a user or a token, and a secret is never a value in the environment: the control plane's credential is the file %s names", BusCredentialsFile))
+		} else {
+			for _, server := range strings.Split(v, ",") {
+				if reason := notABusServer(strings.TrimSpace(server)); reason != "" {
+					r.refuse(BusURL, reason)
+					break
+				}
 			}
 		}
 	}
@@ -707,9 +714,6 @@ func (r *reader) bus() Bus {
 // notABusServer is why one address of AGK_BUS_URL is not one, or nothing where it is. NATS takes
 // several separated by commas, which is how a client finds the rest of a cluster of three.
 func notABusServer(server string) string {
-	if _, has := userinfo(server); has {
-		return fmt.Sprintf("carries a user or a token, and a secret is never a value in the environment: the control plane's credential is the file %s names", BusCredentialsFile)
-	}
 	u, err := url.Parse(server)
 	switch {
 	case err != nil:

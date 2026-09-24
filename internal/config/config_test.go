@@ -727,6 +727,7 @@ func TestAPasswordAParserMisreadsIsRefusedAndNotRepeated(t *testing.T) {
 		"a bus password of digits, then a /":          {config.BusURL, "tls://controller:2718/28Qk@nats:4222", []string{"2718", "28Qk"}, config.BusCredentialsFile, both},
 		"a bus token holding a /":                     {config.BusURL, "tls://s3cr/3tt0k3n@nats:4222", []string{"s3cr", "3tt0k3n"}, config.BusCredentialsFile, both},
 		"a bus password holding a stray %":            {config.BusURL, "tls://controller:Xy9%Qk@nats:4222", []string{"Xy9", "%Qk"}, config.BusCredentialsFile, both},
+		"a bus password holding a ,":                  {config.BusURL, "tls://controller:Xy9Qk,Lm2@nats:4222", []string{"Xy9Qk", "Lm2"}, config.BusCredentialsFile, both},
 		"a second bus server's password holding a ?":  {config.BusURL, "tls://nats-1:4222,tls://controller:Xy9Qk?Lm2@nats-2:4222", []string{"Xy9Qk", "Lm2"}, config.BusCredentialsFile, both},
 		"a public URL's password holding a /":         {config.PublicURL, "https://admin:Xy9Qk/Lm2@agentiik.example.com", []string{"Xy9Qk", "Lm2"}, "", []program{theAPI}},
 		"a public URL's password holding a stray %":   {config.PublicURL, "https://admin:Xy9%Qk@agentiik.example.com", []string{"Xy9", "%Qk"}, "", []program{theAPI}},
