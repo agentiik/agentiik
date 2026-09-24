@@ -1,0 +1,542 @@
+package api_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/version"
+)
+
+// Reading runs by the identifiers a client holds: every run it can read, wherever it is; one run by
+// its identifier alone; one output's envelope; one artifact by its URI.
+
+// granted allows each principal the permissions it lists, each over a whole namespace where the
+// target names no workflow and over one workflow where it does, and nothing else: the shape of
+// "access is granted by binding a principal to a role, either on the whole namespace or on a single
+// workflow", which a listing across namespaces asks about one workflow at a time.
+type granted map[api.Principal][]grant
+
+type grant struct {
+	what api.Permission
+	over api.Target
+}
+
+func (g granted) Allow(_ context.Context, who api.Principal, what api.Permission, over api.Target) (bool, error) {
+	for _, h := range g[who] {
+		if h.what == what && h.over.Namespace == over.Namespace && (h.over.Workflow == "" || h.over.Workflow == over.Workflow) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// someRuns is an installation holding runs in two namespaces, of two workflows in one of them.
+type someRuns struct {
+	pool    *db.Pool
+	super   string
+	store   *version.Store
+	objects artifact.Objects
+	signed  *artifact.Signed
+
+	// finance are the runs of finance/monthly-invoicing, oldest first, and payroll and teamOps
+	// the one run of finance/payroll and of team-ops/monthly-invoicing.
+	finance []string
+	payroll string
+	teamOps string
+}
+
+func withSomeRuns(t *testing.T) someRuns {
+	t.Helper()
+	pool, super := dbtest.Open(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := artifact.Dir(t.TempDir())
+	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := someRuns{pool: pool, super: super, store: store, objects: objects, signed: signed}
+
+	h := s.servedTo(t, everything{who: "admin"})
+	start := func(namespace, workflow string) string {
+		t.Helper()
+		if w, _ := call(t, h, "PUT", "/api/v1/"+namespace+"/workflows/"+workflow+"/versions/"+aCommit, "admin", aPush(t)); w.Code != http.StatusOK {
+			t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+		}
+		w, started := call(t, h, "POST", "/api/v1/"+namespace+"/workflows/"+workflow+"/runs", "admin",
+			api.Start{Commit: aCommit, Inputs: map[string]any{"orders": []any{}}})
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+		}
+		return started["run"].(string)
+	}
+	s.finance = []string{start("finance", "monthly-invoicing"), start("finance", "monthly-invoicing")}
+	s.payroll = start("finance", "payroll")
+	s.teamOps = start("team-ops", "monthly-invoicing")
+
+	// Created a minute apart, oldest first, so that newest first is an order a listing has to
+	// keep rather than one it gets from runs created in the same instant.
+	for i, run := range []string{s.finance[0], s.finance[1], s.payroll, s.teamOps} {
+		s.sql(t, `update runs set created_at = $2 where id = $1`, run, aMinute(i))
+	}
+	return s
+}
+
+// aMinute is the moment the i-th run was created.
+func aMinute(i int) time.Time {
+	return time.Date(2026, 9, 24, 6, i, 0, 0, time.UTC)
+}
+
+func (s someRuns) sql(t *testing.T, statement string, args ...any) {
+	t.Helper()
+	if _, err := dbtest.Superuser(t, s.super).Exec(t.Context(), statement, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// servedTo is the API over the installation, deciding with auth, with the object routes a redirect
+// leads to beside it.
+func (s someRuns) servedTo(t *testing.T, auth api.Authorizer) http.Handler {
+	t.Helper()
+	rt, err := api.NewRouter(auth, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: s.pool, Versions: s.store, Objects: s.objects, URLs: s.signed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, s.signed); err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+// listed is the runs a listing answered, by identifier and in order, with the namespace each is in.
+func listed(t *testing.T, h http.Handler, as, query string) []string {
+	t.Helper()
+	w, _ := call(t, h, "GET", "/api/v1/runs"+query, as, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("listing %q answered %d: %s", query, w.Code, w.Body)
+	}
+	var answer struct {
+		Runs []struct {
+			Namespace string `json:"namespace"`
+			Run       string `json:"run"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, r := range answer.Runs {
+		out = append(out, r.Namespace+"/"+r.Run)
+	}
+	return out
+}
+
+func same(a, b []string) bool {
+	return strings.Join(a, " ") == strings.Join(b, " ")
+}
+
+// "GET /api/v1/runs: Runs, filtered by namespace, workflow, state and time", across every namespace
+// the caller can read. run:read held on a namespace lists every workflow's runs there, held on one
+// workflow lists that workflow's, and anything else lists nothing; a namespace the caller cannot read
+// lists what one that does not exist lists.
+func TestRunsAreListedAcrossEveryNamespaceTheCallerCanRead(t *testing.T) {
+	s := withSomeRuns(t)
+	h := s.servedTo(t, granted{
+		"alice": {{api.RunRead, api.Target{Namespace: "finance"}}},
+		"bob": {
+			{api.RunRead, api.Target{Namespace: "team-ops", Workflow: "monthly-invoicing"}},
+			{api.RunRead, api.Target{Namespace: "finance", Workflow: "payroll"}},
+		},
+		"olivia": {
+			{api.WorkflowRun, api.Target{Namespace: "finance"}},
+			{api.RunReadData, api.Target{Namespace: "team-ops"}},
+		},
+	})
+
+	for _, c := range []struct {
+		as, query string
+		want      []string
+	}{
+		{"alice", "", []string{"finance/" + s.payroll, "finance/" + s.finance[1], "finance/" + s.finance[0]}},
+		{"bob", "", []string{"team-ops/" + s.teamOps, "finance/" + s.payroll}},
+		{"olivia", "", []string{}},
+		{"alice", "?workflow=payroll", []string{"finance/" + s.payroll}},
+		{"alice", "?namespace=finance&workflow=monthly-invoicing", []string{"finance/" + s.finance[1], "finance/" + s.finance[0]}},
+		{"bob", "?namespace=finance", []string{"finance/" + s.payroll}},
+		{"bob", "?workflow=monthly-invoicing", []string{"team-ops/" + s.teamOps}},
+	} {
+		if got := listed(t, h, c.as, c.query); !same(got, c.want) {
+			t.Errorf("%s listing %q was answered %v, want %v", c.as, c.query, got, c.want)
+		}
+	}
+
+	// A namespace she cannot read answers what one nobody made answers, body and all.
+	refused, _ := call(t, h, "GET", "/api/v1/runs?namespace=team-ops", "alice", nil)
+	absent, _ := call(t, h, "GET", "/api/v1/runs?namespace=nowhere", "alice", nil)
+	if refused.Code != http.StatusOK || refused.Body.String() != absent.Body.String() {
+		t.Errorf("a namespace she cannot read answered %d %s, and one that does not exist %s", refused.Code, refused.Body, absent.Body)
+	}
+
+	if w, _ := call(t, h, "GET", "/api/v1/runs", "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("a caller with no credential answered %d", w.Code)
+	}
+}
+
+// A listing is narrowed by state, by when its runs were created, both bounds included, and by a
+// limit, newest first throughout; a state or a time that is none is refused, and a name no
+// namespace could have lists nothing rather than failing.
+func TestAListingIsNarrowedByStateAndTime(t *testing.T) {
+	s := withSomeRuns(t)
+	h := s.servedTo(t, everything{who: "alice"})
+	s.sql(t, `update runs set state = 'succeeded', started_at = $2, finished_at = $2 where id = $1`, s.finance[0], aMinute(0))
+
+	at := func(i int) string { return url.QueryEscape(aMinute(i).Format(time.RFC3339)) }
+	for _, c := range []struct {
+		query string
+		want  []string
+	}{
+		{"?state=succeeded", []string{"finance/" + s.finance[0]}},
+		{"?state=queued&namespace=finance", []string{"finance/" + s.payroll, "finance/" + s.finance[1]}},
+		{"?limit=2", []string{"team-ops/" + s.teamOps, "finance/" + s.payroll}},
+		{"?since=" + at(1) + "&until=" + at(2), []string{"finance/" + s.payroll, "finance/" + s.finance[1]}},
+		{"?until=" + at(0), []string{"finance/" + s.finance[0]}},
+		{"?since=" + at(3), []string{"team-ops/" + s.teamOps}},
+		{"?namespace=%00", []string{}},
+		{"?workflow=%ff", []string{}},
+	} {
+		if got := listed(t, h, "alice", c.query); !same(got, c.want) {
+			t.Errorf("listing %q was answered %v, want %v", c.query, got, c.want)
+		}
+	}
+	for _, query := range []string{"?state=finished", "?since=yesterday", "?until=2026-09-24"} {
+		if w, _ := call(t, h, "GET", "/api/v1/runs"+query, "alice", nil); w.Code != http.StatusBadRequest {
+			t.Errorf("listing %q answered %d: %s", query, w.Code, w.Body)
+		}
+	}
+}
+
+// "GET /api/v1/runs/{id}: Run state, per-step state, envelope digests", by the identifier alone,
+// which is all a push notification carries. It answers what the namespaced route answers, the
+// namespace included, to whoever holds run:read on the run's workflow, and a run the caller cannot
+// read answers what a run nobody started answers.
+func TestARunIsReadByItsIdentifierAlone(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	h := s.servedTo(t, granted{
+		"alice":  {{api.RunRead, api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}}},
+		"bob":    {{api.RunRead, api.Target{Namespace: "finance", Workflow: "payroll"}}, {api.RunRead, api.Target{Namespace: "team-ops"}}},
+		"olivia": {{api.WorkflowRun, api.Target{Namespace: "finance"}}, {api.RunReadData, api.Target{Namespace: "finance"}}},
+		"admin":  {{api.RunRead, api.Target{Namespace: "finance"}}},
+	})
+
+	w, detail := call(t, h, "GET", "/api/v1/runs/"+run, "alice", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the run read by its identifier answered %d: %s", w.Code, w.Body)
+	}
+	if detail["namespace"] != "finance" || detail["run"] != run || detail["workflow"] != "monthly-invoicing" {
+		t.Errorf("the run reads %v", detail)
+	}
+	namespaced, _ := call(t, h, "GET", "/api/v1/finance/runs/"+run, "admin", nil)
+	if namespaced.Code != http.StatusOK || namespaced.Body.String() != w.Body.String() {
+		t.Errorf("the namespaced route answered %d %s, and by identifier %s", namespaced.Code, namespaced.Body, w.Body)
+	}
+
+	absent, _ := call(t, h, "GET", "/api/v1/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ", "alice", nil)
+	for _, as := range []string{"bob", "olivia"} {
+		refused, _ := call(t, h, "GET", "/api/v1/runs/"+run, as, nil)
+		if refused.Code != http.StatusNotFound || refused.Body.String() != absent.Body.String() {
+			t.Errorf("%s, who cannot read the run, was answered %d %s, and a run nobody started %d %s", as, refused.Code, refused.Body, absent.Code, absent.Body)
+		}
+	}
+	for _, id := range []string{"%00", "%ff", "not-a-run"} {
+		if w, _ := call(t, h, "GET", "/api/v1/runs/"+id, "alice", nil); w.Code != http.StatusNotFound {
+			t.Errorf("a run named %s answered %d: %s", id, w.Code, w.Body)
+		}
+	}
+}
+
+// finished ends a run as succeeded, its archive step having published envelope on ok, which the
+// workflow's output invoices is a view of, and puts the envelope where a runner would have.
+func (s someRuns) finished(t *testing.T, run string, envelope agk.Envelope) string {
+	t.Helper()
+	digest, size, err := artifact.PutEnvelope(t.Context(), s.objects, "finance", envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports, _ := json.Marshal(map[string]any{"ok": map[string]any{"digest": "sha256:" + digest, "size": size, "items": len(envelope.Items)}})
+	outputs, _ := json.Marshal(map[string]any{"invoices": map[string]any{"step": "archive", "port": "ok", "count": len(envelope.Items)}})
+	s.sql(t, `update steps set ports = $2, state = 'succeeded' where run_id = $1 and step = 'archive'`, run, ports)
+	s.sql(t, `update runs set state = 'succeeded', started_at = now(), finished_at = now(), outputs = $2 where id = $1`, run, outputs)
+	return digest
+}
+
+func anEnvelope(run string) agk.Envelope {
+	return agk.Envelope{
+		Meta: agk.Meta{RunID: agk.RunID(run), Step: "archive", Port: "ok", Attempt: 1, Count: 1, ProducedAt: aMinute(9)},
+		Items: []agk.Item{{
+			ID: "01JMZ8W4K7A1B2C3D4E5F6G7H8", Data: map[string]any{"customer_id": "C-1042", "total": 1290.5},
+			Files: []agk.File{},
+		}},
+	}
+}
+
+// "GET /api/v1/runs/{id}/outputs/{name}: One workflow output's envelope. Requires run:read_data."
+// run:read alone answers what a run nobody started answers; an output the run has not recorded,
+// because it has not ended or the workflow declares no such output, is a 404 of its own; one whose
+// envelope was purged is 410, since it existed and is finished.
+func TestAWorkflowOutputIsItsEnvelope(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	envelope := anEnvelope(run)
+	s.finished(t, run, envelope)
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	h := s.servedTo(t, granted{
+		"alice": {{api.RunReadData, invoicing}},
+		"dave":  {{api.RunRead, invoicing}, {api.WorkflowRun, invoicing}},
+	})
+
+	w, _ := call(t, h, "GET", "/api/v1/runs/"+run+"/outputs/invoices", "alice", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the output answered %d: %s", w.Code, w.Body)
+	}
+	var want bytes.Buffer
+	envelope.Encode(&want)
+	if w.Body.String() != want.String() || w.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("the output reads %s as %q, want %s", w.Body, w.Header().Get("Content-Type"), want.String())
+	}
+
+	absent, _ := call(t, h, "GET", "/api/v1/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ/outputs/invoices", "alice", nil)
+	refused, _ := call(t, h, "GET", "/api/v1/runs/"+run+"/outputs/invoices", "dave", nil)
+	if refused.Code != http.StatusNotFound || refused.Body.String() != absent.Body.String() {
+		t.Errorf("dave, holding run:read and not run:read_data, was answered %d %s, and a run nobody started %s", refused.Code, refused.Body, absent.Body)
+	}
+	for _, path := range []string{
+		"/api/v1/runs/" + run + "/outputs/receipts",
+		"/api/v1/runs/" + run + "/outputs/%ff",
+		"/api/v1/runs/" + s.finance[1] + "/outputs/invoices",
+	} {
+		if w, _ := call(t, h, "GET", path, "alice", nil); w.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d: %s", path, w.Code, w.Body)
+		}
+	}
+
+	s.sql(t, `update steps set envelopes_purged_at = now() where run_id = $1`, run)
+	if w, _ := call(t, h, "GET", "/api/v1/runs/"+run+"/outputs/invoices", "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("an output whose envelope was purged answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// anArtifact records one artifact of run on archive/ok, with the fetch budget given, and puts its
+// bytes in the store.
+func (s someRuns) anArtifact(t *testing.T, run, name string, fetches int, content []byte) agk.URI {
+	t.Helper()
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+	if err := s.objects.Put(t.Context(), artifact.Key("finance", digest), bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	u := agk.URI{Run: agk.RunID(run), Step: "archive", Port: "ok", Name: name}
+	if err := s.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		_, err := ns.WriteArtifact(ctx, db.Reference{URI: u, Digest: digest, Size: int64(len(content)), MediaType: "text/html", For: time.Hour, Fetches: fetches})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+func artifactPath(u agk.URI) string { return "/api/v1/artifacts/" + url.PathEscape(u.String()) }
+
+// "no fetch budget: 302 to a short-lived presigned URL. The bytes never touch the control plane."
+// The URL is one of the object route's, for this run, and works; the redirect is kept by no cache.
+// An artifact that expired is 410, one never written is 404, and one of a run the caller holds
+// run:read on and not run:read_data answers what one never written does.
+func TestAnArtifactWithNoBudgetIsARedirect(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	content := []byte("<script>alert(1)</script> invoice 2026-01")
+	u := s.anArtifact(t, run, "invoice.html", 0, content)
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	h := s.servedTo(t, granted{
+		"alice": {{api.RunReadData, invoicing}},
+		"dave":  {{api.RunRead, invoicing}},
+	})
+
+	before := time.Now()
+	w, _ := call(t, h, "GET", artifactPath(u), "alice", nil)
+	if w.Code != http.StatusFound {
+		t.Fatalf("an artifact with no budget answered %d: %s", w.Code, w.Body)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("the redirect may be cached: %q", got)
+	}
+	location, err := url.Parse(w.Header().Get("Location"))
+	if err != nil || !strings.HasPrefix(location.String(), "https://agentiik.example.com/objects/finance/sha256/") {
+		t.Fatalf("the redirect leads to %q", w.Header().Get("Location"))
+	}
+	if location.Query().Get("run") != run {
+		t.Errorf("the URL is signed for run %q", location.Query().Get("run"))
+	}
+	expires, _ := strconv.ParseInt(location.Query().Get("expires"), 10, 64)
+	if lasts := time.Unix(expires, 0).Sub(before); lasts <= 0 || lasts > 5*time.Minute+time.Second {
+		t.Errorf("the URL works for %s, and a presigned URL for an artifact expires in minutes", lasts)
+	}
+	followed, _ := call(t, h, "GET", location.RequestURI(), "", nil)
+	if followed.Code != http.StatusOK || followed.Body.String() != string(content) {
+		t.Errorf("following the redirect answered %d %q", followed.Code, followed.Body)
+	}
+
+	absent, _ := call(t, h, "GET", artifactPath(agk.URI{Run: u.Run, Step: "archive", Port: "ok", Name: "nothing.pdf"}), "alice", nil)
+	if absent.Code != http.StatusNotFound {
+		t.Errorf("an artifact never written answered %d: %s", absent.Code, absent.Body)
+	}
+	refused, _ := call(t, h, "GET", artifactPath(u), "dave", nil)
+	if refused.Code != http.StatusNotFound || refused.Body.String() != absent.Body.String() {
+		t.Errorf("dave, holding run:read and not run:read_data, was answered %d %s, and an artifact never written %s", refused.Code, refused.Body, absent.Body)
+	}
+	elsewhere := agk.URI{Run: agk.RunID(s.teamOps), Step: "archive", Port: "ok", Name: "invoice.html"}
+	if w, _ := call(t, h, "GET", artifactPath(elsewhere), "alice", nil); w.Code != http.StatusNotFound || w.Body.String() != absent.Body.String() {
+		t.Errorf("an artifact of a run in another namespace answered %d %s", w.Code, w.Body)
+	}
+
+	s.sql(t, `update artifacts set status = 'expired', retired_at = now() where run_id = $1`, run)
+	if w, _ := call(t, h, "GET", artifactPath(u), "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("an expired artifact answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// failing is a client that goes away before the bytes arrive.
+type failing struct{ *httptest.ResponseRecorder }
+
+func (failing) Write([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+
+// "budget left: The bytes themselves, served by the API. budget spent: 410 Gone." A fetch counts
+// when the response completes: a HEAD fetches nothing and a transfer the client abandons spends
+// nothing, while each whole one spends one. What is served is bytes a browser neither renders nor
+// sniffs, since it is served from the API's own origin.
+func TestAnArtifactWithABudgetIsServedAndCountedWhenItCompletes(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("<script>alert(1)</script> payslip 2026-01")
+	u := s.anArtifact(t, s.finance[0], "payslip.html", 2, content)
+	h := s.servedTo(t, everything{who: "alice"})
+	request := func(method string) *http.Request {
+		r := httptest.NewRequest(method, artifactPath(u), nil)
+		r.Header.Set("Authorization", "Bearer alice")
+		r.Header.Set("Range", "bytes=0-9")
+		return r
+	}
+
+	head := httptest.NewRecorder()
+	h.ServeHTTP(head, request("HEAD"))
+	if head.Code != http.StatusOK || head.Header().Get("Content-Length") != strconv.Itoa(len(content)) {
+		t.Errorf("a HEAD answered %d with %q", head.Code, head.Header().Get("Content-Length"))
+	}
+	h.ServeHTTP(failing{httptest.NewRecorder()}, request("GET"))
+
+	for i := range 2 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, request("GET"))
+		if w.Code != http.StatusOK || w.Body.String() != string(content) {
+			t.Fatalf("fetch %d of a budget of two answered %d %q", i+1, w.Code, w.Body)
+		}
+		for header, want := range map[string]string{
+			"Content-Type":           "application/octet-stream",
+			"X-Content-Type-Options": "nosniff",
+			"Cache-Control":          "no-store",
+			"Content-Disposition":    `attachment; filename=payslip.html`,
+		} {
+			if got := w.Header().Get(header); got != want {
+				t.Errorf("%s is %q, want %q", header, got, want)
+			}
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, request("GET"))
+	if w.Code != http.StatusGone {
+		t.Errorf("a spent budget answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// stalling is a client that receives the first bytes and then waits until it is let go.
+type stalling struct {
+	*httptest.ResponseRecorder
+	writing chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *stalling) Write(b []byte) (int, error) {
+	s.once.Do(func() {
+		close(s.writing)
+		<-s.release
+	})
+	return s.ResponseRecorder.Write(b)
+}
+
+// The last fetch of a budget is served once. Two fetches of it at once would each find one left
+// before either counted it, and both be served, so the second waits for the first and is then told
+// the budget is spent.
+func TestTheLastFetchOfABudgetIsServedOnce(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("payslip 2026-01")
+	u := s.anArtifact(t, s.finance[0], "payslip.txt", 1, content)
+	h := s.servedTo(t, everything{who: "alice"})
+	request := func() *http.Request {
+		r := httptest.NewRequest("GET", artifactPath(u), nil)
+		r.Header.Set("Authorization", "Bearer alice")
+		return r
+	}
+
+	first := &stalling{ResponseRecorder: httptest.NewRecorder(), writing: make(chan struct{}), release: make(chan struct{})}
+	var done sync.WaitGroup
+	done.Go(func() { h.ServeHTTP(first, request()) })
+	<-first.writing
+
+	second := httptest.NewRecorder()
+	answered := make(chan struct{})
+	done.Go(func() {
+		h.ServeHTTP(second, request())
+		close(answered)
+	})
+	select {
+	case <-answered:
+		t.Errorf("a second fetch of the last one was answered %d while the first was still being served", second.Code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(first.release)
+	done.Wait()
+
+	if first.Code != http.StatusOK || first.Body.String() != string(content) {
+		t.Errorf("the first fetch answered %d %q", first.Code, first.Body)
+	}
+	if second.Code != http.StatusGone {
+		t.Errorf("the second fetch of a budget of one answered %d %q", second.Code, second.Body)
+	}
+}
