@@ -16,20 +16,13 @@ import (
 
 // ExitContractBroken is the exit code a task is reported with when its container exited 0
 // and what it left broke the output contract, which ErrOutputsRefused marks: an envelope
-// above inline_max_bytes, envelope_max_bytes or max_items, or one that is not an envelope
-// at all. It is 121, the first of the codes the table reserves for the runner, where a
-// brick "is treated as having failed the contract, whatever its manifest says". The step
-// fails, the failure is the brick's, and no retry policy reaches it, since the band is not
-// one retry.on can name.
+// above inline_max_bytes, envelope_max_bytes or max_items, a document that is not an
+// envelope, or a file under /agk/out/files that is not what its entry says, not a file, or
+// above artifact_max_bytes. It is 121, the first of the codes the table reserves for the
+// runner, where a brick "is treated as having failed the contract, whatever its manifest
+// says". The step fails, the failure is the brick's, and no retry policy reaches it, since
+// the band is not one retry.on can name.
 const ExitContractBroken = 121
-
-// ExitOutputsUnwritten is the exit code a task is reported with when its container exited 0,
-// its outputs passed, and the store would not take them: refused, past its upload policy or
-// out of reach. A failed task whose container ran carries a code, and 0 would say it
-// succeeded. It is 125, the first of the codes the table reads as an infrastructure
-// failure, charged to the runner and not to the brick, since the brick did what it was
-// asked.
-const ExitOutputsUnwritten = 125
 
 // exitState is the state a container that exited reports.
 //

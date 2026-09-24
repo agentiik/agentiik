@@ -126,9 +126,8 @@ var ErrDaemonUnreachable = errors.New("the Docker daemon could not be reached, s
 // its manifest says".
 var ErrContractBroken = errors.New("the image does not honour the brick contract")
 
-// ErrOutputsRefused is a container that exited 0 and left outputs the collection refused:
-// an envelope above inline_max_bytes, envelope_max_bytes or max_items, one that is not an
-// envelope at all, a file it names that is not what it says. A container ran, so unlike
+// ErrOutputsRefused is a container that exited 0 and left outputs the collection refused,
+// for any of the reasons ExitContractBroken lists. A container ran, so unlike
 // ErrContractBroken it has an exit code, ExitContractBroken, and a caller that reports the
 // task tests for this to say so.
 var ErrOutputsRefused = errors.New("a container that exits 0 with outputs that break the output contract is reported failed with exit code 121, charged to the brick and never retried")

@@ -139,8 +139,8 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 
 	w := &withheld{store: s}
 	files := filepath.Join(c.Dir, filesDir)
-	// One upload per port and name, because two items of one envelope attaching the
-	// same file is ordinary, a fan-in of a shared document being the usual case, and
+	// One description per port and name, because two items of one envelope attaching
+	// the same file is ordinary, a fan-in of a shared document being the usual case, and
 	// reading the bytes twice would be the price of it.
 	uploaded := make(map[string]agk.File)
 	// Sorted, so that a container that broke the contract on two ports at once is
@@ -192,8 +192,8 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 	return collected{Outputs: out, Artifacts: produced(out, m)}, nil
 }
 
-// attach uploads the files one envelope references and rewrites each entry to the
-// artifact that now holds it.
+// attach describes the files one envelope references and rewrites each entry to the
+// artifact that will hold it, which commit writes once every envelope has passed.
 //
 // A files[] entry whose name is not under /agk/out/files/ is left exactly as it is. It
 // is already a reference, and an item carried through from an input keeps the URI of the
@@ -241,7 +241,7 @@ func (c collection) attach(ctx context.Context, w *withheld, files string, e *ag
 	return nil
 }
 
-// publish uploads every file left under /agk/out/files/ for the shorthand item to carry.
+// publish describes every file left under /agk/out/files/ for the shorthand item to carry.
 //
 // They are addressed on the port the shorthand publishes, because that is the port they
 // will travel on: agk://run/<run>/<step>/<port>/<name> names one artifact of one port,

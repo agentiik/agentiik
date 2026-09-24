@@ -86,9 +86,10 @@
 // for a runner that stopped reporting and means the work may well have finished, which is
 // false for a pull that died before a container existed.
 //
-// One error does come from a container that ran: one that exited 0 and left outputs the
-// driver refused, which driver.ErrOutputsRefused marks. The exit code table has a code of
-// its own for it, 121, driver.ExitContractBroken, and that is the code recorded.
+// One of these errors has a code of its own: a container that exited 0 and left outputs the
+// driver refused, which driver.ErrOutputsRefused marks. The exit code table reserves 121,
+// driver.ExitContractBroken, for it, and that is the code recorded. Outputs that passed
+// and could not be written are the platform's, like any other platform charge.
 //
 // Otherwise the code does not reach the report. The Failure this package hands back
 // carries HasExit false and the driver's own Fault sentence, so the report reads "no exit

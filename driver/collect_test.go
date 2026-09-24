@@ -635,6 +635,26 @@ func TestAnEnvelopeARuleRefusesLeavesTheStoreUntouched(t *testing.T) {
 			outcome: agk.Fail,
 		},
 		{
+			// The entries name the files under another step's short address, which
+			// brick.Collect takes, and attach rewrites each to this step's longer one:
+			// the envelope passes as the brick wrote it and breaks the rule only as
+			// it will be published.
+			name: "a brick's envelope above envelope_max_bytes only once its files are attached",
+			task: brickTask("out"),
+			left: func(t *testing.T, dir string) []byte {
+				var items []agk.Item
+				for i := range 16 {
+					f := containerLeft(t, dir, fmt.Sprintf("page-%02d.csv", i), fmt.Sprintf("page,%d\n", i), "out")
+					f.URI.Step = "a"
+					items = append(items, anItem(fmt.Sprintf("p%02d", i), nil, f))
+				}
+				containerWrote(t, dir, "out", items...)
+				return nil
+			},
+			rule:    agk.RuleEnvelopeMaxBytes,
+			outcome: agk.Fail,
+		},
+		{
 			name:   "the shorthand around the files a script left, above envelope_max_bytes",
 			task:   collectScriptTask("out"),
 			limits: limitsWith(func(l *agk.Limits) { l.EnvelopeMaxBytes = 2048 }),
@@ -665,8 +685,16 @@ func TestAnEnvelopeARuleRefusesLeavesTheStoreUntouched(t *testing.T) {
 			dir := outRoot(t)
 			s, objects := countedStore(t)
 			col := aCollection(c.task, dir)
-			col.Limits = c.limits
 			col.Stdout = c.left(t, dir)
+			col.Limits = c.limits
+			if col.Limits == (agk.Limits{}) {
+				// The envelope as the brick wrote it, and not a byte more.
+				info, err := os.Stat(filepath.Join(dir, portsDir, "out.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				col.Limits = limitsWith(func(l *agk.Limits) { l.EnvelopeMaxBytes = info.Size() })
+			}
 
 			_, err := collect(context.Background(), s, col)
 			var refusal *agk.Refusal

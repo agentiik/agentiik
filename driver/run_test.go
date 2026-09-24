@@ -1087,45 +1087,67 @@ var _ = docker.Ceiling
 func TestAnEnvelopeARuleRefusesIsAFailedTaskThatKeepsItsRule(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
-	var written strings.Builder
-	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
-		return 0, wrote(c, "out", agk.NewItem(map[string]any{"page": 1}), agk.NewItem(map[string]any{"page": 2}))
-	})
-	r = reopen(t, r, func(cfg *Config) {
-		cfg.Limits = agk.DefaultLimits()
-		cfg.Limits.MaxItems = 1
-		cfg.Logs = &sinkFor{b: &written}
-	})
-	task := oneTask(ref)
+	for _, c := range []struct {
+		rule    string
+		outcome agk.Outcome
+		limit   func(*agk.Limits)
+		items   []agk.Item
+	}{
+		{
+			rule:    agk.RuleMaxItems,
+			outcome: agk.Fail,
+			limit:   func(l *agk.Limits) { l.MaxItems = 1 },
+			items:   []agk.Item{agk.NewItem(map[string]any{"page": 1}), agk.NewItem(map[string]any{"page": 2})},
+		},
+		{
+			rule:    agk.RuleInlineMaxBytes,
+			outcome: agk.Reject,
+			limit:   func(l *agk.Limits) { l.InlineMaxBytes = 64 },
+			items:   []agk.Item{agk.NewItem(map[string]any{"body": strings.Repeat("x", 256)})},
+		},
+	} {
+		t.Run(c.rule, func(t *testing.T) {
+			var written strings.Builder
+			r := newRunner(t, oneImage(ref, goodManifest), func(ctr dockertest.Container) (int, error) {
+				return 0, wrote(ctr, "out", c.items...)
+			})
+			r = reopen(t, r, func(cfg *Config) {
+				cfg.Limits = agk.DefaultLimits()
+				c.limit(&cfg.Limits)
+				cfg.Logs = &sinkFor{b: &written}
+			})
+			task := oneTask(ref)
 
-	_, err := r.Run(t.Context(), task)
-	var refusal *agk.Refusal
-	if !errors.As(err, &refusal) || refusal.Rule != agk.RuleMaxItems || refusal.Outcome != agk.Fail {
-		t.Fatalf("the delivery answered %v, and an envelope above max_items is an application failure of the step", err)
-	}
-	if !errors.Is(err, ErrOutputsRefused) {
-		t.Errorf("the delivery answered %v, which does not say the outputs of a container that ran were refused", err)
-	}
-	if charge, decided := Charged(err); !decided || charge != ChargeBrick {
-		t.Errorf("the refusal is charged to %s, and the brick broke the output contract", charge)
-	}
+			_, err := r.Run(t.Context(), task)
+			var refusal *agk.Refusal
+			if !errors.As(err, &refusal) || refusal.Rule != c.rule || refusal.Outcome != c.outcome {
+				t.Fatalf("the delivery answered %v, and the envelope breaks %s, which is %s", err, c.rule, c.outcome)
+			}
+			if !errors.Is(err, ErrOutputsRefused) {
+				t.Errorf("the delivery answered %v, which does not say the outputs of a container that ran were refused", err)
+			}
+			if charge, decided := Charged(err); !decided || charge != ChargeBrick {
+				t.Errorf("the refusal is charged to %s, and the brick broke the output contract", charge)
+			}
 
-	e, found, err := r.keys.read(task.ID)
-	if err != nil || !found {
-		t.Fatalf("the key is not in the record after its container ran to its end: %v", err)
-	}
-	if e.State != agk.TaskFailed || e.ExitCode == nil || *e.ExitCode != ExitContractBroken || e.StartedAt.IsZero() {
-		t.Errorf("the key is recorded %s exiting %v from %s, want failed exiting %d with the span it ran for", e.State, e.ExitCode, e.StartedAt, ExitContractBroken)
-	}
-	if log := written.String(); !strings.Contains(log, agk.RuleMaxItems) || !strings.Contains(log, "exit code 121") {
-		t.Errorf("the log reads %q, and it names the rule and the code", log)
-	}
+			e, found, err := r.keys.read(task.ID)
+			if err != nil || !found {
+				t.Fatalf("the key is not in the record after its container ran to its end: %v", err)
+			}
+			if e.State != agk.TaskFailed || e.ExitCode == nil || *e.ExitCode != ExitContractBroken || e.StartedAt.IsZero() {
+				t.Errorf("the key is recorded %s exiting %v from %s, want failed exiting %d with the span it ran for", e.State, e.ExitCode, e.StartedAt, ExitContractBroken)
+			}
+			if log := written.String(); !strings.Contains(log, c.rule) || !strings.Contains(log, "exit code 121") {
+				t.Errorf("the log reads %q, and it names the rule and the code", log)
+			}
 
-	r.observed.mu.Lock()
-	last := r.observed.es[len(r.observed.es)-1]
-	r.observed.mu.Unlock()
-	if last.State != agk.TaskFailed || last.Err == nil {
-		t.Errorf("the observer was last told %s with %v, and the task failed for the refusal", last.State, last.Err)
+			r.observed.mu.Lock()
+			last := r.observed.es[len(r.observed.es)-1]
+			r.observed.mu.Unlock()
+			if last.State != agk.TaskFailed || last.Err == nil {
+				t.Errorf("the observer was last told %s with %v, and the task failed for the refusal", last.State, last.Err)
+			}
+		})
 	}
 }
 

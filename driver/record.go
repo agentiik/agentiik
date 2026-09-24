@@ -120,8 +120,10 @@ type Ending struct {
 	State agk.TaskState `json:"state"`
 
 	// ExitCode is there wherever a container exited and its code was read, which is a
-	// success and a failure, as a result carries one. A failure met after the exit, a
-	// collection or an upload that did not go through, is written with none.
+	// success and a failure, as a result carries one. Outputs the collection refused are
+	// written with ExitContractBroken, since the container ran. A failure met after the
+	// exit that is the platform's, an upload that did not go through, is written with
+	// none.
 	ExitCode *int `json:"exit_code,omitempty"`
 
 	// StartedAt and FinishedAt are the daemon's own, as the Result carried them.
