@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -233,6 +234,45 @@ func TestAnEmptyListTravelsAsAnEmptyList(t *testing.T) {
 	}
 	if seen["network"] != "none" {
 		t.Errorf("network travelled as %v, and the wire spells it none, internal or egress", seen["network"])
+	}
+}
+
+// A ceiling nothing decided, neither the step nor its pool, is left out rather than written empty:
+// "cpu": "", "memory": "" and "pids": 0 are values the wire's patterns and its minimum refuse, and
+// a step that asks for nothing on a pool with no ceiling is the ordinary case. What was decided
+// still travels, each on its own.
+func TestACeilingNothingDecidedIsLeftOffTheWire(t *testing.T) {
+	s := taskMessages(t)
+	for _, c := range []struct {
+		resources graph.Resources
+		want      map[string]any
+	}{
+		{graph.Resources{}, map[string]any{}},
+		{graph.Resources{Memory: "512Mi"}, map[string]any{"memory": "512Mi"}},
+		{graph.Resources{PIDs: 64}, map[string]any{"pids": float64(64)}},
+	} {
+		d := aDispatch(t)
+		d.Task.Resources = c.resources
+		m, err := messageOf(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validates(t, s, body); err != nil {
+			t.Errorf("resources of %+v are refused by the wire:\n%s\n\n%s", c.resources, err, body)
+		}
+		var seen struct {
+			Resources map[string]any `json:"resources"`
+		}
+		if err := json.Unmarshal(body, &seen); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(seen.Resources, c.want) {
+			t.Errorf("resources of %+v travelled as %v, want %v", c.resources, seen.Resources, c.want)
+		}
 	}
 }
 

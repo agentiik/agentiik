@@ -151,7 +151,7 @@ func anInstallationServing(t *testing.T) *served {
 	// The pool, and one runner of it.
 	now := time.Now().UTC()
 	if err := pool.Installation(ctx, db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: in.poolName, AcceptedNamespaces: []string{"finance"}, CreatedBy: "admin"}); err != nil {
+		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: in.poolName, Labels: []string{"zone=dmz"}, AcceptedNamespaces: []string{"finance"}, CreatedBy: "admin"}); err != nil {
 			return err
 		}
 		token, err := w.IssueJoinToken(ctx, in.poolName, nil, "admin", now, now.Add(time.Hour))
@@ -202,10 +202,10 @@ func (in *served) dispatch(t *testing.T, step agk.Step) bus.TaskMessage {
 		Image:  "ghcr.io/acme/agk-invoice@" + imageDigest,
 		Params: map[string]any{}, Secrets: []bus.SecretMount{}, Inputs: []bus.Input{}, Outputs: []string{"out"},
 		Resources: bus.Resources{CPU: "0.5", Memory: "256Mi", PIDs: 128},
-		Network:   "none", RunsOn: []string{"pool=" + in.poolName},
+		Network:   "none", RunsOn: []string{"zone=dmz"},
 		Deadline: deadline.Format(time.RFC3339Nano), Grant: granted.Clear,
 	}
-	if err := in.control.Publish(ctx, m); err != nil {
+	if err := in.control.Publish(ctx, in.poolName, m); err != nil {
 		t.Fatal(err)
 	}
 	return m
@@ -301,7 +301,7 @@ func TestAFullHostTakesNothingAndAFreedSlotTakesOne(t *testing.T) {
 		served <- Serve(ctx, Agent{
 			Config: Config{
 				API: in.url, Runner: in.runner, Pool: in.poolName, Concurrency: 1,
-				WorkDir: c.root, Credential: in.credential, Labels: []string{"pool=" + in.poolName, "zone=dmz"},
+				WorkDir: c.root, Credential: in.credential, Labels: []string{"zone=dmz"},
 			},
 			Driver: c.carrier.Driver.(*driver.Docker), Client: client, Endings: c.carrier.Endings,
 			Log: func(s string) { logged.Lock(); log.WriteString(s + "\n"); logged.Unlock() },

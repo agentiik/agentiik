@@ -85,8 +85,7 @@ func aPoolOnTheBus(t *testing.T, ackWait time.Duration) *aPool {
 // publish puts a task message on the pool's queue, as the controller does.
 func (p *aPool) publish(t *testing.T, m bus.TaskMessage) {
 	t.Helper()
-	m.RunsOn = append([]string{"pool=" + p.name}, m.RunsOn...)
-	if err := p.control.Publish(t.Context(), m); err != nil {
+	if err := p.control.Publish(t.Context(), p.name, m); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -224,7 +223,7 @@ func aLoop(t *testing.T, c *carrying, p *aPool, api *anAPI) *looping {
 	l := &looping{
 		carrying: c, pool: p, queue: q, progress: pr,
 		loop: &Loop{
-			Runner: "runner-dmz-02", Pool: p.name, Concurrency: 2, Labels: []string{"pool=" + p.name, "zone=dmz"},
+			Runner: "runner-dmz-02", Pool: p.name, Concurrency: 2, Labels: []string{"zone=dmz", "arch=amd64"},
 			Queue: q, Holder: c.carrier.Driver.(*driver.Docker), Carrier: c.carrier,
 			Assembly: Assembly{WorkRoot: c.root},
 			Progress: progress,

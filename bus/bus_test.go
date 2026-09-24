@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -153,12 +154,12 @@ func rowOf(step agk.Step) string {
 	return row.(string)
 }
 
-// The round trip, which is the whole contract: the control plane publishes and a runner of the pool
-// the labels select takes it, whole.
-func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
+// The round trip, which is the whole contract: the control plane publishes to a pool and a runner
+// of that pool takes it, whole.
+func TestATaskIsTakenWholeByTheRunnersOfItsPool(t *testing.T) {
 	b := open(t)
 
-	if err := b.Publish(t.Context(), message(step(t), "pool=dmz", "arch=amd64")); err != nil {
+	if err := b.Publish(t.Context(), "dmz", message(step(t), "zone=dmz", "arch=amd64")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -199,12 +200,19 @@ func TestATaskGoesToThePoolItsLabelsSelect(t *testing.T) {
 	}
 }
 
-// A task that names no pool goes to the default one, which is what a step with no runs_on asks
-// for.
-func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
+// The pool is the one the controller chose and not one read off the labels again: a task whose
+// labels a pool of another name carries goes where it was sent.
+func TestATaskGoesToThePoolItIsPublishedTo(t *testing.T) {
 	b := open(t)
-	if err := b.Publish(t.Context(), message(step(t))); err != nil {
+	if err := b.Publish(t.Context(), DefaultPool, message(step(t), "zone=dmz")); err != nil {
 		t.Fatal(err)
+	}
+	other, err := b.Take(t.Context(), "dmz", 8, 300*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("the dmz pool was offered %d tasks sent to the default pool", len(other))
 	}
 	taken, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
 	if err != nil {
@@ -219,7 +227,7 @@ func TestATaskWithNoPoolGoesToTheDefault(t *testing.T) {
 // A runner that took work it cannot run puts it back, and somebody else gets it.
 func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	b := open(t)
-	if err := b.Publish(t.Context(), message(step(t))); err != nil {
+	if err := b.Publish(t.Context(), DefaultPool, message(step(t))); err != nil {
 		t.Fatal(err)
 	}
 	first, err := b.Take(t.Context(), DefaultPool, 8, 5*time.Second)
@@ -271,7 +279,7 @@ func TestAPoolWaitsAckWaitForARunnerToAcknowledge(t *testing.T) {
 // on the strength of the buffer, it would not know the message was coming round again.
 func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
 	b := open(t)
-	if err := b.Publish(t.Context(), message(step(t))); err != nil {
+	if err := b.Publish(t.Context(), DefaultPool, message(step(t))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -349,7 +357,7 @@ func (l *link) cut() {
 func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 	b := open(t)
 	for range 3 {
-		if err := b.Publish(t.Context(), message(step(t))); err != nil {
+		if err := b.Publish(t.Context(), DefaultPool, message(step(t))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -364,7 +372,7 @@ func TestPublishingOneTaskTwiceQueuesItOnce(t *testing.T) {
 
 	nameless := message(step(t) + "-nameless")
 	nameless.TaskID = ""
-	if err := b.Publish(t.Context(), nameless); err == nil {
+	if err := b.Publish(t.Context(), DefaultPool, nameless); err == nil {
 		t.Error("a task naming no task_id was published")
 	}
 }
@@ -437,7 +445,7 @@ func TestARequeueIsQueuedUnderTheKeyItWasLostUnder(t *testing.T) {
 	lost := message(step(t))
 	requeued := messageAs(ulid.New(), step(t))
 	for _, m := range []TaskMessage{lost, requeued} {
-		if err := b.Publish(t.Context(), m); err != nil {
+		if err := b.Publish(t.Context(), DefaultPool, m); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -546,7 +554,7 @@ func TestARequeueIsAnsweredWithTheEndingItsHostRecorded(t *testing.T) {
 	b := open(t)
 	task := aTask(step(t))
 	requeue := messageAs(ulid.New(), step(t))
-	if err := b.Publish(t.Context(), requeue); err != nil {
+	if err := b.Publish(t.Context(), DefaultPool, requeue); err != nil {
 		t.Fatal(err)
 	}
 	taken, err := b.Take(t.Context(), DefaultPool, 1, 5*time.Second)
@@ -620,7 +628,7 @@ func TestARequeueWhoseRecordedEndingDidNotGoOutStaysOnTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	requeue := messageAs(ulid.New(), step(t))
-	if err := b.Publish(t.Context(), requeue); err != nil {
+	if err := b.Publish(t.Context(), DefaultPool, requeue); err != nil {
 		t.Fatal(err)
 	}
 	taken, err := b.Take(t.Context(), DefaultPool, 1, 5*time.Second)
@@ -891,7 +899,7 @@ func TestATakeForABatchAnswersOnceOneTaskIsThere(t *testing.T) {
 	m := message(step(t))
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		if err := b.Publish(context.Background(), m); err != nil {
+		if err := b.Publish(context.Background(), DefaultPool, m); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -955,39 +963,78 @@ func TestTakingFromAPoolWithNoConsumerSaysSo(t *testing.T) {
 	}
 }
 
-// What a pool may be called, refused where it would reach another pool's work.
-func TestWhatIsNotARunnerPool(t *testing.T) {
+// What a pool may be called, refused where it would reach another pool's work, before anything
+// is published.
+func TestATaskIsNotPublishedToWhatIsNotARunnerPool(t *testing.T) {
+	b := open(t)
 	for _, c := range []struct {
-		labels []string
-		why    string
+		pool string
+		why  string
 	}{
-		{[]string{"pool=a.b"}, "a dot, which makes one pool's subject a prefix of another's"},
-		{[]string{"pool=*"}, "a wildcard, which makes it every pool's"},
-		{[]string{"pool=>"}, "the other wildcard"},
-		{[]string{"pool="}, "nothing at all"},
-		{[]string{"arch"}, "a label with no value"},
+		{"a.b", "a dot, which makes one pool's subject a prefix of another's"},
+		{"*", "a wildcard, which makes it every pool's"},
+		{">", "the other wildcard"},
+		{"", "nothing at all"},
 	} {
-		if _, err := PoolOf(c.labels); err == nil {
-			t.Errorf("%v was read as a pool, and it is %s", c.labels, c.why)
+		if err := b.Publish(t.Context(), c.pool, message(step(t))); err == nil {
+			t.Errorf("a task was published to %q, and it is %s", c.pool, c.why)
 		}
 	}
+}
+
+// "A step goes to the pool whose labels include every label of its runs_on", one pool and never
+// two, and a step that names none goes to the pool default.
+func TestATaskGoesToThePoolWhoseLabelsIncludeEveryOneOfItsOwn(t *testing.T) {
+	pools := []Pool{
+		{Name: DefaultPool},
+		{Name: "dmz", Labels: []string{"zone=dmz", "arch=amd64"}},
+		{Name: "dmz-arm", Labels: []string{"zone=dmz", "arch=arm64"}},
+		{Name: "home", Labels: []string{"site=home"}},
+	}
 	for _, c := range []struct {
-		labels []string
+		runsOn []string
 		want   string
 	}{
 		{nil, DefaultPool},
-		{[]string{"arch=amd64"}, DefaultPool},
-		{[]string{"pool=dmz"}, "dmz"},
-		{[]string{"zone=lan", "pool=bare_metal-1"}, "bare_metal-1"},
+		{[]string{}, DefaultPool},
+		{[]string{"zone=dmz", "arch=amd64"}, "dmz"},
+		{[]string{"arch=arm64"}, "dmz-arm"},
+		{[]string{"site=home"}, "home"},
 	} {
-		got, err := PoolOf(c.labels)
+		got, err := Route(c.runsOn, pools)
 		if err != nil {
-			t.Errorf("%v: %s", c.labels, err)
+			t.Errorf("%v: %s", c.runsOn, err)
 			continue
 		}
 		if got != c.want {
-			t.Errorf("%v selects pool %q, want %q", c.labels, got, c.want)
+			t.Errorf("%v goes to the pool %q, want %q", c.runsOn, got, c.want)
 		}
+	}
+
+	for _, c := range []struct {
+		runsOn []string
+		pools  []Pool
+		want   []string
+		why    string
+	}{
+		{[]string{"zone=dmz"}, pools, []string{"dmz", "dmz-arm"}, "two pools carry it, and a task on two queues runs twice"},
+		{[]string{"zone=dmz", "gpu=true"}, pools, nil, "no pool carries every label, though one carries some"},
+		{[]string{"zone=lan"}, pools, nil, "no pool carries it"},
+		{nil, pools[1:], nil, "a task naming nothing goes to the pool default and nowhere else, and there is none"},
+	} {
+		_, err := Route(c.runsOn, c.pools)
+		var unrouted *Unrouted
+		if !errors.As(err, &unrouted) {
+			t.Errorf("%v was routed, and %s: %v", c.runsOn, c.why, err)
+			continue
+		}
+		if !slices.Equal(unrouted.Pools, c.want) {
+			t.Errorf("%v is matched by %v, want %v", c.runsOn, unrouted.Pools, c.want)
+		}
+	}
+
+	if _, err := Route([]string{"arch"}, pools); err == nil || errors.As(err, new(*Unrouted)) {
+		t.Errorf("a label with no value was answered %v", err)
 	}
 }
 
