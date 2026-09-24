@@ -37,6 +37,12 @@ type Server struct {
 	urls     artifact.Presigner
 	limits   agk.Limits
 	now      func() time.Time
+
+	// logs tells the step log streams this server answers that their log moved on, streaming is
+	// how they spend their time, and stopping ends them.
+	logs      *logWatch
+	streaming streamTiming
+	stopping  <-chan struct{}
 }
 
 // ServerOptions are what a Server is given.
@@ -61,6 +67,12 @@ type ServerOptions struct {
 
 	// Now is the clock, an argument so that a test has one.
 	Now func() time.Time
+
+	// Stopping ends every log stream open when it closes, without the event that says a step's
+	// log is over, so that its reader reconnects, to another API where this one is going away,
+	// and resumes there: "open log streams reconnect elsewhere and resume from their last
+	// position". Without it a stop waits for streams that may never end on their own.
+	Stopping <-chan struct{}
 }
 
 // NewServer builds one and registers its routes on a router.
@@ -83,7 +95,10 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	if o.Limits == (agk.Limits{}) {
 		o.Limits = agk.DefaultLimits()
 	}
-	s := &Server{pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now}
+	s := &Server{
+		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
+		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping,
+	}
 	rt.ServeRuns(runsIn{o.Pool})
 
 	for _, r := range []struct {
@@ -108,6 +123,8 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			OnRun{Permission: RunRead, Reveals: RunReadData}, s.detail},
 		{"GET", "/api/v1/runs/{run}/outputs/{name}",
 			OnRun{Permission: RunReadData}, s.output},
+		{"GET", "/api/v1/runs/{run}/steps/{step}/logs",
+			OnRun{Permission: RunRead}, s.stepLog},
 		{"GET", "/api/v1/artifacts/{uri}",
 			OnArtifact{Permission: RunReadData}, s.artifactOf},
 	} {
