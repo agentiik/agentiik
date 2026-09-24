@@ -183,7 +183,8 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 }
 
 // What a host says of itself at join is what the inventory reads back: the key it will sign a
-// rotation with, the namespaces it narrows itself to and what it can prove of its containment.
+// rotation with, the namespaces it narrows itself to, what it can prove of its containment and a
+// vCPU count past 32 bits.
 // The identifier it is answered with is lowercase, which is the grammar the wire prints a runner
 // in and the one the result reader holds it to.
 func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
@@ -199,7 +200,7 @@ func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
 		}
 		joined, err = w.Join(ctx, Joining{
 			Token: issued.Clear, PublicKey: hostKey(7), Labels: []string{},
-			CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
+			CPU: 1 << 33, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
 			Architecture: "arm64", AgentVersion: "0.2.0",
 			Namespaces:  []string{"finance"},
 			Containment: &Containment{Runtime: "runsc", UsernsRemap: false},
@@ -232,6 +233,11 @@ func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
 	for _, r := range []Runner{listed[0], opened} {
 		if !bytes.Equal(r.PublicKey, hostKey(7)) {
 			t.Errorf("the runner's key reads back as %x", r.PublicKey)
+		}
+		// The wire sets vCPU a least and no most, so a count past 32 bits is kept rather
+		// than refused by the column as a failure of the installation's.
+		if r.CPU != 1<<33 {
+			t.Errorf("the host's vCPU read back as %d", r.CPU)
 		}
 		if len(r.Namespaces) != 1 || r.Namespaces[0] != "finance" {
 			t.Errorf("the host's namespaces read back as %v", r.Namespaces)

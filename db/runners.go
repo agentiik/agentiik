@@ -109,9 +109,10 @@ type Joining struct {
 	// leaves the host.
 	PublicKey ed25519.PublicKey
 
-	// What a machine says about itself is what only the machine knows. What it is allowed
-	// is its pool's: "the labels it claims, its capacity in vCPU, memory and disk, its
-	// architecture and its agent version" is the whole of what registration carries.
+	// What a machine says about itself is what only the machine knows: "the public key, the
+	// labels it claims, its AGK_RUNNER_NAMESPACES, its capacity in vCPU, memory and disk, its
+	// architecture and its agent version". What it is allowed is its token's and its pool's,
+	// and its own namespaces only narrow that.
 	CPU          int
 	MemoryBytes  int64
 	DiskBytes    int64
