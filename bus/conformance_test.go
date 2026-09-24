@@ -149,8 +149,10 @@ func sameDocument(t *testing.T, a, b []byte) bool {
 }
 
 // What a runner reports is what the document describes, in each of the shapes a result takes: a
-// task that ran, one that never reached a container, one stopped at its deadline, and one a runner
-// recovers as lost. A success that published nothing still says so.
+// task that ran, one that never reached a container, one stopped at its deadline with the code the
+// stop left, one whose container exited before its statistics were sampled, and one a runner
+// recovers as lost. A success that published nothing still says so, and an unsampled usage carries
+// the pull alone rather than two zeros nobody measured.
 func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
 	s := taskResults(t)
 	task := aTask("invoice")
@@ -167,7 +169,11 @@ func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
 
 	stopped := aResult(task)
 	stopped.State = agk.TaskTimedOut
-	stopped.ExitCode = nil
+	stopped.ExitCode = new(137)
+	stopped.Outputs = []Output{}
+
+	unsampled := aResult(task)
+	unsampled.Usage = &Usage{ImagePullMS: 3184}
 
 	lost := TaskResult{
 		TaskID: ran.TaskID, IdempotencyKey: ran.IdempotencyKey, Runner: ran.Runner,
@@ -177,7 +183,7 @@ func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
 	for name, r := range map[string]TaskResult{
 		"a task that ran": ran, "a success that published nothing": nothing,
 		"a task that never reached a container": unreached, "a task stopped at its deadline": stopped,
-		"a task recovered as lost": lost,
+		"a task whose usage was never sampled": unsampled, "a task recovered as lost": lost,
 	} {
 		body, err := r.encode()
 		if err != nil {
@@ -202,6 +208,18 @@ func TestWhatIsReportedIsWhatTheWireDescribes(t *testing.T) {
 	}
 	if outputs, there := seen["outputs"].([]any); !there || len(outputs) != 0 {
 		t.Errorf("a success that published nothing travelled with outputs %v, and it says so with an empty list", seen["outputs"])
+	}
+
+	body, err = unsampled.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen = nil
+	if err := json.Unmarshal(body, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if usage, _ := seen["usage"].(map[string]any); len(usage) != 1 || usage["image_pull_ms"] != 3184.0 {
+		t.Errorf("a usage nobody sampled travelled as %v, and it carries the pull and nothing else", seen["usage"])
 	}
 }
 
@@ -248,7 +266,10 @@ func TestAResultTheControllerWouldRefuseIsNotReported(t *testing.T) {
 			other, _ := agk.NewLogURI(agk.NewTaskID(agk.NewRunID(), "invoice", 1, agk.Shard{}))
 			r.Log.URI = other.String()
 		}},
-		{"a negative usage", func(r *TaskResult) { r.Usage.CPUSeconds = -1 }},
+		{"a negative usage", func(r *TaskResult) { r.Usage.CPUSeconds = new(-1.0) }},
+		{"a negative image pull", func(r *TaskResult) { r.Usage.ImagePullMS = -1 }},
+		{"a CPU figure without the peak it was sampled with", func(r *TaskResult) { r.Usage.MaxRSSBytes = nil }},
+		{"a peak without the CPU figure it was sampled with", func(r *TaskResult) { r.Usage.CPUSeconds = nil }},
 	} {
 		r := aResult(task)
 		r.Outputs = append([]Output(nil), r.Outputs...)
