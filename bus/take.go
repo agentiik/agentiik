@@ -149,6 +149,17 @@ func (t Taken) Again() error {
 	return t.msg.Nak()
 }
 
+// AgainAfter puts it back as Again does, to be handed out again once d has passed rather than at
+// once. A runner that would be refused the same message again, being draining or unable to write
+// the key down, says this: put back at once, the message would come straight back to its next free
+// slot, and a pool with no other runner would spin on it as fast as the API answers.
+func (t Taken) AgainAfter(d time.Duration) error {
+	if t.msg == nil {
+		return errors.New("bus: returning a task that came from nowhere")
+	}
+	return t.msg.NakWithDelay(d)
+}
+
 // Ended answers a task this host took whose key it had already carried to an ending, with that
 // ending.
 //
@@ -208,6 +219,10 @@ func (b *Bus) Ended(ctx context.Context, t Taken, ending TaskResult) error {
 // it has room, which makes distribution naturally proportional to each host's real capacity
 // without the controller having to model load".
 //
+// A ctx that ends ends the wait as well, so that an agent being stopped is not held for the rest of
+// a long poll. A message the server handed out as the wait was given up is not lost: nobody
+// acknowledged it, so it comes round once AckWait has passed.
+//
 // Creating one here would fail twice over. A runner's credential reaches this consumer and no
 // other and creates nothing, for the reason Consumer gives, and a WorkQueue stream refuses a
 // second consumer on a subject one already filters on. So AckWait and MaxDeliver are what
@@ -227,13 +242,51 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 		return nil, fmt.Errorf("bus: the consumer of pool %s could not be reached: %w", pool, err)
 	}
 
-	msgs, err := consumer.Fetch(batch, jetstream.FetchMaxWait(wait))
+	if wait <= 0 {
+		return nil, fmt.Errorf("bus: a runner waiting %s for work", wait)
+	}
+	waiting, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+
+	// One message is waited for, and the rest of the batch is only what is already there. A pull
+	// for the whole batch would hold the first message until the batch filled or the wait ran
+	// out, unacknowledged and handed to nobody else, while a host with room for several tasks
+	// waited on a queue holding one.
+	first, err := consumer.Fetch(1, jetstream.FetchContext(waiting))
 	if err != nil {
 		return nil, fmt.Errorf("bus: pool %s could not be asked for work: %w", pool, err)
 	}
+	out, arrived := b.taken(pool, first)
+	// The wait running out is a take that found nothing more, which is no failure, and the
+	// server says as much just before it runs out. The caller's ctx ending is, whatever the
+	// server said, and what was taken by then is answered with it.
+	if err := ctx.Err(); err != nil {
+		return out, fmt.Errorf("bus: pool %s was asked for work and the wait was given up: %w", pool, err)
+	}
+	if err := first.Error(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return out, fmt.Errorf("bus: pool %s was asked for work and answered: %w", pool, err)
+	}
+	if batch == 1 || !arrived {
+		return out, nil
+	}
+	rest, err := consumer.FetchNoWait(batch - 1)
+	if err != nil {
+		return out, fmt.Errorf("bus: pool %s could not be asked for more work: %w", pool, err)
+	}
+	more, _ := b.taken(pool, rest)
+	out = append(out, more...)
+	if err := rest.Error(); err != nil {
+		return out, fmt.Errorf("bus: pool %s was asked for more work and answered: %w", pool, err)
+	}
+	return out, nil
+}
 
+// taken reads every message of one fetch as a task, and says whether any message arrived at all.
+func (b *Bus) taken(pool string, msgs jetstream.MessageBatch) ([]Taken, bool) {
 	var out []Taken
+	arrived := false
 	for msg := range msgs.Messages() {
+		arrived = true
 		var t TaskMessage
 		if err := json.Unmarshal(msg.Data(), &t); err != nil {
 			// A message nobody can read is not work and will never become work, so it
@@ -247,10 +300,7 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 		}
 		out = append(out, Taken{Task: t, msg: msg})
 	}
-	if err := msgs.Error(); err != nil {
-		return out, fmt.Errorf("bus: pool %s was asked for work and answered: %w", pool, err)
-	}
-	return out, nil
+	return out, arrived
 }
 
 // Report sends one result back.
