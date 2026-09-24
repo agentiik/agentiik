@@ -228,3 +228,38 @@ func TestTheRemappedRangeIsReadOffTheRootDirectory(t *testing.T) {
 		t.Error("a root directory ending in names was read as carrying a numbered range")
 	}
 }
+
+// The three profiles of the SecurityOpt row are read off the same list, one option each,
+// and a seccomp listed as unconfined is told apart from one listed with a profile, since
+// it is the one answer that lists the mechanism and applies none of it.
+func TestTheProfilesAreReadOffTheSecurityOptions(t *testing.T) {
+	ubuntu := Info{SecurityOptions: []string{"name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"}}
+	if profile, ok := ubuntu.SeccompProfile(); !ok || profile != "builtin" {
+		t.Errorf("the seccomp profile of %v reads as %q, %v", ubuntu.SecurityOptions, profile, ok)
+	}
+	if !ubuntu.AppArmor() || ubuntu.SELinux() {
+		t.Errorf("%v reads as AppArmor %v and SELinux %v", ubuntu.SecurityOptions, ubuntu.AppArmor(), ubuntu.SELinux())
+	}
+
+	fedora := Info{SecurityOptions: []string{"name=seccomp,profile=/etc/docker/seccomp.json", "name=selinux"}}
+	if profile, _ := fedora.SeccompProfile(); profile != "/etc/docker/seccomp.json" {
+		t.Errorf("a daemon started with a profile of its own reads as %q", profile)
+	}
+	if fedora.AppArmor() || !fedora.SELinux() {
+		t.Errorf("%v reads as AppArmor %v and SELinux %v", fedora.SecurityOptions, fedora.AppArmor(), fedora.SELinux())
+	}
+
+	unconfined := Info{SecurityOptions: []string{"name=seccomp,profile=unconfined"}}
+	if profile, ok := unconfined.SeccompProfile(); !ok || profile != "unconfined" {
+		t.Errorf("a daemon started with --seccomp-profile=unconfined reads as %q, %v", profile, ok)
+	}
+
+	if _, ok := (Info{SecurityOptions: []string{"name=cgroupns"}}).SeccompProfile(); ok {
+		t.Error("a daemon listing no seccomp was read as one that filters system calls")
+	}
+	// A field is matched whole, so a profile that happens to be called apparmor is not
+	// the AppArmor option.
+	if (Info{SecurityOptions: []string{"name=seccomp,profile=apparmor"}}).AppArmor() {
+		t.Error("a seccomp profile called apparmor was read as AppArmor")
+	}
+}
