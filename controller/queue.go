@@ -15,9 +15,9 @@ import (
 //
 // "For each of them it creates one task per shard and publishes those tasks on the queue that
 // matches the step's runs_on labels. It does not choose a machine, and it does not start one."
-// The queue is the pool's, and the pool is chosen here, where the pools are read: the one whose
-// labels include every label of the step's runs_on, among the pools the namespace may reach. So a
-// Dispatch names it, and an implementation publishes to it rather than choosing again from labels
+// The queue is the pool's, and the pool is chosen by this package, in the transaction that issues
+// the task's grant and reads the pools: the one whose labels include every label of the step's
+// runs_on, among the pools the namespace may reach (pool.go). So a Dispatch names it, and an implementation publishes to it rather than choosing again from labels
 // alone, which would be a second choice free to differ from the one whose policy was applied.
 //
 // Stop is a method rather than a cancelled context for the reason graph.Driver gives: "a task

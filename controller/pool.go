@@ -32,10 +32,11 @@ import (
 // platformFailure is the exit code a task refused at dispatch ends with: 125, the first code of the
 // band "read as an infrastructure failure, charged to the runner and not to the brick", which no
 // retry policy can name. The brick never ran, and running it again changes nothing until an
-// administrator changes the pool.
+// administrator changes the pools or the step's author changes its runs_on.
 const platformFailure = 125
 
-// unpublishable is a task no runner may be handed, and why, in words that name the pool.
+// unpublishable is a task no runner may be handed, and why, in words that name the pool or the
+// labels no one pool answers.
 type unpublishable struct{ why string }
 
 func (u unpublishable) Error() string { return u.why }
