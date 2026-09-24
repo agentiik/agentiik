@@ -143,6 +143,16 @@ func TestARedemptionIsTheWiresRequestAndReadsTheWiresAnswer(t *testing.T) {
 func TestEachAnswerToARedemptionLeadsWhereThePageSays(t *testing.T) {
 	m, answer := corpusExchange(t)
 	unknown := bytes.Replace(answer, []byte(`"task_id"`), []byte(`"grant_ttl":900,"task_id"`), 1)
+	// An expiry written as a number: JSON, and not this runner's answer.
+	var doc map[string]any
+	if err := json.Unmarshal(answer, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["expires_at"] = 1789023069
+	reshaped, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, c := range map[string]struct {
 		status int
 		body   []byte
@@ -157,7 +167,10 @@ func TestEachAnswerToARedemptionLeadsWhereThePageSays(t *testing.T) {
 		"503":                        {http.StatusServiceUnavailable, nil, RedeemAgain},
 		"400, a status nobody named": {http.StatusBadRequest, []byte(`{"error":"a redemption names the task it is for"}`), RedeemAgain},
 		"200 with a field unknown":   {http.StatusOK, unknown, RedeemReport},
-		"200 cut short":              {http.StatusOK, answer[:len(answer)/2], RedeemReport},
+		"200 cut short":              {http.StatusOK, answer[:len(answer)/2], RedeemAgain},
+		"200 from a proxy":           {http.StatusOK, []byte("<html>maintenance</html>"), RedeemAgain},
+		"200 with nothing":           {http.StatusOK, nil, RedeemAgain},
+		"200 of another shape":       {http.StatusOK, reshaped, RedeemReport},
 		"200 for another task":       {http.StatusOK, bytes.Replace(answer, []byte(m.TaskID), []byte("01JMZ8V1PC7K3M0QY4B8ZR6TDM"), 1), RedeemReport},
 	} {
 		t.Run(name, func(t *testing.T) {

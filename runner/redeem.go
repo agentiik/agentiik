@@ -3,8 +3,10 @@ package runner
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -136,12 +138,20 @@ func (c *Client) Redeem(ctx context.Context, m bus.TaskMessage) (Redemption, err
 		Grant: m.Grant, TaskID: m.TaskID, IdempotencyKey: m.IdempotencyKey,
 	}, &r)
 	var refused *APIError
+	var syntax *json.SyntaxError
 	switch {
 	case err == nil:
 	case errors.As(err, &refused), errors.Is(err, ErrUnavailable), ctx.Err() != nil:
 		return Redemption{}, err
+	case errors.As(err, &syntax), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		// A success that is not JSON at all, is empty or stops short, is not an API of another
+		// version: it is a proxy's page, or a body cut off, and the 200 may not even be
+		// the API's. Nothing says the task was bound, so it is asked again, which the
+		// holder is answered as the first time.
+		return Redemption{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	default:
-		// A success that could not be decoded: the status said the task is bound here.
+		// A document that reads as JSON and not as this runner's answer: an API of another
+		// version, whose 200 said the task is bound here.
 		return Redemption{}, fmt.Errorf("%w: %w", ErrAnswerUnusable, err)
 	}
 	if err := r.answers(m); err != nil {
@@ -173,7 +183,8 @@ const (
 	RedeemReport
 
 	// RedeemAgain is no answer at all, a 401 or any other 5xx: the grant expired or opens
-	// nothing, the runner's own credential was refused, or a failure that may pass. The
+	// nothing, the runner's own credential was refused, or a failure that may pass. A 200 that
+	// is not JSON, or stops short, is one too, since it may not be the API's at all. The
 	// answer may have been lost after the binding, so the runner keeps the key, names it in
 	// its heartbeat and redeems again, acknowledging nothing, until the deadline the message
 	// carries has passed, when it reports the task timed_out with no container ran.
