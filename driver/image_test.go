@@ -510,3 +510,108 @@ func TestAnAdoptedContainerPastItsDeadlineIsNotLeftBehind(t *testing.T) {
 		t.Errorf("the adopted container %s was left behind", container[:12])
 	}
 }
+
+// A stop that lands during the pull finds no container to signal and is recorded, and the
+// task it called off ends cancelled even where its deadline then passes before the pull is
+// over: it was called off first, and a step retried on timeout must not run it again.
+func TestAStopDuringThePullIsNotReadAsATimeout(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	images := map[string]dockertest.Image{ref: {Digest: imageDigest, Manifest: []byte(goodManifest), Remote: true, Layers: 4}}
+	r := newRunner(t, images, nil, dockertest.SlowPull(300*time.Millisecond))
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(600 * time.Millisecond)
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatalf("holding the task: %s", err)
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		r.Stop(context.Background(), graph.Stop{Task: task.ID, Reason: graph.StopCancelled})
+	}()
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskCancelled {
+		t.Errorf("the state is %s, and the task was cancelled before its deadline passed", result.State)
+	}
+	if n := len(r.daemon.Created()); n != 0 {
+		t.Errorf("%d containers were created for a task called off during its pull", n)
+	}
+}
+
+// A manifest read the deadline cut short is the clock's doing and not the brick's: the task
+// ends timed_out with no container, as a pull the deadline cut short does, rather than
+// failing the brick's contract, and the container the manifest was being read through is
+// removed.
+func TestAManifestReadCutShortByTheDeadlineIsATimeout(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), nil)
+	r.daemon.Handle("GET", "/containers/{id}/archive", func(w http.ResponseWriter, req *http.Request) {
+		<-req.Context().Done()
+	})
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(300 * time.Millisecond)
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("a manifest read the deadline cut short answered an error rather than an ending: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Errorf("the state is %s, want timed_out", result.State)
+	}
+	if n := taskContainers(r.daemon); n != 0 {
+		t.Errorf("%d containers were created for the task", n)
+	}
+	for _, c := range r.daemon.Created() {
+		if !slices.Contains(r.daemon.Removed(), c.ID) {
+			t.Errorf("the container %s the manifest was read through was left behind", c.ID[:12])
+		}
+	}
+}
+
+// The container a manifest is read through is removed even where the daemon answers its
+// create only after the deadline: the create is waited for, so its identifier is known and
+// the removal has something to remove.
+func TestAManifestReaderCreatedPastTheDeadlineIsRemoved(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), nil, dockertest.SlowCreate(500*time.Millisecond))
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(200 * time.Millisecond)
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Errorf("the state is %s, want timed_out", result.State)
+	}
+	created := r.daemon.Created()
+	if len(created) == 0 {
+		t.Fatal("no container was created to read the manifest through")
+	}
+	for _, c := range created {
+		if !slices.Contains(r.daemon.Removed(), c.ID) {
+			t.Errorf("the container %s the manifest was read through was left behind", c.ID[:12])
+		}
+	}
+}
+
+// A refusal that is the brick's stays the brick's once the deadline has passed: only what the
+// clock can cut short, a call to the daemon, ends the task timed_out. A step naming no image
+// past its deadline is refused as a step naming no image, and not handed to the step's retry
+// as a timeout.
+func TestABricksRefusalPastTheDeadlineIsNotATimeout(t *testing.T) {
+	r := newRunner(t, nil, nil)
+
+	task := oneTask("")
+	task.Deadline = time.Now().Add(-time.Second)
+	result, err := r.Run(t.Context(), task)
+	if err == nil {
+		t.Fatalf("a step naming no image ended %s", result.State)
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargeBrick {
+		t.Errorf("the refusal %q is charged to %s", err, charge)
+	}
+}

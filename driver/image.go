@@ -156,7 +156,13 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 
 	document, err := readManifest(ctx, cli, ref, digest)
 	if err != nil {
-		return resolved{}, fault(t.Step, ErrContractBroken, ChargeBrick,
+		if ctx.Err() != nil {
+			// Cut short, by a deadline or by the caller, which says nothing of the
+			// image: the brick is not charged for what the clock did.
+			return out, fault(t.Step, nil, ChargePlatform,
+				"reading %s out of %s was cut short: %v", brick.ManifestPath, ref, err)
+		}
+		return out, fault(t.Step, ErrContractBroken, ChargeBrick,
 			"reading %s out of %s: %v", brick.ManifestPath, ref, err)
 	}
 	if document == nil {
@@ -168,7 +174,7 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 
 	m, err := brick.ParseManifest(document)
 	if err != nil {
-		return resolved{}, fault(t.Step, ErrContractBroken, ChargeBrick,
+		return out, fault(t.Step, ErrContractBroken, ChargeBrick,
 			"%s of %s: %v", brick.ManifestPath, ref, err)
 	}
 	if declaresRootUser(m.Spec.Runtime.User) {
@@ -176,7 +182,7 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 		// manifest is read, so this is the second gate rather than the first. It
 		// stays because the refusal that matters is the one before a container
 		// is created, and because this one names the step and the image.
-		return resolved{}, fault(t.Step, ErrRootUser, ChargeBrick,
+		return out, fault(t.Step, ErrRootUser, ChargeBrick,
 			"%s of %s declares spec.runtime.user: %q", brick.ManifestPath, ref, m.Spec.Runtime.User)
 	}
 
@@ -196,6 +202,11 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 // it starts, and the grant it would redeem its inputs with has expired with it. A pull
 // the deadline cut short answers *pastDeadline, and so does a deadline that had already
 // passed when the pull would have begun.
+//
+// Only a failure charged to the platform is read that way, since only the platform's side
+// of the resolution waits on the daemon and can be cut short by the clock. A manifest the
+// brick got wrong is the brick's refusal whenever it is read, and a deadline that fired a
+// moment before it was does not make it a timeout for the step's retry to run again.
 func (d *Docker) resolve(ctx context.Context, t graph.Task, bounded bool) (resolved, error) {
 	if !bounded || t.Deadline.IsZero() {
 		return resolveImage(ctx, d.cli, d.cache, t, "", nil)
@@ -203,7 +214,7 @@ func (d *Docker) resolve(ctx context.Context, t graph.Task, bounded bool) (resol
 	pulling, cancel := context.WithDeadline(ctx, t.Deadline)
 	defer cancel()
 	image, err := resolveImage(pulling, d.cli, d.cache, t, "", nil)
-	if err != nil && ctx.Err() == nil && errors.Is(pulling.Err(), context.DeadlineExceeded) {
+	if charge, _ := Charged(err); err != nil && charge == ChargePlatform && ctx.Err() == nil && errors.Is(pulling.Err(), context.DeadlineExceeded) {
 		return resolved{}, &pastDeadline{deadline: t.Deadline, ref: image.Ref, pulled: image.PullMillis, err: err}
 	}
 	return image, err
@@ -249,9 +260,9 @@ func hold(ctx context.Context, cli *docker.Client, step agk.Step, ref, auth stri
 	image, err = cli.ImageInspect(ctx, ref)
 	if err != nil {
 		if docker.IsUnreachable(err) {
-			return docker.Image{}, 0, fault(step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
+			return docker.Image{}, pullMillis, fault(step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
 		}
-		return docker.Image{}, 0, fault(step, ErrImagePullFailed, ChargePlatform,
+		return docker.Image{}, pullMillis, fault(step, ErrImagePullFailed, ChargePlatform,
 			"%s was pulled and then could not be inspected: %v", ref, err)
 	}
 	return image, pullMillis, nil
@@ -266,7 +277,13 @@ func hold(ctx context.Context, cli *docker.Client, step agk.Step, ref, auth stri
 // including the one where the file is not there, so that reading a manifest leaves
 // nothing behind.
 func readManifest(ctx context.Context, cli *docker.Client, ref, digest string) ([]byte, error) {
-	created, err := cli.ContainerCreate(ctx, "", docker.Config{
+	// The create is not cut short with ctx. A create the daemon carries out after the
+	// caller gave up answers nobody, so the container's identifier is never learnt and
+	// nothing removes it; a deadline bounding the resolution makes that ordinary rather
+	// than rare. It is given the removal's own bound instead, and ctx is asked after it.
+	creating, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
+	defer cancel()
+	created, err := cli.ContainerCreate(creating, "", docker.Config{
 		Image: ref,
 		// A create is refused where neither the image nor the request names a
 		// command. This container is never started, so the command exists to

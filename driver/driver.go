@@ -120,6 +120,13 @@ func (h *held) stopping(state agk.TaskState) *watch {
 	return h.watch
 }
 
+// stoppedAs answers with what a stop that landed made of the task, and whether one did.
+func (h *held) stoppedAs() (agk.TaskState, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state, h.stopped
+}
+
 // watching answers with the watch of this task's container, or nothing where there is no
 // container yet. It is a method rather than a field read because the event goroutine
 // reads it while the goroutine running the task is still writing it.

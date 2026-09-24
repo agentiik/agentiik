@@ -375,7 +375,8 @@ func (p *pastDeadline) Error() string {
 func (p *pastDeadline) Unwrap() error { return p.err }
 
 // timedOutPulling ends a task whose deadline passed during its pull: timed_out, with no
-// container, as a task whose deadline passed before its grant could be redeemed ends.
+// container, as a task whose deadline passed before its grant could be redeemed ends, or
+// cancelled where a stop landed during the pull before the deadline did.
 //
 // It is an ending and not an error, unlike every other way a task reaches no container,
 // because the reason is the task's own clock and not a failure of anything: the step's
@@ -390,8 +391,20 @@ func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadl
 	}
 	defer closeSink()
 	log := newLog(sink, newMasker(), d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
-	log.note("the step's deadline passed while its image %s was being pulled, so no container was created for it: %v", p.ref, p.err)
+	state := agk.TaskTimedOut
+	if h := d.lookup(t.ID); h != nil {
+		// A stop that landed during the pull found no container to signal and was
+		// recorded, and the work was called off before its deadline came: that is
+		// what the task ended as, and a cancelled step is not retried as a timeout.
+		if stopped, ok := h.stoppedAs(); ok {
+			state = stopped
+			log.note("the task was stopped while its image %s was being pulled, so no container was created for it", p.ref)
+		}
+	}
+	if state == agk.TaskTimedOut {
+		log.note("the step's deadline passed while its image %s was being pulled, so no container was created for it: %v", p.ref, p.err)
+	}
 	ref, _ := log.finish()
-	d.observe(ctx, Event{Task: t.ID, State: agk.TaskTimedOut, Log: ref, Usage: Usage{ImagePullMS: p.pulled}})
-	return graph.Result{Task: t.ID, State: agk.TaskTimedOut}, nil
+	d.observe(ctx, Event{Task: t.ID, State: state, Log: ref, Usage: Usage{ImagePullMS: p.pulled}})
+	return graph.Result{Task: t.ID, State: state}, nil
 }
