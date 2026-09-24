@@ -30,6 +30,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/secret"
 	"github.com/agentiik/agentiik/version"
@@ -373,7 +374,7 @@ func tidy(super, stmt string) {
 func natsFrom(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "nats-server.conf")
-	conf := fmt.Sprintf("host: 127.0.0.1\nport: -1\njetstream {\n  store_dir: %q\n}\ninclude %q\n", t.TempDir(), bus.AccountsFile)
+	conf := fmt.Sprintf("host: 127.0.0.1\nport: -1\njetstream {\n  store_dir: %q\n}\ninclude %q\n", bustest.StoreDir(t), bus.AccountsFile)
 	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
 		t.Fatal(err)
 	}

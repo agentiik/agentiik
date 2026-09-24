@@ -80,9 +80,13 @@ type Shard struct {
 
 // File is one repository file the step asked for, and where the container sees it. The bytes are
 // fetched from the tree by redeeming the grant.
+//
+// To is left out where the step asked for no relocation, as a selector's short form never does and
+// its long form need not: the file is then where it is under /agk/repo/, and an empty to is one the
+// wire refuses. A runner reads one left out as the empty string, which is no relocation.
 type File struct {
 	From string `json:"from"`
-	To   string `json:"to"`
+	To   string `json:"to,omitempty"`
 	Mode string `json:"mode,omitempty"`
 }
 

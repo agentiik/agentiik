@@ -2,10 +2,16 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/jackc/pgx/v5"
@@ -534,4 +540,106 @@ func TestOnlyATaskThatRanCarriesAnExitCode(t *testing.T) {
 			t.Errorf("a %s task carried exit code %d, and nothing decided it", c.state, c.code)
 		}
 	}
+}
+
+// A transaction whose context ends between two statements, on a connection that has stopped
+// answering, still returns. The statement after the end refuses the context before it writes
+// anything, so the connection is left alive, inside the transaction and silent, and the rollback
+// owed on it waits for an answer that is not coming. Unbounded, that wait is as long as TCP's: a
+// controller asked to stop in the middle of a sweep while cut off from its database stayed there.
+func TestARollbackNothingAnswersIsGivenUp(t *testing.T) {
+	_, app := database(t)
+	u, err := url.Parse(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := silence(t, u.Host)
+	u.Host = cut.listener.Addr().String()
+
+	pool, err := Open(t.Context(), u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	// Answering again first, so that closing the pool does not wait on the silence as well.
+	t.Cleanup(func() { cut.silent.Store(false) })
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	returned := make(chan error, 1)
+	go func() {
+		returned <- pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			cut.silent.Store(true)
+			stop()
+			return w.tx.QueryRow(ctx, `select 1`).Scan(new(int))
+		})
+	}()
+
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the transaction ended with %v, and it was its context that ended", err)
+		}
+	case <-time.After(rollbackWithin + 10*time.Second):
+		t.Fatalf("the transaction had not returned %s after its context ended on a connection nothing answers on", rollbackWithin+10*time.Second)
+	}
+}
+
+// cutOff stands between a pool and PostgreSQL and, once silent, forwards nothing either way while
+// keeping every connection open: a network that stopped answering without a reset.
+type cutOff struct {
+	listener net.Listener
+	silent   atomic.Bool
+}
+
+func silence(t *testing.T, target string) *cutOff {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &cutOff{listener: l}
+	var conns sync.WaitGroup
+	t.Cleanup(func() {
+		l.Close()
+		c.silent.Store(false)
+		conns.Wait()
+	})
+	go func() {
+		for {
+			near, err := l.Accept()
+			if err != nil {
+				return
+			}
+			far, err := net.Dial("tcp", target)
+			if err != nil {
+				near.Close()
+				continue
+			}
+			conns.Add(2)
+			relay := func(to, from net.Conn) {
+				defer conns.Done()
+				defer to.Close()
+				defer from.Close()
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := from.Read(buf)
+					for c.silent.Load() {
+						time.Sleep(10 * time.Millisecond)
+					}
+					if n > 0 {
+						if _, err := to.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}
+			go relay(far, near)
+			go relay(near, far)
+		}
+	}()
+	return c
 }

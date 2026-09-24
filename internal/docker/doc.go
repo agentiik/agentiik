@@ -61,7 +61,8 @@
 //
 // The six the runner section names, GET /containers/{id}/json, POST
 // /containers/{id}/stop, GET /containers/json, GET /containers/{id}/archive, GET /images
-// /{name}/json, POST /images/create, the network calls, and GET /events.
+// /{name}/json, POST /images/create, GET /containers/{id}/stats, the network calls, and
+// GET /events.
 //
 //	GET  /_ping                          negotiate the version, once per daemon
 //	GET  /info                           SecurityOptions, for userns and the profiles applied
@@ -74,6 +75,7 @@
 //	GET  /containers/{id}/logs           after the exit, which is why AutoRemove is false
 //	GET  /containers/{id}/archive        /agk/brick.yaml out of the image, /agk/out back
 //	GET  /containers/{id}/json           the backstop, and State.StartedAt and FinishedAt
+//	GET  /containers/{id}/stats          sampled while it runs, for the usage block
 //	GET  /containers/json                adoption and the startup sweep, filtered by label
 //	POST /containers/{id}/stop           SIGTERM then SIGKILL after t, the daemon's own
 //	POST /containers/{id}/kill            the backstop signal
@@ -115,6 +117,7 @@
 //	attach.go     the hijacked upgrade, dialed raw and spoken by hand
 //	stream.go     the eight-byte stdcopy frame header, which separates stdout from stderr
 //	events.go     the event stream as newline-delimited JSON, resumed from since
+//	stats.go      a container's statistics, one sample now or a stream of them
 //	network.go    create, list and remove
 //	types.go      the Engine API shapes with their wire json tags
 //	errors.go     Error, and the three questions a caller asks of one

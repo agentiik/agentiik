@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/ulid"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
@@ -674,7 +675,7 @@ func TestARequeueWhoseRecordedEndingDidNotGoOutStaysOnTheQueue(t *testing.T) {
 func alone(t *testing.T) *Bus {
 	t.Helper()
 	server, err := natsserver.NewServer(&natsserver.Options{
-		Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+		Port: -1, JetStream: true, StoreDir: bustest.StoreDir(t), NoLog: true, NoSigs: true,
 	})
 	if err != nil {
 		t.Fatal(err)

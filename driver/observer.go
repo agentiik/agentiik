@@ -67,13 +67,21 @@ type Event struct {
 // ImagePullMS is here rather than beside the other two because it is the one part that is
 // not spent inside the container: a task that waited four minutes on a cold image did not
 // spend four minutes of anybody's CPU, and reporting it inside the run time would make a
-// slow registry look like a slow brick. It is also the only one of the three this driver
-// fills in: the other two are read off the container's own cgroup, which is the runner's
-// to gather.
+// slow registry look like a slow brick. The other two are sampled from the daemon's
+// statistics while the container runs, which sampler says the limits of: each is what the
+// samples saw, and a container that exited before any was read carries neither. They are
+// filled in on the terminal event of a container this driver watched run, and are absent
+// from one it found already exited.
 type Usage struct {
 	CPUSeconds  float64 `json:"cpu_seconds,omitempty"`
 	MaxRSSBytes int64   `json:"max_rss_bytes,omitempty"`
 	ImagePullMS int64   `json:"image_pull_ms,omitempty"`
+
+	// Sampled says the two figures were read off at least one sample, so that a zero
+	// among them is a zero the daemon counted rather than nothing counted at all. It is
+	// not on the wire: what a result carries for a container nobody sampled is the
+	// runner's to decide.
+	Sampled bool `json:"-"`
 }
 
 // IsZero says there is nothing to report, which is what lets the field be omitted.
