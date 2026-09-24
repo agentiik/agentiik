@@ -390,7 +390,11 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 		Credential string `json:"credential"`
 	}
 	if code := in.ask(t, "POST", "/api/v1/runners", "", api.Join{
-		Token: join.Clear, CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38, Architecture: "amd64", AgentVersion: "0.2.0",
+		Token:        join.Clear,
+		PublicKey:    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+		Labels:       []string{},
+		Capacity:     &api.Capacity{VCPU: 8, Memory: "16Gi", Disk: "256Gi"},
+		Architecture: "amd64", AgentVersion: "0.2.0",
 	}, &joined); code != http.StatusCreated {
 		t.Fatalf("joining answered %d", code)
 	}

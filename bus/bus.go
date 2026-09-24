@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -348,18 +349,27 @@ func validPool(pool string) error {
 	return nil
 }
 
-// validRunner holds a runner's name to what can be a subject token, for the same reason: a
-// runner's results go on a subject of its own, and a name with a wildcard in it would be a
-// credential allowed to publish as every runner at once.
+// validRunner holds a runner's name to the grammar the wire writes one in, which is also what can
+// be a subject token: a runner's results go on a subject of its own, and a name with a wildcard in
+// it would be a credential allowed to publish as every runner at once.
+//
+// The wire's grammar rather than any subject token, because the name is the runner field of every
+// result it publishes and the API mints it in that grammar, lowercase words joined by hyphens. A
+// runner the API could not have minted is a credential somebody wrote by hand, and a result naming
+// one is taken off the queue before the controller reads it as a host.
 func validRunner(runner string) error {
 	if runner == "" {
 		return errors.New("a runner with no name, and a result is taken from the runner that sent it")
 	}
-	if !isToken(runner) {
-		return fmt.Errorf("%q is not a runner: letters, digits, hyphens and underscores, because a runner's name is a subject token and a dot or a wildcard in one would reach another runner's results", runner)
+	if !runnerName.MatchString(runner) {
+		return fmt.Errorf("%.64q is not a runner: a runner is named in lowercase words joined by hyphens, the name the API minted it at join, and it is a subject token, so a dot or a wildcard in one would reach another runner's results", runner)
 	}
 	return nil
 }
+
+// runnerName is the wire's pattern for a runner, wire.schema.json $defs/taskResult/runner, held
+// to it by a test.
+var runnerName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // isToken says whether a name can be one token of a subject and nothing more.
 func isToken(s string) bool {

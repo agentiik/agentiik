@@ -216,3 +216,9 @@ func manifestPath(name string) string {
 	}
 	return "fixtures/" + name
 }
+
+// RunnerRegistrations returns the join corpus: what a machine sends the API to become a runner, and
+// what the API answers, each document the pair.
+func RunnerRegistrations() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.RunnerRegistration })
+}

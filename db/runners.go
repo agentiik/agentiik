@@ -2,9 +2,11 @@ package db
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -102,14 +104,36 @@ type Joining struct {
 	Token  string
 	Labels []string
 
-	// What a machine says about itself is what only the machine knows. What it is allowed
-	// is its pool's: "the labels it claims, its capacity in vCPU, memory and disk, its
-	// architecture and its agent version" is the whole of what registration carries.
+	// PublicKey is the public half of the keypair the host generated, which is the runner's
+	// identity across restarts and what a rotation is signed against. The private half never
+	// leaves the host.
+	PublicKey ed25519.PublicKey
+
+	// What a machine says about itself is what only the machine knows: "the public key, the
+	// labels it claims, its AGK_RUNNER_NAMESPACES, its capacity in vCPU, memory and disk, its
+	// architecture and its agent version". What it is allowed is its token's and its pool's,
+	// and its own namespaces only narrow that.
 	CPU          int
 	MemoryBytes  int64
 	DiskBytes    int64
 	Architecture string
 	AgentVersion string
+
+	// Namespaces is the host's own narrowing, nil where it narrows nothing. It may name only
+	// namespaces its pool accepts: it narrows and never widens.
+	Namespaces []string
+
+	// Containment is what the host can prove about how its containers are contained, nil
+	// where it said nothing.
+	Containment *Containment
+}
+
+// Containment is what a host reported at join of how it contains a container: the runtime its
+// daemon creates them with, and whether that daemon remaps container root to an unprivileged
+// account.
+type Containment struct {
+	Runtime     string `json:"runtime"`
+	UsernsRemap bool   `json:"userns_remap"`
 }
 
 // Joined is what it gets back: an identity, and a credential that exists once.
@@ -128,10 +152,16 @@ type Joined struct {
 // then wonder why it is being offered nothing.
 func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, now time.Time) (Joined, error) {
 	switch {
+	case len(j.PublicKey) != ed25519.PublicKeySize:
+		return Joined{}, errors.New("db: a runner is its key, and this one brings no Ed25519 public key")
 	case j.CPU < 1 || j.MemoryBytes < 1 || j.DiskBytes < 1:
 		return Joined{}, errors.New("db: a runner declares its own capacity, and this one declares none")
 	case j.Architecture == "" || j.AgentVersion == "":
 		return Joined{}, errors.New("db: a runner says what it is and what it runs")
+	case j.Namespaces != nil && len(j.Namespaces) == 0:
+		return Joined{}, errors.New("db: a runner narrowed to no namespace could never be handed a task, and one that narrows nothing sends no list")
+	case j.Containment != nil && j.Containment.Runtime == "":
+		return Joined{}, errors.New("db: a runner reporting its containment names the runtime its daemon uses")
 	}
 
 	var id, pool, hashed string
@@ -162,19 +192,50 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 		}
 	}
 
-	runner := ulid.New()
+	// The host's namespaces narrow its pool's and never widen them, the rule its labels follow:
+	// a namespace the pool does not accept is refused with the whole registration rather than
+	// dropped, because a machine asking for more than it may have is a machine somebody should
+	// look at. A pool that lists none accepts every namespace, so any narrowing of it is one.
+	if j.Namespaces != nil {
+		var accepted []string
+		if err := w.tx.QueryRow(ctx,
+			`select accepted_namespaces::text[] from runner_pools where name = $1`, pool).
+			Scan(&accepted); err != nil {
+			return Joined{}, fmt.Errorf("db: the pool of the join token could not be read: %w", err)
+		}
+		if len(accepted) > 0 {
+			for _, narrowed := range j.Namespaces {
+				if !slices.Contains(accepted, narrowed) {
+					return Joined{}, fmt.Errorf("%w: it narrows itself to %s, which its pool does not accept", ErrNoJoinToken, narrowed)
+				}
+			}
+		}
+	}
+
+	// Minted in the grammar the wire prints a runner in, lowercase, because the identifier is
+	// the runner field of every result it publishes and a subject token on the bus, and the
+	// result reader holds it to that grammar.
+	runner := strings.ToLower(ulid.New())
 	clear, credential, err := token.New(token.Runner, "")
 	if err != nil {
 		return Joined{}, fmt.Errorf("db: %w", err)
 	}
 	rotate := now.Add(rotateAfter)
 
+	var runtime *string
+	var remap *bool
+	if c := j.Containment; c != nil {
+		runtime, remap = &c.Runtime, &c.UsernsRemap
+	}
 	if _, err := w.tx.Exec(ctx,
-		`insert into runners (id, pool, labels, cpu, memory_bytes, disk_bytes,
-		                      architecture, agent_version, credential_hash, rotate_by, joined_with)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		runner, pool, orEmptyStrings(j.Labels),
-		j.CPU, j.MemoryBytes, j.DiskBytes, j.Architecture, j.AgentVersion,
+		`insert into runners (id, pool, labels, public_key, cpu, memory_bytes, disk_bytes,
+		                      architecture, agent_version, accepted_namespaces,
+		                      containment_runtime, userns_remap,
+		                      credential_hash, rotate_by, joined_with)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text[]::namespace_name[], $11, $12, $13, $14, $15)`,
+		runner, pool, orEmptyStrings(j.Labels), []byte(j.PublicKey),
+		j.CPU, j.MemoryBytes, j.DiskBytes, j.Architecture, j.AgentVersion, j.Namespaces,
+		runtime, remap,
 		credential, rotate, id); err != nil {
 		return Joined{}, fmt.Errorf("db: the runner could not be created: %w", err)
 	}
@@ -192,17 +253,57 @@ type Runner struct {
 	Pool   string   `json:"pool"`
 	Labels []string `json:"labels"`
 
+	// PublicKey is the key the host joined with. It is not answered in the inventory, which
+	// lists hosts rather than proves them.
+	PublicKey ed25519.PublicKey `json:"-"`
+
 	CPU          int    `json:"cpu"`
 	MemoryBytes  int64  `json:"memory_bytes"`
 	DiskBytes    int64  `json:"disk_bytes"`
 	Architecture string `json:"architecture"`
 	AgentVersion string `json:"agent_version"`
 
+	Namespaces  []string     `json:"namespaces,omitempty"`
+	Containment *Containment `json:"containment,omitempty"`
+
 	State       string    `json:"state"`
 	DrainReason string    `json:"drain_reason,omitempty"`
 	JoinedAt    time.Time `json:"joined_at"`
 	LastSeenAt  time.Time `json:"last_seen_at,omitzero"`
 	RotateBy    time.Time `json:"rotate_by,omitzero"`
+}
+
+// runnerColumns are what scanRunner reads, in its order.
+const runnerColumns = `id, pool, labels, public_key, cpu, memory_bytes, disk_bytes,
+	architecture, agent_version, accepted_namespaces::text[], containment_runtime, userns_remap,
+	state, drain_reason, joined_at, last_heartbeat_at, rotate_by`
+
+// scanRunner reads one row of runnerColumns.
+func scanRunner(row pgx.Row) (Runner, error) {
+	var r Runner
+	var key []byte
+	var runtime, reason *string
+	var remap *bool
+	var seen, rotate *time.Time
+	if err := row.Scan(&r.ID, &r.Pool, &r.Labels, &key, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+		&r.Architecture, &r.AgentVersion, &r.Namespaces, &runtime, &remap,
+		&r.State, &reason, &r.JoinedAt, &seen, &rotate); err != nil {
+		return Runner{}, err
+	}
+	r.PublicKey = ed25519.PublicKey(key)
+	if runtime != nil && remap != nil {
+		r.Containment = &Containment{Runtime: *runtime, UsernsRemap: *remap}
+	}
+	if reason != nil {
+		r.DrainReason = *reason
+	}
+	if seen != nil {
+		r.LastSeenAt = *seen
+	}
+	if rotate != nil {
+		r.RotateBy = *rotate
+	}
+	return r, nil
 }
 
 // Authenticate answers which runner a credential belongs to, and refuses a revoked one.
@@ -213,15 +314,8 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 	if kind, ok := token.KindOf(credential); !ok || kind != token.Runner {
 		return Runner{}, ErrNoRunner
 	}
-	var r Runner
-	var reason *string
-	var seen, rotate *time.Time
-	err := w.tx.QueryRow(ctx, `
-		select id, pool, labels, cpu, memory_bytes, disk_bytes,
-		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
-		from runners where credential_hash = $1`, token.Hash(credential)).
-		Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
-			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
+	r, err := scanRunner(w.tx.QueryRow(ctx,
+		`select `+runnerColumns+` from runners where credential_hash = $1`, token.Hash(credential)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNoRunner
 	}
@@ -230,15 +324,6 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 	}
 	if r.State == "revoked" {
 		return Runner{}, ErrNoRunner
-	}
-	if reason != nil {
-		r.DrainReason = *reason
-	}
-	if seen != nil {
-		r.LastSeenAt = *seen
-	}
-	if rotate != nil {
-		r.RotateBy = *rotate
 	}
 	return r, nil
 }
@@ -263,30 +348,15 @@ const LostAfter = 3 * HeartbeatInterval
 // moment against every task it named, which is what Lost compares against, and what it answers is
 // whether the runner should be draining.
 func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at time.Time) (Runner, error) {
-	var r Runner
-	var reason *string
-	var seen, rotate *time.Time
-	err := w.tx.QueryRow(ctx, `
-		update runners set last_heartbeat_at = $2 where id = $1 and state <> 'revoked'
-		returning id, pool, labels, cpu, memory_bytes, disk_bytes,
-		          architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by`,
-		runner, at).
-		Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
-			&r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate)
+	r, err := scanRunner(w.tx.QueryRow(ctx,
+		`update runners set last_heartbeat_at = $2 where id = $1 and state <> 'revoked'
+		 returning `+runnerColumns,
+		runner, at))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNoRunner
 	}
 	if err != nil {
 		return Runner{}, fmt.Errorf("db: the heartbeat could not be recorded: %w", err)
-	}
-	if reason != nil {
-		r.DrainReason = *reason
-	}
-	if seen != nil {
-		r.LastSeenAt = *seen
-	}
-	if rotate != nil {
-		r.RotateBy = *rotate
 	}
 
 	if len(holding) > 0 {
@@ -330,10 +400,7 @@ func (w *Wide) Revoke(ctx context.Context, runner, why string) error {
 
 // Runners is the inventory.
 func (w *Wide) Runners(ctx context.Context) ([]Runner, error) {
-	rows, err := w.tx.Query(ctx, `
-		select id, pool, labels, cpu, memory_bytes, disk_bytes,
-		       architecture, agent_version, state, drain_reason, joined_at, last_heartbeat_at, rotate_by
-		from runners order by pool, id`)
+	rows, err := w.tx.Query(ctx, `select `+runnerColumns+` from runners order by pool, id`)
 	if err != nil {
 		return nil, fmt.Errorf("db: the runners could not be read: %w", err)
 	}
@@ -341,21 +408,9 @@ func (w *Wide) Runners(ctx context.Context) ([]Runner, error) {
 
 	out := []Runner{}
 	for rows.Next() {
-		var r Runner
-		var reason *string
-		var seen, rotate *time.Time
-		if err := rows.Scan(&r.ID, &r.Pool, &r.Labels, &r.CPU, &r.MemoryBytes,
-			&r.DiskBytes, &r.Architecture, &r.AgentVersion, &r.State, &reason, &r.JoinedAt, &seen, &rotate); err != nil {
+		r, err := scanRunner(rows)
+		if err != nil {
 			return nil, err
-		}
-		if reason != nil {
-			r.DrainReason = *reason
-		}
-		if seen != nil {
-			r.LastSeenAt = *seen
-		}
-		if rotate != nil {
-			r.RotateBy = *rotate
 		}
 		out = append(out, r)
 	}
