@@ -186,6 +186,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
 - The pool routes are held to the vendored runner pool corpus, a join token's default hour to its `issued_at` and `expires_at`, and every administrator route to a 403 for anybody without `grant:manage` over the installation.
+- That 403 is given to a principal holding every other permission over the installation, so an administrator route asking for anything but `grant:manage` there fails the test.
 
 ## v0.1.2, 2026-09-13
 

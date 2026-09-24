@@ -250,24 +250,26 @@ func TestThePoolsAreNotSomethingARunnerReads(t *testing.T) {
 	}
 }
 
-// ownsEveryNamespace holds every permission over every namespace and every workflow in them, and
-// nothing over the installation: as much as anybody can be given and still not be an
-// administrator.
-type ownsEveryNamespace struct{ who api.Principal }
+// allButAdministration holds every permission over every namespace and every workflow in them,
+// and every permission over the installation but grant:manage: as much as anybody can be given
+// and still not be an administrator. Holding the installation's other permissions is what makes
+// a route asking for one of them, rather than grant:manage, answer where it should refuse.
+type allButAdministration struct{ who api.Principal }
 
-func (o ownsEveryNamespace) Allow(_ context.Context, who api.Principal, _ api.Permission, over api.Target) (bool, error) {
-	return who == o.who && over.Namespace != "", nil
+func (o allButAdministration) Allow(_ context.Context, who api.Principal, p api.Permission, over api.Target) (bool, error) {
+	return who == o.who && (p != api.GrantManage || over.Namespace != ""), nil
 }
 
-// "Administrator only": grant:manage at the installation, and nothing held over a namespace
-// stands in for it, however much of it there is.
+// "Administrator only": grant:manage at the installation, and nothing else stands in for it,
+// however much of it there is: no other permission over the installation, and no permission over
+// a namespace.
 func TestOnlyAnAdministratorReachesThePoolsAndTheInventory(t *testing.T) {
-	h, _ := withRunnersAuthorizedBy(t, ownsEveryNamespace{who: "alice"})
+	h, _ := withRunnersAuthorizedBy(t, allButAdministration{who: "alice"})
 
 	for _, c := range administration() {
 		w, _ := call(t, h, c.method, c.path, "alice", c.body)
 		if w.Code != http.StatusForbidden {
-			t.Errorf("an owner of every namespace reaching %s %s answered %d: %s", c.method, c.path, w.Code, w.Body)
+			t.Errorf("somebody holding everything but grant:manage over the installation reaching %s %s answered %d: %s", c.method, c.path, w.Code, w.Body)
 		}
 		w, _ = call(t, h, c.method, c.path, "", c.body)
 		if w.Code != http.StatusUnauthorized {
