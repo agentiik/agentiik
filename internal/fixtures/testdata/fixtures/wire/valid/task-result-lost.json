@@ -4,7 +4,7 @@
   "runner": "runner-dmz-02",
   "state": "failed",
   "log": {
-    "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
+    "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1%2F3%2F8",
     "lines": 3,
     "truncated": false
   }
