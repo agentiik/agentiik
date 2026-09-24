@@ -251,10 +251,13 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	stamp(tasks, a)
 
 	// "A result for an attempt that is over changes nothing", and the evaluator says so by
-	// not counting a decision. There is then nothing to write, and writing it anyway would
-	// be refused for taking the run from a sequence to the same sequence.
+	// not counting a decision. There is then nothing to decide, and writing the decision anyway
+	// would be refused for taking the run from a sequence to the same sequence. What such a
+	// result may still say is how a container the controller stopped exited: a task stopped as
+	// superseded or sibling_failed was ended when the stop went out, while the run went on, and
+	// its runner's report comes to a task that is over, as one a run's ending stopped does.
 	if state.Seq == e.Seq {
-		return nil
+		return co.stopCode(ctx, e.Namespace, a, bind)
 	}
 
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
@@ -352,13 +355,14 @@ func unreached(a Answer) bool {
 		a.Result.ExitCode == 0 && len(a.Outputs) == 0
 }
 
-// stopCode writes onto the row of a dispatch a run's ending stopped the exit code its container
-// exited with, where the answer comes from the runner bound to it and reports one.
+// stopCode writes onto the row of a dispatch the controller stopped, by a run's ending or by a
+// stop sent while the run went on, the exit code its container exited with, where the answer
+// comes from the runner bound to it and reports one.
 //
 // A runner bound by this very answer is not one: an ending that never reached a container has no
 // code, and a host answering from its record answers a requeue, not a container the run stopped.
 // Nor is a loss, which reports no outcome. Which row takes the code is Wide.StopCode's to say: one
-// the run's ending stopped, and only once.
+// the controller stopped, and only once.
 func (co *Core) stopCode(ctx context.Context, namespace string, a Answer, bind bool) error {
 	r := a.Result
 	if bind || r.State == agk.TaskLost || r.StartedAt.IsZero() || r.NoExitCode {

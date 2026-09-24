@@ -488,7 +488,10 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 
 	// The finish is kept where the decision has none, because a dispatch finishes once: a
 	// further attempt and a requeue are rows of their own, so nothing written to this row
-	// later can mean it has not finished after all.
+	// later can mean it has not finished after all. So is the exit code, for the same reason
+	// and for a stopped task's in particular: its runner's report lands through StopCode on a
+	// row the evaluator ended when the stop went out, and the run's later decisions, which
+	// know no code for it, would otherwise write it away.
 	var held string
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
@@ -506,7 +509,7 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		                  then tasks.state
 		                  else excluded.state end,
 		     runner = coalesce(excluded.runner, tasks.runner),
-		     exit_code = excluded.exit_code,
+		     exit_code = coalesce(excluded.exit_code, tasks.exit_code),
 		     log_uri = coalesce(excluded.log_uri, tasks.log_uri),
 		     log_lines = coalesce(excluded.log_lines, tasks.log_lines),
 		     log_truncated = excluded.log_truncated,
@@ -926,9 +929,12 @@ func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID,
 // only a cancellation's. A run that succeeded or failed has ended every step, and a step ends once
 // every shard of it has, except the one a merge: first superseded: that step is cancelled the
 // moment the barrier lifts on another edge, while its tasks are still in flight and only asked to
-// stop. Their runners' endings would then reach a run with nothing left to learn, and the rows
-// would read dispatched or running for ever. "cancelled: Stopped because the run was cancelled by
-// a principal, by a concurrency group, by a merge: first or by fail_fast" is the ending for them.
+// stop. The controller ends each one it knows was dispatched as its stop goes out, but a dispatch
+// whose publication it never saw acknowledged is pending in its document and may have been
+// redeemed all the same. Its runner's ending would then reach a run with nothing left to learn,
+// and the row would read dispatched or running for ever. "cancelled: Stopped because the run was
+// cancelled by a principal, by a concurrency group, by a merge: first or by fail_fast" is the
+// ending for it.
 //
 // It is CancelTasks for every way a run ends under its tasks, and for the same reasons: a message
 // still on the queue would otherwise redeem its grant for a run that has ended, the run's tasks
@@ -949,13 +955,15 @@ func (w *Wide) EndTasks(ctx context.Context, namespace string, run agk.RunID, at
 	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
 }
 
-// StopCode writes onto one dispatch that a run's ending stopped the exit code its container
+// StopCode writes onto one dispatch that the controller stopped the exit code its container
 // exited with, as its runner reported it, and answers whether a row took it.
 //
 // CancelTasks and EndTasks end a run's tasks in the pass that ends the run, before any
 // container has exited, so the rows they end carry no code; the runner's report comes later, to a
-// run with nothing left to decide. "A timed_out or cancelled task carries an exit code wherever a
-// container ran" all the same, and this is where it lands. Only on a row that is stopped and has no
+// run with nothing left to decide. A task stopped as superseded or sibling_failed while its run
+// goes on is ended the same way, in the pass that sends the stop, and its report comes to a task
+// that is over. "A timed_out or cancelled task carries an exit code wherever a container ran" all
+// the same, and this is where it lands; the decisions written after it keep it. Only on a row that is stopped and has no
 // code yet, so an ending is written once; only on the dispatch named by its row and its key, as
 // HeldBy compares them; and only from the runner the dispatch is bound to. When it started is kept
 // where the row has none, and when it finished is the moment the run ended it, which stays.
