@@ -220,7 +220,9 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 	if err != nil {
 		return Joined{}, fmt.Errorf("db: %w", err)
 	}
-	rotate := now.Add(rotateAfter)
+	// To the microsecond, which is what PostgreSQL keeps and Authenticate judges by, so that the
+	// instant answered is the instant enforced.
+	rotate := now.Add(rotateAfter).Truncate(time.Microsecond)
 
 	var runtime *string
 	var remap *bool
@@ -285,17 +287,18 @@ const runnerColumns = `id, pool, labels, public_key, cpu, memory_bytes, disk_byt
 	architecture, agent_version, accepted_namespaces::text[], containment_runtime, userns_remap,
 	state, drain_reason, reported_state, concurrency, joined_at, last_heartbeat_at, rotate_by`
 
-// scanRunner reads one row of runnerColumns.
-func scanRunner(row pgx.Row) (Runner, error) {
+// scanRunner reads one row of runnerColumns, and whatever a query selects after them into more.
+func scanRunner(row pgx.Row, more ...any) (Runner, error) {
 	var r Runner
 	var key []byte
 	var runtime, reason, reported *string
 	var remap *bool
 	var concurrency *int64
 	var seen, rotate *time.Time
-	if err := row.Scan(&r.ID, &r.Pool, &r.Labels, &key, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
+	into := append([]any{&r.ID, &r.Pool, &r.Labels, &key, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
 		&r.Architecture, &r.AgentVersion, &r.Namespaces, &runtime, &remap,
-		&r.State, &reason, &reported, &concurrency, &r.JoinedAt, &seen, &rotate); err != nil {
+		&r.State, &reason, &reported, &concurrency, &r.JoinedAt, &seen, &rotate}, more...)
+	if err := row.Scan(into...); err != nil {
 		return Runner{}, err
 	}
 	r.PublicKey = ed25519.PublicKey(key)
@@ -317,26 +320,156 @@ func scanRunner(row pgx.Row) (Runner, error) {
 	return r, nil
 }
 
-// Authenticate answers which runner a credential belongs to, and refuses a revoked one.
+// Authenticate answers which runner a credential belongs to, and refuses a revoked one and one
+// past its rotate_by.
 //
 // "revoking it from the console stops the runner at its next heartbeat", so a revoked credential
-// is refused here rather than left to a check somewhere else.
-func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, error) {
+// is refused here rather than left to a check somewhere else. So is a credential past its
+// rotate_by, which is the whole of the rotation window: "A credential past its rotate_by is refused
+// everywhere, and that host joins again", because "a machine that has been dark for a month should
+// be reconsidered rather than readmitted". The moment is the caller's, as every moment this package
+// judges is.
+//
+// A runner that has rotated holds two credentials until it presents the new one: the one it was
+// answered, and the one it rotated with, which is what it still holds if the answer never reached
+// it. Either opens the runner, each until its own rotate_by, and the Runner answered carries the
+// rotate_by of the one presented. The first time the new one is presented, the old one is forgotten,
+// since the runner has then shown it holds the new one and the old one is worth something only to
+// whoever else has a copy.
+func (w *Wide) Authenticate(ctx context.Context, credential string, now time.Time) (Runner, error) {
 	if kind, ok := token.KindOf(credential); !ok || kind != token.Runner {
 		return Runner{}, ErrNoRunner
 	}
+	hashed := token.Hash(credential)
+	var current string
+	var previousBy *time.Time
 	r, err := scanRunner(w.tx.QueryRow(ctx,
-		`select `+runnerColumns+` from runners where credential_hash = $1`, token.Hash(credential)))
+		`select `+runnerColumns+`, credential_hash, previous_rotate_by from runners
+		 where credential_hash = $1 or previous_credential_hash = $1`, hashed),
+		&current, &previousBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNoRunner
 	}
 	if err != nil {
 		return Runner{}, fmt.Errorf("db: the runner could not be read: %w", err)
 	}
-	if r.State == "revoked" {
+	isCurrent := current == hashed
+	if !isCurrent {
+		r.RotateBy = *previousBy
+	}
+	switch {
+	case r.State == "revoked":
+		return Runner{}, ErrNoRunner
+	case !now.Before(r.RotateBy):
 		return Runner{}, ErrNoRunner
 	}
+
+	if isCurrent && previousBy != nil {
+		if _, err := w.tx.Exec(ctx,
+			`update runners set previous_credential_hash = null, previous_rotate_by = null
+			 where id = $1 and credential_hash = $2`, r.ID, hashed); err != nil {
+			return Runner{}, fmt.Errorf("db: the credential runner %s rotated from could not be forgotten: %w", r.ID, err)
+		}
+	}
 	return r, nil
+}
+
+// ErrNotItsKey is a rotation whose signature is not by the key its runner joined with.
+var ErrNotItsKey = errors.New("db: that signature is not by the key the runner joined with")
+
+// ErrRotationReplayed is a rotation signing a request time no later than the last one its runner
+// rotated with.
+var ErrRotationReplayed = errors.New("db: a rotation signs a later time than the last one did")
+
+// Rotating is what a runner presents to be given a new credential: the credential it holds, and
+// proof that it holds the key it joined with.
+type Rotating struct {
+	// Credential is the one the request was authenticated with.
+	Credential string
+
+	// Runner is the runner the request names, which the signature is over.
+	Runner string
+
+	// SignedAt is the request time the runner signed, by its own clock.
+	SignedAt time.Time
+
+	// Signed is the message the signature is over, as the wire composes it from the runner and
+	// the request time, and Signature is the runner's Ed25519 signature of it.
+	Signed    []byte
+	Signature []byte
+}
+
+// Rotated is what it gets back: a credential that exists once, and when that one stops being
+// accepted.
+type Rotated struct {
+	Credential string
+	RotateBy   time.Time
+}
+
+// Rotate gives a runner a new credential, for the one it holds and a signature by its key.
+//
+// "The key proves the machine": the credential alone renews nothing, so a copy of it taken off a
+// disk or a backup lasts until its rotate_by and no longer, while the host that holds the key keeps
+// renewing. The new credential is accepted until now plus rotateAfter, which is how far "rotate_by
+// moves". The one presented stays accepted until its own rotate_by or until the new one is first
+// presented, whichever comes first, so that an answer lost on the way back locks nobody out: the
+// runner rotates again with what it still holds, and the credential it never received is dropped.
+// A runner therefore holds at most two, the one it last rotated with and the one that answered.
+//
+// The runner is locked while it is judged, so that two rotations at once cannot both keep the
+// credential they presented: the second waits, and finds what the first left.
+func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duration, now time.Time) (Rotated, error) {
+	if kind, ok := token.KindOf(ro.Credential); !ok || kind != token.Runner {
+		return Rotated{}, ErrNoRunner
+	}
+	hashed := token.Hash(ro.Credential)
+	var id, state, current string
+	var key []byte
+	var rotateBy time.Time
+	var previousBy, lastSigned *time.Time
+	err := w.tx.QueryRow(ctx,
+		`select id, state, public_key, credential_hash, rotate_by, previous_rotate_by, rotation_signed_at
+		 from runners
+		 where credential_hash = $1 or previous_credential_hash = $1
+		 for update`, hashed).
+		Scan(&id, &state, &key, &current, &rotateBy, &previousBy, &lastSigned)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Rotated{}, ErrNoRunner
+	}
+	if err != nil {
+		return Rotated{}, fmt.Errorf("db: the runner could not be read: %w", err)
+	}
+	if current != hashed {
+		rotateBy = *previousBy
+	}
+	// To the microsecond, which is what PostgreSQL keeps of it. Judged finer than what was kept,
+	// the same request sent again would read as a later one, and be good twice.
+	signedAt := ro.SignedAt.Truncate(time.Microsecond)
+	switch {
+	case state == "revoked", !now.Before(rotateBy), id != ro.Runner:
+		// Everything Authenticate refuses, judged again under the lock, since a rotation
+		// that committed after the request was authenticated may have left the credential
+		// presented behind.
+		return Rotated{}, ErrNoRunner
+	case !ed25519.Verify(ed25519.PublicKey(key), ro.Signed, ro.Signature):
+		return Rotated{}, ErrNotItsKey
+	case lastSigned != nil && !signedAt.After(*lastSigned):
+		return Rotated{}, ErrRotationReplayed
+	}
+
+	clear, credential, err := token.New(token.Runner, "")
+	if err != nil {
+		return Rotated{}, fmt.Errorf("db: %w", err)
+	}
+	rotate := now.Add(rotateAfter).Truncate(time.Microsecond)
+	if _, err := w.tx.Exec(ctx,
+		`update runners set credential_hash = $2, rotate_by = $3,
+		        previous_credential_hash = $4, previous_rotate_by = $5, rotation_signed_at = $6
+		 where id = $1`,
+		id, credential, rotate, hashed, rotateBy, signedAt); err != nil {
+		return Rotated{}, fmt.Errorf("db: runner %s could not be given its new credential: %w", id, err)
+	}
+	return Rotated{Credential: clear, RotateBy: rotate}, nil
 }
 
 // HeartbeatInterval is how often a runner says it is there: "A runner posts one heartbeat every 10

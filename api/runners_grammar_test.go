@@ -122,3 +122,50 @@ func TestTheHeartbeatGrammarsAreTheWiresOwn(t *testing.T) {
 		}
 	}
 }
+
+// So are the grammars a rotation is checked against.
+func TestTheRotationGrammarsAreTheWiresOwn(t *testing.T) {
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type property struct {
+		Pattern string `json:"pattern"`
+		Ref     string `json:"$ref"`
+	}
+	var schema struct {
+		Defs struct {
+			RunnerRotation struct {
+				Properties struct {
+					Request struct {
+						Properties map[string]property `json:"properties"`
+					} `json:"request"`
+				} `json:"properties"`
+			} `json:"runnerRotation"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(doc, &schema); err != nil {
+		t.Fatal(err)
+	}
+	request := schema.Defs.RunnerRotation.Properties.Request.Properties
+
+	if ref := request["at"].Ref; ref != "#/$defs/timestamp" {
+		t.Errorf("a rotation's at is no longer the wire's timestamp, so instantForm may not be its grammar")
+	}
+	for _, c := range []struct {
+		what string
+		ours *regexp.Regexp
+		wire string
+	}{
+		{"a rotation's runner", runnerForm, request["runner"].Pattern},
+		{"a rotation's signature", signatureForm, request["signature"].Pattern},
+	} {
+		if c.wire == "" {
+			t.Errorf("the wire writes no pattern for %s where this test looks for one", c.what)
+			continue
+		}
+		if c.ours.String() != c.wire {
+			t.Errorf("%s is checked against %s, and the wire writes %s", c.what, c.ours, c.wire)
+		}
+	}
+}
