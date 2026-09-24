@@ -566,6 +566,11 @@ func (d *Daemon) containerArchive(w http.ResponseWriter, r *http.Request) {
 // already committed to.
 func (d *Daemon) imageCreate(w http.ResponseWriter, r *http.Request) {
 	ref := referenceOf(r)
+	if d.opts.pullAnswers401 {
+		name, _, _ := strings.Cut(ref, "@")
+		writeError(w, http.StatusInternalServerError, `unknown: failed to resolve reference "`+ref+`": unexpected status from HEAD request to https://registry.example/v2/`+name+`/manifests/latest: 401 Unauthorized`)
+		return
+	}
 	key, img, ok := d.image(ref)
 	if !ok {
 		writeError(w, http.StatusNotFound, "pull access denied for "+ref+", repository does not exist or may require 'docker login'")
@@ -598,6 +603,13 @@ func (d *Daemon) imageCreate(w http.ResponseWriter, r *http.Request) {
 			message := "failed to register layer: unexpected EOF"
 			send(docker.Progress{Error: message, ErrorDetail: &docker.ErrorDetail{Message: message}})
 			return
+		}
+		if d.opts.slowPull > 0 {
+			select {
+			case <-time.After(d.opts.slowPull):
+			case <-r.Context().Done():
+				return
+			}
 		}
 		send(docker.Progress{ID: id, Status: "Download complete"})
 	}

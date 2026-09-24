@@ -148,6 +148,18 @@ var RegistryUnreachable Behaviour = func(o *Options) { o.registryUnreachable = t
 // daemon passes on whichever of the two its registry chose.
 var RegistryAnswers401 Behaviour = func(o *Options) { o.registryAnswers401 = true }
 
+// PullAnswers401 is a registry that wants credentials for every pull, passed on the way
+// the daemon passes on quay.io's: a 500 whose message ends in the registry's 401
+// Unauthorized.
+var PullAnswers401 Behaviour = func(o *Options) { o.pullAnswers401 = true }
+
+// SlowPull is a pull that takes d over every layer, which is a cold pull of a large image
+// and what a deadline has to be able to cut short. It is abandoned when the request is, as
+// the daemon abandons one whose client went away.
+func SlowPull(d time.Duration) Behaviour {
+	return func(o *Options) { o.slowPull = d }
+}
+
 // TagMoves is ref pointed at another image the moment it has been inspected, which is a
 // docker build -t or a docker pull of the same tag finishing on the machine between two
 // questions about it. The image it named before stays held under its digest, as a
@@ -189,6 +201,8 @@ type behaviours struct {
 	classicStore        bool
 	registryUnreachable bool
 	registryAnswers401  bool
+	pullAnswers401      bool
+	slowPull            time.Duration
 	moves               map[string]Image
 
 	apiVersion string

@@ -46,6 +46,8 @@
 //	ClassicImageStore    no RepoDigests for an image built on the machine and never pushed
 //	RegistryUnreachable  a registry the daemon cannot reach when it is asked what it serves
 //	RegistryAnswers401   a 401 where a registry that never heard of a repository answers 403
+//	PullAnswers401       a pull refused by a registry that wants credentials
+//	SlowPull             a pull that takes its time over every layer
 //	TagMoves             a tag pointed at another image once it has been inspected
 //
 // Restart is the one change made to a daemon already serving: it drops every event stream
