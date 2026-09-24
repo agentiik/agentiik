@@ -64,10 +64,13 @@ steps:
     script:
       - |
         # Given no secret of its own, so nothing of what it prints is masked. It waits
-        # until the other container is certainly up, then reads the repository mount.
+        # until the other container is certainly up, then reads the repository mount. A
+        # file it may not read is the rule holding rather than the step failing, and on
+        # Linux, where the files a run writes keep their modes inside the mount, several
+        # are.
         sleep 2
         find /agk/repo -type f 2>/dev/null | head -50
-        for f in $(find /agk/repo -type f 2>/dev/null | head -50); do cat "$f" 2>/dev/null; done
+        for f in $(find /agk/repo -type f 2>/dev/null | head -50); do cat "$f" 2>/dev/null || true; done
 `)
 
 	code, out, errs := runner(t, dir, "run", "--local", "--secret", "billing_api="+secret, "--logs")
