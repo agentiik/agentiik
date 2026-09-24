@@ -161,6 +161,9 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 	d.order = append(d.order, l)
 	d.mu.Unlock()
 
+	if d.opts.slowCreate > 0 {
+		time.Sleep(d.opts.slowCreate)
+	}
 	writeJSON(w, http.StatusCreated, docker.Created{ID: l.id})
 }
 

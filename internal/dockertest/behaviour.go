@@ -160,6 +160,13 @@ func SlowPull(d time.Duration) Behaviour {
 	return func(o *Options) { o.slowPull = d }
 }
 
+// SlowCreate is a daemon that takes d to answer a create it has already carried out, and
+// carries it out whether or not the client is still there to hear the answer, as a daemon
+// does: a client that gives up first never learns the container's identifier.
+func SlowCreate(d time.Duration) Behaviour {
+	return func(o *Options) { o.slowCreate = d }
+}
+
 // TagMoves is ref pointed at another image the moment it has been inspected, which is a
 // docker build -t or a docker pull of the same tag finishing on the machine between two
 // questions about it. The image it named before stays held under its digest, as a
@@ -203,6 +210,7 @@ type behaviours struct {
 	registryAnswers401  bool
 	pullAnswers401      bool
 	slowPull            time.Duration
+	slowCreate          time.Duration
 	moves               map[string]Image
 
 	apiVersion string
