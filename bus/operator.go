@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +48,10 @@ type Installation struct {
 	Operator, Account, System string
 }
 
+// controlPlaneName is the name the control plane's credential carries, which an operator reads in
+// the server's list of connections.
+const controlPlaneName = "agentiik-control-plane"
+
 // NewInstallation creates an installation's bus identity in dir: an operator, the application
 // account and the system account, and the three files that hand them out. The control plane's
 // credential expires at until.
@@ -60,7 +65,8 @@ type Installation struct {
 // wrote and nothing else, so it can be run again; the directory it made, if it made one, is left
 // empty. An until already passed is refused before anything is written, since the API and the
 // controller would refuse the credential on their first start and the identity could not then be
-// created again over it.
+// created again over it. So is a directory its group or anybody else may write to, for the reason
+// private gives.
 //
 // The operator's seed and the system account's are not written anywhere. Nothing in an installation
 // signs with either after this. An account the server would trust, new or changed, is one the
@@ -79,6 +85,9 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 	}
 	if !until.After(time.Now()) {
 		return Installation{}, fmt.Errorf("bus: a control plane credential that expired at %s, which the API and the controller refuse to start on", until.UTC().Format(time.RFC3339))
+	}
+	if err := private(dir, false); err != nil {
+		return Installation{}, err
 	}
 	in := Installation{
 		Accounts:     filepath.Join(dir, AccountsFile),
@@ -151,7 +160,7 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 	// The control plane's credential, minted the way every other is. An Issuer asks for an
 	// address because a runner is handed one with its credential; a credential file carries
 	// none, since the API and the controller are given the bus's address as a setting.
-	control, err := (&Issuer{account: account}).ForControlPlane("agentiik-control-plane", until)
+	control, err := (&Issuer{account: account}).ForControlPlane(controlPlaneName, until)
 	if err != nil {
 		return Installation{}, err
 	}
@@ -185,6 +194,147 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 		return Installation{}, err
 	}
 	return in, nil
+}
+
+// RenewControlPlane mints the control plane a new credential, expiring at until, under the account
+// whose seed dir holds, and puts it in place of the one dir holds. It answers the credential's path
+// and the instant it expires, which is until to the second.
+//
+// Nothing else changes. The operator, the accounts and the server's configuration stay as they
+// were, so every stream, every consumer and every task queued on them stays too, and the API goes on
+// minting runner credentials the server trusts. That is the difference between renewing a
+// credential and creating an identity again, which would be a server restarted on new accounts with
+// nothing it held before.
+//
+// The credential it replaces keeps working until its own expiry, since a NATS credential is not
+// revoked but runs out, so a program still holding it is not cut off by the renewal. It is
+// replaced in one step, by a rename over it once the new one is on the disk, so a program starting
+// at that moment reads the one or the other and never half of each.
+//
+// dir has to hold the identity NewInstallation wrote: the account seed, and a server
+// configuration that trusts the account it is the seed of. A seed from some other installation
+// would mint a credential the server refuses, with nothing on the API's side to say why, so it is
+// refused here instead. The directory is held to what private says, and the seed to what every
+// secret's file is held to: a regular file its owner alone may read.
+func RenewControlPlane(dir string, until time.Time) (string, time.Time, error) {
+	if dir == "" {
+		return "", time.Time{}, errors.New("bus: no directory holding the installation's bus identity")
+	}
+	if until.IsZero() {
+		return "", time.Time{}, errors.New("bus: a control plane credential that never expires, and one that never expires is one a stolen disk still holds")
+	}
+	if !until.After(time.Now()) {
+		return "", time.Time{}, fmt.Errorf("bus: a control plane credential that expired at %s, which the API and the controller refuse to start on", until.UTC().Format(time.RFC3339))
+	}
+	if err := private(dir, true); err != nil {
+		return "", time.Time{}, err
+	}
+
+	seedPath := filepath.Join(dir, AccountSeedFile)
+	info, err := os.Lstat(seedPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", time.Time{}, fmt.Errorf("bus: %s holds no %s, so there is no identity to renew a credential under: an installation's bus identity is created first", dir, AccountSeedFile)
+	case err != nil:
+		return "", time.Time{}, fmt.Errorf("bus: %s could not be looked for: %w", seedPath, err)
+	case !info.Mode().IsRegular():
+		return "", time.Time{}, fmt.Errorf("bus: %s is not a regular file, and the account seed is one", seedPath)
+	case info.Mode().Perm()&0o077 != 0:
+		return "", time.Time{}, fmt.Errorf("bus: %s is mode %#o, and the account seed is readable by its owner alone: chmod 600 it, because a seed anybody on the host can read is an account anybody on the host signs for", seedPath, info.Mode().Perm())
+	}
+	content, err := os.ReadFile(seedPath)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("bus: %s could not be read: %w", seedPath, err)
+	}
+	defer wipe(content)
+	account, err := jwt.ParseDecoratedNKey(content)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("bus: %s holds no seed: %w", seedPath, err)
+	}
+	defer account.Wipe()
+	public, err := account.PublicKey()
+	if err != nil || !strings.HasPrefix(public, "A") {
+		return "", time.Time{}, fmt.Errorf("bus: %s holds a seed that is not an account's, and a credential signed by anything else is one no bus trusts", seedPath)
+	}
+	conf, err := os.ReadFile(filepath.Join(dir, AccountsFile))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("bus: %s could not be read, and it is what says which account the server trusts: %w", filepath.Join(dir, AccountsFile), err)
+	}
+	if !strings.Contains(string(conf), strconv.Quote(public)) {
+		return "", time.Time{}, fmt.Errorf("bus: %s holds the seed of %s, and %s does not trust that account, so a credential minted under it is one the server refuses", seedPath, public, AccountsFile)
+	}
+
+	control, err := (&Issuer{account: account}).ForControlPlane(controlPlaneName, until)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	creds, err := jwt.FormatUserConfig(control.JWT, []byte(control.Seed))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("bus: the control plane's credential could not be written out: %w", err)
+	}
+	path := filepath.Join(dir, ControlPlaneFile)
+	if err := replace(dir, path, creds); err != nil {
+		return "", time.Time{}, err
+	}
+	return path, control.ExpiresAt, nil
+}
+
+// private refuses a directory its group or anybody else may write to, and one that is not there
+// where it has to be.
+//
+// Writing to a directory is replacing what it holds. Whoever may do that can put an operator of
+// their own in the configuration the server includes, or a credential of their own where the
+// control plane reads its credential, and the files' own modes, which say who may read them, say
+// nothing about that. A directory that is not there yet is not refused where the caller makes it,
+// which it does readable and writable by its owner alone.
+func private(dir string, mustExist bool) error {
+	info, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && !mustExist:
+		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("bus: %s does not exist, and it is the directory holding the installation's bus identity", dir)
+	case err != nil:
+		return fmt.Errorf("bus: %s could not be looked at: %w", dir, err)
+	case !info.IsDir():
+		return fmt.Errorf("bus: %s is not a directory", dir)
+	case info.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("bus: %s is mode %#o, writable by its group or by others, and whoever may write to it may replace the operator the server trusts or the credential the control plane signs in with: chmod 700 it", dir, info.Mode().Perm())
+	}
+	return nil
+}
+
+// replace puts content at path in one step: written beside it under another name, on the disk,
+// then renamed over it, then the directory's entries on the disk as well.
+func replace(dir, path string, content []byte) error {
+	defer wipe(content)
+	// CreateTemp makes the file readable and writable by its owner alone, and exclusively, so
+	// that two renewals at once each write a file of their own and the later rename wins whole.
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return fmt.Errorf("bus: a file beside %s could not be created: %w", path, err)
+	}
+	temporary := f.Name()
+	fail := func(err error) error {
+		f.Close()
+		os.Remove(temporary)
+		return fmt.Errorf("bus: %s could not be written: %w", path, err)
+	}
+	if _, err := f.Write(content); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(temporary)
+		return fmt.Errorf("bus: %s could not be written: %w", path, err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		os.Remove(temporary)
+		return fmt.Errorf("bus: %s could not be put in place: %w", path, err)
+	}
+	return syncDir(dir)
 }
 
 // file is one file writeAll writes.
