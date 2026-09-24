@@ -22,6 +22,25 @@ const identifierPattern = `^[A-Za-z0-9][A-Za-z0-9_-]*$`
 // as well as bytes.
 const IdentifierMaxBytes = 255
 
+// ReservedNamespaces are the words the API routes on as the first segment after /api/v1/,
+// which is why they cannot name a namespace: GET /api/v1/runs/{id} and GET
+// /api/v1/{ns}/runs would both claim /api/v1/runs/runs, and the router answers such a
+// path by the word. The list is fixed rather than read off the routes, so that a route
+// added later under a new word cannot make an existing namespace unreachable. The
+// schemas refuse the same words, and namespace and login creation refuse them from
+// v0.3.0, since each user gets a namespace named after their login.
+var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts"}
+
+// IsReservedNamespace reports whether name is one of ReservedNamespaces.
+func IsReservedNamespace(name string) bool {
+	for _, w := range ReservedNamespaces {
+		if name == w {
+			return true
+		}
+	}
+	return false
+}
+
 // RunID is the identifier of a run, carried as the run's ULID. It is the value the
 // container reads as AGK_RUN_ID and the first path segment of every artifact URI.
 type RunID string

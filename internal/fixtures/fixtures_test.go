@@ -199,10 +199,10 @@ func TestWorkflowsCarriesTheWholeCorpus(t *testing.T) {
 		}
 	}
 	// The corpus the release carries: nine documents that must be accepted and
-	// fifty-three that must be refused, of which fifteen are rules no JSON Schema can
+	// fifty-four that must be refused, of which fifteen are rules no JSON Schema can
 	// express and the evaluator owns.
-	if valid != 9 || invalid != 53 || byValidator != 15 {
-		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 53 and 15", valid, invalid, byValidator)
+	if valid != 9 || invalid != 54 || byValidator != 15 {
+		t.Fatalf("the corpus holds %d valid and %d invalid documents, %d of them the validator's, want 9, 54 and 15", valid, invalid, byValidator)
 	}
 }
 
