@@ -314,6 +314,19 @@ func TestARouteAsksOnlyAboutWhatItReveals(t *testing.T) {
 		t.Errorf("a request no router served was answered %t, %v", held, err)
 	}
 
+	// A request built from one a revealing route was given, and served again as a facade over
+	// the API serves one, asks what its own route declared.
+	rt.MustHandle("GET", "/api/v1/{namespace}/facade", api.Needs{Permission: api.RunRead, Scope: api.Namespace, Reveals: api.RunReadData},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+			again := r.Clone(r.Context())
+			again.URL.Path = "/api/v1/finance/runs"
+			rt.ServeHTTP(w, again)
+		})
+	answers = nil
+	if code, _ := reached(t, rt, "GET", "/api/v1/finance/facade", "alice"); code != http.StatusOK || len(answers) != 3 || answers[0] {
+		t.Errorf("a route revealing nothing, reached through one revealing run:read_data, was answered %v", answers)
+	}
+
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
 	rt.ServeRuns(&runsOf{})
 	for _, c := range []struct {
@@ -329,7 +342,7 @@ func TestARouteAsksOnlyAboutWhatItReveals(t *testing.T) {
 	}
 	for _, route := range rt.Routes() {
 		want := api.Permission("")
-		if route.Pattern == "/api/v1/{namespace}/runs/{run}" {
+		if route.Pattern == "/api/v1/{namespace}/runs/{run}" || route.Pattern == "/api/v1/{namespace}/facade" {
 			want = api.RunReadData
 		}
 		if route.Reveals != want {

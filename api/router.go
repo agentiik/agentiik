@@ -429,15 +429,19 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		rt.deny(w, g.scope)
 		return
 	}
-	if g.reveals != "" {
-		authorised := target.Namespace
-		r = r.WithContext(context.WithValue(r.Context(), revealingKey{}, Holds(func(ctx context.Context, over Target) (bool, error) {
-			if over.Namespace != authorised {
-				return false, fmt.Errorf("api: a route authorised in namespace %q asked what it may reveal in %q, which it was not authorised in", authorised, over.Namespace)
-			}
-			return rt.auth.Allow(ctx, who, g.reveals, over)
-		})))
-	}
+	// Set on every route, to a question answered false where the route declares none, so that a
+	// request built from this one and served again, as a facade over the API would serve one,
+	// asks what its own route declared rather than what this one did.
+	authorised := target.Namespace
+	r = r.WithContext(context.WithValue(r.Context(), revealingKey{}, Holds(func(ctx context.Context, over Target) (bool, error) {
+		if g.reveals == "" {
+			return false, nil
+		}
+		if over.Namespace != authorised {
+			return false, fmt.Errorf("api: a route authorised in namespace %q asked what it may reveal in %q, which it was not authorised in", authorised, over.Namespace)
+		}
+		return rt.auth.Allow(ctx, who, g.reveals, over)
+	})))
 	h(w, r, who, target)
 }
 
