@@ -49,16 +49,28 @@ func encodeStop(s graph.Stop) ([]byte, error) {
 // readStop reads one stop off the bus, as the wire describes it.
 //
 // Closed, as the document is and as readResult is, for the same reason: a stop saying more than
-// the wire describes comes from something written against another wire.
+// the wire describes comes from something written against another wire. Closed further than
+// readResult, down to the spelling of the two names: encoding/json reads "Reason" as reason, and
+// a stop carrying both, one cancelled and one deadline, would be read as whichever came last,
+// which decides whether the task ends cancelled or timed_out. The schema refuses such a stop,
+// and so does this.
 func readStop(body []byte) (graph.Stop, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	var m stopMessage
-	if err := dec.Decode(&m); err != nil {
+	var fields map[string]json.RawMessage
+	if err := dec.Decode(&fields); err != nil {
 		return graph.Stop{}, err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return graph.Stop{}, errors.New("a stop is one document, and this message carries more after it")
+	}
+	for name := range fields {
+		if name != "task" && name != "reason" {
+			return graph.Stop{}, fmt.Errorf("a stop carries task and reason, spelled so, and this one carries %q", name)
+		}
+	}
+	var m stopMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return graph.Stop{}, err
 	}
 	if m.Task == nil {
 		return graph.Stop{}, errors.New("a stop names no task")

@@ -102,6 +102,8 @@ func TestWhatIsNotAStopIsNotReadAsOne(t *testing.T) {
 		`{"task":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1","reason":"stopped"}`,
 		`{"task":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1","reason":"cancelled","runner":"runner-1"}`,
 		`{"task":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1","reason":"cancelled"}{}`,
+		`{"Task":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1","REASON":"cancelled"}`,
+		`{"task":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1","reason":"cancelled","Reason":"deadline"}`,
 		`not a stop`,
 	} {
 		if stop, err := readStop([]byte(body)); err == nil {
