@@ -20,6 +20,13 @@
 // _FILE variable holds either: a secret pasted into the variable that should name its file is a
 // value like any other, and repeating it would put it in whatever log the refusal reaches.
 //
+// # No plaintext path
+//
+// "No plaintext path anywhere, including between the control plane and the bus." A database URL
+// sets an sslmode that never falls back to plaintext, the bus is reached at tls:// or wss://, and
+// the public URL is https. The one path left without TLS is a local socket, which crosses no
+// network.
+//
 // # Each program reads what it needs
 //
 // ReadAPI, ReadController and ReadMigration each read the settings of one program, or of one verb
@@ -469,8 +476,8 @@ func (r *reader) publicURL() string {
 	case err != nil:
 		r.refuse(PublicURL, "is not a URL"+unparsed)
 		return ""
-	case u.Scheme != "https" && u.Scheme != "http" || u.Host == "":
-		r.refuse(PublicURL, "is not an http or https URL with a host, such as https://agentiik.example.com")
+	case u.Scheme != "https" || u.Host == "":
+		r.refuse(PublicURL, "is not an https URL with a host, such as https://agentiik.example.com, and runners and clients never reach the API in plaintext: it names whatever terminates TLS in front of it")
 		return ""
 	case strings.ContainsAny(v, "?#"):
 		// Looked for in the text, since net/url reads a ? or a # with nothing after it as an
@@ -562,7 +569,38 @@ func (r *reader) databaseURL(name, passwordFile string, needsRole bool) Database
 		r.refuse(name, "names no role, and it names the role the API and the controller connect as, which migrating creates")
 		return Database{}
 	}
+	if !overTLS(params) {
+		r.refuse(name, "does not set sslmode to verify-full, verify-ca or require, and the database is never reached in plaintext: pgx's default, prefer, falls back to plaintext without a word, and allow and disable begin there")
+		return Database{}
+	}
 	return d
+}
+
+// overTLS says whether a PostgreSQL URL's parameters keep its connection off plaintext: an sslmode
+// that never falls back to it, or hosts that are all local sockets, which cross no network and
+// which pgx, as libpq, speaks no TLS over.
+func overTLS(params map[string]string) bool {
+	mode, set := params["sslmode"]
+	if !set && params["ssl"] == "true" {
+		// How pgx spells require for a URL written for JDBC. A URL holding both is read by
+		// its sslmode alone, since pgx takes whichever came last and this reading keeps no
+		// order.
+		mode = "require"
+	}
+	switch mode {
+	case "verify-full", "verify-ca", "require":
+		return true
+	}
+	hosts, set := params["host"]
+	if !set {
+		return false
+	}
+	for host := range strings.SplitSeq(hosts, ",") {
+		if !strings.HasPrefix(host, "/") {
+			return false
+		}
+	}
+	return true
 }
 
 // parameters is a PostgreSQL URL's query as pgx reads it, which is libpq's reading, and false
@@ -670,8 +708,8 @@ func notABusServer(server string) string {
 	switch {
 	case err != nil:
 		return "is not a URL, or a list of them separated by commas" + unparsed
-	case u.Host == "" || u.Scheme != "nats" && u.Scheme != "tls" && u.Scheme != "ws" && u.Scheme != "wss":
-		return "is not a NATS URL with a host, such as nats://nats:4222"
+	case u.Host == "" || u.Scheme != "tls" && u.Scheme != "wss":
+		return "is not a NATS URL over TLS with a host, such as tls://nats:4222 or wss://nats.example.com, and the bus is never reached in plaintext: nats:// and ws:// are, unless the server happens to insist, and every runner is handed this address too"
 	}
 	return ""
 }

@@ -81,11 +81,11 @@ func anInstallation(t *testing.T) *installation {
 	i.adminPassword = "the superuser's own"
 
 	i.env = map[string]string{
-		config.DatabaseURL:                 "postgres://agentiik@db:5432/agentiik?sslmode=disable",
+		config.DatabaseURL:                 "postgres://agentiik@db:5432/agentiik?sslmode=verify-full",
 		config.DatabasePasswordFile:        i.write(t, "database.password", []byte(i.databasePassword+"\n")),
-		config.MigrateDatabaseURL:          "postgres://postgres@db:5432/agentiik?sslmode=disable",
+		config.MigrateDatabaseURL:          "postgres://postgres@db:5432/agentiik?sslmode=verify-full",
 		config.MigrateDatabasePasswordFile: i.write(t, "admin.password", []byte(i.adminPassword)),
-		config.BusURL:                      "nats://nats-1:4222,nats://nats-2:4222",
+		config.BusURL:                      "tls://nats-1:4222,tls://nats-2:4222",
 		config.BusCredentialsFile:          i.write(t, "control-plane.creds", creds),
 		config.BusAccountSeedFile:          i.write(t, "account.seed", []byte(i.accountSeed+"\n")),
 		config.ObjectsDir:                  objects,
@@ -497,10 +497,19 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"a database password of two lines":      {config.DatabasePasswordFile, holding("one\ntwo\n"), all},
 		"no migration database":                 {config.MigrateDatabaseURL, unset, []program{migrating}},
 		"a migration database that is not one":  {config.MigrateDatabaseURL, is("https://db/agentiik"), []program{migrating}},
+		"a database with no sslmode":            {config.DatabaseURL, is("postgres://agentiik@db/agentiik"), all},
+		"a database that prefers TLS":           {config.DatabaseURL, is("postgres://agentiik@db/agentiik?sslmode=prefer"), all},
+		"a database that allows TLS":            {config.DatabaseURL, is("postgres://agentiik@db/agentiik?sslmode=allow"), all},
+		"a database with TLS disabled":          {config.DatabaseURL, is("postgres://agentiik@db/agentiik?sslmode=disable"), all},
+		"a database at a socket and a host":     {config.DatabaseURL, is("postgres://agentiik@/agentiik?host=/run/postgresql,db"), all},
+		"a migration database in plaintext":     {config.MigrateDatabaseURL, is("postgres://postgres@db/agentiik?sslmode=disable"), []program{migrating}},
 		"no bus":                                {config.BusURL, unset, both},
 		"a bus that is not NATS":                {config.BusURL, is("http://nats:4222"), both},
+		"a bus in plaintext":                    {config.BusURL, is("nats://nats:4222"), both},
+		"a bus over a plaintext websocket":      {config.BusURL, is("ws://nats:8080"), both},
+		"a bus one of whose servers is plain":   {config.BusURL, is("tls://nats-1:4222,nats://nats-2:4222"), both},
 		"a bus with no host":                    {config.BusURL, is("nats://"), both},
-		"a bus one of whose servers is not one": {config.BusURL, is("nats://nats-1:4222,amqp://rabbit:5672"), both},
+		"a bus one of whose servers is not one": {config.BusURL, is("tls://nats-1:4222,amqp://rabbit:5672"), both},
 		"no bus credential":                     {config.BusCredentialsFile, unset, both},
 		"a bus credential that is not one":      {config.BusCredentialsFile, holding("-----BEGIN NATS USER JWT-----\nnot a jwt\n------END NATS USER JWT------\n"), both},
 		"a bus credential that has expired":     {config.BusCredentialsFile, credentialExpired, both},
@@ -516,6 +525,7 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"no public URL":                         {config.PublicURL, unset, api},
 		"a public URL with no scheme":           {config.PublicURL, is("agentiik.example.com"), api},
 		"a public URL of another scheme":        {config.PublicURL, is("ftp://agentiik.example.com"), api},
+		"a public URL in plaintext":             {config.PublicURL, is("http://agentiik.example.com"), api},
 		"a public URL with a query":             {config.PublicURL, is("https://agentiik.example.com/?tenant=a"), api},
 		"a public URL with a fragment":          {config.PublicURL, is("https://agentiik.example.com/#top"), api},
 		"a public URL ending in a ?":            {config.PublicURL, is("https://agentiik.example.com?"), api},
@@ -572,6 +582,32 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 				}
 				saysNothingOf(t, err, i.secrets...)
 			})
+		}
+	}
+}
+
+// "No plaintext path anywhere, including between the control plane and the bus." Every way of
+// reaching the database, the bus and the API over TLS is accepted, and a local socket, which
+// crosses no network and which pgx speaks no TLS over, needs no sslmode.
+func TestEveryPathOverTLSIsAccepted(t *testing.T) {
+	for variable, values := range map[string][]string{
+		config.DatabaseURL: {
+			"postgres://agentiik@db/agentiik?sslmode=verify-full",
+			"postgres://agentiik@db/agentiik?sslmode=verify-ca&sslrootcert=/etc/agentiik/db-ca.pem",
+			"postgresql://agentiik@db/agentiik?sslmode=require",
+			"postgres://agentiik@db/agentiik?ssl=true",
+			"postgres://agentiik@/agentiik?host=/run/postgresql",
+			"postgres://agentiik@/agentiik?host=/run/postgresql,/var/run/postgresql",
+		},
+		config.BusURL:    {"tls://nats:4222", "wss://nats.example.com", "wss://nats.example.com:443/bus", "tls://nats-1:4222, tls://nats-2:4222"},
+		config.PublicURL: {"https://agentiik.example.com", "https://agentiik.example.com:8443/agentiik"},
+	} {
+		for _, v := range values {
+			i := anInstallation(t)
+			i.env[variable] = v
+			if _, err := config.ReadAPI(theAPI.environment(i)); err != nil {
+				t.Errorf("%s=%s: %v", variable, v, err)
+			}
 		}
 	}
 }
@@ -845,7 +881,7 @@ func TestADatabasePasswordReachesTheConnectionAndNothingElse(t *testing.T) {
 	if password, _ := u.User.Password(); password != i.databasePassword || u.User.Username() != "agentiik" {
 		t.Errorf("the connection signs in as %q with %q", u.User.Username(), password)
 	}
-	if u.Host != "db:5432" || u.Path != "/agentiik" || u.Query().Get("sslmode") != "disable" {
+	if u.Host != "db:5432" || u.Path != "/agentiik" || u.Query().Get("sslmode") != "verify-full" {
 		t.Errorf("the connection lost part of its URL: %s", u.Redacted())
 	}
 	for _, verb := range verbs {
