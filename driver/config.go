@@ -57,10 +57,10 @@ type Config struct {
 	// still in flight.
 	Observer Observer
 
-	// Policy is the runner's own configuration, and its zero value is the floor in
+	// Policy is the runner's own configuration, and its zero value is both floors in
 	// place. New never reads a file: reading /etc/agentiik/runner.toml belongs where
 	// a runner is configured, and doing it here would make this package refuse to be
-	// a library on a machine with no such file.
+	// a library on a machine with no such file. LoadPolicy is the reader.
 	Policy Policy
 
 	// WorkRoot is where a task's working directory is created, fresh, and removed

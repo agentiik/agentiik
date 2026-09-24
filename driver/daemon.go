@@ -222,8 +222,8 @@ func sourceOf(p Policy) string {
 	return p.Source
 }
 
-// announce says, once, when the daemon is opened, what this daemon confines a container
-// with less than the settings table promises. A daemon that gives up nothing says nothing.
+// announce says, once, when the daemon is opened, what of the SecurityOpt row this daemon
+// does not apply. A daemon that gives up nothing says nothing.
 func (c confinement) announce(say func(string)) {
 	if say == nil {
 		return
