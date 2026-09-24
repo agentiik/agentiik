@@ -214,7 +214,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 
 	runners := api.RunnerOptions{
-		Pool: pool, JoinRotation: s.JoinRotation,
+		Pool: pool, JoinRotation: s.JoinRotation, RevocationGrace: s.RevocationGrace,
 		Objects: objects, URLs: signed,
 		BusIssuer: issuer, BusConsumers: consumers,
 		Trouble: func(err error) {

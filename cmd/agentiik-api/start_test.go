@@ -277,6 +277,8 @@ func TestServeRegistersEveryRouteBuiltSoFar(t *testing.T) {
 		"POST /api/v1/runners",
 		"POST /api/v1/runners/heartbeat",
 		"POST /api/v1/runners/rotate",
+		"POST /api/v1/runners/{runner}/drain",
+		"POST /api/v1/runners/{runner}/revoke",
 		"POST /api/v1/tasks/redeem",
 		"POST /api/v1/bus/token",
 		"POST /api/v1/runs/{run}/cancel",

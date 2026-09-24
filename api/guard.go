@@ -153,8 +153,8 @@ type Authorizer interface {
 	Allow(ctx context.Context, who Principal, what Permission, over Target) (bool, error)
 }
 
-// IdentifyRunner says which runner a credential belongs to, and refuses a revoked one and one past
-// its rotate_by.
+// IdentifyRunner says which runner a credential belongs to, and refuses one revoked past its grace
+// and one past its rotate_by.
 //
 // It is the runner half of Identify, separate because the two answer different questions: one
 // asks who a person is and the other asks which machine this is. A runner that cannot be
@@ -172,9 +172,13 @@ type Runner struct {
 	// RotateBy is when the credential the request carried stops being accepted, which is as
 	// long as anything minted on the strength of it may last.
 	RotateBy time.Time
+
+	// ResultsAcceptedUntil is the end of a revoked runner's grace, which it is opened until,
+	// and zero for a runner nobody revoked.
+	ResultsAcceptedUntil time.Time
 }
 
-// ErrNoRunner is a credential that opens no runner, one that was revoked, or one past its
+// ErrNoRunner is a credential that opens no runner, one revoked past its grace, or one past its
 // rotate_by. One error for all of them, because telling a caller which it was tells somebody
 // guessing whether they had a real one.
 var ErrNoRunner = errors.New("api: no runner of that credential")
