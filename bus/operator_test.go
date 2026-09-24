@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -29,7 +30,7 @@ func serveFrom(t *testing.T, in Installation, features ...string) string {
 	// Beside the accounts file, since a server resolves an include against the directory of
 	// the file that includes it.
 	path := filepath.Join(filepath.Dir(in.Accounts), "nats-server.conf")
-	conf := "host: 127.0.0.1\nport: -1\njetstream {\n  store_dir: " + `"` + t.TempDir() + `"` + "\n}\ninclude \"" + AccountsFile + "\"\n"
+	conf := "host: 127.0.0.1\nport: -1\njetstream {\n  store_dir: " + `"` + bustest.StoreDir(t) + `"` + "\n}\ninclude \"" + AccountsFile + "\"\n"
 	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
 		t.Fatal(err)
 	}

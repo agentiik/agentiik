@@ -14,6 +14,7 @@ import (
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/ulid"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -34,7 +35,7 @@ import (
 func served(t *testing.T) (*bus.Bus, string) {
 	t.Helper()
 	server, err := natsserver.NewServer(&natsserver.Options{
-		Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+		Port: -1, JetStream: true, StoreDir: bustest.StoreDir(t), NoLog: true, NoSigs: true,
 	})
 	if err != nil {
 		t.Fatal(err)

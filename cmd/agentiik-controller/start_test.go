@@ -23,6 +23,7 @@ import (
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/ulid"
@@ -247,7 +248,7 @@ func withInstallationBus(t *testing.T) installationBus {
 	}
 
 	server, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: bustest.StoreDir(t),
 		TrustedOperators: []*jwt.OperatorClaims{trusted},
 		AccountResolver:  resolver,
 		SystemAccount:    systemPublic,
