@@ -408,10 +408,14 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		// the task is not failed for it and somebody is told.
 		d.say("driver: task " + string(t.ID) + ": the log sink failed: " + logErr.Error())
 	}
+	// The exit is told whatever the state, since a container stopped at its deadline or
+	// cancelled exited too, with the code the stop left, and a result reports it.
+	code := e.Code
 	d.observe(ctx, Event{
 		Task: t.ID, State: state, Container: container,
 		Log: ref, Outputs: ports, Artifacts: artifacts,
-		Usage: spent.usage(image),
+		Usage:    spent.usage(image),
+		ExitCode: &code, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
 	})
 	return result, nil
 }
@@ -458,10 +462,18 @@ func (d *Docker) refused(ctx context.Context, t graph.Task, container string, us
 	if logErr != nil {
 		d.say("driver: task " + string(t.ID) + ": the log sink failed: " + logErr.Error())
 	}
-	d.observe(ctx, Event{
+	ended := Event{
 		Task: t.ID, State: agk.TaskFailed, Container: container,
 		Log: ref, Usage: usage, Err: err,
-	})
+	}
+	// The exit is told as the key is written down: ExitContractBroken and the span where the
+	// brick broke the contract, and none where the platform failed it, which the record
+	// writes with neither.
+	if charge == ChargeBrick {
+		code := ExitContractBroken
+		ended.ExitCode, ended.StartedAt, ended.FinishedAt = &code, r.StartedAt, r.FinishedAt
+	}
+	d.observe(ctx, ended)
 	if charge != ChargeBrick {
 		return exited(t.ID, err)
 	}

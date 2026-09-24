@@ -1151,6 +1151,11 @@ func TestAnEnvelopeARuleRefusesIsAFailedTaskThatKeepsItsRule(t *testing.T) {
 			if last.State != agk.TaskFailed || last.Err == nil {
 				t.Errorf("the observer was last told %s with %v, and the task failed for the refusal", last.State, last.Err)
 			}
+			// Run answers an error and no Result, so the ending a result reports is told
+			// here: the code the brick is charged with and the span its container ran for.
+			if last.ExitCode == nil || *last.ExitCode != ExitContractBroken || last.StartedAt.IsZero() || last.FinishedAt.IsZero() {
+				t.Errorf("the observer was told the refused container exited %v from %s to %s, want %d with its span", last.ExitCode, last.StartedAt, last.FinishedAt, ExitContractBroken)
+			}
 		})
 	}
 }
@@ -1185,5 +1190,43 @@ func TestTheLogOfAContainerStoppedAtItsDeadlineNamesTheDeadline(t *testing.T) {
 	}
 	if strings.Contains(log, "infrastructure failure") {
 		t.Errorf("the log reads %q, and a timeout is not the runtime's failure", log)
+	}
+}
+
+// "A timed_out or cancelled task carries an exit code wherever a container ran." A Result reads
+// one for succeeded and failed alone, so the code the stop left is told to the observer with the
+// span, and written down with the key, where a requeue answered from the record finds it.
+func TestAContainerStoppedAtItsDeadlineTellsTheCodeItsStopLeft(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-c.Signalled()
+		return 143, nil
+	})
+	task := oneTask(ref)
+	task.Timeout = graph.Duration(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result, err := r.Run(ctx, task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Fatalf("the task reports %s, and its container was stopped at its deadline", result.State)
+	}
+
+	r.observed.mu.Lock()
+	last := r.observed.es[len(r.observed.es)-1]
+	r.observed.mu.Unlock()
+	if last.State != agk.TaskTimedOut || last.ExitCode == nil || *last.ExitCode != 143 || last.StartedAt.IsZero() || last.FinishedAt.IsZero() {
+		t.Errorf("the observer was told %s exiting %v from %s to %s, want timed_out exiting 143 with its span", last.State, last.ExitCode, last.StartedAt, last.FinishedAt)
+	}
+	e, found, err := r.keys.read(task.ID)
+	if err != nil || !found {
+		t.Fatalf("the key is not in the record: %v", err)
+	}
+	if e.State != agk.TaskTimedOut || e.ExitCode == nil || *e.ExitCode != 143 || e.StartedAt.IsZero() {
+		t.Errorf("the key is recorded %s exiting %v from %s, want timed_out exiting 143 with its span", e.State, e.ExitCode, e.StartedAt)
 	}
 }

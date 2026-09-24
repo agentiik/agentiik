@@ -119,11 +119,11 @@ type Ending struct {
 	Key   agk.TaskID    `json:"idempotency_key"`
 	State agk.TaskState `json:"state"`
 
-	// ExitCode is there wherever a container exited and its code was read, which is a
-	// success and a failure, as a result carries one. Outputs the collection refused are
-	// written with ExitContractBroken, since the container ran. A failure met after the
-	// exit that is the platform's, an upload that did not go through, is written with
-	// none.
+	// ExitCode is there wherever a container exited and its code was read, as a result
+	// carries one: a success, a failure, and a container stopped at its deadline or
+	// cancelled, with the code the stop left. Outputs the collection refused are written
+	// with ExitContractBroken, since the container ran. A failure met after the exit that
+	// is the platform's, an upload that did not go through, is written with none.
 	ExitCode *int `json:"exit_code,omitempty"`
 
 	// StartedAt and FinishedAt are the daemon's own, as the Result carried them.
@@ -488,6 +488,14 @@ func (d *Docker) ending(r graph.Result) Ending {
 		return e
 	}
 	told := h.ended()
+	// A container stopped at its deadline or cancelled exited too, and the code the stop
+	// left is on what the observer was told, since a Result reads one for succeeded and
+	// failed alone. It is kept where the container is known to have started, as a result
+	// carries a code only beside the span.
+	if e.ExitCode == nil && told.ExitCode != nil && !e.StartedAt.IsZero() {
+		code := *told.ExitCode
+		e.ExitCode = &code
+	}
 	e.Outputs = told.Outputs
 	for _, f := range told.Artifacts {
 		e.Artifacts = append(e.Artifacts, EndedArtifact{SHA256: f.SHA256, Bytes: f.Size})
