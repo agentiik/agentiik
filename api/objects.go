@@ -42,10 +42,7 @@ func NewObjects(rt *Router, signed *artifact.Signed) (*ObjectAPI, error) {
 	why := Public{Why: "a presigned URL is itself the authorisation: it names one method, one object, one run and one instant, and it is signed by the installation, so asking for a credential here as well would mean the runner holding a standing object-store credential, which is the thing presigning exists to remove"}
 	// Outside /api/v1, because a presigned URL is not a call of the API: it stands where the
 	// object store's own URL stands wherever there is a real store, and a runner follows it
-	// without knowing which of the two it holds. Under /api/v1 it was also a pair of routes no
-	// router could hold beside the rest: /api/v1/objects/{key...} and /api/v1/{namespace}/runs
-	// both match /api/v1/objects/runs, neither is the more specific, and net/http refuses to
-	// serve the two together.
+	// without knowing which of the two it holds.
 	for _, r := range []struct{ method, pattern string }{
 		{"GET", "/objects/{key...}"},
 		{"PUT", "/objects/{key...}"},

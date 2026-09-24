@@ -79,6 +79,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
 - A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0020_version_images.sql`.
 - `runners` keeps the credential a runner rotated from and its `rotate_by` until the new one is first used, and the time its last rotation signed. `credential_hash` and `rotate_by` are required, and both credentials are looked up by an index. `Wide.Authenticate` takes the moment it judges at, and `Wide.Rotate` renews a credential. Migration `0023_credential_rotation.sql`.
+- `artifacts.fetches_held_until` holds each fetch of a budget being served until an instant, so a transfer that does not complete never spends one, and one whose API died gives it back when its hold lapses. `db.NS.Fetched` gives way to `Reserve`, `Delivered` and `Release`.
 
 ### Bus
 
@@ -232,6 +233,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
 - A push is answered with `images`, the digest each tag of the version is recorded with. For a commit pushed before, those are its first push's, whatever the tag names now.
 - `agentiik-api` is the API as a program of its own, a static binary and an image run as a user that is not root, and the one program that links the secret store. `serve` serves every route built so far with the built-in object store and the secret providers, finishes the requests under way for up to 30 seconds at SIGINT or SIGTERM, and warns once a day from 14 days before the control plane's bus credential expires; `migrate` applies the migrations and creates the application role; `bus-init` writes the bus identity with a 90-day control plane credential, and `bus-credential` renews it. Until v0.3.0, the token whose SHA-256 `AGK_OPERATOR_TOKEN_FILE` holds is allowed everything, and nobody else anything.
+- `GET /api/v1/runs` lists the runs of every workflow the caller holds `run:read` on, over its namespace or itself, newest first, narrowed by `namespace`, `workflow`, `state`, `since` and `until`, both times included, and `limit`, 50 by default and at most 500. A namespace the caller cannot read lists what one that does not exist lists. `api.Across` is its guard: the handler is given `Holds`, bound to the route's permission and caller.
+- `GET /api/v1/runs/{run}` reads a run by its identifier alone, with `run:read` on its workflow. A run, listed or read, carries its `namespace`.
+- `GET /api/v1/runs/{run}/outputs/{name}` answers one workflow output's envelope, with `run:read_data`. An output the run has not recorded is 404, and one whose envelope was purged is 410.
+- `GET /api/v1/artifacts/{uri}` redirects to a presigned URL of five minutes, or serves the bytes where the artifact has a fetch budget, within an hour. A fetch is held before the bytes go and spent only if all of them went, so the last one is served once, and an artifact whose every remaining fetch is being served is 409. 410 once expired, spent or past its duration, swept or not. `api.OnArtifact` authorises it with `run:read_data` on the run the URI names.
+- A route under a word of its own, `/api/v1/runs/{run}` or `/api/v1/artifacts/{uri}`, is served beside the routes under `/api/v1/{namespace}/`, which net/http cannot hold on one mux. A namespace named after such a word is reached by nothing under `/api/v1/`.
 
 ### Secrets
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -615,6 +616,7 @@ func TestNoRouteButRedemptionReadsASecretValue(t *testing.T) {
 		"{namespace}", "finance", "{workflow}", "monthly-invoicing", "{commit}", aCommit,
 		"{run}", grantRun, "{name}", "stripe", "{pool}", "dmz",
 		"{key...}", "finance/sha256/"+strings.Repeat("0", 64),
+		"{uri}", url.PathEscape("agk://run/"+grantRun+"/normalize/ok/invoice.pdf"),
 	)
 	redemption, err := json.Marshal(asking(clear))
 	if err != nil {
