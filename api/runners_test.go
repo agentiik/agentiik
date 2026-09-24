@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -23,6 +24,14 @@ func withRunners(t *testing.T) (http.Handler, *db.Pool) {
 // withRunnersAuthorizedBy is withRunners with the principals the authorizer allows, rather than
 // an administrator allowed everything.
 func withRunnersAuthorizedBy(t *testing.T, auth api.Authorizer) (http.Handler, *db.Pool) {
+	t.Helper()
+	h, pool, _ := runnersOn(t, auth)
+	return h, pool
+}
+
+// runnersOn is withRunnersAuthorizedBy, answering also the superuser's connection string, for a
+// test that writes what only the controller writes.
+func runnersOn(t *testing.T, auth api.Authorizer) (http.Handler, *db.Pool, string) {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
@@ -46,7 +55,7 @@ func withRunnersAuthorizedBy(t *testing.T, auth api.Authorizer) (http.Handler, *
 	if _, err := api.NewRunners(rt, api.RunnerOptions{Pool: pool}); err != nil {
 		t.Fatal(err)
 	}
-	return rt, pool
+	return rt, pool, super
 }
 
 // issue mints a join token the way an administrator would.
@@ -79,6 +88,18 @@ func aMachine(token string, labels ...string) api.Join {
 	}
 }
 
+// aBeat is a heartbeat as the wire's example writes one, from the runner named and holding the keys
+// given.
+func aBeat(runner string, holding ...agk.TaskID) api.Beat {
+	if holding == nil {
+		holding = []agk.TaskID{}
+	}
+	return api.Beat{
+		Runner: runner, AgentVersion: "0.2.0", State: "ready", Concurrency: 8,
+		Tasks: holding, SentAt: time.Date(2026, 9, 10, 6, 41, 9, 104e6, time.UTC),
+	}
+}
+
 // The whole of what a machine does: joins, and then says it is there.
 func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
 	h, pool := withRunners(t)
@@ -89,6 +110,7 @@ func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
 		t.Fatalf("joining answered %d: %s", w.Code, w.Body)
 	}
 	credential, _ := answer["credential"].(string)
+	runner, _ := answer["runner"].(string)
 	if credential == "" || answer["pool"] != "dmz" {
 		t.Fatalf("joining answered %v", answer)
 	}
@@ -97,15 +119,15 @@ func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
 	}
 
 	// Registration is the one route outside both hooks, and it needed no credential.
-	w, answer = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, api.Beat{})
+	w, answer = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
 	if w.Code != http.StatusOK {
 		t.Fatalf("the heartbeat answered %d: %s", w.Code, w.Body)
 	}
-	if answer["interval_seconds"] != float64(10) {
-		t.Errorf("the answer says to come back every %v seconds, and the page says every 10: %v", answer["interval_seconds"], answer)
+	if answer["drain"] != false {
+		t.Errorf("a runner that just joined was told drain: %v", answer["drain"])
 	}
-	if answer["drain"] != nil {
-		t.Errorf("a runner that just joined was told to drain: %v", answer)
+	if _, there := answer["reason"]; there {
+		t.Errorf("a runner nobody drained was given a reason: %v", answer)
 	}
 }
 
@@ -205,7 +227,7 @@ func TestADrainedRunnerIsToldAtItsNextHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, said := call(t, h, "POST", "/api/v1/runners/heartbeat", credential, api.Beat{})
+	w, said := call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
 	if w.Code != http.StatusOK {
 		t.Fatalf("the heartbeat answered %d", w.Code)
 	}
@@ -219,7 +241,7 @@ func TestADrainedRunnerIsToldAtItsNextHeartbeat(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w, _ = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, api.Beat{})
+	w, _ = call(t, h, "POST", "/api/v1/runners/heartbeat", credential, aBeat(runner))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("a revoked runner's heartbeat answered %d", w.Code)
 	}

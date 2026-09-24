@@ -261,6 +261,139 @@ func TestARunEndsAtItsDeadlineAndStopsWhatItHolds(t *testing.T) {
 	}
 }
 
+// boundedBothWorkflow is bothAtOnceWorkflow with a root timeout, so that one run reaching its
+// deadline holds a task a runner has redeemed and a task still waiting on the queue for one.
+const boundedBothWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+timeout: 1h
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+  archive:
+    image: ` + theImage + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]
+`
+
+// A run that reaches its deadline ends its tasks where they stand, as a cancelled one does: each
+// row reads timed_out, so the namespace holds nothing for a run that has ended, and the row a
+// runner redeemed stays bound to it, which is what the heartbeat answers cancel from to a runner
+// that missed the stop on agentiik.stops.
+func TestARunPastItsDeadlineEndsItsTasksTimedOut(t *testing.T) {
+	core, q, pool, super := decidingOn(t, boundedBothWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 2 {
+		t.Fatalf("the first pass published %d tasks", len(sent))
+	}
+	var held Dispatch
+	for _, d := range sent {
+		if d.Task.Step == "archive" {
+			held = d
+		}
+	}
+	if err := core.redeem(t, held, theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	// Woken for the run rather than by a sweep, which after two silent hours would find the
+	// redeemed task lost first: its runner is heartbeating it here, only off the bus.
+	clock.advance(2 * time.Hour)
+	if err := core.Wake(t.Context(), Wake{Run: decidedRun}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.TimedOut {
+		t.Fatalf("past its root timeout the run is %s", got)
+	}
+
+	var tasks []db.TaskSummary
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		d, err := ns.RunDetail(ctx, decidedRun)
+		tasks = d.Tasks
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("the run has %d tasks", len(tasks))
+	}
+	for _, task := range tasks {
+		if task.State != agk.TaskTimedOut {
+			t.Errorf("%s reads %s in a run past its deadline", task.Task, task.State)
+		}
+	}
+	var free int
+	if err := core.controller.Fenced(t.Context(), core.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		free, err = w.Slots(ctx, "finance")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if free != 20 {
+		t.Errorf("the namespace has %d of its 20 slots free, and the run holding the rest has ended", free)
+	}
+	var runner *string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select runner from tasks where idempotency_key = $1`, string(held.Task.ID)).Scan(&runner); err != nil {
+		t.Fatal(err)
+	}
+	if runner == nil || *runner != theRunner {
+		t.Errorf("the task %s redeemed reads as bound to %v", theRunner, runner)
+	}
+}
+
+// A pass that published a task and died before recording the dispatch leaves the task pending in
+// the document, where the evaluator names nothing to stop. Reaching the deadline stops that task
+// all the same, from the row its redemption bound.
+func TestADeadlineStopsATaskTakenBeforeItsDispatchWasRecorded(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, boundedWorkflow)
+	createRun(t, pool)
+	ctx, cancel := context.WithCancel(t.Context())
+	died := &diesOnPublishing{cancel: cancel}
+	dead, err := NewCore(core.controller, core.term, Options{
+		Queue: died, Versions: core.versions, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dead.Decide(ctx, decidedRun); err == nil {
+		t.Fatal("a pass that died after publishing answered as if it had recorded the dispatch")
+	}
+	sent := died.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the pass that died published %d tasks", len(sent))
+	}
+	if err := core.redeem(t, sent[0], theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.advance(2 * time.Hour)
+	if err := core.Wake(t.Context(), Wake{Run: decidedRun}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.TimedOut {
+		t.Fatalf("past its root timeout the run is %s", got)
+	}
+	stops := q.stops()
+	if len(stops) != 1 || stops[0].Task != sent[0].Task.ID || stops[0].Reason != graph.StopDeadline {
+		t.Errorf("the deadline stopped %+v, and %s had redeemed %s", stops, theRunner, sent[0].Task.ID)
+	}
+}
+
 // "cancelled: Cancelled by a principal holding workflow:run, by a concurrency group or by a
 // merge: first."
 func TestCancellingARunStopsWhatItHolds(t *testing.T) {

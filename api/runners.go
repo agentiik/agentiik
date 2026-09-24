@@ -14,7 +14,9 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -495,9 +497,20 @@ func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 	})
 }
 
-// Beat is what a runner says every interval: the keys it is holding, and nothing else.
+// Beat is what a runner says every interval, in the shape wire.schema.json gives it:
+// $defs/runnerHeartbeat/request.
+//
+// "liveness, what the runner will accept, and what it is holding": which runner is speaking, the
+// agent it runs, what it will do with new work, how many tasks it will run at once, the keys it is
+// holding and when it sent this. What was fixed at the join, its labels, namespaces and capacity,
+// is not repeated.
 type Beat struct {
-	Tasks []agk.TaskID `json:"tasks"`
+	Runner       string       `json:"runner"`
+	AgentVersion string       `json:"agent_version"`
+	State        string       `json:"state"`
+	Concurrency  int64        `json:"concurrency"`
+	Tasks        []agk.TaskID `json:"tasks"`
+	SentAt       time.Time    `json:"sent_at"`
 }
 
 // beatMaxTasks is how many keys one heartbeat may name.
@@ -512,12 +525,108 @@ const beatMaxTasks = 4096
 // more than a run's identifier, a step's name, an attempt and a shard come to.
 const beatMaxBytes = beatMaxTasks * 256
 
+// The grammars the wire holds a heartbeat to, copied from wire.schema.json and held to the
+// patterns it writes by a test, as a join's are.
+var (
+	// runnerForm is the identifier the API answered at the join, lowercase words joined by
+	// hyphens.
+	runnerForm = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// keyForm is an idempotency key, run/step/attempt and /index/of where a fan-out produced
+	// it. agk.TaskID.Validate is applied too, for what a pattern cannot read: a shard past its
+	// cardinality, and a key that does not compose back into itself.
+	keyForm = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]+/[A-Za-z0-9][A-Za-z0-9_-]*/[1-9][0-9]*(?:/[1-9][0-9]*/[1-9][0-9]*)?$`)
+	// instantForm is an RFC 3339 date-time with its offset, which is what the wire's
+	// format: date-time is. Checked before time.Parse, which also takes a comma before the
+	// fraction and an hour of one digit in its offset, neither of them RFC 3339.
+	instantForm = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$`)
+)
+
+// runnerStates are what a runner reports it will do with new work, in the order the wire lists
+// them: ready pulls and accepts tasks, draining accepts none and finishes what it holds, unhealthy
+// accepts none because the runner took itself out of service.
+var runnerStates = []string{"ready", "draining", "unhealthy"}
+
 func (bt *Beat) field(b *body, name string) error {
 	switch name {
+	case "runner":
+		return text(b, &bt.Runner)
+	case "agent_version":
+		return text(b, &bt.AgentVersion)
+	case "state":
+		return text(b, &bt.State)
+	case "concurrency":
+		return integer(b, &bt.Concurrency)
 	case "tasks":
 		return texts(b, &bt.Tasks, beatMaxTasks, fmt.Sprintf("a heartbeat names at most %d tasks, which is more containers than one host runs at once", beatMaxTasks))
+	case "sent_at":
+		return instant(b, &bt.SentAt)
 	}
 	return unknown(name)
+}
+
+// instant reads an RFC 3339 date-time, the way every instant on the wire is written. Null leaves
+// it as it was.
+func instant(b *body, into *time.Time) error {
+	var written string
+	if err := text(b, &written); err != nil {
+		return err
+	}
+	if written == "" {
+		return nil
+	}
+	if !instantForm.MatchString(written) {
+		return fmt.Errorf("%.64q is not an instant: it is RFC 3339 with its offset, 2026-09-10T06:41:09.104Z", written)
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.ToUpper(written))
+	if err != nil {
+		return fmt.Errorf("%.64q is not an instant: it is written as one, and names a day or a time no calendar has", written)
+	}
+	*into = at
+	return nil
+}
+
+// beating checks a heartbeat the way the wire would, and answers it as the database takes it.
+func (bt Beat) beating() (db.Beating, error) {
+	switch {
+	case bt.Runner == "":
+		return db.Beating{}, errors.New("the heartbeat names no runner: it names the one the join answered, so that it says on its own what it is about")
+	case !runnerForm.MatchString(bt.Runner):
+		return db.Beating{}, fmt.Errorf("%.64q is not a runner: a runner is named as the join answered it, lowercase words joined by hyphens", bt.Runner)
+	case bt.AgentVersion == "":
+		return db.Beating{}, errors.New("the heartbeat names no agent_version: after the join it is the only message that can say which agent a host now runs")
+	case !versionForm.MatchString(bt.AgentVersion):
+		return db.Beating{}, fmt.Errorf("%.64q is not an agent version: it is written as the release is tagged, 0.2.0", bt.AgentVersion)
+	case bt.State == "":
+		return db.Beating{}, errors.New("the heartbeat says no state: a runner says whether it is ready, draining or unhealthy, since one that answers and refuses work is present and useless")
+	case !slices.Contains(runnerStates, bt.State):
+		return db.Beating{}, fmt.Errorf("%.64q is not a runner's state: it is ready, draining or unhealthy", bt.State)
+	case bt.Concurrency < 1:
+		return db.Beating{}, fmt.Errorf("the heartbeat reports a concurrency of %d: it is the most tasks the host runs at once, AGK_RUNNER_CONCURRENCY, one or more", bt.Concurrency)
+	case bt.Tasks == nil:
+		return db.Beating{}, errors.New("the heartbeat names no tasks: a host holding none writes \"tasks\": [], so that holding nothing is something the request says")
+	case bt.SentAt.IsZero():
+		return db.Beating{}, errors.New("the heartbeat says no sent_at: it is when the runner sent it, by its own clock, for the runner to compare with received_at")
+	}
+
+	// A set, as the wire has it, and read into a map rather than compared pairwise, since four
+	// thousand keys compared each with the ones before it is eight million comparisons for one
+	// heartbeat.
+	seen := make(map[agk.TaskID]struct{}, len(bt.Tasks))
+	for _, key := range bt.Tasks {
+		if !keyForm.MatchString(string(key)) {
+			return db.Beating{}, fmt.Errorf("%.100q is not an idempotency key: one is run/step/attempt, and run/step/attempt/index/of where a fan-out produced it", string(key))
+		}
+		if err := key.Validate(); err != nil {
+			return db.Beating{}, fmt.Errorf("the heartbeat names a key that could not have been composed: %w", err)
+		}
+		if _, twice := seen[key]; twice {
+			return db.Beating{}, fmt.Errorf("the heartbeat names the key %.100q twice, and one written twice is refused rather than kept once", string(key))
+		}
+		seen[key] = struct{}{}
+	}
+	return db.Beating{
+		AgentVersion: bt.AgentVersion, State: bt.State, Concurrency: bt.Concurrency, Holding: bt.Tasks,
+	}, nil
 }
 
 func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) {
@@ -526,11 +635,26 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 		fail(w, statusOf(err), err.Error())
 		return
 	}
+	report, err := b.beating()
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	var state db.Runner
-	err := s.pool.Installation(r.Context(), db.Heartbeat, func(ctx context.Context, wide *db.Wide) error {
+	// "a heartbeat whose named runner is not the one that credential belongs to is refused
+	// rather than believed." Nothing of it is recorded, since a host sending one is either
+	// configured with another host's credential or speaking for a runner it is not, and
+	// neither is a report of anything.
+	if b.Runner != runner.ID {
+		fail(w, http.StatusForbidden, fmt.Sprintf("the heartbeat speaks for runner %s, and its credential is runner %s's: a runner reports for itself alone", b.Runner, runner.ID))
+		return
+	}
+
+	at := s.now()
+	var beaten db.Beaten
+	err = s.pool.Installation(r.Context(), db.Heartbeat, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		state, err = wide.Beat(ctx, runner.ID, b.Tasks, s.now())
+		beaten, err = wide.Beat(ctx, runner.ID, report, at)
 		return err
 	})
 	if errors.Is(err, db.ErrNoRunner) {
@@ -543,15 +667,22 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 		return
 	}
 
-	// "The heartbeat is also how a revoked credential takes effect and how the console knows
-	// a runner is present: there is no separate liveness channel to keep in sync." The
-	// interval is the one the controller's sweep counts silence in, and read from the same
-	// constant, so that a runner is never told one and judged by another.
-	answer := map[string]any{"interval_seconds": int(db.HeartbeatInterval / time.Second)}
-	if state.State == "draining" {
+	// "The heartbeat is also how a drain or a revocation takes effect and how the console knows
+	// a runner is present: there is no separate liveness channel to keep in sync." The answer is
+	// closed and always carries these three, so that a runner reads a list and a boolean rather
+	// than testing whether a field arrived. The interval is not among them: the page fixes it,
+	// and db.HeartbeatInterval, which the sweep counts silence in, is held to the page's figure
+	// by a test.
+	answer := map[string]any{
+		"received_at": at.UTC().Format(time.RFC3339Nano),
+		"drain":       false,
+		"cancel":      beaten.Cancel,
+	}
+	// reason belongs to a drain order and is written with one alone, as the wire requires.
+	if beaten.Runner.State == "draining" {
 		answer["drain"] = true
-		if state.DrainReason != "" {
-			answer["reason"] = state.DrainReason
+		if beaten.Runner.DrainReason != "" {
+			answer["reason"] = beaten.Runner.DrainReason
 		}
 	}
 	write(w, http.StatusOK, answer)

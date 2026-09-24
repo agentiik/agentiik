@@ -266,28 +266,36 @@ type Runner struct {
 	Namespaces  []string     `json:"namespaces,omitempty"`
 	Containment *Containment `json:"containment,omitempty"`
 
-	State       string    `json:"state"`
-	DrainReason string    `json:"drain_reason,omitempty"`
-	JoinedAt    time.Time `json:"joined_at"`
-	LastSeenAt  time.Time `json:"last_seen_at,omitzero"`
-	RotateBy    time.Time `json:"rotate_by,omitzero"`
+	State       string `json:"state"`
+	DrainReason string `json:"drain_reason,omitempty"`
+
+	// What the runner last said of itself at a heartbeat: what it will do with new work, which
+	// is not State (the installation's word on it), and how many tasks it will run at once.
+	// Neither is written until its first heartbeat.
+	ReportedState string `json:"reported_state,omitempty"`
+	Concurrency   int64  `json:"concurrency,omitempty"`
+
+	JoinedAt   time.Time `json:"joined_at"`
+	LastSeenAt time.Time `json:"last_seen_at,omitzero"`
+	RotateBy   time.Time `json:"rotate_by,omitzero"`
 }
 
 // runnerColumns are what scanRunner reads, in its order.
 const runnerColumns = `id, pool, labels, public_key, cpu, memory_bytes, disk_bytes,
 	architecture, agent_version, accepted_namespaces::text[], containment_runtime, userns_remap,
-	state, drain_reason, joined_at, last_heartbeat_at, rotate_by`
+	state, drain_reason, reported_state, concurrency, joined_at, last_heartbeat_at, rotate_by`
 
 // scanRunner reads one row of runnerColumns.
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
 	var key []byte
-	var runtime, reason *string
+	var runtime, reason, reported *string
 	var remap *bool
+	var concurrency *int64
 	var seen, rotate *time.Time
 	if err := row.Scan(&r.ID, &r.Pool, &r.Labels, &key, &r.CPU, &r.MemoryBytes, &r.DiskBytes,
 		&r.Architecture, &r.AgentVersion, &r.Namespaces, &runtime, &remap,
-		&r.State, &reason, &r.JoinedAt, &seen, &rotate); err != nil {
+		&r.State, &reason, &reported, &concurrency, &r.JoinedAt, &seen, &rotate); err != nil {
 		return Runner{}, err
 	}
 	r.PublicKey = ed25519.PublicKey(key)
@@ -296,6 +304,9 @@ func scanRunner(row pgx.Row) (Runner, error) {
 	}
 	if reason != nil {
 		r.DrainReason = *reason
+	}
+	if reported != nil && concurrency != nil {
+		r.ReportedState, r.Concurrency = *reported, *concurrency
 	}
 	if seen != nil {
 		r.LastSeenAt = *seen
@@ -331,51 +342,118 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 // HeartbeatInterval is how often a runner says it is there: "A runner posts one heartbeat every 10
 // seconds to the API".
 //
-// One constant, because two things read it and they must not disagree. The API tells a runner the
-// interval in the answer to every heartbeat, and Lost counts silence in it: a runner told one
-// interval and judged by another would be declared lost while it reported on time, or kept long
-// after it had gone.
+// A constant, and not something the answer to a heartbeat tells a runner: the wire's answer is
+// closed and carries no interval, and the documentation fixes the figure, so the runner and Lost
+// both count in the one the page gives. A runner judged by another interval than the one it
+// reports at would be declared lost while it reported on time, or kept long after it had gone.
 const HeartbeatInterval = 10 * time.Second
 
 // LostAfter is how long a task in flight may go unaccounted for before Lost moves it: "Three
 // missed intervals move a task to lost."
 const LostAfter = 3 * HeartbeatInterval
 
-// Beat records that a runner is there and says what it is holding.
+// Beating is what a runner says of itself at every heartbeat, as the wire's request has it: which
+// agent it runs, what it will do with new work, how many tasks it will run at once, and the keys it
+// is holding.
+type Beating struct {
+	AgentVersion string
+
+	// State is ready, draining or unhealthy, the runner's own word on what it will do with new
+	// work. It is recorded and never obeyed: the installation's word is Runner.State.
+	State       string
+	Concurrency int64
+
+	// Holding is every key in flight on the host.
+	Holding []agk.TaskID
+}
+
+// Beaten is what a heartbeat is answered from: the runner as it now stands, and the keys it is to
+// stop.
+type Beaten struct {
+	Runner Runner
+
+	// Cancel is each key the heartbeat named whose dispatch, bound to this runner, the
+	// controller has ended as cancelled or timed_out, in the order keys sort in. Never nil, so
+	// that the answer is always a list.
+	Cancel []agk.TaskID
+}
+
+// Beat records that a runner is there and what it says of itself, and answers what it is to stop.
 //
 // "A runner posts one heartbeat every 10 seconds to the API, listing the idempotency keys it
 // currently holds. One request covers every in-flight task on that host." What it writes is the
-// moment against every task it named, which is what Lost compares against, and what it answers is
-// whether the runner should be draining.
-func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at time.Time) (Runner, error) {
-	r, err := scanRunner(w.tx.QueryRow(ctx,
-		`update runners set last_heartbeat_at = $2 where id = $1 and state <> 'revoked'
-		 returning `+runnerColumns,
-		runner, at))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Runner{}, ErrNoRunner
-	}
-	if err != nil {
-		return Runner{}, fmt.Errorf("db: the heartbeat could not be recorded: %w", err)
+// moment against every task it named, which is what Lost compares against, and what the runner
+// reported of itself, which is what the inventory shows.
+//
+// What it answers to stop is the backstop for agentiik.stops, which keeps nothing: a runner that
+// was disconnected when a stop went out hears it here within one interval, rather than running the
+// container to its deadline. So it is each key the runner named whose dispatch bound to it has
+// been ended cancelled or timed_out, since those are the two endings the control plane writes
+// while a container may still be running. A lost dispatch is never among them, although the host
+// may still hold it: a host that was only cut off finishes its key, and the ending it records is
+// what answers a requeue that comes back to it. Nor is a dispatch bound to another runner, which
+// after a requeue is one more reason the key alone decides nothing.
+func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time) (Beaten, error) {
+	switch {
+	case b.AgentVersion == "":
+		return Beaten{}, errors.New("db: a heartbeat says which agent the runner runs")
+	case b.State != "ready" && b.State != "draining" && b.State != "unhealthy":
+		return Beaten{}, fmt.Errorf("db: a runner reports itself ready, draining or unhealthy, and not %q", b.State)
+	case b.Concurrency < 1:
+		return Beaten{}, fmt.Errorf("db: a runner that runs anything runs one task or more at once, and not %d", b.Concurrency)
 	}
 
-	if len(holding) > 0 {
-		keys := make([]string, len(holding))
-		for i, k := range holding {
-			keys[i] = string(k)
-		}
-		// Only the tasks this runner is actually holding. A heartbeat naming somebody
-		// else's task is a heartbeat keeping somebody else's task alive, which is the one
-		// thing a liveness report must not be able to do.
-		if _, err := w.tx.Exec(ctx, `
-			update tasks set last_heartbeat_at = $3
-			where runner = $1 and idempotency_key = any($2)
-			  and state in ('dispatched', 'running', 'publishing')`,
-			runner, keys, at); err != nil {
-			return Runner{}, fmt.Errorf("db: what the runner is holding could not be recorded: %w", err)
-		}
+	r, err := scanRunner(w.tx.QueryRow(ctx,
+		`update runners set last_heartbeat_at = $2, agent_version = $3, reported_state = $4, concurrency = $5
+		 where id = $1 and state <> 'revoked'
+		 returning `+runnerColumns,
+		runner, at, b.AgentVersion, b.State, b.Concurrency))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Beaten{}, ErrNoRunner
 	}
-	return r, nil
+	if err != nil {
+		return Beaten{}, fmt.Errorf("db: the heartbeat could not be recorded: %w", err)
+	}
+
+	beaten := Beaten{Runner: r, Cancel: []agk.TaskID{}}
+	if len(b.Holding) == 0 {
+		return beaten, nil
+	}
+	keys := make([]string, len(b.Holding))
+	for i, k := range b.Holding {
+		keys[i] = string(k)
+	}
+
+	// Only the tasks this runner is actually holding. A heartbeat naming somebody else's task
+	// is a heartbeat keeping somebody else's task alive, which is the one thing a liveness
+	// report must not be able to do.
+	if _, err := w.tx.Exec(ctx, `
+		update tasks set last_heartbeat_at = $3
+		where runner = $1 and idempotency_key = any($2)
+		  and state in ('dispatched', 'running', 'publishing')`,
+		runner, keys, at); err != nil {
+		return Beaten{}, fmt.Errorf("db: what the runner is holding could not be recorded: %w", err)
+	}
+
+	// And only this runner's dispatches, for the same reason: a key names every dispatch of it,
+	// and one bound elsewhere is no order to this host.
+	rows, err := w.tx.Query(ctx, `
+		select distinct idempotency_key from tasks
+		where runner = $1 and idempotency_key = any($2)
+		  and state in ('cancelled', 'timed_out')
+		order by idempotency_key`,
+		runner, keys)
+	if err != nil {
+		return Beaten{}, fmt.Errorf("db: what the runner is to stop could not be read: %w", err)
+	}
+	cancel, err := pgx.CollectRows(rows, pgx.RowTo[agk.TaskID])
+	if err != nil {
+		return Beaten{}, fmt.Errorf("db: what the runner is to stop could not be read: %w", err)
+	}
+	if len(cancel) > 0 {
+		beaten.Cancel = cancel
+	}
+	return beaten, nil
 }
 
 // Drain tells a runner to stop taking work and finish what it holds.

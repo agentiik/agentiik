@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/agentiik/agentiik/internal/fixtures"
@@ -53,6 +54,64 @@ func TestTheJoinGrammarsAreTheWiresOwn(t *testing.T) {
 		{"a host's memory", memoryForm, capacity["memory"].Pattern},
 		{"a host's disk", memoryForm, capacity["disk"].Pattern},
 		{"a container runtime", runtimeForm, containment["runtime"].Pattern},
+	} {
+		if c.wire == "" {
+			t.Errorf("the wire writes no pattern for %s where this test looks for one", c.what)
+			continue
+		}
+		if c.ours.String() != c.wire {
+			t.Errorf("%s is checked against %s, and the wire writes %s", c.what, c.ours, c.wire)
+		}
+	}
+}
+
+// The grammars a heartbeat is checked against are the wire's own too, for the same reason, and so
+// is the list of states a runner may report.
+func TestTheHeartbeatGrammarsAreTheWiresOwn(t *testing.T) {
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type property struct {
+		Pattern string    `json:"pattern"`
+		Enum    []string  `json:"enum"`
+		Ref     string    `json:"$ref"`
+		Items   *property `json:"items"`
+	}
+	var schema struct {
+		Defs struct {
+			IdempotencyKey  property `json:"idempotencyKey"`
+			RunnerHeartbeat struct {
+				Properties struct {
+					Request struct {
+						Properties map[string]property `json:"properties"`
+					} `json:"request"`
+				} `json:"properties"`
+			} `json:"runnerHeartbeat"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(doc, &schema); err != nil {
+		t.Fatal(err)
+	}
+	request := schema.Defs.RunnerHeartbeat.Properties.Request.Properties
+
+	if ref := request["tasks"].Items; ref == nil || ref.Ref != "#/$defs/idempotencyKey" {
+		t.Errorf("a heartbeat's tasks are no longer the wire's idempotency key, so keyForm may not be their grammar")
+	}
+	if ref := request["sent_at"].Ref; ref != "#/$defs/timestamp" {
+		t.Errorf("a heartbeat's sent_at is no longer the wire's timestamp, so instantForm may not be its grammar")
+	}
+	if !slices.Equal(request["state"].Enum, runnerStates) {
+		t.Errorf("a runner reports itself %v, and the wire lists %v", runnerStates, request["state"].Enum)
+	}
+	for _, c := range []struct {
+		what string
+		ours *regexp.Regexp
+		wire string
+	}{
+		{"a heartbeat's runner", runnerForm, request["runner"].Pattern},
+		{"a heartbeat's agent version", versionForm, request["agent_version"].Pattern},
+		{"an idempotency key", keyForm, schema.Defs.IdempotencyKey.Pattern},
 	} {
 		if c.wire == "" {
 			t.Errorf("the wire writes no pattern for %s where this test looks for one", c.what)

@@ -1492,7 +1492,7 @@
         },
         "response": {
           "title": "Heartbeat response",
-          "description": "What the API answers, and the only way an order reaches a runner. Every arrow in this architecture starts at the runner or at the controller: a runner opens no listening port and is never connected to, so there is nothing to push an instruction down. Anything the installation wants a runner to do therefore waits for its next heartbeat, which fixes the worst case at one interval, ten seconds, and is the price of a runner that is a firewall rule rather than a project.",
+          "description": "What the API answers, and the one channel every order is sure to reach a runner on. Every arrow in this architecture starts at the runner or at the controller: a runner opens no listening port and is never connected to, so there is nothing to push an instruction down. Anything the installation wants a runner to do is therefore said here at its next heartbeat, which fixes the worst case at one interval, ten seconds, and is the price of a runner that is a firewall rule rather than a project. A stop is the one order that can arrive sooner, on agentiik.stops, which a runner hears over the bus connection it opened itself; that subject keeps nothing, so cancel repeats it here.",
           "type": "object",
           "required": [
             "received_at",
@@ -1563,7 +1563,7 @@
             },
             "cancel": {
               "title": "Tasks to stop",
-              "description": "The keys the runner is to stop now, by sending the container SIGTERM and then SIGKILL after the grace period the runner policy sets. Cancelling a run sends SIGTERM to running containers, and this is where that reaches the host, since nothing ever connects inbound to a runner and the heartbeat is its only periodic exchange with the API. The same list carries a task the control plane has already given up on: a key declared lost and requeued elsewhere is one this runner should no longer be working on. Only keys the request listed ever appear here, so a runner is never asked about work it does not have. It is always present and usually empty, so that a runner reads a list rather than testing whether a field arrived.",
+              "description": "The keys the runner is to stop now, by sending the container SIGTERM and then SIGKILL after the grace period the runner policy sets. A key is here when the dispatch of it bound to this runner has been ended cancelled or timed_out by the control plane. The same stop goes out first on agentiik.stops, which keeps nothing, so this list is the backstop: a runner that was disconnected when the stop went out hears it within one interval rather than running the container to its deadline, since nothing ever connects inbound to a runner and the heartbeat is its only periodic exchange with the API. A lost dispatch is never here: a host that was only cut off finishes its key, and the ending it records is what answers a requeue that comes back to it, so stopping it would throw away work the requeue is waiting for. Only keys the request listed ever appear here, so a runner is never asked about work it does not have. It is always present and usually empty, so that a runner reads a list rather than testing whether a field arrived.",
               "type": "array",
               "uniqueItems": true,
               "items": {

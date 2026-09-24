@@ -311,13 +311,35 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// asking again at the same instant is idempotent by design, and the commonest case is
 	// a sweep reaching a run that is simply waiting.
 	saved := e.Seq
+	var held []agk.TaskID
 	if state.Seq != saved {
 		if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-			return w.SaveDecision(ctx, decision)
+			if err := w.SaveDecision(ctx, decision); err != nil {
+				return err
+			}
+			if state.Run.State != agk.TimedOut {
+				return nil
+			}
+			// A run that has just reached its deadline ends its tasks here, in the same
+			// transaction, as a cancelled run does: the evaluator ends the run and leaves
+			// its tasks as they were, and a row left in flight would redeem, hold a slot
+			// of max_concurrent_tasks for good, and keep the deadline's stop out of the
+			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
+			// hears it again.
+			var err error
+			held, err = w.TimeOutTasks(ctx, e.Namespace, run, now)
+			return err
 		}); err != nil {
 			return err
 		}
 		saved = state.Seq
+	}
+	// And the rows name what a runner holds that the document may not, as they do for a
+	// cancellation: a pass that published a task and died before recording the dispatch.
+	for _, key := range held {
+		if !slices.ContainsFunc(plan.Stop, func(s graph.Stop) bool { return s.Task == key }) {
+			plan.Stop = append(plan.Stop, graph.Stop{Task: key, Reason: graph.StopDeadline})
+		}
 	}
 
 	// Committed. Only now does anything leave this process, and everything that does is
