@@ -258,7 +258,7 @@ func TestProvisioningNarrowsAWidenedRoleBack(t *testing.T) {
 		`grant ` + powerful + ` to ` + granter + ` with admin option`,
 		`grant ` + powerful + ` to ` + role + ` granted by ` + granter,
 		`grant pg_write_all_data to ` + role,
-		`alter role ` + role + ` nologin bypassrls createdb createrole replication connection limit 0 valid until '2001-01-01'`,
+		`alter role ` + role + ` superuser nologin bypassrls createdb createrole replication connection limit 0 valid until '2001-01-01'`,
 		`grant truncate, references, trigger on runs to ` + role,
 		`grant all on schema_migrations to ` + role,
 		`grant update (name) on schema_migrations to ` + role,
@@ -644,5 +644,45 @@ func TestProvisionGrantsNothingTheMigrationsDidNotCreate(t *testing.T) {
 				t.Errorf("the role holds %q", line)
 			}
 		}
+	}
+}
+
+// A hardened cluster revokes CONNECT from PUBLIC, and the role still connects, since Provision
+// grants it rather than relying on PUBLIC.
+func TestTheRoleConnectsToADatabaseClosedToPublic(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	conn := connect(t, super)
+	if _, err := conn.Exec(ctx, `revoke connect on database `+role+` from public`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := login(t, super, role, "test"); err != nil {
+		t.Errorf("the role does not connect to a database closed to PUBLIC: %s", err)
+	}
+}
+
+// Each verifier is drawn with a salt of its own, so the same password set twice, or on two
+// installations, is not stored as the same verifier.
+func TestEveryVerifierHasASaltOfItsOwn(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	conn := connect(t, super)
+
+	var verifiers []string
+	for range 2 {
+		if _, err := Provision(ctx, conn, role, "test"); err != nil {
+			t.Fatal(err)
+		}
+		var verifier string
+		if err := conn.QueryRow(ctx, `select rolpassword from pg_authid where rolname = $1`, role).Scan(&verifier); err != nil {
+			t.Fatal(err)
+		}
+		verifiers = append(verifiers, verifier)
+	}
+	if verifiers[0] == verifiers[1] {
+		t.Errorf("the same password was stored twice as %s", verifiers[0])
 	}
 }
