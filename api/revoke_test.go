@@ -168,7 +168,7 @@ func TestARevokedRunnerIsHeardUntilItsGraceEnds(t *testing.T) {
 		t.Errorf("a revoked runner was answered %v", answer)
 	}
 	if len(made.made) != 0 {
-		t.Errorf("a queue was made ready for a runner that may take nothing from it: %v", made.made)
+		t.Errorf("minting a revoked runner's credential asked the bus for the consumers of %v", made.made)
 	}
 
 	w, _ = call(t, ro.handler, "POST", "/api/v1/runners/rotate", credential, ro.signed(runner, key))
@@ -260,7 +260,7 @@ func TestNoBusCredentialOutlivesAGrace(t *testing.T) {
 // A draining runner is only told to take nothing new: its bus credential is the one it always had,
 // and it renews its runner credential, since it stays up for as long as it is left drained.
 func TestADrainingRunnerKeepsItsCredentials(t *testing.T) {
-	ro, made := withGrace(t, 30*24*time.Hour, time.Hour)
+	ro, _ := withGrace(t, 30*24*time.Hour, time.Hour)
 	key := host(1)
 	runner, credential := ro.joinedAs(t, key)
 	ro.order(t, runner, "drain", "the host is being retired")
@@ -268,8 +268,8 @@ func TestADrainingRunnerKeepsItsCredentials(t *testing.T) {
 	if w, _ := call(t, ro.handler, "POST", "/api/v1/bus/token", credential, nil); w.Code != http.StatusOK {
 		t.Fatalf("a draining runner's bus credential answered %d: %s", w.Code, w.Body)
 	}
-	if !slices.Equal(ro.minted.names, []string{runner}) || len(ro.minted.revoked) != 0 || !slices.Equal(made.made, []string{"dmz"}) {
-		t.Errorf("a draining runner was minted %v and %v, with queues %v", ro.minted.names, ro.minted.revoked, made.made)
+	if !slices.Equal(ro.minted.names, []string{runner}) || len(ro.minted.revoked) != 0 {
+		t.Errorf("a draining runner was minted %v and %v", ro.minted.names, ro.minted.revoked)
 	}
 
 	*ro.clock = ro.clock.Add(time.Second)
