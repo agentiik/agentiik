@@ -212,6 +212,7 @@ func TestLoadPolicyRefusesAKeyItDoesNotRead(t *testing.T) {
 		want []string
 	}{
 		{"require_userns_remap = true\npids_limt = 64\n", []string{"pids_limt on line 2", "is not a setting"}},
+		{"require_userns_remap = false\npids_limt = 64\n", []string{"pids_limt on line 2", "is not a setting"}},
 		{"concurrency = 4\nlabels = [\"zone=dmz\"]\n", []string{"concurrency on line 1 and labels on line 2", "are not settings"}},
 		{"[runner]\nname = \"runner-dmz-02\"\n", []string{"runner", "is not a setting"}},
 		{"[ulimits]\nnofiles = { soft = 1, hard = 2 }\n", []string{"ulimits.nofiles on line 2"}},
@@ -263,6 +264,9 @@ func TestLoadPolicyRefusesAWrongType(t *testing.T) {
 		{"require_userns_remap = \"false\"\n", "line 1: require_userns_remap is true or false"},
 		{"require_userns_remap = 0\n", "line 1: require_userns_remap is true or false"},
 		{"\npids_limit = \"many\"\n", "line 2: pids_limit is a whole number above zero"},
+		// The floor lifted before the refused line, so the check below has a floor to
+		// find lifted.
+		{"require_userns_remap = false\npids_limit = \"many\"\n", "line 2: pids_limit is a whole number above zero"},
 		{"pids_limit = 2.5\n", "line 1: pids_limit is a whole number above zero"},
 		{"memory_cap = 8589934592\n", "line 1: memory_cap is a whole number of at least 6Mi with a binary suffix"},
 		{"cpu_cap = 4\n", "line 1: cpu_cap is a number of cores of at least 0.01 in quotation marks"},
@@ -300,6 +304,7 @@ func TestLoadPolicyRefusesALineThatIsNotTOML(t *testing.T) {
 		{"require_userns_remap = maybe\n", "line 1"},
 		{"\nrequire_userns_remap = True\n", "line 2"},
 		{"pids_limit = 1\npids_limit = 2\n", "line 2"},
+		{"require_userns_remap = false\npids_limit = 1\npids_limit = 2\n", "line 3"},
 	} {
 		p, err := LoadPolicy(writePolicyFile(t, c.body))
 		if err == nil {
@@ -366,16 +371,19 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		{"[ulimits]\nnofile = { soft = 1024, hard = 2000000 }\n", "ulimits.nofile.hard is 2000000 in"},
 		{"seccomp_profile = \"seccomp.json\"\n", `seccomp_profile is "seccomp.json"`},
 	} {
-		path := writePolicyFile(t, c.body)
+		// Each file lifts the floor before the line that is refused, so that a refusal
+		// coming back with what the file had read so far would come back lifted.
+		body := "require_userns_remap = false\n" + c.body
+		path := writePolicyFile(t, body)
 		p, err := LoadPolicy(path)
 		if err == nil {
 			t.Fatalf("%q was accepted", c.body)
 		}
 		if !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), path) {
-			t.Errorf("the refusal of %q does not say %q in %s: %s", c.body, c.want, path, err)
+			t.Errorf("the refusal of %q does not say %q in %s: %s", body, c.want, path, err)
 		}
 		if p.RequireUsernsRemap.Lifted() {
-			t.Errorf("a refused file came back with a lifted floor")
+			t.Errorf("the refusal of %q came back with the floor its first line lifted", body)
 		}
 	}
 }
