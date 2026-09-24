@@ -459,6 +459,14 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // than right, and writing it over the loss would erase the one record that the runner went quiet.
 // An ending is different. It came back from the runner, so the dispatch was not lost after all,
 // and it is written.
+//
+// Nor does a decision move a dispatch back along the way to its ending. Running and publishing
+// are written by Progress, from the runner holding the dispatch, and the evaluator never hears of
+// them: its state says dispatched until the ending, so every pass in between would write
+// dispatched over running. A dispatch only moves forwards, since a further attempt and a requeue
+// are rows of their own, so the later of the two states in flight is kept. That is the row saying
+// more than the decision rather than something the decision has not heard, and it is answered as
+// heard.
 func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t TaskRow) (bool, error) {
 	if err := t.ID.Validate(); err != nil {
 		return false, fmt.Errorf("db: a task of run %s: %w", run, err)
@@ -490,7 +498,13 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
-		                  then tasks.state else excluded.state end,
+		                  then tasks.state
+		                  when tasks.state in ('running', 'publishing')
+		                   and excluded.state in ('pending', 'dispatched')
+		                  then tasks.state
+		                  when tasks.state = 'publishing' and excluded.state = 'running'
+		                  then tasks.state
+		                  else excluded.state end,
 		     runner = coalesce(excluded.runner, tasks.runner),
 		     exit_code = excluded.exit_code,
 		     log_uri = coalesce(excluded.log_uri, tasks.log_uri),
@@ -511,7 +525,7 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	if err != nil {
 		return false, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
-	return held == t.State.String(), nil
+	return held != agk.TaskLost.String() || t.State == agk.TaskLost, nil
 }
 
 // TaskRow is the identifier a task's own row is keyed by: the row of the latest dispatch of the
@@ -701,7 +715,8 @@ func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]L
 	return out, rows.Err()
 }
 
-// ErrNotHeld is a loss naming a dispatch that was never bound to the runner it names.
+// ErrNotHeld is a loss or a progress message naming a dispatch that was never bound to the runner
+// it names.
 var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 
 // Lose moves to lost the one dispatch a loss names, where it is bound to the runner the loss
@@ -781,6 +796,70 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	}
 	if !held {
 		return false, fmt.Errorf("%w: %s never held dispatch %s of %s", ErrNotHeld, runner, row, key)
+	}
+	return false, nil
+}
+
+// Progress moves the one dispatch a progress message names to running or publishing, where it is
+// bound to the runner the message names, and answers whether anything moved.
+//
+// "running: The container is running. publishing: The container is finished; its outputs are being
+// collected and uploaded." Only the runner holding a dispatch can see either, so it says so on its
+// results subject, and this is where it is written: on the row alone, for a person reading the run.
+// The evaluator's state is not told, since nothing it decides depends on either, and the row is
+// what the run detail reads.
+//
+// Only forwards, and never over an ending. Running moves a dispatched row, publishing a dispatched
+// or running one, and a row already there or past it is left as it is, so a message delivered twice,
+// out of order or after the result changes nothing, whichever commits first: the row is locked by
+// the update, and one that waited on a decision writing the ending finds the ending. Nor on the row
+// of a run that has ended, which has nothing to learn, as a result for one has not.
+//
+// It reaches only a dispatch bound to that runner, for the reason Lose gives: a runner able to move
+// somebody else's task could show work running that nobody runs. A dispatch bound to another
+// runner, or to none, or no dispatch of the key at all, is answered ErrNotHeld. The dispatch is
+// named by its task_id and its key together, for the reason HeldBy gives, so a host still running a
+// dispatch that was declared lost moves nothing on the requeue somebody else may hold.
+func (w *Wide) Progress(ctx context.Context, namespace string, key agk.TaskID, row, runner string, to agk.TaskState) (bool, error) {
+	var from []string
+	switch to {
+	case agk.TaskRunning:
+		from = []string{agk.TaskDispatched.String()}
+	case agk.TaskPublishing:
+		from = []string{agk.TaskDispatched.String(), agk.TaskRunning.String()}
+	default:
+		return false, fmt.Errorf("db: task %s cannot move to %s on its runner's word, which says running or publishing and leaves the ending to a result", key, to)
+	}
+	switch {
+	case runner == "":
+		return false, fmt.Errorf("%w: progress of %s from no runner", ErrNotHeld, key)
+	case row == "":
+		return false, fmt.Errorf("%w: progress of %s that names no dispatch of it", ErrNotHeld, key)
+	}
+	// The row is compared as text, for the reason Lose gives.
+	tag, err := w.tx.Exec(ctx,
+		`update tasks set state = $5
+		 where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4
+		   and state = any($6)
+		   and exists (select 1 from runs
+		               where runs.namespace = tasks.namespace and runs.id = tasks.run_id
+		                 and runs.state in ('queued', 'running', 'waiting'))`,
+		namespace, row, string(key), runner, to.String(), from)
+	if err != nil {
+		return false, fmt.Errorf("db: the progress of task %s could not be written: %w", key, err)
+	}
+	if tag.RowsAffected() > 0 {
+		return true, nil
+	}
+	var held bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select 1 from tasks
+		                where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4)`,
+		namespace, row, string(key), runner).Scan(&held); err != nil {
+		return false, fmt.Errorf("db: task %s could not be read: %w", key, err)
+	}
+	if !held {
+		return false, fmt.Errorf("%w: %s does not hold dispatch %s of %s", ErrNotHeld, runner, row, key)
 	}
 	return false, nil
 }
