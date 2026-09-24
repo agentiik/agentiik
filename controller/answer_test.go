@@ -402,7 +402,7 @@ func TestAResultFromARunnerThatDoesNotHoldTheTaskIsRefused(t *testing.T) {
 }
 
 // "A task that never reached a container writes what stopped it", "a refused pull or a grant that
-// would not redeem being the usual reasons", and a runner pulls the image before it redeems, so
+// would not redeem being the usual reasons", and a grant that would not redeem binds nobody, so
 // such an ending is about a dispatch nobody holds. It is taken from the first runner to report it,
 // which is bound to the dispatch as a redemption would have bound it: another runner's word on it
 // is refused, and its grant redeems for nobody.
@@ -517,12 +517,9 @@ func TestAnUnreachedEndingTheControllerCouldNotWriteBindsNobody(t *testing.T) {
 		t.Errorf("after an ending that was never written the key holds %q, want %q", got, want)
 	}
 
-	// Dispatched on the test's clock, which is days behind the database's.
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
-		t.Fatalf("the heartbeat declared %d tasks lost that never reached a container, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
+	core.silence(t)
+	if got, want := dispatchesOf(t, conn, d.Task.ID), []string{"0 dispatched -"}; !slices.Equal(got, want) {
+		t.Errorf("after the sweep the key holds %q, want %q", got, want)
 	}
 	if again := q.dispatched(); len(again) != 0 {
 		t.Errorf("a task that never reached a container was sent out again as %+v", again)

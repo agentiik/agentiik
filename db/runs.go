@@ -568,20 +568,20 @@ func (w *Wide) HeldBy(ctx context.Context, namespace string, key agk.TaskID, row
 // BindUnredeemed binds one dispatch nobody has redeemed to the runner whose ending of it is being
 // written, and answers who holds it once that is done.
 //
-// Two endings come for a dispatch no runner is bound to. A runner pulls a task's image before it
-// redeems the grant, so a refused pull, or a grant that would not redeem, ends a dispatch that
-// never reached a container. And a requeue that comes back to the host which already ended its
-// key is never redeemed at all: the host answers it from its record, through the runner that
-// redeemed an earlier dispatch of the key. The runner reporting either is bound to the dispatch
-// here, as a redemption would have bound it, so that no other runner can report a second ending
-// for it and no redemption can follow. A dispatch somebody already holds keeps its holder, and the
-// answer says who that is; the row is locked by the update, so a redemption racing it binds first
-// or finds it bound.
+// Two endings come for a dispatch no runner is bound to. A grant that would not redeem ends a
+// dispatch that never reached a container and that no redemption bound: a runner redeems before it
+// pulls, so a refused pull is reported by the runner the redemption bound, but a refused redemption
+// binds nobody. And a requeue that comes back to the host which already ended its key is never
+// redeemed at all: the host answers it from its record, through the runner that redeemed an earlier
+// dispatch of the key. The runner reporting either is bound to the dispatch here, as a redemption
+// would have bound it, so that no other runner can report a second ending for it and no redemption
+// can follow. A dispatch somebody already holds keeps its holder, and the answer says who that is;
+// the row is locked by the update, so a redemption racing it binds first or finds it bound.
 //
-// It belongs in the transaction that writes the ending, and never in one of its own. Pool.Lost
-// takes a bound dispatch in flight for one a runner redeemed, so a binding committed without its
-// ending would be swept lost, counted from the dispatch, as if a container had run and its host
-// gone quiet.
+// It belongs in the transaction that writes the ending, and never in one of its own. Lost takes a
+// bound dispatch in flight for one a runner redeemed, so a binding committed without its ending
+// would be swept lost, counted from the dispatch, as if a container had run and its host gone
+// quiet.
 func (w *Wide) BindUnredeemed(ctx context.Context, namespace string, key agk.TaskID, row, runner string) (string, error) {
 	if runner == "" {
 		return "", fmt.Errorf("db: dispatch %s of task %s bound to no runner", row, key)
@@ -665,8 +665,8 @@ type Loss struct {
 
 // Losses names the dispatches of one run that are lost and that nothing has requeued.
 //
-// It is how the controller hears what the heartbeat declared. "Liveness therefore lives in the
-// database beside the task state", so a loss is written here first, by Pool.Lost or by Lose, and
+// It is how the controller hears what its sweep declared. "Liveness therefore lives in the
+// database beside the task state", so a loss is written here first, by Lost or by Lose, and
 // the evaluator is told on the next pass rather than by whoever noticed: a requeue is a decision,
 // and deciding is the controller's. A dispatch already requeued past is not named, since the loss
 // has been heard; one that was not requeued, because its step is not idempotent or its policy
@@ -737,6 +737,19 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 	}
 	// The row is compared as text, because a runner wrote it and the column's domain would
 	// refuse a value that is not a ULID with an error rather than find nothing.
+	//
+	// The run's row is locked before the task's, which is the order a decision takes them in. A
+	// loss reported while its run is being decided then waits for the decision, where holding the
+	// task the decision is about to write would be a deadlock, and PostgreSQL would end one of
+	// the two. A dispatch that is not there locks nothing, and is refused below.
+	if _, err := w.tx.Exec(ctx,
+		`select 1 from runs
+		 where namespace = $1
+		   and id = (select run_id from tasks where namespace = $1 and id = $2::text)
+		 for update`,
+		namespace, row); err != nil {
+		return false, fmt.Errorf("db: the run of task %s could not be locked: %w", key, err)
+	}
 	var run string
 	err := w.tx.QueryRow(ctx,
 		`update tasks set state = 'lost', finished_at = $5
@@ -746,8 +759,8 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 		namespace, row, string(key), runner, at).Scan(&run)
 	switch {
 	case err == nil:
-		// And the run is left for the next sweep, as Pool.Lost leaves it, so that the loss
-		// is heard even where whoever wrote it goes no further.
+		// And the run is left for the next sweep, as Lost leaves it, so that the loss is
+		// heard even where whoever wrote it goes no further.
 		if _, err := w.tx.Exec(ctx,
 			`update runs set wake_at = null
 			 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')`,

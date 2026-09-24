@@ -17,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/ulid"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // The bus against a real NATS, for the reason every other real test in this module exists: what
@@ -220,10 +221,35 @@ func TestATaskPutBackIsOfferedAgain(t *testing.T) {
 	second[0].Held(t.Context())
 }
 
+// A pool's consumer waits AckWait for a runner to acknowledge what it was handed before handing it
+// to another, which is the bound on a take and a redemption and not on a task. AckWait is the
+// figure the documentation gives, "The pool consumer's AckWait, one minute", and not whatever the
+// constant happens to hold.
+func TestAPoolWaitsAckWaitForARunnerToAcknowledge(t *testing.T) {
+	if AckWait != time.Minute {
+		t.Errorf("AckWait is %s, and the documentation gives the pool consumer's AckWait as one minute", AckWait)
+	}
+	b := open(t)
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		consumer, err := b.js.Consumer(t.Context(), Stream, Durable(pool))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Config.AckWait != AckWait {
+			t.Errorf("the consumer of pool %s waits %s for an acknowledgement, and AckWait is %s", pool, info.Config.AckWait, AckWait)
+		}
+	}
+}
+
 // A task is held once the server says the acknowledgement arrived, and not once it has left
 // this side. A link that drops keeps the acknowledgement in the client's buffer, and the server
-// hands the task to another runner of the pool when its wait runs out, so a runner told it held
-// the task on the strength of the buffer would start the container beside that one.
+// hands the message to another runner of the pool when its wait runs out. That runner is refused
+// the task at its redemption, but the runner holding it is owed the truth: told it held the task
+// on the strength of the buffer, it would not know the message was coming round again.
 func TestATaskIsHeldOnlyOnceTheServerHasTheAcknowledgement(t *testing.T) {
 	b := open(t)
 	if err := b.Publish(t.Context(), dispatch(step(t))); err != nil {
@@ -542,6 +568,96 @@ func TestARequeueIsAnsweredWithTheEndingItsHostRecorded(t *testing.T) {
 		t.Errorf("a second result reached the controller: %+v", a)
 	case <-time.After(500 * time.Millisecond):
 	}
+}
+
+// A requeue answered from the record is acknowledged only once its ending is out. A report that
+// did not go out leaves the message on the queue, so the host that could not say how the key ended
+// has taken nothing from anybody: the message comes round once AckWait has passed, and is answered
+// again once the report can go. Acknowledged first, it would have left the queue bound to nobody,
+// where the heartbeat's sweep does not look, and the run would wait on it until its timeout.
+func TestARequeueWhoseRecordedEndingDidNotGoOutStaysOnTheQueue(t *testing.T) {
+	b := alone(t)
+	const wait = 2 * time.Second
+	if err := b.consumer(t.Context(), DefaultPool, wait); err != nil {
+		t.Fatal(err)
+	}
+	requeue := dispatchAs(ulid.New(), step(t))
+	if err := b.Publish(t.Context(), requeue); err != nil {
+		t.Fatal(err)
+	}
+	taken, err := b.Take(t.Context(), DefaultPool, 1, 5*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("taking the requeue: %v, %d", err, len(taken))
+	}
+	recorded := aResult(aTask(step(t)))
+	recorded.TaskID = rowOf(step(t))
+
+	// With no stream to take it, a report is answered "no response from stream", as it is
+	// where the link to the bus dropped between the take and the report.
+	if err := b.js.DeleteStream(t.Context(), Results); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Ended(t.Context(), taken[0], recorded); err == nil {
+		t.Fatal("the recorded ending was said to be reported with no stream to take it")
+	}
+	if n := b.Outstanding(t, DefaultPool); n != 1 {
+		t.Fatalf("a requeue whose ending did not go out leaves %d messages for the pool to hand out, and it is still owed an answer", n)
+	}
+
+	again, err := b.Take(t.Context(), DefaultPool, 1, 3*wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 1 || again[0].Task.TaskID != requeue.Row {
+		t.Fatalf("once AckWait had passed the pool handed out %+v, want the requeue %s again", again, requeue.Row)
+	}
+	reopened, err := Open(t.Context(), Options{URL: b.conn.ConnectedUrl()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := b.Ended(t.Context(), again[0], recorded); err != nil {
+		t.Fatalf("answering the requeue once the report could go: %s", err)
+	}
+	if n := b.Outstanding(t, DefaultPool); n != 0 {
+		t.Errorf("the requeue was answered and the pool still has %d messages to hand out", n)
+	}
+	info, err := reopened.results.Info(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 1 {
+		t.Errorf("the result stream holds %d results, want the one ending", info.State.Msgs)
+	}
+}
+
+// alone is a bus on a server of the test's own, with both streams and the consumers the control
+// plane makes. It is for a test that takes something away from the bus, which on the server the
+// other tests share would be taken from them too.
+func alone(t *testing.T) *Bus {
+	t.Helper()
+	server, err := natsserver.NewServer(&natsserver.Options{
+		Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Start()
+	if !server.ReadyForConnections(10 * time.Second) {
+		t.Fatal("the server did not come up")
+	}
+	t.Cleanup(server.Shutdown)
+	b, err := Open(t.Context(), Options{URL: server.ClientURL()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	for _, pool := range []string{DefaultPool, "dmz"} {
+		if err := b.Consumer(t.Context(), pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return b
 }
 
 // One dispatch delivered to two machines is redeemed by one of them, and the other may report the

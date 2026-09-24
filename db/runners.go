@@ -231,12 +231,25 @@ func (w *Wide) Authenticate(ctx context.Context, credential string) (Runner, err
 	return r, nil
 }
 
+// HeartbeatInterval is how often a runner says it is there: "A runner posts one heartbeat every 10
+// seconds to the API".
+//
+// One constant, because two things read it and they must not disagree. The API tells a runner the
+// interval in the answer to every heartbeat, and Lost counts silence in it: a runner told one
+// interval and judged by another would be declared lost while it reported on time, or kept long
+// after it had gone.
+const HeartbeatInterval = 10 * time.Second
+
+// LostAfter is how long a task in flight may go unaccounted for before Lost moves it: "Three
+// missed intervals move a task to lost."
+const LostAfter = 3 * HeartbeatInterval
+
 // Beat records that a runner is there and says what it is holding.
 //
 // "A runner posts one heartbeat every 10 seconds to the API, listing the idempotency keys it
 // currently holds. One request covers every in-flight task on that host." What it writes is the
-// moment against every task it named, which is what a lost-task sweep compares against, and what
-// it answers is whether the runner should be draining.
+// moment against every task it named, which is what Lost compares against, and what it answers is
+// whether the runner should be draining.
 func (w *Wide) Beat(ctx context.Context, runner string, holding []agk.TaskID, at time.Time) (Runner, error) {
 	var r Runner
 	var reason *string
@@ -344,7 +357,8 @@ func orEmptyStrings(s []string) []string {
 	return s
 }
 
-// Lost moves the tasks of runners that stopped reporting.
+// Lost moves the tasks of runners that stopped reporting, as of now, and answers how many it
+// moved.
 //
 // "Three missed intervals move a task to lost, which is the state whose consequences Lifecycle and
 // replay describes." A task is lost rather than failed, and the distinction is the whole of why
@@ -352,15 +366,27 @@ func orEmptyStrings(s []string) []string {
 // charged to the infrastructure and is requeued only when the step is declared idempotent, since
 // it may well have completed without the result coming back."
 //
-// after is three heartbeat intervals. It is an argument rather than a constant because the
-// interval is what an installation configures and thirty seconds is only the default's default.
+// It is the controller's sweep and judges by the controller's clock, though not everything it
+// judges was stamped by that clock: the dispatch was, and the heartbeat and the redemption were
+// stamped by the API's. So it rests on the two agreeing, as a grant already does, whose expiry the
+// controller sets and the API judges. A heartbeat is at most one interval old when the next one
+// lands, so a controller less than two intervals ahead of the API still finds a runner reporting
+// on time, and one behind it declares a loss that much later. Judging by the database's clock
+// would not have removed the pairing, only added a third clock to it.
 //
-// Only a task some runner holds, which is one a runner has redeemed the grant of. A task nobody
-// has redeemed is a message waiting on the queue for a runner with room, and a busy pool or an
-// empty one keeps it waiting as long as it likes; it is not lost, because "lost: The runner
-// holding it stopped reporting" and nothing holds it. Declared lost, it would be requeued into the
-// queue it was already waiting on, one row and one message on every sweep for as long as the pool
-// stayed full, and a step that does not requeue would fail for having waited.
+// Only a task some runner holds, which is one a runner has redeemed the grant of. A task nobody has
+// redeemed is a message waiting on the queue for a runner with room, or one a runner took and has
+// not redeemed yet, and so has not acknowledged either, since a runner acknowledges only once it
+// has redeemed: should it die there, the bus hands the message to another runner of the pool once
+// AckWait has passed. Or it is a requeue that came back to the host which had already ended its
+// key, which nobody redeems: that host publishes the ending it recorded before it acknowledges the
+// message, so the ending is on the result stream by the time the message leaves the queue, and
+// binds the host's runner as it is written. Either way the task is the bus's until it is redeemed
+// or answered, and a busy pool or an empty one keeps it waiting as long as it likes; it is not
+// lost, because "lost: The runner holding it stopped reporting" and nothing holds it. Declared
+// lost, it would be requeued into the queue it was already waiting on, one row and one message on
+// every sweep for as long as the pool stayed full, and a step that does not requeue would fail for
+// having waited.
 //
 // Held is read as bound to a runner, and a task in flight is bound by a redemption and by nothing
 // else. A runner is also bound to a task it reports never reached a container, and that binding
@@ -371,51 +397,112 @@ func orEmptyStrings(s []string) []string {
 // its redemption where no heartbeat has named it yet, and the dispatch only where neither is
 // recorded. Not from the dispatch alone, which is when the message went on the queue: a task
 // redeemed after a long wait would be lost between its redemption and its first heartbeat, and
-// requeued while its container ran. A runner that took work and was never heard from again is
-// still exactly the case this is for, counted from when it took it. The redemption is the latest
-// of its grants', since a task may have been issued several and a runner redeems one: joined on
-// each, the one nobody redeemed would count the task from its dispatch.
+// requeued while its container ran. A runner that redeemed a task and was never heard from again,
+// one that died before it could acknowledge the message included, is still exactly the case this is
+// for, counted from its redemption. The redemption is the latest of its grants', since a task may
+// have been issued several and a runner redeems one: joined on each, the one nobody redeemed would
+// count the task from its dispatch.
+//
+// The runs are locked before their tasks, which is the order a decision takes them in:
+// SaveDecision updates the run and then writes each of its tasks. Taken the other way round, a
+// sweep holding a task and waiting on its run, while a decision held the run and reached the task,
+// would be a deadlock, and PostgreSQL would end one of the two. Neither is waited on where somebody
+// else holds it: a run being decided is passed over with its tasks, a task that a redemption, a
+// heartbeat or a runner's own loss holds is passed over alone, and each is judged again on the next
+// sweep. A sweep that waited would wait on whatever that was, and every run behind it with it.
+//
+// The tasks are locked by one statement and judged by the next. PostgreSQL rechecks a row that
+// changed before it could be locked against the row as it now stands and every other table as it
+// stood, so a redemption that committed in between would be judged with its binding and without its
+// grant, and counted from the dispatch. Judged once they are locked, a task redeemed before the
+// lock counts from its redemption, and a redemption after it waits and finds the task lost.
 //
 // What it writes is the dispatch's row and the run's wake, and nothing about a requeue. Whether
 // the task is handed out again is the evaluator's to say, and the controller hears of the loss
-// through Losses on the run's next pass.
-func (p *Pool) Lost(ctx context.Context, after time.Duration, batch int) (int, error) {
+// through Losses on the pass the wake brings round.
+func (w *Wide) Lost(ctx context.Context, now time.Time, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
 		return 0, err
 	}
-	var lost int
-	err = p.Installation(ctx, Heartbeat, func(ctx context.Context, w *Wide) error {
-		return w.tx.QueryRow(ctx, `
-			with gone as (
-			  update tasks set state = 'lost', finished_at = now()
-			  where (namespace, id) in (
-			    select t.namespace, t.id from tasks t
-			    cross join lateral (
-			      select max(g.redeemed_at) as at from task_grants g
-			      where g.namespace = t.namespace and g.task_id = t.id
-			    ) redeemed
-			    where t.state in ('dispatched', 'running', 'publishing')
-			      and t.runner is not null
-			      and coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
-			          < now() - ($1::bigint * interval '1 second')
-			    order by coalesce(greatest(t.last_heartbeat_at, redeemed.at), t.dispatched_at)
-			    limit $2
-			    for update of t skip locked
-			  )
-			  returning namespace, run_id
-			), woken as (
-			  update runs r set wake_at = now()
-			  from (select distinct namespace, run_id from gone) g
-			  where r.namespace = g.namespace and r.id = g.run_id
-			    and r.state in ('queued', 'running', 'waiting')
-			  returning 1
-			)
-			select (select count(*) from gone)::int`,
-			int64(after/time.Second), batch).Scan(&lost)
-	})
+	cutoff := now.Add(-LostAfter)
+
+	namespaces, runs, err := w.pairs(ctx, `
+		select r.namespace, r.id from runs r
+		where (r.namespace, r.id) in (
+		  select t.namespace, t.run_id from tasks t
+		  where `+held+` and `+heardFrom+` < $1
+		  order by `+heardFrom+`
+		  limit $2)
+		for update of r skip locked`, cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("db: the runs of the lost tasks could not be locked: %w", err)
+	}
+	if len(runs) == 0 {
+		return 0, nil
+	}
+
+	namespaces, ids, err := w.pairs(ctx, `
+		select t.namespace, t.id from tasks t
+		where (t.namespace, t.run_id) in (select * from unnest($1::text[], $2::text[]))
+		  and `+held+` and `+heardFrom+` < $3
+		order by `+heardFrom+`
+		limit $4
+		for update of t skip locked`, namespaces, runs, cutoff, batch)
 	if err != nil {
 		return 0, fmt.Errorf("db: the lost tasks could not be found: %w", err)
 	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	var lost int
+	if err := w.tx.QueryRow(ctx, `
+		with gone as (
+		  update tasks t set state = 'lost', finished_at = $3
+		  where (t.namespace, t.id) in (select * from unnest($1::text[], $2::text[]))
+		    and `+held+` and `+heardFrom+` < $4
+		  returning t.namespace, t.run_id
+		), woken as (
+		  update runs r set wake_at = $3
+		  from (select distinct namespace, run_id from gone) g
+		  where r.namespace = g.namespace and r.id = g.run_id
+		    and r.state in ('queued', 'running', 'waiting')
+		  returning 1
+		)
+		select (select count(*) from gone)::int`,
+		namespaces, ids, now, cutoff).Scan(&lost); err != nil {
+		return 0, fmt.Errorf("db: the lost tasks could not be moved: %w", err)
+	}
 	return lost, nil
+}
+
+// held is a task in flight that a runner is bound to, which is the only kind Lost moves.
+const held = `t.state in ('dispatched', 'running', 'publishing') and t.runner is not null`
+
+// heardFrom is the last moment the runner holding a task said anything of it, which is what Lost
+// counts from: its last heartbeat, or its latest redemption where none has named it yet, and the
+// dispatch only where neither is recorded.
+const heardFrom = `coalesce(greatest(t.last_heartbeat_at,
+	(select max(g.redeemed_at) from task_grants g
+	 where g.namespace = t.namespace and g.task_id = t.id)),
+	t.dispatched_at)`
+
+// pairs reads a query answering a namespace and an identifier per row, as the two arrays the next
+// statement takes them back as.
+func (w *Wide) pairs(ctx context.Context, query string, args ...any) ([]string, []string, error) {
+	rows, err := w.tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var namespaces, ids []string
+	for rows.Next() {
+		var namespace, id string
+		if err := rows.Scan(&namespace, &id); err != nil {
+			return nil, nil, err
+		}
+		namespaces, ids = append(namespaces, namespace), append(ids, id)
+	}
+	return namespaces, ids, rows.Err()
 }

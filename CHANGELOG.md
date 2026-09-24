@@ -35,6 +35,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Cancelling a run writes every task of it not yet over as `cancelled`, in the pass that ends the run. A message still on the queue then redeems nothing and starts no container, and the run gives back its share of `max_concurrent_tasks` at once. A lost dispatch keeps its loss.
 - Cancelling a run also stops every task whose row a runner has redeemed. A task published by a pass that died before recording the dispatch reads pending in the document, and was left running to its deadline.
 - A requeue that comes back to the host which already ended its key is answered with that ending, reported under the requeue's `task_id`. Where nobody has redeemed the requeue, the controller takes it from a runner that redeemed an earlier dispatch of the key and binds that runner as the ending is written, so the run no longer waits for its timeout.
+- The sweep declares lost every task whose runner has said nothing of it for three heartbeat intervals, then decides the runs it woke on the same pass. Nothing ran that check before, so a silent runner's tasks were never lost.
+- The sweep locks a run before its tasks, as a decision does, and passes over a run or a task somebody else holds rather than wait on it, so it never deadlocks with a decision.
+- A loss a runner reports locks its run before its task, as a decision does, and waits for a decision on the run rather than deadlocking with it.
+- A sweep that cannot look for lost tasks reports why, through `Controller.Trouble` with no run, and still decides the runs that are due.
 
 ### State
 
@@ -44,6 +48,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
 - `tasks` keeps one row per dispatch of a key, numbered by `requeue`, and at most one of them that is not `lost`.
 - `Wide.RedeemedBefore` says whether a runner redeemed an earlier dispatch of a key, and `Wide.BindUnreached` is now `Wide.BindUnredeemed`, since it also binds a requeue answered from a host's record.
+- `Pool.Lost` is now `Wide.Lost`, which the controller calls through its fence with its own clock. `db.HeartbeatInterval` is the interval the API tells a runner, and `db.LostAfter` is three of them. A test holds both to the documented figures.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
@@ -73,6 +78,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner acknowledges a task on take, once it is written down on the host, and a host that dies mid-task is left to the heartbeat. `Taken.Done` is now `Taken.Held`, and `Taken.Working` is gone.
 - `Taken.Held` takes a context and answers once the server confirms the acknowledgement, not once the client has buffered it. A runner starts nothing for a task whose `Held` failed.
 - `Bus.Ended` answers a task whose key the host already ended: it acknowledges the message and reports the recorded ending under the message's `task_id`. An ending of another key is not sent.
+- A runner redeems a task's grant before it acknowledges the message, and pulls only after, where it acknowledged on take. A host that dies before redeeming leaves the message to another runner once `bus.AckWait` has passed, and one that dies after leaves a bound task the heartbeat's sweep declares lost. Nothing sweeps a task nobody redeemed. Secret values are read before the pull.
+- `Taken.Refused` acknowledges a task whose redemption was refused, another runner's or one that is over, and starts nothing.
+- A runner no longer holds back a task it redeemed because `Taken.Held` failed: every other runner is refused the message that comes round again.
+- `bus.AckWait` is a minute, sized for a take and a redemption rather than a task.
+- `Bus.Ended` publishes the recorded ending before it acknowledges the message, so a requeue whose report did not go out stays on the queue. Acknowledged first, it left the queue bound to nobody, out of any sweep's reach.
+- A redemption that failed without refusing the task, the runner's own credential refused or the API failing on its side, is not acknowledged, and the message comes round after `bus.AckWait`.
+- A test holds `bus.AckWait` to the documented minute.
 
 ### Driver
 
@@ -80,6 +92,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery reads a container its deadline stopped as `timed_out`, and gives one that was created and never started its envelope on standard input.
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
+- `Docker.Hold` also holds the task in memory, so a stop that lands between the redemption and `Run` is kept and its container is never started. `Docker.Release` lets go of a key the runner will not run.
+- A secret the source cannot give fails saying the value comes from the redemption, made before the pull, rather than at the last moment.
 - A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
 - The record of a key's ending keeps what it left by reference and never a payload: each port's envelope by digest and count, each artifact by digest and size, the log's address and length.
 - Each port's envelope is written to the store before the ending is recorded, and the terminal `driver.Event` names it in `Outputs` by the digest the store answered, through `artifact.Store.PutEnvelope`. An envelope the store refuses ends the key `failed`, naming nothing, charged to the platform.
@@ -107,7 +121,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A presigned URL names one method, one object, one run and an expiry. A presigned write is hashed as it arrives and refused if the bytes do not match their digest. With the built-in store, the API serves the objects, at `/objects/{key...}` beside `/api/v1` so the two route sets can share one router.
 - An installation with no secret provider holds nothing, and a task naming a secret fails saying which one.
 - A redemption tells the runner whether a secret it names is not held or held and unreadable, and hands the store's reason to `RunnerOptions.Trouble` for whoever runs the installation.
-- A redemption binds its task only once it has an answer to give. A secret the store cannot give, or an input envelope it cannot read, is refused and binds nothing, as a missing tree already did: the refused runner's report that no container ran ends the dispatch, and only a second delivery could redeem it. A runner that dies before that report leaves the task to the run's `timeout` until dispatches nobody redeemed are swept, where the heartbeat found it lost before. The values are read last, once nothing else can refuse, and in no transaction.
+- A redemption binds its task only once it has an answer to give. A secret the store cannot give, or an input envelope it cannot read, is refused and binds nothing, as a missing tree already did: the refused runner's report that no container ran ends the dispatch, and only a second delivery could redeem it. A runner that dies before that report has not acknowledged the message, so the next runner of the pool is handed it, where the heartbeat found it lost before. The values are read last, once nothing else can refuse, and in no transaction.
 - A test has runners redeem one task at once, all of them past the check before any is bound, and holds that one is given the task and the rest are refused with no value.
 - A version keeps its tree: each file is stored content-addressed, and the version holds a manifest (`path`, `sha256`, `size`, `mode`) with a counted reference to each object, so the collector never takes a file a version names.
 - Redeeming a grant also answers the tree of the task's version, one presigned GET per object, in the `grantRedemption` shape of `wire.schema.json`. The controller names the version in the grant; the runner never speaks git.

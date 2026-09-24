@@ -41,9 +41,10 @@ type Config struct {
 	// value shared by every task of it.
 	Runs func(ctx context.Context, run agk.RunID) (agk.Run, error)
 
-	// Secrets is where a value is redeemed at the last moment. A server runner
-	// redeems the per-task grant the controller issued; agk run --local reads the
-	// command line.
+	// Secrets is where a value comes from when the container is prepared. A server
+	// runner answers from its redemption of the per-task grant the controller issued,
+	// which it made before the pull, since it redeems before it acknowledges the task
+	// message; agk run --local reads the command line.
 	Secrets Secrets
 
 	// Logs is where a task's log is written. A nil Logs is a runner that keeps

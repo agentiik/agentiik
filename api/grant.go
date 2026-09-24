@@ -34,9 +34,11 @@ import (
 //
 // Somewhere to write is the one part the runner could not be told by name, because the key of an
 // output is the digest of bytes that do not exist until the container has exited. So it is told at
-// the first redemption, beside everything else, as one policy for the task's namespace: a task has
-// no reason to redeem a second time, and its secrets are read once rather than again at the end to
-// ask where its outputs go.
+// the first redemption, beside everything else, as one policy for the task's namespace, and a task
+// never comes back at the end to ask where its outputs go, which would read its secrets a second
+// time for nothing. The holder may still redeem again, when a message it redeemed comes round
+// because its acknowledgement never arrived, and it is answered as the first time was, with fresh
+// URLs.
 
 // Secrets is where a secret value comes from.
 //
@@ -147,14 +149,16 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 		return
 	}
 
-	// Then the answer, the secret values last: "the runner obtains the value at the last
-	// moment", and the last moment is once everything else the task is given is ready, so
-	// that a redemption refused for anything else never reads one. They are read outside any
-	// transaction. A store reads a declaration, and the built-in one its value, on connections
-	// of its own, and does not always answer from this database at all: a transaction held
-	// open around the read would hold the task's row for as long as the store takes, and hold
-	// a connection while waiting for another, which enough redemptions at once turn into
-	// every connection held and none to be had.
+	// Then the answer, the secret values last: "the runner obtains the value at the last moment",
+	// and the last moment is once everything else the task is given is ready, so that a redemption
+	// refused for anything else never reads one. It comes before the image is pulled, though,
+	// which is a cost accepted with the order a runner takes a task in: it redeems before it
+	// acknowledges the message, so that the redemption decides who runs the task, and pulls only
+	// after. They are read outside any transaction. A store reads a declaration, and the built-in
+	// one its value, on connections of its own, and does not always answer from this database at
+	// all: a transaction held open around the read would hold the task's row for as long as the
+	// store takes, and hold a connection while waiting for another, which enough redemptions at
+	// once turn into every connection held and none to be had.
 	answer, err := s.whatTheGrantIsFor(r.Context(), got, tree)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
@@ -162,15 +166,16 @@ func (s *RunnerAPI) redeem(w http.ResponseWriter, r *http.Request, runner Runner
 	}
 
 	// And the task is bound once there is an answer to give. A redemption that cannot answer
-	// refuses and binds nothing, as a missing tree always did: a runner told there is no tree,
-	// or no secret, has not taken a task it cannot run. It reports that no container ran, and
-	// that report binds it and ends the dispatch (db.Wide.BindUnreached). No other runner is
-	// handed the task, which was acknowledged on take, unless the bus delivered it twice. So a
-	// runner that dies between the refusal and its report leaves a dispatch nobody redeemed,
-	// which db.Pool.Lost does not look at: the sweep of dispatches nobody redeemed ends it, and
-	// until that is built the run's own timeout does. Bound here, the heartbeat would have found
-	// it lost instead. Redeem checks again under the row's lock, so a task another runner bound
-	// in between is refused here and the values read for it go nowhere.
+	// refuses and binds nothing, as a missing tree always did: a runner told there is no tree, or
+	// no secret, has not taken a task it cannot run. It reports that no container ran, which ends
+	// the dispatch and binds it in one write (db.Wide.BindUnredeemed), and acknowledges the
+	// message only once the report is published (bus.Taken.Refused). So a runner that dies between
+	// the refusal and its report has acknowledged nothing, and the next runner of the pool is
+	// handed the message once the consumer's AckWait has passed, to be refused the same way, or to
+	// find the dispatch over. Bound here, a runner that died there would have left a task bound to
+	// it and run by nobody, for the heartbeat's sweep to find lost. Redeem checks again under the
+	// row's lock, so a task another runner bound in between is refused here and the values read
+	// for it go nowhere.
 	err = s.pool.Installation(r.Context(), db.Redemption, func(ctx context.Context, wide *db.Wide) error {
 		bound, err := wide.Redeem(ctx, ask.Grant, ask.IdempotencyKey, runner.ID, s.now())
 		if err != nil {
@@ -198,8 +203,12 @@ func refuseRedemption(w http.ResponseWriter, err error) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "that grant cannot be redeemed")
 	case errors.Is(err, db.ErrTaskHeld):
-		// Not a refusal of the credential: the grant was real and the task is somebody
-		// else's or already over. A runner that gets this stops rather than retrying.
+		// Not a refusal of the credential: the grant was real and the task is another runner's, or
+		// over, a lost dispatch among them. A runner that gets this acknowledges the message and
+		// starts nothing (bus.Taken.Refused): the holder answers for the task, the heartbeat's
+		// sweep for a holder gone quiet, and a lost task's requeue goes out as a message of its
+		// own. Asking again gets the same answer, and a message put back goes to the next runner
+		// of the pool to be refused in its turn.
 		fail(w, http.StatusConflict, "that task is not this runner's to work on")
 	case errors.Is(err, errNoCommit):
 		// This and the two below are the installation's rather than the runner's: the

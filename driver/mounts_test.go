@@ -265,7 +265,7 @@ func TestAStepWithNoParametersGetsAnEmptyObject(t *testing.T) {
 }
 
 // "A secret is mounted on tmpfs at /agk/secrets/<name>, never injected as an environment
-// variable", and the value is obtained "at the last moment".
+// variable", and the value is asked of the secret source as the container is prepared.
 func TestASecretIsMountedWhereTheManifestAsksForIt(t *testing.T) {
 	task := graph.Task{
 		Step:    "invoice",

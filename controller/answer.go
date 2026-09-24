@@ -115,24 +115,24 @@ var ErrNotTheHolder = errors.New("controller: a result from a runner that does n
 // decided, and so is a loss of a dispatch nobody redeemed, since a runner cannot lose what it
 // never held, and so is one saying a container ran for such a dispatch, but in the one case below.
 //
-// One saying no container ran is another matter. A runner pulls the image before it redeems the
-// grant, so "a refused pull or a grant that would not redeem" ends a dispatch nobody is bound to,
-// and a runner reports it all the same, having acknowledged the message on take and left nothing
-// on the queue to deliver it again. The first runner to report such an ending is bound to the
-// dispatch as a redemption would have bound it, in the transaction that writes the ending, and
-// the answer is taken from it and from no other.
+// One saying no container ran is another matter. Of "a refused pull or a grant that would not
+// redeem", the second ends a dispatch nobody is bound to: a runner redeems before it pulls, so a
+// refused pull is reported by the runner the redemption bound, but a refused redemption binds
+// nobody, and the runner reports it all the same, and acknowledges the message only then. The first
+// runner to report such an ending is bound to the dispatch as a redemption would have bound it, in
+// the transaction that writes the ending, and the answer is taken from it and from no other.
 //
 // The one case is a requeue that came back to the host which had already ended its key. The
 // heartbeat declares a task lost when its host stops reporting, and a host only cut off may have
 // run it to its end and reported that ending into the same silence. The requeue is likeliest to
 // come back to that host, and certain to where it is its pool's only runner, and the host refuses
-// to run the key again, acknowledges the message, and reports the ending it recorded under the
-// requeue's task_id. Nobody redeems the requeue, so nobody else will ever answer it, and the run
-// would wait on it until its own timeout, or for ever where it has none. So an ending of a dispatch
-// nobody holds is also taken from a runner that redeemed an earlier dispatch of the same key, and
-// binds it the same way. Its reach is still the tasks in its hands: it was given that key, and a
-// machine that never was is refused as before. An ending that is not news writes nothing and binds
-// nobody.
+// to run the key again, reports the ending it recorded under the requeue's task_id, and
+// acknowledges the message once that is published. Nobody redeems the requeue, so nobody else will
+// ever answer it, and the run would wait on it until its own timeout, or for ever where it has
+// none. So an ending of a dispatch nobody holds is also taken from a runner that redeemed an
+// earlier dispatch of the same key, and binds it the same way. Its reach is still the tasks in its
+// hands: it was given that key, and a machine that never was is refused as before. An ending that
+// is not news writes nothing and binds nobody.
 func (co *Core) Answer(ctx context.Context, a Answer) error {
 	run, step, _, shard, err := agk.ParseTaskID(string(a.Result.Task))
 	if err != nil {

@@ -19,7 +19,7 @@
 // argument and stays exactly as the evaluator hands it out: Inputs is already the
 // argument brick.WriteInputs takes, Outputs is already the declared argument brick.Collect
 // takes, Params goes to /agk/params.json unexamined, Secrets is names and mount points
-// whose values are redeemed through Config.Secrets at the last moment, and Script,
+// whose values are asked of Config.Secrets as the container is prepared, and Script,
 // BeforeScript, AfterScript and Shell become the container's command. Everything a
 // container needs that a Task deliberately does not carry arrives at construction
 // instead: the socket, the store, the repository tree, the secret source, the log sink,
@@ -137,10 +137,13 @@
 // its end ends its key even when what it left cannot be collected, an output that is
 // not an envelope or a store that refused an artifact or an envelope: the brick ran,
 // and the key is written down failed. Hold writes a key down on take, which is what a
-// runner does before it acknowledges the task message, and refuses one that has ended
-// with a *Completed holding the recorded Ending, which the runner reports under the
-// task_id of the message it took: that is how the requeue of a task declared lost is
-// answered by the host that had already ended it.
+// runner does before it redeems the task's grant and acknowledges its message, and refuses
+// one that has ended with a *Completed holding the recorded Ending, before any grant is
+// redeemed for it, which the runner reports under the task_id of the message it took: that
+// is how the requeue of a task declared lost is answered by the host that had already ended
+// it. A key Hold wrote down is held in the in-flight registry from then on, as Run holds the
+// task it runs, so that a stop sent once the redemption has bound the task, and before Run
+// has begun, is kept for Run to find; Release lets go of a key the runner will not run.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this

@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +38,23 @@ steps:
       orders: ${{ workflow.inputs.orders }}
     outputs: [ok, rejected]
 `
+
+// silence lets more than three heartbeat intervals pass with nothing heard, and sweeps, as the
+// controller does on its interval: what went unaccounted for is declared lost, and the runs that
+// woke are decided.
+func (co *Core) silence(t *testing.T) {
+	t.Helper()
+	clock.advance(db.LostAfter + time.Second)
+	if err := co.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bounded gives a workflow a root timeout of an hour, which is a clock its run waits on: a sweep
+// inside the hour finds the run only where something woke it.
+func bounded(workflow string) string {
+	return strings.Replace(workflow, "\ninputs:", "\ntimeout: 1h\ninputs:", 1)
+}
 
 // redeem binds a dispatch to a runner, which is what the runner's first call does and what the
 // heartbeat and a runner's own loss are read against.
@@ -82,16 +101,9 @@ func TestALostTaskIsRequeuedUnderTheSameKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// runner-1 goes quiet. The task was dispatched on the test's clock, which is days behind
-	// the database's, so three missed intervals have long passed. The wake the heartbeat
-	// leaves is on the database's clock too, so the run is decided here as a sweep would
-	// decide it once its own clock got there.
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	// runner-1 goes quiet for three intervals, and the sweep declares the task lost and
+	// decides the run it woke.
+	core.silence(t)
 
 	again := q.dispatched()
 	if len(again) != 1 {
@@ -225,12 +237,7 @@ func TestALossReportedAfterTheHeartbeatDeclaredItMovesNothing(t *testing.T) {
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 {
 		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
@@ -277,12 +284,7 @@ func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 {
 		t.Fatalf("after the loss the controller dispatched %d tasks", len(again))
@@ -334,10 +336,11 @@ func TestAnEndingOfALostDispatchChangesNothing(t *testing.T) {
 
 }
 
-// "lost: The runner holding it stopped reporting." A task no runner has taken is waiting on the
-// queue, however long a busy pool keeps it there, and the heartbeat declares nothing about it: a
-// step that does not requeue is not failed for the wait, and one that does is not sent out again
-// into the queue its task is already waiting on.
+// "lost: The runner holding it stopped reporting." A task no runner has redeemed is waiting on the
+// queue, or on a runner that took it and has not acknowledged it, which the bus hands on should
+// that runner die, and the sweep declares nothing about it however long a busy pool keeps it
+// there: a step that does not requeue is not failed for the wait, and one that does is not sent
+// out again into the queue its task is already waiting on.
 func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 	for _, c := range []struct{ name, workflow string }{
 		{"no retry policy", theWorkflow},
@@ -354,14 +357,8 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 				t.Fatalf("the first pass dispatched %d tasks", len(first))
 			}
 
-			// Dispatched on the test's clock, days behind the database's, and taken by
-			// nobody since.
-			if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 0 {
-				t.Fatalf("the heartbeat declared %d tasks lost that no runner had taken, answering %v", n, err)
-			}
-			if err := core.Decide(t.Context(), decidedRun); err != nil {
-				t.Fatal(err)
-			}
+			// Taken by nobody for three intervals and more.
+			core.silence(t)
 			if got := stateOf(t, core); got != agk.Running {
 				t.Errorf("a run whose one task is waiting on the queue is %s", got)
 			}
@@ -373,6 +370,110 @@ func TestATaskNoRunnerHasTakenIsNeverLost(t *testing.T) {
 				t.Errorf("the key holds %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// The sweep that declares a loss decides the run the loss woke, on the same pass. Both runs wait on
+// a root timeout an hour off, so a sweep inside the hour decides one only where something woke it:
+// declared after the runs were chosen, or without a wake, the loss would wait for the next sweep
+// that found the run due, which here is its deadline. A step that requeues sends the task out again
+// under its key; one that does not fails for it.
+func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
+	for _, c := range []struct {
+		name, workflow string
+		run            agk.RunState
+		dispatches     []string
+	}{
+		{"no retry policy", bounded(theWorkflow), agk.Failed, []string{"0 lost runner-1"}},
+		{"retry on lost", bounded(requeueingWorkflow), agk.Running, []string{"0 lost runner-1", "1 dispatched -"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, c.workflow)
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			first := q.dispatched()
+			if len(first) != 1 {
+				t.Fatalf("the first pass dispatched %d tasks", len(first))
+			}
+			if err := core.redeem(t, first[0], "runner-1"); err != nil {
+				t.Fatal(err)
+			}
+
+			core.silence(t)
+			conn := dbtest.Superuser(t, super)
+			if got := dispatchesOf(t, conn, first[0].Task.ID); !slices.Equal(got, c.dispatches) {
+				t.Errorf("after the sweep the key holds %q, want %q", got, c.dispatches)
+			}
+			if got := stateOf(t, core); got != c.run {
+				t.Errorf("after the sweep the run is %s, want %s", got, c.run)
+			}
+			again := q.dispatched()
+			switch {
+			case c.run == agk.Failed && len(again) != 0:
+				t.Errorf("a step that does not requeue sent its task out again as %+v", again)
+			case c.run == agk.Running && (len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row):
+				t.Errorf("the requeue went out as %+v, want %s again under a new task_id", again, first[0].Task.ID)
+			}
+		})
+	}
+}
+
+// A sweep that cannot look for lost tasks still decides the runs that are due, and says why it could
+// not. The losses wait for the next sweep, and the runs have nothing to do with them: a sweep that
+// stopped there would leave every run of the installation waiting on the one statement.
+func TestASweepThatCannotLookForLossesStillDecides(t *testing.T) {
+	core, q, pool, super := decidingOn(t, theWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	if err := core.redeem(t, first[0], "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing may be moved to lost, so looking for losses fails whole.
+	conn := dbtest.Superuser(t, super)
+	for _, stmt := range []string{
+		`create function refuse_loss() returns trigger language plpgsql as $$
+		 begin raise exception 'no loss may be written here'; end $$`,
+		`create trigger refuse_loss before update on tasks for each row
+		 when (new.state = 'lost') execute function refuse_loss()`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A second run, created while the runner holding the first one's task went quiet.
+	const later agk.RunID = "01M2Z8V1P9C4XQ7K2N4D6F8H0D"
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: later, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice",
+			Inputs: json.RawMessage(`{"orders": []}`),
+			Steps:  []agk.Step{"normalize", "archive"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var trouble []error
+	core.controller.Trouble = func(_ agk.RunID, err error) { trouble = append(trouble, err) }
+	clock.advance(db.LostAfter + time.Second)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatalf("a sweep that could not look for losses answered %v", err)
+	}
+	if len(trouble) != 1 {
+		t.Errorf("a sweep that could not look for losses reported %v", trouble)
+	}
+	if sent := q.taken(); len(sent) != 1 || sent[0].Run != later {
+		t.Errorf("the sweep published %+v, want the first task of run %s", sent, later)
 	}
 }
 
@@ -393,12 +494,7 @@ func lostAndRequeued(t *testing.T) (*Core, *fakeQueue, *pgx.Conn, Dispatch, Disp
 	if err := core.redeem(t, first[0], "runner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || n != 1 {
-		t.Fatalf("the heartbeat declared %d tasks lost, answering %v", n, err)
-	}
-	if err := core.Decide(t.Context(), decidedRun); err != nil {
-		t.Fatal(err)
-	}
+	core.silence(t)
 	again := q.dispatched()
 	if len(again) != 1 || again[0].Task.ID != first[0].Task.ID || again[0].Row == first[0].Row {
 		t.Fatalf("after the loss the controller dispatched %+v, want %s again under a new task_id", again, first[0].Task.ID)

@@ -89,8 +89,9 @@ type Redeemed struct {
 // ErrTaskHeld is a task another runner is already working on.
 //
 // Separate from ErrNoGrant because the caller is an authenticated runner rather than somebody
-// guessing: it presented a valid grant for a real task, and what it needs to know is that the
-// work is somebody else's and it should stop rather than retry.
+// guessing: it presented a valid grant for a real task, and what it needs to know is that the work
+// is somebody else's, or over, and that it acknowledges the message and starts nothing rather than
+// retrying or putting the message back for the next runner to be refused in its turn.
 var ErrTaskHeld = errors.New("db: that task is held by another runner")
 
 // IssueGrant mints the grant for one task and records what it takes to check it.
@@ -138,10 +139,11 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 // credential that says how it failed is a credential that helps somebody find the next one.
 //
 // Binding the task here is what makes at-least-once delivery safe on the way in. A message may be
-// delivered twice and to two machines; the second one to redeem is told the work is somebody
-// else's rather than starting a container for it. The binding is never released, because a task
-// whose runner was lost is moved to lost and requeued as a new row under the same key, with a
-// grant of its own.
+// delivered twice and to two machines; the second one to redeem is told the work is somebody else's
+// rather than starting a container for it. A runner redeems before it acknowledges the message, so
+// this, and not the bus, is what decides whose a task is: the bus decides only who is handed it.
+// The binding is never released, because a task whose runner was lost is moved to lost and requeued
+// as a new row under the same key, with a grant of its own.
 //
 // A key may therefore have several rows, one per dispatch, and the rule is about the key: "the
 // runner refuses to start a container for a key that has already completed". The row is what is

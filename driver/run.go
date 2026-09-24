@@ -60,11 +60,13 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		d.floor.announceSecrets(d.cfg.Policy, t.Step, d.say)
 	}
 
-	// The task is held from here, before anything is pulled or created, so that a stop
-	// arriving while it is being prepared lands on something. That window is the image
-	// pull and it is minutes wide on a cold registry; a stop answered nil inside it
-	// would leave the container to be created afterwards and to run to its deadline.
-	done, ok := d.register(t.ID, &held{})
+	// The task is held from here at the latest, before anything is pulled or created, so
+	// that a stop arriving while it is being prepared lands on something. That window is
+	// the image pull and it is minutes wide on a cold registry; a stop answered nil inside
+	// it would leave the container to be created afterwards and to run to its deadline. A
+	// runner holds it from earlier still, from Hold, and a stop that landed since is taken
+	// over here with the task.
+	done, ok := d.register(t.ID)
 	if !ok {
 		return graph.Result{}, fault(t.Step, ErrTaskInFlight, ChargePlatform, "task %s", t.ID)
 	}

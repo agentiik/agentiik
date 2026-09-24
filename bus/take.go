@@ -35,53 +35,101 @@ func ResultSubject(runner string) string { return resultPrefix + runner }
 
 const resultPrefix = "agentiik.results."
 
-// Taken is one task message a runner pulled, and the two things it can say about it afterwards.
+// Taken is one task message a runner pulled, and what it can say about it afterwards.
 //
-// It says them at once. A runner either writes the task down and holds it, or puts it back, and
-// the package documentation says why the first is said on take rather than when the container is
-// over: from then on the task is the host's to answer for, through its heartbeat, and nothing is
-// left to tell the bus while the container runs.
+// It says one thing, and soon. A runner writes the key down and redeems the grant, and then says
+// Held where the task is now its own, or Refused where the redemption refused it the task. It says
+// Again where it cannot take the task at all, which is only ever before the redemption, and Ended
+// where its host had already carried the key to an ending, which writing the key down finds before
+// anything is redeemed. Where the redemption failed without saying whose the task is, it says
+// nothing, and the message comes round once AckWait has passed. The package documentation says why
+// the acknowledgement follows the redemption and never the container: from the redemption on, the
+// task is bound to one runner and is that runner's to answer for, through its heartbeat, and
+// nothing is left to tell the bus while the container runs.
 type Taken struct {
 	Task TaskMessage
 
 	msg jetstream.Msg
 }
 
-// Held says the task is written down on this host, and takes it off the queue.
+// Held says the task is this runner's, and takes it off the queue.
 //
-// Under WorkQueue retention acknowledging is what removes a message from the stream: "a message
-// is removed as soon as it has been consumed". So it is said after the key is recorded under the
-// work root, driver.Docker.Hold, and never before. The other order leaves a moment in which the
-// task is off the queue and on no host's record, and a runner that died in it would leave the
-// task for the heartbeat's sweep to find lost, where one that dies before acknowledging has it
-// handed to the next runner of the pool a minute later.
+// It is said once the grant is redeemed, which is what binds the task to this runner, and before
+// the image is pulled or anything is created. Under WorkQueue retention acknowledging is what
+// removes a message from the stream: "a message is removed as soon as it has been consumed". Said
+// before the redemption, it would leave a moment in which the task was off the queue and bound to
+// nobody, and a runner that died in that moment would leave a task nothing hands out again and no
+// sweep finds, since a task nobody redeemed is one db.Wide.Lost reads as still waiting on the
+// queue. Said after it, a runner that dies before redeeming has its task handed to the next runner
+// of the pool once AckWait has passed, and one that dies after redeeming is bound and silent, which
+// is what the heartbeat's sweep declares lost.
 //
-// It answers once the server says the acknowledgement arrived, and not once it has left this
-// side. The client keeps what it sends while its link is down and answers nil for it, and a
-// server that never received the acknowledgement hands the task to another runner of the pool
-// when the consumer's AckWait runs out. So a runner starts nothing for a task whose Held did not
-// answer nil, and does not name it in its heartbeat. The key stays recorded as taken and not
-// ended. Where the acknowledgement was lost, the bus delivers the task again and it runs once.
-// Where only the confirmation was, nothing comes next: the server has taken the message off the
-// queue, and the heartbeat does not find the task either, because nobody redeemed it and a task
-// nobody redeemed is one db.Pool.Lost reads as waiting on the queue. It stays dispatched until the
-// run's own timeout ends it, and a run with none waits for ever. That is not run twice, and a step
-// that is not idempotent is not run at all, which is the side to err on, but it is a task left
-// hanging; nothing can find it until the database records who took a message as well as who
-// redeemed it. A ctx with no deadline waits as long as JetStream's own default.
+// It answers once the server says the acknowledgement arrived, and not once it has left this side:
+// the client keeps what it sends while its link is down and answers nil for it. What it answers
+// does not decide whether the task runs, though, because the redemption decided that. A message
+// whose acknowledgement never arrived comes round again once AckWait has passed. Any other runner
+// that takes it is refused it at the redemption, the task being bound to this one, and says Refused
+// and starts nothing. This runner finds the key ended on its host as it writes it down again,
+// driver.Completed, and answers with Ended before redeeming anything, or redeems it again as its
+// holder and finds it in flight there, driver.ErrTaskInFlight. So a runner goes on with a task
+// whose Held answered an error, and says so. A ctx with no deadline waits as long as JetStream's
+// own default.
 func (t Taken) Held(ctx context.Context) error {
 	if t.msg == nil {
 		return errors.New("bus: acknowledging a task that came from nowhere")
 	}
 	if err := t.msg.DoubleAck(ctx); err != nil {
-		return fmt.Errorf("bus: task %s: the server did not confirm the acknowledgement, so the task is not held and nothing is to be started for it: %w", t.Task.IdempotencyKey, err)
+		return fmt.Errorf("bus: task %s: the server did not confirm the acknowledgement, so the message may come round again, to be refused at the redemption by every runner but this one: %w", t.Task.IdempotencyKey, err)
 	}
 	return nil
 }
 
-// Again puts it back for somebody else, which is what a runner says when it took a task it
-// cannot run: its labels changed, it is draining, it has no room after all, or the task could
-// not be written down. Not a task whose key this host has already ended, which Ended answers.
+// Refused takes off the queue a task whose redemption refused this runner, and nothing is started
+// for it.
+//
+// A redemption refuses a runner the task where another runner holds it or where it is over, a lost
+// dispatch among them, which is a 409, and neither is this runner's to answer for: the holder
+// answers for its task through its heartbeat, the heartbeat's sweep for a holder that went quiet,
+// and the requeue of a lost task goes out as a message of its own. Put back, the message would go
+// to the next runner of the pool to be refused in its turn, for as long as the stream kept it, and
+// left alone it would come round again every AckWait. So it is acknowledged, and nothing more is
+// said of it.
+//
+// A redemption refused because the installation has nothing to give the task, no tree or a secret
+// it does not hold, is the one where the runner speaks first. It reports that no container ran,
+// which is what ends the dispatch and binds the runner to it, and says Refused once the report is
+// published. The other order would leave a runner that died between the two with a task taken off
+// the queue and ended by nobody, where this one hands the message to the next runner of the pool,
+// to be refused the same way, or to find the dispatch over.
+//
+// Nothing else is a refusal. A redemption that got no answer, or an answer about the runner rather
+// than the task, its own credential refused or the API failing on its side, has said nothing of
+// whose the task is, and acknowledging it would take off the queue a task nobody holds and no sweep
+// finds. The runner says nothing, and the message comes round once AckWait has passed: left, it
+// costs a redemption, where acknowledged it would cost the task. Which answer is which is not
+// always in the status alone, since a 401 answers a grant that opens nothing and a runner
+// credential that opens nothing alike, and a 500 an installation that will never have the task's
+// tree and one that could not read it this time.
+//
+// A runner that says Refused, or says nothing, lets go of the key it held, which is
+// driver.Docker.Release.
+func (t Taken) Refused(ctx context.Context) error {
+	if t.msg == nil {
+		return errors.New("bus: acknowledging a task that came from nowhere")
+	}
+	if err := t.msg.DoubleAck(ctx); err != nil {
+		return fmt.Errorf("bus: task %s: the server did not confirm the acknowledgement, so the message may come round again, to be refused again: %w", t.Task.IdempotencyKey, err)
+	}
+	return nil
+}
+
+// Again puts it back for somebody else, which is what a runner says when it took a task it cannot
+// run: its labels changed, it is draining, it has no room after all, or the task could not be
+// written down. Only before the redemption: once redeemed, the task is bound to this runner, and a
+// message put back would go round runners that are each refused it while the task waited on a
+// runner that had given it up, until the heartbeat's sweep declared it lost. Not a task whose key
+// this host has already ended, which Ended answers. A runner that held the key lets go of it, which
+// is driver.Docker.Release.
 func (t Taken) Again() error {
 	if t.msg == nil {
 		return errors.New("bus: returning a task that came from nowhere")
@@ -96,28 +144,48 @@ func (t Taken) Again() error {
 // host ran it to its end and reported into the same silence, and the requeue is likeliest to come
 // back to it, and certain to where it is its pool's only runner. The host's record refuses to run
 // the key again, which is driver.Completed, and putting the message back would hand it to a runner
-// of the pool with no record of the key, which would run it. So it is acknowledged, as every take
-// is, and the ending the record holds is reported under the task_id this message carries. The
-// controller takes it from the runner that redeemed the dispatch the host ended, as the requeue's
-// answer, and the brick never runs twice. It reads the envelopes back by the digests the ending
-// names, and the store holds them: the host wrote each there before it wrote the ending down.
+// of the pool with no record of the key, which would run it. So it is answered, and without a
+// redemption: the record answers it, and redeeming would bind this runner to the requeue and read
+// its secret values for a brick that is not going to run. The ending the record holds is reported
+// under the task_id this message carries, and the controller takes it from the runner that redeemed
+// the dispatch the host ended, as the requeue's answer, binding that runner to the requeue as it
+// writes the ending. The brick never runs twice. The controller reads the envelopes back by the
+// digests the ending names, and the store holds them: the host wrote each there before it wrote the
+// ending down.
+//
+// The ending is published first, and the message acknowledged only once it is, for the reason Held
+// follows the redemption: the bus lets go of a task only once something else answers for it, and
+// nothing binds a requeue answered from the record until the controller writes that ending.
+// Acknowledged first, a host that died before its report went out would leave the requeue off the
+// queue and bound to nobody, out of reach of the heartbeat's sweep, for the run to wait on until
+// its timeout. Published first, the ending is on the result stream, which keeps it until the
+// controller has recorded it, before the message leaves the queue. A host that dies between the
+// two, or whose report did not go out, leaves the message to come round once AckWait has passed. On
+// this host the record answers it again, which the result stream drops as the copy it is or the
+// controller reads as no news. On a host with no record of the key it is refused at the redemption,
+// once the controller has written the ending this reports. A controller that has not written it by
+// then lets that host redeem the requeue and run the key, which only a requeue can bring about and
+// so only for an idempotent step, and the ending this reports is then refused as another runner's
+// word on the requeue.
 //
 // The ending is the record's and only the dispatch is this message's, so an ending of another key
-// is refused before anything is said: a result under a task_id is about that task_id's key, and
-// the two travel as separate fields. It is reported whether or not the acknowledgement was
-// confirmed. Nothing is started either way, and a message the bus hands out again is refused and
-// answered again, which the result stream drops as the copy it is, or the controller reads as no
-// news.
+// is refused before anything is said: a result under a task_id is about that task_id's key, and the
+// two travel as separate fields.
 func (b *Bus) Ended(ctx context.Context, t Taken, ending TaskResult) error {
+	if t.msg == nil {
+		return errors.New("bus: answering a task that came from nowhere")
+	}
 	if ending.IdempotencyKey != t.Task.IdempotencyKey {
 		return fmt.Errorf("bus: task %s is %s, and the ending of %s is no answer to it", t.Task.TaskID, t.Task.IdempotencyKey, ending.IdempotencyKey)
 	}
 	ending.TaskID = t.Task.TaskID
-	held := t.Held(ctx)
 	if err := b.Report(ctx, ending); err != nil {
-		return errors.Join(held, err)
+		return fmt.Errorf("%w, so task %s is left on the queue, to be answered again once AckWait has passed", err, t.Task.TaskID)
 	}
-	return held
+	if err := t.msg.DoubleAck(ctx); err != nil {
+		return fmt.Errorf("bus: task %s: its ending was reported and the server did not confirm the acknowledgement, so the message may come round again, to be answered again from the record: %w", t.Task.IdempotencyKey, err)
+	}
+	return nil
 }
 
 // Take pulls up to batch tasks for one pool, waiting up to wait for them.
@@ -177,9 +245,9 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 //
 // Called by the runner when the container is over and everything it produced is uploaded, which
 // is why the task state it carries is terminal. The task message it answers was acknowledged
-// long before, on take, so a result that could not be published is the runner's to publish
-// again and not the bus's to recover by redelivering the task: redelivery would run the brick a
-// second time to recover an answer that already exists.
+// long before, once its grant was redeemed, so a result that could not be published is the
+// runner's to publish again and not the bus's to recover by redelivering the task: every runner
+// but this one is refused the task at its redemption, so a redelivery would recover nothing.
 //
 // A result the controller would refuse is refused here rather than on the queue, where the one
 // thing left to do with it is take it off and say so. One naming no dispatch is among them: a

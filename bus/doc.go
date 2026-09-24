@@ -62,30 +62,49 @@
 //
 // # When a runner acknowledges
 //
-// On take, once the task is written down on the host, and not when the work is over. The runner
-// records the key under its work root, which is driver.Docker.Hold, and then acknowledges, before
-// it pulls, redeems or creates anything. From the moment the server confirms the acknowledgement,
-// which is when Taken.Held answers nil, the task is the host's to answer for and no longer the
-// bus's to redeliver: "Liveness therefore lives in the database beside the task state, rather
-// than as traffic on a work queue that exists to distribute work." A host that dies holding a
-// task stops heartbeating, the task becomes lost, and an idempotent step is requeued under the
-// same key. Holding is redeeming, though, since only a task a runner has redeemed can be lost: a
-// host that dies between the acknowledgement and the redemption, pulling the image for instance,
-// leaves a task nothing hands out again and the heartbeat never finds, which only the run's own
-// timeout ends.
+// Once it has redeemed the task's grant, and neither on take nor when the work is over. A runner
+// takes the message, writes the key down under its work root, which is driver.Docker.Hold, redeems
+// the grant, which binds the task to it, and acknowledges, which is Taken.Held; only then does it
+// pull the image and start anything. The redemption is what decides who runs a task. A message
+// delivered twice, or to two machines, is redeemed by one of them, and the other is told the task
+// is not its own, acknowledges the message and starts nothing, which is Taken.Refused. The
+// acknowledgement follows so that the bus lets go of a task only once something else answers for
+// it, which here is the database saying whose it is: "Liveness therefore lives in the database
+// beside the task state, rather than as traffic on a work queue that exists to distribute work." A
+// redemption the installation has nothing to answer with is reported as a task no container ran
+// before it is acknowledged, as Taken.Refused says. One that failed for any other reason, with no
+// answer or with one about the runner rather than the task, says nothing of whose the task is, and
+// the message is left to come round.
 //
-// Acknowledging at the end would have made the ack wait the longest a step may run. A runner
-// that died would then hold its work for that long before anybody else could take it, and a
-// runner that lived would have to keep telling the bus so for as long as its container ran, which
-// is a second liveness channel beside the heartbeat and one that says less.
+// So a host that dies leaves its task to exactly one thing, whichever side of the redemption it
+// died on. Before it, the host never acknowledged, and the bus hands the message to another runner
+// of the pool once the consumer's AckWait has passed. After it, the task is bound to a runner that
+// has gone quiet, the heartbeat's sweep declares it lost three intervals on, as it would a task
+// whose container was running, and an idempotent step is requeued under the same key; the message,
+// never acknowledged, comes round and is refused. Nothing sweeps a task nobody redeemed, since it
+// is on the queue, on a host that has not acknowledged it, or answered by an ending already on the
+// result stream, as below, and so a task waiting on the queue of a full pool, or behind a slow
+// pull, is never declared lost for the wait. What this costs, and it is accepted, is that the
+// secret values are read at the redemption, before the image is pulled, rather than just before the
+// container starts.
 //
-// What is left to redelivery is a task whose acknowledgement the server never confirmed, which
-// comes round again once the pool consumer's AckWait has passed, and the requeue of a lost task.
-// A confirmation is the only thing that tells a runner the bus will not hand the task to anybody
-// else, so a runner starts nothing without one, and the first of the two never runs a key beside
-// itself. Both can hand a host a key it has already run, and the host's record is what refuses
-// one it has already carried to an ending, and what answers it: the runner acknowledges the
-// message and reports the ending the record holds under the message's task_id, which is
-// Bus.Ended. The requeue of a lost task is waiting on that answer, and without it the run would
-// wait for its own timeout.
+// Acknowledging at the end would have made the ack wait the longest a step may run. A runner that
+// died would then hold its work for that long before anybody else could take it, and a runner that
+// lived would have to keep telling the bus so for as long as its container ran, which is a second
+// liveness channel beside the heartbeat and one that says less. AckWait bounds a take and a
+// redemption instead, and says why it is a minute.
+//
+// What is left to redelivery is a message nobody acknowledged, and the requeue of a lost task,
+// which is a message of its own. A message nobody acknowledged is redeemed by whichever runner
+// takes it where nobody had redeemed it, and refused to every runner but the holder where somebody
+// had; the holder, redeeming again, finds the key in flight on its host. So a confirmed
+// acknowledgement is not what a runner waits for before it starts: the redemption already said
+// nobody else will run the task. The requeue can come back to the host that ran the key, and so can
+// a message whose holder's acknowledgement never arrived, and the host's record is what refuses a
+// key it has already carried to an ending, when the key is written down and before any redemption,
+// and what answers it: the runner reports the ending the record holds under the message's task_id
+// and acknowledges the message once the report is published, which is Bus.Ended. Nothing redeems
+// that message, so the ending on the result stream is what answers for it when the bus lets go. The
+// requeue of a lost task is waiting on that answer, and without it the run would wait for its own
+// timeout.
 package bus

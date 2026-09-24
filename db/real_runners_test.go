@@ -174,6 +174,18 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 	}
 }
 
+// "A runner posts one heartbeat every 10 seconds to the API", and "three missed intervals move a
+// task to lost". The tests that follow count in these two constants, so this one holds them to the
+// figures the page gives.
+func TestAHeartbeatIsTenSecondsAndThreeMissedAreALoss(t *testing.T) {
+	if HeartbeatInterval != 10*time.Second {
+		t.Errorf("a runner is told to report every %s, and the page says every 10 seconds", HeartbeatInterval)
+	}
+	if LostAfter != 3*HeartbeatInterval {
+		t.Errorf("a task is lost after %s of silence, and the page says three intervals of %s", LostAfter, HeartbeatInterval)
+	}
+}
+
 // "Three missed intervals move a task to lost", and a lost task is not a failed one: one is
 // charged to the infrastructure and the other to the brick.
 func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
@@ -231,7 +243,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 	}
 
 	// Nothing is lost yet.
-	if lost, err := pool.Lost(t.Context(), 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a runner that just reported lost %d tasks, %v", lost, err)
 	}
 
@@ -244,7 +256,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 		 where step = 'render'`); err != nil {
 		t.Fatal(err)
 	}
-	lost, err := pool.Lost(t.Context(), 30*time.Second, 0)
+	lost, err := declaredLost(t, pool, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +346,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lost, err := pool.Lost(t.Context(), 30*time.Second, 0)
+	lost, err := declaredLost(t, pool, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +396,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a task on the queue and a task taken a moment ago were lost %d times, %v", lost, err)
 	}
 
@@ -397,7 +409,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 0 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 0 {
 		t.Fatalf("a task taken a moment ago and issued a grant since was lost %d times, %v", lost, err)
 	}
 
@@ -406,7 +418,7 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 		`update task_grants set redeemed_at = now() - interval '5 minutes' where task_id = $1`, taken); err != nil {
 		t.Fatal(err)
 	}
-	if lost, err := pool.Lost(ctx, 30*time.Second, 0); err != nil || lost != 1 {
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 1 {
 		t.Fatalf("a runner silent since it took its task lost %d tasks, %v", lost, err)
 	}
 	var states []string
@@ -423,6 +435,170 @@ func TestOnlyATaskARunnerHoldsIsLost(t *testing.T) {
 	if len(states) != 2 || states[0] != want[0] || states[1] != want[1] {
 		t.Errorf("the tasks read %q, want %q", states, want)
 	}
+}
+
+// A decision takes its run's row and then writes each of that run's tasks. A sweep that took a
+// task and then waited on its run would be the other half of a deadlock, and PostgreSQL would end
+// one of the two, so the sweep takes the run first and passes over one a decision holds: it moves
+// nothing of that run, the decision goes through, and the next sweep finds the loss.
+func TestASweepPassesOverARunADecisionHolds(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	// A task its runner redeemed five minutes ago and has said nothing of since, which is ten
+	// times the bound.
+	const row = "01M2HNAAAAAAAAAAAAAAAAAAAA"
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state, runner, dispatched_at)
+		values ('finance', $1, $2, 'render', 1, 'running', 'runner-dmz-02', now() - interval '5 minutes')`,
+		row, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A decision on the run holds its row, as SaveDecision does before it writes the tasks.
+	deciding, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deciding.Close(ctx)
+	decision, err := deciding.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decision.Rollback(context.WithoutCancel(ctx))
+	if _, err := decision.Exec(ctx,
+		`update runs set seq = seq where namespace = 'finance' and id = $1`, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	type sweep struct {
+		lost int
+		err  error
+	}
+	swept := make(chan sweep, 1)
+	go func() {
+		lost, err := declaredLost(t, pool, time.Now().UTC())
+		swept <- sweep{lost, err}
+	}()
+
+	// The sweep is given a moment to reach the run, and the decision then writes the task.
+	var first *sweep
+	select {
+	case s := <-swept:
+		first = &s
+	case <-time.After(time.Second):
+	}
+	if _, err := decision.Exec(ctx,
+		`update tasks set log_lines = 0 where namespace = 'finance' and id = $1`, row); err != nil {
+		t.Errorf("a decision writing its task beside a sweep answered %v", err)
+	}
+	if err := decision.Commit(ctx); err != nil {
+		t.Errorf("a decision beside a sweep could not commit: %v", err)
+	}
+	if first == nil {
+		select {
+		case s := <-swept:
+			first = &s
+		case <-time.After(10 * time.Second):
+			t.Fatal("the sweep never came back")
+		}
+	}
+	if first.err != nil || first.lost != 0 {
+		t.Errorf("a sweep beside a decision on the run moved %d tasks, answering %v", first.lost, first.err)
+	}
+
+	// The decision is over, and the next sweep finds the task it passed over.
+	if lost, err := declaredLost(t, pool, time.Now().UTC()); err != nil || lost != 1 {
+		t.Errorf("the sweep after the decision moved %d tasks, answering %v", lost, err)
+	}
+}
+
+// A loss a runner reports takes the run's row before the task's, as a decision does, so one
+// reported while its run is being decided waits for the decision rather than holding the task the
+// decision is about to write.
+func TestALossReportedWhileItsRunIsDecidedWaitsForTheDecision(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	const row = "01M2HRAAAAAAAAAAAAAAAAAAAA"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state, runner, dispatched_at, published_at)
+		values ('finance', $1, $2, 'render', 1, 'running', 'runner-1', now(), now())`,
+		row, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	deciding, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deciding.Close(ctx)
+	decision, err := deciding.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decision.Rollback(context.WithoutCancel(ctx))
+	if _, err := decision.Exec(ctx,
+		`update runs set seq = seq where namespace = 'finance' and id = $1`, string(financeRun)); err != nil {
+		t.Fatal(err)
+	}
+
+	type loss struct {
+		moved bool
+		err   error
+	}
+	reported := make(chan loss, 1)
+	go func() {
+		var moved bool
+		err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+			var err error
+			moved, err = w.Lose(ctx, "finance", key, row, "runner-1", time.Now().UTC())
+			return err
+		})
+		reported <- loss{moved, err}
+	}()
+
+	// The loss is given a moment to reach the run, and the decision then writes the task.
+	time.Sleep(time.Second)
+	if _, err := decision.Exec(ctx,
+		`update tasks set log_lines = 0 where namespace = 'finance' and id = $1`, row); err != nil {
+		t.Errorf("a decision writing its task beside a reported loss answered %v", err)
+	}
+	if err := decision.Commit(ctx); err != nil {
+		t.Errorf("a decision beside a reported loss could not commit: %v", err)
+	}
+	select {
+	case l := <-reported:
+		if l.err != nil || !l.moved {
+			t.Errorf("a loss reported beside a decision moved %v, answering %v", l.moved, l.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reported loss never came back")
+	}
+}
+
+// declaredLost is the controller's sweep for silence as of now, on the door the controller's fence
+// opens.
+func declaredLost(t *testing.T, pool *Pool, now time.Time) (int, error) {
+	t.Helper()
+	var lost int
+	err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		var err error
+		lost, err = w.Lost(ctx, now, 0)
+		return err
+	})
+	return lost, err
 }
 
 // A revoked credential stops being accepted, which is what "revoking it from the console stops the

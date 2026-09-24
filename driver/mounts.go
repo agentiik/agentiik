@@ -52,14 +52,14 @@ const (
 	TmpDir = "/tmp"
 )
 
-// Secrets is where a value comes from at the last moment.
+// Secrets is where a value comes from when the container is prepared.
 //
 // It is one method because the driver asks one question: what is this secret worth, now,
-// for this task. A server runner answers it "by redeeming at the API the per-task grant
-// the controller issued for that one task and that one secret", and agk run --local
-// answers it off the command line. Neither is this package's business, which is why the
-// source arrives at construction and not in a Task: a Task "carries no secret value at
-// all".
+// for this task. A server runner answers it from what it was given "by redeeming at the
+// API the per-task grant the controller issued for that one task and that one secret",
+// which it did before it pulled the image, and agk run --local answers it off the command
+// line. Neither is this package's business, which is why the source arrives at
+// construction and not in a Task: a Task "carries no secret value at all".
 type Secrets interface {
 	Value(ctx context.Context, name string) ([]byte, error)
 }
@@ -296,10 +296,12 @@ func inside(repo, rel string) (string, error) {
 	return clean, nil
 }
 
-// writeSecrets redeems the values and lays them down where the manifest asked for them.
+// writeSecrets asks for the values and lays them down where the manifest asked for them.
 //
-// The value is obtained "at the last moment", here, and never travels on the task
-// message: what a Task carries is "names and mount points and never values". Each one
+// The value is asked of Config.Secrets here, and never travels on the task message: what
+// a Task carries is "names and mount points and never values". A server runner answers
+// from the task's redemption, which it made before the pull, since it redeems before it
+// acknowledges the task message, and agk run --local from the command line. Each one
 // becomes a file of its own, bound read-only at its mount point, so a brick opens a path
 // and the value is never in an environment "readable by its children" and in "diagnostic
 // dumps".
@@ -341,7 +343,7 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 
 		value, err := secrets.Value(ctx, s.Name)
 		if err != nil {
-			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s could not be redeemed at the last moment, as the per-task grant is", s.Name)
+			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s has no value to give the task: a runner has it from the redemption of the per-task grant, made before the image was pulled, and agk run --local from the command line", s.Name)
 		}
 		// The file is named by the mount point and not by the secret's own name.
 		// The manifest chooses where a value is read from, and two secrets of

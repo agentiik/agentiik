@@ -286,8 +286,10 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 	}
 
 	// "The heartbeat is also how a revoked credential takes effect and how the console knows
-	// a runner is present: there is no separate liveness channel to keep in sync."
-	answer := map[string]any{"interval_seconds": 10}
+	// a runner is present: there is no separate liveness channel to keep in sync." The
+	// interval is the one the controller's sweep counts silence in, and read from the same
+	// constant, so that a runner is never told one and judged by another.
+	answer := map[string]any{"interval_seconds": int(db.HeartbeatInterval / time.Second)}
 	if state.State == "draining" {
 		answer["drain"] = true
 		if state.DrainReason != "" {

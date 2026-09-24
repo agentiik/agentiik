@@ -200,12 +200,37 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 // Close releases the connection.
 func (b *Bus) Close() { b.conn.Close() }
 
+// AckWait is how long a pool's consumer waits for a runner to acknowledge a task it was handed,
+// before handing it to another runner of the pool.
+//
+// It bounds a take and a redemption, and not a task. A runner writes the key down, redeems the
+// grant and acknowledges, and pulls the image and starts the container only after that, so what the
+// wait has to hold is one write to the host's disk and one round trip to the API, which reads the
+// task's input envelopes and secret values from their stores before it answers. A minute is many
+// times that, so that a redemption slowed by a loaded API or a slow store is not handed to a second
+// runner halfway through, and short enough that a task whose runner died before redeeming it waits
+// no longer than that for the next one.
+//
+// A wait that proved too short runs nothing twice. The message goes to a second runner as well, the
+// two redemptions bind the task once, and the runner refused it acknowledges the message and starts
+// nothing: what it costs is a redemption. A wait too long costs a task whose runner died before
+// redeeming it that much more time on the queue. Nothing depends on how it compares with
+// db.LostAfter either: a message whose runner died after redeeming it is refused to the next runner
+// whether the heartbeat's sweep has declared the task lost yet or the silent runner still holds it.
+const AckWait = time.Minute
+
 // Consumer makes sure the one durable consumer a pool's runners share is there.
 //
 // The control plane creates it because a runner's credential cannot, and that is the point: a
 // machine able to create a consumer is a machine able to create one with no filter and take every
 // pool's work.
 func (b *Bus) Consumer(ctx context.Context, pool string) error {
+	return b.consumer(ctx, pool, AckWait)
+}
+
+// consumer is Consumer with the wait said, which is how a test sees what follows the wait without
+// waiting AckWait for it.
+func (b *Bus) consumer(ctx context.Context, pool string, wait time.Duration) error {
 	if err := validPool(pool); err != nil {
 		return fmt.Errorf("bus: %w", err)
 	}
@@ -214,16 +239,16 @@ func (b *Bus) Consumer(ctx context.Context, pool string) error {
 		Description:   "Every runner of the " + pool + " pool, sharing one queue.",
 		FilterSubject: Subject(pool),
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		// A runner acknowledges on take, once it has written the task down, and not
-		// when the container finishes: the package documentation says why. So this
-		// bounds the seconds between a message being handed over and being recorded,
-		// and a task that runs for an hour is not redelivered halfway through it. What
-		// notices a host that died after that is the heartbeat, and what it produces
-		// is lost rather than a second delivery.
-		AckWait: time.Minute,
-		// Without limit, because a message comes round again only when a runner took
-		// it and never wrote it down, or put it back, and neither is a reason to give
-		// up on the task.
+		// A runner acknowledges once it has redeemed the grant, before it pulls or starts
+		// anything, and not when the container finishes: the package documentation says
+		// why. So this bounds a take and a redemption, AckWait says how, and a task that
+		// runs for an hour is not redelivered halfway through it. What notices a host that
+		// died after the redemption is the heartbeat, and what it produces is lost rather
+		// than a second delivery.
+		AckWait: wait,
+		// Without limit, because a message comes round again only when a runner took it and
+		// never redeemed it, redeemed it and never got its acknowledgement through, or put
+		// it back, and none of them is a reason to give up on the task.
 		MaxDeliver:    -1,
 		MaxAckPending: -1,
 	})
