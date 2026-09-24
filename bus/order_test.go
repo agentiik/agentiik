@@ -17,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/bus/control"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
@@ -148,7 +149,7 @@ func dispatched(t *testing.T) taking {
 		runners[i].bus = connected
 	}
 
-	// The grant, and the message that carries it.
+	// The grant, and the message that carries it, published as the controller publishes one.
 	var granted db.Granted
 	if err := pool.Installation(ctx, db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		var err error
@@ -159,7 +160,7 @@ func dispatched(t *testing.T) taking {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Publish(ctx, controller.Dispatch{
+	if err := control.New(b).Publish(ctx, controller.Dispatch{
 		Task: graph.Task{
 			ID: key, Run: run, Namespace: "finance", Workflow: "monthly-invoicing", Commit: commit,
 			Step: "render", Attempt: 1,

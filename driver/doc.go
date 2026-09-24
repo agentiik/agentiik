@@ -19,13 +19,24 @@
 // argument and stays exactly as the evaluator hands it out: Inputs is already the
 // argument brick.WriteInputs takes, Outputs is already the declared argument brick.Collect
 // takes, Params goes to /agk/params.json unexamined, Secrets is names and mount points
-// whose values are asked of Config.Secrets as the container is prepared, and Script,
-// BeforeScript, AfterScript and Shell become the container's command. Everything a
+// whose values are asked of the task's secret source as the container is prepared, and
+// Script, BeforeScript, AfterScript and Shell become the container's command. Everything a
 // container needs that a Task deliberately does not carry arrives at construction
 // instead: the socket, the store, the repository tree, the secret source, the log sink,
 // the policy and the work root. That is why the interface needs no widening. A wider Run
 // would be the evaluator learning about grants, trees and sockets, which is the thing
 // graph/driver.go exists to prevent.
+//
+// Three of those are one task's where a server runs it, because a runner has them from
+// the redemption of that task's grant: the store, opened on its presigned URLs and its
+// upload policy, its secret values, and the tree laid out from the files it names. A
+// runner holding two redemptions at once cannot answer through hooks asked by namespace
+// or by name, so it gives each task its own as Sources, through WithSources, on the
+// context that task's Run is called with. Each one given there answers in place of the
+// Config hook of the same name, for that task and for the adoption of its container, and
+// agk run --local, which redeems nothing, gives none. The context carries them because it
+// is scoped to exactly one Run, as a redemption is to one task, and neither the Task nor
+// the interface has to learn what a grant is.
 //
 // A graph.Result means a container ran and the exit code table read its code. An error
 // means no outcome could be determined at all, which is a daemon that could not be
@@ -208,6 +219,12 @@
 // is whole before the match runs; a value split across lines is not, which is what the
 // documentation already says of it.
 //
+// An adopted container is masked with the values the first delivery wrote for it, read
+// back from the task's secrets directory before that is removed, beside the ones the
+// adopting delivery redeemed. The documentation names a secret rotated between the two
+// redemptions as a limit of masking, and the value the container holds is on the host all
+// along; only a host that lost it, a tmpfs a restart cleared, is still left with the limit.
+//
 // /agk/out is a bind mount from the task's working directory and not a tmpfs. A tmpfs is
 // unmounted when the container stops, so an output written to one is gone before anything
 // can collect it, and collecting before exit is not sound because a brick writes until
@@ -250,6 +267,7 @@
 //
 //	driver.go     Docker, New, Run, Stop, Close, the in-flight registry
 //	config.go     Config and what a Task deliberately does not carry
+//	sources.go    what a runner gives one task in place of Config: its store, its secrets, its tree
 //	policy.go     Policy, DefaultPolicy, LoadPolicy, the userns floor as an enum
 //	daemon.go     negotiate the API version, check the floor, announce a lifted one
 //	image.go      resolve and pull by digest, read and cache the manifest, refuse root

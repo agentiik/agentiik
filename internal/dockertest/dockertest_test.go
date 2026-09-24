@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -973,7 +974,7 @@ func TestARouteATestReplacedWinsOverTheDaemonsOwn(t *testing.T) {
 func TestSocketAnswersWhereARealDaemonIs(t *testing.T) {
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine, which is what CI looks like")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	if socket == "" {
 		t.Fatal("a daemon was found at no path")
@@ -990,5 +991,45 @@ func TestSocketAnswersWhereARealDaemonIs(t *testing.T) {
 	}
 	if _, err := c.Info(t.Context()); err != nil {
 		t.Errorf("info: %v", err)
+	}
+}
+
+// ending is a dockertest.T that writes down how a test was ended instead of ending it.
+type ending struct {
+	skipped, failed string
+}
+
+func (e *ending) Helper() {}
+
+func (e *ending) Skipf(format string, args ...any) { e.skipped = fmt.Sprintf(format, args...) }
+
+func (e *ending) Fatalf(format string, args ...any) { e.failed = fmt.Sprintf(format, args...) }
+
+func TestAMissingDaemonIsASkipUntilTheSuiteIsToldItMustBeThere(t *testing.T) {
+	const why = "alpine:3.21 is not on this machine: docker pull alpine:3.21"
+	for _, tc := range []struct {
+		value string
+		fails bool
+	}{
+		{value: "", fails: false},
+		{value: "0", fails: false},
+		{value: "1", fails: true},
+	} {
+		t.Setenv(dockertest.RequireDocker, tc.value)
+		var e ending
+		dockertest.Unavailable(&e, "%s is not on this machine: docker pull %s", "alpine:3.21", "alpine:3.21")
+
+		switch {
+		case tc.fails && e.skipped != "":
+			t.Errorf("%s=%q: the test skipped (%q), and the suite was told a daemon must be there", dockertest.RequireDocker, tc.value, e.skipped)
+		case tc.fails && !strings.Contains(e.failed, why):
+			t.Errorf("%s=%q: the failure reads %q, and it has to say what was missing", dockertest.RequireDocker, tc.value, e.failed)
+		case tc.fails && !strings.Contains(e.failed, dockertest.RequireDocker):
+			t.Errorf("%s=%q: the failure reads %q, and it has to name what made it one", dockertest.RequireDocker, tc.value, e.failed)
+		case !tc.fails && e.failed != "":
+			t.Errorf("%s=%q: the test failed (%q), and a machine with nothing installed skips", dockertest.RequireDocker, tc.value, e.failed)
+		case !tc.fails && e.skipped != why:
+			t.Errorf("%s=%q: the skip reads %q, want %q", dockertest.RequireDocker, tc.value, e.skipped, why)
+		}
 	}
 }
