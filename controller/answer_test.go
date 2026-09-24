@@ -668,6 +668,21 @@ func TestAStoppedTasksExitCodeIsRecordedAndRead(t *testing.T) {
 	if got := codes(t, pool)[string(first[0].Task.ID)]; got != "timed_out 137" {
 		t.Errorf("an attempt killed after the grace at its deadline reads %q", got)
 	}
+	// And an attempt reported with no code, moved past by the retry after it, reads none.
+	clock.advance(2 * time.Minute)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := q.dispatched()
+	if len(second) != 1 || second[0].Task.Attempt != 2 {
+		t.Fatalf("the retry dispatched %+v", second)
+	}
+	quiet := stopped(second[0].Task, 0, core.now())
+	quiet.NoExitCode = true
+	core.answer(t, quiet)
+	if got := codes(t, pool)[string(second[0].Task.ID)]; got != "timed_out none" {
+		t.Errorf("an attempt stopped at its deadline and reported with no code reads %q", got)
+	}
 
 	// Ending the step: nothing retries it, and the row keeps the code all the same.
 	core, q, pool, _ = deciding(t)
@@ -768,5 +783,64 @@ func TestTheCodeOfAContainerARunsEndingStoppedIsRecorded(t *testing.T) {
 	}
 	if got[obeyed.Task.ID] != "cancelled 143" || got[silent.Task.ID] != "cancelled none" {
 		t.Errorf("the stopped tasks read %v: the one that obeyed exited 143, reported once and then again as 137, and the other reported no code", got)
+	}
+}
+
+// A container that exited on its own as its run was cancelled is reported failed, to a run that
+// has ended: the row keeps the ending the cancellation wrote and takes the code it exited with. A
+// dispatch that was lost before the run ended keeps its loss and takes no code, whatever its runner
+// says of it afterwards.
+func TestARunsEndingKeepsItsStateAndTakesTheCodeAContainerExitedWith(t *testing.T) {
+	core, q, pool, super := decidingOn(t, bothAtOnceWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 2 {
+		t.Fatalf("the first pass published %d tasks", len(sent))
+	}
+	for _, d := range sent {
+		if err := core.redeem(t, d, theRunner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exited, lost := sent[0], sent[1]
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(), `update tasks set state = 'lost' where id = $1`, lost.Row); err != nil {
+		t.Fatal(err)
+	}
+	askedToCancel(t, pool, core, decidedRun)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Fatalf("a run somebody asked to cancel is %s after a sweep", got)
+	}
+
+	at := core.now()
+	for _, a := range []Answer{
+		{Result: graph.Result{Task: exited.Task.ID, State: agk.TaskFailed, ExitCode: 1, StartedAt: at, FinishedAt: at}, Row: exited.Row, Runner: theRunner},
+		{Result: graph.Result{Task: lost.Task.ID, State: agk.TaskCancelled, ExitCode: 143, StartedAt: at, FinishedAt: at}, Row: lost.Row, Runner: theRunner},
+	} {
+		if err := core.Answer(t.Context(), a); err != nil {
+			t.Errorf("the report of %s after its run ended answered %s", a.Result.Task, err)
+		}
+	}
+	for _, c := range []struct {
+		row, want string
+	}{{exited.Row, "cancelled 1"}, {lost.Row, "lost none"}} {
+		var state string
+		var code *int
+		if err := conn.QueryRow(t.Context(), `select state, exit_code from tasks where id = $1`, c.row).Scan(&state, &code); err != nil {
+			t.Fatal(err)
+		}
+		got := state + " none"
+		if code != nil {
+			got = state + " " + strconv.Itoa(*code)
+		}
+		if got != c.want {
+			t.Errorf("dispatch %s reads %q, want %q", c.row, got, c.want)
+		}
 	}
 }

@@ -204,7 +204,9 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		// wrong, which a cancelled run and a run that timed out both produce. What it still
 		// says is how the container the run's ending stopped exited, which the row it ended
 		// carries no code for: "a timed_out or cancelled task carries an exit code wherever a
-		// container ran".
+		// container ran". That includes a container that exited on its own as the run
+		// ended, whose runner reports it failed or succeeded: the row keeps the ending the
+		// run wrote, and takes the code.
 		return co.stopCode(ctx, e.Namespace, a, bind)
 	}
 	if a.Result.State == agk.TaskLost {
@@ -351,13 +353,15 @@ func unreached(a Answer) bool {
 }
 
 // stopCode writes onto the row of a dispatch a run's ending stopped the exit code its container
-// stopped with, where the answer is a stop from the runner bound to it and reports one.
+// exited with, where the answer comes from the runner bound to it and reports one.
 //
 // A runner bound by this very answer is not one: an ending that never reached a container has no
 // code, and a host answering from its record answers a requeue, not a container the run stopped.
+// Nor is a loss, which reports no outcome. Which row takes the code is Wide.StopCode's to say: one
+// the run's ending stopped, and only once.
 func (co *Core) stopCode(ctx context.Context, namespace string, a Answer, bind bool) error {
 	r := a.Result
-	if bind || (r.State != agk.TaskCancelled && r.State != agk.TaskTimedOut) || r.StartedAt.IsZero() || r.NoExitCode {
+	if bind || r.State == agk.TaskLost || r.StartedAt.IsZero() || r.NoExitCode {
 		return nil
 	}
 	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {

@@ -932,7 +932,7 @@ func (w *Wide) TimeOutTasks(ctx context.Context, namespace string, run agk.RunID
 }
 
 // StopCode writes onto one dispatch that a run's ending stopped the exit code its container
-// stopped with, as its runner reported it, and answers whether a row took it.
+// exited with, as its runner reported it, and answers whether a row took it.
 //
 // CancelTasks and TimeOutTasks end a run's tasks in the pass that ends the run, before any
 // container has exited, so the rows they end carry no code; the runner's report comes later, to a
