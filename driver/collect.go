@@ -1,9 +1,11 @@
 package driver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"mime"
@@ -96,12 +98,26 @@ type collected struct {
 // artifact is uploaded and referenced by whatever holds the store, and the standard
 // output shorthand belongs here too, since only the caller that started the container
 // captured the stream.
+//
+// Nothing is written until every envelope has been held to inline_max_bytes,
+// envelope_max_bytes and max_items, which the size rules ask of a runner before its first
+// upload. The rules are measured on the document that will be published, whose files[]
+// entries are the ones the store will answer, so the collection is assembled against a
+// store that answers each write and keeps it back, and the writes are made only once every
+// port has passed. A refused envelope leaves the store as it found it: an artifact written
+// for an envelope that is never published is bytes nothing addresses.
+//
+// An error charged to nobody is the brick's, and conclude charges it so. A write the store
+// then refuses, or a store that cannot be reached, is a *Fault charged to the platform,
+// since the brick did what it was asked.
 func collect(ctx context.Context, s *artifact.Store, c collection) (collected, error) {
+	// Both are this side's, and a brick charged for either would fail for a runner that
+	// was not given what it needed.
 	if s == nil {
-		return collected{}, errors.New("driver: no artifact store: what a container leaves under " + brick.OutFilesDir + " is uploaded to one")
+		return collected{}, fault(c.Task.Step, nil, ChargePlatform, "no artifact store: what a container leaves under %s is uploaded to one", brick.OutFilesDir)
 	}
 	if c.Dir == "" {
-		return collected{}, errors.New("driver: no working directory to collect the outputs from")
+		return collected{}, fault(c.Task.Step, nil, ChargePlatform, "no working directory to collect the outputs from")
 	}
 
 	m := c.meta()
@@ -110,17 +126,18 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 		return collected{}, err
 	}
 
-	// Here and not lower down, because everything below this line writes: a value over
-	// inline_max_bytes is spilled to the object store by Spill, so a secret masked after
-	// the spill would already be in the store as bytes, and an envelope is validated and
-	// published straight after. This is the last moment at which what a brick wrote is
-	// still only in memory. The shorthand is masked where it is assembled, a few lines
+	// Here and not lower down, because everything below this line is on its way to the
+	// store: a value over inline_max_bytes is spilled to an artifact, so a secret masked
+	// after the spill would reach the store as bytes, and an envelope is published once it
+	// has been validated. This is the last moment at which what a brick wrote is still
+	// only what it wrote. The shorthand is masked where it is assembled, a few lines
 	// below, and every other payload is masked here.
 	for port, e := range out {
 		e.Items = maskItems(c.Mask, e.Items)
 		out[port] = e
 	}
 
+	w := &withheld{store: s}
 	files := filepath.Join(c.Dir, filesDir)
 	// One upload per port and name, because two items of one envelope attaching the
 	// same file is ordinary, a fan-in of a shared document being the usual case, and
@@ -131,7 +148,7 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 	// brick.Collect already takes of its own directory.
 	for _, port := range slices.Sorted(maps.Keys(out)) {
 		e := out[port]
-		if err := c.attach(ctx, s, files, &e, uploaded); err != nil {
+		if err := c.attach(ctx, w, files, &e, uploaded); err != nil {
 			return collected{}, err
 		}
 		out[port] = e
@@ -143,7 +160,7 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 	// nothing references is bytes no envelope addresses, and putting those in the
 	// store would fill it with artifacts nothing can ask for.
 	if _, declared := out[shorthandPort]; declared && isScript(c.Task) && c.Code == 0 && wroteNoItem(out) {
-		loose, err := c.publish(ctx, s, files)
+		loose, err := c.publish(ctx, w, files)
 		if err != nil {
 			return collected{}, err
 		}
@@ -155,18 +172,22 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 		// standard output and a field a brick left inline are both values this side
 		// assembled, and the engine never publishes an envelope its own rule would
 		// reject.
-		e, err := brick.Spill(ctx, s, out[port], c.Limits)
+		e, err := brick.Spill(ctx, w, out[port], c.Limits)
 		if err != nil {
 			return collected{}, err
 		}
 		// Validated after the spill and not before it, because what travels is what
 		// this side assembled rather than what the container wrote: the file entries
-		// were rewritten to the artifacts that now hold them, and the size rules are
+		// were rewritten to the artifacts that will hold them, and the size rules are
 		// measured on the document that will be published.
 		if err := e.Validate(c.Limits); err != nil {
 			return collected{}, err
 		}
 		out[port] = e
+	}
+
+	if err := w.commit(ctx, c.Task.Step); err != nil {
+		return collected{}, err
 	}
 	return collected{Outputs: out, Artifacts: produced(out, m)}, nil
 }
@@ -183,7 +204,7 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 // carries is refused. The envelope is a document about bytes, and a consumer verifies the
 // digest when it reads the artifact back, so a contradiction left alone would fail a
 // downstream step with nothing to say where it came from.
-func (c collection) attach(ctx context.Context, s *artifact.Store, files string, e *agk.Envelope, uploaded map[string]agk.File) error {
+func (c collection) attach(ctx context.Context, w *withheld, files string, e *agk.Envelope, uploaded map[string]agk.File) error {
 	step, port := e.Meta.Step, e.Meta.Port
 	for i, item := range e.Items {
 		for j, f := range item.Files {
@@ -206,7 +227,7 @@ func (c collection) attach(ctx context.Context, s *artifact.Store, files string,
 			key := string(port) + "/" + f.Name
 			got, ok := uploaded[key]
 			if !ok {
-				if got, err = upload(ctx, s, where, agk.URI{Run: e.Meta.RunID, Step: step, Port: port, Name: f.Name}, f.MediaType); err != nil {
+				if got, err = w.putFile(ctx, where, agk.URI{Run: e.Meta.RunID, Step: step, Port: port, Name: f.Name}, f.MediaType); err != nil {
 					return fmt.Errorf("driver: step %s: port %s: item %s: %w", step, port, item.ID, err)
 				}
 				uploaded[key] = got
@@ -225,14 +246,14 @@ func (c collection) attach(ctx context.Context, s *artifact.Store, files string,
 // They are addressed on the port the shorthand publishes, because that is the port they
 // will travel on: agk://run/<run>/<step>/<port>/<name> names one artifact of one port,
 // and an artifact addressed on a port no item references could not be fetched by anyone.
-func (c collection) publish(ctx context.Context, s *artifact.Store, files string) ([]agk.File, error) {
+func (c collection) publish(ctx context.Context, w *withheld, files string) ([]agk.File, error) {
 	names, err := loose(files, c.Task.Step)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]agk.File, 0, len(names))
 	for _, name := range names {
-		f, err := upload(ctx, s, filepath.Join(files, name), agk.URI{Run: c.Task.Run, Step: c.Task.Step, Port: shorthandPort, Name: name}, typeOf(name))
+		f, err := w.putFile(ctx, filepath.Join(files, name), agk.URI{Run: c.Task.Run, Step: c.Task.Step, Port: shorthandPort, Name: name}, typeOf(name))
 		if err != nil {
 			return nil, fmt.Errorf("driver: step %s: port %s: %w", c.Task.Step, shorthandPort, err)
 		}
@@ -265,15 +286,106 @@ func loose(files string, step agk.Step) ([]string, error) {
 	return names, nil
 }
 
-// upload writes one file the container left to the store, under the URI its port and its
-// name give it.
-func upload(ctx context.Context, s *artifact.Store, where string, u agk.URI, mediaType string) (agk.File, error) {
-	f, err := os.Open(where)
+// withheld is the store as the collection sees it until every envelope of the task has
+// passed the size rules: each write is answered with the files[] entry the store would
+// answer for it, and kept back until commit makes it.
+//
+// What is kept is where the bytes are and not the bytes, wherever that is possible. A file
+// the container left is read again from its working directory, which outlives the
+// collection, since an artifact runs to artifact_max_bytes and holding one in memory would
+// be the runner's memory spent on a brick's output. A value the spill moved exists
+// nowhere else, and it is small: it came out of an envelope, which envelope_max_bytes
+// bounds.
+type withheld struct {
+	store  *artifact.Store
+	writes []withheldWrite
+}
+
+// withheldWrite is one write described and not yet made: the entry the store answered, and
+// either the file the container left or the bytes the spill moved.
+type withheldWrite struct {
+	file agk.File
+	path string
+	body []byte
+}
+
+// Put answers a value the spill moved, which is how brick.Spill reaches this: it takes a
+// brick.Putter, and this is the one that writes nothing yet.
+func (w *withheld) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reader) (agk.File, error) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
+	}
+	f, err := w.store.Describe(ctx, u, mediaType, bytes.NewReader(body))
 	if err != nil {
 		return agk.File{}, err
 	}
-	defer f.Close()
-	return s.Put(ctx, u, mediaType, f)
+	w.writes = append(w.writes, withheldWrite{file: f, body: body})
+	return f, nil
+}
+
+// putFile answers one file the container left, under the URI its port and its name give it.
+func (w *withheld) putFile(ctx context.Context, where string, u agk.URI, mediaType string) (agk.File, error) {
+	src, err := os.Open(where)
+	if err != nil {
+		return agk.File{}, err
+	}
+	defer src.Close()
+	f, err := w.store.Describe(ctx, u, mediaType, src)
+	if err != nil {
+		return agk.File{}, err
+	}
+	w.writes = append(w.writes, withheldWrite{file: f, path: where})
+	return f, nil
+}
+
+// errArtifactChanged is a file that no longer holds the bytes it was described by when it
+// came to be written.
+var errArtifactChanged = errors.New("an artifact is written as the bytes its envelope names, and these are not those bytes")
+
+// commit makes the writes that were kept back, in the order they were described, once each
+// envelope that names them has passed.
+//
+// One write per digest, because the store keeps one object per digest: the same bytes
+// attached on two ports are two entries and one object, and a runner whose store cannot
+// say what it already holds would otherwise send them twice.
+//
+// A write that does not go through is the platform's. The brick left what it was asked to
+// leave, and a store that refused it, an upload policy that expired or a store that could
+// not be reached says nothing about the brick.
+func (w *withheld) commit(ctx context.Context, step agk.Step) error {
+	written := make(map[string]bool, len(w.writes))
+	for _, write := range w.writes {
+		if written[write.file.SHA256] {
+			continue
+		}
+		got, err := w.write(ctx, write)
+		if err != nil {
+			f := fault(step, err, ChargePlatform, "artifact %s could not be written to the store, and an envelope names an artifact only once the store holds it", write.file.URI)
+			f.Port = write.file.URI.Port
+			return f
+		}
+		if got.SHA256 != write.file.SHA256 || got.Size != write.file.Size {
+			f := fault(step, errArtifactChanged, ChargePlatform, "artifact %s was described as %d bytes with sha256 %s and read back as %d bytes with sha256 %s", write.file.URI, write.file.Size, write.file.SHA256, got.Size, got.SHA256)
+			f.Port = write.file.URI.Port
+			return f
+		}
+		written[write.file.SHA256] = true
+	}
+	return nil
+}
+
+// write makes one write, reading the bytes from wherever they were kept.
+func (w *withheld) write(ctx context.Context, write withheldWrite) (agk.File, error) {
+	if write.path == "" {
+		return w.store.Put(ctx, write.file.URI, write.file.MediaType, bytes.NewReader(write.body))
+	}
+	src, err := os.Open(write.path)
+	if err != nil {
+		return agk.File{}, err
+	}
+	defer src.Close()
+	return w.store.Put(ctx, write.file.URI, write.file.MediaType, src)
 }
 
 // publishPorts writes the envelope of every port to the store, in port order, and names
