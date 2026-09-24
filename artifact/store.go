@@ -63,7 +63,8 @@ func (s *Store) Namespace() string {
 //
 // The write is skipped when the object is already held, because the key is the digest of
 // the content: two steps producing identical bytes store one copy, and a replay that
-// recomputes the same content writes nothing.
+// recomputes the same content writes nothing. A runner's byte layer cannot ask, so a
+// runner sends the bytes again, and the store keeps the one copy it had.
 func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reader) (agk.File, error) {
 	if err := checkURI(u); err != nil {
 		return agk.File{}, err
