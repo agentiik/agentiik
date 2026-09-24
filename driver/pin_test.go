@@ -1,10 +1,14 @@
 package driver
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
@@ -62,35 +66,67 @@ func TestAnImageTheDaemonDoesNotHoldIsPulledBeforeItIsPinned(t *testing.T) {
 	}
 }
 
-// An image built on the machine and never pushed is refused naming it, on either store:
-// the classic one holds it under no registry digest at all, and the containerd one under a
-// digest its registry does not serve.
+// An image built on the machine and never pushed is refused naming it, on either store and
+// whichever way its registry says so. The classic store holds it under no registry digest
+// at all. The containerd store holds it under a digest its registry does not serve, and the
+// registry says that with 404 where it holds other images of the repository, and otherwise,
+// which is the common case, with 403 or 401, since it will not tell somebody with no
+// credentials whether a repository exists.
 func TestAnImageBuiltHereAndNeverPushedIsRefusedNamingIt(t *testing.T) {
+	const local = "ghcr.io/acme/agk-local:0.1.0"
 	for _, c := range []struct {
-		store string
-		bs    []dockertest.Behaviour
+		name   string
+		images map[string]dockertest.Image
+		bs     []dockertest.Behaviour
+		said   string
 	}{
-		{"containerd", nil},
-		{"classic", []dockertest.Behaviour{dockertest.ClassicImageStore}},
+		{"a repository the registry holds nothing of", nil, nil, "403"},
+		{"a registry that answers 401", nil, []dockertest.Behaviour{dockertest.RegistryAnswers401}, "401"},
+		{"a repository the registry holds other images of", map[string]dockertest.Image{
+			"ghcr.io/acme/agk-local:0.0.9": {Digest: registryDigest},
+		}, nil, "404"},
+		{"the classic store", nil, []dockertest.Behaviour{dockertest.ClassicImageStore}, "under no digest of its registry"},
 	} {
-		t.Run(c.store, func(t *testing.T) {
-			r := newRunner(t, map[string]dockertest.Image{
-				"ghcr.io/acme/agk-local:0.1.0": {Digest: imageDigest, Unpushed: true},
-			}, nil, c.bs...)
+		t.Run(c.name, func(t *testing.T) {
+			images := map[string]dockertest.Image{local: {Digest: imageDigest, Unpushed: true}}
+			maps.Copy(images, c.images)
+			r := newRunner(t, images, nil, c.bs...)
 
-			pinned, err := r.Pin(t.Context(), "fetch", "ghcr.io/acme/agk-local:0.1.0")
+			pinned, err := r.Pin(t.Context(), "fetch", local)
 			if !errors.Is(err, ErrNotPushed) {
 				t.Fatalf("an image never pushed was pinned to %q: %v", pinned, err)
 			}
 			if charge, _ := Charged(err); charge != ChargeBrick {
 				t.Errorf("an image never pushed is charged to %s", charge)
 			}
-			for _, want := range []string{"fetch", "ghcr.io/acme/agk-local:0.1.0", "never pushed"} {
+			for _, want := range []string{"fetch", local, "never pushed", c.said} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not name %q: %v", want, err)
 				}
 			}
 		})
+	}
+}
+
+// A registry answering a question about one digest with the descriptor of another has not
+// said that it serves the one this machine holds, so a version recorded under that digest
+// would name a manifest nobody confirmed. The image is refused as one its registry does not
+// serve, naming what the registry answered.
+func TestARegistryAnsweringAnotherDigestHasNotConfirmedTheOneAsked(t *testing.T) {
+	r := newRunner(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: imageDigest},
+	}, nil)
+	r.daemon.Handle("GET", "/distribution/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(docker.Distribution{Descriptor: docker.Descriptor{Digest: registryDigest}})
+	})
+
+	pinned, err := r.Pin(t.Context(), "fetch", "ghcr.io/acme/agk-invoice:1.4.0")
+	if !errors.Is(err, ErrNotPushed) {
+		t.Fatalf("a digest the registry did not confirm was pinned to %q: %v", pinned, err)
+	}
+	if !strings.Contains(err.Error(), registryDigest) {
+		t.Errorf("the refusal does not name what the registry answered: %v", err)
 	}
 }
 
