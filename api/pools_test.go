@@ -119,6 +119,19 @@ func TestAPoolIsRefusedWhereTheWireRefusesIt(t *testing.T) {
 	}
 }
 
+// A pids ceiling is kept at any size the wire accepts, which sets a least and no most, as the
+// PidsLimit it becomes is 64 bits: one past 32 bits is a pool like any other, and not a failure
+// of the API's own.
+func TestAPidsCeilingIsKeptAtAnySizeTheWireAccepts(t *testing.T) {
+	h, _ := withRunners(t)
+
+	w := sent(t, h, "POST", "/api/v1/runner-pools", "admin",
+		`{"pool":{"name":"many","labels":[],"namespaces":[],"resource_ceilings":{"pids":3000000000}}}`)
+	if w.Code != http.StatusCreated || !strings.Contains(w.Body.String(), `"resource_ceilings":{"pids":3000000000}`) {
+		t.Errorf("a pool whose pids ceiling is past 32 bits answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // "It is shown once, here, and stored hashed, so this answer is the only moment the value exists
 // outside the machine that will hold it."
 func TestAJoinTokenIsIssuedIntoAPoolAndShownOnce(t *testing.T) {

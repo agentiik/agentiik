@@ -50,7 +50,9 @@ alter table join_tokens
 -- the step write them so that a pool answers what its administrator wrote: two cores are "2" and
 -- eight gibibytes are "8Gi", never a count of bytes somebody has to divide back. Null is no
 -- ceiling of that kind, which is the ordinary case for a pool of uniform hosts where the host
--- itself is the limit.
+-- itself is the limit. pids is a bigint because the wire sets it a least and no most, and the
+-- PidsLimit it becomes is 64 bits: an integer would refuse a ceiling the wire accepts, and the API
+-- would answer that as a failure of its own.
 --
 -- There is no disk ceiling, because nothing can enforce one: the daemon caps a container's cpu,
 -- memory and processes, and a task writes into a working directory on the host, bound into the
@@ -65,7 +67,7 @@ alter table runner_pools
     check (ceiling_cpu ~ '^(?:0*[1-9][0-9]*(?:\.[0-9]+)?|0*\.[0-9]*[1-9][0-9]*)$'),
   add column ceiling_memory text
     check (ceiling_memory ~ '^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$'),
-  add column ceiling_pids integer
+  add column ceiling_pids bigint
     check (ceiling_pids > 0),
   -- What runs the containers here: "hardened is the default runtime with user-namespace
   -- remapping", sandboxed is gVisor's runsc and separated is hosts of their own. The column holds
