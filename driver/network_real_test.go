@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/docker"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // The tests here ask the kernel what network: internal gives a container, on a real daemon,
@@ -271,21 +273,31 @@ func TestARealContainerOnTheInternalPostureCannotReachTheRunnerHost(t *testing.T
 // runs on the host and could carry a query off it for the container: a name is a message,
 // and a resolver that forwards one is a way out. The daemon forwards nothing for a
 // container whose every network is internal, and the probe holds it to that: it asks for a
-// name that only a resolver outside the host could answer, and gets no address for it. The
-// same probe on the default bridge resolves the name.
+// name that only a resolver outside the host could answer, and gets no address for it.
+//
+// Two things have to hold first, or the silence proves nothing. The machine running the
+// test resolves the name, so a resolver that forwarded it would have had an answer to give;
+// and the embedded resolver answers the container's own name, so the probe is reading a
+// resolver that is there and would say RESOLVED of an answer.
 func TestANameResolvedOnTheInternalPostureDoesNotLeaveTheHost(t *testing.T) {
 	d, image := realDriver(t)
 	logs := &taskLogs{}
 	d.cfg.Logs = logs
 
+	if _, err := net.DefaultResolver.LookupHost(t.Context(), "example.com"); err != nil {
+		dockertest.Unavailable(t, "this machine resolves no name outside it, so a container that cannot either proves nothing: %v", err)
+	}
+
+	resolved := func(name, as string) string {
+		return `nslookup ` + name + ` >/tmp/answer 2>&1 || true; sed 's/^/ANSWER /' /tmp/answer >&2; if sed -n '/^Name:/,$p' /tmp/answer | grep -q '^Address'; then echo "RESOLVED ` + as + `" >&2; fi`
+	}
 	task := internalTask("resolver", image,
-		needs("nslookup", "grep", "sed"),
+		needs("nslookup", "grep", "sed", "hostname"),
 		`sed 's/^/RESOLV /' /etc/resolv.conf >&2`,
-		// Script steps run under set -e, and a lookup that fails is the outcome hoped
-		// for rather than the end of the probe.
-		`nslookup example.com >/tmp/answer 2>&1 || true`,
-		`sed 's/^/ANSWER /' /tmp/answer >&2`,
-		`if sed -n '/^Name:/,$p' /tmp/answer | grep -q '^Address'; then echo "RESOLVED example.com" >&2; fi`,
+		// Script steps run under set -e, and a lookup that fails is the outcome
+		// hoped for rather than the end of the probe.
+		resolved(`"$(hostname)"`, "ITS OWN NAME"),
+		resolved("example.com", "example.com"),
 		`exit 0`,
 	)
 
@@ -296,10 +308,10 @@ func TestANameResolvedOnTheInternalPostureDoesNotLeaveTheHost(t *testing.T) {
 	log := logs.of(task.ID)
 	t.Logf("the container said:\n%s", log)
 	succeeded(t, r, log)
-	if !strings.Contains(log, "ANSWER ") {
-		t.Fatalf("nslookup said nothing at all, so nothing here says what the resolver did: %s", log)
+	if !strings.Contains(log, "RESOLVED ITS OWN NAME") {
+		t.Fatalf("the embedded resolver did not answer the container's own name, so its silence on another proves nothing: %s", log)
 	}
-	if strings.Contains(log, "RESOLVED") {
+	if strings.Contains(log, "RESOLVED example.com") {
 		t.Errorf("a name asked on network: internal was resolved, so the query left the host: %s", log)
 	}
 }

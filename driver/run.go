@@ -96,19 +96,10 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// Everything that can be refused without creating anything is refused first, and
 	// network: egress is the one that matters: a workflow must not be able to
 	// believe its egress.allow list is being enforced when nothing is enforcing it.
-	n, err := networkFor(ctx, d.cli, t)
-	if err != nil {
+	// The network itself is created just before the container, in networkFor.
+	if err := refuseNetwork(d.cli, t); err != nil {
 		return graph.Result{}, err
 	}
-	defer func() {
-		tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
-		defer cancel()
-		// Said and not returned, for the reason tidy says a directory: the task has
-		// ended by now, and a network left behind changes nothing about how.
-		if err := removeNetwork(tidy, d.cli, n); err != nil {
-			d.say(fmt.Sprintf("%s left the network %s of task %s on this host, where it holds its share of the daemon's address pools until the runner's next start sweeps it: %v", t.Step, n.Mode, t.ID, err))
-		}
-	}()
 
 	image, err := resolveImage(ctx, d.cli, d.cache, t, "", nil)
 	if err != nil {
@@ -141,6 +132,10 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
 			defer d.tidy(t, w)
 		}
+		// The network goes after the container, whatever network it was created on:
+		// one a driver that predates the isolation left is removed with it rather
+		// than refused, which would leave the container running on it.
+		defer d.removeNetwork(ctx, t, networkOf(t))
 		defer func() {
 			tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
 			defer cancel()
@@ -188,6 +183,12 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// create rather than immediately after, because the container has to be told the
 	// same moment the watch will stop it at, and the environment is composed here.
 	dispatched := d.now()
+
+	n, err := networkFor(ctx, d.cli, t)
+	if err != nil {
+		return graph.Result{}, err
+	}
+	defer d.removeNetwork(ctx, t, n)
 
 	entrypoint, cmd := scriptCommand(t, d.cfg.Policy.Shell)
 	config := containerConfig(t, image.Ref, image.User, environment(t, deadlineOf(t, dispatched)), entrypoint, cmd)
@@ -785,6 +786,17 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// removeNetwork takes a task's network away, the container on it being gone, and says
+// what it could not take away. Said and not returned, for the reason tidy says a directory:
+// the task has ended by now, and a network left behind changes nothing about how.
+func (d *Docker) removeNetwork(ctx context.Context, t graph.Task, n network) {
+	tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
+	defer cancel()
+	if err := removeNetwork(tidy, d.cli, n); err != nil {
+		d.say(fmt.Sprintf("%s left the network %s of task %s on this host, where it holds its share of the daemon's address pools until the runner's next start sweeps it: %v", t.Step, n.Mode, t.ID, err))
+	}
 }
 
 // tidy takes a task's working directory away and says what it could not take away.

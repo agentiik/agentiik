@@ -304,6 +304,7 @@ func TestServeSweepsTheTaskNetworksAnEarlierAgentLeft(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	d.Backdate("agk-01JMZ8V1P9C4_invoice_1", time.Hour)
 
 	h := newHost(t, d, secretsTmpfs)
 	h.serving(t)

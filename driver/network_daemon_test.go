@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/graph"
@@ -265,8 +267,8 @@ func TestANetworkThatWouldNotBeRemovedIsSaid(t *testing.T) {
 // What a runner that died left on the daemon is swept when the next one starts: a task's
 // network that no container is on any more. A network a container still carries the task
 // of is kept, since a redelivery will adopt that container and it needs its network, and so
-// is one of a task this process holds, one that is not this driver's, and one the daemon
-// refuses to remove, which is said.
+// is one of a task this process holds, one another process has only just made, one that is
+// not this driver's, and one the daemon refuses to remove, which is said.
 func TestTheSweepRemovesTheTaskNetworksNoContainerIsOn(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 	busy := make(chan struct{})
@@ -277,17 +279,25 @@ func TestTheSweepRemovesTheTaskNetworksNoContainerIsOn(t *testing.T) {
 	})
 	ctx := t.Context()
 
-	left := func(step agk.Step) graph.Task {
+	// Every network here was left an hour ago but one, which another process on the
+	// daemon has only just made and is about to create its container on.
+	made := func(step agk.Step) graph.Task {
 		task := internalTaskOn(step)
 		if _, err := networkFor(ctx, r.cli, task); err != nil {
-			t.Fatalf("leaving the network of %s behind: %s", step, err)
+			t.Fatalf("making the network of %s: %s", step, err)
 		}
+		return task
+	}
+	left := func(step agk.Step) graph.Task {
+		task := made(step)
+		r.daemon.Backdate(networkName(task.ID), time.Hour)
 		return task
 	}
 	orphan := left("orphan")
 	adoptable := left("adoptable")
 	held := left("held")
 	inUse := left("in-use")
+	fresh := made("fresh")
 	for _, spec := range []docker.NetworkSpec{
 		{Name: "agk-somebody-elses", Labels: map[string]string{"owner": "somebody"}},
 		{Name: "somebody-elses", Labels: map[string]string{LabelTask: "01JMZ8V1P9C4/theirs/1"}},
@@ -295,6 +305,7 @@ func TestTheSweepRemovesTheTaskNetworksNoContainerIsOn(t *testing.T) {
 		if _, err := r.cli.NetworkCreate(ctx, spec); err != nil {
 			t.Fatalf("creating a network of somebody else's: %s", err)
 		}
+		r.daemon.Backdate(spec.Name, time.Hour)
 	}
 
 	// The container a redelivery would adopt, created and never started, so that no
@@ -331,7 +342,7 @@ func TestTheSweepRemovesTheTaskNetworksNoContainerIsOn(t *testing.T) {
 	if kept[networkName(orphan.ID)] {
 		t.Errorf("the network no container is on survived the sweep")
 	}
-	for _, name := range []string{networkName(adoptable.ID), networkName(held.ID), networkName(inUse.ID), "agk-somebody-elses", "somebody-elses"} {
+	for _, name := range []string{networkName(adoptable.ID), networkName(held.ID), networkName(inUse.ID), networkName(fresh.ID), "agk-somebody-elses", "somebody-elses"} {
 		if !kept[name] {
 			t.Errorf("the sweep removed %s", name)
 		}
@@ -354,5 +365,60 @@ func TestASweepThatCannotListSaysSo(t *testing.T) {
 	})
 	if err := r.Sweep(t.Context()); err == nil || !strings.Contains(err.Error(), "could not be listed") {
 		t.Fatalf("a sweep that could not list anything answered %v", err)
+	}
+}
+
+// A runner of a build that predates the isolation died with a task's container on a network
+// that is internal and keeps the host in it. The redelivery on the new build adopts that
+// container, collects it and removes it with its network, rather than refusing the network
+// and leaving the container running on it with nothing left to stop it.
+func TestARedeliveryAdoptsAContainerOnANetworkThatPredatesTheIsolation(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"from": "the first delivery"}))
+	})
+	task := oneTask(ref)
+	task.Network = graph.NetworkInternal
+
+	old, err := r.cli.NetworkCreate(t.Context(), docker.NetworkSpec{Name: networkName(task.ID), Driver: networkDriver, Internal: true, Labels: labels(task)})
+	if err != nil {
+		t.Fatalf("leaving the old network behind: %s", err)
+	}
+	container, _ := exitedFirstDelivery(t, r, task)
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("the redelivery was refused: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the redelivery reports %s, and the container exited 0", result.State)
+	}
+	removed := r.daemon.Removed()
+	if !slices.Contains(removed, container) {
+		t.Errorf("the adopted container was left on the daemon: %v", removed)
+	}
+	if !slices.Contains(removed, old.ID) {
+		t.Errorf("the old network was left on the daemon: %v", removed)
+	}
+}
+
+// A task's network is made immediately before its container, and not before the pull, so
+// that a network with no container on it is never one whose image is still arriving, which
+// the sweep of another process on the daemon would take for left. A pull that fails leaves
+// the daemon with nothing made and nothing to remove.
+func TestTheNetworkIsMadeAfterThePull(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, nil, func(dockertest.Container) (int, error) { return 0, nil })
+	task := oneTask(ref)
+	task.Network = graph.NetworkInternal
+
+	if _, err := r.Run(t.Context(), task); err == nil {
+		t.Fatalf("a task whose image is nowhere ran")
+	}
+	if removed := r.daemon.Removed(); len(removed) != 0 {
+		t.Fatalf("a task refused at its pull made and removed %v", removed)
+	}
+	if list, _ := r.cli.NetworkList(t.Context(), nil); len(list) != 0 {
+		t.Fatalf("a task refused at its pull left %d networks", len(list))
 	}
 }
