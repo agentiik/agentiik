@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -487,6 +488,11 @@ func narrowed(t *testing.T, p *Pool, namespaces []string) {
 // runnerForm is the wire's pattern for a runner, $defs/runnerRegistration/response/runner.
 var runnerForm = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
+// beating is a heartbeat of a ready runner of four slots, holding the keys it is given.
+func beating(holding ...agk.TaskID) Beating {
+	return Beating{AgentVersion: "0.2.0", State: "ready", Concurrency: 4, Holding: holding}
+}
+
 // "A runner posts one heartbeat every 10 seconds to the API", and "three missed intervals move a
 // task to lost". The tests that follow count in these two constants, so this one holds them to the
 // figures the page gives.
@@ -542,12 +548,12 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 
 	// The runner says it is there and holding one of them.
 	err = pool.Installation(t.Context(), Heartbeat, func(ctx context.Context, w *Wide) error {
-		r, err := w.Beat(ctx, runner, []agk.TaskID{held}, now)
+		r, err := w.Beat(ctx, runner, beating(held), now)
 		if err != nil {
 			return err
 		}
-		if r.State != "ready" {
-			t.Errorf("a runner that just joined is %q", r.State)
+		if r.Runner.State != "ready" {
+			t.Errorf("a runner that just joined is %q", r.Runner.State)
 		}
 		return nil
 	})
@@ -652,7 +658,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 
 	// My heartbeat names their task.
 	err = pool.Installation(t.Context(), Heartbeat, func(ctx context.Context, w *Wide) error {
-		_, err := w.Beat(ctx, mine, []agk.TaskID{key}, now)
+		_, err := w.Beat(ctx, mine, beating(key), now)
 		return err
 	})
 	if err != nil {
@@ -950,12 +956,140 @@ func TestARevokedCredentialOpensNothing(t *testing.T) {
 		if _, err := w.Authenticate(ctx, joined.Credential); !errors.Is(err, ErrNoRunner) {
 			t.Errorf("a revoked credential answered %v", err)
 		}
-		if _, err := w.Beat(ctx, joined.Runner, nil, now); !errors.Is(err, ErrNoRunner) {
+		if _, err := w.Beat(ctx, joined.Runner, beating(), now); !errors.Is(err, ErrNoRunner) {
 			t.Errorf("a revoked runner's heartbeat answered %v", err)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// "cancel: Each key the request named whose dispatch, bound to this runner, the controller has
+// ended as cancelled or timed_out. Never a lost dispatch: a host only cut off finishes its key."
+// The answer is the backstop for agentiik.stops, which keeps nothing, so it names what a stop would
+// have, to the runner a stop would have reached, and nothing else.
+func TestAHeartbeatIsAnsweredWithWhatItsRunnerIsToStop(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	var mine, theirs string
+	err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		for i, into := range []*string{&mine, &theirs} {
+			issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+			if err != nil {
+				return err
+			}
+			joined, err := w.Join(ctx, Joining{
+				Token: issued.Clear, PublicKey: hostKey(byte(i + 1)), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+				Architecture: "amd64", AgentVersion: "0.2.0",
+			}, time.Hour, now)
+			if err != nil {
+				return err
+			}
+			*into = joined.Runner
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, row := range []struct {
+		namespace, id, run, step string
+		attempt, requeue         int
+		state                    string
+		runner                   *string
+	}{
+		// Mine, in flight, and ended by the cancellation below.
+		{"finance", "01M2HC1AAAAAAAAAAAAAAAAAAA", financeRun, "render", 1, 0, "running", &mine},
+		// Mine, lost, and requeued to theirs, which the cancellation then ends.
+		{"finance", "01M2HC2AAAAAAAAAAAAAAAAAAA", financeRun, "render", 2, 0, "lost", &mine},
+		{"finance", "01M2HC2BAAAAAAAAAAAAAAAAAA", financeRun, "render", 2, 1, "running", &theirs},
+		// Theirs alone.
+		{"finance", "01M2HC3AAAAAAAAAAAAAAAAAAA", financeRun, "render", 3, 0, "running", &theirs},
+		// Nobody's: on the queue when the run was cancelled.
+		{"finance", "01M2HC4AAAAAAAAAAAAAAAAAAA", financeRun, "render", 4, 0, "dispatched", nil},
+		// Mine and cancelled, and not named by the heartbeat.
+		{"finance", "01M2HC5AAAAAAAAAAAAAAAAAAA", financeRun, "render", 5, 0, "running", &mine},
+		// Mine and past its deadline.
+		{"finance", "01M2HC6AAAAAAAAAAAAAAAAAAA", financeRun, "render", 6, 0, "timed_out", &mine},
+		// Mine and ended as it should be.
+		{"finance", "01M2HC7AAAAAAAAAAAAAAAAAAA", financeRun, "render", 7, 0, "succeeded", &mine},
+		// Mine, in another namespace, and still running.
+		{"team-ops", "01M2HC8AAAAAAAAAAAAAAAAAAA", opsRun, "archive", 1, 0, "running", &mine},
+	} {
+		if _, err := conn.Exec(ctx, `
+			insert into tasks (namespace, id, run_id, step, attempt, requeue, state, runner, dispatched_at)
+			values ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
+			row.namespace, row.id, row.run, row.step, row.attempt, row.requeue, row.state, row.runner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The run is cancelled, which is what ends its tasks in flight as cancelled.
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		_, err := w.CancelTasks(ctx, "finance", financeRun, now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	render := func(attempt int) agk.TaskID { return agk.NewTaskID(financeRun, "render", attempt, agk.Shard{}) }
+	archive := agk.NewTaskID(opsRun, "archive", 1, agk.Shard{})
+	beat := func(runner string, b Beating) Beaten {
+		t.Helper()
+		var beaten Beaten
+		if err := pool.Installation(ctx, Heartbeat, func(ctx context.Context, w *Wide) error {
+			var err error
+			beaten, err = w.Beat(ctx, runner, b, now)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return beaten
+	}
+
+	got := beat(mine, Beating{
+		AgentVersion: "0.2.1", State: "draining", Concurrency: 6,
+		Holding: []agk.TaskID{render(7), render(6), render(4), render(3), render(2), render(1), archive},
+	})
+	if want := []agk.TaskID{render(1), render(6)}; !slices.Equal(got.Cancel, want) {
+		t.Errorf("my heartbeat is told to stop %q, want %q", got.Cancel, want)
+	}
+	if got := beat(theirs, beating(render(2), render(3))); !slices.Equal(got.Cancel, []agk.TaskID{render(2), render(3)}) {
+		t.Errorf("their heartbeat is told to stop %q, want the requeue and their own", got.Cancel)
+	}
+	if got := beat(theirs, beating()); got.Cancel == nil || len(got.Cancel) != 0 {
+		t.Errorf("a heartbeat naming nothing is told to stop %#v, and it is always a list", got.Cancel)
+	}
+
+	// And what the runner said of itself is what the inventory now holds of it.
+	var runners []Runner
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		runners, err = w.Runners(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runners {
+		if r.ID != mine {
+			continue
+		}
+		if r.AgentVersion != "0.2.1" || r.ReportedState != "draining" || r.Concurrency != 6 {
+			t.Errorf("the inventory holds %s at %s, %s, %d, and its heartbeat said 0.2.1, draining, 6",
+				r.ID, r.AgentVersion, r.ReportedState, r.Concurrency)
+		}
+		if r.State != "ready" {
+			t.Errorf("a runner that says it is draining was made %s, and only an order drains a runner", r.State)
+		}
 	}
 }

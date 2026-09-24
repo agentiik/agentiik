@@ -259,7 +259,7 @@ func (tk taking) swept(t *testing.T, at time.Time) int {
 func (tk taking) beat(t *testing.T, r runner, at time.Time, holding ...agk.TaskID) {
 	t.Helper()
 	if err := tk.pool.Installation(t.Context(), db.Heartbeat, func(ctx context.Context, w *db.Wide) error {
-		_, err := w.Beat(ctx, r.id, holding, at)
+		_, err := w.Beat(ctx, r.id, db.Beating{AgentVersion: "0.2.0", State: "ready", Concurrency: 4, Holding: holding}, at)
 		return err
 	}); err != nil {
 		t.Fatal(err)
