@@ -153,9 +153,6 @@ func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, str
 		`insert into workflows (namespace, name) values ('finance', 'monthly-invoicing')`,
 		`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
 		   values ('finance', 'monthly-invoicing', 'a3f9c1e', '{}', 'alice', now())`,
-		// The pool a step that names none runs on, created as an administrator creates it,
-		// since a task whose pool does not exist is refused rather than published.
-		`insert into runner_pools (name, created_by) values ('default', 'admin')`,
 	} {
 		if _, err := conn.Exec(t.Context(), stmt); err != nil {
 			t.Fatalf("%s: %s", stmt, err)
