@@ -210,6 +210,13 @@ func refuseRedemption(w http.ResponseWriter, err error) {
 		// own. Asking again gets the same answer, and a message put back goes to the next runner
 		// of the pool to be refused in its turn.
 		fail(w, http.StatusConflict, "that task is not this runner's to work on")
+	case errors.Is(err, db.ErrRunnerNotTaking):
+		// "A redemption by a draining or revoked runner gets 403, binds nothing, and the runner
+		// puts the message back with Again": the runner's standing and not the task's, which is
+		// nobody's yet and should go to another runner of the pool. It is refused before any
+		// secret is read. A task the runner already holds is not refused, since finishing what
+		// it holds is what a drain and a grace leave it to do.
+		fail(w, http.StatusForbidden, "this runner is draining or revoked and takes no new task: put the message back for another runner of the pool")
 	case errors.Is(err, errNoCommit):
 		// This and the two below are the installation's rather than the runner's: the
 		// grant was real and what it was written with cannot be answered. Each says so

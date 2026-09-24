@@ -106,6 +106,25 @@ func (i *Issuer) ForRunner(name, pool string, until time.Time) (Credentials, err
 	})
 }
 
+// ForRevokedRunner mints the credential a revoked runner finishes its grace with: it may publish its
+// results and hear stops, and nothing else.
+//
+// "Revoking a credential never destroys work already done", so the results of what the runner holds
+// still reach the controller until the grace ends, and a stop still reaches its containers. But it
+// takes nothing new, so it may neither pull from its pool's consumer nor acknowledge on it, and no
+// pool is named at all. Its own inbox stays, because a result is published as a request the stream
+// answers, and the answer comes back there; nothing else can, since a credential that pulls nothing
+// is handed nothing.
+func (i *Issuer) ForRevokedRunner(name string, until time.Time) (Credentials, error) {
+	if err := validRunner(name); err != nil {
+		return Credentials{}, fmt.Errorf("bus: %w", err)
+	}
+	return i.mint(name, until, func(c *jwt.UserClaims) {
+		c.Sub.Allow.Add(Inbox(name)+".>", StopSubject)
+		c.Pub.Allow.Add(ResultSubject(name))
+	})
+}
+
 // Inbox is the prefix a runner's replies come back under, which OpenRunner connects with.
 //
 // Its own rather than the _INBOX every client shares by default, because JetStream hands a pulled

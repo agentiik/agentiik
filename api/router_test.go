@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -236,20 +237,72 @@ func TestWhatCannotBeRegistered(t *testing.T) {
 }
 
 // Two routes net/http cannot serve together are an error from Handle rather than a panic out of it:
-// each matches a path the other does, /api/v1/objects/runs, and neither is the more specific. The
-// route refused is not part of the surface either, since nothing answers it.
+// each matches a path the other does, /api/v1/finance/runs/latest, and neither is the more
+// specific. The route refused is not part of the surface either, since nothing answers it.
 func TestARouteTheMuxCannotServeBesideAnotherIsAnError(t *testing.T) {
 	rt := router(t, api.DenyAll{})
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
-	rt.MustHandle("GET", "/api/v1/{namespace}/runs", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, ok)
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs/{run}", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, ok)
 
-	why := api.Public{Why: "a route that stands in for another one in a test, and is never served to anybody"}
-	if err := rt.Handle("GET", "/api/v1/objects/{key...}", why, ok); err == nil || !strings.Contains(err.Error(), "/api/v1/objects/{key...}") {
+	clash := "/api/v1/{namespace}/{what}/latest"
+	if err := rt.Handle("GET", clash, api.Needs{Permission: api.RunRead, Scope: api.Namespace}, ok); err == nil || !strings.Contains(err.Error(), clash) {
 		t.Errorf("a route the mux refuses was answered %v", err)
 	}
 	for _, r := range rt.Routes() {
-		if r.Pattern == "/api/v1/objects/{key...}" {
+		if r.Pattern == clash {
 			t.Error("a route the mux refused is listed as served")
+		}
+	}
+}
+
+// The documentation's surface holds routes net/http cannot serve on one mux: GET /api/v1/runs/{id}
+// and GET /api/v1/{ns}/runs both match /api/v1/runs/runs, and GET /api/v1/artifacts/{uri} beside
+// either matches /api/v1/artifacts/runs. So they are served together, and a path whose first
+// segment after /api/v1/ is one of the API's own words is answered by the route of that word, the
+// word written with its letters escaped included, while every other path there reaches the
+// namespaced routes.
+func TestTheAPIsOwnWordsAreServedBesideTheNamespacedRoutes(t *testing.T) {
+	rt := router(t, everything{who: "alice"})
+	rt.ServeRuns(&runsOf{of: map[string]api.Target{
+		"01M2Z8V1P9C4XQ7K2N4D6F8H0C": {Namespace: "finance", Workflow: "monthly-invoicing"},
+	}})
+	answering := func(what string) api.Handler {
+		return func(w http.ResponseWriter, _ *http.Request, _ api.Principal, _ api.Target) {
+			w.Write([]byte(what))
+		}
+	}
+	for _, r := range []struct {
+		pattern string
+		guard   api.Guard
+		what    string
+	}{
+		{"/api/v1/{namespace}/runs", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, "listing"},
+		{"/api/v1/{namespace}/secrets", api.Needs{Permission: api.RunRead, Scope: api.Namespace}, "secrets"},
+		{"/api/v1/runs/{run}", api.OnRun{Permission: api.RunRead}, "run"},
+		{"/api/v1/artifacts/{uri}", api.OnArtifact{Permission: api.RunRead}, "artifact"},
+	} {
+		if err := rt.Handle("GET", r.pattern, r.guard, answering(r.what)); err != nil {
+			t.Fatalf("%s could not be served beside the others: %v", r.pattern, err)
+		}
+	}
+
+	for _, c := range []struct{ path, want string }{
+		{"/api/v1/finance/runs", "listing"},
+		{"/api/v1/finance/secrets", "secrets"},
+		{"/api/v1/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0C", "run"},
+		{"/api/v1/run%73/01M2Z8V1P9C4XQ7K2N4D6F8H0C", "run"},
+		{"/api/v1/artifacts/" + url.PathEscape("agk://run/01M2Z8V1P9C4XQ7K2N4D6F8H0C/archive/ok/invoice.pdf"), "artifact"},
+	} {
+		if code, body := reached(t, rt, "GET", c.path, "alice"); code != http.StatusOK || body != c.want {
+			t.Errorf("%s answered %d %q, want the %s route", c.path, code, body, c.want)
+		}
+	}
+
+	// A namespace named after one of the words is one whose routes nothing reaches: the paths
+	// are the word's, and answer as its route does, here as a run nobody minted.
+	for _, path := range []string{"/api/v1/runs/runs", "/api/v1/runs/secrets", "/api/v1/artifacts/runs"} {
+		if code, body := reached(t, rt, "GET", path, "alice"); code != http.StatusNotFound || body == "listing" || body == "secrets" {
+			t.Errorf("%s answered %d %q, and reached a namespaced route", path, code, body)
 		}
 	}
 }

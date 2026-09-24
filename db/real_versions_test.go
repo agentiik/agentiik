@@ -54,7 +54,7 @@ func oneFetchAndGone(t *testing.T, pool *Pool, name, digest string, size int64) 
 		if _, err := ns.WriteArtifact(ctx, Reference{URI: u, Digest: digest, Size: size, For: time.Hour, Fetches: 1}); err != nil {
 			return err
 		}
-		_, err := ns.Fetched(ctx, u)
+		_, err := fetched(ctx, ns, u)
 		return err
 	}); err != nil {
 		t.Fatal(err)

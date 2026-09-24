@@ -214,7 +214,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 
 	runners := api.RunnerOptions{
-		Pool: pool, JoinRotation: s.JoinRotation,
+		Pool: pool, JoinRotation: s.JoinRotation, RevocationGrace: s.RevocationGrace,
 		Objects: objects, URLs: signed,
 		BusIssuer: issuer, BusConsumers: consumers,
 		Trouble: func(err error) {
@@ -229,7 +229,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: versions, Objects: objects}); err != nil {
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: versions, Objects: objects, URLs: signed}); err != nil {
 		return nil, err
 	}
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/graph"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -445,4 +446,98 @@ func mustUserSeed(t *testing.T) []byte {
 	}
 	seed, _ := pair.Seed()
 	return seed
+}
+
+// A revoked runner finishes its grace holding a credential that publishes its results and hears
+// stops, and does nothing else: "narrowed to publishing results and hearing stops, no pull". Its
+// result reaches the controller as its own, and the work still on its pool's queue is left there
+// for another runner.
+func TestARevokedRunnerPublishesItsResultsAndTakesNothing(t *testing.T) {
+	a := withAccounts(t)
+	until := time.Now().UTC().Add(time.Hour)
+	control := openControlPlane(t, a, until)
+	if err := control.Consumer(t.Context(), "dmz"); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Publish(t.Context(), message("waiting", "pool=dmz")); err != nil {
+		t.Fatal(err)
+	}
+	got := reporting(t, control, func(heard) error { return nil })
+
+	minted, err := a.issuer.ForRevokedRunner("runner-1", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !minted.ExpiresAt.Equal(until.Truncate(time.Second)) {
+		t.Errorf("the credential expires at %s, and was minted until %s", minted.ExpiresAt, until)
+	}
+	if _, err := a.issuer.ForRevokedRunner("Runner One", until); err == nil {
+		t.Error("a credential was minted for a runner no subject can name")
+	}
+	runner, err := OpenRunner(Options{URL: minted.URL, Name: "runner-1", Credentials: &minted})
+	if err != nil {
+		t.Fatalf("the revoked runner could not connect: %s", err)
+	}
+	defer runner.Close()
+
+	// It publishes the result of what it holds, and the controller hears it from that runner.
+	result := aResult(aTask("mine"))
+	result.Runner = "runner-1"
+	if err := runner.Report(t.Context(), result); err != nil {
+		t.Fatalf("a revoked runner's result was refused: %s", err)
+	}
+	select {
+	case h := <-got:
+		if h.sender != "runner-1" || h.result.TaskID != result.TaskID {
+			t.Errorf("the controller heard %+v", h)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revoked runner's result never reached the controller")
+	}
+
+	// It hears a stop.
+	heard := make(chan graph.Stop, 1)
+	if err := runner.Stops(t.Context(), func(s graph.Stop) { heard <- s }); err != nil {
+		t.Fatalf("the revoked runner could not listen for stops: %s", err)
+	}
+	stop := graph.Stop{Task: aKey("01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"), Reason: graph.StopCancelled}
+	if err := control.Stop(t.Context(), stop); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case s := <-heard:
+		if s != stop {
+			t.Errorf("the revoked runner heard %+v", s)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revoked runner never heard the stop")
+	}
+
+	// And takes nothing: not from its pool, not by asking after the consumer, not by
+	// acknowledging, and not as anybody else.
+	short, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if taken, err := runner.Take(short, "dmz", 8, 300*time.Millisecond); err == nil {
+		t.Errorf("a revoked runner took %d tasks from its pool", len(taken))
+	}
+	for _, subject := range []string{
+		"$JS.API.CONSUMER.MSG.NEXT." + Stream + "." + Durable("dmz"),
+		"$JS.ACK." + Stream + "." + Durable("dmz") + ".1.1.1.1.1",
+		ResultSubject("runner-2"),
+	} {
+		runner.conn.Publish(subject, []byte("{}"))
+		runner.conn.Flush()
+		if err := runner.conn.LastError(); err == nil || !strings.Contains(err.Error(), subject) {
+			t.Errorf("a revoked runner published on %s, and the server said %v", subject, err)
+		}
+	}
+
+	// The task it could not take is still on the queue, for a runner that may.
+	theirs, err := control.Take(t.Context(), "dmz", 8, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(theirs) != 1 || theirs[0].Task.Step != "waiting" {
+		t.Errorf("the pool holds %+v, and the task published to it was left alone", theirs)
+	}
 }
