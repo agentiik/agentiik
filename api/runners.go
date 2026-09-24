@@ -754,7 +754,11 @@ func RotationSigned(runner, at string) []byte {
 const RotationSkew = 5 * time.Minute
 
 // signatureForm is an Ed25519 signature, sixty-four bytes, in standard base64 with its padding.
-var signatureForm = regexp.MustCompile(`^[A-Za-z0-9+/]{86}==$`)
+//
+// The last character before the padding holds two bits of the signature and four of nothing, and
+// is one of the four characters whose four are zero: the decoder refuses the rest, so the grammar
+// does too, rather than taking in a spelling it then calls no signature.
+var signatureForm = regexp.MustCompile(`^[A-Za-z0-9+/]{85}[AQgw]==$`)
 
 // rotating checks a rotation the way the wire would, and answers the request time and the
 // signature it carries.

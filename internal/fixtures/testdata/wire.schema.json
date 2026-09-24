@@ -1682,7 +1682,7 @@
               "title": "Signature",
               "description": "The Ed25519 signature of the message the request describes, by the private half of the key whose public half the join sent, in standard base64 with its padding: sixty-four bytes, eighty-eight characters. Ed25519 because it is the algorithm the join accepts a key in, deterministic, so no random number generator on the host can weaken it, and in the standard library of every language an agent is likely to be written in. A signature by any other key is refused, and a host whose key is gone is a new runner, which joins again rather than proving itself some other way.",
               "type": "string",
-              "pattern": "^[A-Za-z0-9+/]{86}==$",
+              "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
               "examples": [
                 "dguPiG0uTjfUsOLqNa80c0tHa+k8W/bRaRTNBYO0gB9pUNh4DtAXuP8DyC9rJ3Svh9HK6HYBIbAwsrlhCuxUCg==",
                 "zCjtXRSpoCNQb/+xfUJQKZCzrFX9HT47AuRR8f8bgWzkeU1Tehxaw6tWDllc/mjxlYVM4yNxC4PlIr20e3U9Aw=="
