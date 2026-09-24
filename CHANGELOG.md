@@ -144,6 +144,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` refuses a remapped daemon without the three capabilities and a secrets directory that is not a tmpfs mounted `noexec,nosuid,nodev`, before any call to the API.
 - `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
 - Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
+- `agk-runner` is also an image for `linux/amd64` and `linux/arm64` (`build/runner.Dockerfile`): the agent and the static helper on scratch, run as `agentiik` (65532), holding the three capabilities as file capabilities on `agk-runner`, so the Compose form keeps `cap_drop: [ALL]` and adds only those three.
+- `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed binds none; a directory there refuses the start.
 
 ### Artifacts
 
@@ -277,6 +279,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 - The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
 - `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
+- A CI job builds the runner's image for both architectures, arm64 under QEMU, and runs `version` and `serve` in each as the Compose sample runs it, refused at the floor. On a remapped daemon, `serve` runs past the floor on the image's file capabilities alone, and with `no-new-privileges` is refused naming them.
 
 ## v0.1.2, 2026-09-13
 
