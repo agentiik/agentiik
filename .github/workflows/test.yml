@@ -55,9 +55,11 @@ jobs:
           done
 
       # The image the real-daemon tests run their containers from. A runner has a Docker
-      # daemon but no images, and a test never pulls one, since that would make it a test of
-      # somebody's registry, so without this step most of those tests skipped. A skip does
-      # not show in go test's output, and the job was as green as if they had run.
+      # daemon but no images, and a test that finds one missing skips rather than pull it,
+      # since that would make it a test of somebody's registry. It is fetched only as the
+      # base a fixture build pulls, or by agk run --local in the milestone test, so without
+      # this step every test that came before those skipped. A skip does not show in go
+      # test's output, and the job was as green as if they had run.
       # alpine:3.21 is the one image the tests and their fixtures name, pinned for the reason
       # the Go version is: a tag that moves changes what a branch nobody touched runs.
       - name: images
