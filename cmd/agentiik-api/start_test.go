@@ -131,8 +131,8 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 	go func() { served <- serve(ctx, s, ln, slog.New(slog.NewTextHandler(&logged, nil))) }()
 	c := client{t: t, base: "http://" + ln.Addr().String(), served: served}
 
-	// Nobody without the token gets anywhere: not with none, not with another, and not with a
-	// credential of the right shape for another hook.
+	// Nobody without the token gets anywhere: not with none, not with another, and not with the
+	// token's hash presented as the token.
 	for _, as := range []string{"", "agk_op_not-the-token", theHash} {
 		for _, r := range []struct {
 			method, path string
@@ -693,6 +693,14 @@ func TestStoppedBySIGTERMTheAPIFinishesWhatItIsAnsweringAndExitsZero(t *testing.
 	if _, err := sending.Write(content[:half]); err != nil {
 		t.Fatal(err)
 	}
+	// The write returns once the bytes are in the socket's buffers, which can be before the
+	// server has accepted the connection, and a connection still waiting to be accepted when the
+	// listener closes is reset. The file the store stages the object in is there once the
+	// handler is reading the body, which is the upload under way this test is about.
+	eventually(t, 10*time.Second, "the upload reaching the store", func() bool {
+		staged, _ := filepath.Glob(filepath.Join(c.Objects, "finance", "sha256", ".staging-*"))
+		return len(staged) > 0
+	}, out)
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
