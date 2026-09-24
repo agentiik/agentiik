@@ -61,10 +61,13 @@ func (s *Store) Namespace() string {
 // read past the limit: one byte more than the limit is all it takes to know, and reading
 // the remainder of an oversized artifact to say so would be the wrong price.
 //
-// The write is skipped when the object is already held, because the key is the digest of
-// the content: two steps producing identical bytes store one copy, and a replay that
-// recomputes the same content writes nothing. A runner's byte layer cannot ask, so a
-// runner sends the bytes again, and the store keeps the one copy it had.
+// The write is skipped when the byte layer says the object is already held, because the
+// key is the digest of the content: two steps producing identical bytes store one copy,
+// and a replay that recomputes the same content writes nothing where the byte layer can
+// ask, as the directory behind agk run --local can. A runner's cannot, so a server run
+// sends the bytes again and the built-in store writes them again under the same key.
+// That is still one copy, since they are the same bytes, and it costs the upload and the
+// write.
 func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reader) (agk.File, error) {
 	if err := checkURI(u); err != nil {
 		return agk.File{}, err

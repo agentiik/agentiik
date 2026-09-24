@@ -101,9 +101,9 @@ func New(o Options) (*Objects, error) {
 //
 // A runner has nothing to ask with. Its URLs read the objects its task was given and its policy
 // writes without reading, so it cannot know what the store holds. Store.Put then posts every
-// object it is handed, and the store, which hashes what arrives, holds identical bytes once
-// however many times they are sent: what a replay stores is unchanged, and only what it sends
-// is not.
+// object it is handed, and the built-in store writes one it already held again under the same
+// key. The store, which hashes what arrives, holds identical bytes once however many times they
+// are sent: a replay costs the upload and the write, and never a second copy.
 func (o *Objects) Has(ctx context.Context, _ string) (bool, error) {
 	return false, ctx.Err()
 }

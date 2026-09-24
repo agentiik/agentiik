@@ -107,7 +107,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Artifacts
 
-- `artifact/granted` is how a runner reads and writes objects. It reads through the presigned GET its task's redemption named for each key, and refuses any other key with `granted.ErrNotGranted` without sending anything. It writes through the task's upload policy: the policy's fields, then `key`, then `file`, last. It cannot ask what the store holds, so it posts every object, and the store keeps the one copy it had.
+- `artifact/granted` is how a runner reads and writes objects. It reads through the presigned GET its task's redemption named for each key, and refuses any other key with `granted.ErrNotGranted` without sending anything. It writes through the task's upload policy: the policy's fields, then `key`, then `file`, last. It cannot ask what the store holds, so it posts every object, and the built-in store writes one it already held again under the same key: a replay costs the upload and the write, never a second copy.
 - The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 
