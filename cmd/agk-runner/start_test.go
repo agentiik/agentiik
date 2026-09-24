@@ -423,7 +423,7 @@ func TestTheVerbsAreTheDocumentedThree(t *testing.T) {
 		}
 	}
 	if code := run(context.Background(), h.e, []string{"join", "--api", "https://agentiik.example.com", "--token", "agkjoin_x"}); code != exitRefused {
-		t.Errorf("join exited %d, and it is refused until it is built", code)
+		t.Errorf("join exited %d given a token that is not one, and it refuses it", code)
 	}
 
 	h.out.b.Reset()
