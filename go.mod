@@ -28,7 +28,8 @@ require (
 	// the next caller; this driver pins one. It also takes parameters natively, which is
 	// what keeps a namespace a parameter and never a string interpolated into SQL. The tests
 	// of package internal/config parse a database URL with it, since the reading that package
-	// makes of one is only right where it is the reading of the driver that connects.
+	// makes of one is only right where it is the reading of the driver that connects, and
+	// agentiik-api migrate opens with it the one connection db.Provision takes.
 	github.com/jackc/pgx/v5 v5.11.0
 	// NATS credentials, used by package bus to mint the "short-lived token minted by the API"
 	// that a runner reaches the bus with, and to sign the operator and the accounts an
@@ -41,15 +42,16 @@ require (
 	// cmd/agentiik-controller write such a file with it, and sign the accounts of the bus they
 	// run on.
 	github.com/nats-io/jwt/v2 v2.8.2
-	// The NATS server, used by packages bus and bus/control and by cmd/agentiik-controller in
-	// tests alone, and never linked into anything this module ships. What a runner credential
-	// may do is a permission set an installation depends on, and asserting the claims this
-	// module writes would be asserting its own JSON: the property that matters is what a server
-	// does with them. The first version of that set allowed $JS.API.> and let a runner create a
-	// stream, which is how this dependency came to be here. Those tests start it from the
-	// configuration bus.NewInstallation writes, so an installation's is the one they hold the
-	// credentials to. Package bus/control and the controller's program run their tests on a
-	// server of their own, since package bus empties the shared one before each of its tests.
+	// The NATS server, used by packages bus and bus/control and by cmd/agentiik-controller and
+	// cmd/agentiik-api in tests alone, and never linked into anything this module ships. What a
+	// runner credential may do is a permission set an installation depends on, and asserting the
+	// claims this module writes would be asserting its own JSON: the property that matters is
+	// what a server does with them. The first version of that set allowed $JS.API.> and let a
+	// runner create a stream, which is how this dependency came to be here. Those tests start it
+	// from the configuration bus.NewInstallation writes, so an installation's is the one they hold
+	// the credentials to, and agentiik-api's from what its bus-init wrote. Package bus/control and
+	// the two programs run their tests on a server of their own, since package bus empties the
+	// shared one before each of its tests.
 	github.com/nats-io/nats-server/v2 v2.15.0
 	// NATS, used by package bus alone, and in tests by bus/control, which publishes where a
 	// runner's credential would refuse to, and by cmd/agentiik-controller, which reads the

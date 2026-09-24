@@ -106,6 +106,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds `bus.AckWait` to the documented minute.
 - The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
 - `bus.NewInstallation` creates an installation's NATS operator, application account and system account, and writes its three files once, readable by their owner alone: `accounts.conf` for the server to include, `account.seed` for the API to mint runner credentials with, and `control-plane.creds` for the API and the controller. The operator's seed is kept nowhere. The bus tests run on a server started from that configuration, and the API and the controller read the files as written.
+- `bus.RenewControlPlane` mints the control plane a new credential under the account a bus directory holds and puts it in place of the old one in one rename, leaving the operator, the accounts and every queued task as they were. A seed the directory's `accounts.conf` does not trust is refused. It and `bus.NewInstallation` refuse a directory its group or anybody else may write to.
 
 ### Driver
 
@@ -208,6 +209,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
 - A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
 - A push is answered with `images`, the digest each tag of the version is recorded with. For a commit pushed before, those are its first push's, whatever the tag names now.
+- `agentiik-api` is the API as a program of its own, a static binary and an image run as a user that is not root, and the one program besides `api` that links the secret store. `serve` serves every route built so far with the built-in object store and the secret providers, finishes the requests under way for up to 30 seconds at SIGINT or SIGTERM, and warns once a day from 14 days before the control plane's bus credential expires; `migrate` applies the migrations and creates the application role; `bus-init` writes the bus identity with a 90-day control plane credential, and `bus-credential` renews it. Until v0.3.0, the token whose SHA-256 `AGK_OPERATOR_TOKEN_FILE` holds is allowed everything, and nobody else anything.
 
 ### Secrets
 
