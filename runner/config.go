@@ -330,6 +330,14 @@ func (r *reader) readFile() bool {
 		return false
 	}
 
+	return r.parse(text)
+}
+
+// parse reads the lines of runner.env into r.file, and says whether every one of them was taken.
+// It is apart from readFile so that join holds what it is about to write to the rules serve will
+// read it with.
+func (r *reader) parse(text []byte) bool {
+	path := r.path
 	known := map[string]bool{}
 	for _, name := range settings {
 		known[name] = true
@@ -355,16 +363,8 @@ func (r *reader) readFile() bool {
 			r.refuse(path, fmt.Sprintf("line %d sets %s, which this runner does not read: a misspelled setting is refused rather than left to its default without a word", n, key))
 		case r.written[key]:
 			r.refuse(path, fmt.Sprintf("line %d sets %s a second time, and a file whose readers could each take a different one of the two is refused", n, key))
-		case strings.ContainsAny(value, "\r\x00"):
-			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a carriage return or a NUL, which one reader keeps and another drops: write the file with plain line endings", n, key))
-		case strings.ContainsAny(value, "\\$`"):
-			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a backslash, a $ or a backquote, which a systemd EnvironmentFile= or a Compose env_file reads as an escape or a substitution and this file keeps as written", n, key))
-		case strings.Contains(value, " #") || strings.Contains(value, "\t#"):
-			r.refuse(path, fmt.Sprintf("line %d, setting %s, holds a # after white space, which a Compose env_file reads as the start of a comment and this file keeps as part of the value", n, key))
-		case value != strings.TrimSpace(value):
-			r.refuse(path, fmt.Sprintf("line %d, setting %s, has white space around its value, which one reader keeps and another strips", n, key))
-		case strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`):
-			r.refuse(path, fmt.Sprintf("line %d, setting %s, is quoted, and this file is read as written: a quote one reader strips is a quote another keeps as part of the value", n, key))
+		case valueFault(value) != "":
+			r.refuse(path, fmt.Sprintf("line %d, setting %s, %s", n, key, valueFault(value)))
 		default:
 			r.written[key] = true
 			// Set to nothing is unset, in the file as in the environment.
@@ -376,6 +376,24 @@ func (r *reader) readFile() bool {
 		ok = false
 	}
 	return ok
+}
+
+// valueFault says what is wrong with a value of runner.env, or nothing where every reader of the
+// file reads it the same.
+func valueFault(value string) string {
+	switch {
+	case strings.ContainsAny(value, "\r\n\x00"):
+		return "holds a carriage return, a line break or a NUL, which one reader keeps and another drops, and a line break would start a line of its own: write the file with plain line endings"
+	case strings.ContainsAny(value, "\\$`"):
+		return "holds a backslash, a $ or a backquote, which a systemd EnvironmentFile= or a Compose env_file reads as an escape or a substitution and this file keeps as written"
+	case strings.Contains(value, " #") || strings.Contains(value, "\t#"):
+		return "holds a # after white space, which a Compose env_file reads as the start of a comment and this file keeps as part of the value"
+	case value != strings.TrimSpace(value):
+		return "has white space around its value, which one reader keeps and another strips"
+	case strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`):
+		return "is quoted, and this file is read as written: a quote one reader strips is a quote another keeps as part of the value"
+	}
+	return ""
 }
 
 // api is the address the API is reached at.
