@@ -160,11 +160,12 @@ func answerOf(r bus.TaskResult) (controller.Answer, error) {
 	}
 	if r.Usage != nil {
 		// Under the names the wire gives them, since the column holding it is read by a
-		// person and a console and never by the engine.
-		a.Usage = map[string]any{
-			"cpu_seconds":   r.Usage.CPUSeconds,
-			"max_rss_bytes": r.Usage.MaxRSSBytes,
-			"image_pull_ms": r.Usage.ImagePullMS,
+		// person and a console and never by the engine, and without the two sampled figures
+		// where the runner read no sample, as the wire carries them.
+		a.Usage = map[string]any{"image_pull_ms": r.Usage.ImagePullMS}
+		if r.Usage.CPUSeconds != nil && r.Usage.MaxRSSBytes != nil {
+			a.Usage["cpu_seconds"] = *r.Usage.CPUSeconds
+			a.Usage["max_rss_bytes"] = *r.Usage.MaxRSSBytes
 		}
 	}
 	return a, nil

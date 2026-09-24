@@ -125,8 +125,9 @@ type TaskResult struct {
 	State          agk.TaskState `json:"state"`
 
 	// ExitCode and the two instants describe a container, and are present exactly where one
-	// ran: "succeeded and failed report an exit code and a span, lost reports neither, because
-	// the point of lost is that there is no outcome to report".
+	// ran: "succeeded and failed report an exit code and a span; timed_out and cancelled report
+	// both wherever a container started, since a stopped container exits too; lost reports
+	// neither, because the point of lost is that there is no outcome to report".
 	ExitCode   *int      `json:"exit_code,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
@@ -164,12 +165,22 @@ type Log struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Usage is what the container consumed, from one read of its statistics.
+// Usage is what the container consumed and what its image cost to pull.
+//
+// The two figures spent inside the container are sampled from the daemon's statistics while it
+// runs, and travel together or not at all: a container that exited before the first sample was
+// read carries neither, because a zero there would be a measurement nobody made. They are pointers
+// so that a zero the daemon did count, a container that spent no CPU worth a sample, still travels
+// as one. The pull is timed on this side before the container starts, and is always there.
 type Usage struct {
-	CPUSeconds  float64 `json:"cpu_seconds"`
-	MaxRSSBytes int64   `json:"max_rss_bytes"`
-	ImagePullMS int64   `json:"image_pull_ms"`
+	CPUSeconds  *float64 `json:"cpu_seconds,omitempty"`
+	MaxRSSBytes *int64   `json:"max_rss_bytes,omitempty"`
+	ImagePullMS int64    `json:"image_pull_ms"`
 }
+
+// Check holds a result to the rules Report holds it to before it goes out, which is how a runner
+// that keeps a result to publish later refuses to keep one no publication would ever take.
+func (r TaskResult) Check() error { return r.check() }
 
 // encode writes a result the way it travels, once it is one a controller would read.
 func (r TaskResult) encode() ([]byte, error) {
@@ -282,8 +293,13 @@ func (r TaskResult) check() error {
 			return fmt.Errorf("the result of %s counts %d lines of log", r.IdempotencyKey, r.Log.Lines)
 		}
 	}
-	if u := r.Usage; u != nil && (u.CPUSeconds < 0 || u.MaxRSSBytes < 0 || u.ImagePullMS < 0) {
-		return fmt.Errorf("the result of %s measures a negative usage", r.IdempotencyKey)
+	if u := r.Usage; u != nil {
+		switch {
+		case (u.CPUSeconds == nil) != (u.MaxRSSBytes == nil):
+			return fmt.Errorf("the result of %s carries one of cpu_seconds and max_rss_bytes without the other, and the two are read off the same samples", r.IdempotencyKey)
+		case u.CPUSeconds != nil && (*u.CPUSeconds < 0 || *u.MaxRSSBytes < 0), u.ImagePullMS < 0:
+			return fmt.Errorf("the result of %s measures a negative usage", r.IdempotencyKey)
+		}
 	}
 	return nil
 }

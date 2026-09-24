@@ -372,7 +372,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 	if state == agk.TaskSucceeded || state == agk.TaskFailed {
 		result.ExitCode = e.Code
 	}
-	result.StartedAt, result.FinishedAt = d.moments(ctx, container)
+	result.StartedAt, result.FinishedAt = d.moments(ctx, t, container, dispatched)
 
 	var artifacts []agk.File
 	var ports []EndedPort
@@ -408,10 +408,14 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 		// the task is not failed for it and somebody is told.
 		d.say("driver: task " + string(t.ID) + ": the log sink failed: " + logErr.Error())
 	}
+	// The exit is told whatever the state, since a container stopped at its deadline or
+	// cancelled exited too, with the code the stop left, and a result reports it.
+	code := e.Code
 	d.observe(ctx, Event{
 		Task: t.ID, State: state, Container: container,
 		Log: ref, Outputs: ports, Artifacts: artifacts,
-		Usage: spent.usage(image),
+		Usage:    spent.usage(image),
+		ExitCode: &code, StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
 	})
 	return result, nil
 }
@@ -458,10 +462,18 @@ func (d *Docker) refused(ctx context.Context, t graph.Task, container string, us
 	if logErr != nil {
 		d.say("driver: task " + string(t.ID) + ": the log sink failed: " + logErr.Error())
 	}
-	d.observe(ctx, Event{
+	ended := Event{
 		Task: t.ID, State: agk.TaskFailed, Container: container,
 		Log: ref, Usage: usage, Err: err,
-	})
+	}
+	// The exit is told as the key is written down: ExitContractBroken and the span where the
+	// brick broke the contract, and none where the platform failed it, which the record
+	// writes with neither.
+	if charge == ChargeBrick {
+		code := ExitContractBroken
+		ended.ExitCode, ended.StartedAt, ended.FinishedAt = &code, r.StartedAt, r.FinishedAt
+	}
+	d.observe(ctx, ended)
 	if charge != ChargeBrick {
 		return exited(t.ID, err)
 	}
@@ -652,12 +664,23 @@ func (d *Docker) replay(ctx context.Context, container string, log *taskLog, std
 
 // moments are the two the daemon itself recorded, rather than a clock on this side, so
 // that the same task read twice reports the same pair.
-func (d *Docker) moments(ctx context.Context, container string) (started, finished time.Time) {
-	in, err := d.cli.ContainerInspect(ctx, container)
-	if err != nil {
-		return time.Time{}, time.Time{}
+//
+// They are asked for whatever became of the task's context, since the container has
+// exited and its span is part of its ending. Where the daemon cannot say, the span is the
+// one this side can vouch for, from the dispatch to the moment the exit was read, which
+// the key is written down with so that a second report says the same. A container that
+// exited with no span at all would read as one that never started, and its exit code would
+// go with the span: a success would read as a failure no retry names, and a transient
+// failure as one that is never retried, for a question the daemon did not answer.
+func (d *Docker) moments(ctx context.Context, t graph.Task, container string, dispatched time.Time) (started, finished time.Time) {
+	ask, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
+	defer cancel()
+	in, err := d.cli.ContainerInspect(ask, container)
+	if err == nil && !in.State.StartedAt.IsZero() && !in.State.FinishedAt.IsZero() {
+		return in.State.StartedAt, in.State.FinishedAt
 	}
-	return in.State.StartedAt, in.State.FinishedAt
+	d.say("driver: task " + string(t.ID) + ": the daemon did not say when its container ran, so its span is taken from the dispatch to the moment its exit was read")
+	return dispatched, d.now()
 }
 
 // openLog opens the task's log sink, and answers with a close that is safe to call
