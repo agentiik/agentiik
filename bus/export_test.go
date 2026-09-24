@@ -5,8 +5,9 @@ import (
 	"time"
 )
 
-// What the tests of package bus_test reach for inside this one. They put the API and the database
-// beside the bus, and the API imports this package, so they cannot be written inside it.
+// What the tests of package bus_test reach for inside this one. They put the API, the database and
+// package bus/control beside the bus, and the API and bus/control import this package, so they
+// cannot be written inside it.
 
 // Opened is a bus with empty queues and the consumers the control plane makes, which is what every
 // test of this package starts from.
