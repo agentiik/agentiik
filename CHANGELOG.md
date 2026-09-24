@@ -46,6 +46,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agentiik-controller` runs the controller as a program of its own, a static binary and an image run as a user that is not root, linking no secret store. It stands by until it holds the lock, then watches, sweeps and takes results off the bus, with `max_requeues` from `AGK_MAX_REQUEUES` and the ceiling from `AGK_TASK_CEILING`. A run it cannot decide is reported and left to the sweep; a fenced write or an expired bus credential ends it.
 - `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking, unlistening and rolling back on the way out wait five seconds at most.
 - `agentiik-controller` asks PostgreSQL to probe its connections every few seconds, so a controller cut off without a reset frees the lock within half a minute rather than two hours. A second SIGINT or SIGTERM ends a process still stopping.
+- A task reads `running` while its container runs and `publishing` while its outputs go up, rather than `dispatched` until it ends. `Core.Progress` writes what the runner holding the dispatch reports, only forwards and never over an ending or on a run that has ended; another runner's is refused with `controller.ErrNotTheHolder`, and one arriving before the dispatch is recorded comes round again. A decision no longer moves such a row back to `dispatched`.
 
 ### State
 
@@ -112,7 +113,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
 - A task message leaves `to` off a file the step asked for no relocation of, the short form of a selector and a long form setting only a mode, where it wrote `"to": ""`, which the wire refuses. The vendored `wire.schema.json` makes `to` optional, and a runner reads it absent as no relocation.
 - `bus.NewInstallation` creates an installation's NATS operator, application account and system account, and writes its three files once, readable by their owner alone: `accounts.conf` for the server to include, `account.seed` for the API to mint runner credentials with, and `control-plane.creds` for the API and the controller. The operator's seed is kept nowhere. The bus tests run on a server started from that configuration, and the API and the controller read the files as written.
+- `Bus.Progress` publishes a task's `running` and `publishing` on the runner's own results subject, as `wire.schema.json` `$defs/taskProgress`, told from a result by its `progress` keyword. `Bus.Reports` and `control.Queue.Answers` take a second function for it, and a runner credential or a revoked runner's needs nothing new.
 - `bus.RenewControlPlane` mints the control plane a new credential under the account a bus directory holds and puts it in place of the old one in one rename, leaving the operator, the accounts and every queued task as they were. A seed the directory's `accounts.conf` does not trust is refused. It and `bus.NewInstallation` refuse a directory its group or anybody else may write to.
+- `taskResult.usage` carries `cpu_seconds` and `max_rss_bytes` together or not at all, omitted where no sample was read, so `bus.Usage` holds them as pointers and a result carrying one without the other is refused.
+- The vendored wire says a stopped container reports the code its stop left, a runner reports 121 for refused outputs, and a task that did not succeed publishes no port.
+- `bus.TaskResult.Check` holds a result to what `Report` holds it to.
 
 ### Driver
 
@@ -147,6 +152,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `driver.KernelHost` is the `Host` a `Config` without one uses, for a caller asking the same of another directory.
 - The terminal `driver.Event` of a container the driver watched run carries `cpu_seconds` and `max_rss_bytes`, sampled from the daemon's statistics (`GET /containers/{id}/stats`) while it runs: the last processor total, and the highest memory less its inactive page cache. A container gone before any sample reports neither rather than a guess, and `driver.Usage.Sampled` tells the two apart from a zero that was counted.
 - A pull that happened reports at least 1 in `image_pull_ms`, since 0 says the host already held the image.
+- The terminal `driver.Event` of a container that ran carries its exit code and span, so a container stopped at its deadline or cancelled tells the code its stop left (137 or 143), which the record of its key keeps, and one whose outputs were refused tells 121.
+- Where the daemon cannot give a container's span after its exit, the span runs from the dispatch to the moment the exit was read, rather than reading as a container that never started.
 
 ### Runner
 
@@ -163,6 +170,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `runner.TaskOf` reads a task message back as the task the controller wrote it from, and a test holds it to `messageOf` over the corpus and over tasks drawn at random.
 - `agk-runner` is also an image for `linux/amd64` and `linux/arm64` (`build/runner.Dockerfile`): the agent and the static helper on scratch, run as `agentiik` (65532), holding the three capabilities as file capabilities on `agk-runner`, so the Compose form keeps `cap_drop: [ALL]` and adds only those three.
 - `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
+- `runner.Carrier` runs an assembled task and reports its ending as the wire's `taskResult` once `driver.Run` has returned and the trees are gone, never from the terminal event: the exit code wherever a container ran, ports and artifacts by digest (empty lists where it did not succeed), the log at `agk.NewLogURI` and the usage. A task that reached no container is reported `failed` and nothing else. `runner.EndingOf` reports a recorded ending for `Bus.Ended`.
+- A result is written under `<work root>/.results` before it is published and taken away once the bus has it, so one the bus did not take goes out with `Results.Flush`, after a restart too, and `Results.Keys` names its key for the heartbeat until then. A kept result of another runner, left by a host that joined again, is taken away.
 
 ### Artifacts
 

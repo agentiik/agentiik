@@ -135,22 +135,34 @@ func aResult(task graph.Task) bus.TaskResult {
 			Port: "ok", Digest: "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1,
 		}},
 		Log:   &bus.Log{URI: log.String(), Lines: 412},
-		Usage: &bus.Usage{CPUSeconds: 12.4, MaxRSSBytes: 198443008},
+		Usage: &bus.Usage{CPUSeconds: new(12.4), MaxRSSBytes: new(int64(198443008))},
 	}
 }
 
 // answering runs Answers until the test ends, handing each answer to fn and on to the channel it
-// answers.
+// answers, and taking every progress message as recorded.
 func answering(t *testing.T, q *Queue, fn func(controller.Answer) error) <-chan controller.Answer {
+	t.Helper()
+	answers, _ := hearing(t, q, fn, func(controller.Progress) error { return nil })
+	return answers
+}
+
+// hearing runs Answers until the test ends, handing each answer to fn and each progress message to
+// progress, and each on to the channel of its kind.
+func hearing(t *testing.T, q *Queue, fn func(controller.Answer) error, progress func(controller.Progress) error) (<-chan controller.Answer, <-chan controller.Progress) {
 	t.Helper()
 	ctx, stop := context.WithCancel(t.Context())
 	got := make(chan controller.Answer, 16)
+	moved := make(chan controller.Progress, 16)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		if err := q.Answers(ctx, func(_ context.Context, a controller.Answer) error {
 			got <- a
 			return fn(a)
+		}, func(_ context.Context, p controller.Progress) error {
+			moved <- p
+			return progress(p)
 		}); err != nil && ctx.Err() == nil {
 			t.Errorf("taking results: %s", err)
 		}
@@ -159,7 +171,7 @@ func answering(t *testing.T, q *Queue, fn func(controller.Answer) error) <-chan 
 		stop()
 		<-done
 	})
-	return got
+	return got, moved
 }
 
 // publishing is a connection that publishes a result on whatever subject it is told, which is what
@@ -413,6 +425,81 @@ func TestAResultNamingAnotherRunnerIsTakenOffAndReported(t *testing.T) {
 		t.Errorf("the controller was handed it after all: %+v", a)
 	case err := <-trouble:
 		t.Errorf("it was said twice, the second time as %q", err)
+	case <-time.After(2 * time.Second):
+	}
+}
+
+// A runner's progress comes back as the controller takes it: the key, the dispatch its task_id
+// names, the state, and the runner whose subject it came on. It is not taken for an answer.
+func TestProgressComesBackAsTheControllerTakesIt(t *testing.T) {
+	b, _ := served(t)
+	task := aTask(step(t))
+	sent := bus.TaskProgress{TaskID: ulid.New(), IdempotencyKey: string(task.ID), Runner: "runner-dmz-02", Progress: agk.TaskPublishing}
+	if err := b.Progress(t.Context(), sent); err != nil {
+		t.Fatal(err)
+	}
+
+	answers, moved := hearing(t, New(b), func(controller.Answer) error { return nil }, func(controller.Progress) error { return nil })
+	select {
+	case p := <-moved:
+		if want := (controller.Progress{Task: task.ID, Row: sent.TaskID, State: agk.TaskPublishing, Runner: "runner-dmz-02"}); p != want {
+			t.Errorf("the progress came back as %+v, want %+v", p, want)
+		}
+	case a := <-answers:
+		t.Fatalf("progress came back as an answer: %+v", a)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no progress reached the controller")
+	}
+}
+
+// Progress is held to the rules a result is held to: one naming a runner other than the one whose
+// subject it came on is never shown to the controller, and one the controller refuses with
+// controller.ErrNotAResult is not delivered again. Both are taken off the queue and said out loud.
+func TestProgressNoDeliveryWouldChangeIsTakenOffAndReported(t *testing.T) {
+	b, url := served(t)
+	trouble := make(chan error, 8)
+	b.Trouble = func(_ string, err error) { trouble <- err }
+
+	task := aTask(step(t))
+	impostor, err := json.Marshal(bus.TaskProgress{TaskID: ulid.New(), IdempotencyKey: string(task.ID), Runner: "runner-dmz-02", Progress: agk.TaskRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishing(t, url).Publish(t.Context(), bus.ResultSubject("runner-lan-01"), impostor); err != nil {
+		t.Fatal(err)
+	}
+	refused := bus.TaskProgress{TaskID: ulid.New(), IdempotencyKey: string(task.ID), Runner: "runner-dmz-02", Progress: agk.TaskRunning}
+	if err := b.Progress(t.Context(), refused); err != nil {
+		t.Fatal(err)
+	}
+
+	_, moved := hearing(t, New(b), func(controller.Answer) error { return nil }, func(p controller.Progress) error {
+		return fmt.Errorf("%w: %w: %s is bound to runner-lan-01", controller.ErrNotAResult, controller.ErrNotTheHolder, p.Task)
+	})
+	heard := 0
+	for said := 0; said < 2; {
+		select {
+		case err := <-trouble:
+			if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
+				t.Errorf("what was said reads %q", err)
+			}
+			said++
+		case p := <-moved:
+			if p.Row != refused.TaskID {
+				t.Fatalf("the controller was handed progress runner-lan-01 published as runner-dmz-02: %+v", p)
+			}
+			if heard++; heard > 1 {
+				t.Fatalf("progress the controller refused was delivered again: %+v", p)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatalf("%d refusals were said, of two", said)
+		}
+	}
+	select {
+	case p := <-moved:
+		t.Errorf("progress came round again: %+v", p)
+	case err := <-trouble:
+		t.Errorf("something more was said: %q", err)
 	case <-time.After(2 * time.Second):
 	}
 }

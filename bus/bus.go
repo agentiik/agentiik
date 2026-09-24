@@ -108,7 +108,7 @@ func Open(ctx context.Context, o Options) (*Bus, error) {
 
 	results, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:        Results,
-		Description: "One result per attempt, removed once the controller has recorded it.",
+		Description: "One result per attempt, and the running and publishing of each dispatch before it, removed once the controller has taken them.",
 		Subjects:    []string{ResultSubject("*")},
 		Retention:   jetstream.WorkQueuePolicy,
 		Discard:     jetstream.DiscardOld,

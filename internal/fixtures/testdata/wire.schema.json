@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.agentiik.dev/wire.schema.json",
   "title": "The wire",
-  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage or $defs/taskResult and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
+  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
   "$defs": {
     "taskMessage": {
       "title": "Task message",
@@ -562,7 +562,7 @@
     },
     "taskResult": {
       "title": "Task result",
-      "description": "What a runner publishes when a task ends, and the only message the controller reads to decide what happens next: whether the step is done, whether it is retried, what the next tasks are handed and what the run detail shows. It names the task twice, by dispatch and by idempotency key, and repeats nothing the key already spells, so the run, the step, the attempt and the shard have one source on the wire rather than two that can disagree. It carries no item and no artifact content: what travels is a digest per port and a digest per artifact, which is what lets the controller schedule on metadata while the payload stays behind run:read_data. The fields that describe a container are present exactly where a container ran, and the state says which case this is: succeeded and failed report an exit code and a span, lost reports neither, because the point of lost is that there is no outcome to report. The bus delivers at least once, so the controller has to read a redelivered result as the same result; nothing here is a counter it could add twice.",
+      "description": "What a runner publishes when a task ends, and the only message the controller reads to decide what happens next: whether the step is done, whether it is retried, what the next tasks are handed and what the run detail shows. It names the task twice, by dispatch and by idempotency key, and repeats nothing the key already spells, so the run, the step, the attempt and the shard have one source on the wire rather than two that can disagree. It carries no item and no artifact content: what travels is a digest per port and a digest per artifact, which is what lets the controller schedule on metadata while the payload stays behind run:read_data. The fields that describe a container are present exactly where a container ran, and the state says which case this is: succeeded and failed report an exit code and a span; timed_out and cancelled report both wherever a container started, since a stopped container exits too; lost reports neither, because the point of lost is that there is no outcome to report. The bus delivers at least once, so the controller has to read a redelivered result as the same result; nothing here is a counter it could add twice.",
       "type": "object",
       "required": [
         "task_id",
@@ -591,7 +591,7 @@
       },
       "allOf": [
         {
-          "$comment": "A container that ran under a state that reports an outcome exited, and an exit is a code and an instant. With the dependentRequired above, exit_code and started_at imply each other in those two states, which is the whole of the rule that an exit code exists where a container ran and does not where none did.",
+          "$comment": "A container that ran under a state that reports an outcome exited, and an exit is a code and an instant. With the dependentRequired above, exit_code and started_at imply each other in those two states. A timed_out or cancelled task carries a code wherever its container started too, as the descriptions say, and that is not enforced here: a host that recorded such an ending before it kept the code a stop left still answers a requeue from that record, and a schema refusing the answer would leave the requeue with none.",
           "if": {
             "properties": {
               "state": {
@@ -690,7 +690,7 @@
         },
         "state": {
           "$ref": "#/$defs/taskState",
-          "description": "How the task ended, which is one of the five endings and never a state it passed through: a heartbeat is what says a task is still running, and a result saying so would be a result for work that has not finished. succeeded and failed come from the container's own exit; lost is declared by the controller rather than reported here, and travels on a result only where a runner recovers one it had already lost; timed_out and cancelled are the runner stopping the container, the first at the step's deadline and the second because the run was cancelled.",
+          "description": "How the task ended, which is one of the five endings and never a state it passed through: a progress message, $defs/taskProgress, is what says a task is running or publishing, and a result saying so would be a result for work that has not finished. succeeded and failed come from the container's own exit; lost is declared by the controller rather than reported here, and travels on a result only where a runner recovers one it had already lost; timed_out and cancelled are the runner stopping the container, the first at the step's deadline and the second because the run was cancelled.",
           "enum": [
             "succeeded",
             "failed",
@@ -706,7 +706,7 @@
         },
         "exit_code": {
           "title": "Exit code",
-          "description": "The status the container exited with, present wherever one ran. Nothing else declares the verdict: 0 is success, 1 to 99 is an application failure retried only where retry.on says so, 100 to 119 is transient and retried by the step policy, 120 is never retried whatever retry says, 121 to 124 are reserved for the runner, and 125 and above is read as infrastructure and charged to the runner rather than to the brick. The ceiling is 255 and not 124 because a container stopped at its deadline reports 128 plus the signal, so 137 is an ordinary value here and not an eighth band.",
+          "description": "The status the container exited with, present wherever one ran. Nothing else declares the verdict: 0 is success, 1 to 99 is an application failure retried only where retry.on says so, 100 to 119 is transient and retried by the step policy, 120 is never retried whatever retry says, 121 to 124 are reserved for the runner, which reports 121 for a container that exited 0 and whose outputs broke the output contract, and 125 and above is read as infrastructure and charged to the runner rather than to the brick. The ceiling is 255 and not 124 because a container stopped at its deadline reports 128 plus the signal, so 137 is an ordinary value here and not an eighth band: a timed_out or cancelled task carries the code its stop left wherever its container started.",
           "type": "integer",
           "minimum": 0,
           "maximum": 255,
@@ -714,6 +714,7 @@
             0,
             108,
             120,
+            121,
             137
           ]
         },
@@ -733,7 +734,7 @@
         },
         "outputs": {
           "title": "Published ports",
-          "description": "One entry per declared output port, naming the envelope published on it. Every declared port appears, including the ones the container never wrote, because an unwritten port publishes an empty envelope and an empty envelope has a digest like any other. A failed task may carry ports too: the documentation's own result example is a failed task publishing two of them, which is how a brick separates the items it rejected from the run failing whole. uniqueItems refuses the same entry twice; that two entries name one port with different digests is a thing the controller refuses, not a shape this schema can describe.",
+          "description": "One entry per declared output port, naming the envelope published on it. Every declared port appears, including the ones the container never wrote, because an unwritten port publishes an empty envelope and an empty envelope has a digest like any other. A task that did not succeed publishes none, and says so with an empty list wherever its container ran: its step publishes an empty envelope on each port for it, which is the engine's rule for a shard that failed, so a brick that sets rejected items apart does it on a port of a success. uniqueItems refuses the same entry twice; that two entries name one port with different digests is a thing the controller refuses, not a shape this schema can describe.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -901,18 +902,24 @@
         },
         "usage": {
           "title": "Usage",
-          "description": "What the container actually consumed, measured by the runner because nothing else can see it and reported here because the container is gone by the time anyone asks. It is what an author reads before changing resources, and what an operator reads when a ceiling turns out to be the thing that failed. The three figures come from one read of the container's statistics, so a result carrying a usage block carries all three: two numbers and a gap is a number nobody can compare.",
+          "description": "What the container actually consumed, measured by the runner because nothing else can see it and reported here because the container is gone by the time anyone asks. It is what an author reads before changing resources, and what an operator reads when a ceiling turns out to be the thing that failed. cpu_seconds and max_rss_bytes are read off the same samples of the container's statistics, taken while it runs, so they travel together or not at all: a container that exited before the first sample was read carries neither, because a zero there would be a measurement nobody made. image_pull_ms is timed before the container starts and is always there.",
           "type": "object",
           "required": [
-            "cpu_seconds",
-            "max_rss_bytes",
             "image_pull_ms"
           ],
+          "dependentRequired": {
+            "cpu_seconds": [
+              "max_rss_bytes"
+            ],
+            "max_rss_bytes": [
+              "cpu_seconds"
+            ]
+          },
           "additionalProperties": false,
           "properties": {
             "cpu_seconds": {
               "title": "CPU seconds",
-              "description": "CPU time consumed, in seconds. It is not the wall clock span between started_at and finished_at, and the two differ by however oversubscribed the host was, which is the difference an author has to see before blaming the brick for a slow step.",
+              "description": "CPU time consumed, in seconds. It is not the wall clock span between started_at and finished_at, and the two differ by however oversubscribed the host was, which is the difference an author has to see before blaming the brick for a slow step. Absent, with max_rss_bytes, where no sample was read.",
               "type": "number",
               "minimum": 0,
               "examples": [
@@ -922,7 +929,7 @@
             },
             "max_rss_bytes": {
               "title": "Peak resident set",
-              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened.",
+              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened. Absent, with cpu_seconds, where no sample was read.",
               "type": "integer",
               "minimum": 0,
               "examples": [
@@ -945,6 +952,9 @@
               "cpu_seconds": 12.4,
               "max_rss_bytes": 198443008,
               "image_pull_ms": 0
+            },
+            {
+              "image_pull_ms": 3184
             }
           ]
         }
@@ -958,24 +968,8 @@
           "exit_code": 108,
           "started_at": "2026-09-10T06:41:09.104Z",
           "finished_at": "2026-09-10T06:42:32.117Z",
-          "outputs": [
-            {
-              "port": "out",
-              "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
-              "items": 0
-            },
-            {
-              "port": "error",
-              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
-              "items": 3
-            }
-          ],
-          "artifacts": [
-            {
-              "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
-              "bytes": 1284
-            }
-          ],
+          "outputs": [],
+          "artifacts": [],
           "log": {
             "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
             "lines": 412,
@@ -1041,6 +1035,73 @@
           "runner": "runner-dmz-02",
           "state": "lost",
           "started_at": "2026-09-10T06:41:09.104Z"
+        }
+      ]
+    },
+    "taskProgress": {
+      "title": "Task progress",
+      "description": "What a runner publishes when a task it holds moves on without ending: running once its container has started, and publishing once the container has exited and its outputs are being collected and uploaded. It travels on the same subject as that runner's results, so the subject vouches for who sent it exactly as it does for a result, and the controller writes it on the row of the dispatch it names, so that a run read through the API shows a step running while its container runs rather than dispatched until it ends. It is taken only from the runner the dispatch is bound to, only forwards, and never after an ending: a copy delivered late, or one overtaken by the result, changes nothing. It is told apart from a result by its progress keyword, which a result never carries, where a result carries state, which this never does, so a reader holding one document from the results subject knows which of the two it is before reading anything else. It carries no instant: the ending carries the container's span as the container reports it, and a second clock writing started_at would be a second answer to one question. The object is closed, as a result is, so that a progress message cannot come to carry an outcome.",
+      "type": "object",
+      "required": [
+        "task_id",
+        "idempotency_key",
+        "runner",
+        "progress"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The dispatch that moved on, carried back unchanged from the task message, as a result carries it. A requeue after loss keeps the idempotency key and takes a new task_id, so this is what says which dispatch of the key the runner holds, and a host still running a dispatch that was declared lost moves nothing on the requeue somebody else holds.",
+          "examples": [
+            "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+            "01M2AAZ9G62NQXFAFCXKRPJEH5"
+          ]
+        },
+        "idempotency_key": {
+          "$ref": "#/$defs/idempotencyKey",
+          "description": "The unit of work the dispatch belongs to. It travels beside task_id, as in a result, and the two are compared with what the controller recorded, so that a message naming a dispatch of one key under another moves nothing.",
+          "examples": [
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+            "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1"
+          ]
+        },
+        "runner": {
+          "title": "Runner",
+          "description": "The runner holding the task, under the name it joined with, which is also the last token of the subject the message arrives on. A message whose runner is not the one whose subject it came on is refused rather than believed, and so is one from a runner the dispatch is not bound to, because a machine of the pool able to move another machine's task would be able to show work running that nobody runs.",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "examples": [
+            "runner-dmz-02",
+            "runner-lan-01"
+          ]
+        },
+        "progress": {
+          "title": "Progress",
+          "description": "The state the task has reached, one of the two between dispatched and an ending that only its runner can see. running: the container has started. publishing: the container has exited and its outputs are being collected and uploaded, a state of its own because the result is not yet safe and losing a runner here is not losing one mid-run. A task only moves forwards, so publishing after publishing, or running after publishing, is a copy and changes nothing. It is spelled progress rather than state so that no document is both a result and a progress message: a reader decides which it holds by the keyword and never by the value.",
+          "type": "string",
+          "enum": [
+            "running",
+            "publishing"
+          ],
+          "examples": [
+            "running",
+            "publishing"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "task_id": "01JMZ8V1PC7K3M0QR9TSVWXYZB",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/2/3/8",
+          "runner": "runner-dmz-02",
+          "progress": "running"
+        },
+        {
+          "task_id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "idempotency_key": "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1",
+          "runner": "runner-lan-01",
+          "progress": "publishing"
         }
       ]
     },

@@ -125,8 +125,9 @@ type TaskResult struct {
 	State          agk.TaskState `json:"state"`
 
 	// ExitCode and the two instants describe a container, and are present exactly where one
-	// ran: "succeeded and failed report an exit code and a span, lost reports neither, because
-	// the point of lost is that there is no outcome to report".
+	// ran: "succeeded and failed report an exit code and a span; timed_out and cancelled report
+	// both wherever a container started, since a stopped container exits too; lost reports
+	// neither, because the point of lost is that there is no outcome to report".
 	ExitCode   *int      `json:"exit_code,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
@@ -164,12 +165,22 @@ type Log struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Usage is what the container consumed, from one read of its statistics.
+// Usage is what the container consumed and what its image cost to pull.
+//
+// The two figures spent inside the container are sampled from the daemon's statistics while it
+// runs, and travel together or not at all: a container that exited before the first sample was
+// read carries neither, because a zero there would be a measurement nobody made. They are pointers
+// so that a zero the daemon did count, a container that spent no CPU worth a sample, still travels
+// as one. The pull is timed on this side before the container starts, and is always there.
 type Usage struct {
-	CPUSeconds  float64 `json:"cpu_seconds"`
-	MaxRSSBytes int64   `json:"max_rss_bytes"`
-	ImagePullMS int64   `json:"image_pull_ms"`
+	CPUSeconds  *float64 `json:"cpu_seconds,omitempty"`
+	MaxRSSBytes *int64   `json:"max_rss_bytes,omitempty"`
+	ImagePullMS int64    `json:"image_pull_ms"`
 }
+
+// Check holds a result to the rules Report holds it to before it goes out, which is how a runner
+// that keeps a result to publish later refuses to keep one no publication would ever take.
+func (r TaskResult) Check() error { return r.check() }
 
 // encode writes a result the way it travels, once it is one a controller would read.
 func (r TaskResult) encode() ([]byte, error) {
@@ -282,10 +293,89 @@ func (r TaskResult) check() error {
 			return fmt.Errorf("the result of %s counts %d lines of log", r.IdempotencyKey, r.Log.Lines)
 		}
 	}
-	if u := r.Usage; u != nil && (u.CPUSeconds < 0 || u.MaxRSSBytes < 0 || u.ImagePullMS < 0) {
-		return fmt.Errorf("the result of %s measures a negative usage", r.IdempotencyKey)
+	if u := r.Usage; u != nil {
+		switch {
+		case (u.CPUSeconds == nil) != (u.MaxRSSBytes == nil):
+			return fmt.Errorf("the result of %s carries one of cpu_seconds and max_rss_bytes without the other, and the two are read off the same samples", r.IdempotencyKey)
+		case u.CPUSeconds != nil && (*u.CPUSeconds < 0 || *u.MaxRSSBytes < 0), u.ImagePullMS < 0:
+			return fmt.Errorf("the result of %s measures a negative usage", r.IdempotencyKey)
+		}
 	}
 	return nil
+}
+
+// TaskProgress is agentiik/schemas wire.schema.json, $defs/taskProgress: what a runner publishes
+// when a task it holds moves on without ending, running once its container has started and
+// publishing once the container has exited and its outputs are being uploaded.
+//
+// It goes on the runner's results subject, because that subject is what says who sent it, and a
+// runner that could say a task was running on a subject anybody may publish on could show work
+// running that nobody runs. Two kinds of message on one subject have to be told apart before either
+// is read, so this one says progress where a result says state, and neither carries the other's
+// keyword. It carries no instant: the ending carries the container's span as the container reports
+// it, and a second clock writing started_at would be a second answer to one question.
+type TaskProgress struct {
+	TaskID         string        `json:"task_id"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	Runner         string        `json:"runner"`
+	Progress       agk.TaskState `json:"progress"`
+}
+
+// encode writes a progress message the way it travels, once it is one a controller would read.
+func (p TaskProgress) encode() ([]byte, error) {
+	if err := p.check(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(p)
+}
+
+// check holds a progress message to the rules the controller acts on: which dispatch, which
+// runner, and a state between dispatched and an ending.
+func (p TaskProgress) check() error {
+	if !isULID(p.TaskID) {
+		return fmt.Errorf("task_id %q is not a dispatch identifier: a progress message carries back the one its task message carried", p.TaskID)
+	}
+	if err := agk.TaskID(p.IdempotencyKey).Validate(); err != nil {
+		return fmt.Errorf("idempotency_key: %w", err)
+	}
+	if err := validRunner(p.Runner); err != nil {
+		return fmt.Errorf("the progress of %s: %w", p.IdempotencyKey, err)
+	}
+	if p.Progress != agk.TaskRunning && p.Progress != agk.TaskPublishing {
+		return fmt.Errorf("the progress of %s is %s, and a task only reports running or publishing on its way to an ending, which a result reports", p.IdempotencyKey, p.Progress)
+	}
+	return nil
+}
+
+// readProgress reads one progress message off the bus, closed as readResult reads a result and for
+// the same reasons.
+func readProgress(body []byte) (TaskProgress, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	var p TaskProgress
+	if err := dec.Decode(&p); err != nil {
+		return TaskProgress{}, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return TaskProgress{}, errors.New("a progress message is one document, and this message carries more after it")
+	}
+	if err := p.check(); err != nil {
+		return TaskProgress{}, err
+	}
+	return p, nil
+}
+
+// isProgress says whether a document off a results subject is a progress message rather than a
+// result, which is whether it carries the keyword progress at its top level. Only the keyword is
+// read, and nothing about its value: a document that is neither is refused by whichever reader it
+// goes to, and one carrying both keywords by readProgress, which knows no state.
+func isProgress(body []byte) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return false
+	}
+	_, ok := top["progress"]
+	return ok
 }
 
 // isULID holds an identifier to the alphabet the engine mints in, and not to a length: the
