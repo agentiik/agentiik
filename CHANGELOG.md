@@ -119,7 +119,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
-- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick; a store that will not take outputs that passed is `failed` with 125 (`driver.ExitOutputsUnwritten`), charged to the platform. Either key is written down with its code and span, and Run's error keeps the `*agk.Refusal` and `driver.ErrOutputsRefused` for `errors.As` and `errors.Is`.
+- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick, and its key is written down with that code and its span. Run's error keeps the `*agk.Refusal` for `errors.As` and is `driver.ErrOutputsRefused`, since `driver.Fault.Unwrap` now answers the error its detail wraps beside its sentinel. A store that will not take outputs that passed is charged to the platform.
 - A container stopped at its deadline or by a stop is logged as `timed_out` or `cancelled`, and no longer as the runtime's failure its kill code reads as.
 
 ### Artifacts
@@ -228,6 +228,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
+- `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
 
 ### Tests
 
