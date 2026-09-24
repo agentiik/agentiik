@@ -262,6 +262,24 @@ type Inspected struct {
 	// read this one, because the container it adopts may have been started by
 	// anything.
 	Mounts []MountPoint `json:"Mounts,omitempty"`
+
+	// NetworkSettings is what the container is on, as the daemon attached it, which is
+	// the answer to whether a task is on its own network rather than what its create
+	// asked for.
+	NetworkSettings *NetworkSettings `json:"NetworkSettings,omitempty"`
+}
+
+// NetworkSettings is the networks a container is attached to, by network name.
+type NetworkSettings struct {
+	Networks map[string]Endpoint `json:"Networks,omitempty"`
+}
+
+// Endpoint is a container's place on one network: the network, and its address there.
+type Endpoint struct {
+	NetworkID   string `json:"NetworkID,omitempty"`
+	IPAddress   string `json:"IPAddress,omitempty"`
+	IPPrefixLen int    `json:"IPPrefixLen,omitempty"`
+	Gateway     string `json:"Gateway,omitempty"`
 }
 
 // MountPoint is one mount of a container as the daemon resolved it. The names are the
