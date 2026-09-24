@@ -620,6 +620,56 @@ func TestASecretPassedAsAValueIsRefused(t *testing.T) {
 	}
 }
 
+// A password holding a /, a ?, a # or a % is where parsers part ways. net/url reads the user and
+// the start of the password as a host and a port and quotes them in its error, quotes a % and what
+// follows it, or, where the password begins with digits, reads no user at all and takes the rest
+// for a path. Whichever happens, the URL is refused as carrying a secret, pointing at the file the
+// secret belongs in, and no piece of the password is repeated.
+func TestAPasswordAParserMisreadsIsRefusedAndNotRepeated(t *testing.T) {
+	type misread struct {
+		variable string
+		value    string
+		pieces   []string
+		instead  string
+		programs []program
+	}
+	database, migration := config.DatabasePasswordFile, config.MigrateDatabasePasswordFile
+	both := []program{theAPI, theController}
+	cases := map[string]misread{
+		"a database password holding a /":             {config.DatabaseURL, "postgres://agentiik:Xy9Qk/Lm2+Zt@db:5432/agentiik", []string{"Xy9Qk", "Lm2+Zt"}, database, everyProgram},
+		"a database password holding a ?":             {config.DatabaseURL, "postgres://agentiik:Xy9Qk?Lm2+Zt@db:5432/agentiik", []string{"Xy9Qk", "Lm2+Zt"}, database, everyProgram},
+		"a database password holding a #":             {config.DatabaseURL, "postgres://agentiik:Xy9Qk#Lm2+Zt@db:5432/agentiik", []string{"Xy9Qk", "Lm2+Zt"}, database, everyProgram},
+		"a database password holding a stray %":       {config.DatabaseURL, "postgres://agentiik:Xy9%Qk@db:5432/agentiik", []string{"Xy9", "%Qk"}, database, everyProgram},
+		"a database password of digits, then a /":     {config.DatabaseURL, "postgres://agentiik:2718/28Qk@db:5432/agentiik", []string{"2718", "28Qk"}, database, everyProgram},
+		"a migration password of digits, then a /":    {config.MigrateDatabaseURL, "postgres://postgres:1234/5678Qk@db:5432/agentiik", []string{"1234", "5678Qk"}, migration, []program{migrating}},
+		"a migration password holding a /":            {config.MigrateDatabaseURL, "postgres://postgres:Xy9Qk/Lm2@db:5432/agentiik", []string{"Xy9Qk", "Lm2"}, migration, []program{migrating}},
+		"a bus password holding a /":                  {config.BusURL, "tls://controller:Xy9Qk/Lm2@nats:4222", []string{"Xy9Qk", "Lm2"}, config.BusCredentialsFile, both},
+		"a bus password of digits, then a /":          {config.BusURL, "tls://controller:2718/28Qk@nats:4222", []string{"2718", "28Qk"}, config.BusCredentialsFile, both},
+		"a bus token holding a /":                     {config.BusURL, "tls://s3cr/3tt0k3n@nats:4222", []string{"s3cr", "3tt0k3n"}, config.BusCredentialsFile, both},
+		"a bus password holding a stray %":            {config.BusURL, "tls://controller:Xy9%Qk@nats:4222", []string{"Xy9", "%Qk"}, config.BusCredentialsFile, both},
+		"a second bus server's password holding a ?":  {config.BusURL, "tls://nats-1:4222,tls://controller:Xy9Qk?Lm2@nats-2:4222", []string{"Xy9Qk", "Lm2"}, config.BusCredentialsFile, both},
+		"a public URL's password holding a /":         {config.PublicURL, "https://admin:Xy9Qk/Lm2@agentiik.example.com", []string{"Xy9Qk", "Lm2"}, "", []program{theAPI}},
+		"a public URL's password holding a stray %":   {config.PublicURL, "https://admin:Xy9%Qk@agentiik.example.com", []string{"Xy9", "%Qk"}, "", []program{theAPI}},
+		"a public URL's password of digits, then a ?": {config.PublicURL, "https://admin:2718?28Qk@agentiik.example.com", []string{"2718", "28Qk"}, "", []program{theAPI}},
+	}
+	for what, c := range cases {
+		for _, p := range c.programs {
+			t.Run(fmt.Sprintf("%s, for %s", what, p.name), func(t *testing.T) {
+				i := anInstallation(t)
+				i.env[c.variable] = c.value
+				err := p.read(p.environment(i))
+				if names := refused(err); !slices.Equal(names, []string{c.variable}) {
+					t.Fatalf("the start was refused naming %v: %v", names, err)
+				}
+				saysNothingOf(t, err, append(i.secrets, c.pieces...)...)
+				if c.instead != "" && !strings.Contains(err.Error(), c.instead) {
+					t.Errorf("the refusal does not say the secret belongs in %s: %s", c.instead, err)
+				}
+			})
+		}
+	}
+}
+
 // Every setting that refuses the start is named on that one start, rather than one per restart.
 func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 	i := anInstallation(t)

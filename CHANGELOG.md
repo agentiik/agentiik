@@ -173,6 +173,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A secret is a file an `AGK_*_FILE` variable names by absolute path, readable by its owner alone. A secret set as a value, a password in a URL or a file its group can read is refused, and a refusal repeats no value.
 - The database password is `AGK_DATABASE_PASSWORD_FILE`, since a URL in the environment carries none, and `AGK_ENV_PREFIXES` opts namespaces in to `env`.
 - The controller refuses to start with `AGK_MASTER_KEY_FILE` set, since the master key is the API's alone.
+- A URL's user and password are looked for up to its last `@` before any parser reads it, so a password holding a `/`, a `?`, a `#` or a `%` is refused as a password rather than read as a host, a path or a query. A URL that does not parse is refused without the parser's reason, which quotes part of it.
 
 ### Command line
 

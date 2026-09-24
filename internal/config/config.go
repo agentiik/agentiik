@@ -16,9 +16,9 @@
 // Every setting that refuses a start is named on that start, rather than one per restart.
 //
 // A refusal never repeats the value of a setting that can hold a secret. Not a URL, which may
-// carry a password, and not the path a _FILE variable holds either: a secret pasted into the
-// variable that should name its file is a value like any other, and repeating it would put it in
-// whatever log the refusal reaches.
+// carry a password, nor what its parser said of it, which quotes part of it, and not the path a
+// _FILE variable holds either: a secret pasted into the variable that should name its file is a
+// value like any other, and repeating it would put it in whatever log the refusal reaches.
 //
 // # Each program reads what it needs
 //
@@ -409,13 +409,14 @@ func (r *reader) publicURL() string {
 	if !set {
 		return ""
 	}
+	if _, has := userinfo(v); has {
+		r.refuse(PublicURL, "carries a user, and it is the address a runner is handed, which carries no credential")
+		return ""
+	}
 	u, err := url.Parse(v)
 	switch {
 	case err != nil:
-		r.refuse(PublicURL, "is not a URL: "+reasonOf(err))
-		return ""
-	case u.User != nil:
-		r.refuse(PublicURL, "carries a user, and it is the address a runner is handed, which carries no credential")
+		r.refuse(PublicURL, "is not a URL"+unparsed)
 		return ""
 	case u.Scheme != "https" && u.Scheme != "http" || u.Host == "":
 		r.refuse(PublicURL, "is not an http or https URL with a host, such as https://agentiik.example.com")
@@ -437,17 +438,27 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 	if !set {
 		return Database{}
 	}
+	carriesAPassword := fmt.Sprintf("carries a password, and a secret is never a value in the environment: write it to a file its owner alone can read, and name that file in %s", passwordFile)
+	// A role is never written with a colon, a slash, a ? or a # before its @, and a password
+	// is: after the colon, and holding the others often enough, since a password from openssl
+	// rand -base64 holds a slash one time in three. An @ further on, in the database's name or a
+	// parameter, is refused with it, because no reading of the text tells it apart from the end
+	// of a password.
+	if info, has := userinfo(v); has && strings.ContainsAny(info, ":/?#") {
+		r.refuse(name, carriesAPassword)
+		return Database{}
+	}
 	u, err := url.Parse(v)
 	switch {
 	case err != nil:
-		r.refuse(name, "is not a URL: "+reasonOf(err))
+		r.refuse(name, "is not a URL"+unparsed)
 		return Database{}
 	case u.Scheme != "postgres" && u.Scheme != "postgresql" || u.Opaque != "":
 		r.refuse(name, "is not a PostgreSQL URL, which begins postgres://")
 		return Database{}
 	}
-	if _, has := u.User.Password(); has || u.Query().Has("password") || u.Query().Has("sslpassword") {
-		r.refuse(name, fmt.Sprintf("carries a password, and a secret is never a value in the environment: write it to a file its owner alone can read, and name that file in %s", passwordFile))
+	if u.Query().Has("password") || u.Query().Has("sslpassword") {
+		r.refuse(name, carriesAPassword)
 		return Database{}
 	}
 	d := Database{URL: v, Role: u.User.Username()}
@@ -524,12 +535,13 @@ func (r *reader) bus() Bus {
 // notABusServer is why one address of AGK_BUS_URL is not one, or nothing where it is. NATS takes
 // several separated by commas, which is how a client finds the rest of a cluster of three.
 func notABusServer(server string) string {
+	if _, has := userinfo(server); has {
+		return fmt.Sprintf("carries a user or a token, and a secret is never a value in the environment: the control plane's credential is the file %s names", BusCredentialsFile)
+	}
 	u, err := url.Parse(server)
 	switch {
 	case err != nil:
-		return "is not a URL, or a list of them separated by commas: " + reasonOf(err)
-	case u.User != nil:
-		return fmt.Sprintf("carries a user or a token, and a secret is never a value in the environment: the control plane's credential is the file %s names", BusCredentialsFile)
+		return "is not a URL, or a list of them separated by commas" + unparsed
 	case u.Host == "" || u.Scheme != "nats" && u.Scheme != "tls" && u.Scheme != "ws" && u.Scheme != "wss":
 		return "is not a NATS URL with a host, such as nats://nats:4222"
 	}
@@ -690,16 +702,41 @@ func (r *reader) optionalFile(name string) []byte {
 	return content
 }
 
-// reasonOf is what went wrong without the value that went wrong with it. Errors from os and
-// net/url repeat the path or the URL they were given, and either can be a secret.
+// reasonOf is what went wrong without the value that went wrong with it. An error from os
+// repeats the path it was given, which can be a secret pasted where its file's path belongs.
 func reasonOf(err error) string {
 	var path *fs.PathError
 	if errors.As(err, &path) {
 		return path.Err.Error()
 	}
-	var address *url.Error
-	if errors.As(err, &address) {
-		return address.Err.Error()
-	}
 	return err.Error()
+}
+
+// unparsed ends the refusal of a URL that does not parse.
+//
+// It stands where net/url's reason would, which quotes the part of the value the parser stopped
+// at, and inside a user that is part of a password: invalid port ":Xy9Qk" after host, for a
+// password holding a slash after Xy9Qk, or invalid URL escape "%Qk". No reason net/url gives is
+// repeated, rather than those two left out, since the next version may quote the value elsewhere.
+const unparsed = ", and what its parser said is left out, since it quotes part of the value and the value may hold a password"
+
+// userinfo is what a URL holds between the // after its scheme and its last @, and whether it
+// has an @ there at all.
+//
+// Read on the text rather than through a parser, because a password holding a slash, a ? or a #
+// is where parsers part ways. net/url ends the host at the first of them, so user:Xy9/Qk@db is a
+// host and a port that fail to parse, or, where the password begins with digits, a host and a
+// port that parse, with no user and the rest of the password in the path. libpq, which pgx
+// follows, ends the user at the first @ with no slash before it. Up to the last @ is where
+// somebody pasting a credential put it, whichever parser is right about the rest.
+func userinfo(raw string) (string, bool) {
+	_, rest, found := strings.Cut(raw, "//")
+	if !found {
+		return "", false
+	}
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return "", false
+	}
+	return rest[:at], true
 }
