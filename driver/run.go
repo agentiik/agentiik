@@ -649,9 +649,16 @@ func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
 // asking, which on a server is the redemption it made itself, and never of the one that
 // started the container.
 func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
+	if len(t.Secrets) == 0 {
+		return nil, nil
+	}
 	secrets := d.secrets(ctx)
 	if secrets == nil {
-		return nil, nil
+		// A server runner leaves Config.Secrets nil and gives each task its own, so a
+		// redelivery that came without them would otherwise mask nothing. It is refused
+		// for the reason a value that cannot be redeemed is.
+		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
+			"%d secrets to mask and no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", len(t.Secrets))
 	}
 	var values [][]byte
 	for _, s := range t.Secrets {

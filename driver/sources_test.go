@@ -284,6 +284,32 @@ func TestAnAdoptedContainerIsMaskedWithTheValuesOfTheDeliveryThatAdoptsIt(t *tes
 	}
 }
 
+// A server runner leaves Config.Secrets nil and gives each task its own. A redelivery that
+// came without them has nothing to mask an adopted container's log with, and is refused
+// rather than writing that log in the clear.
+func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
+		return 0, nil
+	})
+	var written strings.Builder
+	r.cfg.Logs = &sinkFor{b: &written}
+
+	task := taskWithASecret(ref)
+	exitedFirstDelivery(t, r, task)
+	r.cfg.Secrets = nil
+
+	_, err := r.Run(t.Context(), task)
+	if !errors.Is(err, ErrContractBroken) {
+		t.Fatalf("a redelivery with no secret source answered %v", err)
+	}
+	if strings.Contains(written.String(), "s3cr3t-value") {
+		t.Errorf("the log carries the secret value: %q", written.String())
+	}
+}
+
 // agk run --local redeems nothing and gives no sources, and it runs as it always did: the
 // store, the tree and the values are the ones Config answers with.
 func TestWithNoSourcesTheConfigAnswersAsBefore(t *testing.T) {
