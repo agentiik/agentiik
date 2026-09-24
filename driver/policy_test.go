@@ -396,6 +396,13 @@ func TestLoadPolicyReadsTheSeccompProfileItNames(t *testing.T) {
 		if !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), file) {
 			t.Errorf("the refusal of %s does not say %q and name the file: %s", c.name, c.want, err)
 		}
+		// fs.ErrNotExist is LoadPolicy saying there is no runner.toml, which a caller
+		// answers with DefaultPolicy. A profile the file names and nobody deployed is a
+		// file that says something, and reading it as no file would drop every other
+		// setting in it with no refusal.
+		if errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the refusal of %s reads as a runner.toml that is not there: %s", c.name, err)
+		}
 	}
 }
 

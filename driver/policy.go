@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -710,7 +711,16 @@ func seccompProfile(path, file string) (string, error) {
 	}
 	body, err := os.ReadFile(file)
 	if err != nil {
-		return "", fmt.Errorf("seccomp_profile in %s names %s, which could not be read: %w", path, file, err)
+		// Said and not wrapped. LoadPolicy answers fs.ErrNotExist for a runner.toml that
+		// is not there, which its caller takes as no file and answers with DefaultPolicy,
+		// and a profile nobody deployed would otherwise read as that: every other setting
+		// of the file dropped, and no refusal.
+		reason := err
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			reason = pe.Err
+		}
+		return "", fmt.Errorf("seccomp_profile in %s names %s, which could not be read: %v", path, file, reason)
 	}
 	// A profile is a JSON object with a defaultAction, as the daemon's own is. Nothing
 	// more is checked, because the daemon is what reads the rest and what refuses it.
