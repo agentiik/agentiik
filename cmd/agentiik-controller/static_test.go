@@ -1,11 +1,13 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"debug/elf"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,6 +159,20 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	if err != nil || !bytes.Contains(bundle, []byte("CERTIFICATE")) {
 		t.Errorf("the image holds no certificate bundle to verify the database and the bus with: %v", err)
 	}
+
+	// The object store's directory is the image user's, so that a named volume mounted there
+	// takes that owner and the controller can write the inputs of every task in it.
+	objects, err := exec.Command("docker", "cp", id+":/var/lib/agentiik/objects", "-").Output()
+	if err != nil {
+		t.Fatalf("the image holds no /var/lib/agentiik/objects: %v", err)
+	}
+	header, err := tar.NewReader(bytes.NewReader(objects)).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner := fmt.Sprintf("%d:%d", header.Uid, header.Gid); owner != cfg.User || !header.FileInfo().IsDir() {
+		t.Errorf("/var/lib/agentiik/objects is owned by %s, and the image runs as %s", owner, cfg.User)
+	}
 }
 
 // daemonArch is the GOARCH the daemon runs containers as, which is what the binary in the image is
@@ -187,9 +203,10 @@ func daemonArch(t *testing.T, socket string) string {
 // buildController builds this program for linux on one architecture, with the flags the release
 // passes, and answers with the path.
 //
-// CGO_ENABLED=0 is what makes it static, and it is here rather than in a script so that what the
-// test checks and what the release ships cannot be built two ways. A machine with no Go toolchain
-// in reach skips.
+// CGO_ENABLED=0 is what makes it static. These are the flags the header of
+// build/controller.Dockerfile gives for the binaries the image is built from, and the two are
+// kept the same by hand until a release workflow builds from one definition of them. A machine
+// with no Go toolchain in reach skips.
 func buildController(t *testing.T, arch string) string {
 	t.Helper()
 	tool, err := exec.LookPath("go")

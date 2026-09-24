@@ -18,6 +18,12 @@
 # this file, or added to it in an image built from this one.
 FROM alpine:3.21 AS certificates
 
+# The directory the object store is mounted at, made here since scratch has no mkdir, and owned by
+# the user below. A named volume mounted over a path the image holds takes that path's owner, so a
+# volume mounted here is one the controller can write in, where one mounted anywhere else is
+# root's and every task's inputs would be refused.
+RUN mkdir -p /var/lib/agentiik/objects
+
 FROM scratch
 
 ARG TARGETARCH
@@ -34,6 +40,7 @@ LABEL org.opencontainers.image.title="agentiik-controller" \
 
 COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY agentiik-controller-linux-${TARGETARCH} /agentiik-controller
+COPY --from=certificates --chown=65532:65532 /var/lib/agentiik/objects /var/lib/agentiik/objects
 
 # A user that is not root, by number, since scratch has no /etc/passwd to name one in. The
 # controller writes nothing but to the object-store directory, which the installation mounts
