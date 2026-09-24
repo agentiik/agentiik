@@ -38,13 +38,20 @@ func TestAPoolIsCreatedAndThenRead(t *testing.T) {
 	if !reflect.DeepEqual(made, map[string]any{"pool": want}) {
 		t.Errorf("creating a pool answered %v", made)
 	}
+	// And one created last whose name sorts first, so that a listing in the order the pools
+	// were created is told from one in the order of their names.
+	if w, _ := call(t, h, "POST", "/api/v1/runner-pools", "admin", api.RunnerPool{Pool: api.Pool{
+		Name: "cpu-heavy", Labels: []string{}, Namespaces: []string{}, Ceilings: &api.Ceilings{},
+	}}); w.Code != http.StatusCreated {
+		t.Fatalf("creating a second pool answered %d: %s", w.Code, w.Body)
+	}
 
 	w, listing := call(t, h, "GET", "/api/v1/runner-pools", "admin", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("the pools answered %d: %s", w.Code, w.Body)
 	}
 	pools, _ := listing["runner_pools"].([]any)
-	if len(pools) != 2 {
+	if len(pools) != 3 {
 		t.Fatalf("the listing holds %d pools: %v", len(pools), listing)
 	}
 	var names []string
@@ -56,7 +63,7 @@ func TestAPoolIsCreatedAndThenRead(t *testing.T) {
 		names = append(names, name)
 		found[name] = pool
 	}
-	if strings.Join(names, ", ") != "dmz, sandboxed" {
+	if strings.Join(names, ", ") != "cpu-heavy, dmz, sandboxed" {
 		t.Errorf("the listing is %v, and it is ordered by name", names)
 	}
 	if !reflect.DeepEqual(found["sandboxed"], want) {
