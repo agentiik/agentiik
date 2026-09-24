@@ -37,6 +37,7 @@ type Daemon struct {
 	order      []*live
 	removed    []string
 	pulled     map[string]bool
+	moved      map[string]Image
 	networks   map[string]docker.NetworkSpec
 	events     []docker.Event
 	watchers   map[chan docker.Event]struct{}
@@ -76,6 +77,7 @@ func NewDaemon(bs ...Behaviour) (*Daemon, error) {
 		opts:       o,
 		containers: map[string]*live{},
 		pulled:     map[string]bool{},
+		moved:      map[string]Image{},
 		networks:   map[string]docker.NetworkSpec{},
 		watchers:   map[chan docker.Event]struct{}{},
 	}

@@ -45,6 +45,7 @@
 //	ClassicImageStore    no RepoDigests for an image built on the machine and never pushed
 //	RegistryUnreachable  a registry the daemon cannot reach when it is asked what it serves
 //	RegistryAnswers401   a 401 where a registry that never heard of a repository answers 403
+//	TagMoves             a tag pointed at another image once it has been inspected
 //
 // # The real daemon
 //

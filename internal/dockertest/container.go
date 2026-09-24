@@ -647,6 +647,14 @@ func (d *Daemon) imageInspect(w http.ResponseWriter, r *http.Request) {
 		Architecture: "arm64",
 		Os:           "linux",
 	})
+
+	// After the answer, so that the question which moved the tag is answered with the
+	// image it named until then.
+	if to, moves := d.opts.moves[ref]; moves {
+		d.mu.Lock()
+		d.moved[ref] = to
+		d.mu.Unlock()
+	}
 }
 
 // distributionInspect is the daemon asking the registry what it serves under a
@@ -689,8 +697,15 @@ func (d *Daemon) distributionInspect(w http.ResponseWriter, r *http.Request) {
 // image is the image a reference names and the key it is held under: the reference
 // itself, or for a reference by digest, the image of that repository held under that
 // digest. That is how a daemon resolves repo@sha256:... against an image it pulled by
-// tag.
+// tag. A tag TagMoves has moved names the image it moved to, and the image it named
+// before is still found by its digest.
 func (d *Daemon) image(ref string) (string, Image, bool) {
+	d.mu.Lock()
+	moved := maps.Clone(d.moved)
+	d.mu.Unlock()
+	if img, ok := moved[ref]; ok {
+		return ref, img, true
+	}
 	if img, ok := d.opts.Images[ref]; ok {
 		return ref, img, true
 	}
@@ -698,11 +713,13 @@ func (d *Daemon) image(ref string) (string, Image, bool) {
 	if !ok {
 		return "", Image{}, false
 	}
-	for _, key := range slices.Sorted(maps.Keys(d.opts.Images)) {
-		img := d.opts.Images[key]
-		if agk.ImageRepository(key) == agk.ImageRepository(ref) && img.Digest != "" &&
-			(img.Digest == digest || img.registryDigest(img.Digest) == digest) {
-			return key, img, true
+	for _, held := range []map[string]Image{d.opts.Images, moved} {
+		for _, key := range slices.Sorted(maps.Keys(held)) {
+			img := held[key]
+			if agk.ImageRepository(key) == agk.ImageRepository(ref) && img.Digest != "" &&
+				(img.Digest == digest || img.registryDigest(img.Digest) == digest) {
+				return key, img, true
+			}
 		}
 	}
 	return "", Image{}, false
