@@ -12,26 +12,28 @@ import (
 
 // The command line against the daemon of this machine, for the two things a person actually
 // does with it: run a workflow and read why one failed. It is skipped where there is no
-// daemon, so that the suite stays green in CI and this machine tests for real.
+// daemon, so that a machine with nothing installed still runs the rest, and fails instead
+// where AGENTIIK_TEST_REQUIRE_DOCKER is 1, as it is in CI.
 //
 // The milestone test is the other half of this file's subject and lives beside it: a fan-out
 // and a merge twice over, with the envelopes compared. What is held here is the report, which
 // that test has no failure to read.
 
-// daemonOrSkip skips unless there is a daemon with the fixture's image on it.
+// needsARealDaemon ends the test through dockertest.Unavailable unless there is a daemon
+// with the fixture's image on it.
 func needsARealDaemon(t *testing.T) {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("the daemon at %s did not answer: %v", socket, err)
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
 	defer cli.Close()
 	if _, err := cli.ImageInspect(t.Context(), "alpine:3.21"); err != nil {
-		t.Skip("alpine:3.21 is not on this machine: docker pull alpine:3.21")
+		dockertest.Unavailable(t, "alpine:3.21 is not on this machine: docker pull alpine:3.21")
 	}
 }
 

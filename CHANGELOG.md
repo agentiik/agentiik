@@ -88,6 +88,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Bus.Ended` publishes the recorded ending before it acknowledges the message, so a requeue whose report did not go out stays on the queue. Acknowledged first, it left the queue bound to nobody, out of any sweep's reach.
 - A redemption that failed without refusing the task, with no answer, the runner's own credential refused or the API failing on its side, is not acknowledged, and the runner keeps the key, names it in its heartbeat and redeems again. Letting go, it left a task its lost answer had bound for the sweep to declare lost before the message came round, spending a requeue on a host that was never lost.
 - A test holds `bus.AckWait` to the documented minute.
+- The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
 
 ### Driver
 
@@ -180,9 +181,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- `bus` has a boundary test: no controller, database, API or secret store. `bus/control` runs on a NATS server of its own, since `bus` empties the shared one before each test.
+- `bus/control` expects at the controller every result of the corpus its schema accepts, so a fixture `bus` lists as outgrown needs no second list.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
+- The real-daemon tests run in CI, which pulls `alpine:3.21` and sets `AGENTIIK_TEST_REQUIRE_DOCKER=1`. Under it, `dockertest.Unavailable` fails a test that would have skipped for want of the daemon, an image or the `docker` command.
+- The probe holding `network: internal` to no way out fails where its image lacks `wget` or `nc`, rather than passing as a network that held, and the `network: none` probe must list the loopback.
+- The no-way-out probe is held to reporting its HTTP request and its TCP connection each on its own, so a probe that drops either one fails.
+- `agk run --local`'s leftover-network check has a step on `network: internal` to find, and the repository-mount adversary no longer fails on Linux over a file it may not read.
 
 ## v0.1.2, 2026-09-13
 

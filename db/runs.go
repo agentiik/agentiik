@@ -727,8 +727,8 @@ var ErrNotHeld = errors.New("db: that dispatch was never bound to that runner")
 //
 // That runner is the one the result names, and it is the one that published it: a heartbeat is a
 // request the API authenticates, and a result arrives on a subject only its runner's credential
-// may publish on, which package bus holds the result's runner field to. So this keeps off another's
-// task both a runner that is wrong about what it holds and one that lies about its name.
+// may publish on, which package bus/control holds the result's runner field to. So this keeps off
+// another's task both a runner that is wrong about what it holds and one that lies about its name.
 func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, runner string, at time.Time) (bool, error) {
 	switch {
 	case runner == "":

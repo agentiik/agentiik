@@ -54,6 +54,17 @@ jobs:
             sleep 1
           done
 
+      # The image the real-daemon tests run their containers from. A runner has a Docker
+      # daemon but no images, and a test that finds one missing skips rather than pull it,
+      # since that would make it a test of somebody's registry. It is fetched only as the
+      # base a fixture build pulls, or by agk run --local in the milestone test, so without
+      # this step every test that came before those skipped. A skip does not show in go
+      # test's output, and the job was as green as if they had run.
+      # alpine:3.21 is the one image the tests and their fixtures name, pinned for the reason
+      # the Go version is: a tag that moves changes what a branch nobody touched runs.
+      - name: images
+        run: docker pull alpine:3.21
+
       - uses: actions/setup-go@v5
         with:
           # The version go.mod requires. Pinned to the minor rather than to stable, so
@@ -79,6 +90,9 @@ jobs:
           # that role can see, and db.Open refuses a superuser for exactly that reason.
           AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
           AGENTIIK_TEST_BUS_URL: nats://127.0.0.1:4222
+          # The daemon and the image are both here, so a real-daemon test that finds either
+          # missing has found a broken job rather than a laptop, and fails rather than skips.
+          AGENTIIK_TEST_REQUIRE_DOCKER: '1'
 
       # gofmt has no exit code of its own for this: it lists the files it would rewrite
       # and succeeds either way, so the listing is what the job has to check.

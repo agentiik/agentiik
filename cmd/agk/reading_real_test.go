@@ -15,15 +15,15 @@ import (
 // the image, and a brick run against its cases.
 //
 // Everything here skips when there is no daemon and runs when there is, exactly as
-// driver/real_test.go does, so that CI stays green and this machine tests for real. The brick is
-// built from testdata rather than pulled, because the point of it is to be a plain image that
-// was never pushed anywhere, which is the image a laptop meets.
+// driver/real_test.go does, and fails rather than skips where AGENTIIK_TEST_REQUIRE_DOCKER is 1,
+// as it is in CI. The brick is built from testdata rather than pulled, because the point of it
+// is to be a plain image that was never pushed anywhere, which is the image a laptop meets.
 
 // counterImage is the brick built from testdata/brick.
 const counterImage = "agk-counter-brick:test"
 
-// realDaemon skips unless there is a daemon and a docker command to build the fixture with, and
-// builds the fixture brick once per test binary.
+// realDaemon ends the test through dockertest.Unavailable unless there is a daemon and a docker
+// command to build the fixture with, and builds the fixture brick once per test binary.
 //
 // Built and not adopted from whatever the daemon already holds under that tag. An earlier build
 // of a fixture that has since been edited is the worst kind of green: the test passes against
@@ -32,16 +32,16 @@ const counterImage = "agk-counter-brick:test"
 func realDaemon(t *testing.T) {
 	t.Helper()
 	if _, ok := dockertest.Socket(); !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("no docker command to build the fixture brick with")
+		dockertest.Unavailable(t, "no docker command to build the fixture brick with")
 	}
 	builtFixture.Do(func() {
 		fixtureBuild, fixtureErr = exec.Command("docker", "build", "-t", counterImage, "testdata/brick").CombinedOutput()
 	})
 	if fixtureErr != nil {
-		t.Skipf("the fixture brick could not be built: %v\n%s", fixtureErr, fixtureBuild)
+		dockertest.Unavailable(t, "the fixture brick could not be built: %v\n%s", fixtureErr, fixtureBuild)
 	}
 }
 
