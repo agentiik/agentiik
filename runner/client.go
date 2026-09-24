@@ -96,12 +96,19 @@ func NewClient(api string, credential Secret, client *http.Client) (*Client, err
 	case credential == "":
 		return nil, errors.New("runner: a client needs this runner's credential, and every call to the API carries it")
 	}
+	return newClient(api, credential, client), nil
+}
+
+// newClient is NewClient without its checks, for the one call a runner makes before it holds a
+// credential: the join, which is authenticated by the token in its body and carries no
+// Authorization at all. It follows no redirect either, since that body is the token.
+func newClient(api string, credential Secret, client *http.Client) *Client {
 	if client == nil {
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}}
 	}
-	return &Client{base: strings.TrimRight(api, "/"), credential: credential, http: client}, nil
+	return &Client{base: strings.TrimRight(api, "/"), credential: credential, http: client}
 }
 
 // Do sends one request and reads its answer.
@@ -134,7 +141,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return fmt.Errorf("runner: %s %s: %w", method, path, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+string(c.credential))
+	if c.credential != "" {
+		req.Header.Set("Authorization", "Bearer "+string(c.credential))
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "agk-runner/"+Version())
 	if in != nil {

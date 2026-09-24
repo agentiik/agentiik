@@ -42,6 +42,14 @@ type env struct {
 	// EnvFile and PolicyFile are /etc/agentiik/runner.env and /etc/agentiik/runner.toml.
 	EnvFile, PolicyFile string
 
+	// KeyFile and MemInfo are what join writes the host's key to and reads its memory from,
+	// /var/lib/agentiik/runner.key and /proc/meminfo.
+	KeyFile, MemInfo string
+
+	// Account finds an account of this host by its name, which is who join gives what it
+	// writes to.
+	Account func(name string) (runner.Owner, error)
+
 	// Host is what the driver asks of this machine rather than of the daemon: the
 	// capabilities the agent holds and what its secrets directory is mounted as. Nil is
 	// the kernel's own answers, which is what main gives.
@@ -58,7 +66,7 @@ type command struct {
 var commands = []command{
 	{
 		name:    "join",
-		usage:   "agk-runner join --api <url> --token <token>",
+		usage:   "agk-runner join --api <url> --token <token> --labels <labels>",
 		summary: "trade a join token for this runner's identity",
 		run:     join,
 	},
@@ -91,6 +99,8 @@ func main() {
 		Lookup:  os.LookupEnv,
 		Geteuid: os.Geteuid,
 		EnvFile: runner.EnvPath, PolicyFile: driver.PolicyPath,
+		KeyFile: runner.KeyPath, MemInfo: runner.MemInfoPath,
+		Account: lookupAccount,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)
