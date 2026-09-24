@@ -231,7 +231,7 @@ type API struct {
 	// Objects is the directory the built-in object store keeps every object in.
 	Objects string
 
-	// PublicURL is the address runners and clients reach the API at, with no trailing slash.
+	// PublicURL is the address runners and clients reach the API at, with no slash at its end.
 	// Every presigned URL is minted on it rather than on a request's Host header.
 	PublicURL string
 
@@ -472,11 +472,15 @@ func (r *reader) publicURL() string {
 	case u.Scheme != "https" && u.Scheme != "http" || u.Host == "":
 		r.refuse(PublicURL, "is not an http or https URL with a host, such as https://agentiik.example.com")
 		return ""
-	case u.RawQuery != "" || u.Fragment != "":
-		r.refuse(PublicURL, "carries a query or a fragment, and every route is a path below it")
+	case strings.ContainsAny(v, "?#"):
+		// Looked for in the text, since net/url reads a ? or a # with nothing after it as an
+		// empty query or fragment, which a check of either passes.
+		r.refuse(PublicURL, "carries a query or a fragment, even an empty one, and every route is a path below it: a path added after a ? or a # would be read as part of the query or the fragment, and every URL minted on it would reach the root")
 		return ""
 	}
-	return strings.TrimSuffix(v, "/")
+	// Every slash at the end, rather than one, since each URL minted on it adds a path that
+	// begins with a slash, and a // left in it is a path no route answers.
+	return strings.TrimRight(v, "/")
 }
 
 // database reads one PostgreSQL URL and the file its password is in.

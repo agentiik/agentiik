@@ -518,6 +518,8 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"a public URL of another scheme":        {config.PublicURL, is("ftp://agentiik.example.com"), api},
 		"a public URL with a query":             {config.PublicURL, is("https://agentiik.example.com/?tenant=a"), api},
 		"a public URL with a fragment":          {config.PublicURL, is("https://agentiik.example.com/#top"), api},
+		"a public URL ending in a ?":            {config.PublicURL, is("https://agentiik.example.com?"), api},
+		"a public URL ending in a #":            {config.PublicURL, is("https://agentiik.example.com/#"), api},
 		"no presign key":                        {config.PresignKeyFile, unset, api},
 		"a presign key that is not base64":      {config.PresignKeyFile, holding("not base64, clearly\n"), api},
 		"a presign key of sixteen bytes":        {config.PresignKeyFile, holding(base64.StdEncoding.EncodeToString(make([]byte, 16))), api},
@@ -570,6 +572,25 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 				}
 				saysNothingOf(t, err, i.secrets...)
 			})
+		}
+	}
+}
+
+// The public URL is kept with no slash at its end, however many it was written with, since every
+// URL minted on it adds a path beginning with one.
+func TestAPublicURLIsKeptWithNoSlashAtItsEnd(t *testing.T) {
+	for written, kept := range map[string]string{
+		"https://agentiik.example.com":             "https://agentiik.example.com",
+		"https://agentiik.example.com/":            "https://agentiik.example.com",
+		"https://agentiik.example.com//":           "https://agentiik.example.com",
+		"https://example.com/agentiik///":          "https://example.com/agentiik",
+		"https://agentiik.example.com:8443/api/v2": "https://agentiik.example.com:8443/api/v2",
+	} {
+		i := anInstallation(t)
+		i.env[config.PublicURL] = written
+		api, err := config.ReadAPI(theAPI.environment(i))
+		if err != nil || api.PublicURL != kept {
+			t.Errorf("%s is kept as %s: %v", written, api.PublicURL, err)
 		}
 	}
 }

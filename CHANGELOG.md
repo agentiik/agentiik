@@ -178,6 +178,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `PGPASSWORD` and `PGSSLPASSWORD` refuse the start of every program, since pgx would take a secret from either where the URL gives none.
 - A database's password file is read even when its URL is refused, so one start names both.
 - Every secret the configuration holds is a `config.Secret`, which prints and marshals as `[secret]` whatever the verb, so a configuration logged whole shows none of them.
+- `AGK_PUBLIC_URL` ending in a bare `?` or `#` is refused, since every path added to it would land in the query or the fragment, and every slash at its end is trimmed rather than one.
 
 ### Command line
 
