@@ -57,7 +57,7 @@ CI runs the same four, and `gofmt -l .` passes only by printing nothing. Tests t
 
 - PostgreSQL: set `AGENTIIK_TEST_DATABASE_URL` to a superuser URL. The tests create their own database and the unprivileged role the code connects as.
 - NATS: set `AGENTIIK_TEST_BUS_URL` to a server started with `-js`.
-- Docker: found through `DOCKER_HOST`, then the usual socket paths.
+- Docker: found through `DOCKER_HOST`, then the usual socket paths. The tests run their containers from `alpine:3.21`, and one that finds it missing skips rather than pull it. It is pulled from Docker Hub only as the base of a fixture build, or by `agk run --local` in the milestone test, and a test that comes before either still skips, so `docker pull alpine:3.21` first. `AGENTIIK_TEST_REQUIRE_DOCKER=1`, which CI sets, fails a test that would otherwise skip for want of the daemon or the image.
 
 `cmd/agk/milestone_test.go` is the proof of v0.1.0: a workflow with a fan-out and a merge, run twice against the real daemon, producing the same envelopes.
 

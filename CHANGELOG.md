@@ -182,6 +182,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
+- The real-daemon tests run in CI, which pulls `alpine:3.21` and sets `AGENTIIK_TEST_REQUIRE_DOCKER=1`. Under it, `dockertest.Unavailable` fails a test that would have skipped for want of the daemon, an image or the `docker` command.
+- The probe holding `network: internal` to no way out fails where its image lacks `wget` or `nc`, rather than passing as a network that held, and the `network: none` probe must list the loopback.
+- The no-way-out probe is held to reporting its HTTP request and its TCP connection each on its own, so a probe that drops either one fails.
+- `agk run --local`'s leftover-network check has a step on `network: internal` to find, and the repository-mount adversary no longer fails on Linux over a file it may not read.
 
 ## v0.1.2, 2026-09-13
 
