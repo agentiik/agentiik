@@ -325,7 +325,7 @@ func scanRunner(row pgx.Row, more ...any) (Runner, error) {
 //
 // "revoking it from the console stops the runner at its next heartbeat", so a revoked credential
 // is refused here rather than left to a check somewhere else. So is a credential past its
-// rotate_by, which is the whole of the rotation window: "a credential past rotate_by is refused
+// rotate_by, which is the whole of the rotation window: "A credential past its rotate_by is refused
 // everywhere, and that host joins again", because "a machine that has been dark for a month should
 // be reconsidered rather than readmitted". The moment is the caller's, as every moment this package
 // judges is.

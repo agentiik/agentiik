@@ -1205,6 +1205,16 @@ func TestARunnerCredentialRotatesWithTheKeyItJoinedWith(t *testing.T) {
 		t.Errorf("the new credential rotates by %s, want %s", first.RotateBy, want)
 	}
 
+	// What Authenticate refuses, judged again under the lock: the hook may have let the
+	// request through a moment before the credential went past its rotate_by or was revoked.
+	if _, err := rotate(rotating(first.Credential, joined.Runner, key, now.Add(2*time.Minute)), first.RotateBy); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("a rotation at its credential's rotate_by answered %v", err)
+	}
+	in(func(ctx context.Context, w *Wide) error { return w.Revoke(ctx, other.Runner, "the host was retired") })
+	if _, err := rotate(rotating(other.Credential, other.Runner, privateKey(2), now), now); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("a rotation by a revoked runner answered %v", err)
+	}
+
 	// Good once: the same signature, or one over an earlier moment, renews nothing again.
 	if _, err := rotate(rotating(joined.Credential, joined.Runner, key, now), now.Add(time.Minute)); !errors.Is(err, ErrRotationReplayed) {
 		t.Errorf("the same rotation sent again answered %v", err)

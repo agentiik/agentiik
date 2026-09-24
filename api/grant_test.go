@@ -484,7 +484,7 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 	}
 }
 
-// "A credential past rotate_by is refused everywhere, and that host joins again": a runner dark
+// "A credential past its rotate_by is refused everywhere, and that host joins again": a runner dark
 // past its window redeems nothing, however good the grant it holds.
 func TestACredentialPastItsRotateByRedeemsNothing(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})

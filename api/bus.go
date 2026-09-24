@@ -67,9 +67,9 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 		}
 	}
 
-	// No longer than the runner credential it was asked for with: "a credential past rotate_by
-	// is refused everywhere", and a bus credential outliving it by up to an hour would be a
-	// runner that has to join again still pulling work.
+	// No longer than the runner credential it was asked for with: "A credential past its
+	// rotate_by is refused everywhere", and a bus credential outliving it by up to an hour would
+	// be a runner that has to join again still pulling work.
 	until := s.now().Add(BusLife)
 	if !runner.RotateBy.IsZero() && runner.RotateBy.Before(until) {
 		until = runner.RotateBy

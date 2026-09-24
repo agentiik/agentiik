@@ -290,6 +290,8 @@ func TestARotationTheWireRefusesIsRefused(t *testing.T) {
 		"no at":                 {"runner": runner, "signature": good.Signature},
 		"no signature":          {"runner": runner, "at": good.At},
 		"a signature too short": {"runner": runner, "at": good.At, "signature": good.Signature[4:]},
+		"a signature whose last character carries bits past the sixty-four bytes": {"runner": runner, "at": good.At,
+			"signature": good.Signature[:85] + "B=="},
 		"a signature in base64url": {"runner": runner, "at": good.At,
 			"signature": base64.URLEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, ed25519.SignatureSize))},
 		"an at that is no instant": {"runner": runner, "at": "yesterday", "signature": good.Signature},
@@ -343,7 +345,8 @@ func TestACredentialPastItsRotateByOpensNothing(t *testing.T) {
 }
 
 // The credential a runner rotated with stays accepted until the new one is used, and never past
-// its own rotate_by: rotating is not a way for the old one to live longer.
+// its own rotate_by: rotating is not a way for the old one to live longer, twice over included,
+// which is what a runner whose first answer was lost does.
 func TestTheOldCredentialStillStopsAtItsOwnRotateBy(t *testing.T) {
 	ro := withRotations(t)
 	key := host(1)
@@ -351,6 +354,8 @@ func TestTheOldCredentialStillStopsAtItsOwnRotateBy(t *testing.T) {
 	joinedAt := *ro.clock
 
 	*ro.clock = joinedAt.Add(20 * 24 * time.Hour)
+	ro.rotated(t, old, ro.signed(runner, key))
+	*ro.clock = ro.clock.Add(time.Second)
 	fresh := ro.rotated(t, old, ro.signed(runner, key))
 
 	*ro.clock = joinedAt.Add(30 * 24 * time.Hour)
