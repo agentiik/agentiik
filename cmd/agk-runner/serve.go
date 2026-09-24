@@ -56,6 +56,7 @@ func serve(ctx context.Context, e env, args []string) int {
 		WorkRoot: cfg.WorkDir,
 		Policy:   policy,
 		Announce: log,
+		Host:     e.Host,
 	})
 	switch {
 	case errors.Is(err, context.Canceled):

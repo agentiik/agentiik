@@ -76,13 +76,16 @@ func TestARealDaemonWithoutTheRemappingIsRefusedByDefault(t *testing.T) {
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
+	if daemon, err := Probe(t.Context(), socket); err == nil && daemon.UsernsRemapped {
+		t.Skip("this daemon remaps user namespaces, so the floor is met and there is nothing to refuse")
+	}
 	_, err := New(Config{
 		Socket:   socket,
 		Policy:   DefaultPolicy(),
 		WorkRoot: t.TempDir(),
 	})
 	if err == nil {
-		t.Skip("this daemon remaps user namespaces, so the floor is met and there is nothing to refuse")
+		t.Fatalf("a daemon that does not remap was opened under the floor")
 	}
 	if !errors.Is(err, ErrUsernsRemapRequired) {
 		t.Fatalf("the refusal is %v, and the floor refuses with ErrUsernsRemapRequired", err)
@@ -120,6 +123,7 @@ func TestARealBrickIsGivenWhatTheContractPromises(t *testing.T) {
 
 	policy := DefaultPolicy()
 	policy.RequireUsernsRemap = RemapLifted
+	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
 	policy.SecretsDir = ""
 
 	var said []string

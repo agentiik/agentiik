@@ -154,6 +154,7 @@ func imageReader(e Env) (*driver.Docker, int) {
 	// image and never starts it, which is why the floors are read at all.
 	policy.RequireUsernsRemap = driver.RemapLifted
 	policy.RequireSeccomp = driver.SeccompLifted
+	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
 
 	d, err := driver.New(driver.Config{
 		Policy: policy,

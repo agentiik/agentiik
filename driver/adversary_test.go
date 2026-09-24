@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -50,7 +51,7 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("preparing the repository: %s", err)
 	}
-	given, err := prepare(ctx, task, w, r.cfg.Policy, store, run, repo, r.secrets(ctx))
+	given, err := prepare(ctx, task, w, r.cfg.Policy, r.cfg.host(), store, run, repo, r.secrets(ctx))
 	if err != nil {
 		t.Fatalf("preparing what the container is given: %s", err)
 	}
@@ -409,4 +410,117 @@ func createdFor(r *runner, id agk.TaskID) dockertest.Container {
 		}
 	}
 	return created
+}
+
+// "Removed with the container, so no residue of one namespace survives into the next task
+// on that host." What a brick left that the runner cannot remove is said, naming the step,
+// the task and where the removal stopped, and it changes nothing about the task's ending:
+// the brick ran and succeeded whatever is left of its directory.
+func TestAWorkingDirectoryThatCannotBeRemovedIsSaid(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where every directory can be removed and there is nothing to say")
+	}
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var locked string
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		// A directory the brick made and left unwritable, as a brick running as an
+		// account of the remapped range leaves one for a runner that cannot override
+		// its mode.
+		locked = filepath.Join(c.Work, "scratch")
+		if err := os.MkdirAll(locked, 0o755); err != nil {
+			return 1, err
+		}
+		if err := os.WriteFile(filepath.Join(locked, "left.txt"), []byte("residue"), 0o644); err != nil {
+			return 1, err
+		}
+		if err := os.Chmod(locked, 0o500); err != nil {
+			return 1, err
+		}
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": 1}))
+	})
+	t.Cleanup(func() {
+		if locked != "" {
+			os.Chmod(locked, 0o755)
+		}
+	})
+
+	task := oneTask(ref)
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("Run: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the task ended %s, and a directory left behind changes nothing about how it ended", result.State)
+	}
+	said := r.said.count("left files on this host that were not removed with its container")
+	if said != 1 {
+		t.Fatalf("the directory left behind was said %d times: %v", said, r.said.s)
+	}
+	for _, want := range []string{string(task.Step), string(task.ID), locked} {
+		if r.said.count(want) == 0 {
+			t.Errorf("what was said does not name %s: %v", want, r.said.s)
+		}
+	}
+}
+
+// lockedResidue leaves, in the out tree of a task's working directory, a directory holding
+// a file and closed to its writer, which this process cannot remove as it is not root. It
+// is opened again when the test ends so that the test's own directory can go.
+func lockedResidue(t *testing.T, root string) string {
+	t.Helper()
+	locked := filepath.Join(root, "out", "scratch")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "left.txt"), []byte("residue"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	return locked
+}
+
+// The two other ways out of a task take its directory away too, and say as much of what
+// they could not: a redelivery that adopts the container the first delivery started, and
+// one refused because this host has already ended the key.
+func TestADirectoryLeftBehindIsSaidOnAdoptionAndOnACompletedKey(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where every directory can be removed and there is nothing to say")
+	}
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	said := "left files on this host that were not removed with its container"
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": 1}))
+	})
+	task := oneTask(ref)
+	_, root := stageFirstDelivery(t, r, task)
+	locked := lockedResidue(t, root)
+	result, err := r.Run(t.Context(), task)
+	if err != nil || result.State != agk.TaskSucceeded {
+		t.Fatalf("the redelivered task ended %s: %v", result.State, err)
+	}
+	if n := r.said.count(said); n != 1 || r.said.count(locked) == 0 {
+		t.Fatalf("an adopted task's directory left behind was said %d times, naming %s or not: %v", n, locked, r.said.s)
+	}
+
+	// The key has ended on this host, so a further delivery is refused before anything
+	// is created, and takes away what a directory of that key still holds.
+	os.Chmod(locked, 0o755)
+	w, err := newWorkdir(r.cfg.WorkRoot, task.ID, r.cfg.Policy.SecretsDir)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	locked = lockedResidue(t, w.Root)
+	_, err = r.Run(t.Context(), task)
+	var completed *Completed
+	if !errors.As(err, &completed) {
+		t.Fatalf("a delivery of a key this host has ended was not refused as completed: %v", err)
+	}
+	if n := r.said.count(said); n != 2 || r.said.count(locked) < 2 {
+		t.Fatalf("a completed key's directory left behind was not said: %v", r.said.s)
+	}
 }

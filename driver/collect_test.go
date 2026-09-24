@@ -288,6 +288,35 @@ func TestSomethingThatIsNotAFileUnderTheFilesDirectoryIsRefused(t *testing.T) {
 	}
 }
 
+// The two directories under /agk/out are the brick's to replace, and a link put in the
+// place of either would have the runner read, on the host, whatever it points at: here a
+// directory standing for /etc/agentiik, holding the runner's credential. A script's
+// shorthand would upload every file in it, and an envelope would reference one by name.
+// Neither is read.
+func TestALinkInThePlaceOfTheFilesOrPortsDirectoryIsRefused(t *testing.T) {
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "runner.env"), []byte("AGK_RUNNER_CREDENTIAL=not-the-bricks"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{filesDir, portsDir} {
+		dir := outRoot(t)
+		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(host, filepath.Join(dir, sub)); err != nil {
+			t.Fatal(err)
+		}
+		s := collectStore(t)
+		_, err := collect(context.Background(), s, aCollection(collectScriptTask("out"), dir))
+		if !errors.Is(err, agk.ErrEnvelopeRejected) {
+			t.Fatalf("a link in the place of %s was read through: %v", sub, err)
+		}
+		if !strings.Contains(err.Error(), "/agk/out/"+sub+" is a symbolic link") {
+			t.Errorf("the refusal does not say which directory was a link: %s", err)
+		}
+	}
+}
+
 // A script that writes nothing and exits 0 publishes, on out, one item carrying its
 // captured standard output and any file it left in /agk/out/files/.
 func TestTheShorthandPublishesStandardOutputAndWhatWasLeftBesideIt(t *testing.T) {

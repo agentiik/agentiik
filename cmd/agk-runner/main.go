@@ -41,6 +41,11 @@ type env struct {
 
 	// EnvFile and PolicyFile are /etc/agentiik/runner.env and /etc/agentiik/runner.toml.
 	EnvFile, PolicyFile string
+
+	// Host is what the driver asks of this machine rather than of the daemon: the
+	// capabilities the agent holds and what its secrets directory is mounted as. Nil is
+	// the kernel's own answers, which is what main gives.
+	Host driver.Host
 }
 
 // command is one verb. The table is data so that the usage text and the dispatch cannot disagree.

@@ -307,6 +307,9 @@ func (d *Docker) heldToFloors(ctx context.Context, step agk.Step) (*usernsFloor,
 		return nil, fault(step, ErrDaemonUnreachable, ChargePlatform, "the daemon's event stream dropped, and it could not be asked what it is now, which is read before any container is created: %v", err)
 	}
 	floor, err := readUsernsFloor(info, d.cfg.Policy)
+	if err == nil {
+		err = readOwnership(floor, d.cfg.Policy, d.cfg.host())
+	}
 	var confined confinement
 	if err == nil {
 		confined, err = readConfinement(info, d.cfg.Policy)
