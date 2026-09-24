@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -410,5 +411,74 @@ func TestTheTreeOfOneVersionIsReadOnItsOwn(t *testing.T) {
 		if got := strings.Join(keys, ","); got != "mode,path,sha256,size" {
 			t.Errorf("a stored entry carries %s", got)
 		}
+	}
+}
+
+// The digest each tag was resolved to at the push is part of what the graph is rebuilt from, so
+// it is kept beside the manifests in the graph column and read back with them. The first push of
+// a commit settles it: the same commit pushed again after the tag moved changes nothing a run of
+// it names.
+func TestTheDigestsAVersionsTagsWereResolvedToAreKept(t *testing.T) {
+	pool, super := opened(t)
+	pinned := map[string]string{
+		"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@sha256:" + digestOf("e"),
+		"alpine:3.21":                    "alpine@sha256:" + digestOf("f"),
+	}
+	v := aVersion("b4a0d2f", aTree())
+	v.Images = pinned
+	if _, err := saveVersion(t, pool, v); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pushed again once the tag had moved, which is the same version.
+	moved := aVersion("b4a0d2f", aTree())
+	moved.Images = map[string]string{
+		"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@sha256:" + digestOf("d"),
+		"alpine:3.21":                    "alpine@sha256:" + digestOf("f"),
+	}
+	if saved, err := saveVersion(t, pool, moved); err != nil || saved.New {
+		t.Fatalf("the same commit pushed again saved as %+v: %v", saved, err)
+	}
+
+	var back Version
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		back, err = ns.Version(ctx, "monthly-invoicing", "b4a0d2f")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(back.Images, pinned) {
+		t.Errorf("the version reads its images back as %v, want %v", back.Images, pinned)
+	}
+
+	// In the graph column, beside what else the graph is rebuilt from.
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	var inGraph bool
+	if err := conn.QueryRow(t.Context(),
+		`select graph ? 'images' from workflow_versions where commit = 'b4a0d2f'`).Scan(&inGraph); err != nil {
+		t.Fatal(err)
+	}
+	if !inGraph {
+		t.Error("the images are not in the graph column, which holds what it takes to rebuild the version")
+	}
+
+	// And a version that names none, all its images written by digest, holds nothing for them.
+	if _, err := saveVersion(t, pool, aVersion("c5b1e3a", aTree())); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		var err error
+		back, err = ns.Version(ctx, "monthly-invoicing", "c5b1e3a")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if back.Images != nil {
+		t.Errorf("a version whose images are all digests reads back %v", back.Images)
 	}
 }

@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/brick"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // agk push, which is where "a version is a commit" stops being a sentence and starts refusing
@@ -117,10 +121,22 @@ func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, strin
 			w.Write([]byte(`{"error":"the installation said no"}`))
 			return
 		}
-		w.Write([]byte(`{"commit":"x"}`))
+		// What the installation answers a version it did not hold before: the images it
+		// records are the ones the push carried.
+		images := p.Images
+		if images == nil {
+			images = map[string]string{}
+		}
+		json.NewEncoder(w).Encode(api.Pushed{Namespace: "finance", Workflow: "monthly-invoicing", Commit: "x", Images: images})
 	}))
 	t.Cleanup(server.Close)
 
+	code, out, errs := pushAgainst(dir, server.URL, args...)
+	return code, out, errs, got, path
+}
+
+// pushAgainst runs the command against the installation at url, and answers what it said.
+func pushAgainst(dir, url string, args ...string) (int, string, string) {
 	out, errs := &strings.Builder{}, &strings.Builder{}
 	e := Env{
 		Out: out, Err: errs, Dir: dir,
@@ -129,13 +145,13 @@ func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, strin
 			case tokenVariable:
 				return "the-token"
 			case serverVariable:
-				return server.URL
+				return url
 			}
 			return ""
 		},
 	}
 	code := push(context.Background(), e, append([]string{"--namespace", "finance"}, args...))
-	return code, out.String(), errs.String(), got, path
+	return code, out.String(), errs.String()
 }
 
 // The ordinary path: a clean tree, and what arrives is what the version is.
@@ -973,4 +989,272 @@ func keysOf(m map[string]api.PushFile) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// taggedWorkflow names its images by tag, as a workflow written against a laptop's daemon does: a
+// brick step, and a script step in a base image.
+const taggedWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-invoice:1.4.0
+    outputs: [ok]
+  report:
+    image: alpine:3.21
+    needs: [{ step: normalize, port: ok, as: in }]
+    script: ["cat /agk/in/in/envelope.json"]
+    outputs: [out]
+`
+
+const invoiceManifest = `apiVersion: agentiik.dev/v1
+kind: Brick
+metadata: { name: invoice, version: 1.4.0 }
+spec:
+  outputs:
+    ok: {}
+  runtime: { user: "65532:65532" }
+`
+
+const (
+	invoiceDigest = "sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"
+	alpineDigest  = "sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+)
+
+// taggedRepository is a repository holding taggedWorkflow, committed.
+func taggedRepository(t *testing.T) string {
+	t.Helper()
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", taggedWorkflow)
+	commitAll(t, dir, "images by tag")
+	return dir
+}
+
+// aDaemon is a fake daemon holding images, which the push reaches as it reaches any daemon: through
+// DOCKER_HOST.
+func aDaemon(t *testing.T, images map[string]dockertest.Image, bs ...dockertest.Behaviour) {
+	t.Helper()
+	daemon, err := dockertest.NewDaemon(append(bs, dockertest.With(dockertest.Options{Images: images}))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { daemon.Close() })
+	t.Setenv("DOCKER_HOST", "unix://"+daemon.Socket())
+}
+
+// "A tag is a mutable pointer, and a commit must determine what ran." So every tag a workflow
+// names, a script step's base image included, travels with the digest the registry serves it
+// under, which the daemon holds it by; the file itself travels as it was committed, and the
+// manifest under the tag it writes.
+func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest, Remote: true},
+	})
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	want := map[string]string{
+		"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@" + invoiceDigest,
+		"alpine:3.21":                    "alpine@" + alpineDigest,
+	}
+	if !maps.Equal(got.Images, want) {
+		t.Errorf("the push carries the images %v, want %v", got.Images, want)
+	}
+	if _, held := got.Manifests["ghcr.io/acme/agk-invoice:1.4.0"]; !held || len(got.Manifests) != 1 {
+		t.Errorf("the push carries manifests for %v", slices.Sorted(maps.Keys(got.Manifests)))
+	}
+	if string(got.Document) != taggedWorkflow {
+		t.Error("the entry point travelled as something other than what was committed")
+	}
+	for _, line := range []string{
+		"ghcr.io/acme/agk-invoice:1.4.0 resolved to ghcr.io/acme/agk-invoice@" + invoiceDigest,
+		"alpine:3.21 resolved to alpine@" + alpineDigest,
+		"2 tags resolved to their digests",
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the push does not say %q: %s", line, out)
+		}
+	}
+	if strings.Contains(errs, "already pushed") {
+		t.Errorf("a version recording what was pushed is said to keep something else: %s", errs)
+	}
+}
+
+// The installation answers with what the version records, and agk push says where that is not
+// what it resolved: a digest the first push of the commit settled, or none at all for a version
+// recorded naming the tag itself before digests were kept. The push is still exit 0, since the
+// version it names is the one recorded.
+func TestAPushSaysWhereItsVersionKeepsAnotherImage(t *testing.T) {
+	const kept = "ghcr.io/acme/agk-invoice@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(api.Pushed{Images: map[string]string{"ghcr.io/acme/agk-invoice:1.4.0": kept}})
+	}))
+	t.Cleanup(server.Close)
+
+	code, out, errs := pushAgainst(dir, server.URL)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	var said []string
+	for _, line := range strings.Split(errs, "\n") {
+		if strings.Contains(line, "already pushed") {
+			said = append(said, line)
+		}
+	}
+	if len(said) != 2 {
+		t.Fatalf("the push says of %d images that the version keeps another, want 2: %s", len(said), errs)
+	}
+	for i, want := range [][]string{
+		{"alpine:3.21 as written", "alpine@" + alpineDigest},
+		{"ghcr.io/acme/agk-invoice:1.4.0 as " + kept, "ghcr.io/acme/agk-invoice@" + invoiceDigest},
+	} {
+		for _, w := range want {
+			if !strings.Contains(said[i], w) {
+				t.Errorf("the push does not say %q: %s", w, said[i])
+			}
+		}
+	}
+}
+
+// Each manifest is read out of the digest its tag was resolved to, and never out of the tag, so a
+// tag moved on this machine between the two, by a build or a pull of it finishing, cannot pair the
+// digest of one image with the manifest of another: what the version holds a step to is the image
+// the version names.
+func TestAManifestIsReadOutOfTheDigestItsTagWasResolvedTo(t *testing.T) {
+	const tag = "ghcr.io/acme/agk-invoice:1.4.0"
+	const movedDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		tag:           {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21": {Digest: alpineDigest},
+	}, dockertest.TagMoves(tag, dockertest.Image{
+		Digest: movedDigest, Manifest: []byte(strings.Replace(invoiceManifest, "version: 1.4.0", "version: 1.4.1", 1)),
+	}))
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	if want := "ghcr.io/acme/agk-invoice@" + invoiceDigest; got.Images[tag] != want {
+		t.Fatalf("the tag was pushed as %s, and it named %s when it was resolved", got.Images[tag], want)
+	}
+	m, err := brick.ParseManifest(got.Manifests[tag])
+	if err != nil {
+		t.Fatalf("the manifest pushed for %s: %v", tag, err)
+	}
+	if m.Metadata.Version != "1.4.0" {
+		t.Errorf("the version names %s with the manifest of %s %s, the image the tag moved to", got.Images[tag], m.Metadata.Name, m.Metadata.Version)
+	}
+}
+
+// A version the installation recorded and whose answer cannot be read is exit 4 and not exit 1: it
+// was not refused, and which digests it records, which a commit pushed before makes other than the
+// ones resolved here, is what cannot be said.
+func TestAnAnswerThatCannotBeReadIsNoOutcome(t *testing.T) {
+	dir := repository(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("<html>recorded</html>"))
+	}))
+	t.Cleanup(server.Close)
+
+	code, out, errs := pushAgainst(dir, server.URL)
+	if code != exitNoOutcome {
+		t.Errorf("a push whose answer could not be read answered %d: %s%s", code, out, errs)
+	}
+	if !strings.Contains(errs, "recorded the version") || strings.Contains(out, "pushed to") {
+		t.Errorf("the push does not say that the version was recorded and its answer unread: %s%s", out, errs)
+	}
+}
+
+// An image built on the machine and never pushed is refused naming it, with exit 1, and nothing
+// is sent: a version naming it would be a version no runner could pull an image for. The
+// containerd store, which holds such an image under a digest as it holds any other, is caught by
+// asking the registry, which answers 403 or 401 for a repository it holds nothing of, the common
+// case, and 404 for one it holds other images of. The classic store holds it under no digest.
+func TestAnImageNeverPushedIsRefusedAndNothingIsSent(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		images map[string]dockertest.Image
+		bs     []dockertest.Behaviour
+	}{
+		{"a repository the registry holds nothing of", nil, nil},
+		{"a registry that answers 401", nil, []dockertest.Behaviour{dockertest.RegistryAnswers401}},
+		{"a repository the registry holds other images of", map[string]dockertest.Image{
+			"ghcr.io/acme/agk-invoice:1.3.0": {Digest: alpineDigest},
+		}, nil},
+		{"the classic store", nil, []dockertest.Behaviour{dockertest.ClassicImageStore}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := taggedRepository(t)
+			images := map[string]dockertest.Image{
+				"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest), Unpushed: true},
+				"alpine:3.21":                    {Digest: alpineDigest},
+			}
+			maps.Copy(images, c.images)
+			aDaemon(t, images, c.bs...)
+
+			code, out, errs, got := pushing(t, dir, http.StatusOK)
+			if code != exitRefused {
+				t.Fatalf("a push naming an image never pushed answered %d: %s%s", code, out, errs)
+			}
+			if got != nil {
+				t.Error("the version reached the server anyway")
+			}
+			for _, want := range []string{"normalize", "ghcr.io/acme/agk-invoice:1.4.0", "never pushed"} {
+				if !strings.Contains(errs, want) {
+					t.Errorf("the refusal does not name %q: %s", want, errs)
+				}
+			}
+		})
+	}
+}
+
+// A registry that could not be asked has not said anything about the image, so the push stops
+// with exit 4, as a daemon that is not there does, rather than telling somebody off their network
+// that their image was never pushed.
+func TestARegistryThatCannotBeAskedIsNoOutcome(t *testing.T) {
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest},
+	}, dockertest.RegistryUnreachable)
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitNoOutcome || got != nil {
+		t.Errorf("a push whose registry could not be asked answered %d, and sent %v: %s", code, got != nil, errs)
+	}
+	if strings.Contains(errs, "never pushed") {
+		t.Errorf("a registry nobody reached was taken for an image nobody pushed: %s", errs)
+	}
+}
+
+// A reference that writes a digest the wire does not carry is refused before any daemon is asked,
+// naming the step, and so is nothing a runner could be handed.
+func TestADigestThatIsNotOneIsRefusedBeforeADaemonIsAsked(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", strings.Replace(scriptWorkflow, "@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc", "@sha256:1ab74e66", 1))
+	commitAll(t, dir, "a digest cut short")
+	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(t.TempDir(), "nobody.sock"))
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused || got != nil {
+		t.Fatalf("a digest cut short answered %d: %s", code, errs)
+	}
+	for _, want := range []string{"normalize", "sixty-four"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("the refusal does not name %q: %s", want, errs)
+		}
+	}
 }

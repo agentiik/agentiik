@@ -110,6 +110,13 @@ type Push struct {
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 
+	// Images are the references the workflow names by tag, each with the digest agk push
+	// resolved it to, name@sha256:<hex>, which every run of the version names in its place.
+	// A tag is resolved where the image is, on the machine that built or pulled it, because
+	// the installation reaches no registry to do it with and a tag resolved at each run
+	// would be whatever it pointed at that day.
+	Images map[string]string `json:"images,omitempty"`
+
 	// Tree is the commit's tree, every file of it, as every step will see it under /agk/repo.
 	// It travels in the push because there is nowhere else it could come from yet: a version
 	// is a commit, and until the installation hosts the repository itself it holds no copy
@@ -137,6 +144,23 @@ func (p *Push) field(b *body, name string) error {
 		// anybody reviews, and without a count a push of a million empty manifests cost a
 		// million entries of a map before anything could refuse it.
 		return files(b, &p.Manifests, TreeMaxFiles, "the manifest of", fmt.Sprintf("this push carries more image manifests than the %d it may, one per image the workflow names", TreeMaxFiles))
+	case "images":
+		// One per image the workflow names, and bounded as the manifests are.
+		tooMany := fmt.Sprintf("this push resolves more images than the %d it may, one per image the workflow names by tag", TreeMaxFiles)
+		return b.object(TreeMaxFiles, tooMany, func(ref string) error {
+			if _, held := p.Images[ref]; held {
+				return twice("the image", ref)
+			}
+			var pinned string
+			if err := text(b, &pinned); err != nil {
+				return err
+			}
+			if p.Images == nil {
+				p.Images = map[string]string{}
+			}
+			p.Images[ref] = pinned
+			return nil
+		})
 	case "tree":
 		// Counted as the files arrive, so that a tree of too many is refused at the first
 		// one past the limit rather than once every one of them is an entry of a map.
@@ -199,6 +223,21 @@ func (f *PushFile) field(b *body, name string) error {
 		return text(b, &f.Mode)
 	}
 	return unknown(name)
+}
+
+// Pushed is what a push is answered with: the version, and the digest each image it names by tag
+// is recorded with.
+type Pushed struct {
+	Namespace string `json:"namespace"`
+	Workflow  string `json:"workflow"`
+	Commit    string `json:"commit"`
+
+	// Images are what the version records, which is not always what the push carried. A
+	// commit pushed again after one of its tags moved is the version its first push
+	// recorded, and every run of it names the digests that push resolved, so the answer
+	// says which those are rather than leaving the pusher to believe the new ones were
+	// taken.
+	Images map[string]string `json:"images"`
 }
 
 // TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
@@ -318,10 +357,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	v := db.Version{
 		Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Parent: p.Parent,
 		Entry: p.Entry, Document: p.Document, Includes: p.Includes, Manifests: p.Manifests,
-		Tree: tree, Author: string(who), CreatedAt: s.now(),
+		Images: p.Images, Tree: tree, Author: string(who), CreatedAt: s.now(),
 	}
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
-	// push rather than discovered by the first run of it.
+	// push rather than discovered by the first run of it. That includes a tag no digest was
+	// resolved for, which is a push from an agk that resolves none.
 	if _, err := version.Build(v); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -354,12 +394,19 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 
 	var saved db.Saved
+	recorded := v.Images
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
 		var err error
-		saved, err = ns.SaveVersion(ctx, v)
+		if saved, err = ns.SaveVersion(ctx, v); err != nil || saved.New {
+			return err
+		}
+		// The same tree pushed again, which is the version already recorded, and its
+		// images are the ones its first push resolved rather than these.
+		held, err := ns.Version(ctx, over.Workflow, commit)
+		recorded = held.Images
 		return err
 	})
 	if errors.Is(err, db.ErrOtherTree) {
@@ -393,9 +440,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		return
 	}
 
-	write(w, http.StatusOK, map[string]any{
-		"namespace": over.Namespace, "workflow": over.Workflow, "commit": commit,
-	})
+	if recorded == nil {
+		recorded = map[string]string{}
+	}
+	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
 }
 
 // checkTree refuses a tree that could not be laid out under /agk/repo, and answers its paths in

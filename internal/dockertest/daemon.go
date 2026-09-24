@@ -37,6 +37,7 @@ type Daemon struct {
 	order      []*live
 	removed    []string
 	pulled     map[string]bool
+	moved      map[string]Image
 	networks   map[string]docker.NetworkSpec
 	events     []docker.Event
 	watchers   map[chan docker.Event]struct{}
@@ -80,6 +81,7 @@ func NewDaemon(bs ...Behaviour) (*Daemon, error) {
 		opts:       o,
 		containers: map[string]*live{},
 		pulled:     map[string]bool{},
+		moved:      map[string]Image{},
 		networks:   map[string]docker.NetworkSpec{},
 		watchers:   map[chan docker.Event]struct{}{},
 		described:  describe(o),
@@ -194,6 +196,7 @@ func (d *Daemon) routes() {
 
 	d.mux.HandleFunc("POST /images/create", d.imageCreate)
 	d.mux.HandleFunc("GET /images/", d.imageInspect)
+	d.mux.HandleFunc("GET /distribution/", d.distributionInspect)
 
 	d.mux.HandleFunc("POST /containers/create", d.containerCreate)
 	d.mux.HandleFunc("GET /containers/json", d.containerList)

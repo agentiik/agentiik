@@ -136,7 +136,17 @@ func readManifests(ctx context.Context, e Env, referenced []reference) (map[stri
 	if len(referenced) == 0 {
 		return map[string]brick.Manifest{}, exitSucceeded
 	}
+	d, code := imageReader(e)
+	if code != exitSucceeded {
+		return nil, code
+	}
+	defer d.Close()
+	return manifestsThrough(ctx, e, d, referenced)
+}
 
+// imageReader opens the driver a command reads images through without running any of them. Where
+// it cannot, the refusal is said and the exit code it leaves with is answered instead.
+func imageReader(e Env) (*driver.Docker, int) {
 	policy := driver.DefaultPolicy()
 	// A laptop is the machine this command is typed on and Docker Desktop does not remap,
 	// so the floors are lifted here exactly as they are for a local run and the driver
@@ -157,8 +167,12 @@ func readManifests(ctx context.Context, e Env, referenced []reference) (map[stri
 		refusal(e.Err, err)
 		return nil, leaving(err)
 	}
-	defer d.Close()
+	return d, exitSucceeded
+}
 
+// manifestsThrough is readManifests through a driver the caller opened, keyed by the image each
+// reference names.
+func manifestsThrough(ctx context.Context, e Env, d *driver.Docker, referenced []reference) (map[string]brick.Manifest, int) {
 	read := make(map[string]brick.Manifest, len(referenced))
 	for _, r := range referenced {
 		m, err := d.Manifest(ctx, r.Step, r.Image)

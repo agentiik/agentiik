@@ -2,9 +2,12 @@ package version_test
 
 import (
 	"context"
+	"maps"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -270,6 +273,137 @@ func TestPushingOneCommitTwiceLeavesItAsItWas(t *testing.T) {
 	}
 	if len(g.Steps()) != 2 {
 		t.Errorf("the version holds %v, which is what the second push wrote", g.Steps())
+	}
+}
+
+// A workflow naming its images by tag, as one written against a laptop's daemon does: a brick
+// step, and a script step in a base image.
+const tagged = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+inputs:
+  orders: { schema: { type: array } }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-invoice:1.4.0
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+  report:
+    image: alpine:3.21
+    needs: [{ step: normalize, port: ok, as: in }]
+    script: ["cat /agk/in/in/envelope.json"]
+    outputs: [out]
+`
+
+const (
+	invoiceDigest = "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"
+	alpineDigest  = "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+)
+
+// aTaggedVersion is that workflow as a push records it: the manifest under the tag the file
+// writes, and the digest each tag was resolved to.
+func aTaggedVersion(t *testing.T) db.Version {
+	t.Helper()
+	return db.Version{
+		Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		Entry: "agentiik.yaml", Document: []byte(tagged),
+		Manifests: map[string][]byte{"ghcr.io/acme/agk-invoice:1.4.0": []byte(manifest)},
+		Images: map[string]string{
+			"ghcr.io/acme/agk-invoice:1.4.0": invoiceDigest,
+			"alpine:3.21":                    alpineDigest,
+		},
+	}
+}
+
+// "Images by digest in production: a tag is a mutable pointer, and a commit must determine what
+// ran." So a step the file names by tag is rebuilt naming the digest the push resolved it to, a
+// script step's base image included, and is held to the manifest read out of that image.
+func TestATagIsRebuiltAsTheDigestThePushResolvedItTo(t *testing.T) {
+	g, err := version.Build(aTaggedVersion(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step, want := range map[agk.Step]string{"normalize": invoiceDigest, "report": alpineDigest} {
+		if st, ok := g.Step(step); !ok || st.Image != want {
+			t.Errorf("%s names %q, want %q", step, st.Image, want)
+		}
+	}
+}
+
+// A tag the version recorded no digest for is refused rather than dispatched: the controller
+// reaches no registry to resolve it with, and no runner may take a message naming one.
+func TestATagWithNoDigestRecordedIsRefused(t *testing.T) {
+	v := aTaggedVersion(t)
+	delete(v.Images, "alpine:3.21")
+	_, err := version.Build(v)
+	if err == nil {
+		t.Fatal("a version naming a tag with no digest recorded for it was built")
+	}
+	for _, want := range []string{"report", "alpine:3.21", "agk push"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// What a version records for a tag is the tag's own repository at a sha256 digest, and only for
+// a tag a step names: a file that says one image while its runs pull another is refused.
+func TestADigestRecordedForSomethingElseIsRefused(t *testing.T) {
+	for what, images := range map[string]map[string]string{
+		"another repository": {"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/mallory/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"},
+		"another spelling":   {"alpine:3.21": "docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"},
+		"a tag again":        {"alpine:3.21": "alpine:3.22"},
+		"a tag and a digest": {"alpine:3.21": "alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"},
+		"a short digest":     {"alpine:3.21": "alpine@sha256:48b0309c"},
+		"a tag nobody names": {"busybox:1.37": "busybox@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"},
+	} {
+		v := aTaggedVersion(t)
+		maps.Copy(v.Images, images)
+		if _, err := version.Build(v); err == nil {
+			t.Errorf("a version recording %s was built", what)
+		}
+	}
+
+	// And a digest the file itself writes is kept as written, with nothing to record.
+	v := aTaggedVersion(t)
+	v.Document = []byte(strings.Replace(tagged, "image: alpine:3.21", "image: "+alpineDigest, 1))
+	delete(v.Images, "alpine:3.21")
+	g, err := version.Build(v)
+	if err != nil {
+		t.Fatalf("a version naming a digest of its own was refused: %v", err)
+	}
+	if st, _ := g.Step("report"); st.Image != alpineDigest {
+		t.Errorf("report names %q", st.Image)
+	}
+	v.Document = []byte(strings.Replace(tagged, "image: alpine:3.21", "image: alpine@sha256:48b0309c", 1))
+	if _, err := version.Build(v); err == nil || !strings.Contains(err.Error(), "sixty-four") {
+		t.Errorf("a step naming a digest that is not one answered %v", err)
+	}
+}
+
+// Two tags resolved to one digest are one image, held to one manifest, and a version carrying two
+// different manifests for it is refused rather than holding one step to the other's.
+func TestTwoTagsOfOneImageAreOneManifest(t *testing.T) {
+	v := aTaggedVersion(t)
+	v.Document = []byte(tagged + `
+  archive:
+    image: ghcr.io/acme/agk-invoice:latest
+    needs: [{ step: normalize, port: ok, as: orders }]
+    outputs: [ok]
+`)
+	v.Images["ghcr.io/acme/agk-invoice:latest"] = invoiceDigest
+	v.Manifests["ghcr.io/acme/agk-invoice:latest"] = []byte(manifest)
+	if _, err := version.Build(v); err != nil {
+		t.Fatalf("two tags of one image with one manifest were refused: %v", err)
+	}
+
+	v.Manifests["ghcr.io/acme/agk-invoice:latest"] = []byte(strings.Replace(manifest, "version: 1.0.0", "version: 2.0.0", 1))
+	if _, err := version.Build(v); err == nil {
+		t.Error("two tags of one image with two manifests were built")
 	}
 }
 

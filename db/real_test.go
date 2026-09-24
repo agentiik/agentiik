@@ -26,7 +26,29 @@ import (
 // database prepares a schema of this test's own, with the application role, and answers
 // with the two addresses: the superuser's, for migrating, and the application's, which is
 // the one the package is meant to be opened with.
+//
+// The role is the one Provision creates, as an installation's migrate step creates it, so
+// every namespace check in this package is also a check of what Provision grants.
 func database(t *testing.T) (super string, app string) {
+	t.Helper()
+	super, role := blank(t)
+
+	ctx := t.Context()
+	sc, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close(ctx)
+	if _, err := Provision(ctx, sc, role, "test"); err != nil {
+		t.Fatalf("the database could not be provisioned: %s", err)
+	}
+	return super, withCredentials(super, role, "test")
+}
+
+// blank prepares a database of this test's own and nothing in it, and answers with the
+// superuser's address on it and the name of the role that goes with it, which nothing has
+// created yet.
+func blank(t *testing.T) (super string, role string) {
 	t.Helper()
 	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
 	if url == "" {
@@ -46,8 +68,11 @@ func database(t *testing.T) (super string, app string) {
 	if len(name) > 60 {
 		name = name[:60]
 	}
+	// A role left by a run that never tidied up goes too, once the database that granted it
+	// something has, so that the role a test starts from is one it created.
 	for _, stmt := range []string{
 		fmt.Sprintf(`drop database if exists %s with (force)`, name),
+		`drop role if exists ` + name,
 		fmt.Sprintf(`create database %s`, name),
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
@@ -63,30 +88,7 @@ func database(t *testing.T) (super string, app string) {
 	t.Cleanup(func() {
 		drop(ctx, url, fmt.Sprintf(`drop database if exists %s with (force)`, name))
 	})
-
-	super = withDatabase(url, name)
-
-	// The application role, created the way a deployment profile creates it: able to
-	// read and write, and unable to walk through a policy.
-	sc, err := pgx.Connect(ctx, super)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sc.Close(ctx)
-	if _, err := Migrate(ctx, sc); err != nil {
-		t.Fatalf("the schema could not be created: %s", err)
-	}
-	for _, stmt := range []string{
-		`drop role if exists ` + name,
-		`create role ` + name + ` login password 'test' nosuperuser nobypassrls`,
-		`grant usage on schema public to ` + name,
-		`grant select, insert, update, delete on all tables in schema public to ` + name,
-	} {
-		if _, err := sc.Exec(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
-			t.Fatalf("%s: %s", stmt, err)
-		}
-	}
-	return super, withCredentials(super, name, "test")
+	return withDatabase(url, name), name
 }
 
 // drop runs one tidying statement and says nothing if it cannot: a test that has finished is

@@ -8,10 +8,12 @@
 // "A version is a commit. finance/monthly-invoicing@a3f9c1e names exactly one tree, permanently,
 // because that is what a commit already is." A run pins one, and a branch that moves afterwards
 // has to change nothing about it. So a version stores what its graph is rebuilt from: the entry
-// point as it was at that commit, the files it included, and the manifest of every image it
-// names. Rebuilding reaches no repository, no object store and no registry, which is what makes a
-// run of a two year old commit evaluate the same way today as it did then. The version names its
-// whole tree as well, which is what a container is given at /agk/repo and plays no part here.
+// point as it was at that commit, the files it included, the manifest of every image it names,
+// and the digest each image it names by tag was resolved to when it was pushed. Rebuilding
+// reaches no repository, no object store and no registry, which is what makes a run of a two year
+// old commit evaluate the same way today as it did then, and run the same images. The version
+// names its whole tree as well, which is what a container is given at /agk/repo and plays no part
+// here.
 //
 // # Why it is cached
 //
@@ -22,13 +24,18 @@
 package version
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 	"testing/fstest"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
@@ -112,8 +119,9 @@ func (s *Store) Graph(ctx context.Context, namespace, workflow, commit string) (
 //
 // The entry point and the includes are the ones the version carries, which is the whole point: a
 // run of a commit whose branch has since moved, or whose repository has since been deleted,
-// evaluates exactly as it did when it started. Version.Tree is what a container is given, and
-// plays no part here.
+// evaluates exactly as it did when it started. So are the digests its tags were resolved to at
+// the push, which the graph names in their place, so that a tag moved since changes nothing a run
+// of it runs. Version.Tree is what a container is given, and plays no part here.
 func Build(v db.Version) (*graph.Graph, error) {
 	if v.Entry == "" || len(v.Document) == 0 {
 		return nil, fmt.Errorf("version: %s@%s carries no entry point", v.Workflow, v.Commit)
@@ -129,19 +137,81 @@ func Build(v db.Version) (*graph.Graph, error) {
 		return nil, fmt.Errorf("version: %s@%s could not be loaded: %w", v.Workflow, v.Commit, err)
 	}
 
+	if err := pin(v, wf); err != nil {
+		return nil, err
+	}
 	manifests := make(map[string]brick.Manifest, len(v.Manifests))
-	for image, body := range v.Manifests {
+	read := make(map[string][]byte, len(v.Manifests))
+	for _, image := range slices.Sorted(maps.Keys(v.Manifests)) {
+		body := v.Manifests[image]
 		m, err := brick.ParseManifest(body)
 		if err != nil {
 			return nil, fmt.Errorf("version: the manifest of %s in %s@%s: %w", image, v.Workflow, v.Commit, err)
 		}
-		manifests[image] = m
+		// Keyed by what the steps name now, which is the digest where the workflow wrote a
+		// tag. Two tags resolved to one digest are one image, and so one manifest.
+		key := image
+		if pinned, held := v.Images[image]; held {
+			key = pinned
+		}
+		if first, twice := read[key]; twice && !bytes.Equal(first, body) {
+			return nil, fmt.Errorf("version: %s@%s carries two manifests for %s, one image under two tags", v.Workflow, v.Commit, key)
+		}
+		read[key], manifests[key] = body, m
 	}
 	g, err := graph.Build(wf, manifests)
 	if err != nil {
 		return nil, fmt.Errorf("version: %s@%s could not be built: %w", v.Workflow, v.Commit, err)
 	}
 	return g, nil
+}
+
+// pin puts the digest each tag was resolved to at the push in the place of the tag, so that the
+// graph a run is decided from names every image by digest.
+//
+// "Images by digest in production: a tag is a mutable pointer, and a commit must determine what
+// ran." A task carries the image its step names, and the wire's imageRef is name@sha256:<hex>, so
+// a tag left here would become a message no runner may take, dispatched by a controller that
+// cannot resolve one: it reaches no registry. An image the workflow names by digest is kept as
+// written, one it names by tag takes the digest the version recorded for it, and one with none
+// recorded is refused, which refuses the push that carried it.
+//
+// A recorded digest has to be of the tag's own repository as the workflow spells it, and every
+// one has to be of a tag some step names. A version whose file names one image while its runs
+// pull another would have its reviewers reading about something that never runs.
+func pin(v db.Version, wf *graph.Workflow) error {
+	named := map[string]bool{}
+	for _, st := range wf.Steps {
+		if st.Image != "" && !agk.ImageByDigest(st.Image) {
+			named[st.Image] = true
+		}
+	}
+	for _, ref := range slices.Sorted(maps.Keys(v.Images)) {
+		pinned := v.Images[ref]
+		repository, _, _ := strings.Cut(pinned, "@")
+		switch {
+		case !named[ref]:
+			return fmt.Errorf("version: %s@%s records a digest for %s, which none of its steps names by a tag", v.Workflow, v.Commit, ref)
+		case !agk.ImageByDigest(pinned) || repository != agk.ImageRepository(ref):
+			return fmt.Errorf("version: %s@%s records %s as %q, and a tag is resolved to its own repository, %s, at a sha256 digest", v.Workflow, v.Commit, ref, pinned, agk.ImageRepository(ref))
+		}
+	}
+
+	for _, step := range slices.Sorted(maps.Keys(wf.Steps)) {
+		st := wf.Steps[step]
+		switch pinned, held := v.Images[st.Image]; {
+		case st.Image == "" || agk.ImageByDigest(st.Image):
+			continue
+		case strings.Contains(st.Image, "@"):
+			return fmt.Errorf("version: step %s of %s@%s names %s, and a digest is written sha256: and sixty-four lowercase hexadecimal characters", step, v.Workflow, v.Commit, st.Image)
+		case !held:
+			return fmt.Errorf("version: step %s of %s@%s names %s by a tag, and the version records no digest for it: a server runs every image by the digest its registry serves, which agk push resolves each tag to", step, v.Workflow, v.Commit, st.Image)
+		default:
+			st.Image = pinned
+			wf.Steps[step] = st
+		}
+	}
+	return nil
 }
 
 // Capture is the half of a push that the graph is rebuilt from: the tree as it is now, reduced to
