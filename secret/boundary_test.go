@@ -48,13 +48,16 @@ var theStore = []string{"secret"}
 //
 // Being on the list excuses a package from the check and from nothing else. The walk goes through
 // it like any other, so a package that imports the API reaches whatever the API reaches. cmd/agk
-// imports it today, for the shape of a push and the limits on its tree, and the main package of
-// the API's own binary will once there is one. So the API reaching the store would put the store
-// in the command line as well, which this test names, and the providers live beside the store
-// instead: package api holds the interfaces they fill and secret.Attach wires them in. The main
-// package that calls it links the store, and joins this list when it is written.
+// imports it, for the shape of a push and the limits on its tree, and so does the main package of
+// the API's own binary. So the API reaching the store would put the store in the command line as
+// well, which this test names, and the providers live beside the store instead: package api holds
+// the interfaces they fill and secret.Attach wires them in. cmd/agentiik-api calls it, which links
+// the store into the API's binary and no other, and is why it is here. The controller's program is
+// not, and stays off the list: the controller "names which secret a task may have and never sees
+// its value".
 var mayRead = map[string]bool{
-	"api": true,
+	"api":              true,
+	"cmd/agentiik-api": true,
 }
 
 // TestOnlyTheAPIReadsASecret reads the module and names every package that reaches the store.
@@ -76,6 +79,14 @@ func TestOnlyTheAPIReadsASecret(t *testing.T) {
 	for _, pkg := range []string{".", "api", "secret", "controller", "cmd/agk", "cmd/agentiik-controller"} {
 		if !slices.Contains(tr.packages, pkg) {
 			t.Fatalf("the walk did not find %s, so it is not reading the module it is meant to", named(pkg))
+		}
+	}
+
+	// An allowance for a package that is not there is one that a package created later under
+	// that name inherits without anybody deciding it should.
+	for pkg := range mayRead {
+		if !slices.Contains(tr.packages, pkg) {
+			t.Errorf("%s may reach the store, and there is no such package: take it off the list", named(pkg))
 		}
 	}
 
