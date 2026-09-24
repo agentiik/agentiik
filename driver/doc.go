@@ -192,7 +192,18 @@
 // daemon does not apply is refused rather than silently ignored. A profile that lets every
 // call through counts as none.
 //
-// Both floors are read when the daemon is opened, and read again before the first container
+// A runner's own host is held to two more. A remapped daemon is refused to a process that
+// lacks CAP_CHOWN, CAP_FOWNER or CAP_DAC_OVERRIDE, read with capget, since a task's
+// directory is given to the range and re-entered and removed afterwards; the refusal is
+// ErrOwnershipCapabilities and names the unit lines that grant them. The secrets directory
+// must be a tmpfs mounted noexec,nosuid,nodev, read with statfs, since a secret is a bind
+// from there and a bind keeps the flags of its source's mount; otherwise it is
+// ErrSecretsTmpfsRequired, unless Policy.RequireSecretsTmpfs is SecretsTmpfsLifted, which
+// only callers that are not runners set. Config.Host answers both in place of the kernel
+// in a test. The secrets floor is read again before any value is written, since a tmpfs
+// unmounted under a running runner leaves a directory of the same name on a disk.
+//
+// The floors are read when the daemon is opened, and read again before the first container
 // after the event stream drops, since a daemon can only change its configuration by
 // restarting and a restart drops the stream. A daemon that no longer meets a floor refuses
 // each task with the sentinel New would have answered, and nothing is created on it.
@@ -207,7 +218,7 @@
 //
 // # Why the policy is a value and the file has one reader
 //
-// Policy is a value whose zero value is both floors in place, and New never reads a file.
+// Policy is a value whose zero value is every floor in place, and New never reads a file.
 // Reading /etc/agentiik/runner.toml belongs where a runner is configured, and doing it in
 // New would make this package refuse to be a library on a machine with no such file,
 // which is the one property both #installing-a-runner and agk run --local depend on.
@@ -253,7 +264,8 @@
 // container.
 //
 // /agk/secrets is a bind mount whose host side is a tmpfs where the platform has one,
-// Policy.SecretsDir, /dev/shm on Linux. A tmpfs the daemon creates at container start is
+// Policy.SecretsDir, /dev/shm on Linux, which a runner replaces with a tmpfs of its own
+// mounted noexec,nosuid,nodev. A tmpfs the daemon creates at container start is
 // empty and cannot be pre-populated, so a value could not be placed in one before the
 // container's first instruction runs. Where no host tmpfs exists, which is the laptop the
 // userns floor gets lifted for, the values touch the work root instead and the driver says
@@ -287,7 +299,8 @@
 //	driver.go     Docker, New, Run, Stop, Close, the in-flight registry
 //	config.go     Config and what a Task deliberately does not carry
 //	sources.go    what a runner gives one task in place of Config: its store, its secrets, its tree
-//	policy.go     Policy, DefaultPolicy, LoadPolicy and runner.toml, the two floors as enums
+//	policy.go     Policy, DefaultPolicy, LoadPolicy and runner.toml, the three floors as enums
+//	host.go       what the floors ask of the host: three capabilities and a noexec tmpfs
 //	daemon.go     hold the floors and the profiles to the daemon, announce what is given up
 //	image.go      resolve and pull by digest, read and cache the manifest, refuse root
 //	workdir.go    created fresh, owned inside the remapped range, removed with the container

@@ -136,7 +136,7 @@ type Ulimits struct {
 // partly in values a step asks for and partly in values the runner sets, and this is the
 // second half.
 //
-// Its zero value is both floors in place and nothing else configured, which is what lets
+// Its zero value is every floor in place and nothing else configured, which is what lets
 // a caller with no /etc/agentiik/runner.toml pass Policy{} and still be refused on a
 // daemon with no remapping or no seccomp. DefaultPolicy fills in the rest.
 type Policy struct {
