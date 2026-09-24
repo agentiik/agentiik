@@ -1071,24 +1071,32 @@ func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
 	}
 }
 
-// An image built on the machine and never pushed is refused naming it, and nothing is sent: a
-// version naming it would be a version no runner could pull an image for. The containerd store,
-// which holds such an image under a digest as it holds any other, is caught by asking the
-// registry; the classic one holds it under none.
+// An image built on the machine and never pushed is refused naming it, with exit 1, and nothing
+// is sent: a version naming it would be a version no runner could pull an image for. The
+// containerd store, which holds such an image under a digest as it holds any other, is caught by
+// asking the registry, which answers 403 or 401 for a repository it holds nothing of, the common
+// case, and 404 for one it holds other images of. The classic store holds it under no digest.
 func TestAnImageNeverPushedIsRefusedAndNothingIsSent(t *testing.T) {
 	for _, c := range []struct {
-		store string
-		bs    []dockertest.Behaviour
+		name   string
+		images map[string]dockertest.Image
+		bs     []dockertest.Behaviour
 	}{
-		{"containerd", nil},
-		{"classic", []dockertest.Behaviour{dockertest.ClassicImageStore}},
+		{"a repository the registry holds nothing of", nil, nil},
+		{"a registry that answers 401", nil, []dockertest.Behaviour{dockertest.RegistryAnswers401}},
+		{"a repository the registry holds other images of", map[string]dockertest.Image{
+			"ghcr.io/acme/agk-invoice:1.3.0": {Digest: alpineDigest},
+		}, nil},
+		{"the classic store", nil, []dockertest.Behaviour{dockertest.ClassicImageStore}},
 	} {
-		t.Run(c.store, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			dir := taggedRepository(t)
-			aDaemon(t, map[string]dockertest.Image{
+			images := map[string]dockertest.Image{
 				"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest), Unpushed: true},
 				"alpine:3.21":                    {Digest: alpineDigest},
-			}, c.bs...)
+			}
+			maps.Copy(images, c.images)
+			aDaemon(t, images, c.bs...)
 
 			code, out, errs, got := pushing(t, dir, http.StatusOK)
 			if code != exitRefused {
