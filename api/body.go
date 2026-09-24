@@ -375,6 +375,22 @@ func integer[T ~int | ~int64](b *body, into *T) error {
 	return b.mistyped(t.Kind(), "a whole number")
 }
 
+// flag reads a boolean. Null leaves it as it was.
+func flag(b *body, into *bool) error {
+	t, err := b.d.ReadToken()
+	if err != nil {
+		return malformed(err)
+	}
+	switch t.Kind() {
+	case jsontext.KindNull:
+		return nil
+	case jsontext.KindTrue, jsontext.KindFalse:
+		*into = t.Bool()
+		return nil
+	}
+	return b.mistyped(t.Kind(), "true or false")
+}
+
 // bytes reads what encoding/json writes a []byte as: standard base64, in a string. Null is nil.
 //
 // Decoded from the body where it lies, with no copy of the text on the way, since base64 needs no
