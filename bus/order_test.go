@@ -3,6 +3,7 @@ package bus_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -128,7 +129,7 @@ func dispatched(t *testing.T) taking {
 				return err
 			}
 			joined, err := w.Join(ctx, db.Joining{
-				Token: token.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+				Token: token.Clear, PublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 				Architecture: "amd64", AgentVersion: "0.2.0",
 			}, time.Hour, now)
 			if err != nil {

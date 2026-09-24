@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -890,6 +891,46 @@ func TestASecretsFileIsReadAsItsToolsWriteIt(t *testing.T) {
 	}
 	if !controller.Bus.Expires.IsZero() || controller.Bus.JWT != token || string(controller.Bus.Seed) != seed {
 		t.Errorf("a credential that never expires reads %+v", controller.Bus)
+	}
+}
+
+// The files bus.NewInstallation writes are the ones the API and the controller are given, so each is
+// read as its program reads it: the account seed by the API, and the control plane's credential by
+// both. A bus identity written in a form its own programs refuse is one an installation cannot start
+// on.
+func TestTheBusFilesAnInstallationIsCreatedWithAreReadByTheirPrograms(t *testing.T) {
+	until := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	created, err := bus.NewInstallation(filepath.Join(t.TempDir(), "bus"), until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := anInstallation(t)
+	i.env[config.BusAccountSeedFile] = created.AccountSeed
+	i.env[config.BusCredentialsFile] = created.ControlPlane
+
+	api, err := config.ReadAPI(theAPI.environment(i))
+	if err != nil {
+		t.Fatalf("the API refuses the files an installation is created with: %s", err)
+	}
+	account, err := nkeys.FromSeed([]byte(api.AccountSeed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if public, _ := account.PublicKey(); public != created.Account {
+		t.Errorf("the API reads the seed of %s, and the installation's account is %s", public, created.Account)
+	}
+	controller, err := config.ReadController(theController.environment(i))
+	if err != nil {
+		t.Fatalf("the controller refuses the credential an installation is created with: %s", err)
+	}
+	for program, b := range map[string]config.Bus{"the API": api.Bus, "the controller": controller.Bus} {
+		claims, err := jwt.DecodeUserClaims(b.JWT)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claims.Issuer != created.Account || !b.Expires.Equal(until) {
+			t.Errorf("%s reads a credential issued by %s until %s", program, claims.Issuer, b.Expires)
+		}
 	}
 }
 

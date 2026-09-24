@@ -31,23 +31,25 @@ require (
 	// makes of one is only right where it is the reading of the driver that connects.
 	github.com/jackc/pgx/v5 v5.11.0
 	// NATS credentials, used by package bus to mint the "short-lived token minted by the API"
-	// that a runner reaches the bus with. This is the library the server verifies with, so the
-	// claims this module writes and the claims the far end reads are the same structure rather
-	// than two readings of a specification. Hand-rolling a JWT for somebody else's verifier is
-	// the kind of clever that is wrong once and wrong for ever. Package internal/config reads
-	// the control plane's credential file and the account seed with it for the same reason:
-	// the file is in the format this library writes and the nats and nsc tools read. The tests
-	// of cmd/agentiik-controller write such a file with it, and sign the accounts of the bus
-	// they run on.
+	// that a runner reaches the bus with, and to sign the operator and the accounts an
+	// installation's bus trusts. This is the library the server verifies with, so the claims
+	// this module writes and the claims the far end reads are the same structure rather than
+	// two readings of a specification. Hand-rolling a JWT for somebody else's verifier is the
+	// kind of clever that is wrong once and wrong for ever. Package internal/config reads the
+	// control plane's credential file and the account seed with it for the same reason: the
+	// file is in the format this library writes and the nats and nsc tools read. The tests of
+	// cmd/agentiik-controller write such a file with it, and sign the accounts of the bus they
+	// run on.
 	github.com/nats-io/jwt/v2 v2.8.2
 	// The NATS server, used by packages bus and bus/control and by cmd/agentiik-controller in
 	// tests alone, and never linked into anything this module ships. What a runner credential
 	// may do is a permission set an installation depends on, and asserting the claims this
 	// module writes would be asserting its own JSON: the property that matters is what a server
 	// does with them. The first version of that set allowed $JS.API.> and let a runner create a
-	// stream, which is how this dependency came to be here. Package bus/control and the
-	// controller's program run their tests on a server of their own, since package bus empties
-	// the shared one before each of its tests.
+	// stream, which is how this dependency came to be here. Those tests start it from the
+	// configuration bus.NewInstallation writes, so an installation's is the one they hold the
+	// credentials to. Package bus/control and the controller's program run their tests on a
+	// server of their own, since package bus empties the shared one before each of its tests.
 	github.com/nats-io/nats-server/v2 v2.15.0
 	// NATS, used by package bus alone, and in tests by bus/control, which publishes where a
 	// runner's credential would refuse to, and by cmd/agentiik-controller, which reads the
@@ -61,9 +63,10 @@ require (
 	// profile precisely because the contract this fills is narrow enough to state.
 	github.com/nats-io/nats.go v1.53.1
 	// The NATS key pairs, used by package bus, and in tests by packages internal/config and
-	// cmd/agentiik-controller, which mint the credentials they read. A user credential is an Ed25519 key pair and a JWT naming
-	// its public half, and this is what mints one and what signs with an account key. It was
-	// already here as an indirect dependency of the client.
+	// cmd/agentiik-controller, which mint the credentials they read. A user credential is an
+	// Ed25519 key pair and a JWT naming its public half, and this is what mints one, what makes
+	// the operator and account keys an installation is created with, and what signs with them.
+	// It was already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
 	// TOML, used by package driver alone, to read /etc/agentiik/runner.toml. The
 	// documentation names the format and writes the file's [hooks] block with arrays of

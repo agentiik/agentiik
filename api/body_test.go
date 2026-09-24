@@ -201,7 +201,13 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		}},
 		&RunnerPool{Pool: Pool{Name: "default", Labels: []string{}, Namespaces: []string{}, Ceilings: &Ceilings{}}},
 		&Issue{Labels: []string{"zone=dmz"}, ExpiresInSeconds: 600},
-		&Join{Token: "agkjoin_x", Labels: []string{"zone=dmz"}, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 38, Architecture: "arm64", AgentVersion: "0.2.0"},
+		&Join{
+			Token: "agkjoin_x", PublicKey: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n",
+			Labels: []string{"zone=dmz"}, Capacity: &Capacity{VCPU: 4, Memory: "8Gi", Disk: "256Gi"},
+			Architecture: "arm64", AgentVersion: "0.2.0", Namespaces: []string{"finance"},
+			Containment: &Containment{Runtime: "runc", UsernsRemap: false, remapWritten: true},
+		},
+		&Join{Token: "agkjoin_x", Labels: []string{}, Capacity: &Capacity{}},
 		&Beat{Tasks: []agk.TaskID{"01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1", "01M2Z8V1P9C4XQ7K2N4D6F8H0B/charge/1/2/3"}},
 		&Beat{Tasks: nil},
 		&Redemption{Grant: "agkgrant_x", TaskID: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", IdempotencyKey: "01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1"},
@@ -253,10 +259,16 @@ func TestABodyIsReadClosed(t *testing.T) {
 		"a stray brace after its own":            {`{"token":"x"}}`, new(Join)},
 		"a document that stops":                  {`{"token":"x"`, new(Join)},
 		"a number where a string is read":        {`{"token":7}`, new(Join)},
-		"a fraction where a whole number is":     {`{"cpu":1.5}`, new(Join)},
-		"a number past 64 bits":                  {`{"memory_bytes":18446744073709551616}`, new(Join)},
+		"a fraction where a whole number is":     {`{"capacity":{"vcpu":1.5}}`, new(Join)},
+		"a number past 64 bits":                  {`{"capacity":{"vcpu":18446744073709551616}}`, new(Join)},
 		"a string where a list is read":          {`{"labels":"zone=dmz"}`, new(Join)},
 		"a number in a list of strings":          {`{"labels":["zone=dmz",4]}`, new(Join)},
+		"a machine's capacity as null":           {`{"capacity":null}`, new(Join)},
+		"a host's namespaces as null":            {`{"namespaces":null}`, new(Join)},
+		"a host's containment as null":           {`{"containment":null}`, new(Join)},
+		"userns_remap as null":                   {`{"containment":{"runtime":"runc","userns_remap":null}}`, new(Join)},
+		"userns_remap as a string":               {`{"containment":{"runtime":"runc","userns_remap":"true"}}`, new(Join)},
+		"a private key beside the public one":    {`{"private_key":"-----BEGIN PRIVATE KEY-----"}`, new(Join)},
 		"a tree file written twice":              {`{"tree":{"a.sh":{"mode":"0644"},"a.sh":{"mode":"0755"}}}`, new(Push)},
 		"an include written twice":               {`{"includes":{"a.yaml":"","a.yaml":"eA=="}}`, new(Push)},
 		"an image resolved twice":                {`{"images":{"alpine:3.21":"alpine@sha256:a","alpine:3.21":"alpine@sha256:b"}}`, new(Push)},
@@ -297,7 +309,7 @@ func TestABodyIsReadClosed(t *testing.T) {
 
 	// A body with no field at all, and one naming each field as null, read as encoding/json reads
 	// them: as nothing.
-	for _, body := range []string{`{}`, `null`, `{"token":null,"labels":null,"cpu":null}`} {
+	for _, body := range []string{`{}`, `null`, `{"token":null,"public_key":null,"labels":null,"architecture":null,"agent_version":null}`} {
 		var j Join
 		if err := readAtMost(httptest.NewRequest("POST", "/", strings.NewReader(body)), &j, smallMaxBytes); err != nil {
 			t.Errorf("%s is refused: %s", body, err)

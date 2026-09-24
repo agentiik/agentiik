@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/graph"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -172,6 +171,11 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 		nats.Name(o.Name),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
+		// So that a subscription read by hand carries the server's refusal of it, which
+		// is how Stops tells a runner that may not hear stops from one that heard none
+		// yet. It changes nothing for a subscription that is not read by hand, and the
+		// JetStream client reads none by hand.
+		nats.PermissionErrOnSubscribe(true),
 	}
 	if o.Name == "" {
 		options[0] = nats.Name("agentiik")
@@ -307,40 +311,6 @@ func (b *Bus) Publish(ctx context.Context, m TaskMessage) error {
 	return nil
 }
 
-// Stop asks for a task in flight to be stopped.
-//
-// A stop is not a queue message. The task it names is held by a runner that already took it, so
-// putting a stop on the work queue would be putting it where nobody holding that task is looking
-// and where a runner with room would take it as work. It goes out as a plain subject a runner
-// subscribes to for as long as it holds anything, which is the one thing the bus does that is
-// not work distribution.
-func (b *Bus) Stop(ctx context.Context, s graph.Stop) error {
-	body, err := json.Marshal(struct {
-		Task   agk.TaskID `json:"task"`
-		Reason string     `json:"reason"`
-	}{Task: s.Task, Reason: s.Reason.String()})
-	if err != nil {
-		return fmt.Errorf("bus: the stop for %s could not be written: %w", s.Task, err)
-	}
-	if err := b.conn.Publish(StopSubject, body); err != nil {
-		return fmt.Errorf("bus: the stop for %s could not be published: %w", s.Task, err)
-	}
-	// Flushed, because a plain publish is fire and forget and a stop that never left the
-	// buffer is a container that runs to its deadline. The flush is given a bound of its
-	// own: the client refuses a context with no deadline, and a caller passing one that has
-	// none is asking for a stop rather than asking to wait for ever.
-	flush, stop := context.WithTimeout(ctx, 10*time.Second)
-	defer stop()
-	if err := b.conn.FlushWithContext(flush); err != nil {
-		return fmt.Errorf("bus: the stop for %s was published and not flushed: %w", s.Task, err)
-	}
-	return nil
-}
-
-// StopSubject is where a stop goes. Not a stream: a stop is worth nothing to a runner that was
-// not holding the task, and worth nothing later.
-const StopSubject = "agentiik.stops"
-
 // PoolOf is the runner pool a task's labels select.
 //
 // "runs_on: [arch=amd64] ... Restricted to the runner pools the namespace is allowed to use." A
@@ -379,18 +349,27 @@ func validPool(pool string) error {
 	return nil
 }
 
-// validRunner holds a runner's name to what can be a subject token, for the same reason: a
-// runner's results go on a subject of its own, and a name with a wildcard in it would be a
-// credential allowed to publish as every runner at once.
+// validRunner holds a runner's name to the grammar the wire writes one in, which is also what can
+// be a subject token: a runner's results go on a subject of its own, and a name with a wildcard in
+// it would be a credential allowed to publish as every runner at once.
+//
+// The wire's grammar rather than any subject token, because the name is the runner field of every
+// result it publishes and the API mints it in that grammar, lowercase words joined by hyphens. A
+// runner the API could not have minted is a credential somebody wrote by hand, and a result naming
+// one is taken off the queue before the controller reads it as a host.
 func validRunner(runner string) error {
 	if runner == "" {
 		return errors.New("a runner with no name, and a result is taken from the runner that sent it")
 	}
-	if !isToken(runner) {
-		return fmt.Errorf("%q is not a runner: letters, digits, hyphens and underscores, because a runner's name is a subject token and a dot or a wildcard in one would reach another runner's results", runner)
+	if !runnerName.MatchString(runner) {
+		return fmt.Errorf("%.64q is not a runner: a runner is named in lowercase words joined by hyphens, the name the API minted it at join, and it is a subject token, so a dot or a wildcard in one would reach another runner's results", runner)
 	}
 	return nil
 }
+
+// runnerName is the wire's pattern for a runner, wire.schema.json $defs/taskResult/runner, held
+// to it by a test.
+var runnerName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // isToken says whether a name can be one token of a subject and nothing more.
 func isToken(s string) bool {
