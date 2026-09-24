@@ -63,6 +63,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
+- A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0024_version_images.sql`.
 
 ### Bus
 
@@ -104,6 +105,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
 - A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
+- `Docker.Pin` answers a tag at the digest its registry serves, asking the registry with no credentials, since the containerd store lists a digest even for an image never pushed. One it does not serve is `driver.ErrNotPushed`.
 
 ### API
 
@@ -152,6 +154,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A route whose body is optional, a bus credential or a cancellation, reads one that declares no length, as a body sent in chunks does. A field it refuses was accepted and dropped that way.
 - `api.OnRun` authorises a route whose path names a run and nothing it is of against the namespace and workflow the run is of, found by its identifier alone. `POST /api/v1/runs/{run}/cancel` is the first to take it. A run that is not there, or an identifier no run was minted with, is the same 404 as a run the caller may not reach, where U+0000 or bytes that are not UTF-8 were a 500.
 - `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
+- A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
 
 ### Secrets
 
@@ -171,6 +174,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
+- `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 
 ### Tests
 
