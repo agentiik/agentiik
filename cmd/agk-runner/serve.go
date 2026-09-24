@@ -48,6 +48,15 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 
+	if policy.Helper == "" {
+		helper, err := layHelper(e.HelperFile, cfg.WorkDir, log)
+		if err != nil {
+			fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
+			return exitRefused
+		}
+		policy.Helper = helper
+	}
+
 	// Limits is left at its zero value, which is agk's own size rules: no installation setting
 	// changes them, and the controller holds a task's envelopes to the same ones.
 	socket, _ := e.Lookup("DOCKER_HOST")
@@ -99,7 +108,7 @@ func openDriver(ctx context.Context, cfg driver.Config) (*driver.Docker, error) 
 	}
 	done := make(chan opened, 1)
 	go func() {
-		d, err := driver.New(cfg)
+		d, err := newDriver(cfg)
 		done <- opened{d, err}
 	}()
 	select {
@@ -114,6 +123,10 @@ func openDriver(ctx context.Context, cfg driver.Config) (*driver.Docker, error) 
 		return nil, context.Canceled
 	}
 }
+
+// newDriver is driver.New, and a variable so that a test can read the configuration serve opens the
+// driver with, which is where every host setting it settled on ends up.
+var newDriver = driver.New
 
 // loadPolicy reads the host's runner.toml.
 //
@@ -132,6 +145,27 @@ func loadPolicy(path string, log func(string)) (driver.Policy, error) {
 		return driver.DefaultPolicy(), nil
 	}
 	return driver.Policy{}, err
+}
+
+// layHelper is the helper a script step is given where runner.toml names none: the one installed
+// beside the agent, laid down under the work root, or none where none is installed.
+//
+// The default is the installed helper rather than none because the page offers /agk/bin/agk to
+// every script step, and a runner that binds it only where an operator thought to write a line is
+// one whose scripts work on some hosts of a pool and say agk: not found on others. A helper that
+// runner.toml names is taken as written, since the operator who wrote it has chosen the file; in
+// the container form that is a path of the host, which the daemon resolves.
+func layHelper(installed, workDir string, log func(string)) (string, error) {
+	path, ok, err := runner.LayHelper(installed, workDir)
+	switch {
+	case err != nil:
+		return "", err
+	case !ok:
+		log("there is no " + installed + " and runner.toml names no helper, so a script step finds no " + driver.BinPath + ", and reads its inputs with jq instead")
+		return "", nil
+	}
+	log("the static helper " + installed + " is bound read-only at " + driver.BinPath + " for a script step, from its copy " + path + " under the work root, where the daemon finds it in either form")
+	return path, nil
 }
 
 // logger writes one line of the agent's log at a time, from whichever goroutine says it.
