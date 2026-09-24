@@ -426,6 +426,12 @@ func TestAnArtifactWithNoBudgetIsARedirect(t *testing.T) {
 		t.Errorf("an artifact of a run in another namespace answered %d %s", w.Code, w.Body)
 	}
 
+	// Past its duration it is gone, whether or not a sweep has retired it yet: "a duration
+	// bounds how long they may be fetched".
+	s.sql(t, `update artifacts set expires_at = now() - interval '1 second' where run_id = $1`, run)
+	if w, _ := call(t, h, "GET", artifactPath(u), "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("an artifact past its duration answered %d: %s", w.Code, w.Body)
+	}
 	s.sql(t, `update artifacts set status = 'expired', retired_at = now() where run_id = $1`, run)
 	if w, _ := call(t, h, "GET", artifactPath(u), "alice", nil); w.Code != http.StatusGone {
 		t.Errorf("an expired artifact answered %d: %s", w.Code, w.Body)
@@ -482,6 +488,51 @@ func TestAnArtifactWithABudgetIsServedAndCountedWhenItCompletes(t *testing.T) {
 	if w.Code != http.StatusGone {
 		t.Errorf("a spent budget answered %d: %s", w.Code, w.Body)
 	}
+
+	// And one with fetches left is gone once its duration has run out, sweep or no sweep.
+	lapsing := s.anArtifact(t, s.finance[0], "lapsing.txt", 3, []byte("payslip 2026-02"))
+	s.sql(t, `update artifacts set expires_at = now() - interval '1 second' where name = 'lapsing.txt'`)
+	if w, _ := call(t, h, "GET", artifactPath(lapsing), "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("a budget past its duration answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// leaving is a client that has everything and goes, as curl does: the request's context is
+// cancelled the moment the last byte is written, before anything after it runs.
+type leaving struct {
+	*httptest.ResponseRecorder
+	left, of int
+	gone     context.CancelFunc
+}
+
+func (l *leaving) Write(b []byte) (int, error) {
+	n, err := l.ResponseRecorder.Write(b)
+	if l.left += n; l.left >= l.of {
+		l.gone()
+	}
+	return n, err
+}
+
+// A client that has the whole artifact has spent a fetch, even where it closes its connection the
+// moment the last byte arrives, which cancels the request before the fetch is recorded.
+func TestAFetchReceivedWholeIsSpentWhenTheClientLeavesAtOnce(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("payslip 2026-01")
+	u := s.anArtifact(t, s.finance[0], "payslip.txt", 1, content)
+	h := s.servedTo(t, everything{who: "alice"})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r := httptest.NewRequestWithContext(ctx, "GET", artifactPath(u), nil)
+	r.Header.Set("Authorization", "Bearer alice")
+	w := &leaving{ResponseRecorder: httptest.NewRecorder(), of: len(content), gone: cancel}
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || w.Body.String() != string(content) {
+		t.Fatalf("the fetch answered %d %q", w.Code, w.Body)
+	}
+	if again, _ := call(t, h, "GET", artifactPath(u), "alice", nil); again.Code != http.StatusGone {
+		t.Errorf("a one-shot artifact received whole answered %d the second time: %s", again.Code, again.Body)
+	}
 }
 
 // stalling is a client that receives the first bytes and then waits until it is let go.
@@ -501,8 +552,9 @@ func (s *stalling) Write(b []byte) (int, error) {
 }
 
 // The last fetch of a budget is served once. Two fetches of it at once would each find one left
-// before either counted it, and both be served, so the second waits for the first and is then told
-// the budget is spent.
+// before either counted it, and both be served, so the second is told at once, without waiting on
+// the first, that it is being served, and once the first has completed a third is told the budget is
+// spent.
 func TestTheLastFetchOfABudgetIsServedOnce(t *testing.T) {
 	s := withSomeRuns(t)
 	content := []byte("payslip 2026-01")
@@ -520,15 +572,9 @@ func TestTheLastFetchOfABudgetIsServedOnce(t *testing.T) {
 	<-first.writing
 
 	second := httptest.NewRecorder()
-	answered := make(chan struct{})
-	done.Go(func() {
-		h.ServeHTTP(second, request())
-		close(answered)
-	})
-	select {
-	case <-answered:
-		t.Errorf("a second fetch of the last one was answered %d while the first was still being served", second.Code)
-	case <-time.After(300 * time.Millisecond):
+	h.ServeHTTP(second, request())
+	if second.Code != http.StatusConflict {
+		t.Errorf("a second fetch of the last one, while the first was being served, answered %d %q", second.Code, second.Body)
 	}
 	close(first.release)
 	done.Wait()
@@ -536,7 +582,9 @@ func TestTheLastFetchOfABudgetIsServedOnce(t *testing.T) {
 	if first.Code != http.StatusOK || first.Body.String() != string(content) {
 		t.Errorf("the first fetch answered %d %q", first.Code, first.Body)
 	}
-	if second.Code != http.StatusGone {
-		t.Errorf("the second fetch of a budget of one answered %d %q", second.Code, second.Body)
+	third := httptest.NewRecorder()
+	h.ServeHTTP(third, request())
+	if third.Code != http.StatusGone {
+		t.Errorf("a fetch of a budget of one once it was served answered %d %q", third.Code, third.Body)
 	}
 }

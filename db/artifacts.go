@@ -233,40 +233,32 @@ type Resolved struct {
 	// one.
 	RetiredAt time.Time
 
-	// Fetches is what is left of the budget, zero where there is none.
-	Fetches int
+	// Fetches is what is left of the budget, zero where there is none or none is left, and
+	// Budgeted says which: whether the workflow declared a fetch budget at all.
+	Fetches  int
+	Budgeted bool
 }
 
 // Resolve turns agk://run/<run>/<step>/<port>/<name> into the physical key it addresses.
 //
 // A reference that has expired or been collected resolves to what it was, with ErrGone
 // beside it: the name, the size and the digest are what the run detail keeps showing, and
-// the error is what tells an API to answer 410 rather than 404.
+// the error is what tells an API to answer 410 rather than 404. So does a reference whose
+// duration has run out and which no sweep has retired yet, as Expired: "a duration bounds how
+// long they may be fetched", and a sweep that has not come round yet does not lengthen it.
 func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
-	return n.resolve(ctx, u, "")
-}
-
-// Claim is Resolve, holding the reference until the transaction ends.
-//
-// It is what a fetch against a budget is served under. The fetch counts when the response
-// completes, which is after the bytes have gone, so two fetches of the last one that each read the
-// budget before either counted would both be served it. Held, the second waits for the first, and
-// then reads the reference the first retired.
-func (n *NS) Claim(ctx context.Context, u agk.URI) (Resolved, error) {
-	return n.resolve(ctx, u, " for update")
-}
-
-func (n *NS) resolve(ctx context.Context, u agk.URI, lock string) (Resolved, error) {
 	out := Resolved{URI: u}
 	var stored string
 	var retired *time.Time
 	var left *int
+	var lapsed bool
 	err := n.tx.QueryRow(ctx,
-		`select digest, size_bytes, media_type, status, expires_at, retired_at, fetches_left
+		`select digest, size_bytes, media_type, status, expires_at, retired_at, fetches_left,
+		        expires_at <= now()
 		 from artifacts
-		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`+lock,
+		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`,
 		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name,
-	).Scan(&stored, &out.Size, &out.MediaType, &out.Status, &out.ExpiresAt, &retired, &left)
+	).Scan(&stored, &out.Size, &out.MediaType, &out.Status, &out.ExpiresAt, &retired, &left, &lapsed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Resolved{URI: u}, ErrNoArtifact
 	}
@@ -280,12 +272,91 @@ func (n *NS) resolve(ctx context.Context, u agk.URI, lock string) (Resolved, err
 		out.RetiredAt = *retired
 	}
 	if left != nil {
-		out.Fetches = *left
+		out.Fetches, out.Budgeted = *left, true
+	}
+	if out.Status == Live && lapsed {
+		out.Status = Expired
 	}
 	if out.Status != Live {
 		return out, ErrGone
 	}
 	return out, nil
+}
+
+// ErrInFlight is a budget whose every fetch left is being served: none is spent yet, since none
+// has completed, and none can be handed to anybody else, since each may. An API answers 409, and
+// the fetch may come back if a transfer holding it does not complete.
+var ErrInFlight = errors.New("db: every fetch left of that artifact is being served")
+
+// Reserve takes one fetch of a budget for a transfer about to begin, and answers the reference.
+//
+// "A fetch counts when the response completes", which is after the bytes have gone, and two
+// fetches of the last one that each read the budget before either counted would both be served
+// it. So a fetch is taken before the transfer, which nobody else can then take, and the transfer
+// ends with Delivered where it completed and with Release where it did not, which gives it back:
+// a transfer interrupted, refused or never begun does not consume the artifact. Nothing is held
+// while the bytes go, so a transfer to a client that reads nothing holds no connection of the
+// database and no lock anybody waits on.
+//
+// A reference with no budget, one retired or past its duration, and one never written answer as
+// Resolve does, ErrNoArtifact and ErrGone; one whose fetches left are all being served answers
+// ErrInFlight.
+func (n *NS) Reserve(ctx context.Context, u agk.URI) (Resolved, error) {
+	var left int
+	err := n.tx.QueryRow(ctx,
+		`update artifacts set fetches_left = fetches_left - 1
+		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5
+		   and status = 'live' and fetches_left > 0 and expires_at > now()
+		 returning fetches_left`,
+		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name).Scan(&left)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Resolved{URI: u}, fmt.Errorf("db: a fetch of %s could not be reserved: %w", u, err)
+	}
+	got, resolved := n.Resolve(ctx, u)
+	switch {
+	case resolved != nil:
+		return got, resolved
+	case err == nil:
+		return got, nil
+	case !got.Budgeted:
+		return got, fmt.Errorf("db: %s has no fetch budget to reserve one of", u)
+	}
+	return got, ErrInFlight
+}
+
+// Delivered records that a transfer Reserve took a fetch for completed, and retires the reference
+// where that was the last: "Once consumed, the reference is gone immediately rather than at the
+// next sweep."
+func (n *NS) Delivered(ctx context.Context, u agk.URI) error {
+	var stored string
+	err := n.tx.QueryRow(ctx,
+		`select digest from artifacts
+		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5
+		   and status = 'live' and fetches_left = 0
+		 for update`,
+		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name).Scan(&stored)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Fetches are left, or a transfer released one since, or the reference was
+		// retired by a sweep in between: nothing is left to retire here.
+		return nil
+	case err != nil:
+		return fmt.Errorf("db: the fetch of %s could not be recorded: %w", u, err)
+	}
+	return n.retire(ctx, u, Collected, stored)
+}
+
+// Release gives back the fetch Reserve took for a transfer that did not complete. A reference
+// retired in the meantime, by its duration running out, stays retired.
+func (n *NS) Release(ctx context.Context, u agk.URI) error {
+	if _, err := n.tx.Exec(ctx,
+		`update artifacts set fetches_left = fetches_left + 1
+		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5
+		   and status = 'live' and fetches_left is not null`,
+		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name); err != nil {
+		return fmt.Errorf("db: the fetch of %s could not be given back: %w", u, err)
+	}
+	return nil
 }
 
 // Fetched counts one fetch against the budget, and answers what is left.

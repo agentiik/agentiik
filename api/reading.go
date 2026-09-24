@@ -176,12 +176,10 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request, who Principal, o
 	e.Encode(w)
 }
 
-// errAbsent and errGone carry an artifact's absence and its end out of the transaction a fetch is
-// served in.
-var (
-	errAbsent = errors.New("api: no artifact of that URI")
-	errGone   = errors.New("api: that artifact has expired or been collected")
-)
+// fetchSettling is how long recording the end of a transfer against a budget may take once the
+// bytes have gone. On a context of its own, because the request's is cancelled the moment a client
+// that has everything closes its connection, which is what a client that has everything does.
+const fetchSettling = 30 * time.Second
 
 // artifactOf answers GET /api/v1/artifacts/{uri}, as How long an artifact lives sets it out: a
 // redirect to a short-lived presigned URL where the artifact has no fetch budget, the bytes
@@ -189,11 +187,13 @@ var (
 // never existed.
 //
 // A budget is served rather than redirected because "a redirect ends when issued, so a client that
-// never arrived would have spent its fetch", and it counts only when the whole of the bytes have
-// gone and matched their digest. The reference is held while they go, so a second fetch of the last
-// one waits for the first and is then answered 410, rather than both being served it. A HEAD is
-// answered what a GET would be, bytes aside, and spends nothing, since nothing was fetched. A Range
-// is not honoured: the whole artifact is answered, which is the one transfer that can count.
+// never arrived would have spent its fetch". One fetch is reserved before the bytes go and given
+// back unless the whole of them went and matched their digest, so the last fetch is served once
+// however many ask for it at the same moment, the others being told it is being served, and a
+// transfer that did not complete spends nothing. Nothing of the database is held while the bytes
+// go. A HEAD is answered what a GET would be, bytes aside, and reserves nothing, since nothing is
+// fetched. A Range is not honoured: the whole artifact is answered, which is the one transfer
+// that can count.
 func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	u, err := agk.ParseURI(r.PathValue("uri"))
 	if err != nil || !utf8.ValidString(u.Name) {
@@ -203,87 +203,113 @@ func (s *Server) artifactOf(w http.ResponseWriter, r *http.Request, who Principa
 		return
 	}
 
-	var redirect string
-	served := false
+	var got db.Resolved
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		got, err := ns.Claim(ctx, u)
-		switch {
-		case errors.Is(err, db.ErrNoArtifact):
-			return errAbsent
-		case errors.Is(err, db.ErrGone):
-			return errGone
-		case err != nil:
-			return err
-		}
-		if got.Fetches == 0 {
-			if s.urls == nil {
-				return errNoPresigner
-			}
-			redirect, err = s.urls.Presign(ctx, artifact.MethodGet, got.Key, u.Run, s.now().Add(artifactURLLifetime))
-			return err
-		}
-		if s.objects == nil {
-			return errNoObjects
-		}
-		rc, err := s.objects.Open(ctx, got.Key)
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-
-		served = true
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": u.Name}))
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Length", strconv.FormatInt(got.Size, 10))
-		w.WriteHeader(http.StatusOK)
-		if r.Method == http.MethodHead {
-			return nil
-		}
-		sum := sha256.New()
-		sent, err := io.Copy(w, io.TeeReader(rc, sum))
-		if err != nil {
-			return err
-		}
-		// Flushed, so that a connection that is gone says so here rather than after the
-		// fetch was counted. A writer that cannot flush has written through already.
-		if err := http.NewResponseController(w).Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
-			return err
-		}
-		if sent != got.Size || hex.EncodeToString(sum.Sum(nil)) != got.Digest {
-			return fmt.Errorf("api: %s was served %d bytes that are not the %d its digest names", u, sent, got.Size)
-		}
-		_, err = ns.Fetched(ctx, u)
+		var err error
+		got, err = ns.Resolve(ctx, u)
 		return err
 	})
-	switch {
-	case served:
-		// The status is written, and whatever went wrong after it went wrong with the
-		// transfer, which rolled the count back: the fetch was not spent.
-	case errors.Is(err, errAbsent):
-		fail(w, http.StatusNotFound, "no such thing, or not yours")
-	case errors.Is(err, errGone):
-		fail(w, http.StatusGone, "that artifact has expired or its fetches are spent: it existed, and is finished")
-	case errors.Is(err, errNoPresigner):
-		fail(w, http.StatusServiceUnavailable, "this installation mints no presigned URLs, and an artifact with no fetch budget is fetched through one")
-	case errors.Is(err, errNoObjects):
-		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an artifact is read from nowhere else")
-	case err != nil:
-		fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
-	default:
+	if !s.fetchable(w, err) {
+		return
+	}
+
+	if !got.Budgeted {
+		if s.urls == nil {
+			fail(w, http.StatusServiceUnavailable, "this installation mints no presigned URLs, and an artifact with no fetch budget is fetched through one")
+			return
+		}
+		redirect, err := s.urls.Presign(r.Context(), artifact.MethodGet, got.Key, u.Run, s.now().Add(artifactURLLifetime))
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
+			return
+		}
 		// A presigned URL is a credential for as long as it works, and no cache in between
 		// has any business keeping one.
 		w.Header().Set("Location", redirect)
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusFound)
+		return
 	}
+	if s.objects == nil {
+		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an artifact is read from nowhere else")
+		return
+	}
+	if r.Method == http.MethodHead {
+		bytesOf(w, u, got.Size)
+		return
+	}
+
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		got, err = ns.Reserve(ctx, u)
+		return err
+	})
+	if !s.fetchable(w, err) {
+		return
+	}
+	// From here the fetch is taken, and every way out either records it delivered or gives it
+	// back, on a context the request going away does not cancel.
+	delivered := false
+	defer func() {
+		settle, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fetchSettling)
+		defer cancel()
+		s.pool.In(settle, over.Namespace, func(ctx context.Context, ns *db.NS) error {
+			if delivered {
+				return ns.Delivered(ctx, u)
+			}
+			return ns.Release(ctx, u)
+		})
+	}()
+
+	rc, err := s.objects.Open(r.Context(), got.Key)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
+		return
+	}
+	defer rc.Close()
+	bytesOf(w, u, got.Size)
+	sum := sha256.New()
+	sent, err := io.Copy(w, io.TeeReader(rc, sum))
+	if err != nil {
+		return
+	}
+	// Flushed, so that a connection that is gone says so here rather than after the fetch was
+	// counted. A writer that cannot flush has written through already.
+	if err := http.NewResponseController(w).Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return
+	}
+	delivered = sent == got.Size && hex.EncodeToString(sum.Sum(nil)) == got.Digest
 }
 
-var (
-	errNoPresigner = errors.New("api: no presigner")
-	errNoObjects   = errors.New("api: no object store")
-)
+// fetchable answers a resolution or a reservation that found nothing to fetch, and says whether
+// there is something.
+func (s *Server) fetchable(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, db.ErrNoArtifact):
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+	case errors.Is(err, db.ErrGone):
+		fail(w, http.StatusGone, "that artifact has expired or its fetches are spent: it existed, and is finished")
+	case errors.Is(err, db.ErrInFlight):
+		fail(w, http.StatusConflict, "every fetch left of that artifact is being served to somebody else, and one comes back if its transfer does not complete: ask again later")
+	default:
+		fail(w, http.StatusInternalServerError, "the artifact could not be fetched")
+	}
+	return false
+}
+
+// bytesOf writes the headers an artifact's bytes are served with: as bytes, which a browser
+// neither renders nor sniffs, since they are served from the API's own origin, to be saved under
+// the artifact's name, and kept by no cache, since a budget is counted here.
+func bytesOf(w http.ResponseWriter, u agk.URI, size int64) {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": u.Name}))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.WriteHeader(http.StatusOK)
+}
 
 // storable says whether PostgreSQL could hold a string as text: UTF-8, with no U+0000. One it
 // could not is no name anything was ever written under, and asking about it would be an error from

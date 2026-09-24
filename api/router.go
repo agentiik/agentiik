@@ -41,8 +41,9 @@ type Identify func(r *http.Request) (Principal, error)
 // either. So a route whose path goes on from /api/v1/ with a word of its own, runs, artifacts,
 // runners and the like, is held apart from those under /api/v1/{namespace}/, and a request whose
 // first segment there is one of those words is answered by the first and never by the second. The
-// words are the API's: a namespace of that name is one whose routes under /api/v1/ nothing reaches,
-// which is why a namespace is never given one.
+// words are the API's: a namespace of that name is one whose routes under /api/v1/ nothing reaches.
+// Nothing creates a namespace through the API yet; what does, and the personal namespace a login
+// is given, has to refuse them.
 type Router struct {
 	mux      *http.ServeMux
 	auth     Authorizer
