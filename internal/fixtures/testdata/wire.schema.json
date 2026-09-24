@@ -1638,6 +1638,137 @@
         }
       ]
     },
+    "runnerRotation": {
+      "title": "Runner rotation",
+      "description": "The exchange that renews a runner's credential before its rotate_by, the only way one is renewed. The runner presents the credential it holds, as it does on every call, and a signature by the private half of the keypair it generated at join over which runner is asking and when; the answer is a new credential whose rotate_by is now plus the installation's join rotation, thirty days by default. The key proves the machine, so a copy of the credential taken off a disk or a backup works until its rotate_by and can never be renewed, while the host that holds the key keeps renewing for as long as it reports. The agent renews at two thirds of the window. The credential it presented stays accepted until the new one is first used, or until its own rotate_by, so an answer lost on the way back locks nobody out: the runner rotates again with what it still holds. A credential past its rotate_by is refused on every call, this one included, and that host joins again, which is deliberate: a machine that has been dark for a month should be reconsidered rather than readmitted. The request and the response are written as one keyword because they are one round trip, the answer meaning nothing apart from the proof it answers.",
+      "type": "object",
+      "required": [
+        "request",
+        "response"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "title": "Rotation request",
+          "description": "What the runner sends, over HTTPS and outbound, with its current credential as the bearer credential of the call. The object is closed and carries no credential and no key: the credential is the call's, as on every runner route, and the private key never leaves the host. The signature is over the bytes of the line agentiik runner rotation, a line feed, runner, a line feed, and at, each exactly as the request writes it and with nothing after the last. The first line is there so that a signature made for this can never be read as one made for anything else the key might one day sign, and neither of the other two can hold a line feed, so no two requests share a message. The time is signed as written rather than as a parsed instant, so that a runner and the API never have to agree on one spelling of it.",
+          "type": "object",
+          "required": [
+            "runner",
+            "at",
+            "signature"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "runner": {
+              "title": "Runner identifier",
+              "description": "The runner asking, as the join answered it. It has to be the runner the credential belongs to: a rotation speaking for another is refused rather than believed, and nothing is renewed, since a host sending one is either configured with another host's credential or speaking for a runner it is not. It is written here as well as being implied by the credential because it is half of what the signature is over, which binds the proof to one runner.",
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "examples": [
+                "runner-dmz-02",
+                "runner-lan-01"
+              ]
+            },
+            "at": {
+              "$ref": "#/$defs/timestamp",
+              "title": "Signed at",
+              "description": "When the runner signed the request, by its own clock, and the other half of what the signature is over. The API refuses a time more than five minutes from its own clock either way, so that a copy of a signed request, from a proxy's log or a disk, is worth nothing afterwards, and one no later than the time its last accepted rotation signed, so that inside those five minutes a signed request renews once. A host whose clock is further out cannot rotate until it is corrected, and the heartbeat's received_at is there for it to compare with.",
+              "examples": [
+                "2026-10-20T06:00:00Z",
+                "2026-11-03T14:22:41.518Z"
+              ]
+            },
+            "signature": {
+              "title": "Signature",
+              "description": "The Ed25519 signature of the message the request describes, by the private half of the key whose public half the join sent, in standard base64 with its padding: sixty-four bytes, eighty-eight characters. Ed25519 because it is the algorithm the join accepts a key in, deterministic, so no random number generator on the host can weaken it, and in the standard library of every language an agent is likely to be written in. A signature by any other key is refused, and a host whose key is gone is a new runner, which joins again rather than proving itself some other way.",
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$",
+              "examples": [
+                "dguPiG0uTjfUsOLqNa80c0tHa+k8W/bRaRTNBYO0gB9pUNh4DtAXuP8DyC9rJ3Svh9HK6HYBIbAwsrlhCuxUCg==",
+                "zCjtXRSpoCNQb/+xfUJQKZCzrFX9HT47AuRR8f8bgWzkeU1Tehxaw6tWDllc/mjxlYVM4yNxC4PlIr20e3U9Aw=="
+              ]
+            }
+          },
+          "examples": [
+            {
+              "runner": "runner-dmz-02",
+              "at": "2026-10-20T06:00:00Z",
+              "signature": "dguPiG0uTjfUsOLqNa80c0tHa+k8W/bRaRTNBYO0gB9pUNh4DtAXuP8DyC9rJ3Svh9HK6HYBIbAwsrlhCuxUCg=="
+            },
+            {
+              "runner": "runner-lan-01",
+              "at": "2026-11-03T14:22:41.518Z",
+              "signature": "zCjtXRSpoCNQb/+xfUJQKZCzrFX9HT47AuRR8f8bgWzkeU1Tehxaw6tWDllc/mjxlYVM4yNxC4PlIr20e3U9Aw=="
+            }
+          ]
+        },
+        "response": {
+          "title": "Rotation answer",
+          "description": "What the API answers once it has verified the signature against the key the runner joined with: a new credential and when that one stops being accepted. The credential the request carried is not revoked by this answer but by the first call that presents the new one, which is what makes a lost answer harmless. A refused rotation is an error and never this object with its fields left empty.",
+          "type": "object",
+          "required": [
+            "credential",
+            "rotate_by"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "credential": {
+              "title": "Runner credential",
+              "description": "The new credential, in the grammar and with the entropy the join's has. It is shown once, here, and stored hashed. The agent writes it to /var/lib/agentiik/credential, which agk-runner serve prefers to the one join wrote in /etc/agentiik/runner.env, since the unit's ProtectSystem=strict leaves /etc/agentiik read-only to the agent.",
+              "type": "string",
+              "pattern": "^agkrunner_[A-Za-z0-9_-]{43,}$",
+              "examples": [
+                "agkrunner_48fGI4GzMIVK5N1IT_OI4UA58LzmKa6C5WD-FkjkppE",
+                "agkrunner_Qm3xV0cYt8Ls2pWd9FhJk4RaNu7ZeGiB1oTy6XbC5vE"
+              ]
+            },
+            "rotate_by": {
+              "$ref": "#/$defs/timestamp",
+              "title": "Rotate by",
+              "description": "When the new credential stops being accepted: the moment of this answer plus the installation's join rotation, thirty days by default. The rotation window is this instant itself, and nothing else has to be kept in step with it: past it, the credential is refused on every call and the host joins again.",
+              "examples": [
+                "2026-11-19T06:00:00.412Z",
+                "2026-12-03T14:22:41.733Z"
+              ]
+            }
+          },
+          "examples": [
+            {
+              "credential": "agkrunner_48fGI4GzMIVK5N1IT_OI4UA58LzmKa6C5WD-FkjkppE",
+              "rotate_by": "2026-11-19T06:00:00.412Z"
+            },
+            {
+              "credential": "agkrunner_Qm3xV0cYt8Ls2pWd9FhJk4RaNu7ZeGiB1oTy6XbC5vE",
+              "rotate_by": "2026-12-03T14:22:41.733Z"
+            }
+          ]
+        }
+      },
+      "examples": [
+        {
+          "request": {
+            "runner": "runner-dmz-02",
+            "at": "2026-10-20T06:00:00Z",
+            "signature": "dguPiG0uTjfUsOLqNa80c0tHa+k8W/bRaRTNBYO0gB9pUNh4DtAXuP8DyC9rJ3Svh9HK6HYBIbAwsrlhCuxUCg=="
+          },
+          "response": {
+            "credential": "agkrunner_48fGI4GzMIVK5N1IT_OI4UA58LzmKa6C5WD-FkjkppE",
+            "rotate_by": "2026-11-19T06:00:00.412Z"
+          }
+        },
+        {
+          "request": {
+            "runner": "runner-lan-01",
+            "at": "2026-11-03T14:22:41.518Z",
+            "signature": "zCjtXRSpoCNQb/+xfUJQKZCzrFX9HT47AuRR8f8bgWzkeU1Tehxaw6tWDllc/mjxlYVM4yNxC4PlIr20e3U9Aw=="
+          },
+          "response": {
+            "credential": "agkrunner_Qm3xV0cYt8Ls2pWd9FhJk4RaNu7ZeGiB1oTy6XbC5vE",
+            "rotate_by": "2026-12-03T14:22:41.733Z"
+          }
+        }
+      ]
+    },
     "grantRedemption": {
       "title": "Grant redemption",
       "description": "The exchange in which a runner turns the names a task message carries into the values it deliberately does not: the URLs of its inputs, the values of its secrets, the files of the repository it runs against, and the place its outputs are written. The task message is safe to put on a queue precisely because it holds none of that, and the grant is the hinge: it is issued with one task, scoped to that task and the secrets it named, and expires with it. Request and response are written here as one pair because neither half is legible without the other; a message on the wire is one or the other, so neither is required and each is validated against the half it is. Everything the response carries is a credential or a secret, so what is ever recorded about this exchange is that it happened and for which task, and nothing it carried.",
