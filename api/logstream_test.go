@@ -55,6 +55,9 @@ type streams struct {
 	stop       chan struct{}
 	credential string
 	runner     string
+
+	// troubles is what the server reported.
+	troubles chan error
 }
 
 func withStreams(t *testing.T, tm timing) streams {
@@ -105,7 +108,11 @@ func withStreams(t *testing.T, tm timing) streams {
 		t.Fatal(err)
 	}
 	stop := make(chan struct{})
-	srv, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: versions, Objects: objects, Stopping: stop})
+	troubles := make(chan error, 16)
+	srv, err := api.NewServer(rt, api.ServerOptions{
+		Pool: pool, Versions: versions, Objects: objects, Stopping: stop,
+		Trouble: func(err error) { troubles <- err },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +120,7 @@ func withStreams(t *testing.T, tm timing) streams {
 
 	served := httptest.NewServer(rt)
 	t.Cleanup(served.Close)
-	s := streams{handler: rt, served: served, pool: pool, super: super, auth: auth, stop: stop}
+	s := streams{handler: rt, served: served, pool: pool, super: super, auth: auth, stop: stop, troubles: troubles}
 
 	var token db.JoinToken
 	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
@@ -601,4 +608,106 @@ func TestALogOfManyChunksIsSentWhole(t *testing.T) {
 		t.Errorf("the log ends as %v", end)
 	}
 	rd.expect(t, "end", "")
+}
+
+// A step's end is heard at the next sweep however busy the rest of the installation is: a sweep
+// that waited for a quiet spell would never come where some task ships every few seconds.
+func TestAStreamHearsItsStepEndWhileOtherLogsAreBusy(t *testing.T) {
+	s := withStreams(t, timing{sweep: 200 * time.Millisecond, keepAlive: time.Minute, reauthorise: time.Minute, settling: time.Minute})
+	rd := s.open(t, "")
+	rd.silent(t, 300*time.Millisecond)
+
+	busy, stop := context.WithCancel(t.Context())
+	defer stop()
+	conn := dbtest.Superuser(t, s.super)
+	elsewhere := string(agk.NewTaskID("01M3ZZZZZZZZZZZZZZZZZZZZZZ", "invoice", 1, agk.Shard{}))
+	go func() {
+		for busy.Err() == nil {
+			conn.Exec(busy, `select pg_notify($1, $2)`, db.LogChannel, elsewhere)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	s.ended(t, "succeeded")
+	if end := rd.expect(t, "end", ""); end["verdict"] != "succeeded" {
+		t.Errorf("the step's log ends as %v", end)
+	}
+}
+
+// A dispatch nothing redeemed and nothing will hand out now, left pending in a step that is over,
+// does not keep the stream open.
+func TestAStepThatIsOverIsNotHeldByADispatchNothingWillHandOut(t *testing.T) {
+	s := withStreams(t, quiet)
+	s.sql(t, `insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, state)
+		values ('finance', $1, $2, 'render', 1, 3, 3, 'pending')`, firstRow, string(streamRun))
+	s.ended(t, "cancelled")
+	s.sql(t, `update runs set state = 'succeeded', started_at = now(), finished_at = now() where id = $1`, string(streamRun))
+
+	rd := s.open(t, "")
+	rd.expect(t, "dispatch", firstRow+"/0/0")
+	if end := rd.expect(t, "dispatch_end", ""); end["final"] != false || end["lines"] != float64(0) {
+		t.Errorf("the pending dispatch ends as %v", end)
+	}
+	rd.expect(t, "end", "")
+	rd.closed(t)
+}
+
+// A step with more dispatches than one read of it takes is sent whole, and its end only once the
+// last of them was.
+func TestAStepOfManyDispatchesIsSentWhole(t *testing.T) {
+	s := withStreams(t, quiet)
+	const shards = 70
+	rows := make([]string, shards)
+	for i := range shards {
+		rows[i] = "01M3C" + strings.Repeat("0", 17) + strings.Repeat("0", 4-len(strconv.Itoa(i))) + strconv.Itoa(i)
+		key, grant := s.dispatched(t, rows[i], 1, agk.Shard{Index: i + 1, Of: shards}, 0, "succeeded")
+		s.ship(t, key, grant, 1, 1, true, "shard "+strconv.Itoa(i+1))
+	}
+	s.ended(t, "succeeded")
+
+	rd := s.open(t, "")
+	for i, row := range rows {
+		rd.expect(t, "dispatch", row+"/0/0")
+		rd.line(t, row, 1, 1, "shard "+strconv.Itoa(i+1))
+		rd.expect(t, "dispatch_end", "")
+	}
+	rd.expect(t, "end", "")
+}
+
+// A chunk whose object no longer holds what was written is sent as a gap naming the lines it held,
+// and the stream goes on past it rather than ending there for every reconnection; the installation
+// is told.
+func TestAChunkThatCannotBeReadBackIsAGap(t *testing.T) {
+	s := withStreams(t, quiet)
+	key, grant := s.dispatched(t, firstRow, 1, agk.Shard{}, 0, "succeeded")
+	s.ship(t, key, grant, 1, 1, false, "one")
+	s.ship(t, key, grant, 2, 2, false, "two", "three")
+	s.ship(t, key, grant, 3, 4, true, "four")
+	s.ended(t, "succeeded")
+	s.sql(t, `update task_log_chunks set object_digest = repeat('0', 64) where task_id = $1 and seq = 2`, firstRow)
+
+	rd := s.open(t, "")
+	rd.expect(t, "dispatch", firstRow+"/0/0")
+	rd.line(t, firstRow, 1, 1, "one")
+	gap := rd.expect(t, "gap", firstRow+"/2/3")
+	if gap["first_line"] != float64(2) || gap["lines"] != float64(2) {
+		t.Errorf("the gap is %v", gap)
+	}
+	rd.line(t, firstRow, 3, 4, "four")
+	rd.expect(t, "dispatch_end", "")
+	rd.expect(t, "end", "")
+	select {
+	case err := <-s.troubles:
+		if !strings.Contains(err.Error(), "could not be read back") {
+			t.Errorf("the installation was told %v", err)
+		}
+	default:
+		t.Error("the installation was told nothing")
+	}
+
+	// Resumed inside the gap, only what is left of it.
+	rd = s.open(t, firstRow+"/2/2")
+	if gap := rd.expect(t, "gap", firstRow+"/2/3"); gap["first_line"] != float64(3) || gap["lines"] != float64(1) {
+		t.Errorf("the gap resumed inside is %v", gap)
+	}
+	rd.line(t, firstRow, 3, 4, "four")
 }

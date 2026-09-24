@@ -485,6 +485,10 @@ func logKey(l db.TaskLog, seq int, shippedDigest string) (string, error) {
 		l.Namespace, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, shippedDigest), nil
 }
 
+// errChunkAltered is a chunk of a log whose object holds other bytes than the ones it was written
+// with, which reading it again will not change.
+var errChunkAltered = errors.New("api: the chunk was altered since it was written")
+
 // ReadLogChunk reads back the lines of one chunk of a log, as the index names it, and refuses bytes
 // that are not the ones the chunk was written with.
 //
@@ -502,14 +506,14 @@ func ReadLogChunk(ctx context.Context, objects artifact.Objects, c db.LogChunk) 
 		return nil, err
 	}
 	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != c.Digest {
-		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with", c.Key)
+		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with: %w", c.Key, errChunkAltered)
 	}
 	var lines []LogLine
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	for dec.More() {
 		var l LogLine
 		if err := dec.Decode(&l); err != nil {
-			return nil, fmt.Errorf("api: the chunk of a log at %s: %w", c.Key, err)
+			return nil, fmt.Errorf("api: the chunk of a log at %s is not lines of a log (%w): %w", c.Key, err, errChunkAltered)
 		}
 		lines = append(lines, l)
 	}

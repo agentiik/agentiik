@@ -74,14 +74,16 @@ type Dispatch struct {
 	FinalSeq  int
 }
 
-// StepLog reads where the log of one step stands, and its dispatches in the order they were made,
-// from the one since names on where it names one, since a reader has let go of those before it.
+// StepLog reads where the log of one step stands, and at most limit of its dispatches in the order
+// they were made, from the one since names on where it names one, since a reader has let go of
+// those before it. The limit is what a reader held on the first shard of a fan-out of ten thousand
+// reads each time, rather than the ten thousand.
 //
 // The order is that of their identifiers: a task_id is minted when its row is, and a row is made
 // when the evaluator hands the attempt out, so a dispatch made later sorts later and a reader that
 // has gone past one never finds another made before it. Sorted byte by byte, as a ULID sorts,
 // whatever collation the database was created with.
-func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step, since string) (StepLog, error) {
+func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step, since string, limit int) (StepLog, error) {
 	var s StepLog
 	var runState, verdict string
 	err := n.tx.QueryRow(ctx, `
@@ -118,7 +120,8 @@ func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step, since st
 		left join task_logs l on l.namespace = t.namespace and l.task_id = t.id
 		where t.namespace = $1 and t.run_id = $2 and t.step = $3
 		  and ($4 = '' or t.id collate "C" >= $4 collate "C")
-		order by t.id collate "C"`, n.namespace, string(run), string(step), since)
+		order by t.id collate "C"
+		limit $5`, n.namespace, string(run), string(step), since, limit)
 	if err != nil {
 		return StepLog{}, fmt.Errorf("db: the tasks of step %s of run %s could not be read: %w", step, run, err)
 	}
@@ -175,9 +178,11 @@ const unlistenWithin = 5 * time.Second
 //
 // It takes a session of its own, since LISTEN is a property of a connection. The first thing it
 // does once listening is sweep: whatever was shipped before it listened is a notification it did
-// not hear, and the sweep is what makes that cost latency rather than lines. Then it sweeps again
-// whenever sweep passes without a notification, which is also what tells a reader of what no
-// shipment announces, a task that ended or a step that reached its verdict.
+// not hear, and the sweep is what makes that cost latency rather than lines. Then it sweeps every
+// sweep, which is also what tells a reader of what no shipment announces, a task that ended or a
+// step that reached its verdict. Every sweep and not every sweep without a notification: on an
+// installation where some task ships something every few seconds, a quiet spell would never come,
+// and a reader whose step ended would never hear it.
 func (p *Pool) WatchLogs(ctx context.Context, sweep time.Duration, on func(agk.TaskID)) error {
 	if on == nil || sweep <= 0 {
 		return errors.New("db: WatchLogs needs something to call and a sweep to call it on")
@@ -192,8 +197,9 @@ func (p *Pool) WatchLogs(ctx context.Context, sweep time.Duration, on func(agk.T
 			conn.Exec(unlisten, `unlisten `+LogChannel)
 		}()
 		on("")
+		next := time.Now().Add(sweep)
 		for {
-			waiting, stop := context.WithTimeout(ctx, sweep)
+			waiting, stop := context.WithDeadline(ctx, next)
 			note, err := conn.Conn().WaitForNotification(waiting)
 			stop()
 			switch {
@@ -202,9 +208,12 @@ func (p *Pool) WatchLogs(ctx context.Context, sweep time.Duration, on func(agk.T
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
-				on("")
 			default:
 				return fmt.Errorf("db: the connection listening for logs failed: %w", err)
+			}
+			if !time.Now().Before(next) {
+				on("")
+				next = time.Now().Add(sweep)
 			}
 		}
 	})

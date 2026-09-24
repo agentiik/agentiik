@@ -43,6 +43,7 @@ type Server struct {
 	logs      *logWatch
 	streaming streamTiming
 	stopping  <-chan struct{}
+	trouble   func(error)
 }
 
 // ServerOptions are what a Server is given.
@@ -73,6 +74,11 @@ type ServerOptions struct {
 	// and resumes there: "open log streams reconnect elsewhere and resume from their last
 	// position". Without it a stop waits for streams that may never end on their own.
 	Stopping <-chan struct{}
+
+	// Trouble is where a log stream says that a chunk the API wrote could not be read back, which
+	// its reader is shown as a gap and whoever runs the installation has to explain. One with
+	// nowhere to put it drops it, as RunnerOptions.Trouble does.
+	Trouble func(err error)
 }
 
 // NewServer builds one and registers its routes on a router.
@@ -97,7 +103,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 	}
 	s := &Server{
 		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
-		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping,
+		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 	}
 	rt.ServeRuns(runsIn{o.Pool})
 
@@ -938,6 +944,13 @@ func write(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// report says one thing, through whatever Trouble was given.
+func (s *Server) report(err error) {
+	if s.trouble != nil {
+		s.trouble(err)
+	}
 }
 
 // fail answers a refusal that is about the request rather than about who asked.

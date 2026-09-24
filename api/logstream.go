@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net/http"
 	"regexp"
@@ -34,6 +35,7 @@ import (
 //
 //	dispatch      a dispatch's log begins: task_id, idempotency_key, attempt, shard, requeue
 //	line          one line of it: task_id, line, at, text
+//	gap           lines of it that cannot be read back: task_id, first_line, lines, reason
 //	dispatch_end  the stream lets go of it: task_id, lines, truncated, final
 //	end           the step's log is over: verdict
 //
@@ -42,7 +44,7 @@ import (
 // again after a loss, under the same key and a new task_id. final is false where the stream let
 // go of a log its runner never closed: lost, or stopped and silent past logSettling.
 //
-// A line and a dispatch event carry an id, <task_id>/<seq>/<line>, the dispatch event 0 and 0,
+// A line, a gap and a dispatch event carry an id, a gap its last line's, <task_id>/<seq>/<line>, the dispatch event 0 and 0,
 // which is everything a reconnect has to name. dispatch_end and end carry none, and a reconnect
 // between a dispatch_end and what follows it is sent that dispatch_end again.
 //
@@ -95,6 +97,10 @@ var defaultStreamTiming = streamTiming{
 	sweep: logSweep, pace: logPace, keepAlive: logKeepAlive, reauthorise: logReauthorise, settling: logSettling,
 }
 
+// logStepBatch is how many dispatches one read of where a step stands takes, which bounds what a
+// stream held on the first shard of a wide fan-out reads each time it is woken.
+const logStepBatch = 64
+
 // logChunkBatch is how many chunks of a log one read takes, which bounds what a stream holds in
 // memory at once: a chunk is at most what one shipment carried, a mebibyte.
 const logChunkBatch = 16
@@ -114,6 +120,15 @@ type streamedLine struct {
 	Line   int       `json:"line"`
 	At     time.Time `json:"at"`
 	Text   string    `json:"text"`
+}
+
+// streamedGap is a gap event's data: lines of a dispatch's log that were written and cannot be read
+// back, which the stream says rather than skip.
+type streamedGap struct {
+	TaskID    string `json:"task_id"`
+	FirstLine int    `json:"first_line"`
+	Lines     int    `json:"lines"`
+	Reason    string `json:"reason"`
 }
 
 // streamedEnd is a dispatch_end event's data: what the API holds of the log.
@@ -153,7 +168,7 @@ func (s *Server) stepLog(w http.ResponseWriter, r *http.Request, who Principal, 
 	var state db.StepLog
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		state, err = ns.StepLog(ctx, run, step, from.row)
+		state, err = ns.StepLog(ctx, run, step, from.row, 1)
 		return err
 	})
 	switch {
@@ -327,78 +342,109 @@ func (f *follower) stream(ctx context.Context, out *eventStream, wake <-chan str
 // until it reaches one whose log may still grow. It answers whether the step's log is over, with
 // the step's verdict, and an error where the stream cannot go on.
 //
-// Where the step stands is read once, and the dispatches from the one the stream follows on, so
-// that a step of ten thousand dispatches costs a read of each once and not a read of all of them
-// for each. The chunks are read after it, which misses nothing: a log closed by then had every
-// chunk recorded by then, and one still open is waited for, or let go of for how it ended, which
-// no chunk read later can change.
+// Where the step stands is read logStepBatch dispatches at a time, from the one the stream follows
+// on, so that a step of ten thousand dispatches costs a read of each once, and a stream held on
+// its first shard reads a batch each time it is woken rather than all ten thousand. Whether the
+// step is over is only asked once the last batch is in. The chunks are read after it, which misses
+// nothing: a log closed by then had every chunk recorded by then, and one still open is waited
+// for, or let go of for how it ended, which no chunk read later can change.
 func (f *follower) advance(ctx context.Context, out *eventStream) (bool, agk.Verdict, error) {
-	var state db.StepLog
-	err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
-		var err error
-		state, err = ns.StepLog(ctx, f.run, f.step, f.at)
-		return err
-	})
-	switch {
-	case err != nil:
-		return false, 0, err
-	case state.Expired:
-		return false, 0, errors.New("api: the logs of the run went past their retention while a stream read them")
-	}
-	for _, d := range state.Dispatches {
-		if d.Row == f.at && f.gone {
-			continue
+	for {
+		var state db.StepLog
+		err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
+			var err error
+			state, err = ns.StepLog(ctx, f.run, f.step, f.at, logStepBatch)
+			return err
+		})
+		switch {
+		case err != nil:
+			return false, 0, err
+		case state.Expired:
+			return false, 0, errors.New("api: the logs of the run went past their retention while a stream read them")
 		}
-		if d.Row != f.at {
-			f.at, f.announced, f.after, f.line, f.gone = d.Row, false, 0, 0, false
-		}
-		if !f.announced {
-			out.send("dispatch", position{row: d.Row}.id(), streamedDispatch{
-				TaskID: d.Row, IdempotencyKey: d.Task, Attempt: d.Attempt, Shard: d.Shard, Requeue: d.Requeue,
-			})
-			f.announced = true
-		}
-		for {
-			var chunks []db.LogChunk
-			err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
-				var err error
-				chunks, err = ns.LogChunks(ctx, d.Row, f.after, logChunkBatch)
-				return err
-			})
-			if err != nil {
+		for _, d := range state.Dispatches {
+			if d.Row == f.at && f.gone {
+				continue
+			}
+			if d.Row != f.at {
+				f.at, f.announced, f.after, f.line, f.gone = d.Row, false, 0, 0, false
+			}
+			if !f.announced {
+				out.send("dispatch", position{row: d.Row}.id(), streamedDispatch{
+					TaskID: d.Row, IdempotencyKey: d.Task, Attempt: d.Attempt, Shard: d.Shard, Requeue: d.Requeue,
+				})
+				f.announced = true
+			}
+			if err := f.chunks(ctx, out, d.Row); err != nil {
 				return false, 0, err
 			}
-			for _, c := range chunks {
-				lines, err := ReadLogChunk(ctx, f.server.objects, c)
-				if err != nil {
-					return false, 0, err
-				}
-				for i, l := range lines {
-					n := c.FirstLine + i
-					if n <= f.line {
-						continue
-					}
-					out.send("line", position{row: d.Row, seq: c.Seq, line: n}.id(), streamedLine{
-						TaskID: d.Row, Line: n, At: l.At, Text: l.Text,
-					})
-					f.line = n
-				}
-				f.after = c.Seq
+			if !f.lettingGo(d, state.Over()) {
+				return false, 0, nil
 			}
-			if out.flush() != nil {
-				return false, 0, out.err
-			}
-			if len(chunks) < logChunkBatch {
-				break
-			}
+			out.send("dispatch_end", "", streamedEnd{TaskID: d.Row, Lines: d.Lines, Truncated: d.Truncated, Final: d.FinalSeq != 0})
+			f.gone = true
 		}
-		if !f.lettingGo(d) {
-			return false, 0, nil
+		if len(state.Dispatches) < logStepBatch {
+			return state.Over(), state.Verdict, nil
 		}
-		out.send("dispatch_end", "", streamedEnd{TaskID: d.Row, Lines: d.Lines, Truncated: d.Truncated, Final: d.FinalSeq != 0})
-		f.gone = true
 	}
-	return state.Over(), state.Verdict, nil
+}
+
+// chunks sends the lines of one dispatch's log past where the stream stands, as far as the index
+// goes, a batch of chunks at a time.
+//
+// A chunk that cannot be read because its object is gone, or holds bytes other than the ones it was
+// written with, will not be readable on the next attempt either, so it is sent as a gap, which says
+// which lines are missing and why, and the stream goes on past it: closed there, the stream would
+// be reopened by its reader at the same place and closed again, for ever, with nothing said. The
+// installation is told as well, since a log the API wrote and cannot read back is its to explain.
+// Any other failure may pass, and ends the stream for its reader to resume.
+func (f *follower) chunks(ctx context.Context, out *eventStream, row string) error {
+	for {
+		var chunks []db.LogChunk
+		err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
+			var err error
+			chunks, err = ns.LogChunks(ctx, row, f.after, logChunkBatch)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		for _, c := range chunks {
+			lines, err := ReadLogChunk(ctx, f.server.objects, c)
+			switch {
+			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errChunkAltered):
+				last := c.FirstLine + c.Lines - 1
+				f.server.report(fmt.Errorf("api: chunk %d of the log of task %s, lines %d to %d, could not be read back: %w", c.Seq, row, c.FirstLine, last, err))
+				if last > f.line {
+					out.send("gap", position{row: row, seq: c.Seq, line: last}.id(), streamedGap{
+						TaskID: row, FirstLine: max(c.FirstLine, f.line+1), Lines: last - max(c.FirstLine, f.line+1) + 1,
+						Reason: "these lines were written and cannot be read back",
+					})
+					f.line = last
+				}
+			case err != nil:
+				return err
+			}
+			for i, l := range lines {
+				n := c.FirstLine + i
+				if n <= f.line {
+					continue
+				}
+				out.send("line", position{row: row, seq: c.Seq, line: n}.id(), streamedLine{
+					TaskID: row, Line: n, At: l.At, Text: l.Text,
+				})
+				f.line = n
+			}
+			f.after = c.Seq
+		}
+		if out.flush() != nil {
+			return out.err
+		}
+		if len(chunks) < logChunkBatch {
+			return nil
+		}
+	}
 }
 
 // lettingGo says whether the stream is done with a dispatch whose chunks it has read as far as the
@@ -409,7 +455,9 @@ func (f *follower) advance(ctx context.Context, out *eventStream) (bool, agk.Ver
 // is waited for while the dispatch is going. Once it has ended, what it can still ship depends on
 // how:
 //
-//   - never redeemed, it ran nowhere and nothing ships;
+//   - never redeemed, it ran nowhere and nothing ships, and the same holds of one never redeemed
+//     and still pending in a step that is over, which nothing will hand out now: a shard a
+//     merge: first left behind when its step was cancelled stays pending in a run that goes on;
 //   - succeeded or failed, its runner closes the log before it reports, so a log still open is
 //     one nobody will close, as for an ending a host re-reported from the record of an earlier
 //     dispatch of the key;
@@ -418,14 +466,14 @@ func (f *follower) advance(ctx context.Context, out *eventStream) (bool, agk.Ver
 //     waited for it would hold back the requeue that replaced it, which is the one being read;
 //   - cancelled or stopped at its deadline, its container is being stopped and its runner ships
 //     the last lines once it has, which logSettling waits for.
-func (f *follower) lettingGo(d db.Dispatch) bool {
+func (f *follower) lettingGo(d db.Dispatch, over bool) bool {
 	switch {
 	case d.FinalSeq != 0:
 		return true
+	case !d.Bound && (over || d.State.Terminal()):
+		return true
 	case !d.State.Terminal():
 		return false
-	case !d.Bound:
-		return true
 	case d.State != agk.TaskCancelled && d.State != agk.TaskTimedOut:
 		return true
 	}
