@@ -175,6 +175,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The controller refuses to start with `AGK_MASTER_KEY_FILE` set, since the master key is the API's alone.
 - A URL's user and password are looked for up to its last `@` before any parser reads it, so a password holding a `/`, a `?`, a `#` or a `%` is refused as a password rather than read as a host, a path or a query. A URL that does not parse is refused without the parser's reason, which quotes part of it.
 - A database URL's parameters are read as pgx reads them, so a `password` holding a `;` or a key written with spaces around it is refused, and the role is the one a `user` parameter names, which is the one pgx signs in as.
+- `PGPASSWORD` and `PGSSLPASSWORD` refuse the start of every program, since pgx would take a secret from either where the URL gives none.
 
 ### Command line
 

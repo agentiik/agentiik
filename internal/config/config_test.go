@@ -583,14 +583,20 @@ func TestASecretPassedAsAValueIsRefused(t *testing.T) {
 	}
 	as := func(v string) func(*installation) string { return func(*installation) string { return v } }
 	values := map[string]value{
-		"the database password":         {"AGK_DATABASE_PASSWORD", as("hunter2"), everyProgram},
-		"the migration password":        {"AGK_MIGRATE_DATABASE_PASSWORD", as("hunter3"), everyProgram},
-		"the bus credential":            {"AGK_BUS_CREDENTIALS", func(i *installation) string { return i.busJWT }, everyProgram},
-		"the account seed":              {"AGK_BUS_ACCOUNT_SEED", func(i *installation) string { return i.accountSeed }, everyProgram},
-		"the presign key":               {"AGK_PRESIGN_KEY", as("c2lnbmluZyBrZXkgb2YgdGhpcnR5IHR3byBieXRlcyE="), everyProgram},
-		"the master key":                {"AGK_MASTER_KEY", as("id: 2026-09 key: c2VjcmV0"), everyProgram},
-		"the operator token":            {"AGK_OPERATOR_TOKEN", as("agkoperator_" + strings.Repeat("Z", 43)), everyProgram},
-		"a password in the database":    {config.DatabaseURL, as("postgres://agentiik:hunter2@db/agentiik"), everyProgram},
+		"the database password":      {"AGK_DATABASE_PASSWORD", as("hunter2"), everyProgram},
+		"the migration password":     {"AGK_MIGRATE_DATABASE_PASSWORD", as("hunter3"), everyProgram},
+		"the bus credential":         {"AGK_BUS_CREDENTIALS", func(i *installation) string { return i.busJWT }, everyProgram},
+		"the account seed":           {"AGK_BUS_ACCOUNT_SEED", func(i *installation) string { return i.accountSeed }, everyProgram},
+		"the presign key":            {"AGK_PRESIGN_KEY", as("c2lnbmluZyBrZXkgb2YgdGhpcnR5IHR3byBieXRlcyE="), everyProgram},
+		"the master key":             {"AGK_MASTER_KEY", as("id: 2026-09 key: c2VjcmV0"), everyProgram},
+		"the operator token":         {"AGK_OPERATOR_TOKEN", as("agkoperator_" + strings.Repeat("Z", 43)), everyProgram},
+		"a password in the database": {config.DatabaseURL, as("postgres://agentiik:hunter2@db/agentiik"), everyProgram},
+
+		// Not the installation's variables, but pgx's, which it signs in with where the URL
+		// gives no password, as libpq does.
+		"the database password as libpq takes it":     {"PGPASSWORD", as("hunter2"), everyProgram},
+		"the client key's password as libpq takes it": {"PGSSLPASSWORD", as("hunter6"), everyProgram},
+
 		"a password as a parameter":     {config.DatabaseURL, as("postgres://agentiik@db/agentiik?password=hunter2"), everyProgram},
 		"a key password as a parameter": {config.DatabaseURL, as("postgres://agentiik@db/agentiik?sslpassword=hunter2"), everyProgram},
 		"a key password holding a ;":    {config.DatabaseURL, as("postgres://agentiik@db/agentiik?sslpassword=hunter;2"), everyProgram},
@@ -694,7 +700,8 @@ func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 
 // Each program reads its own settings, and asks its environment for nothing else: not a file only
 // another program holds, and nothing under AGK_DEV_, where the API reads nothing for itself and the
-// namespaces opted in to env keep their variables.
+// namespaces opted in to env keep their variables. The two libpq variables pgx takes a secret from
+// are asked for too, and only to be refused.
 func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 	neverAsked := map[string][]string{
 		theAPI.name: {config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile},
@@ -723,6 +730,9 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 		for _, name := range asked {
 			if slices.Contains(neverAsked[p.name], name) {
 				t.Errorf("%s asked for %s", p.name, name)
+			}
+			if name == "PGPASSWORD" || name == "PGSSLPASSWORD" {
+				continue
 			}
 			if !strings.HasPrefix(name, "AGK_") || strings.HasPrefix(name, "AGK_DEV_") {
 				t.Errorf("%s asked for %s, which is not a variable of the installation's", p.name, name)

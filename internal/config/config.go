@@ -6,7 +6,7 @@
 // secret is never a value in the environment, which every process the program starts inherits and
 // anybody allowed to inspect the process or its container reads. It is a file readable by its
 // owner alone, named by a variable ending _FILE, and a secret written as the value of a variable is
-// refused rather than used.
+// refused rather than used. So are PGPASSWORD and PGSSLPASSWORD, which pgx would take one from.
 //
 // # Refusing to start
 //
@@ -76,6 +76,18 @@ const (
 var secretFiles = []string{
 	DatabasePasswordFile, MigrateDatabasePasswordFile, BusCredentialsFile, BusAccountSeedFile,
 	PresignKeyFile, MasterKeyFile, OperatorTokenFile,
+}
+
+// libpqSecrets are the variables pgx takes a secret from wherever the URL gives none, as libpq
+// does, and where each secret belongs instead.
+//
+// They are not the installation's variables, and every program refuses them all the same: pgx
+// would sign in with a password found there although nothing here read it, which is a secret held
+// as a value under another name. The client key's password has no file of its own, because a key
+// kept unencrypted in a file its owner alone can read is that file.
+var libpqSecrets = []struct{ name, use, instead string }{
+	{"PGPASSWORD", "pgx would sign in with it", "write the database's password to a file its owner alone can read, and name that file in " + DatabasePasswordFile},
+	{"PGSSLPASSWORD", "pgx would unlock the client key with it", "keep the key unencrypted, in a file its owner alone can read, which the URL's sslkey names"},
 }
 
 // DefaultListen is where the API listens when AGK_LISTEN is unset.
@@ -292,6 +304,11 @@ func newReader(lookup Lookup) *reader {
 		value := strings.TrimSuffix(file, "_FILE")
 		if _, set := r.value(value); set {
 			r.refuse(value, fmt.Sprintf("is set, and a secret is never read from the environment, which every process started from this one inherits and anybody who can inspect it reads: write it to a file its owner alone can read, and name that file in %s", file))
+		}
+	}
+	for _, libpq := range libpqSecrets {
+		if _, set := r.value(libpq.name); set {
+			r.refuse(libpq.name, "is set, and "+libpq.use+", but a secret is never read from the environment, which every process started from this one inherits and anybody who can inspect it reads: "+libpq.instead)
 		}
 	}
 	return r
