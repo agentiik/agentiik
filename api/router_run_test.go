@@ -93,8 +93,53 @@ func TestARouteAboutARunIsAuthorisedAgainstItsWorkflow(t *testing.T) {
 	}
 }
 
+// A route about a run whose path names the namespace as well, as the one a Location names a run by
+// does, is authorised against the run's own workflow, and a run of another namespace asked for under
+// this one answers what a run that is not there answers, body included, before anything is asked
+// about the namespace it is in.
+func TestARouteAboutARunUnderANamespaceFindsItThereAlone(t *testing.T) {
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	elsewhere := api.Target{Namespace: "team-ops", Workflow: "monthly-invoicing"}
+	asked := granted{"alice": {{api.RunRead, invoicing}, {api.RunRead, elsewhere}}}
+	rt := router(t, asked)
+	rt.ServeRuns(&runsOf{of: map[string]api.Target{
+		"01M2Z8V1P9C4XQ7K2N4D6F8H0C": invoicing,
+		"01M2Z8V1P9C4XQ7K2N4D6F8H0D": {Namespace: "finance", Workflow: "payroll"},
+		"01M2Z8V1P9C4XQ7K2N4D6F8H0E": elsewhere,
+	}})
+	var saw api.Target
+	rt.MustHandle("GET", "/api/v1/{namespace}/runs/{run}", api.OnRun{Permission: api.RunRead},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, over api.Target) {
+			saw = over
+			w.WriteHeader(http.StatusOK)
+		})
+
+	if code, body := reached(t, rt, "GET", "/api/v1/finance/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0C", "alice"); code != http.StatusOK || saw != invoicing {
+		t.Fatalf("a run of the one workflow she holds run:read on answered %d %s, over %+v", code, body, saw)
+	}
+	absent, absentBody := reached(t, rt, "GET", "/api/v1/finance/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ", "alice")
+	for _, path := range []string{
+		"/api/v1/finance/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0D",
+		"/api/v1/finance/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0E",
+		"/api/v1/team-ops/runs/01M2Z8V1P9C4XQ7K2N4D6F8H0C",
+	} {
+		if code, body := reached(t, rt, "GET", path, "alice"); code != absent || body != absentBody {
+			t.Errorf("%s answered %d %q, and a run that is not there %d %q", path, code, body, absent, absentBody)
+		}
+	}
+	if absent != http.StatusNotFound {
+		t.Errorf("a run that is not there answered %d", absent)
+	}
+
+	for _, route := range rt.Routes() {
+		if route.Pattern == "/api/v1/{namespace}/runs/{run}" && (!route.OfRun || route.Scope != api.Workflow) {
+			t.Errorf("the surface lists the route as %+v", route)
+		}
+	}
+}
+
 // What cannot be registered about a run: each is a route that would be authorised against a
-// namespace or a workflow other than the ones its run is of, or against none.
+// workflow other than the one its run is of, or against none.
 func TestWhatCannotBeRegisteredAboutARun(t *testing.T) {
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
 	run := api.OnRun{Permission: api.WorkflowRun}
@@ -111,8 +156,8 @@ func TestWhatCannotBeRegisteredAboutARun(t *testing.T) {
 		guard   api.Guard
 	}{
 		{"no run in its path", "/api/v1/runs/cancel", run},
-		{"a namespace in its path as well", "/api/v1/{namespace}/runs/{run}/cancel", run},
 		{"a workflow in its path as well", "/api/v1/workflows/{workflow}/runs/{run}/cancel", run},
+		{"a namespace and a workflow in its path as well", "/api/v1/{namespace}/workflows/{workflow}/runs/{run}/cancel", run},
 		{"a permission nobody documents", "/api/v1/runs/{run}/cancel", api.OnRun{Permission: "run:cancel"}},
 	} {
 		if err := rt.Handle("POST", c.pattern, c.guard, ok); err == nil {
@@ -194,7 +239,10 @@ func TestARouteAcrossTheInstallationAsksAboutItsOwnPermission(t *testing.T) {
 	var answers []bool
 	var asked error
 	rt.MustHandleAcross("GET", "/api/v1/runs", api.Across{Permission: api.RunReadData},
-		func(w http.ResponseWriter, r *http.Request, who api.Principal, holds api.Holds) {
+		func(w http.ResponseWriter, r *http.Request, who api.Principal, within api.Target, holds api.Holds) {
+			if within != (api.Target{}) {
+				t.Errorf("a route across the installation was handed %+v", within)
+			}
 			answers = nil
 			for _, over := range []api.Target{invoicing, payroll} {
 				allowed, err := holds(r.Context(), over)
@@ -239,14 +287,60 @@ func TestARouteAcrossTheInstallationAsksAboutItsOwnPermission(t *testing.T) {
 	}
 }
 
-// What cannot be registered across the installation: a route whose path names a target has one
-// to authorise before it runs, and a guard of this kind given to Handle has no Holds to hand on.
+// A route answering across the namespace its path names is handed that namespace, and what it may
+// ask answers about the workflows there, one at a time, and about nothing outside it: a namespace
+// its caller holds nothing in is still served, and lists what one that does not exist lists.
+func TestARouteAcrossANamespaceAsksAboutItAlone(t *testing.T) {
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	elsewhere := api.Target{Namespace: "team-ops", Workflow: "monthly-invoicing"}
+	rt := router(t, granted{"alice": {{api.RunRead, invoicing}, {api.RunRead, elsewhere}}})
+
+	var saw api.Target
+	var answers []bool
+	var failures []error
+	rt.MustHandleAcross("GET", "/api/v1/{namespace}/runs", api.Across{Permission: api.RunRead},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, within api.Target, holds api.Holds) {
+			saw, answers, failures = within, nil, nil
+			for _, over := range []api.Target{invoicing, payroll, elsewhere, {}} {
+				held, err := holds(r.Context(), over)
+				answers, failures = append(answers, held), append(failures, err)
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+
+	if code, body := reached(t, rt, "GET", "/api/v1/finance/runs", "alice"); code != http.StatusOK || saw != (api.Target{Namespace: "finance"}) {
+		t.Fatalf("the route answered %d %s, handed %+v", code, body, saw)
+	}
+	if len(answers) != 4 || !answers[0] || answers[1] || answers[2] || answers[3] {
+		t.Errorf("holds answered %v about the workflow she holds, one she does not, one she holds in another namespace and the installation", answers)
+	}
+	if len(failures) != 4 || failures[0] != nil || failures[1] != nil || failures[2] == nil || failures[3] == nil {
+		t.Errorf("asking inside the namespace, in another and about the installation failed with %v", failures)
+	}
+	if code, _ := reached(t, rt, "GET", "/api/v1/nowhere/runs", "alice"); code != http.StatusOK || saw != (api.Target{Namespace: "nowhere"}) {
+		t.Errorf("a namespace she holds nothing in answered %d, handed %+v", code, saw)
+	}
+	saw = api.Target{}
+	if code, _ := reached(t, rt, "GET", "/api/v1/finance/runs", ""); code != http.StatusUnauthorized || saw != (api.Target{}) {
+		t.Errorf("a caller with no credential answered %d and reached the handler", code)
+	}
+	for _, route := range rt.Routes() {
+		if route.Pattern == "/api/v1/{namespace}/runs" && (!route.Across || route.Permission != api.RunRead) {
+			t.Errorf("the surface lists the route as %+v", route)
+		}
+	}
+}
+
+// What cannot be registered across the installation: a route whose path names a target narrower
+// than a namespace has one to authorise before it runs, and a guard of this kind given to Handle
+// has no Holds to hand on.
 func TestWhatCannotBeRegisteredAcrossTheInstallation(t *testing.T) {
 	across := api.Across{Permission: api.RunRead}
 	rt := router(t, api.DenyAll{})
 	rt.ServeRuns(&runsOf{})
-	listing := func(http.ResponseWriter, *http.Request, api.Principal, api.Holds) {}
-	for _, pattern := range []string{"/api/v1/{namespace}/runs", "/api/v1/workflows/{workflow}/runs", "/api/v1/runs/{run}/steps", "/api/v1/artifacts/{uri}/like"} {
+	listing := func(http.ResponseWriter, *http.Request, api.Principal, api.Target, api.Holds) {}
+	for _, pattern := range []string{"/api/v1/{namespace}/workflows/{workflow}/runs", "/api/v1/workflows/{workflow}/runs", "/api/v1/runs/{run}/steps", "/api/v1/{namespace}/runs/{run}/steps", "/api/v1/artifacts/{uri}/like"} {
 		if err := rt.HandleAcross("GET", pattern, across, listing); err == nil {
 			t.Errorf("%s was registered across the installation", pattern)
 		}

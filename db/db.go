@@ -141,18 +141,22 @@ const (
 	// writes is the grant, the task it names, and the index to that task's log.
 	LogShipment Reason = "a runner shipping a task's log"
 
-	// RunRoute is a route about one run, whose path names the run and nothing it is of:
-	// "Agentiik sends the push service an identifier and a state", and the application a
-	// notification opens holds that identifier and nothing else. What it reads is which
-	// namespace and workflow the run is of, and that goes to the authorizer and nowhere else;
-	// the route itself reads and writes through In, in the namespace it was authorised in.
+	// RunRoute is a route about one run, whose path names the run and not the workflow it is
+	// of, and often not its namespace: "Agentiik sends the push service an identifier and a
+	// state", and the application a notification opens holds that identifier and nothing
+	// else. What it reads is which namespace and workflow the run is of, and that goes to the
+	// router and the authorizer and nowhere else; the route itself reads and writes through
+	// In, in the namespace it was authorised in.
 	RunRoute Reason = "a route that names a run and not its namespace"
 
-	// RunListing is GET /api/v1/runs, "across every namespace the caller can read", whose
-	// path names no namespace because the whole point is that it names none. What it reads
-	// is which workflows there are, for the authorizer to be asked about each, and then the
-	// runs of the ones it allowed and of no others: the namespaces a listing reaches are the
-	// ones the authorisation decision named, as In's always are.
+	// RunListing is GET /api/v1/runs, "across every namespace the caller can read", and GET
+	// /api/v1/{ns}/runs, the same listing within one. What it reads is which workflows there
+	// are, for the authorizer to be asked about each, and then the runs of the ones it allowed
+	// and of no others: the namespaces a listing reaches are the ones the authorisation
+	// decision named, as In's always are. One namespace's listing steps past In too, rather
+	// than reading its runs under the namespace's policy, because that policy admits every
+	// workflow of the namespace, and "a deny wins at any scope" only where the workflow is in
+	// the question.
 	RunListing Reason = "a listing of runs across the namespaces its caller can read"
 
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,

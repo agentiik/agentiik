@@ -18,15 +18,15 @@ import (
 // tail of its log". None of that is the evaluator's state: it is the projection the decisions
 // wrote, which is what the projection is for.
 
-// RunQuery is how a listing is narrowed.
+// RunQuery is how a listing is narrowed, besides the workflows it is of, which are what the
+// authorizer allowed and are given beside it.
 //
 // Since and Until bound when a run was created, both included, and the zero time bounds nothing.
 // Included at both ends, so that a client paging back through time by passing the last run it was
 // given as Until is given that run again rather than skipping the ones created in the same instant.
 type RunQuery struct {
-	Workflow string
-	State    string
-	Limit    int
+	State string
+	Limit int
 
 	Since time.Time
 	Until time.Time
@@ -117,33 +117,6 @@ type RunDetail struct {
 
 	Steps []StepSummary `json:"steps"`
 	Tasks []TaskSummary `json:"tasks"`
-}
-
-// Runs lists what a namespace holds, newest first.
-//
-// "with the failing and waiting runs surfaced first" is the console's ordering and not this one:
-// what is ordered here is time, because a listing that reordered itself by state would be a
-// listing whose second page overlapped its first. The surfacing is the client's to do over what
-// it was given.
-func (n *NS) Runs(ctx context.Context, q RunQuery) ([]RunSummary, error) {
-	if err := q.check(); err != nil {
-		return nil, err
-	}
-	rows, err := n.tx.Query(ctx, `
-		select namespace, id, workflow, commit, state, trigger, triggered_by,
-		       created_at, started_at, finished_at
-		from runs
-		where namespace = $1
-		  and ($2 = '' or workflow = $2)
-		  and ($3 = '' or state = $3)
-		  and ($5::timestamptz is null or created_at >= $5)
-		  and ($6::timestamptz is null or created_at <= $6)
-		order by created_at desc, id desc
-		limit $4`, n.namespace, q.Workflow, q.State, q.Limit, bound(q.Since), bound(q.Until))
-	if err != nil {
-		return nil, fmt.Errorf("db: the runs could not be read: %w", err)
-	}
-	return summaries(rows)
 }
 
 // summaries reads the rows of a listing.
@@ -368,13 +341,18 @@ func (w *Wide) Workflows(ctx context.Context, namespace, name string) ([]Workflo
 	return out, rows.Err()
 }
 
-// Runs lists the runs of the workflows given and of no others, newest first, as NS.Runs orders
-// one namespace's.
+// Runs lists the runs of the workflows given and of no others, newest first.
 //
-// The second half of a listing across namespaces, given the workflows the authorizer allowed. None
-// given reads nothing, rather than everything: the filter is the authorisation decision, and a
-// missing one fails closed. q.Workflow narrows nothing here, since the workflows given already
-// have.
+// "with the failing and waiting runs surfaced first" is the console's ordering and not this one:
+// what is ordered here is time, because a listing that reordered itself by state would be a
+// listing whose second page overlapped its first. The surfacing is the client's to do over what
+// it was given.
+//
+// The second half of a listing, across namespaces or within one, given the workflows the
+// authorizer allowed. None given reads nothing, rather than everything: the filter is the
+// authorisation decision, and a missing one fails closed. There is no listing of one namespace's
+// runs that skips the question, because "a deny wins at any scope" and a deny on one workflow is
+// only in the answer where that workflow is in the question.
 func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSummary, error) {
 	if err := q.check(); err != nil {
 		return nil, err

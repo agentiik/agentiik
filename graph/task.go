@@ -226,6 +226,13 @@ type Result struct {
 	Requeue  int           `json:"requeue,omitempty"`
 	Reason   string        `json:"reason,omitempty"`
 
+	// NoExitCode says the result reported no exit code at all, which the 0 of ExitCode cannot
+	// say. A stopped task whose container started may report none: a host answering a requeue
+	// from a record it kept before stops kept their code has none to give. The evaluator reads
+	// no code off a stopped task, so nothing is decided by it; it keeps the task's row from
+	// reading 0, the code of success.
+	NoExitCode bool `json:"no_exit_code,omitempty"`
+
 	Outputs map[agk.Port]agk.Envelope `json:"outputs,omitempty"`
 
 	DispatchedAt time.Time `json:"dispatched_at,omitzero"`
