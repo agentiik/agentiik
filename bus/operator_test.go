@@ -164,6 +164,13 @@ func TestARunnerMintedWithTheInstallationsSeedTakesFromItsPoolAlone(t *testing.T
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	// Take asks after a consumer before it pulls, so its refusal above can be the question's
+	// alone. The pull itself, asked for directly, is the permission that keeps lan's tasks
+	// from a runner of dmz, and any answer at all is the server taking the request.
+	pull := "$JS.API.CONSUMER.MSG.NEXT." + Stream + "." + Durable("lan")
+	if reply, err := conn.Request(pull, []byte(`{"batch":1,"no_wait":true}`), time.Second); err == nil {
+		t.Errorf("a runner of dmz pulled from lan and was answered %q", reply.Data)
+	}
 	js, err := jetstream.New(conn)
 	if err != nil {
 		t.Fatal(err)
@@ -292,5 +299,40 @@ func TestWhatAnInstallationIsNotCreatedWith(t *testing.T) {
 		if _, err := os.Stat(dir); err == nil {
 			t.Errorf("refusing a control plane credential that %s, it made the directory", what)
 		}
+	}
+}
+
+// Failing part way, the files already written are removed and nothing else is, so the directory
+// holds every file or none and the call can be run again, and a file already there is refused
+// rather than written over.
+func TestAWriteFailingPartWayLeavesNothingItWrote(t *testing.T) {
+	dir := t.TempDir()
+	kept := filepath.Join(dir, "kept")
+	if err := os.WriteFile(kept, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(dir, "first")
+	err := writeAll(dir, []file{
+		{first, []byte("one")},
+		{filepath.Join(dir, "missing", "second"), []byte("two")},
+	})
+	if err == nil {
+		t.Fatal("a file in a directory that does not exist was written")
+	}
+	if _, err := os.Stat(first); err == nil {
+		t.Error("the file written before the failure was left behind")
+	}
+	if content, _ := os.ReadFile(kept); string(content) != "kept" {
+		t.Error("a file the call did not write was removed or changed")
+	}
+
+	if err := writeAll(dir, []file{{first, []byte("one")}, {kept, []byte("over")}}); err == nil {
+		t.Error("a file already there was written over")
+	}
+	if content, _ := os.ReadFile(kept); string(content) != "kept" {
+		t.Errorf("the file already there holds %q", content)
+	}
+	if _, err := os.Stat(first); err == nil {
+		t.Error("the file written before the refusal was left behind")
 	}
 }

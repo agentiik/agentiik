@@ -62,11 +62,11 @@ type Installation struct {
 // controller would refuse the credential on their first start and the identity could not then be
 // created again over it.
 //
-// The operator's seed and the system account's are not written anywhere. Nothing in an
-// installation signs with either after this: the server reads the accounts from the configuration
-// file rather than from a resolver it can be handed a new one on, so changing one means writing
-// that configuration again, and a key kept only for that day is a key that could sign an account
-// the server would trust, on a disk, for every other day. The day an installation needs new
+// The operator's seed and the system account's are not written anywhere. Nothing in an installation
+// signs with either after this. An account the server would trust, new or changed, is one the
+// operator signed, and the server takes one pushed to it at run time only from a connection under
+// the system account, so a key kept for the day an account changes is a key that could sign one and
+// hand it to the server, on a disk, for every other day. The day an installation needs new
 // accounts, it creates a new identity in a new directory, restarts the server on it and hands the
 // API and the controller their new files, and every runner is given a credential under the new
 // account the next time it asks.
@@ -176,32 +176,47 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Installation{}, fmt.Errorf("bus: the directory for the bus identity could not be made: %w", err)
 	}
-	var written []string
-	for _, f := range []struct {
-		path    string
-		content []byte
-	}{
+	err = writeAll(dir, []file{
 		{in.Accounts, []byte(conf.String())},
 		{in.AccountSeed, append(append([]byte{}, accountSeed...), '\n')},
 		{in.ControlPlane, creds},
-	} {
+	})
+	if err != nil {
+		return Installation{}, err
+	}
+	return in, nil
+}
+
+// file is one file writeAll writes.
+type file struct {
+	path    string
+	content []byte
+}
+
+// writeAll writes each file once, then the directory's entries, and on failing part way removes
+// the files it wrote and nothing else, so that what it leaves is either every file or none of them
+// and the call can be run again.
+func writeAll(dir string, files []file) error {
+	var written []string
+	undo := func() {
+		for _, path := range written {
+			os.Remove(path)
+		}
+	}
+	for _, f := range files {
 		if err := writeOnce(f.path, f.content); err != nil {
-			for _, path := range written {
-				os.Remove(path)
-			}
-			return Installation{}, err
+			undo()
+			return err
 		}
 		written = append(written, f.path)
 	}
 	// The directory's entries as well as the files' contents, or a power cut after this
 	// answered could come back to a directory missing a file the call said it wrote.
 	if err := syncDir(dir); err != nil {
-		for _, path := range written {
-			os.Remove(path)
-		}
-		return Installation{}, err
+		undo()
+		return err
 	}
-	return in, nil
+	return nil
 }
 
 // unwritten refuses a directory already holding any of the three files, and tells an identity from
