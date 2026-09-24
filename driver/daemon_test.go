@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/internal/docker"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // remapped is a daemon's /info as one with user namespace remapping on answers it: the
@@ -18,10 +19,11 @@ func remapped() docker.Info {
 	}
 }
 
-// plain is a daemon without the remapping, which is what Docker Desktop answers.
+// plain is a daemon without the remapping, which is what Docker Desktop answers: its own
+// seccomp profile, and neither AppArmor nor SELinux.
 func plain() docker.Info {
 	return docker.Info{
-		SecurityOptions: []string{"name=seccomp,profile=unconfined", "name=cgroupns"},
+		SecurityOptions: []string{"name=seccomp,profile=builtin", "name=cgroupns"},
 		DockerRootDir:   "/var/lib/docker",
 	}
 }
@@ -226,5 +228,197 @@ func TestPreparingAWorkingDirectoryOnADaemonThatDoesNotRemapDoesNothing(t *testi
 	defer w.remove()
 	if err := floor.ownWorkdir(w); err != nil {
 		t.Fatalf("ownWorkdir: %s", err)
+	}
+}
+
+// A daemon with no seccomp, or one started with --seccomp-profile=unconfined, runs a brick
+// with the whole system call table open. A runner refuses it, whatever its file says, and
+// says what to change; the refusal is a sentinel so that a runner can exit on it as the
+// machine's fault rather than Docker's.
+func TestADaemonWithoutSeccompIsRefusedOnAServer(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		options []string
+		want    string
+	}{
+		{"no seccomp at all", []string{"name=apparmor", "name=userns"}, "lists no seccomp"},
+		{"seccomp switched off", []string{"name=apparmor", "name=seccomp,profile=unconfined", "name=userns"}, "--seccomp-profile=unconfined"},
+	} {
+		p := DefaultPolicy()
+		// The file cannot lift the seccomp floor, and lifting the userns one does not
+		// lift it either: they are two floors.
+		p.RequireUsernsRemap = RemapLifted
+		_, err := readConfinement(docker.Info{SecurityOptions: c.options}, p)
+		if !errors.Is(err, ErrSeccompRequired) {
+			t.Fatalf("%s: a runner took the daemon, or refused it unrecognisably: %v", c.name, err)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: the refusal does not say why: %s", c.name, err)
+		}
+	}
+}
+
+// Locally the same daemon is taken and the machine says what it gives up, once, when the
+// daemon is opened: agk run --local runs on somebody's own laptop, where a refusal would
+// stop them for a fact about their machine they are owed a sentence about instead.
+func TestADaemonWithoutSeccompIsAnnouncedLocally(t *testing.T) {
+	p := DefaultPolicy()
+	p.RequireSeccomp = SeccompLifted
+
+	c, err := readConfinement(docker.Info{SecurityOptions: []string{"name=apparmor", "name=seccomp,profile=unconfined"}}, p)
+	if err != nil {
+		t.Fatalf("a lifted seccomp floor refused anyway: %s", err)
+	}
+	var said []string
+	c.announce(func(s string) { said = append(said, s) })
+	if len(said) != 1 {
+		t.Fatalf("the driver said %d things: %v", len(said), said)
+	}
+	for _, want := range []string{"no seccomp profile", "--seccomp-profile=unconfined", "any system call", "A runner refuses such a daemon"} {
+		if !strings.Contains(said[0], want) {
+			t.Errorf("the announcement does not say %q: %s", want, said[0])
+		}
+	}
+}
+
+// A daemon started unconfined still filters where the runner names a profile of its own,
+// because every container is then created with that profile and the daemon's default is
+// never the one applied.
+func TestARunnerProfileConfinesAnUnconfinedDaemon(t *testing.T) {
+	p := DefaultPolicy()
+	p.Seccomp = `{"defaultAction":"SCMP_ACT_ERRNO"}`
+	c, err := readConfinement(docker.Info{SecurityOptions: []string{"name=apparmor", "name=seccomp,profile=unconfined"}}, p)
+	if err != nil {
+		t.Fatalf("a daemon applying the runner's own profile was refused: %s", err)
+	}
+	if !c.Seccomp {
+		t.Fatalf("a container created with the runner's profile was read as unfiltered")
+	}
+}
+
+// "An AppArmor profile or SELinux label depending on the host": the host decides, and a
+// runner cannot install either, so a daemon with neither is taken on a server as it is on
+// a laptop, and the driver says what that leaves. A daemon with one of the two says
+// nothing about it.
+func TestADaemonWithNeitherAppArmorNorSELinuxIsAnnounced(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		options []string
+		said    int
+	}{
+		{"Docker Desktop", plain().SecurityOptions, 1},
+		{"Ubuntu", []string{"name=apparmor", "name=seccomp,profile=builtin"}, 0},
+		{"Fedora with --selinux-enabled", []string{"name=seccomp,profile=builtin", "name=selinux"}, 0},
+	} {
+		confined, err := readConfinement(docker.Info{SecurityOptions: c.options}, DefaultPolicy())
+		if err != nil {
+			t.Fatalf("%s: refused: %s", c.name, err)
+		}
+		var said []string
+		confined.announce(func(s string) { said = append(said, s) })
+		if len(said) != c.said {
+			t.Fatalf("%s: the driver said %v", c.name, said)
+		}
+		if c.said == 1 && (!strings.Contains(said[0], "neither an AppArmor profile nor an SELinux label") || !strings.Contains(said[0], "seccomp profile")) {
+			t.Errorf("%s: the announcement does not say what is left: %s", c.name, said[0])
+		}
+	}
+}
+
+// A profile the runner's file names is held to what the daemon can apply. The daemon
+// ignores an AppArmor profile on a host without AppArmor and a label where it labels
+// nothing, so either would be a setting that silently did nothing, and a seccomp profile
+// on a daemon with no seccomp would fail every container at its start.
+func TestAProfileTheDaemonCannotApplyIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		policy  func(*Policy)
+		options []string
+		want    string
+	}{
+		{"apparmor_profile", func(p *Policy) { p.AppArmor = "agentiik-brick" }, []string{"name=seccomp,profile=builtin", "name=selinux"}, "does not apply AppArmor"},
+		{"selinux_label", func(p *Policy) { p.SELinuxLabel = "level:s0:c1" }, []string{"name=seccomp,profile=builtin", "name=apparmor"}, "does not label containers"},
+		{"seccomp_profile", func(p *Policy) { p.Seccomp = `{"defaultAction":"SCMP_ACT_ERRNO"}`; p.RequireSeccomp = SeccompLifted }, []string{"name=apparmor"}, "lists no seccomp"},
+	} {
+		p := DefaultPolicy()
+		p.Source = "/etc/agentiik/runner.toml"
+		c.policy(&p)
+		_, err := readConfinement(docker.Info{SecurityOptions: c.options}, p)
+		if err == nil {
+			t.Fatalf("%s was taken on a daemon that cannot apply it", c.name)
+		}
+		for _, want := range []string{c.name, c.want, p.Source} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal of %s does not say %q: %s", c.name, want, err)
+			}
+		}
+	}
+}
+
+// New holds the seccomp floor before anything else happens, against a daemon on a socket
+// rather than a value handed to a function: a runner opening a daemon without seccomp is
+// refused, and a local caller opening the same daemon is told once and goes on.
+func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
+	daemon, err := dockertest.NewDaemon(dockertest.WithoutSeccomp, dockertest.WithUsernsRemap(165536, 165536))
+	if err != nil {
+		t.Fatalf("starting a fake daemon: %s", err)
+	}
+	defer daemon.Close()
+
+	d, err := New(Config{Socket: daemon.Socket(), Policy: DefaultPolicy(), WorkRoot: t.TempDir()})
+	if err == nil {
+		d.Close()
+		t.Fatalf("a runner opened a daemon that applies no seccomp profile")
+	}
+	if !errors.Is(err, ErrSeccompRequired) {
+		t.Fatalf("the refusal is %v, and the seccomp floor refuses with ErrSeccompRequired", err)
+	}
+
+	p := DefaultPolicy()
+	p.RequireSeccomp = SeccompLifted
+	var said []string
+	d, err = New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
+	if err != nil {
+		t.Fatalf("a lifted seccomp floor refused anyway: %s", err)
+	}
+	defer d.Close()
+	told := 0
+	for _, s := range said {
+		if strings.Contains(s, "no seccomp profile") {
+			told++
+		}
+	}
+	if told != 1 {
+		t.Fatalf("opening the daemon said %v, and the missing seccomp is said once", said)
+	}
+}
+
+// A [hooks] table in the file is read past, and opening the daemon says so once, because
+// an operator who wrote a pre_task is relying on it having run.
+func TestNewSaysTheHooksDoNotRun(t *testing.T) {
+	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
+	if err != nil {
+		t.Fatalf("starting a fake daemon: %s", err)
+	}
+	defer daemon.Close()
+
+	p, err := LoadPolicy(writePolicyFile(t, "[hooks]\npre_task = [\"/usr/local/sbin/attach-licence\"]\n"))
+	if err != nil {
+		t.Fatalf("LoadPolicy: %s", err)
+	}
+	var said []string
+	d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
+	if err != nil {
+		t.Fatalf("New: %s", err)
+	}
+	defer d.Close()
+	hooks := 0
+	for _, s := range said {
+		if strings.Contains(s, "[hooks]") && strings.Contains(s, p.Source) && strings.Contains(s, "v0.9.0") {
+			hooks++
+		}
+	}
+	if hooks != 1 {
+		t.Fatalf("opening the daemon said %v, and the skipped hooks are said once", said)
 	}
 }

@@ -40,6 +40,7 @@
 //	EventStreamDrops     an event stream that drops and must be resumed from since
 //	WithoutUsernsRemap   an /info carrying no name=userns, which is the floor refusing
 //	WithUsernsRemap      an /info that carries it, with a root directory ending <uid>.<gid>
+//	WithoutSeccomp       an /info listing no name=seccomp, the seccomp floor refusing
 //	APIVersion           a daemon answering an older version than the ceiling
 //	OOMKills             a die event with an oom before it, which the wait never sees
 //

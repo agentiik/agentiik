@@ -188,7 +188,8 @@ func (d *Daemon) ping(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// info answers with the two fields the userns floor is read from.
+// info answers with the two fields the userns floor is read from, and the security
+// options seccomp is read from.
 func (d *Daemon) info(w http.ResponseWriter, r *http.Request) {
 	i := docker.Info{
 		ID:            "DAEM:ON00:FAKE",
@@ -200,11 +201,12 @@ func (d *Daemon) info(w http.ResponseWriter, r *http.Request) {
 		MemTotal:      2 << 30,
 		DockerRootDir: "/var/lib/docker",
 	}
+	if !d.opts.noSeccomp {
+		i.SecurityOptions = append(i.SecurityOptions, "name=seccomp,profile=builtin")
+	}
 	if d.opts.userns {
-		i.SecurityOptions = []string{"name=seccomp,profile=builtin", "name=userns"}
+		i.SecurityOptions = append(i.SecurityOptions, "name=userns")
 		i.DockerRootDir = fmt.Sprintf("/var/lib/docker/%d.%d", d.opts.usernsUID, d.opts.usernsGID)
-	} else {
-		i.SecurityOptions = []string{"name=seccomp,profile=builtin"}
 	}
 	writeJSON(w, http.StatusOK, i)
 }

@@ -133,7 +133,8 @@ func hostConfig(t graph.Task, p Policy, g *given, networkMode string) (docker.Ho
 // no-new-privileges is unconditional. The other three are named only where the policy
 // names one: a daemon applies its own default seccomp and AppArmor profiles to every
 // container, and passing an empty profile name would replace a default that is already
-// the right answer with nothing at all.
+// the right answer with nothing at all. Whether the daemon applies any is read once, when
+// it is opened, by readConfinement.
 //
 // A seccomp profile travels as its JSON, which is what the daemon decodes. The path of the
 // file it came from would be decoded as a profile and refused when the container starts,

@@ -136,9 +136,10 @@ func (h *held) join(container string, w *watch) bool {
 // New opens a driver on a daemon.
 //
 // Three things happen once, here, rather than once per task: the API version is
-// negotiated, the userns floor is read and the machine says what it gives up. Each is a
-// fact about the daemon and the policy, and a task that re-read them would be a task
-// that could answer differently from the one beside it.
+// negotiated, the userns floor and the confinement the daemon applies are read, and the
+// machine says what it gives up. Each is a fact about the daemon and the policy, and a
+// task that re-read them would be a task that could answer differently from the one
+// beside it.
 func New(cfg Config) (*Docker, error) {
 	cli, err := docker.Dial(cfg.Socket)
 	if err != nil {
@@ -158,6 +159,11 @@ func New(cfg Config) (*Docker, error) {
 		cli.Close()
 		return nil, err
 	}
+	confined, err := readConfinement(info, cfg.Policy)
+	if err != nil {
+		cli.Close()
+		return nil, err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Docker{
@@ -167,6 +173,10 @@ func New(cfg Config) (*Docker, error) {
 		keys:     &keys{root: cfg.WorkRoot},
 	}
 	floor.announce(cfg.Policy, d.say)
+	confined.announce(d.say)
+	if cfg.Policy.HooksSkipped {
+		d.say(sourceOf(cfg.Policy) + " has a [hooks] table, and this runner runs no hook: runner-side hooks arrive in v0.9.0, so nothing in it runs before or after a task.")
+	}
 
 	d.wg.Add(1)
 	go d.follow()
