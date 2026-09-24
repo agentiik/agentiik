@@ -225,6 +225,21 @@ func (f *PushFile) field(b *body, name string) error {
 	return unknown(name)
 }
 
+// Pushed is what a push is answered with: the version, and the digest each image it names by tag
+// is recorded with.
+type Pushed struct {
+	Namespace string `json:"namespace"`
+	Workflow  string `json:"workflow"`
+	Commit    string `json:"commit"`
+
+	// Images are what the version records, which is not always what the push carried. A
+	// commit pushed again after one of its tags moved is the version its first push
+	// recorded, and every run of it names the digests that push resolved, so the answer
+	// says which those are rather than leaving the pusher to believe the new ones were
+	// taken.
+	Images map[string]string `json:"images"`
+}
+
 // TreeMaxBytes is the largest tree a push carries, counting its paths as well as its files.
 //
 // It is a limit of this push rather than a rule about repositories. The tree travels inline, in
@@ -379,12 +394,19 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 
 	var saved db.Saved
+	recorded := v.Images
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.SaveWorkflow(ctx, over.Workflow, p.Branch); err != nil {
 			return err
 		}
 		var err error
-		saved, err = ns.SaveVersion(ctx, v)
+		if saved, err = ns.SaveVersion(ctx, v); err != nil || saved.New {
+			return err
+		}
+		// The same tree pushed again, which is the version already recorded, and its
+		// images are the ones its first push resolved rather than these.
+		held, err := ns.Version(ctx, over.Workflow, commit)
+		recorded = held.Images
 		return err
 	})
 	if errors.Is(err, db.ErrOtherTree) {
@@ -418,9 +440,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		return
 	}
 
-	write(w, http.StatusOK, map[string]any{
-		"namespace": over.Namespace, "workflow": over.Workflow, "commit": commit,
-	})
+	if recorded == nil {
+		recorded = map[string]string{}
+	}
+	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
 }
 
 // checkTree refuses a tree that could not be laid out under /agk/repo, and answers its paths in
