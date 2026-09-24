@@ -410,7 +410,7 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 		d.cli.ContainerRemove(tidy, left, true)
 	}
 	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
-		w.remove()
+		d.tidy(t, w)
 	}
 	return &Completed{Ending: e}
 }

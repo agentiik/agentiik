@@ -94,12 +94,21 @@ func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 		}
 	}
 
+	// A directory that could not be prepared is taken away again, and what could not
+	// be taken away is part of the refusal rather than dropped.
+	abandon := func(dir string, err error) (*workdir, error) {
+		err = fmt.Errorf("driver: task %s: working directory %s: %w", id, dir, err)
+		if left := w.remove(); left != nil {
+			err = fmt.Errorf("%w, and what was prepared was not all taken away: %v", err, left)
+		}
+		return nil, err
+	}
+
 	// The parents are created with the work root's own mode, private to the runner,
 	// so that the one permissive directory below sits behind them.
 	for _, dir := range []string{w.Root, w.In, w.Secrets} {
 		if err := os.MkdirAll(dir, workdirMode); err != nil {
-			w.remove()
-			return nil, fmt.Errorf("driver: task %s: working directory %s: %w", id, dir, err)
+			return abandon(dir, err)
 		}
 	}
 	// The two directories the contract names under /agk/out exist before the
@@ -107,15 +116,13 @@ func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 	// not create the directory first is honouring the contract as it is written.
 	for _, dir := range []string{w.Out, filepath.Join(w.Out, "ports"), filepath.Join(w.Out, "files")} {
 		if err := os.MkdirAll(dir, outMode); err != nil {
-			w.remove()
-			return nil, fmt.Errorf("driver: task %s: working directory %s: %w", id, dir, err)
+			return abandon(dir, err)
 		}
 		// MkdirAll applies the process umask, which on a runner is usually 022 and
 		// would take the group and other bits straight back off. The mode is the
 		// access decision here, so it is set rather than requested.
 		if err := os.Chmod(dir, outMode); err != nil {
-			w.remove()
-			return nil, fmt.Errorf("driver: task %s: working directory %s: %w", id, dir, err)
+			return abandon(dir, err)
 		}
 	}
 	return w, nil
@@ -182,9 +189,17 @@ func ownedDir(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is %s and not a directory of this runner's own", path, modeName(info.Mode()))
 	}
-	// A chmod closes a directory somebody left open, and fails outright where this
-	// process is not the account that owns it, which is the same refusal by another
-	// route and the one check that needs no platform specific call to make.
+	// The owner is read rather than left to the chmod below to refuse. A runner on a
+	// remapped daemon holds CAP_FOWNER, and a chmod by a process holding it succeeds on
+	// a directory anybody owns, so a directory made first by another account on the
+	// host would be closed and kept, with that account still its owner and free to open
+	// it again once values are written beneath it.
+	if uid, ok := ownerOf(info); ok && uid != os.Geteuid() {
+		return fmt.Errorf("%s belongs to uid %d, and this runner is uid %d", path, uid, os.Geteuid())
+	}
+	// A chmod closes a directory this runner left open, and fails outright where this
+	// process is not the account that owns it and holds nothing that lets it, which is
+	// the same refusal by another route on a platform whose owner is not read above.
 	return os.Chmod(path, workdirMode)
 }
 
@@ -233,11 +248,7 @@ func taskPath(id agk.TaskID) (string, error) {
 // Chowning to a uid that is not your own is a privileged operation, so a runner that
 // finds a remapped daemon is a runner that has to be able to do it.
 func (w *workdir) own(uid, gid int) error {
-	roots := []string{w.Root}
-	if w.secretsOwn {
-		roots = append(roots, w.Secrets)
-	}
-	for _, root := range roots {
+	for _, root := range w.trees() {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -248,21 +259,44 @@ func (w *workdir) own(uid, gid int) error {
 			return os.Lchown(path, uid, gid)
 		})
 		if err != nil {
-			return fmt.Errorf("driver: the working directory %s could not be given to uid %d and gid %d, which is the base of this daemon's remapped range: %w. A runner on a daemon with userns-remap prepares each task's directory inside that range, and the range itself is the one /etc/subuid gives the daemon's account", root, uid, gid, err)
+			return fmt.Errorf("driver: the working directory %s could not be given to uid %d and gid %d, which is the base of this daemon's remapped range: %w. A runner on a daemon with userns-remap prepares each task's directory inside that range, and the range itself is the one /etc/subuid gives the daemon's account. A runner that is not root does it with CAP_CHOWN, which its unit grants with AmbientCapabilities", root, uid, gid, err)
 		}
 	}
 	return nil
 }
 
-// remove takes the task's directory away, which is what "removed with the container"
-// means on this side. It is called on every path out of a task, so it reports nothing: a
-// directory that is already gone is the outcome asked for.
-func (w *workdir) remove() {
-	if w == nil {
-		return
-	}
-	os.RemoveAll(w.Root)
+// trees are the directories that hold the whole of one task on the host: its working
+// directory, and its secrets directory where that is not inside the first.
+func (w *workdir) trees() []string {
 	if w.secretsOwn {
-		os.RemoveAll(w.Secrets)
+		return []string{w.Root, w.Secrets}
 	}
+	return []string{w.Root}
+}
+
+// remove takes the task's directory away, which is what "removed with the container"
+// means on this side, and answers with what it could not take away. A directory that is
+// already gone is the outcome asked for and no error.
+//
+// It is called on every path out of a task, and what it answers never changes what became
+// of the task: the container ran or it did not, whatever is left here. What is left is
+// still the one thing the directory exists not to leave, "residue of one namespace" that
+// survives "into the next task on that host", secret values among it, so a caller says so
+// rather than dropping it. A brick creates files under /agk/out as an account of its own,
+// in directories it may make unreadable, and a runner that cannot remove them is the case
+// this answers for. Every tree is attempted whatever became of the one before it, so that a
+// working directory that could not be removed does not keep the secret values with it.
+func (w *workdir) remove() error {
+	if w == nil {
+		return nil
+	}
+	var left []error
+	for _, tree := range w.trees() {
+		// RemoveAll names the path it stopped at, which is what a person goes and
+		// looks at.
+		if err := os.RemoveAll(tree); err != nil {
+			left = append(left, err)
+		}
+	}
+	return errors.Join(left...)
 }

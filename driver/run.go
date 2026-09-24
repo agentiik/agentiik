@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -134,7 +135,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		// prepared, and a work root that named nothing is left alone rather than
 		// guessed at.
 		if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
-			defer w.remove()
+			defer d.tidy(t, w)
 		}
 		defer func() {
 			tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
@@ -148,7 +149,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if err != nil {
 		return graph.Result{}, err
 	}
-	defer w.remove()
+	defer d.tidy(t, w)
 
 	run, err := d.runOf(ctx, t)
 	if err != nil {
@@ -159,7 +160,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.secrets(ctx))
+	given, err := prepare(ctx, t, w, d.cfg.Policy, d.cfg.host(), store, run, repo, d.secrets(ctx))
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -780,4 +781,16 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// tidy takes a task's working directory away and says what it could not take away.
+//
+// It is said and not returned, because by the time a directory is removed the task has
+// ended one way or the other and a removal cannot change which. It is said every time and
+// not once, since each is a directory of its own left on this host, and the step is named
+// first for the reason announceSecrets names it.
+func (d *Docker) tidy(t graph.Task, w *workdir) {
+	if err := w.remove(); err != nil {
+		d.say(fmt.Sprintf("%s left files on this host that were not removed with its container, so what task %s was given and what its brick wrote survive into the tasks after it until somebody removes them: %v", t.Step, t.ID, err))
+	}
 }

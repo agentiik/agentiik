@@ -144,13 +144,17 @@ func TestRemovingTakesTheWholeTreeAway(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(w.Out, "ports", "out.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatalf("writing an output: %s", err)
 	}
-	w.remove()
+	if err := w.remove(); err != nil {
+		t.Fatalf("removing the working directory: %s", err)
+	}
 	if _, err := os.Stat(w.Root); !os.IsNotExist(err) {
 		t.Fatalf("the working directory survived: %v", err)
 	}
 	// A directory that is already gone is the outcome asked for, so a second
 	// removal is not a failure. remove runs in a defer on every path out of a task.
-	w.remove()
+	if err := w.remove(); err != nil {
+		t.Fatalf("removing a working directory that is already gone: %s", err)
+	}
 }
 
 // Giving the tree to the account it is already owned by is what a chown to the remapped
@@ -187,5 +191,48 @@ func TestOwnRefusesWhatItCannotDoAndSaysWhatItTried(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the refusal does not name %q: %s", want, err)
 		}
+	}
+}
+
+// A tree that cannot be removed is reported rather than dropped, naming where the removal
+// stopped, and the secrets directory is removed whatever became of the working directory,
+// so that a brick that left an unreadable directory behind does not keep the values with
+// it. A directory of mode 0500 is what a brick running as another account leaves a runner
+// without CAP_DAC_OVERRIDE.
+func TestARemovalThatFailsSaysWhereAndStillTakesTheSecretsAway(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where every directory can be removed and there is nothing to report")
+	}
+	w, err := newWorkdir(t.TempDir(), shardedTask, t.TempDir())
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	if err := writeSecret(filepath.Join(w.Secrets, "bearer"), []byte("s3cr3t-value")); err != nil {
+		t.Fatalf("writing the value: %s", err)
+	}
+	locked := filepath.Join(w.Out, "files", "nested")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "left.txt"), []byte("residue"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	err = w.remove()
+	if err == nil {
+		t.Fatalf("a working directory that could not be removed was reported as removed")
+	}
+	if !strings.Contains(err.Error(), locked) {
+		t.Errorf("the report does not name where the removal stopped, %s: %s", locked, err)
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Errorf("the report carries the secret value: %s", err)
+	}
+	if _, err := os.Stat(w.Secrets); !os.IsNotExist(err) {
+		t.Errorf("the secrets directory survived a working directory that could not be removed: %v", err)
 	}
 }
