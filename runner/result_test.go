@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/driver"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dockertest"
 	"github.com/agentiik/agentiik/internal/fixtures"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -427,5 +429,47 @@ func TestATaskTheAgentStoppedUnderIsNotReported(t *testing.T) {
 	}
 	if got := c.bus.all(); len(got) != 0 {
 		t.Errorf("a task carried as the agent stopped was reported as %+v", got)
+	}
+}
+
+// inFlight is a driver on which another delivery of every key is still running.
+type inFlight struct{}
+
+func (inFlight) Run(context.Context, graph.Task) (graph.Result, error) {
+	return graph.Result{}, fmt.Errorf("driver: task: %w", driver.ErrTaskInFlight)
+}
+
+func (inFlight) Stop(context.Context, graph.Stop) error { return nil }
+
+// A delivery of a key another delivery on this host is still running reports nothing, since the
+// other reports the ending, and leaves every tree of the key where it is, since the running
+// container is bound to one of them.
+func TestADeliveryOfAKeyInFlightLeavesItsTreesAndReportsNothing(t *testing.T) {
+	root := t.TempDir()
+	s := newObjectStore(t)
+	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	running, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { running.Remove() })
+	again, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &published{}
+	results, err := OpenResults(root, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Carrier{Runner: "runner-dmz-02", Driver: inFlight{}, Endings: &Endings{}, Results: results}
+	if err := c.Carry(t.Context(), m, again); !errors.Is(err, ErrNotReported) {
+		t.Errorf("a delivery of a key in flight answered %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(running.Sources.Repo, "agentiik.yaml")); err != nil {
+		t.Errorf("the tree the running container is bound to was taken away: %s", err)
+	}
+	if got := b.all(); len(got) != 0 {
+		t.Errorf("a delivery of a key in flight reported %+v", got)
 	}
 }

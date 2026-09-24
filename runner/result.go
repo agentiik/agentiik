@@ -100,7 +100,8 @@ var ErrNotReported = errors.New("runner: the task was not reported, since nothin
 // Run that ended in an error and told of no ending ran no container, and is reported failed with
 // none, which the controller charges to the platform: that is a task this runner could not carry,
 // and a result is what ends the dispatch rather than leaving it to be declared lost three heartbeat
-// intervals on and requeued. The two exceptions are ErrNotReported.
+// intervals on and requeued. The two exceptions are ErrNotReported, and neither takes the trees
+// away where another delivery of the key may still be using them.
 //
 // A result that is published answers nil. One the bus did not take is kept and published again by
 // Results, and Carry answers the error that says so.
@@ -111,6 +112,12 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	}
 	_, err := c.Driver.Run(a.Context(ctx), a.Task)
 	told, ended := c.Endings.take(a.Task.ID)
+	if errors.Is(err, driver.ErrTaskInFlight) && !ended {
+		// Another delivery on this host is running the key, in a container bound to a
+		// tree of the key, and Remove takes every tree of the key: this delivery's goes
+		// with that one's, once it ends.
+		return fmt.Errorf("%w: task %s is carried by another delivery on this host: %w", ErrNotReported, m.TaskID, err)
+	}
 	if rerr := a.Remove(); rerr != nil {
 		// A tree left behind is disk and not a secret, since the values are the working
 		// directory's and Run took that. It is said rather than reported, and the result is
@@ -130,11 +137,11 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		if r, err = EndingOf(m, c.Runner, completed.Ending); err != nil {
 			return err
 		}
-	case errors.Is(err, driver.ErrTaskInFlight):
-		return fmt.Errorf("%w: task %s is carried by another delivery on this host: %w", ErrNotReported, m.TaskID, err)
 	case err != nil && ctx.Err() != nil:
-		// The agent is stopping. A container that was created stays for the agent that
-		// comes back to adopt, and a key that never reached one stays recorded as taken.
+		// The agent is stopping, and the task did not fail: nothing is said of it, the
+		// agent stops naming its key, and the heartbeat's sweep declares it lost, which is
+		// what a runner the control plane stopped hearing from is, requeued where the step
+		// allows it.
 		return fmt.Errorf("%w: task %s was stopped with the agent: %w", ErrNotReported, m.TaskID, err)
 	case err != nil:
 		say(fmt.Sprintf("runner: task %s (%s) ran no container: %s", m.TaskID, m.IdempotencyKey, err))

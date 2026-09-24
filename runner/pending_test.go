@@ -257,3 +257,30 @@ func TestAKeptResultGoesOutOnceAfterARestart(t *testing.T) {
 		t.Errorf("the agent still names %v once both are out", keys)
 	}
 }
+
+// A kept result the agent could not read is not one it knows to be no result: it is left where it
+// is, and said, since it may be the one copy of an ending the controller is waiting on.
+func TestAKeptResultThatCouldNotBeReadIsLeftWhereItIs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode, so nothing here can be left unreadable")
+	}
+	root := t.TempDir()
+	first, err := OpenResults(root, &published{refuse: errUnreachable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := ending("01M2AAZ9G62NQXFAFCXKRPJEH5", "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1")
+	first.Report(t.Context(), r)
+	kept := filepath.Join(root, ResultsDir, r.TaskID+".json")
+	if err := os.Chmod(kept, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(kept, 0o600) })
+
+	if _, err := OpenResults(root, &published{}); err == nil {
+		t.Error("a kept result that could not be read was passed over without a word")
+	}
+	if _, err := os.Lstat(kept); err != nil {
+		t.Errorf("a kept result that could not be read was taken away: %s", err)
+	}
+}

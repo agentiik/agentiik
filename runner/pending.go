@@ -69,7 +69,8 @@ type Results struct {
 //
 // A file that does not read as a result, or reads as one no publication would ever take, is taken
 // away and said in the error, since keeping it would name its key in the heartbeat for ever and
-// publish nothing. The rest are kept, and the results are opened all the same.
+// publish nothing. A file that could not be read at all is left where it is and said, since it may
+// be a result the next agent can read. The rest are kept, and the results are opened all the same.
 func OpenResults(workRoot string, p Publisher) (*Results, error) {
 	if workRoot == "" {
 		return nil, errors.New("runner: no work root: results the bus has not taken are kept under one")
@@ -102,7 +103,14 @@ func OpenResults(workRoot string, p Publisher) (*Results, error) {
 		if !ok || !e.Type().IsRegular() {
 			continue
 		}
-		res, err := readKept(path)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			// Unread is not unreadable: the file may be the one copy of an ending the
+			// controller is waiting on, and the next agent may read it.
+			dropped = append(dropped, fmt.Errorf("runner: the result kept at %s could not be read, and is left where it is: %w", path, err))
+			continue
+		}
+		res, err := readKept(b)
 		if err == nil && res.TaskID != id {
 			err = fmt.Errorf("it is kept as %s and is the result of %s", id, res.TaskID)
 		}
@@ -117,11 +125,7 @@ func OpenResults(workRoot string, p Publisher) (*Results, error) {
 }
 
 // readKept reads one kept result, held to the rules a publication holds it to.
-func readKept(path string) (bus.TaskResult, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return bus.TaskResult{}, err
-	}
+func readKept(b []byte) (bus.TaskResult, error) {
 	var res bus.TaskResult
 	if err := json.Unmarshal(b, &res); err != nil {
 		return bus.TaskResult{}, err
