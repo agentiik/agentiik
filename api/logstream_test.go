@@ -651,10 +651,15 @@ func TestAStreamHearsItsStepEndWhileOtherLogsAreBusy(t *testing.T) {
 	rd.silent(t, 300*time.Millisecond)
 
 	busy, stop := context.WithCancel(t.Context())
-	defer stop()
 	conn := dbtest.Superuser(t, s.super)
 	elsewhere := string(agk.NewTaskID("01M3ZZZZZZZZZZZZZZZZZZZZZZ", "invoice", 1, agk.Shard{}))
+	still := make(chan struct{})
+	defer func() {
+		stop()
+		<-still
+	}()
 	go func() {
+		defer close(still)
 		for busy.Err() == nil {
 			conn.Exec(busy, `select pg_notify($1, $2)`, db.LogChannel, elsewhere)
 			time.Sleep(50 * time.Millisecond)
