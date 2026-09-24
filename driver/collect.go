@@ -120,6 +120,10 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 		return collected{}, fault(c.Task.Step, nil, ChargePlatform, "no working directory to collect the outputs from")
 	}
 
+	if err := c.refuseLinkedDirs(); err != nil {
+		return collected{}, err
+	}
+
 	m := c.meta()
 	out, err := brick.Collect(c.Dir, c.Task.Outputs, m, c.Limits)
 	if err != nil {
@@ -190,6 +194,32 @@ func collect(ctx context.Context, s *artifact.Store, c collection) (collected, e
 		return collected{}, err
 	}
 	return collected{Outputs: out, Artifacts: produced(out, m)}, nil
+}
+
+// refuseLinkedDirs refuses a ports or files directory that is not one.
+//
+// /agk/out is a bind and cannot be replaced from inside the container, but the two
+// directories under it are the brick's to remove and to put a link in the place of, and
+// what is read through them is read by the runner on the host. A link there would have
+// the collection read whatever it points at, the runner's own credential under
+// /etc/agentiik among it, and upload it as the brick's artifact; a runner holding
+// CAP_DAC_OVERRIDE would read it whatever its mode. Every entry under them is already
+// held to being a file, and the container has exited by the time this runs, so nothing
+// can change the answer between the check and the read.
+func (c collection) refuseLinkedDirs() error {
+	for _, dir := range []struct{ host, inside string }{{portsDir, brick.OutPortsDir}, {filesDir, brick.OutFilesDir}} {
+		info, err := os.Lstat(filepath.Join(c.Dir, dir.host))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("driver: step %s: %w", c.Task.Step, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("driver: step %s: %s is %s and not a directory, and what is under it is read on the runner's side of the boundary: %w", c.Task.Step, dir.inside, modeName(info.Mode()), agk.ErrEnvelopeRejected)
+		}
+	}
+	return nil
 }
 
 // attach describes the files one envelope references and rewrites each entry to the
