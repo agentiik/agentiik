@@ -652,6 +652,41 @@ func TestARedemptionIsHeldToThePoolAndTheHostsNamespaces(t *testing.T) {
 		t.Fatalf("a refused redemption bound the task to %s", *holder)
 	}
 
+	// The checks come in an order: a draining runner is refused as one, before its pool is
+	// asked, since a 422 would have it report the task and so bind it; and a pool that does not
+	// run the namespace is answered as never answerable before a narrowing that leaves it out as
+	// well, which a pool narrowed after its runner joined produces, since putting the message
+	// back would only hand it round the pool.
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.Drain(ctx, outside.Runner, "admin", "the host is being retired", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'shared'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		runner string
+		want   error
+	}{
+		{outside.Runner, ErrRunnerNotTaking},
+		{narrowed.Runner, ErrPoolRefusesNamespace},
+	} {
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			_, err := w.Redeemable(ctx, clear, key, c.runner, now)
+			if !errors.Is(err, c.want) {
+				t.Errorf("checking a redemption by %s answered %v, not %v", c.runner, err, c.want)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, `update runner_pools set accepted_namespaces = '{finance, team-ops}' where name = 'shared'`); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
 		_, err := w.Redeem(ctx, clear, key, within.Runner, now)
 		return err

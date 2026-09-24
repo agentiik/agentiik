@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -145,6 +146,40 @@ func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
 	}
 	if got := stateOf(t, core); got != agk.Failed {
 		t.Errorf("the run is %s", got)
+	}
+}
+
+// The pool is read again in the transaction that issues the grant, so a pool that stopped running
+// the namespace after the pass read the pools gives the task no credential and publishes nothing.
+func TestAPoolChangedBeforeTheGrantIssuesNone(t *testing.T) {
+	core, q, pool, super := decidingOn(t, onPool("ops", `{ cpu: "1" }`))
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(),
+		`insert into runner_pools (name, accepted_namespaces, created_by) values ('ops', '{finance}', 'admin')`); err != nil {
+		t.Fatal(err)
+	}
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	published := q.dispatched()
+	if len(published) != 1 {
+		t.Fatalf("the first pass published %d tasks", len(published))
+	}
+
+	if _, err := conn.Exec(t.Context(), `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'ops'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := core.dispatchOf(t.Context(), "finance", published[0].Task)
+	if !errors.As(err, new(unpublishable)) || !strings.Contains(err.Error(), "runner pool ops") {
+		t.Errorf("preparing the task again answered %v", err)
+	}
+	var grants int
+	if err := conn.QueryRow(t.Context(), `select count(*) from task_grants`).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 1 {
+		t.Errorf("the task holds %d grants, and the refusal issued one", grants)
 	}
 }
 
