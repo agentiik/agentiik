@@ -48,9 +48,9 @@ const GrantHeader = "Agentiik-Grant"
 // shipMaxBytes is how large one shipment may be.
 //
 // A chunk is what a runner read of a container's standard error since the last one, and the
-// driver writes out a line that never ends in pieces of 64 KiB, so a mebibyte is sixteen of the
-// longest lines it produces and far more of the usual ones, while four shipments reach the whole
-// of what the log may hold.
+// driver writes out a line that never ends in pieces of 64 KiB, so a mebibyte holds fifteen of the
+// longest lines it produces with their framing, and far more of the usual ones, while five
+// shipments reach the whole of what the log may hold.
 const shipMaxBytes = 1 << 20
 
 // shipMaxLines is how many lines one shipment may carry. The count is what bounds reading one,
@@ -62,13 +62,18 @@ const shipMaxLines = 4096
 
 // The caps a log is held to where it is written, "so that one component keeps one account of how
 // much of a task's log exists". They are the runner's own defaults, log_max_bytes and
-// log_max_lines, and room for the line the driver writes past them to say it cut the log, so that
-// a runner left at its defaults never has a line it kept dropped here, the one saying why the log
-// stops least of all. The API is the backstop for a runner that raised them: "a log is a
+// log_max_lines, exactly, and the API is the backstop for a runner that raised them: "a log is a
 // diagnostic and not a payload".
+//
+// Exactly and not with room to spare, because truncated is what the result reports as
+// log.truncated and the API has no other way to learn that the runner cut the log. A driver that
+// reaches its cap writes one line more to say so, and at these caps that line is the one dropped
+// here, so a log the runner cut is truncated in the answer, and one that came to the cap and no
+// further is not. The line saying why is lost; the flag saying that is not, and it is the one
+// "somebody chasing a failure has to know".
 const (
-	DefaultLogMaxBytes = 4<<20 + 1<<10
-	DefaultLogMaxLines = 50000 + 1
+	DefaultLogMaxBytes = 4 << 20
+	DefaultLogMaxLines = 50000
 )
 
 // LogShipment is one chunk of a task's log, in the shape wire.schema.json gives it:
@@ -253,6 +258,9 @@ func (s *RunnerAPI) shipLog(w http.ResponseWriter, r *http.Request, runner Runne
 		})
 		if err != nil {
 			break
+		}
+		if s.betweenShip != nil {
+			s.betweenShip()
 		}
 		err = s.pool.Installation(r.Context(), db.LogShipment, func(ctx context.Context, wide *db.Wide) error {
 			held, err := wide.ShippingLog(ctx, grant, ship.IdempotencyKey, runner.ID)
@@ -480,8 +488,9 @@ func logKey(l db.TaskLog, seq int, shippedDigest string) (string, error) {
 // ReadLogChunk reads back the lines of one chunk of a log, as the index names it, and refuses bytes
 // that are not the ones the chunk was written with.
 //
-// It is what a reader of a log follows the index with: GET /api/v1/runs/{id}/steps/{step}/logs
-// reads db.NS.TaskLog for the chunks in order and this for each of their lines.
+// It is what a reader of a log follows the index with, db.NS.TaskLog giving the chunks in order and
+// this the lines of each, which is how GET /api/v1/runs/{id}/steps/{step}/logs is to read a log's
+// history once it is built.
 func ReadLogChunk(ctx context.Context, objects artifact.Objects, c db.LogChunk) ([]LogLine, error) {
 	r, err := objects.Open(ctx, c.Key)
 	if err != nil {

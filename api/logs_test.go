@@ -211,6 +211,13 @@ func withLogCaps(t *testing.T, lines, bytes int) grants {
 // withRunnerOptions is withGrants serving the runner routes with options a test changed.
 func withRunnerOptions(t *testing.T, change func(*api.RunnerOptions)) grants {
 	t.Helper()
+	g, _ := withRunnerAPI(t, change)
+	return g
+}
+
+// withRunnerAPI is withRunnerOptions, and the runner half it serves.
+func withRunnerAPI(t *testing.T, change func(*api.RunnerOptions)) (grants, *api.RunnerAPI) {
+	t.Helper()
 	g := withGrants(t, held{})
 	rt, err := api.NewRouter(everything{who: "admin"}, bearer)
 	if err != nil {
@@ -218,11 +225,12 @@ func withRunnerOptions(t *testing.T, change func(*api.RunnerOptions)) grants {
 	}
 	o := api.RunnerOptions{Pool: g.pool, Objects: g.objects, URLs: g.signed, Secrets: held{}}
 	change(&o)
-	if _, err := api.NewRunners(rt, o); err != nil {
+	runners, err := api.NewRunners(rt, o)
+	if err != nil {
 		t.Fatal(err)
 	}
 	g.handler = rt
-	return g
+	return g, runners
 }
 
 // slowly is a store whose every write takes a while, which is the window two shipments of one log
@@ -539,7 +547,7 @@ func TestAnObjectAFailedShipmentWroteIsStillPurged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expired) != 1 || len(expired[0].Keys) != 1 || expired[0].URI != "" {
+	if len(expired) != 1 || len(expired[0].Keys) != 1 || expired[0].URI == "" {
 		t.Fatalf("the purge found %+v", expired)
 	}
 	if found, err := g.objects.Has(t.Context(), expired[0].Keys[0]); err != nil || !found {
@@ -629,45 +637,67 @@ func TestThePurgeTakesALogABatchAtATime(t *testing.T) {
 	}
 }
 
-// A runner left at its own caps never has a line dropped here: not the last line it kept, and not
-// the one the driver writes after it to say why the log stops.
-func TestARunnerAtItsDefaultCapsLosesNothingHere(t *testing.T) {
+// At a runner's own default caps, a log the runner cut is truncated in the answer, the line the
+// driver wrote past the cap to say so being the one dropped here, and a log that came to the cap
+// and no further is not.
+func TestALogTheRunnerCutIsTruncatedAtItsDefaultCaps(t *testing.T) {
 	policy := driver.DefaultPolicy()
-	marker := "driver: the log reached the " + strconv.FormatInt(policy.LogMaxBytes, 10) + " bytes the runner policy allows, and the rest of it was dropped"
+	if api.DefaultLogMaxLines != policy.LogMaxLines || api.DefaultLogMaxBytes != policy.LogMaxBytes {
+		t.Fatalf("the API caps a log at %d lines and %d bytes, and a runner at %d and %d", api.DefaultLogMaxLines, api.DefaultLogMaxBytes, policy.LogMaxLines, policy.LogMaxBytes)
+	}
+	marker := "driver: the log reached the " + strconv.Itoa(policy.LogMaxLines) + " lines the runner policy allows, and the rest of it was dropped"
+	full := make([]string, policy.LogMaxLines)
+	for i := range full {
+		full[i] = "x"
+	}
+	for name, c := range map[string]struct {
+		lines     []string
+		truncated bool
+	}{
+		"at the cap":        {full, false},
+		"cut by the runner": {append(slices.Clone(full), marker), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := withGrants(t, held{})
+			credential, grant := g.holding(t)
+			seq := 1
+			for first := 0; first < len(c.lines); first += 4096 {
+				g.ship(t, credential, grant, aChunk(seq, first+1, false, c.lines[first:min(first+4096, len(c.lines))]...))
+				seq++
+			}
+			answer := g.ship(t, credential, grant, aChunk(seq, len(c.lines)+1, true))
+			stands(t, answer, 0, seq+1, policy.LogMaxLines, c.truncated)
+		})
+	}
+}
 
-	t.Run("lines", func(t *testing.T) {
-		g := withGrants(t, held{})
-		credential, grant := g.holding(t)
-		lines := make([]string, policy.LogMaxLines)
-		for i := range lines {
-			lines[i] = "x"
+// A chunk taken in the moment between another's two transactions is written only once its object
+// is recorded: the chunk after it, which found a gap when it recorded nothing, goes back and records
+// its object before writing it, so the purge is handed both.
+func TestAChunkIsWrittenOnlyOnceItsObjectIsRecorded(t *testing.T) {
+	g, runners := withRunnerAPI(t, func(*api.RunnerOptions) {})
+	credential, grant := g.holding(t)
+	landed := false
+	api.BetweenShipTransactions(runners, func() {
+		if landed {
+			return
 		}
-		lines = append(lines, marker)
-		seq := 1
-		for first := 0; first < len(lines); first += 4096 {
-			chunk := lines[first:min(first+4096, len(lines))]
-			g.ship(t, credential, grant, aChunk(seq, first+1, false, chunk...))
-			seq++
-		}
-		answer := g.ship(t, credential, grant, aChunk(seq, len(lines)+1, true))
-		stands(t, answer, 0, seq+1, policy.LogMaxLines+1, false)
+		landed = true
+		stands(t, g.ship(t, credential, grant, aChunk(1, 1, false, "one")), 1, 2, 1, false)
 	})
-
-	t.Run("bytes", func(t *testing.T) {
-		g := withGrants(t, held{})
-		credential, grant := g.holding(t)
-		long := strings.Repeat("x", 64<<10)
-		var lines []string
-		for range policy.LogMaxBytes / int64(len(long)) {
-			lines = append(lines, long)
-		}
-		lines = append(lines, marker)
-		seq := 1
-		for first := 0; first < len(lines); first += 15 {
-			g.ship(t, credential, grant, aChunk(seq, first+1, false, lines[first:min(first+15, len(lines))]...))
-			seq++
-		}
-		answer := g.ship(t, credential, grant, aChunk(seq, len(lines)+1, true))
-		stands(t, answer, 0, seq+1, len(lines), false)
-	})
+	stands(t, g.ship(t, credential, grant, aChunk(2, 2, false, "two")), 1, 3, 2, false)
+	if !landed {
+		t.Fatal("nothing ran between the two transactions")
+	}
+	g.expire(t)
+	expired, err := g.pool.ExpiredLogs(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || len(expired[0].Keys) != 2 {
+		t.Errorf("the purge was handed %+v, and the log is written in two chunks", expired)
+	}
+	if _, lines := g.logged(t); !slices.Equal(lines, []string{"one", "two"}) {
+		t.Errorf("the log holds %q", lines)
+	}
 }

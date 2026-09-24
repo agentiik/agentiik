@@ -158,12 +158,27 @@ func (w *Wide) ShippingLog(ctx context.Context, clear string, task agk.TaskID, r
 
 // RecordLogObject records that an object of a log is about to be written, in a transaction that
 // commits before the write, so that the purge can name it whatever becomes of the transaction
-// that records the chunk it holds.
+// that records the chunk it holds. The task's row is given the log's URI with it, which is what
+// the purge finds a log by.
 func (w *Wide) RecordLogObject(ctx context.Context, l TaskLog, key string) error {
 	if _, err := w.tx.Exec(ctx,
 		`insert into task_log_objects (namespace, task_id, object_key) values ($1, $2, $3) on conflict do nothing`,
 		l.Namespace, l.Row, key); err != nil {
 		return fmt.Errorf("db: an object of the log of task %s could not be recorded: %w", l.Row, err)
+	}
+	return w.nameLog(ctx, l)
+}
+
+// nameLog gives the task's row the URI of its log, the first time.
+func (w *Wide) nameLog(ctx context.Context, l TaskLog) error {
+	uri, err := l.URI()
+	if err != nil {
+		return fmt.Errorf("db: %w", err)
+	}
+	if _, err := w.tx.Exec(ctx,
+		`update tasks set log_uri = $3 where namespace = $1 and id = $2 and log_uri is null`,
+		l.Namespace, l.Row, uri.String()); err != nil {
+		return fmt.Errorf("db: task %s could not be given the URI of its log: %w", l.Row, err)
 	}
 	return nil
 }
@@ -225,23 +240,14 @@ func (w *Wide) ShipChunk(ctx context.Context, was, now TaskLog, c *LogChunk) err
 		was.Namespace, was.Row, now.NextSeq, now.ShippedLines, now.Lines, now.Bytes, now.Truncated, final); err != nil {
 		return fmt.Errorf("db: the log of task %s could not be moved on: %w", was.Row, err)
 	}
-	uri, err := was.URI()
-	if err != nil {
-		return fmt.Errorf("db: %w", err)
-	}
-	if _, err := w.tx.Exec(ctx,
-		`update tasks set log_uri = $3 where namespace = $1 and id = $2 and log_uri is null`,
-		was.Namespace, was.Row, uri.String()); err != nil {
-		return fmt.Errorf("db: task %s could not be given the URI of its log: %w", was.Row, err)
-	}
-	return nil
+	return w.nameLog(ctx, was)
 }
 
 // TaskLog reads one dispatch's log as a reader follows it: where it stands, and the chunks that
 // hold lines, in order. A dispatch that has shipped nothing is ErrNoLog.
 //
-// It is what GET /api/v1/runs/{id}/steps/{step}/logs reads the history from, in the namespace its
-// run was authorised in, before it follows what is shipped next.
+// It is what GET /api/v1/runs/{id}/steps/{step}/logs is to read the history from once it is built,
+// in the namespace its run was authorised in, before it follows what is shipped next.
 func (n *NS) TaskLog(ctx context.Context, row string) (TaskLog, []LogChunk, error) {
 	l := TaskLog{Namespace: n.namespace, Row: row}
 	var final *int

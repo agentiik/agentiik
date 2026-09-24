@@ -75,7 +75,6 @@ type Log struct {
 	Namespace string
 	Task      string
 
-	// URI is empty for a log whose every write failed before the task's row was given it.
 	URI string
 
 	// Keys are objects its lines were written to, for the caller to delete before it
@@ -222,12 +221,10 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 	var out []Log
 	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
 		rows, err := w.tx.Query(ctx, `
-			select t.namespace, t.id, coalesce(t.log_uri, '')
+			select t.namespace, t.id, t.log_uri
 			from tasks t join runs r on r.namespace = t.namespace and r.id = t.run_id
-			where r.expires_at is not null and r.expires_at <= now()
-			  and (t.log_uri is not null
-			       or exists (select 1 from task_log_objects o
-			                  where o.namespace = t.namespace and o.task_id = t.id))
+			where t.log_uri is not null
+			  and r.expires_at is not null and r.expires_at <= now()
 			order by r.expires_at
 			limit $1
 			for update of t skip locked`, batch)

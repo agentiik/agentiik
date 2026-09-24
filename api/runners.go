@@ -92,6 +92,10 @@ type RunnerAPI struct {
 	limits      agk.Limits
 	logMaxBytes int64
 	logMaxLines int
+
+	// betweenShip runs between the two transactions of a shipment, for a test to land another
+	// shipment there.
+	betweenShip func()
 	issuer      BusIssuer
 	consumers   BusConsumers
 	trouble     func(error)
