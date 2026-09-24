@@ -597,11 +597,13 @@ func (f runnerFile) apply(path string, p *Policy) error {
 		if v == "" || strings.ContainsAny(v, " \t\n") {
 			return refuse("apparmor_profile", v)
 		}
-		// The key names what a container is confined by, and a runner offers no way to
-		// take away what the host gives. A host without AppArmor is said out loud when
-		// the daemon is opened; a host with it keeps it.
+		// The key names what a container is confined by, and it has no value for
+		// nothing: the spelling that says so outright is refused. What a profile the host
+		// loaded allows is written on the host, where the runner reads its name and not
+		// its rules, and is answered for by whoever loaded it. A host without AppArmor is
+		// said out loud when the daemon is opened; a host with it keeps it.
 		if v == "unconfined" {
-			return fmt.Errorf("apparmor_profile is %q in %s, which confines nothing: the key names the AppArmor profile every container is confined by, and a runner has no setting that lifts the confinement its host gives", v, path)
+			return fmt.Errorf("apparmor_profile is %q in %s, which confines nothing: the key names the AppArmor profile every container is confined by, and has no value for none", v, path)
 		}
 		p.AppArmor = v
 	}
@@ -613,6 +615,13 @@ func (f runnerFile) apply(path string, p *Policy) error {
 			// disable is the one option this leaves out on purpose, for the reason
 			// apparmor_profile refuses unconfined.
 			return refuse("selinux_label", v)
+		}
+		// The same reason refuses the types the shipped policies leave unconfined, which
+		// are how a container is given no confinement by name: spc_t is what the container
+		// policy calls a super-privileged container. A type the host's own policy defines
+		// is the host's to answer for, as an AppArmor profile is.
+		if kind == "type" && slices.Contains(unconfinedTypes, value) {
+			return fmt.Errorf("selinux_label is %q in %s, which confines nothing: %s is a type the SELinux policy leaves unconfined, and the key names the label every container is confined by, with no value for none", v, path, value)
 		}
 		p.SELinuxLabel = v
 	}
@@ -740,10 +749,17 @@ var (
 // seccompProfile reads the profile seccomp_profile names, and keeps it as the Engine API
 // takes it.
 //
-// It is read here, once, rather than at every task, so that a profile that is missing
-// or is not one refuses the start, and not every task after it. What is kept is the JSON
-// compacted, as the docker command sends it: the whitespace of a hand-formatted profile
-// is most of its bytes, and it would travel in the body of every create.
+// It is read here, once, rather than at every task, so that a profile that is missing, is
+// not one, or names an action seccomp does not have refuses the start, and not every task
+// after it: the daemon takes any action at the create, and the runtime refuses one it does
+// not know when the container starts. What else a profile says is the daemon's to read.
+// What is kept is the JSON compacted, as the docker command sends it: the whitespace of a
+// hand-formatted profile is most of its bytes, and it would travel in the body of every
+// create.
+//
+// A profile that lets every call through is refused as well. The key names what filters a
+// container, and a profile filtering nothing would lift the seccomp floor under the name
+// of meeting it, which is the one thing no line of this file does.
 func seccompProfile(path, file string) (string, error) {
 	if !filepath.IsAbs(file) {
 		return "", fmt.Errorf("seccomp_profile is %q in %s: it is %s", file, path, fileKeys["seccomp_profile"])
@@ -761,17 +777,73 @@ func seccompProfile(path, file string) (string, error) {
 		}
 		return "", fmt.Errorf("seccomp_profile in %s names %s, which could not be read: %v", path, file, reason)
 	}
-	// A profile is a JSON object with a defaultAction, as the daemon's own is. Nothing
-	// more is checked, because the daemon is what reads the rest and what refuses it.
-	var profile struct {
-		DefaultAction string `json:"defaultAction"`
-	}
+	// A profile is a JSON object with a defaultAction, as the daemon's own is.
+	var rules seccompRules
 	var compact bytes.Buffer
-	if json.Unmarshal(body, &profile) != nil || profile.DefaultAction == "" || json.Compact(&compact, body) != nil {
+	if json.Unmarshal(body, &rules) != nil || rules.DefaultAction == "" || json.Compact(&compact, body) != nil {
 		return "", fmt.Errorf("seccomp_profile in %s names %s, which is not a seccomp profile: a profile is a JSON object with a defaultAction, as the daemon's own is", path, file)
+	}
+	for _, action := range rules.actions() {
+		if !slices.Contains(seccompActions, action) {
+			return "", fmt.Errorf("seccomp_profile in %s names %s, whose action %q is not one seccomp has: the actions are %s, and the runtime refuses any other as every container starts", path, file, action, strings.Join(seccompActions, ", "))
+		}
+	}
+	if rules.filtersNothing() {
+		return "", fmt.Errorf("seccomp_profile in %s names %s, which lets every system call through: the key names the profile a container is filtered by, and one that filters nothing would lift the seccomp floor, which no setting of a runner lifts", path, file)
 	}
 	return compact.String(), nil
 }
+
+// seccompActions are the actions a seccomp profile may name, as the runtime reads them.
+var seccompActions = []string{
+	"SCMP_ACT_KILL", "SCMP_ACT_KILL_PROCESS", "SCMP_ACT_KILL_THREAD", "SCMP_ACT_TRAP",
+	"SCMP_ACT_ERRNO", "SCMP_ACT_TRACE", "SCMP_ACT_ALLOW", "SCMP_ACT_LOG", "SCMP_ACT_NOTIFY",
+}
+
+// seccompRules is what of a profile decides what it does: the action taken for a call no
+// rule names, and the action of each rule.
+type seccompRules struct {
+	DefaultAction string `json:"defaultAction"`
+	Syscalls      []struct {
+		Action string `json:"action"`
+	} `json:"syscalls"`
+}
+
+// actions is every action the profile names, its default first.
+func (r seccompRules) actions() []string {
+	out := []string{r.DefaultAction}
+	for _, rule := range r.Syscalls {
+		out = append(out, rule.Action)
+	}
+	return out
+}
+
+// filtersNothing says whether every action of the profile lets the call through, which is
+// a profile that confines nothing however many rules it writes. SCMP_ACT_LOG lets a call
+// through and writes it down, so it filters as little as SCMP_ACT_ALLOW does.
+func (r seccompRules) filtersNothing() bool {
+	for _, action := range r.actions() {
+		if action != "SCMP_ACT_ALLOW" && action != "SCMP_ACT_LOG" {
+			return false
+		}
+	}
+	return true
+}
+
+// profileFiltersNothing says whether a profile as a Policy holds it lets every call
+// through. A profile that does not decode is not one: the daemon refuses it as every
+// container starts, which is a failure and never a container with the table open.
+func profileFiltersNothing(profile string) bool {
+	var r seccompRules
+	if json.Unmarshal([]byte(profile), &r) != nil || r.DefaultAction == "" {
+		return false
+	}
+	return r.filtersNothing()
+}
+
+// unconfinedTypes are the SELinux types the targeted and container policies ship as
+// unconfined domains and that a container is given by name.
+var unconfinedTypes = []string{"spc_t", "unconfined_t", "container_runtime_t"}
 
 // capabilities are the Linux capabilities of capabilities(7), as the daemon's CapAdd takes
 // them: in capitals, without the CAP_ prefix.

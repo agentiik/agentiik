@@ -296,6 +296,45 @@ func TestARunnerProfileConfinesAnUnconfinedDaemon(t *testing.T) {
 	}
 }
 
+// A profile the runner names that lets every call through filters nothing, whatever the
+// daemon was started with, since it replaces the daemon's own for every container. It is
+// counted as no profile: refused under the floor, said out loud where the floor is lifted.
+func TestAProfileThatFiltersNothingIsNoProfile(t *testing.T) {
+	for _, profile := range []string{
+		`{"defaultAction":"SCMP_ACT_ALLOW"}`,
+		`{"defaultAction":"SCMP_ACT_LOG","syscalls":[{"names":["reboot"],"action":"SCMP_ACT_ALLOW"}]}`,
+	} {
+		for _, daemon := range []string{"name=seccomp,profile=unconfined", "name=seccomp,profile=builtin"} {
+			p := DefaultPolicy()
+			p.Seccomp = profile
+			info := docker.Info{SecurityOptions: []string{"name=apparmor", daemon}}
+			_, err := readConfinement(info, p)
+			if !errors.Is(err, ErrSeccompRequired) {
+				t.Fatalf("%s on a daemon listing %s was taken as a filter: %v", profile, daemon, err)
+			}
+			if !strings.Contains(err.Error(), "lets every system call through") {
+				t.Errorf("the refusal does not say why: %s", err)
+			}
+
+			p.RequireSeccomp = SeccompLifted
+			c, err := readConfinement(info, p)
+			if err != nil {
+				t.Fatalf("a lifted seccomp floor refused anyway: %s", err)
+			}
+			if c.Seccomp {
+				t.Fatalf("%s was read as filtering", profile)
+			}
+		}
+	}
+
+	// A profile that refuses something is a filter, on a daemon started unconfined too.
+	p := DefaultPolicy()
+	p.Seccomp = `{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[{"names":["reboot"],"action":"SCMP_ACT_ERRNO"}]}`
+	if c, err := readConfinement(docker.Info{SecurityOptions: []string{"name=seccomp,profile=unconfined"}}, p); err != nil || !c.Seccomp {
+		t.Fatalf("a profile refusing reboot was not taken as a filter: %v", err)
+	}
+}
+
 // "An AppArmor profile or SELinux label depending on the host": the host decides, and a
 // runner cannot install either, so a daemon with neither is taken on a server as it is on
 // a laptop, and the driver says what that leaves. A daemon with one of the two says

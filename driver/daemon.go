@@ -179,10 +179,16 @@ type confinement struct {
 // profile on a host without AppArmor, and a label where it labels nothing, so either would
 // be a setting that silently did nothing; and a seccomp profile on a daemon with no seccomp
 // fails every container as it starts. Each is refused here, before any container exists.
+//
+// A seccomp profile the policy names replaces the daemon's for every container, so it is
+// what decides whether a container is filtered, and one that lets every call through is
+// counted as no profile at all. LoadPolicy refuses such a file; a Policy built by hand is
+// held to the floor here all the same.
 func readConfinement(info docker.Info, p Policy) (confinement, error) {
 	profile, filters := info.SeccompProfile()
+	open := p.Seccomp != "" && profileFiltersNothing(p.Seccomp)
 	c := confinement{
-		Seccomp:  filters && (profile != "unconfined" || p.Seccomp != ""),
+		Seccomp:  filters && !open && (profile != "unconfined" || p.Seccomp != ""),
 		AppArmor: info.AppArmor(),
 		SELinux:  info.SELinux(),
 	}
@@ -201,14 +207,16 @@ func readConfinement(info docker.Info, p Policy) (confinement, error) {
 		return c, nil
 	}
 	c.unfiltered = "it lists no seccomp among its security options, so it was built without seccomp or runs on a kernel that has none"
-	if filters {
+	remedy := "Run the runner on a daemon and a kernel that offer seccomp"
+	switch {
+	case open:
+		c.unfiltered = "the seccomp profile " + sourceOf(p) + " names, which every container is created with, lets every system call through"
+		remedy = "Name a profile whose actions refuse a system call, or none, which leaves the daemon's own"
+	case filters:
 		c.unfiltered = "it was started with --seccomp-profile=unconfined"
+		remedy = "Start the daemon without --seccomp-profile=unconfined, or name a profile with seccomp_profile in " + PolicyPath + ", which every container is then created with"
 	}
 	if !p.RequireSeccomp.Lifted() {
-		remedy := "Run the runner on a daemon and a kernel that offer seccomp"
-		if filters {
-			remedy = "Start the daemon without --seccomp-profile=unconfined, or name a profile with seccomp_profile in " + PolicyPath + ", which every container is then created with"
-		}
 		return confinement{}, fmt.Errorf("driver: %w: %s. Seccomp is what keeps a brick to the system calls a container needs, and no setting lifts this refusal. %s", ErrSeccompRequired, c.unfiltered, remedy)
 	}
 	return c, nil

@@ -346,6 +346,8 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		{"selinux_label = \"disable\"\n", `selinux_label is "disable"`},
 		{"selinux_label = \"level:\"\n", `selinux_label is "level:"`},
 		{"selinux_label = \"colour:blue\"\n", `selinux_label is "colour:blue"`},
+		{"selinux_label = \"type:spc_t\"\n", "spc_t is a type the SELinux policy leaves unconfined"},
+		{"selinux_label = \"type:unconfined_t\"\n", "which confines nothing"},
 		{"allow_cap_add = [\"ALL\"]\n", "Privileged"},
 		{"allow_cap_add = [\"CAP_NET_ADMIN\"]\n", "as NET_ADMIN"},
 		{"allow_cap_add = [\"net_admin\"]\n", "as NET_ADMIN"},
@@ -382,6 +384,14 @@ func TestLoadPolicyReadsTheSeccompProfileItNames(t *testing.T) {
 		{"array.json", "[]", "is not a seccomp profile"},
 		{"empty.json", "{}", "is not a seccomp profile"},
 		{"broken.json", "{\"defaultAction\": ", "is not a seccomp profile"},
+		// The daemon takes any action at the create and the runtime refuses one it does
+		// not know at the start, every container.
+		{"misspelled.json", `{"defaultAction":"SCMP_ACT_ERRON"}`, `action "SCMP_ACT_ERRON" is not one seccomp has`},
+		{"rule.json", `{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[{"names":["read"],"action":"SCMP_ACT_ALOW"}]}`, `action "SCMP_ACT_ALOW"`},
+		{"unnamed.json", `{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[{"names":["read"]}]}`, `action ""`},
+		// A profile that filters nothing would lift the floor under the name of meeting it.
+		{"allow.json", `{"defaultAction":"SCMP_ACT_ALLOW"}`, "lets every system call through"},
+		{"log.json", `{"defaultAction":"SCMP_ACT_LOG","syscalls":[{"names":["reboot"],"action":"SCMP_ACT_ALLOW"}]}`, "lets every system call through"},
 	} {
 		file := filepath.Join(dir, c.name)
 		if c.body != "" {
@@ -403,6 +413,22 @@ func TestLoadPolicyReadsTheSeccompProfileItNames(t *testing.T) {
 		if errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("the refusal of %s reads as a runner.toml that is not there: %s", c.name, err)
 		}
+	}
+}
+
+// A profile that refuses one call and lets the rest through filters something, and is
+// the operator's to write: only a profile that filters nothing at all is refused.
+func TestLoadPolicyTakesAProfileThatRefusesOneCall(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "seccomp.json")
+	if err := os.WriteFile(file, []byte(`{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[{"names":["reboot"],"action":"SCMP_ACT_ERRNO"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPolicy(writePolicyFile(t, "seccomp_profile = \""+file+"\"\n"))
+	if err != nil {
+		t.Fatalf("a profile refusing reboot was refused: %s", err)
+	}
+	if p.Seccomp == "" {
+		t.Fatalf("the profile was not kept")
 	}
 }
 
