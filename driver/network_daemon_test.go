@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -420,5 +421,33 @@ func TestTheNetworkIsMadeAfterThePull(t *testing.T) {
 	}
 	if list, _ := r.cli.NetworkList(t.Context(), nil); len(list) != 0 {
 		t.Fatalf("a task refused at its pull left %d networks", len(list))
+	}
+}
+
+// A key a build that ran network: internal carried on a daemon older than Docker 28.0 comes
+// back to a build that refuses the posture there. The refusal takes away the container the
+// earlier delivery left, its network and its directory, rather than leaving the container
+// running with nothing to stop it.
+func TestARefusedInternalTaskTakesAwayWhatAnEarlierDeliveryLeft(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil }, dockertest.APIVersion("1.47"))
+	task := oneTask(ref)
+	task.Network = graph.NetworkInternal
+
+	old, err := r.cli.NetworkCreate(t.Context(), docker.NetworkSpec{Name: networkName(task.ID), Driver: networkDriver, Internal: true, Labels: labels(task)})
+	if err != nil {
+		t.Fatalf("leaving the old network behind: %s", err)
+	}
+	container, root := stageFirstDelivery(t, r, task)
+
+	if _, err := r.Run(t.Context(), task); !errors.Is(err, ErrInternalNotIsolated) {
+		t.Fatalf("the redelivery on API 1.47: %v", err)
+	}
+	removed := r.daemon.Removed()
+	if !slices.Contains(removed, container) || !slices.Contains(removed, old.ID) {
+		t.Errorf("the refusal left the container or the network: removed %v", removed)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("the refusal left the working directory %s", root)
 	}
 }

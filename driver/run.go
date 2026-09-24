@@ -98,6 +98,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	// believe its egress.allow list is being enforced when nothing is enforcing it.
 	// The network itself is created just before the container, in networkFor.
 	if err := refuseNetwork(d.cli, t); err != nil {
+		d.abandon(ctx, t)
 		return graph.Result{}, err
 	}
 
@@ -786,6 +787,28 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// abandon takes away what an earlier delivery of a refused task left: its container, its
+// network and its working directory. A key this host carried under a build that ran the
+// posture comes back to one that refuses it, on a daemon too old to keep the host out of an
+// internal network, and the refusal would otherwise leave that container running with
+// nothing left to stop it and its secrets on the host.
+func (d *Docker) abandon(ctx context.Context, t graph.Task) {
+	found, err := d.containerOf(ctx, t.ID)
+	if err != nil || found == "" {
+		return
+	}
+	tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
+	defer cancel()
+	if err := d.cli.ContainerRemove(tidy, found, true); err != nil && !docker.IsNotFound(err) {
+		d.say(fmt.Sprintf("%s was refused, and the container an earlier delivery of task %s left was not removed, so it runs on until somebody removes it: %v", t.Step, t.ID, err))
+		return
+	}
+	d.removeNetwork(ctx, t, networkOf(t))
+	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
+		d.tidy(t, w)
+	}
 }
 
 // removeNetwork takes a task's network away, the container on it being gone, and says

@@ -40,8 +40,9 @@ const (
 )
 
 // isolatedSince is the Engine API version of Docker 28.0, the first release whose bridge
-// knows gatewayMode=isolated. An older bridge ignores an option it does not know, so the
-// network it made would be called isolated and reach the host all the same.
+// knows gatewayMode=isolated. A bridge older than 27.1 ignores an option it does not know,
+// so the network it made would be called isolated and reach the host all the same, and one
+// from 27.1 on refuses the value; either way the version is what is asked.
 const isolatedSince = "1.48"
 
 // ErrInternalNotIsolated is the refusal of network: internal on a daemon too old to keep
