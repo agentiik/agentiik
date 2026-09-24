@@ -192,14 +192,15 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 	}
 	credential, _ := answer["credential"].(string)
 	runner, _ := answer["runner"].(string)
-	if code, answer := c.do("POST", "/api/v1/runners/heartbeat", credential, api.Beat{}); code != http.StatusOK {
+	beat := api.Beat{Runner: runner, AgentVersion: "0.2.0", State: "ready", Concurrency: 4, Tasks: []agk.TaskID{}, SentAt: time.Now()}
+	if code, answer := c.do("POST", "/api/v1/runners/heartbeat", credential, beat); code != http.StatusOK {
 		t.Fatalf("the heartbeat answered %d: %v", code, answer)
 	}
 	// The runner credential is not the operator's token, and the token is not a runner's.
 	if code, _ := c.do("GET", "/api/v1/runners", credential, nil); code != http.StatusUnauthorized {
 		t.Errorf("a runner credential read the inventory, answering %d", code)
 	}
-	if code, _ := c.do("POST", "/api/v1/runners/heartbeat", theToken, api.Beat{}); code != http.StatusUnauthorized {
+	if code, _ := c.do("POST", "/api/v1/runners/heartbeat", theToken, beat); code != http.StatusUnauthorized {
 		t.Errorf("the operator's token heartbeat, answering %d", code)
 	}
 	if code, answer := c.do("GET", "/api/v1/runners", theToken, nil); code != http.StatusOK || !strings.Contains(fmt.Sprint(answer), runner) {
