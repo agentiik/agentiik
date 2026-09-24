@@ -54,6 +54,12 @@ type Fault struct {
 	// err is the sentinel this fault is an instance of, so that a caller tests with
 	// errors.Is rather than by reading the prose.
 	err error
+
+	// cause is the detail as an error, which is what keeps an error the detail wrapped
+	// with %w reachable: a *agk.Refusal wrapped that way still says, through errors.As,
+	// which rule refused and what that does to the run, where the prose alone would only
+	// say it to a person.
+	cause error
 }
 
 // Error writes the step, the port, what was found and the rule, in that order, which is
@@ -73,17 +79,30 @@ func (f *Fault) Error() string {
 	return s
 }
 
-// Unwrap gives up the sentinel, which is how ErrRootUser and the rest are tested for.
-func (f *Fault) Unwrap() error { return f.err }
+// Unwrap gives up the sentinel, which is how ErrRootUser and the rest are tested for, and
+// whatever the detail wrapped.
+func (f *Fault) Unwrap() []error {
+	var errs []error
+	for _, err := range []error{f.err, f.cause} {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
 
-// fault composes one, with the sentinel it is an instance of.
+// fault composes one, with the sentinel it is an instance of. The detail is formatted as
+// fmt.Errorf formats it, so that an error it names with %w stays reachable through the
+// fault.
 func fault(step agk.Step, err error, charge Charge, format string, args ...any) *Fault {
+	detail := fmt.Errorf(format, args...)
 	return &Fault{
 		Step:   step,
 		Rule:   ruleOf(err),
 		Charge: charge,
-		Detail: fmt.Sprintf(format, args...),
+		Detail: detail.Error(),
 		err:    err,
+		cause:  detail,
 	}
 }
 
@@ -106,6 +125,13 @@ var ErrDaemonUnreachable = errors.New("the Docker daemon could not be reached, s
 // runner. A brick that exits with one is treated as having failed the contract, whatever
 // its manifest says".
 var ErrContractBroken = errors.New("the image does not honour the brick contract")
+
+// ErrOutputsRefused is a container that exited 0 and left outputs the collection refused:
+// an envelope above inline_max_bytes, envelope_max_bytes or max_items, one that is not an
+// envelope at all, a file it names that is not what it says. A container ran, so unlike
+// ErrContractBroken it has an exit code, ExitContractBroken, and a caller that reports the
+// task tests for this to say so.
+var ErrOutputsRefused = errors.New("a container that exits 0 with outputs that break the output contract is reported failed with exit code 121, charged to the brick and never retried")
 
 // Charged says whose failure an error was, and whether anybody decided. A plain error
 // from somewhere else is nobody's until this package says so.

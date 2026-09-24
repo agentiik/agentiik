@@ -515,7 +515,9 @@ func (storeGone) Open(context.Context, string) (io.ReadCloser, error) {
 // A container that ran to its end has ended its key, whatever then became of what it left.
 // An output that is not an envelope, or a store that refused the upload, is still the error
 // Run answers with, and the key is still written down: the brick ran, and a second delivery
-// of the key would run it again.
+// of the key would run it again. It is written down as a container that ran, with a code and
+// a span: 121 and the brick's where the brick broke the output contract, 125 and the
+// platform's where the store would not take what the brick left.
 func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
@@ -524,6 +526,8 @@ func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 		left    func(dockertest.Container) error
 		store   artifact.Objects
 		refused string
+		code    int
+		charge  Charge
 	}{
 		{
 			name: "an output that is not an envelope",
@@ -531,6 +535,8 @@ func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 				return os.WriteFile(filepath.Join(ctr.Work, "ports", "out.json"), []byte("{not an envelope"), 0o644)
 			},
 			refused: "the envelope is not a JSON document",
+			code:    ExitContractBroken,
+			charge:  ChargeBrick,
 		},
 		{
 			name: "a store that refused the upload",
@@ -552,6 +558,8 @@ func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 			},
 			store:   storeGone{},
 			refused: "the object store could not be reached",
+			code:    ExitOutputsUnwritten,
+			charge:  ChargePlatform,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -572,9 +580,12 @@ func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 			}
 			task := oneTask(ref)
 
-			_, err := first.Run(t.Context(), task)
-			if err == nil || !strings.Contains(err.Error(), c.refused) {
-				t.Fatalf("the delivery answered %v, and what the container left could not be collected", err)
+			_, runErr := first.Run(t.Context(), task)
+			if runErr == nil || !strings.Contains(runErr.Error(), c.refused) {
+				t.Fatalf("the delivery answered %v, and what the container left could not be collected", runErr)
+			}
+			if charge, decided := Charged(runErr); !decided || charge != c.charge {
+				t.Errorf("the delivery's error is charged to %s, want %s", charge, c.charge)
 			}
 			e, found, err := first.keys.read(task.ID)
 			if err != nil || !found {
@@ -583,8 +594,14 @@ func TestWhatFailsAfterTheExitStillEndsTheKey(t *testing.T) {
 			if e.State != agk.TaskFailed {
 				t.Errorf("the key is recorded %s, and a delivery that answered an error is recorded failed", e.State)
 			}
-			if e.ExitCode != nil || e.Outputs != nil {
-				t.Errorf("the key is recorded exiting %v with %v, and none of what the container left reached a Result", e.ExitCode, e.Outputs)
+			if e.ExitCode == nil || *e.ExitCode != c.code {
+				t.Errorf("the key is recorded exiting %v, want %d: a container ran, and a failed result that ran carries its code", e.ExitCode, c.code)
+			}
+			if e.StartedAt.IsZero() || e.FinishedAt.IsZero() {
+				t.Errorf("the key is recorded with the span %s to %s, and a container that ran has one", e.StartedAt, e.FinishedAt)
+			}
+			if e.Outputs != nil {
+				t.Errorf("the key is recorded with %v, and none of what the container left reached a Result", e.Outputs)
 			}
 
 			again := reopen(t, r, nil)
@@ -817,8 +834,8 @@ func TestAnEnvelopeTheStoreRefusedEndsTheKeyNamingNothing(t *testing.T) {
 	if !errors.As(err, &done) {
 		t.Fatalf("holding a key whose container ran to its end answered %v, and it is refused with its ending", err)
 	}
-	if e := done.Ending; e.State != agk.TaskFailed || e.ExitCode != nil || e.Outputs != nil {
-		t.Errorf("the ending reads %s exiting %v naming %+v, and a port the store never received is named nowhere", e.State, e.ExitCode, e.Outputs)
+	if e := done.Ending; e.State != agk.TaskFailed || e.ExitCode == nil || *e.ExitCode != ExitOutputsUnwritten || e.Outputs != nil {
+		t.Errorf("the ending reads %s exiting %v naming %+v, and a port the store never received is named nowhere, on a failure charged to the runtime", e.State, e.ExitCode, e.Outputs)
 	}
 	if n := bricks.times("fetch"); n != 1 {
 		t.Errorf("the brick ran %d times", n)
