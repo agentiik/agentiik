@@ -2,7 +2,7 @@
 
 A multi-user workflow engine: every brick is an ephemeral OCI container, every workflow is a git repository whose `agentiik.yaml` describes a directed acyclic graph, and one installation serves many users through namespaces, sharing and named roles.
 
-This file is the same in all twelve repositories of the organisation. Its source is `agentiik/.github/CLAUDE.md` and it is distributed from there, so edit it in that repository and never in a copy.
+This file is the same in all thirteen repositories of the organisation. Its source is `agentiik/.github/CLAUDE.md` and it is distributed from there, so edit it in that repository and never in a copy.
 
 ## The documentation is the authority
 
@@ -63,6 +63,7 @@ Every repository carries the same version, tagged at the same moment, released t
 | `bricks`, `brick-sdk` | The standard catalog and the optional helpers. A brick is not a derivative work of the engine. |
 | `design`, `console`, `ios`, `android` | The tokens and the four clients. |
 | `deploy`, `terraform-provider-agentiik` | Compose stacks and the provider. |
+| `homebrew-tap` | The Homebrew formulae: `agk` alone, and the server programs with it. |
 | `agentiik.github.io` | This documentation and the roadmap. |
 | `.github` | What every repository shares, including this file. |
 
