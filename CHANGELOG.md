@@ -134,6 +134,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner's secrets directory must be a tmpfs mounted `noexec,nosuid,nodev` that it may write to, read with `statfs` when the daemon is opened and again before a value is written; otherwise it is `driver.ErrSecretsTmpfsRequired`. A secret is a bind from there and keeps those flags, so the default `/dev/shm` is refused where it lacks `noexec`. `Policy.RequireSecretsTmpfs` is the floor; no line of `runner.toml` lifts it, and `agk run --local`, `agk brick test` and `agk validate` do.
 - What a task's directory leaves on the host is said, naming the step, the task and the path, and the secrets directory is removed whatever became of the working directory. A directory under `SecretsDir` owned by another account is refused.
 - A link in the place of `/agk/out/ports` or `/agk/out/files` is refused, where the collection read whatever it pointed at on the host.
+- A task's `internal` network is created with `com.docker.network.bridge.gateway_mode_ipv4=isolated`, so the bridge takes no address in it and the container cannot reach the runner host through the gateway, which it could on Docker 29. `EnableIPv6` is sent as `false` rather than left to the daemon's default. A daemon older than Docker 28.0 (API 1.48) ignores the option, and `network: internal` is refused on it with `driver.ErrInternalNotIsolated`.
+- A redelivery whose network is already there takes it over only where it carries the task's label and is internal and isolated, and is refused otherwise.
+- A task network the daemon would not remove is said, naming the step, the network and the task, where it was dropped.
+- `Docker.Sweep` removes the `agk-` networks a runner that died left, those no container carrying their task's label is on and no task in flight here names, and says what it removed and what the daemon refused.
+- The refusal of `network: egress` names v0.9.0 for the proxy.
 
 ### Runner
 
@@ -141,6 +146,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE` (no quotes, escapes, substitutions or trailing comments, which another reader would read differently), refused when it is a symbolic link, owned by another account or readable by its group or anybody else, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
 - `serve` loads `/etc/agentiik/runner.toml`, keeps every default and the userns floor where there is none, and refuses one it cannot read. A daemon without user namespace remapping is refused before any call to the API, and no flag or variable lifts the floor. It refuses to run as root.
 - `serve` refuses a remapped daemon without the three capabilities and a secrets directory that is not a tmpfs mounted `noexec,nosuid,nodev`, before any call to the API.
+- `serve` sweeps the task networks an earlier agent left before it takes any work, and a sweep that cannot look is said rather than refusing the start.
 - `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
 - Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
 
@@ -276,6 +282,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 - The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
 - `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
+- The fake daemon answers a second network of a name already taken with 409, removes a network by its name, and refuses to remove one a running container is on with 403.
+- The real-daemon tests hold `network: internal` to what the kernel does: the container is on its task's network and no other with no default route, two tasks at once cannot reach each other, the runner host is not reachable through the gateway, and a name asked from it is not resolved.
 
 ## v0.1.2, 2026-09-13
 
