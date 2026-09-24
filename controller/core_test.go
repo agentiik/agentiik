@@ -270,12 +270,18 @@ func resumeOn(t *testing.T, pool *db.Pool, super string, like *Core) (*Core, *fa
 
 func createRun(t *testing.T, pool *db.Pool) {
 	t.Helper()
+	createRunOf(t, pool, "normalize", "archive")
+}
+
+// createRunOf creates the run of a workflow whose steps are not the two most of these tests use.
+func createRunOf(t *testing.T, pool *db.Pool, steps ...agk.Step) {
+	t.Helper()
 	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Trigger: agk.TriggerManual, TriggeredBy: "alice",
 			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}]}`),
-			Steps:  []agk.Step{"normalize", "archive"},
+			Steps:  steps,
 		})
 	})
 	if err != nil {

@@ -328,17 +328,19 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			if err := w.SaveDecision(ctx, decision); err != nil {
 				return err
 			}
-			if state.Run.State != agk.TimedOut {
+			if !state.Run.State.Terminal() {
 				return nil
 			}
-			// A run that has just reached its deadline ends its tasks here, in the same
-			// transaction, as a cancelled run does: the evaluator ends the run and leaves
-			// its tasks as they were, and a row left in flight would redeem, hold a slot
-			// of max_concurrent_tasks for good, and keep the deadline's stop out of the
+			// A run that has just ended ends its tasks here, in the same transaction, as a
+			// cancelled run does, whatever its verdict: the evaluator ends the run and
+			// leaves its tasks as they were, and a row left in flight would redeem, hold a
+			// slot of max_concurrent_tasks for good, and keep the stop out of the
 			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
-			// hears it again.
+			// hears it again. A run that reached its deadline is the obvious case, and one
+			// that succeeded or failed with a step a merge: first superseded still in flight
+			// is the other.
 			var err error
-			held, err = w.TimeOutTasks(ctx, e.Namespace, run, now)
+			held, err = w.EndTasks(ctx, e.Namespace, run, now)
 			return err
 		}); err != nil {
 			return err
@@ -349,7 +351,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// cancellation: a pass that published a task and died before recording the dispatch.
 	for _, key := range held {
 		if !slices.ContainsFunc(plan.Stop, func(s graph.Stop) bool { return s.Task == key }) {
-			plan.Stop = append(plan.Stop, graph.Stop{Task: key, Reason: graph.StopDeadline})
+			plan.Stop = append(plan.Stop, graph.Stop{Task: key, Reason: stopOf(state.Run.State)})
 		}
 	}
 
@@ -416,6 +418,22 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
 	})
+}
+
+// stopOf is the stop a run's ending sends to a runner still holding one of its tasks, as the
+// documentation's table of stops names it: deadline for a run past its root timeout, cancelled
+// for a run called off, and superseded for a run that succeeded or failed. Such a run has ended
+// every step, and the only one whose tasks can still be in flight is a step a merge: first
+// cancelled when its barrier lifted on another edge, which is what superseded says. It is never
+// sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
+func stopOf(run agk.RunState) graph.StopReason {
+	switch run {
+	case agk.TimedOut:
+		return graph.StopDeadline
+	case agk.Cancelled:
+		return graph.StopCancelled
+	}
+	return graph.StopSuperseded
 }
 
 // contains says whether an identifier is in a list, which two places here need.

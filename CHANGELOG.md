@@ -50,6 +50,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task whose pool does not exist, or does not accept the run's namespace, is not published and gets no grant: every pending shard of its step fails with exit code 125 on the pass that finds it, before the quota, on the infrastructure's account, and the step's reason names the pool. The pool is the one `bus.PoolOf` routes to, so a step naming no `pool=` label needs a pool called `default`. `graph.Result.Reason` carries why.
 - Resources are capped to the pool's cpu, memory and pids ceilings on the task message, and an ask left out takes the ceiling.
 - A `timed_out` or `cancelled` task keeps its container's exit code on its row, 137 or 143 for a stop, including one its run's ending stopped, whose runner reports after the run ended. A lost task, an ending no container reached and a stop reported with no code have none; `graph.Result.NoExitCode` tells that from 0.
+- A run that succeeds or fails with a task a `merge: first` superseded still in flight writes it `cancelled` in the pass that ends the run, and sends its runner the `superseded` stop, where it read in flight for good and never took its exit code. `db.Wide.EndTasks` ends a run's tasks with the ending its own ending names, and replaces `TimeOutTasks`.
 
 ### State
 
