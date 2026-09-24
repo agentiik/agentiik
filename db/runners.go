@@ -220,7 +220,9 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 	if err != nil {
 		return Joined{}, fmt.Errorf("db: %w", err)
 	}
-	rotate := now.Add(rotateAfter)
+	// To the microsecond, which is what PostgreSQL keeps and Authenticate judges by, so that the
+	// instant answered is the instant enforced.
+	rotate := now.Add(rotateAfter).Truncate(time.Microsecond)
 
 	var runtime *string
 	var remap *bool
@@ -459,7 +461,7 @@ func (w *Wide) Rotate(ctx context.Context, ro Rotating, rotateAfter time.Duratio
 	if err != nil {
 		return Rotated{}, fmt.Errorf("db: %w", err)
 	}
-	rotate := now.Add(rotateAfter)
+	rotate := now.Add(rotateAfter).Truncate(time.Microsecond)
 	if _, err := w.tx.Exec(ctx,
 		`update runners set credential_hash = $2, rotate_by = $3,
 		        previous_credential_hash = $4, previous_rotate_by = $5, rotation_signed_at = $6

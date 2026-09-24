@@ -1259,3 +1259,38 @@ func TestARotationSignedFinerThanAMicrosecondIsStillGoodOnce(t *testing.T) {
 		t.Errorf("the same rotation, signed to the nanosecond, sent again answered %v", err)
 	}
 }
+
+// The rotate_by a join or a rotation answers is the one Authenticate holds the credential to, to
+// the microsecond PostgreSQL keeps, and not a promise of the nanoseconds past it.
+func TestTheRotateByAnsweredIsTheOneEnforced(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC().Truncate(time.Microsecond).Add(999 * time.Nanosecond)
+	key := privateKey(1)
+	joined := joinedWith(t, pool, key, time.Hour, now)
+	if want := now.Add(time.Hour).Truncate(time.Microsecond); !joined.RotateBy.Equal(want) {
+		t.Errorf("a join answered rotate_by %s, and the credential is held to %s", joined.RotateBy, want)
+	}
+
+	var rotated Rotated
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		rotated, err = w.Rotate(ctx, rotating(joined.Credential, joined.Runner, key, now), time.Hour, now)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		r, err := w.Authenticate(ctx, rotated.Credential, now)
+		if err != nil {
+			return err
+		}
+		if !r.RotateBy.Equal(rotated.RotateBy) {
+			t.Errorf("a rotation answered rotate_by %s, and the credential is held to %s", rotated.RotateBy, r.RotateBy)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
