@@ -289,6 +289,10 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 			return graph.Result{}, fault(t.Step, ErrContractBroken, ChargePlatform, "the container could not be started: %v", err)
 		}
 	}
+	// What the container consumes is read from here, while it runs, since its cgroup
+	// and everything counted in it go when it exits.
+	spent := d.sample(ctx, container)
+	defer spent.stop()
 	if stoppedBefore {
 		// The container was adopted and is running already, so the stop recorded
 		// while this side had no watch to take it reaches the daemon now.
@@ -319,6 +323,7 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 	if err != nil {
 		return graph.Result{}, err
 	}
+	spent.exited()
 
 	// The attach ends when the container does, so what is left is whatever is still
 	// on the socket. It is given a moment to arrive and then the stream is closed
@@ -339,16 +344,17 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 		d.replay(ctx, container, log, stdout)
 	}
 
-	return d.conclude(ctx, t, store, container, image, log, mask, stdout, e, out, dispatched)
+	return d.conclude(ctx, t, store, container, image, spent, log, mask, stdout, e, out, dispatched)
 }
 
 // conclude is the end every container this driver carries comes to, whether it was watched
 // to its exit or found already over: the exit read as a task state, the ports collected off
-// the mount where it succeeded, the log closed and the observer told.
+// the mount where it succeeded, the log closed and the observer told. spent is what read
+// the container's statistics while it ran, and nil for one found already over.
 //
 // A collection that fails is an error that came after the exit, which is how ended knows
 // to write the key down all the same.
-func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, log *taskLog, mask *masker, stdout *capture, e exit, out string, dispatched time.Time) (graph.Result, error) {
+func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Store, container string, image resolved, spent *sampler, log *taskLog, mask *masker, stdout *capture, e exit, out string, dispatched time.Time) (graph.Result, error) {
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskPublishing, Container: container})
 
 	// A deadline that fired and a stop that landed are what the task was, whatever code
@@ -391,7 +397,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 			ports, err = publishPorts(ctx, store, t.Step, got.Outputs)
 		}
 		if err != nil {
-			return graph.Result{}, d.refused(ctx, t, container, image, log, result, err)
+			return graph.Result{}, d.refused(ctx, t, container, spent.usage(image), log, result, err)
 		}
 		result.Outputs, artifacts = got.Outputs, got.Artifacts
 	}
@@ -405,7 +411,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 	d.observe(ctx, Event{
 		Task: t.ID, State: state, Container: container,
 		Log: ref, Outputs: ports, Artifacts: artifacts,
-		Usage: Usage{ImagePullMS: image.PullMillis},
+		Usage: spent.usage(image),
 	})
 	return result, nil
 }
@@ -429,7 +435,7 @@ func (d *Docker) conclude(ctx context.Context, t graph.Task, store *artifact.Sto
 //
 // The error keeps what refused. A size rule's *agk.Refusal is reachable through errors.As,
 // so a caller can tell which rule it was and what the rule does to the run.
-func (d *Docker) refused(ctx context.Context, t graph.Task, container string, image resolved, log *taskLog, r graph.Result, err error) error {
+func (d *Docker) refused(ctx context.Context, t graph.Task, container string, usage Usage, log *taskLog, r graph.Result, err error) error {
 	charge, decided := Charged(err)
 	switch {
 	case decided:
@@ -454,7 +460,7 @@ func (d *Docker) refused(ctx context.Context, t graph.Task, container string, im
 	}
 	d.observe(ctx, Event{
 		Task: t.ID, State: agk.TaskFailed, Container: container,
-		Log: ref, Usage: Usage{ImagePullMS: image.PullMillis}, Err: err,
+		Log: ref, Usage: usage, Err: err,
 	})
 	if charge != ChargeBrick {
 		return exited(t.ID, err)
@@ -589,7 +595,7 @@ func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store
 		log.note("the step's timeout had passed when the container ended, inside the time the stop at the deadline takes, so it is read as stopped at its deadline")
 		e.TimedOut = true
 	}
-	return d.conclude(ctx, t, store, container, image, log, mask, stdout, e, out, dispatched)
+	return d.conclude(ctx, t, store, container, image, nil, log, mask, stdout, e, out, dispatched)
 }
 
 // writeStdin puts the envelope on standard input and closes the write half after it.

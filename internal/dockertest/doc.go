@@ -70,6 +70,7 @@
 //	daemon.go     Daemon, NewDaemon, Socket, Close, Restart, Streams, Handle, and the routing
 //	container.go  Container, what a created container is and what running one means
 //	record.go     Created and Removed, which is what happened, as it happened
+//	stats.go      the statistics of a container this daemon has no cgroup to measure
 //	behaviour.go  the prepared failures, each one a thing that actually goes wrong
 //	real.go       Socket and Unavailable, the one place that decides whether a real daemon
 //	              is present and what its absence means
