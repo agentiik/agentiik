@@ -687,11 +687,28 @@ func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 	i.env[config.MaxRequeues] = "-1"
 	i.env[config.TaskCeiling] = "forever"
 	i.env["AGK_MASTER_KEY"] = "id: 2026-09"
+	chmod(t, i.env[config.DatabasePasswordFile], 0o644)
 
 	_, err := config.ReadController(theController.environment(i))
 	names := refused(err)
 	slices.Sort(names)
-	want := []string{"AGK_MASTER_KEY", config.DatabaseURL, config.MaxRequeues, config.TaskCeiling}
+	want := []string{"AGK_MASTER_KEY", config.DatabaseURL, config.DatabasePasswordFile, config.MaxRequeues, config.TaskCeiling}
+	slices.Sort(want)
+	if !slices.Equal(names, want) {
+		t.Errorf("the start was refused naming %v, and %v all refuse it: %v", names, want, err)
+	}
+
+	// A database URL refused for what it is still leaves its password's file to be read.
+	i = anInstallation(t)
+	i.env[config.MigrateDatabaseURL] = "mysql://postgres@db/agentiik"
+	chmod(t, i.env[config.MigrateDatabasePasswordFile], 0o640)
+	i.env[config.DatabaseURL] = "postgres://agentiik:hunter2@db/agentiik"
+	chmod(t, i.env[config.DatabasePasswordFile], 0o644)
+
+	_, err = config.ReadMigration(migrating.environment(i))
+	names = refused(err)
+	slices.Sort(names)
+	want = []string{config.DatabaseURL, config.DatabasePasswordFile, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile}
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Errorf("the start was refused naming %v, and %v all refuse it: %v", names, want, err)

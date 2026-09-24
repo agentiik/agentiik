@@ -447,6 +447,33 @@ func (r *reader) publicURL() string {
 
 // database reads one PostgreSQL URL and the file its password is in.
 func (r *reader) database(name, passwordFile string, needsRole bool) Database {
+	// The password's file is read whatever becomes of the URL, so that a start refused over both
+	// names both.
+	password := r.password(passwordFile)
+	d := r.databaseURL(name, passwordFile, needsRole)
+	if d.URL != "" {
+		d.Password = password
+	}
+	return d
+}
+
+// password reads the one line of the file a database's password is in, and is empty where no
+// file is named or the file refuses the start.
+func (r *reader) password(name string) string {
+	content := r.optionalFile(name)
+	if content == nil {
+		return ""
+	}
+	password := strings.TrimRight(string(content), "\r\n")
+	if strings.ContainsAny(password, "\r\n") {
+		r.refuse(name, "names a file of more than one line, and it holds one password")
+		return ""
+	}
+	return password
+}
+
+// databaseURL reads one PostgreSQL URL, and is the zero Database where the URL refuses the start.
+func (r *reader) databaseURL(name, passwordFile string, needsRole bool) Database {
 	why := "and it is the database the API and the controller share, and share nothing else"
 	if name == MigrateDatabaseURL {
 		why = "and migrating is done as a role that may change the schema, which the role the API and the controller connect as may not"
@@ -458,9 +485,9 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 	carriesAPassword := fmt.Sprintf("carries a password, and a secret is never a value in the environment: write it to a file its owner alone can read, and name that file in %s", passwordFile)
 	// A role is never written with a colon, a slash, a ? or a # before its @, and a password
 	// is: after the colon, and holding the others often enough, since a password from openssl
-	// rand -base64 holds a slash one time in three. An @ further on, in the database's name or a
-	// parameter, is refused with it, because no reading of the text tells it apart from the end
-	// of a password.
+	// rand -base64 32 holds a slash about one time in two. An @ further on, in the database's
+	// name or a parameter, is refused with it, because no reading of the text tells it apart
+	// from the end of a password.
 	if info, has := userinfo(v); has && strings.ContainsAny(info, ":/?#") {
 		r.refuse(name, carriesAPassword)
 		return Database{}
@@ -495,14 +522,7 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 	}
 	if needsRole && d.Role == "" {
 		r.refuse(name, "names no role, and it names the role the API and the controller connect as, which migrating creates")
-	}
-	if password := r.optionalFile(passwordFile); password != nil {
-		p := strings.TrimRight(string(password), "\r\n")
-		if strings.ContainsAny(p, "\r\n") {
-			r.refuse(passwordFile, "names a file of more than one line, and it holds one password")
-			return d
-		}
-		d.Password = p
+		return Database{}
 	}
 	return d
 }
