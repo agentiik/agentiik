@@ -484,6 +484,32 @@ func TestWhatAGrantWillNotDo(t *testing.T) {
 	}
 }
 
+// "A credential past rotate_by is refused everywhere, and that host joins again": a runner dark
+// past its window redeems nothing, however good the grant it holds.
+func TestACredentialPastItsRotateByRedeemsNothing(t *testing.T) {
+	g := withGrants(t, api.NoSecrets{})
+	credential := g.joined(t)
+	clear, _, _ := g.dispatched(t, nil)
+
+	conn := dbtest.Superuser(t, g.super)
+	if _, err := conn.Exec(t.Context(), `update runners set rotate_by = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("a redemption past the credential's rotate_by answered %d: %s", w.Code, w.Body)
+	}
+	if runner := g.bound(t); runner != nil {
+		t.Fatalf("a redemption past the credential's rotate_by bound the task to %s", *runner)
+	}
+
+	// The same redemption inside the window is taken, so what was refused was the credential.
+	if _, err := conn.Exec(t.Context(), `update runners set rotate_by = now() + interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	g.redeemed(t, credential, asking(clear))
+}
+
 // An installation with no secret provider holds nothing, and a task naming a secret fails in
 // front of somebody rather than mounting an empty file. That is also what an installation that
 // attached no store at all gets, since the runner half's options default to holding nothing.

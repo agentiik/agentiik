@@ -67,7 +67,14 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 		}
 	}
 
-	credentials, err := s.issuer.ForRunner(runner.ID, runner.Pool, s.now().Add(BusLife))
+	// No longer than the runner credential it was asked for with: "a credential past rotate_by
+	// is refused everywhere", and a bus credential outliving it by up to an hour would be a
+	// runner that has to join again still pulling work.
+	until := s.now().Add(BusLife)
+	if !runner.RotateBy.IsZero() && runner.RotateBy.Before(until) {
+		until = runner.RotateBy
+	}
+	credentials, err := s.issuer.ForRunner(runner.ID, runner.Pool, until)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the bus credential could not be minted")
 		return

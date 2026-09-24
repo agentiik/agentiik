@@ -90,7 +90,7 @@ func TestAMachineJoinsWithATokenAndGetsACredential(t *testing.T) {
 
 	// The credential opens the runner it was issued to, and nothing else does.
 	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		r, err := w.Authenticate(ctx, joined.Credential)
+		r, err := w.Authenticate(ctx, joined.Credential, now)
 		if err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func TestAMachineJoinsWithATokenAndGetsACredential(t *testing.T) {
 		if len(r.Labels) != 1 || r.Labels[0] != "zone=dmz" {
 			t.Errorf("the runner claims %v", r.Labels)
 		}
-		if _, err := w.Authenticate(ctx, joined.Credential+"x"); !errors.Is(err, ErrNoRunner) {
+		if _, err := w.Authenticate(ctx, joined.Credential+"x", now); !errors.Is(err, ErrNoRunner) {
 			t.Errorf("a credential that is nearly right answered %v", err)
 		}
 		return nil
@@ -222,7 +222,7 @@ func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
 		if listed, err = w.Runners(ctx); err != nil {
 			return err
 		}
-		opened, err = w.Authenticate(ctx, joined.Credential)
+		opened, err = w.Authenticate(ctx, joined.Credential, now)
 		return err
 	})
 	if err != nil {
@@ -263,7 +263,7 @@ func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		r, err := w.Authenticate(ctx, plain.Credential)
+		r, err := w.Authenticate(ctx, plain.Credential, now)
 		if err != nil {
 			return err
 		}
@@ -458,7 +458,7 @@ func TestASecondJoinFromOneHostIsASecondRunner(t *testing.T) {
 			t.Errorf("a host joining twice left %d runners", len(listed))
 		}
 		for _, j := range []Joined{first, second} {
-			r, err := w.Authenticate(ctx, j.Credential)
+			r, err := w.Authenticate(ctx, j.Credential, now)
 			if err != nil {
 				t.Errorf("the credential of %s answered %v", j.Runner, err)
 				continue
@@ -942,7 +942,7 @@ func TestARevokedCredentialOpensNothing(t *testing.T) {
 		if err := w.Drain(ctx, joined.Runner, "the host is being retired"); err != nil {
 			return err
 		}
-		r, err := w.Authenticate(ctx, joined.Credential)
+		r, err := w.Authenticate(ctx, joined.Credential, now)
 		if err != nil {
 			return err
 		}
@@ -953,7 +953,7 @@ func TestARevokedCredentialOpensNothing(t *testing.T) {
 		if err := w.Revoke(ctx, joined.Runner, "the credential leaked"); err != nil {
 			return err
 		}
-		if _, err := w.Authenticate(ctx, joined.Credential); !errors.Is(err, ErrNoRunner) {
+		if _, err := w.Authenticate(ctx, joined.Credential, now); !errors.Is(err, ErrNoRunner) {
 			t.Errorf("a revoked credential answered %v", err)
 		}
 		if _, err := w.Beat(ctx, joined.Runner, beating(), now); !errors.Is(err, ErrNoRunner) {
@@ -1091,5 +1091,148 @@ func TestAHeartbeatIsAnsweredWithWhatItsRunnerIsToStop(t *testing.T) {
 		if r.State != "ready" {
 			t.Errorf("a runner that says it is draining was made %s, and only an order drains a runner", r.State)
 		}
+	}
+}
+
+// joinedWith joins one host of the default pool, its credential accepted for rotateAfter from now.
+func joinedWith(t *testing.T, pool *Pool, key ed25519.PrivateKey, rotateAfter time.Duration, now time.Time) Joined {
+	t.Helper()
+	var joined Joined
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		joined, err = w.Join(ctx, Joining{
+			Token: issued.Clear, PublicKey: key.Public().(ed25519.PublicKey),
+			CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Architecture: "amd64", AgentVersion: "0.2.0",
+		}, rotateAfter, now)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return joined
+}
+
+// privateKey is the whole keypair hostKey is the public half of.
+func privateKey(seed byte) ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
+}
+
+// "The rotation window is rotate_by itself: a credential past it is refused everywhere, and that
+// host joins again." Up to the instant, and not at it.
+func TestACredentialIsRefusedFromItsRotateBy(t *testing.T) {
+	pool, _ := joining(t)
+	// To the microsecond, which is what PostgreSQL keeps of rotate_by.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	joined := joinedWith(t, pool, privateKey(1), time.Hour, now)
+
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		if _, err := w.Authenticate(ctx, joined.Credential, now.Add(time.Hour-time.Microsecond)); err != nil {
+			t.Errorf("a credential a moment before its rotate_by answered %v", err)
+		}
+		if _, err := w.Authenticate(ctx, joined.Credential, now.Add(time.Hour)); !errors.Is(err, ErrNoRunner) {
+			t.Errorf("a credential at its rotate_by answered %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// rotating is the rotation a host holding key sends for runner, signed at the moment given.
+func rotating(credential, runner string, key ed25519.PrivateKey, at time.Time) Rotating {
+	signed := []byte("agentiik runner rotation\n" + runner + "\n" + at.Format(time.RFC3339Nano))
+	return Rotating{
+		Credential: credential, Runner: runner, SignedAt: at,
+		Signed: signed, Signature: ed25519.Sign(key, signed),
+	}
+}
+
+// A rotation is renewed by the key the runner joined with and by nothing else, is good once, and
+// leaves the credential it was presented with accepted until the new one is first used.
+func TestARunnerCredentialRotatesWithTheKeyItJoinedWith(t *testing.T) {
+	pool, _ := joining(t)
+	// To the microsecond, which is what PostgreSQL keeps of rotate_by.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := privateKey(1)
+	joined := joinedWith(t, pool, key, 30*24*time.Hour, now)
+	other := joinedWith(t, pool, privateKey(2), 30*24*time.Hour, now)
+
+	in := func(fn func(ctx context.Context, w *Wide) error) {
+		t.Helper()
+		if err := pool.Installation(t.Context(), RunnerInventory, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotate := func(ro Rotating, at time.Time) (Rotated, error) {
+		var rotated Rotated
+		err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+			var err error
+			rotated, err = w.Rotate(ctx, ro, 30*24*time.Hour, at)
+			return err
+		})
+		return rotated, err
+	}
+
+	// Refused: another runner's key, a key nobody joined with, a message the signature is not
+	// over, and a runner the credential does not open.
+	tampered := rotating(joined.Credential, joined.Runner, key, now)
+	tampered.Signed = []byte("agentiik runner rotation\n" + joined.Runner + "\n" + now.Add(time.Second).Format(time.RFC3339Nano))
+	for name, c := range map[string]struct {
+		ro   Rotating
+		want error
+	}{
+		"signed by another runner's key":     {rotating(joined.Credential, joined.Runner, privateKey(2), now), ErrNotItsKey},
+		"signed by a key nobody joined with": {rotating(joined.Credential, joined.Runner, privateKey(3), now), ErrNotItsKey},
+		"signed over another message":        {tampered, ErrNotItsKey},
+		"for a runner its credential is not": {rotating(joined.Credential, other.Runner, key, now), ErrNoRunner},
+		"with a credential that opens none":  {rotating(joined.Credential+"x", joined.Runner, key, now), ErrNoRunner},
+	} {
+		if _, err := rotate(c.ro, now); !errors.Is(err, c.want) {
+			t.Errorf("a rotation %s answered %v, want %v", name, err, c.want)
+		}
+	}
+
+	first, err := rotate(rotating(joined.Credential, joined.Runner, key, now), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(time.Minute + 30*24*time.Hour); !first.RotateBy.Equal(want) {
+		t.Errorf("the new credential rotates by %s, want %s", first.RotateBy, want)
+	}
+
+	// Good once: the same signature, or one over an earlier moment, renews nothing again.
+	if _, err := rotate(rotating(joined.Credential, joined.Runner, key, now), now.Add(time.Minute)); !errors.Is(err, ErrRotationReplayed) {
+		t.Errorf("the same rotation sent again answered %v", err)
+	}
+	if _, err := rotate(rotating(joined.Credential, joined.Runner, key, now.Add(-time.Second)), now.Add(time.Minute)); !errors.Is(err, ErrRotationReplayed) {
+		t.Errorf("a rotation signed before the last one answered %v", err)
+	}
+
+	in(func(ctx context.Context, w *Wide) error {
+		at := now.Add(2 * time.Minute)
+		r, err := w.Authenticate(ctx, joined.Credential, at)
+		if err != nil {
+			t.Errorf("the old credential, before the new one was used, answered %v", err)
+		} else if !r.RotateBy.Equal(joined.RotateBy) {
+			t.Errorf("the old credential is answered as rotating by %s, want its own %s", r.RotateBy, joined.RotateBy)
+		}
+		if _, err := w.Authenticate(ctx, first.Credential, at); err != nil {
+			t.Errorf("the new credential answered %v", err)
+		}
+		return nil
+	})
+	in(func(ctx context.Context, w *Wide) error {
+		if _, err := w.Authenticate(ctx, joined.Credential, now.Add(3*time.Minute)); !errors.Is(err, ErrNoRunner) {
+			t.Errorf("the old credential, after the new one was used, answered %v", err)
+		}
+		return nil
+	})
+	if _, err := rotate(rotating(joined.Credential, joined.Runner, key, now.Add(3*time.Minute)), now.Add(3*time.Minute)); !errors.Is(err, ErrNoRunner) {
+		t.Errorf("rotating with the old credential, after the new one was used, answered %v", err)
 	}
 }

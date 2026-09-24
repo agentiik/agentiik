@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/pem"
 	"errors"
@@ -29,7 +30,8 @@ import (
 // "Serve the runner-facing routes and no others to a runner." What a runner may do is a short
 // closed list: join, say it is there, redeem a grant, ship a log. It holds no permission and
 // reaches nothing else, which is what makes a compromised one cost "the tasks in its hands and
-// the namespaces its policy accepts".
+// the namespaces its policy accepts". Renewing its credential is one more of them, and proves the
+// key the runner joined with.
 
 // RunnerOptions are what the runner half of the API is given.
 type RunnerOptions struct {
@@ -129,6 +131,7 @@ func NewRunners(rt *Router, o RunnerOptions) (*RunnerAPI, error) {
 		handler RunnerHandler
 	}{
 		{"POST", "/api/v1/runners/heartbeat", s.beat},
+		{"POST", "/api/v1/runners/rotate", s.rotate},
 		{"POST", "/api/v1/tasks/redeem", s.redeem},
 		{"POST", "/api/v1/bus/token", s.busToken},
 	} {
@@ -163,7 +166,7 @@ func (s *RunnerAPI) Runner(ctx context.Context, credential string) (Runner, erro
 	var found db.Runner
 	err := s.pool.Installation(ctx, db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		found, err = w.Authenticate(ctx, credential)
+		found, err = w.Authenticate(ctx, credential, s.now())
 		return err
 	})
 	if errors.Is(err, db.ErrNoRunner) {
@@ -172,7 +175,7 @@ func (s *RunnerAPI) Runner(ctx context.Context, credential string) (Runner, erro
 	if err != nil {
 		return Runner{}, err
 	}
-	return Runner{ID: found.ID, Pool: found.Pool, State: found.State}, nil
+	return Runner{ID: found.ID, Pool: found.Pool, State: found.State, RotateBy: found.RotateBy}, nil
 }
 
 // Join is what a machine presents, in the shape wire.schema.json gives it:
@@ -574,15 +577,24 @@ func instant(b *body, into *time.Time) error {
 	if written == "" {
 		return nil
 	}
-	if !instantForm.MatchString(written) {
-		return fmt.Errorf("%.64q is not an instant: it is RFC 3339 with its offset, 2026-09-10T06:41:09.104Z", written)
-	}
-	at, err := time.Parse(time.RFC3339Nano, strings.ToUpper(written))
+	at, err := instantOf(written)
 	if err != nil {
-		return fmt.Errorf("%.64q is not an instant: it is written as one, and names a day or a time no calendar has", written)
+		return err
 	}
 	*into = at
 	return nil
+}
+
+// instantOf reads one instant as the wire writes it.
+func instantOf(written string) (time.Time, error) {
+	if !instantForm.MatchString(written) {
+		return time.Time{}, fmt.Errorf("%.64q is not an instant: it is RFC 3339 with its offset, 2026-09-10T06:41:09.104Z", written)
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.ToUpper(written))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%.64q is not an instant: it is written as one, and names a day or a time no calendar has", written)
+	}
+	return at, nil
 }
 
 // beating checks a heartbeat the way the wire would, and answers it as the database takes it.
@@ -686,6 +698,152 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 		}
 	}
 	write(w, http.StatusOK, answer)
+}
+
+// Rotation is what a runner sends to be given a new credential, in the shape wire.schema.json gives
+// it: $defs/runnerRotation/request. The credential it rotates is the one the request carries, as
+// every runner route's does.
+//
+// "The key proves the machine: a stolen credential without it cannot be renewed." So the request
+// is signed, with the private half of the key the host generated at join, over which runner is
+// asking and when.
+type Rotation struct {
+	Runner string `json:"runner"`
+
+	// At is when the runner signed the request, by its own clock, kept as written because the
+	// characters written are what was signed.
+	At string `json:"at"`
+
+	// Signature is the Ed25519 signature of RotationSigned(Runner, At), in standard base64.
+	Signature string `json:"signature"`
+}
+
+func (ro *Rotation) field(b *body, name string) error {
+	switch name {
+	case "runner":
+		return text(b, &ro.Runner)
+	case "at":
+		return text(b, &ro.At)
+	case "signature":
+		return text(b, &ro.Signature)
+	}
+	return unknown(name)
+}
+
+// RotationSigned is the message a rotation's signature is over: a line saying what it is for,
+// then the runner and the request time, each on a line of its own and exactly as the request
+// writes them.
+//
+// The first line is there so that a signature made for this can never be read as one made for
+// anything else the key might one day sign, and the other two can hold no line break, since the
+// wire's grammars for a runner and an instant admit none, so no two requests share a message.
+// The time is signed as written rather than as a parsed instant, because two spellings of one
+// instant are two messages, and a runner and the API that had to agree on a canonical one would
+// be one more thing to keep in step.
+func RotationSigned(runner, at string) []byte {
+	return []byte("agentiik runner rotation\n" + runner + "\n" + at)
+}
+
+// RotationSkew is how far a rotation's request time may be from the API's clock, either way.
+//
+// The signature proves the key, and the time is what stops a signed request from being a proof
+// forever: a copy of one, from a proxy's log or a disk, is worth nothing five minutes later, the
+// window webhooks are held to. Inside it, a request is good for one rotation, since each has to
+// sign a later time than the last. A runner whose clock is further out than this cannot rotate
+// until it is corrected, and the heartbeat's received_at is how it finds out.
+const RotationSkew = 5 * time.Minute
+
+// signatureForm is an Ed25519 signature, sixty-four bytes, in standard base64 with its padding.
+var signatureForm = regexp.MustCompile(`^[A-Za-z0-9+/]{86}==$`)
+
+// rotating checks a rotation the way the wire would, and answers the request time and the
+// signature it carries.
+func (ro Rotation) rotating() (time.Time, []byte, error) {
+	switch {
+	case ro.Runner == "":
+		return time.Time{}, nil, errors.New("the rotation names no runner: it names the one the join answered, which is half of what the signature is over")
+	case !runnerForm.MatchString(ro.Runner):
+		return time.Time{}, nil, fmt.Errorf("%.64q is not a runner: a runner is named as the join answered it, lowercase words joined by hyphens", ro.Runner)
+	case ro.At == "":
+		return time.Time{}, nil, errors.New("the rotation says no at: it is when the runner signed it, by its own clock, and the other half of what the signature is over")
+	case ro.Signature == "":
+		return time.Time{}, nil, errors.New("the rotation carries no signature: a credential is renewed by the host that holds the key it joined with, and the signature is how it shows that")
+	case !signatureForm.MatchString(ro.Signature):
+		return time.Time{}, nil, errors.New("the signature is not an Ed25519 signature: it is sixty-four bytes in standard base64, eighty-eight characters ending in ==")
+	}
+	at, err := instantOf(ro.At)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	signature, err := base64.StdEncoding.Strict().DecodeString(ro.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return time.Time{}, nil, errors.New("the signature is not an Ed25519 signature: it is sixty-four bytes in standard base64, eighty-eight characters ending in ==")
+	}
+	return at, signature, nil
+}
+
+func (s *RunnerAPI) rotate(w http.ResponseWriter, r *http.Request, runner Runner) {
+	var ro Rotation
+	if err := readAtMost(r, &ro, smallMaxBytes); err != nil {
+		fail(w, statusOf(err), err.Error())
+		return
+	}
+	at, signature, err := ro.rotating()
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// The heartbeat's rule, for the same reason: a host rotating for another runner is either
+	// configured with another host's credential or speaking for a runner it is not.
+	if ro.Runner != runner.ID {
+		fail(w, http.StatusForbidden, fmt.Sprintf("the rotation speaks for runner %s, and its credential is runner %s's: a runner renews its own credential alone", ro.Runner, runner.ID))
+		return
+	}
+	now := s.now()
+	if skew := now.Sub(at); skew > RotationSkew || skew < -RotationSkew {
+		fail(w, http.StatusBadRequest, fmt.Sprintf("the rotation was signed at %s, and the API's clock reads %s: a rotation is signed within %s of it, so that a copy of one is not a way to rotate later. Correct the host's clock, which the heartbeat's received_at is there to compare with, and sign again",
+			at.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339), RotationSkew))
+		return
+	}
+
+	// The credential is read again from the request rather than carried by the hook, since the
+	// runner is one thing and which of its credentials was presented is another: it is the one
+	// that stays accepted until the new one is first used.
+	credential, _ := bearerOf(r)
+	var rotated db.Rotated
+	err = s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		rotated, err = wide.Rotate(ctx, db.Rotating{
+			Credential: credential, Runner: ro.Runner, SignedAt: at,
+			Signed: RotationSigned(ro.Runner, ro.At), Signature: signature,
+		}, s.rotation, now)
+		return err
+	})
+	switch {
+	case errors.Is(err, db.ErrNoRunner):
+		// Superseded or expired between the hook and the lock, which is what the hook would
+		// have answered a moment later.
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		fail(w, http.StatusUnauthorized, "that credential opens nothing")
+		return
+	case errors.Is(err, db.ErrNotItsKey):
+		fail(w, http.StatusForbidden, fmt.Sprintf("the signature is not by the key runner %s joined with: the key proves the machine, and a host whose key is gone is a new runner, which joins again", runner.ID))
+		return
+	case errors.Is(err, db.ErrRotationReplayed):
+		fail(w, http.StatusConflict, fmt.Sprintf("runner %s last rotated with a request signed at that time or later: each rotation signs a later time than the last, so that a copy of one rotates nothing. Sign again", runner.ID))
+		return
+	case err != nil:
+		fail(w, http.StatusInternalServerError, "the credential could not be rotated")
+		return
+	}
+
+	// It exists in this answer and on the machine that asked, and nowhere else.
+	w.Header().Set("Cache-Control", "no-store")
+	write(w, http.StatusOK, map[string]any{
+		"credential": rotated.Credential,
+		"rotate_by":  rotated.RotateBy.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (s *RunnerAPI) inventory(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
