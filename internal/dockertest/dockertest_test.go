@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -940,6 +941,56 @@ func TestANetworkIsCreatedFoundByItsLabelAndRemoved(t *testing.T) {
 	}
 	if removed := d.Removed(); len(removed) != 1 || removed[0] != created.ID {
 		t.Errorf("removed: got %v, want the network, so that its destruction is an assertion", removed)
+	}
+}
+
+// A daemon has refused a second network of a name already taken since names became unique,
+// and takes a network's name wherever it takes its identifier. A network a running
+// container is on is refused with 403, as a daemon refuses one with active endpoints; one
+// whose container was only created, or has exited, is not.
+func TestANetworkNameIsTakenOnceAndRemovesLikeItsIdentifier(t *testing.T) {
+	release := make(chan struct{})
+	d, c := start(t, dockertest.With(dockertest.Options{
+		Images: map[string]dockertest.Image{"brick": {Digest: "sha256:" + strings.Repeat("a", 64)}},
+		Run: func(dockertest.Container) (int, error) {
+			<-release
+			return 0, nil
+		},
+	}))
+	defer close(release)
+	ctx := t.Context()
+
+	spec := docker.NetworkSpec{Name: "agk-task", Driver: "bridge", Internal: true}
+	if _, err := c.NetworkCreate(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.NetworkCreate(ctx, spec); !docker.IsConflict(err) {
+		t.Fatalf("a second network named agk-task: %v, want a 409", err)
+	}
+
+	created, err := c.ContainerCreate(ctx, "", docker.Config{Image: "brick"}, docker.HostConfig{NetworkMode: "agk-task"}, docker.NetworkingConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ContainerStart(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	var refused *docker.Error
+	if err := c.NetworkRemove(ctx, "agk-task"); !errors.As(err, &refused) || refused.Status != http.StatusForbidden {
+		t.Fatalf("removing a network a running container is on: %v, want a 403", err)
+	}
+
+	if err := c.ContainerRemove(ctx, created.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.NetworkRemove(ctx, "agk-task"); err != nil {
+		t.Fatalf("removing the network by its name: %v", err)
+	}
+	if err := c.NetworkRemove(ctx, "agk-task"); !docker.IsNotFound(err) {
+		t.Fatalf("removing it again: %v, want a 404", err)
+	}
+	if removed := d.Removed(); !slices.Contains(removed, created.ID) || len(removed) != 2 {
+		t.Errorf("removed: got %v, want the container and the network", removed)
 	}
 }
 

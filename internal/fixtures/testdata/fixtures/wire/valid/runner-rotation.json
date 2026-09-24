@@ -1,0 +1,11 @@
+{
+  "request": {
+    "runner": "runner-dmz-02",
+    "at": "2026-10-20T06:00:00Z",
+    "signature": "dguPiG0uTjfUsOLqNa80c0tHa+k8W/bRaRTNBYO0gB9pUNh4DtAXuP8DyC9rJ3Svh9HK6HYBIbAwsrlhCuxUCg=="
+  },
+  "response": {
+    "credential": "agkrunner_48fGI4GzMIVK5N1IT_OI4UA58LzmKa6C5WD-FkjkppE",
+    "rotate_by": "2026-11-19T06:00:00.412Z"
+  }
+}

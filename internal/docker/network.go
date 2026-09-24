@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // NetworkSpec is one network to create. Every task gets its own, so two containers on
@@ -11,12 +12,20 @@ import (
 //
 // Internal is the network with no outbound route, which is what network: internal means:
 // a step that talks to a sidecar and to nothing else.
+//
+// EnableIPv6 is always sent, false included. Left out, it is the daemon's own default,
+// and a daemon.json that turns IPv6 on for every network would give a task an address
+// family nobody asked for and nothing here holds to the posture.
+//
+// Options are the driver's own, which is where a bridge is told to keep the host out of
+// the network it makes.
 type NetworkSpec struct {
 	Name       string            `json:"Name"`
 	Driver     string            `json:"Driver,omitempty"`
 	Internal   bool              `json:"Internal,omitempty"`
 	Attachable bool              `json:"Attachable,omitempty"`
-	EnableIPv6 bool              `json:"EnableIPv6,omitempty"`
+	EnableIPv6 bool              `json:"EnableIPv6"`
+	Options    map[string]string `json:"Options,omitempty"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 }
 
@@ -33,7 +42,12 @@ type NetworkSummary struct {
 	Name     string            `json:"Name"`
 	Driver   string            `json:"Driver,omitempty"`
 	Internal bool              `json:"Internal,omitempty"`
+	Options  map[string]string `json:"Options,omitempty"`
 	Labels   map[string]string `json:"Labels,omitempty"`
+
+	// Created is when the daemon made it, which is how a network that has only just
+	// been made is told from one that was left.
+	Created time.Time `json:"Created"`
 }
 
 // NetworkCreate creates one network.
