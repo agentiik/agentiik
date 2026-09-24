@@ -123,6 +123,16 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
+- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick, and its key is written down with that code and its span. Run's error keeps the `*agk.Refusal` for `errors.As` and is `driver.ErrOutputsRefused`, since `driver.Fault.Unwrap` now answers the error its detail wraps beside its sentinel. A store that will not take outputs that passed is charged to the platform.
+- A container stopped at its deadline or by a stop is logged as `timed_out` or `cancelled`, and no longer as the runtime's failure its kill code reads as.
+
+### Runner
+
+- `agk-runner` is the agent, one static binary with the verbs `join`, `serve` and `version`. `join` is named and refused until the API's side of it is built.
+- `serve` reads `AGK_API`, `AGK_RUNNER_LABELS`, `AGK_RUNNER_CONCURRENCY` (one per vCPU where unset), `AGK_RUNNER_WORKDIR` and `AGK_RUNNER_NAMESPACES` from the environment or `/etc/agentiik/runner.env`, which is read strictly as `KEY=VALUE` (no quotes, escapes, substitutions or trailing comments, which another reader would read differently), refused when it is a symbolic link, owned by another account or readable by its group or anybody else, and the only place the runner's identity and credential are read from. A setting written in both places to two values is refused, and no refusal repeats a credential or a URL.
+- `serve` loads `/etc/agentiik/runner.toml`, keeps every default and the userns floor where there is none, and refuses one it cannot read. A daemon without user namespace remapping is refused before any call to the API, and no flag or variable lifts the floor. It refuses to run as root.
+- `serve` tells systemd `READY=1` over `NOTIFY_SOCKET` once the floor holds and the daemon is open, with the standard library, so the unit is `Type=notify` and a refused start is a failed one. A stop while the daemon is being opened ends the start without it, and a second signal ends the process.
+- Package `runner` holds the agent's HTTP client: the runner credential on every call, no redirect followed, an answer with a field it does not know refused, and each refusal classed by what the runner does next. `runner.Secret` prints as its kind and `[redacted]` whatever the verb.
 
 ### Artifacts
 
@@ -130,6 +140,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+- `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
@@ -230,11 +241,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
+- `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
 
 ### Tests
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
+- `agk-runner` has a boundary test over its linked closure (no database, controller, API, secret store or server configuration) and over its symbols, so nothing in it can open an inbound port. A static test holds it to a static ELF for `linux/amd64` and `linux/arm64`.
 - `bus` has a boundary test: no controller, database, API or secret store. `bus/control` runs on a NATS server of its own, since `bus` empties the shared one before each test.
 - `bus/control` expects at the controller every result of the corpus its schema accepts, so a fixture `bus` lists as outgrown needs no second list.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.

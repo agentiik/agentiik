@@ -14,6 +14,16 @@ import (
 // this file adds is the two things the driver has to do with a band, which are the state
 // to report and who the code is charged to.
 
+// ExitContractBroken is the exit code a task is reported with when its container exited 0
+// and what it left broke the output contract, which ErrOutputsRefused marks: an envelope
+// above inline_max_bytes, envelope_max_bytes or max_items, a document that is not an
+// envelope, or a file under /agk/out/files that is not what its entry says, not a file, or
+// above artifact_max_bytes. It is 121, the first of the codes the table reserves for the
+// runner, where a brick "is treated as having failed the contract, whatever its manifest
+// says". The step fails, the failure is the brick's, and no retry policy reaches it, since
+// the band is not one retry.on can name.
+const ExitContractBroken = 121
+
 // exitState is the state a container that exited reports.
 //
 // Exit 0 is succeeded and every other code is failed, with the code carried alongside so
@@ -76,4 +86,17 @@ func exitNote(code int) string {
 	default:
 		return fmt.Sprintf("the container exited %d, which the exit code table has %s: read as an infrastructure failure, charged to the runner and not to the brick", code, band)
 	}
+}
+
+// stoppedNote is what the log says about the code of a container this side stopped, at its
+// deadline or on a stop.
+//
+// The table is not read for it. A container killed at its deadline leaves 137, which the
+// table has among the codes charged to the runtime, and a log that said so would blame the
+// runner for a timeout the step's own timeout decided.
+func stoppedNote(code int, state agk.TaskState) string {
+	if state == agk.TaskTimedOut {
+		return fmt.Sprintf("the container exited %d after it was stopped at its deadline, so the task timed out: the code says how it was stopped and not why", code)
+	}
+	return fmt.Sprintf("the container exited %d after a stop landed, so the task was cancelled: the code says how it was stopped and not why", code)
 }

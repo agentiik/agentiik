@@ -427,3 +427,47 @@ func TestOpenRefusesWhatTheDigestDoesNotDescribe(t *testing.T) {
 		})
 	}
 }
+
+// Describe is how a caller holds what it is about to publish to the size rules before it
+// writes anything, so the entry it answers is the one Put would answer for the same bytes,
+// the media type Put fills in included, and nothing reaches the byte layer.
+func TestDescribeAnswersWhatPutWouldAndWritesNothing(t *testing.T) {
+	objects := newMemory()
+	s, err := artifact.New(objects, "acme", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mediaType := range []string{"text/csv", ""} {
+		described, err := s.Describe(t.Context(), uri("render", "out", "a.csv"), mediaType, strings.NewReader("hello"))
+		if err != nil {
+			t.Fatalf("Describe: %v", err)
+		}
+		if len(objects.writes) != 0 {
+			t.Fatalf("Describe wrote %v, and it writes nothing", objects.writes)
+		}
+		put, err := s.Put(t.Context(), uri("render", "out", "a.csv"), mediaType, strings.NewReader("hello"))
+		if err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		if described != put {
+			t.Errorf("Describe answered %+v and Put %+v for the same bytes", described, put)
+		}
+		objects.writes = nil
+	}
+}
+
+// Above artifact_max_bytes Describe refuses exactly as Put does, so a caller that describes
+// first learns of the refusal before it has written anything at all.
+func TestDescribeRefusesWhatPutWouldRefuse(t *testing.T) {
+	limits := agk.DefaultLimits()
+	limits.ArtifactMaxBytes = 16
+	s, err := artifact.New(newMemory(), "acme", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Describe(t.Context(), uri("render", "out", "big.bin"), "", strings.NewReader(strings.Repeat("x", 1024)))
+	var refusal *agk.Refusal
+	if !errors.As(err, &refusal) || refusal.Rule != agk.RuleArtifactMaxBytes || refusal.Outcome != agk.Fail {
+		t.Errorf("Describe answered %v, and an artifact above artifact_max_bytes is an application failure", err)
+	}
+}
