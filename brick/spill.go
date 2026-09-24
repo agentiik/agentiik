@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -12,6 +13,20 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 )
+
+// Putter is what a spilled value is written through: an *artifact.Store, or anything that
+// answers a write with the files[] entry the store would answer.
+//
+// It is an interface rather than the store itself so that a caller can hold the envelope
+// Spill returns to the size rules before anything reaches the store. A runner refuses an
+// envelope before its first upload, and the entries that envelope carries are the ones the
+// store will answer, so it describes the writes here and makes them once the envelope has
+// passed.
+type Putter interface {
+	Put(ctx context.Context, u agk.URI, mediaType string, r io.Reader) (agk.File, error)
+}
+
+var _ Putter = (*artifact.Store)(nil)
 
 // spilledMediaType is what a spilled value is written as. The artifact holds the JSON
 // encoding of the value that left data, so the media type says JSON whatever the value
@@ -49,7 +64,7 @@ const maxFieldSegment = 64
 //
 // Items and files already carried are left as they are: a files[] entry is already a
 // reference, and nothing is spilled twice.
-func Spill(ctx context.Context, s *artifact.Store, e agk.Envelope, l agk.Limits) (agk.Envelope, error) {
+func Spill(ctx context.Context, s Putter, e agk.Envelope, l agk.Limits) (agk.Envelope, error) {
 	if s == nil {
 		return agk.Envelope{}, errors.New("brick: no artifact store: a value above the threshold is written to one")
 	}
