@@ -162,6 +162,13 @@ func RunnerHeartbeats() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.RunnerHeartbeat })
 }
 
+// LogShipments returns the log shipment corpus: one chunk of a task's log as a runner ships it,
+// and what the API answers, each document the pair, since the answer is where the runner stands
+// after the chunk it sent.
+func LogShipments() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.LogShipment })
+}
+
 // Wire is the schema document every message above is held to.
 func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 
