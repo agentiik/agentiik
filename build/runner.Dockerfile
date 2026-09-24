@@ -32,13 +32,12 @@ ARG TARGETARCH
 RUN apk add --no-cache libcap-setcap
 
 # The agent holds CAP_CHOWN, CAP_FOWNER and CAP_DAC_OVERRIDE as file capabilities, the way the
-# systemd unit gives them with AmbientCapabilities. A container that runs as a user that is not
-# root is given no capability by cap_add, which only keeps them in its bounding set; the file's
-# are what an exec raises within it. Without them the agent refuses a remapped daemon, since it
-# could not own a task's directory inside the range. The effective bit makes the kernel refuse the
-# exec outright where the bounding set lacks one of the three, as cap_drop ALL alone leaves it.
-# no-new-privileges takes nothing away: the runtime has already put the three in the permitted set
-# of the process it execs from, so the file's gain nothing it would refuse.
+# systemd unit gives them with AmbientCapabilities. For a user that is not root, what cap_add
+# grants the runtime's own process is lost at the exec of a program without file capabilities,
+# since the runtime sets no ambient ones; the file's are what the exec keeps, within the bounding
+# set cap_add leaves. Without them the agent refuses a remapped daemon, since it could not own a
+# task's directory inside the range. The effective bit makes the kernel refuse the exec outright
+# where the bounding set lacks one of the three, as cap_drop ALL alone leaves it.
 COPY agk-runner-linux-${TARGETARCH} /out/usr/local/bin/agk-runner
 RUN setcap cap_chown,cap_fowner,cap_dac_override=ep /out/usr/local/bin/agk-runner
 

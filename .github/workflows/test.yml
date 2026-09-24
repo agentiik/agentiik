@@ -171,6 +171,10 @@ jobs:
   # first match and would fail the command writing to it with SIGPIPE.
   runner-image:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # bash with -eo pipefail, which a step that names no shell does not get.
+        shell: bash
     # A serve that starts where it should have been refused runs until it is stopped, and every
     # foreground one below is also held to two minutes.
     timeout-minutes: 20
