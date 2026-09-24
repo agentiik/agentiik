@@ -646,15 +646,22 @@ func taskOf(run agk.RunID, step agk.Step, sh graph.ShardState) db.TaskRow {
 		StartedAt:    sh.StartedAt,
 		FinishedAt:   sh.FinishedAt,
 	}
-	// "ExitCode is read for a task that succeeded or failed and for no other state", which
-	// the column says too: a task stopped at its deadline or by a cancellation decided
-	// nothing and has no code of its own to carry. Nor does a failure that never reached a
+	// A code is written for every ending that carries one. The evaluator reads a code only for a
+	// task that succeeded or failed, since a stop and not the code decided the verdict of one
+	// stopped, but a stopped container exits too: "a timed_out or cancelled task carries an
+	// exit code wherever a container ran", 143 where it obeyed SIGTERM and 137 where it was
+	// killed after the grace, and that is what a person reading the run is owed. A lost task
+	// carries none, because nothing came back. Nor does an ending that never reached a
 	// container, which a runner reports with no exit code at all and the shard holds as 0, the
-	// code of success. So a code is written where a container started, and where the evaluator
-	// gave one to a task it could not build, which is 120 and never 0.
-	if (sh.Task == agk.TaskSucceeded || sh.Task == agk.TaskFailed) && (!sh.StartedAt.IsZero() || sh.ExitCode != 0) {
-		code := sh.ExitCode
-		t.ExitCode = &code
+	// code of success, nor a stopped container its runner reported no code for. So a code is
+	// written where a container started and reported one, and where the evaluator gave one to a
+	// task it could not build, which is 120 and never 0.
+	switch sh.Task {
+	case agk.TaskSucceeded, agk.TaskFailed, agk.TaskTimedOut, agk.TaskCancelled:
+		if (!sh.StartedAt.IsZero() && !sh.NoExitCode) || sh.ExitCode != 0 {
+			code := sh.ExitCode
+			t.ExitCode = &code
+		}
 	}
 	return t
 }

@@ -201,8 +201,13 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	}
 	if e.State.Terminal() {
 		// A run that has ended has nothing to learn. The answer is late rather than
-		// wrong, which a cancelled run and a run that timed out both produce.
-		return nil
+		// wrong, which a cancelled run and a run that timed out both produce. What it still
+		// says is how the container the run's ending stopped exited, which the row it ended
+		// carries no code for: "a timed_out or cancelled task carries an exit code wherever a
+		// container ran". That includes a container that exited on its own as the run
+		// ended, whose runner reports it failed or succeeded: the row keeps the ending the
+		// run wrote, and takes the code.
+		return co.stopCode(ctx, e.Namespace, a, bind)
 	}
 	if a.Result.State == agk.TaskLost {
 		return co.lose(ctx, run, a)
@@ -347,6 +352,24 @@ func unreached(a Answer) bool {
 		a.Result.ExitCode == 0 && len(a.Outputs) == 0
 }
 
+// stopCode writes onto the row of a dispatch a run's ending stopped the exit code its container
+// exited with, where the answer comes from the runner bound to it and reports one.
+//
+// A runner bound by this very answer is not one: an ending that never reached a container has no
+// code, and a host answering from its record answers a requeue, not a container the run stopped.
+// Nor is a loss, which reports no outcome. Which row takes the code is Wide.StopCode's to say: one
+// the run's ending stopped, and only once.
+func (co *Core) stopCode(ctx context.Context, namespace string, a Answer, bind bool) error {
+	r := a.Result
+	if bind || r.State == agk.TaskLost || r.StartedAt.IsZero() || r.NoExitCode {
+		return nil
+	}
+	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.StopCode(ctx, namespace, r.Task, a.Row, a.Runner, r.ExitCode, r.StartedAt)
+		return err
+	})
+}
+
 // isDigest says whether a string is sixty-four lowercase hexadecimal characters, which is what an
 // object key is built from. Anything else is refused before the store is asked.
 func isDigest(s string) bool {
@@ -418,7 +441,7 @@ func shardOf(s *graph.State, step agk.Step, shard agk.Shard) (graph.ShardState, 
 // other row. Who held it is left as the redemption wrote it.
 func passed(run agk.RunID, step agk.Step, before graph.ShardState, r graph.Result) db.TaskRow {
 	ended := before
-	ended.Task, ended.ExitCode = r.State, r.ExitCode
+	ended.Task, ended.ExitCode, ended.NoExitCode = r.State, r.ExitCode, r.NoExitCode
 	if !r.StartedAt.IsZero() {
 		ended.StartedAt = r.StartedAt.UTC()
 	}

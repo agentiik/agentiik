@@ -96,10 +96,12 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.push},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
-		{"GET", "/api/v1/{namespace}/runs",
-			Needs{Permission: RunRead, Scope: Namespace}, s.list},
+		// The run by the path a Location names it by, authorised over its own workflow
+		// rather than over the namespace, so that run:read held on that workflow alone reads
+		// it and a deny of run:read on that workflow refuses it: "a workflow-scope grant only
+		// adds; only an explicit deny removes, and it wins over any allow at any scope".
 		{"GET", "/api/v1/{namespace}/runs/{run}",
-			Needs{Permission: RunRead, Scope: Namespace, Reveals: RunReadData}, s.detail},
+			OnRun{Permission: RunRead, Reveals: RunReadData}, s.detail},
 		{"POST", "/api/v1/runs/{run}/cancel",
 			OnRun{Permission: WorkflowRun}, s.cancel},
 		// The run by its identifier alone, which is all a push notification carries, read
@@ -115,8 +117,12 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 			return nil, err
 		}
 	}
-	if err := rt.HandleAcross("GET", "/api/v1/runs", Across{Permission: RunRead}, s.across); err != nil {
-		return nil, err
+	// One namespace's runs are the listing across the installation narrowed to it, asked about
+	// one workflow at a time for the reason the run is authorised over its own.
+	for _, pattern := range []string{"/api/v1/{namespace}/runs", "/api/v1/runs"} {
+		if err := rt.HandleAcross("GET", pattern, Across{Permission: RunRead}, s.across); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -791,25 +797,6 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 	write(w, http.StatusAccepted, map[string]any{
 		"run": string(run), "state": agk.Queued.String(),
 	})
-}
-
-func (s *Server) list(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
-	q := db.RunQuery{
-		Workflow: r.URL.Query().Get("workflow"),
-		State:    r.URL.Query().Get("state"),
-		Limit:    intOr(r.URL.Query().Get("limit"), 50),
-	}
-	var runs []db.RunSummary
-	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		var err error
-		runs, err = ns.Runs(ctx, q)
-		return err
-	})
-	if err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	write(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 // detail answers one run: "run state, per-step state, envelope digests" to whoever holds

@@ -483,8 +483,12 @@ func TestProgressNoDeliveryWouldChangeIsTakenOffAndReported(t *testing.T) {
 	_, moved := hearing(t, New(b), func(controller.Answer) error { return nil }, func(p controller.Progress) error {
 		return fmt.Errorf("%w: %w: %s is bound to runner-lan-01", controller.ErrNotAResult, controller.ErrNotTheHolder, p.Task)
 	})
+	// Both refusals are said and the refused message is heard once before the quiet spell
+	// starts: a select picks among ready channels at random, so the two cannot be read in the
+	// order they happened, and ending on the refusals alone would leave the one delivery
+	// unread and take it for a second.
 	heard := 0
-	for said := 0; said < 2; {
+	for said := 0; said < 2 || heard < 1; {
 		select {
 		case err := <-trouble:
 			if !errors.Is(err, controller.ErrNotAResult) || !errors.Is(err, controller.ErrNotTheHolder) {
@@ -499,7 +503,7 @@ func TestProgressNoDeliveryWouldChangeIsTakenOffAndReported(t *testing.T) {
 				t.Fatalf("progress the controller refused was delivered again: %+v", p)
 			}
 		case <-time.After(15 * time.Second):
-			t.Fatalf("%d refusals were said, of two", said)
+			t.Fatalf("%d refusals were said, of two, and the refused progress was heard %d times, of one", said, heard)
 		}
 	}
 	select {

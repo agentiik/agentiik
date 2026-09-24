@@ -36,19 +36,25 @@ import (
 // in the meantime stays fetchable through it until then, and never longer.
 const artifactURLLifetime = 5 * time.Minute
 
-// across lists the runs of every workflow its caller holds run:read on, newest first.
+// across lists the runs of every workflow its caller holds run:read on, newest first, across the
+// installation or, under GET /api/v1/{ns}/runs, across the namespace the path names.
 //
 // The filters narrow what is asked about rather than what is answered: a namespace or a workflow
 // the caller cannot read lists nothing, which is what one that does not exist lists, so a listing
 // is no way of learning which exist. Each workflow is asked about in turn, because a permission is
-// held on a whole namespace or on a single workflow and asking about the workflow answers both.
-func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, holds Holds) {
+// held on a whole namespace or on a single workflow and asking about the workflow answers both, a
+// deny on it included. Under a namespace's path, a namespace in the query is not read: the path's
+// is the only one its Holds answers about.
+func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, within Target, holds Holds) {
 	q, err := runQuery(r)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	namespace, workflow := r.URL.Query().Get("namespace"), r.URL.Query().Get("workflow")
+	if within.Namespace != "" {
+		namespace = within.Namespace
+	}
 	if !storable(namespace) || !storable(workflow) {
 		// No namespace or workflow is named with bytes PostgreSQL cannot hold, so the
 		// filter names nothing, and nothing is what it lists.

@@ -489,10 +489,10 @@ func TestALostTaskTakesANewRowUnderItsKey(t *testing.T) {
 	}
 }
 
-// An exit code is read off a container that decided something. A task stopped at its
-// deadline or by a cancellation decided nothing, and a row claiming both would be a row
-// the retry policy reads backwards.
-func TestOnlyATaskThatRanCarriesAnExitCode(t *testing.T) {
+// An exit code is read off a container that exited, and a stopped one exits too: "a
+// timed_out or cancelled task carries an exit code wherever a container ran". A lost task
+// has no outcome to report, and a row claiming one would be inventing it.
+func TestOnlyATaskWhoseContainerExitedCarriesAnExitCode(t *testing.T) {
 	super, app := database(t)
 	seed(t, super)
 
@@ -519,9 +519,10 @@ func TestOnlyATaskThatRanCarriesAnExitCode(t *testing.T) {
 	}{
 		{"failed", 108, true},
 		{"succeeded", 0, true},
-		{"timed_out", 137, false},
-		{"cancelled", 143, false},
+		{"timed_out", 137, true},
+		{"cancelled", 143, true},
 		{"lost", 1, false},
+		{"dispatched", 0, false},
 	} {
 		// A task identifier of the right alphabet, one per case, so that a refusal is
 		// the check constraint and never a collision on the primary key.
@@ -536,8 +537,10 @@ func TestOnlyATaskThatRanCarriesAnExitCode(t *testing.T) {
 		if c.allowed && err != nil {
 			t.Errorf("a %s task could not carry an exit code: %s", c.state, err)
 		}
-		if !c.allowed && err == nil {
-			t.Errorf("a %s task carried exit code %d, and nothing decided it", c.state, c.code)
+		// Refused by the rule on exit codes and by nothing else, so that a row refused for
+		// another reason does not pass for this one.
+		if !c.allowed && (err == nil || !strings.Contains(err.Error(), "tasks_exit_code_check")) {
+			t.Errorf("a %s task carrying exit code %d was answered %v, and nothing reported one", c.state, c.code, err)
 		}
 	}
 }
