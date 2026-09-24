@@ -196,9 +196,9 @@
 // LoadPolicy is offered for the caller that does have the file, so that there is one
 // reader of that format and not two. It reads every setting an operator owns about the
 // host, strictly: a key it does not read, a key in another case and a value of the wrong
-// type are each refused, naming the line where it has one, and [hooks] is read past until
-// the hooks arrive. It reads the seccomp profile the file names, too, because the Engine
-// API takes the profile's JSON and never a path.
+// type are each refused, naming the line where it has one, and [hooks] is held to its
+// three keys and runs nothing until the hooks arrive. It reads the seccomp profile the file
+// names, too, because the Engine API takes the profile's JSON and never a path.
 //
 // # What leaves through the observer
 //

@@ -104,10 +104,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has ended is refused with a `driver.Completed` holding that ending, so a runner answers a requeue that comes back to it without running the brick again.
 - A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
-- `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written. `[hooks]` is read past until v0.9.0, and the driver says so.
+- `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
 - A runner refuses a daemon that applies no seccomp profile with `driver.ErrSeccompRequired`, and no setting lifts it; `agk run --local`, `agk validate` and `agk brick test` say so instead. A daemon with neither AppArmor nor SELinux is taken and said out loud, and a profile or label it would ignore is refused.
 - A `seccomp_profile` that cannot be read refuses the file without wrapping `fs.ErrNotExist`, which says there is no `runner.toml` and has its caller drop every setting.
+- `[hooks]` is held to `timeout`, `pre_task` and `post_task` and runs nothing until v0.9.0, and the driver says so. A setting written below its header, which TOML puts inside it, is refused and told to move above it rather than dropped.
 
 ### API
 

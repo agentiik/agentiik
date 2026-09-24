@@ -197,11 +197,11 @@ type Policy struct {
 	// none to offer, which binds nothing.
 	Helper string
 
-	// HooksSkipped says the file carries a [hooks] table, which this version reads
-	// past and runs none of: the hooks of #runner-side-hooks arrive in v0.9.0. It is
-	// kept so that the driver can say so once, because an operator who wrote a pre_task
-	// that attaches a licence, or a post_task that wipes a scratch disk, is relying on
-	// it having run.
+	// HooksSkipped says the file carries a [hooks] table, which this version reads and
+	// runs none of: the hooks of #runner-side-hooks arrive in v0.9.0. It is kept so
+	// that the driver can say so once, because an operator who wrote a pre_task that
+	// attaches a licence, or a post_task that wipes a scratch disk, is relying on it
+	// having run.
 	HooksSkipped bool
 }
 
@@ -274,9 +274,13 @@ func defaultSecretsDir() string {
 // regard to case and Require_Userns_Remap would otherwise lift the floor under a name the
 // documentation never wrote.
 //
-// The one table read past is [hooks]. The hooks of #runner-side-hooks arrive in v0.9.0,
-// and a file already written for them is not refused by the version before them;
-// HooksSkipped says it was there, so that the driver can say none of it runs.
+// [hooks] is read as strictly as the rest and run not at all. The hooks of
+// #runner-side-hooks arrive in v0.9.0, and a file already written for them is not refused
+// by the version before them; HooksSkipped says it was there, so that the driver can say
+// none of it runs. It is still held to the three keys the documentation writes, because
+// TOML puts every key after a table's header inside that table: a seccomp_profile written
+// below [hooks] is a key of [hooks], and a table taking any key would drop it without a
+// word.
 //
 // A key the file leaves out keeps its value from DefaultPolicy, and require_userns_remap
 // in particular keeps the floor: an absent line is not a decision.
@@ -358,10 +362,15 @@ type runnerFile struct {
 	LogMaxLines        *int64       `toml:"log_max_lines"`
 	Ulimits            *fileUlimits `toml:"ulimits"`
 
-	// Hooks is declared so that the strict pass takes [hooks] as a table rather than
-	// as keys nobody declared, and still refuses hooks = 3 as the wrong type. What is
-	// in it is not read.
-	Hooks map[string]any `toml:"hooks"`
+	// Hooks is declared key by key so that the strict pass holds [hooks] to what the
+	// documentation writes in it. What is in it is not run.
+	Hooks *fileHooks `toml:"hooks"`
+}
+
+type fileHooks struct {
+	Timeout  *string   `toml:"timeout"`
+	PreTask  *[]string `toml:"pre_task"`
+	PostTask *[]string `toml:"post_task"`
 }
 
 type fileUlimits struct {
@@ -403,12 +412,15 @@ var fileKeys = map[string]string{
 	"ulimits.nproc":        "a table of soft and hard, such as { soft = 256, hard = 256 }",
 	"ulimits.nproc.soft":   "a whole number above zero",
 	"ulimits.nproc.hard":   "a whole number above zero, and no lower than soft",
-	"hooks":                "a table, which this version reads past",
+	"hooks":                "a table of timeout, pre_task and post_task, which this version reads and runs none of",
+	"hooks.timeout":        `a duration in quotation marks, such as "30s"`,
+	"hooks.pre_task":       `a list of commands in quotation marks, such as ["nvidia-smi -L"]`,
+	"hooks.post_task":      `a list of commands in quotation marks, such as ["nvidia-smi -L"]`,
 }
 
 // keysInOrder is what a refusal of an unknown key lists, in the order the reference
 // table on the page gives them.
-const keysInOrder = "require_userns_remap, secrets_dir, stop_grace, helper, seccomp_profile, apparmor_profile, selinux_label, allow_cap_add, pids_limit, memory_cap, cpu_cap, tmp_size, log_max_bytes, log_max_lines, [ulimits] with nofile and nproc, each a table of soft and hard, and [hooks]"
+const keysInOrder = "require_userns_remap, secrets_dir, stop_grace, helper, seccomp_profile, apparmor_profile, selinux_label, allow_cap_add, pids_limit, memory_cap, cpu_cap, tmp_size, log_max_bytes, log_max_lines, [ulimits] with nofile and nproc, each a table of soft and hard, and [hooks] with timeout, pre_task and post_task"
 
 // notTOML refuses a file the first pass could not read as a document at all.
 func notTOML(path string, err error) error {
@@ -434,7 +446,7 @@ func misshapen(path string, err error) error {
 		if len(unknown) > 1 {
 			verb = "are not settings"
 		}
-		return fmt.Errorf("%s: %s %s this runner reads. A key it does not read is refused rather than ignored, because a misspelled setting would otherwise leave its default in force without a word. The settings are %s", path, andList(unknown), verb, keysInOrder)
+		return fmt.Errorf("%s: %s %s this runner reads.%s A key it does not read is refused rather than ignored, because a misspelled setting would otherwise leave its default in force without a word. The settings are %s", path, andList(unknown), verb, belowAHeader(missing), keysInOrder)
 	}
 	var de *toml.DecodeError
 	if errors.As(err, &de) {
@@ -446,6 +458,36 @@ func misshapen(path string, err error) error {
 		return fmt.Errorf("%s line %d: %s", path, line, strings.TrimPrefix(de.Error(), "toml: "))
 	}
 	return fmt.Errorf("%s: %w", path, err)
+}
+
+// belowAHeader explains the one refusal of an unknown key that is not a misspelling: a
+// setting of the runner written after a table's header, which TOML reads as a key of that
+// table. No setting shares its name with a key of a table, so a name that matches a
+// setting once its table is taken off is one that was meant to be above the table.
+func belowAHeader(missing *toml.StrictMissingError) string {
+	var settings, tables []string
+	for _, e := range missing.Errors {
+		key := e.Key()
+		if len(key) < 2 {
+			continue
+		}
+		setting := key[len(key)-1]
+		if _, ok := fileKeys[setting]; !ok {
+			continue
+		}
+		settings = append(settings, setting)
+		if table := "[" + strings.Join(key[:len(key)-1], ".") + "]"; !slices.Contains(tables, table) {
+			tables = append(tables, table)
+		}
+	}
+	if len(settings) == 0 {
+		return ""
+	}
+	verb := "is a setting"
+	if len(settings) > 1 {
+		verb = "are settings"
+	}
+	return fmt.Sprintf(" %s %s of the runner written below the header of %s, and TOML puts every key after a table's header inside that table, so a setting of the runner goes above the first table of the file.", andList(settings), verb, andList(tables))
 }
 
 // exactKeys holds every key of the document to its spelling.
@@ -464,9 +506,6 @@ func exactKeys(path string, raw map[string]any, table string) error {
 		dotted := key
 		if table != "" {
 			dotted = table + "." + key
-		}
-		if dotted == "hooks" {
-			continue
 		}
 		if _, ok := fileKeys[dotted]; !ok {
 			return fmt.Errorf("%s: %s is spelled %s. A key is read exactly as the documentation writes it, and one spelled otherwise is refused rather than guessed at", path, dotted, spelling(dotted))

@@ -406,17 +406,14 @@ func TestLoadPolicyReadsTheSeccompProfileItNames(t *testing.T) {
 	}
 }
 
-// [hooks] is the one table read past. The hooks arrive in v0.9.0, and a file already
-// written for them, arrays, a nested table and a require_userns_remap under the table
-// among them, is neither refused nor read: a key under [hooks] is a hook's, never the
-// runner's, whatever it is called.
-func TestLoadPolicySkipsTheHooksTable(t *testing.T) {
+// [hooks] runs nothing until v0.9.0, and a file already written for the hooks, the
+// documentation's own example among them, is neither refused nor run.
+func TestLoadPolicyReadsTheHooksTableAndRunsNothing(t *testing.T) {
 	p, err := LoadPolicy(writePolicyFile(t, `
 pids_limit = 300
 
 [hooks]
 timeout = "30s"
-require_userns_remap = false
 
 # before the container is created, after the image is resolved
 pre_task = [
@@ -424,22 +421,17 @@ pre_task = [
   "nvidia-smi -L > /dev/null",
 ]
 
+# after the container is destroyed, whatever the verdict
 post_task = [
   "/usr/local/sbin/release-licence --slot $AGK_TASK_ID",
   "find $AGK_WORKDIR -mindepth 1 -delete",
 ]
-
-[hooks.v0_9_0]
-anything = { at = "all" }
 `))
 	if err != nil {
 		t.Fatalf("a file carrying the documentation's own [hooks] table was refused: %s", err)
 	}
 	if !p.HooksSkipped {
-		t.Fatalf("the [hooks] table was read past without saying so")
-	}
-	if p.RequireUsernsRemap.Lifted() {
-		t.Fatalf("a require_userns_remap under [hooks] lifted the floor of the runner")
+		t.Fatalf("the [hooks] table was read without saying none of it runs")
 	}
 	if p.PidsLimit != 300 {
 		t.Fatalf("the settings before [hooks] were not read: pids_limit is %d", p.PidsLimit)
@@ -452,6 +444,63 @@ anything = { at = "all" }
 	}
 	if !p.HooksSkipped {
 		t.Fatalf("an empty [hooks] table was not noticed")
+	}
+}
+
+// TOML puts every key after a table's header inside that table, so a setting appended
+// below the [hooks] the documentation's example ends with is a key of [hooks]. Taken as a
+// hook's, it would be dropped: a runner starting green with none of the confinement its
+// operator believes is in force. It is refused, and the refusal says where it belongs.
+func TestLoadPolicyRefusesASettingWrittenBelowTheHooksHeader(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want []string
+	}{
+		{
+			"[hooks]\ntimeout = \"30s\"\npre_task = [\"nvidia-smi -L\"]\nmemory_cap = \"8Gi\"\napparmor_profile = \"agentiik-brick\"\n",
+			[]string{"hooks.memory_cap on line 4 and hooks.apparmor_profile on line 5", "memory_cap and apparmor_profile are settings of the runner written below the header of [hooks]", "above the first table"},
+		},
+		{
+			"[hooks]\nrequire_userns_remap = false\n",
+			[]string{"hooks.require_userns_remap on line 2", "require_userns_remap is a setting of the runner written below the header of [hooks]"},
+		},
+		{
+			"[ulimits]\nnofile = { soft = 1, hard = 2 }\npids_limit = 64\n",
+			[]string{"ulimits.pids_limit on line 3", "pids_limit is a setting of the runner written below the header of [ulimits]"},
+		},
+		// A key no hook has is refused as any other is, and is not taken for a setting.
+		{"[hooks]\npids_limt = 64\n", []string{"hooks.pids_limt on line 2", "is not a setting"}},
+		{"[hooks]\npre_tasks = []\n", []string{"hooks.pre_tasks on line 2"}},
+		{"[hooks.v0_9_0]\nanything = { at = \"all\" }\n", []string{"hooks.v0_9_0"}},
+	} {
+		p, err := LoadPolicy(writePolicyFile(t, c.body))
+		if err == nil {
+			t.Fatalf("%q was accepted", c.body)
+		}
+		for _, want := range c.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal of %q does not say %q: %s", c.body, want, err)
+			}
+		}
+		if strings.Contains(c.body, "pids_limt") && strings.Contains(err.Error(), "written below the header") {
+			t.Errorf("a misspelling under [hooks] was taken for a setting written below it: %s", err)
+		}
+		if p.RequireUsernsRemap.Lifted() {
+			t.Errorf("%q came back with a lifted floor", c.body)
+		}
+	}
+}
+
+// A key of [hooks] is held to its type, as a setting is, though none of it runs.
+func TestLoadPolicyHoldsAHookToItsType(t *testing.T) {
+	for _, c := range []struct{ body, want string }{
+		{"[hooks]\ntimeout = 30\n", "line 2: hooks.timeout is a duration in quotation marks"},
+		{"[hooks]\npre_task = \"nvidia-smi -L\"\n", "line 2: hooks.pre_task is a list of commands"},
+		{"[hooks]\npost_task = [1]\n", "line 2: hooks.post_task is a list of commands"},
+	} {
+		if _, err := LoadPolicy(writePolicyFile(t, c.body)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("the refusal of %q does not say %q: %v", c.body, c.want, err)
+		}
 	}
 }
 
