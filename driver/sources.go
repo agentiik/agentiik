@@ -13,9 +13,10 @@ import (
 // to the input envelopes and artifacts, the secret values and one upload policy", and every
 // one of those belongs to the task whose grant was redeemed: the URLs and the policy expire
 // with its deadline and are bound to its run, and the values are the ones its namespace
-// declared. Config's hooks are asked once per daemon, by namespace or by name, so a runner
-// holding two redemptions at once, two tasks from two namespaces that both name billing, has
-// no way through them to say which task a value is asked for.
+// declared. Config's hooks are given once per daemon and asked on every Run, concurrently, by
+// namespace or by name alone, so a runner holding two redemptions at once, two tasks from two
+// namespaces that both name billing, has no way through them to say which task a value is
+// asked for.
 //
 // Sources travels on the context of one call to Run, through WithSources, rather than in the
 // Task or in a wider Run. graph.Driver is the evaluator's contract and a Task "carries no
