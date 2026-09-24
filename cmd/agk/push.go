@@ -176,7 +176,14 @@ func push(ctx context.Context, e Env, args []string) int {
 	name := string(wf.Metadata.Name)
 	url := fmt.Sprintf("%s/api/v1/%s/workflows/%s/versions/%s",
 		strings.TrimRight(where, "/"), *namespace, name, sha)
-	if err := put(ctx, url, token, body); err != nil {
+	pushed, err := put(ctx, url, token, body)
+	if errors.Is(err, errAnswerUnread) {
+		// Recorded, and what it records is what cannot be said, which is no outcome
+		// rather than a refusal.
+		fmt.Fprintf(e.Err, "%s\n", err)
+		return exitNoOutcome
+	}
+	if err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
 		return exitRefused
 	}
@@ -188,6 +195,23 @@ func push(ctx context.Context, e Env, args []string) int {
 		counted(len(captured.Includes), "included file", "included files"),
 		counted(len(captured.Manifests), "manifest", "manifests"),
 		counted(len(images), "tag resolved to its digest", "tags resolved to their digests"))
+
+	// A commit pushed before is the version its first push recorded, digests included, so a
+	// tag that has moved since was resolved here to something no run of it will name. Said,
+	// because the lines above say it was resolved, and somebody pushing again to pick up an
+	// image they fixed under the same tag would otherwise believe it was picked up. A
+	// version recorded naming a tag itself, before digests were kept, holds none for it.
+	for _, tag := range slices.Sorted(maps.Keys(images)) {
+		held, recorded := pushed.Images[tag]
+		if held == images[tag] {
+			continue
+		}
+		if !recorded {
+			held = "written"
+		}
+		fmt.Fprintf(e.Err, "%s/%s@%s was already pushed, with %s as %s, and every run of it keeps that rather than %s: the first push of a commit settles its images, so running what the tag names now takes a new commit\n",
+			*namespace, name, short(sha), tag, held, images[tag])
+	}
 	return exitSucceeded
 }
 
@@ -626,26 +650,35 @@ func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
 	return wf, nil
 }
 
-// put sends the version and reads whatever the server says about it.
-func put(ctx context.Context, url, token string, body api.Push) error {
+// errAnswerUnread is a version the installation recorded and whose answer could not be read, so
+// what it records, which is not always what was pushed, cannot be said.
+var errAnswerUnread = errors.New("the installation recorded the version, and its answer saying which image digests it records could not be read")
+
+// put sends the version and reads whatever the server says about it: what the version records,
+// or why it was refused.
+func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("the version could not be written: %w", err)
+		return api.Pushed{}, fmt.Errorf("the version could not be written: %w", err)
 	}
 	r, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(encoded))
 	if err != nil {
-		return fmt.Errorf("%s: %w", url, err)
+		return api.Pushed{}, fmt.Errorf("%s: %w", url, err)
 	}
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("Content-Type", "application/json")
 
 	answer, err := (&http.Client{Timeout: 2 * time.Minute}).Do(r)
 	if err != nil {
-		return fmt.Errorf("%s could not be reached: %w", url, err)
+		return api.Pushed{}, fmt.Errorf("%s could not be reached: %w", url, err)
 	}
 	defer answer.Body.Close()
 	if answer.StatusCode == http.StatusOK {
-		return nil
+		var pushed api.Pushed
+		if err := json.NewDecoder(answer.Body).Decode(&pushed); err != nil {
+			return api.Pushed{}, fmt.Errorf("%w: %v", errAnswerUnread, err)
+		}
+		return pushed, nil
 	}
 
 	var said struct {
@@ -657,14 +690,14 @@ func put(ctx context.Context, url, token string, body api.Push) error {
 	}
 	switch answer.StatusCode {
 	case http.StatusUnauthorized:
-		return fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
+		return api.Pushed{}, fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
 	case http.StatusNotFound:
 		// The same answer an inaccessible workflow gets, which is the point: there is
 		// nothing here to tell the two apart with, and saying so is more honest than
 		// guessing.
-		return fmt.Errorf("no such namespace or workflow, or not yours")
+		return api.Pushed{}, fmt.Errorf("no such namespace or workflow, or not yours")
 	}
-	return fmt.Errorf("the installation refused the version: %s", said.Error)
+	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.Error)
 }
 
 // commitOf is the commit a push names, as the whole hash git holds it under.

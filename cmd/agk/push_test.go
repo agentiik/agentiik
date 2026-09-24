@@ -121,10 +121,22 @@ func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, strin
 			w.Write([]byte(`{"error":"the installation said no"}`))
 			return
 		}
-		w.Write([]byte(`{"commit":"x"}`))
+		// What the installation answers a version it did not hold before: the images it
+		// records are the ones the push carried.
+		images := p.Images
+		if images == nil {
+			images = map[string]string{}
+		}
+		json.NewEncoder(w).Encode(api.Pushed{Namespace: "finance", Workflow: "monthly-invoicing", Commit: "x", Images: images})
 	}))
 	t.Cleanup(server.Close)
 
+	code, out, errs := pushAgainst(dir, server.URL, args...)
+	return code, out, errs, got, path
+}
+
+// pushAgainst runs the command against the installation at url, and answers what it said.
+func pushAgainst(dir, url string, args ...string) (int, string, string) {
 	out, errs := &strings.Builder{}, &strings.Builder{}
 	e := Env{
 		Out: out, Err: errs, Dir: dir,
@@ -133,13 +145,13 @@ func pushingTo(t *testing.T, dir string, answer int, args ...string) (int, strin
 			case tokenVariable:
 				return "the-token"
 			case serverVariable:
-				return server.URL
+				return url
 			}
 			return ""
 		},
 	}
 	code := push(context.Background(), e, append([]string{"--namespace", "finance"}, args...))
-	return code, out.String(), errs.String(), got, path
+	return code, out.String(), errs.String()
 }
 
 // The ordinary path: a clean tree, and what arrives is what the version is.
@@ -1070,6 +1082,50 @@ func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
 			t.Errorf("the push does not say %q: %s", line, out)
 		}
 	}
+	if strings.Contains(errs, "already pushed") {
+		t.Errorf("a version recording what was pushed is said to keep something else: %s", errs)
+	}
+}
+
+// The installation answers with what the version records, and agk push says where that is not
+// what it resolved: a digest the first push of the commit settled, or none at all for a version
+// recorded naming the tag itself before digests were kept. The push is still exit 0, since the
+// version it names is the one recorded.
+func TestAPushSaysWhereItsVersionKeepsAnotherImage(t *testing.T) {
+	const kept = "ghcr.io/acme/agk-invoice@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest},
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(api.Pushed{Images: map[string]string{"ghcr.io/acme/agk-invoice:1.4.0": kept}})
+	}))
+	t.Cleanup(server.Close)
+
+	code, out, errs := pushAgainst(dir, server.URL)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	var said []string
+	for _, line := range strings.Split(errs, "\n") {
+		if strings.Contains(line, "already pushed") {
+			said = append(said, line)
+		}
+	}
+	if len(said) != 2 {
+		t.Fatalf("the push says of %d images that the version keeps another, want 2: %s", len(said), errs)
+	}
+	for i, want := range [][]string{
+		{"alpine:3.21 as written", "alpine@" + alpineDigest},
+		{"ghcr.io/acme/agk-invoice:1.4.0 as " + kept, "ghcr.io/acme/agk-invoice@" + invoiceDigest},
+	} {
+		for _, w := range want {
+			if !strings.Contains(said[i], w) {
+				t.Errorf("the push does not say %q: %s", w, said[i])
+			}
+		}
+	}
 }
 
 // Each manifest is read out of the digest its tag was resolved to, and never out of the tag, so a
@@ -1100,6 +1156,25 @@ func TestAManifestIsReadOutOfTheDigestItsTagWasResolvedTo(t *testing.T) {
 	}
 	if m.Metadata.Version != "1.4.0" {
 		t.Errorf("the version names %s with the manifest of %s %s, the image the tag moved to", got.Images[tag], m.Metadata.Name, m.Metadata.Version)
+	}
+}
+
+// A version the installation recorded and whose answer cannot be read is exit 4 and not exit 1: it
+// was not refused, and which digests it records, which a commit pushed before makes other than the
+// ones resolved here, is what cannot be said.
+func TestAnAnswerThatCannotBeReadIsNoOutcome(t *testing.T) {
+	dir := repository(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("<html>recorded</html>"))
+	}))
+	t.Cleanup(server.Close)
+
+	code, out, errs := pushAgainst(dir, server.URL)
+	if code != exitNoOutcome {
+		t.Errorf("a push whose answer could not be read answered %d: %s%s", code, out, errs)
+	}
+	if !strings.Contains(errs, "recorded the version") || strings.Contains(out, "pushed to") {
+		t.Errorf("the push does not say that the version was recorded and its answer unread: %s%s", out, errs)
 	}
 }
 
