@@ -164,6 +164,10 @@ func New(cfg Config) (*Docker, error) {
 		cli.Close()
 		return nil, err
 	}
+	if err := readCapacity(info, cfg.Policy); err != nil {
+		cli.Close()
+		return nil, err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Docker{

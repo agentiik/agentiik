@@ -110,6 +110,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A `seccomp_profile` that cannot be read refuses the file without wrapping `fs.ErrNotExist`, which says there is no `runner.toml` and has its caller drop every setting.
 - `[hooks]` is held to `timeout`, `pre_task` and `post_task` and runs nothing until v0.9.0, and the driver says so. A setting written below its header, which TOML puts inside it, is refused and told to move above it rather than dropped.
 - A `seccomp_profile` that lets every system call through, or names an action seccomp does not have, is refused, and a `Policy.Seccomp` that filters nothing counts as no profile under the floor. `selinux_label` refuses the unconfined types `spc_t`, `unconfined_t` and `container_runtime_t` as it refuses `disable`.
+- A cap the daemon would refuse for every step naming no resources is refused before any container exists: a `memory_cap` under 6Mi or a `cpu_cap` under 0.01 by `LoadPolicy`, and a `cpu_cap` above the daemon's CPUs by `New`. A hard `nofile` above 1048576, the kernel's default `fs.nr_open`, is refused too.
 
 ### API
 

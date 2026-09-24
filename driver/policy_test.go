@@ -264,8 +264,8 @@ func TestLoadPolicyRefusesAWrongType(t *testing.T) {
 		{"require_userns_remap = 0\n", "line 1: require_userns_remap is true or false"},
 		{"\npids_limit = \"many\"\n", "line 2: pids_limit is a whole number above zero"},
 		{"pids_limit = 2.5\n", "line 1: pids_limit is a whole number above zero"},
-		{"memory_cap = 8589934592\n", "line 1: memory_cap is a whole number above zero with a binary suffix"},
-		{"cpu_cap = 4\n", "line 1: cpu_cap is a number of cores above zero in quotation marks"},
+		{"memory_cap = 8589934592\n", "line 1: memory_cap is a whole number of at least 6Mi with a binary suffix"},
+		{"cpu_cap = 4\n", "line 1: cpu_cap is a number of cores of at least 0.01 in quotation marks"},
 		{"allow_cap_add = \"NET_ADMIN\"\n", "line 1: allow_cap_add is a list of capability names"},
 		{"allow_cap_add = [\"NET_ADMIN\", 1]\n", "line 1: allow_cap_add is a list of capability names"},
 		{"[ulimits]\nnofile = 4096\n", "line 2: ulimits.nofile is a table of soft and hard"},
@@ -335,6 +335,12 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		{"memory_cap = \"+8Gi\"\n", `memory_cap is "+8Gi"`},
 		{"memory_cap = \"99999999999Ti\"\n", `memory_cap is "99999999999Ti"`},
 		{"tmp_size = \"64MB\"\n", `tmp_size is "64MB"`},
+		// The daemon's own least: a cap is what a step naming no resources gets, and
+		// one under it fails every such step.
+		{"memory_cap = \"4Mi\"\n", `memory_cap is "4Mi"`},
+		{"memory_cap = \"6143Ki\"\n", "of at least 6Mi"},
+		{"cpu_cap = \"0.005\"\n", `cpu_cap is "0.005"`},
+		{"cpu_cap = \"0.001\"\n", "of at least 0.01"},
 		{"cpu_cap = \"0\"\n", `cpu_cap is "0"`},
 		{"cpu_cap = \"Inf\"\n", `cpu_cap is "Inf"`},
 		{"cpu_cap = \"1e3\"\n", `cpu_cap is "1e3"`},
@@ -356,6 +362,8 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		{"[ulimits]\nnproc = { hard = 10 }\n", "hard alone"},
 		{"[ulimits]\nnofile = { soft = 0, hard = 10 }\n", "ulimits.nofile.soft is 0"},
 		{"[ulimits]\nnofile = { soft = 20, hard = 10 }\n", "ulimits.nofile.hard is 10"},
+		// Above the kernel's default fs.nr_open, every container fails as it starts.
+		{"[ulimits]\nnofile = { soft = 1024, hard = 2000000 }\n", "ulimits.nofile.hard is 2000000 in"},
 		{"seccomp_profile = \"seccomp.json\"\n", `seccomp_profile is "seccomp.json"`},
 	} {
 		path := writePolicyFile(t, c.body)
@@ -369,6 +377,22 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		if p.RequireUsernsRemap.Lifted() {
 			t.Errorf("a refused file came back with a lifted floor")
 		}
+	}
+}
+
+// The least a cap may be and the most nofile may be are the daemon's and the kernel's own
+// figures, and each is taken exactly.
+func TestLoadPolicyTakesTheBoundsItHoldsTo(t *testing.T) {
+	p, err := LoadPolicy(writePolicyFile(t, "memory_cap = \"6Mi\"\ncpu_cap = \"0.01\"\n\n[ulimits]\nnofile = { soft = 1048576, hard = 1048576 }\n"))
+	if err != nil {
+		t.Fatalf("the bounds themselves were refused: %s", err)
+	}
+	if p.MemoryCap != 6<<20 || p.CPUCap != 0.01 || p.Ulimits.NoFile.Hard != 1<<20 {
+		t.Fatalf("the bounds were read as %d, %v and %d", p.MemoryCap, p.CPUCap, p.Ulimits.NoFile.Hard)
+	}
+	// nproc has no ceiling of the kernel's to be held to.
+	if _, err := LoadPolicy(writePolicyFile(t, "[ulimits]\nnproc = { soft = 4096, hard = 2000000 }\n")); err != nil {
+		t.Fatalf("an nproc above nofile's ceiling was refused: %s", err)
 	}
 }
 

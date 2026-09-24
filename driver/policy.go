@@ -400,15 +400,15 @@ var fileKeys = map[string]string{
 	"selinux_label":        `one SELinux label option in quotation marks, user, role, type, level or filetype, a colon and a value, such as "level:s0:c100,c200"`,
 	"allow_cap_add":        `a list of capability names in capitals and without the CAP_ prefix, such as ["NET_BIND_SERVICE"]`,
 	"pids_limit":           "a whole number above zero, such as 256",
-	"memory_cap":           `a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, in quotation marks, such as "8Gi"`,
-	"cpu_cap":              `a number of cores above zero in quotation marks, such as "4" or "0.5"`,
+	"memory_cap":           `a whole number of at least 6Mi with a binary suffix, Ki, Mi, Gi or Ti, in quotation marks, such as "8Gi"`,
+	"cpu_cap":              `a number of cores of at least 0.01 in quotation marks, such as "4" or "0.5"`,
 	"tmp_size":             `a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, in quotation marks, such as "64Mi"`,
 	"log_max_bytes":        "a whole number of bytes above zero, such as 4194304",
 	"log_max_lines":        "a whole number above zero, such as 50000",
 	"ulimits":              "a table holding nofile and nproc",
 	"ulimits.nofile":       "a table of soft and hard, such as { soft = 1024, hard = 4096 }",
 	"ulimits.nofile.soft":  "a whole number above zero",
-	"ulimits.nofile.hard":  "a whole number above zero, and no lower than soft",
+	"ulimits.nofile.hard":  "a whole number no lower than soft and no higher than 1048576",
 	"ulimits.nproc":        "a table of soft and hard, such as { soft = 256, hard = 256 }",
 	"ulimits.nproc.soft":   "a whole number above zero",
 	"ulimits.nproc.hard":   "a whole number above zero, and no lower than soft",
@@ -648,19 +648,26 @@ func (f runnerFile) apply(path string, p *Policy) error {
 		p.Ulimits.NProc = Ulimit{Soft: *f.PidsLimit, Hard: *f.PidsLimit}
 	}
 
+	// A cap is also what a step naming no resources is given, so one the daemon would
+	// refuse fails every such step, on the platform's account, one task at a time. The
+	// floors are the daemon's own: it refuses a memory limit under 6Mi at the create, and a
+	// CPU quota under a hundredth of a core fails as the container starts. Whether the
+	// host has as many cores as cpu_cap names is a fact about the daemon and not the file,
+	// and New holds it there.
 	for _, s := range []struct {
 		key   string
 		value *string
 		into  *int64
+		least int64
 	}{
-		{"memory_cap", f.MemoryCap, &p.MemoryCap},
-		{"tmp_size", f.TmpSize, &p.TmpSize},
+		{"memory_cap", f.MemoryCap, &p.MemoryCap, minMemoryCap},
+		{"tmp_size", f.TmpSize, &p.TmpSize, 1},
 	} {
 		if s.value == nil {
 			continue
 		}
 		n, err := binarySize(*s.value)
-		if err != nil || !sizeGrammar.MatchString(*s.value) {
+		if err != nil || !sizeGrammar.MatchString(*s.value) || n < s.least {
 			return refuse(s.key, *s.value)
 		}
 		*s.into = n
@@ -669,7 +676,7 @@ func (f runnerFile) apply(path string, p *Policy) error {
 	if f.CPUCap != nil {
 		cores, err := strconv.ParseFloat(*f.CPUCap, 64)
 		// The grammar is resources.cpu's, and the ceiling is what NanoCpus can count.
-		if err != nil || !coresGrammar.MatchString(*f.CPUCap) || cores > math.MaxInt64/1e9 {
+		if err != nil || !coresGrammar.MatchString(*f.CPUCap) || cores < minCPUCap || cores > math.MaxInt64/1e9 {
 			return refuse("cpu_cap", *f.CPUCap)
 		}
 		p.CPUCap = cores
@@ -709,7 +716,7 @@ func (f runnerFile) apply(path string, p *Policy) error {
 			if soft <= 0 {
 				return refuse(u.key+".soft", soft)
 			}
-			if hard < soft {
+			if hard < soft || (u.key == "ulimits.nofile" && hard > maxNoFile) {
 				return refuse(u.key+".hard", hard)
 			}
 			*u.into = Ulimit{Soft: soft, Hard: hard}
@@ -717,6 +724,24 @@ func (f runnerFile) apply(path string, p *Policy) error {
 	}
 	return nil
 }
+
+// The least of the caps and the most of nofile, each the daemon's or the kernel's figure
+// rather than one chosen here.
+const (
+	// minMemoryCap is the daemon's least memory limit: "Minimum memory limit allowed is
+	// 6MB", counted in mebibytes.
+	minMemoryCap = 6 << 20
+
+	// minCPUCap is the least the daemon takes for NanoCpus, "the range of CPUs is from
+	// 0.01", and the kernel's least CPU quota, a millisecond in every tenth of a second.
+	minCPUCap = 0.01
+
+	// maxNoFile is the highest hard nofile the file takes. The kernel refuses a hard
+	// limit above fs.nr_open, which the Engine API does not report, and the daemon hears
+	// of it only as each container starts, so the ceiling is the kernel's default for
+	// fs.nr_open: the one figure every host takes unless somebody lowered it.
+	maxNoFile = 1 << 20
+)
 
 // quoted writes a refused value the way the file writes it: a string in quotation marks
 // and a number without.

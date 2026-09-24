@@ -222,6 +222,25 @@ func readConfinement(info docker.Info, p Policy) (confinement, error) {
 	return c, nil
 }
 
+// readCapacity holds the policy's CPU cap to the cores this daemon has.
+//
+// The cap is also what a step naming no cpu is given, and the daemon refuses a container
+// asking for more cores than it has, so a cap above them fails every such step as it is
+// created, on the platform's account, while the runner looks healthy. One runner.toml
+// written for a fleet meets hosts of every size, which is how a cap comes to be above one
+// of them, and it is refused here, where the host's count is known, rather than by the
+// file, where it is not.
+func readCapacity(info docker.Info, p Policy) error {
+	if p.CPUCap <= 0 || info.NCPU <= 0 {
+		return nil
+	}
+	// Compared as it is sent, in billionths, since that is what the daemon compares.
+	if nanoCPUsOf(p.CPUCap) > int64(info.NCPU)*1e9 {
+		return fmt.Errorf("driver: cpu_cap in %s is %s cores, and this daemon has %d: the daemon refuses a container asking for more cores than it has, and a step that names no cpu is given the cap, so every such step would fail as it is created. Write a cap this host has, or leave the key out", sourceOf(p), strconv.FormatFloat(p.CPUCap, 'f', -1, 64), info.NCPU)
+	}
+	return nil
+}
+
 // sourceOf names the file a policy was read from, or says there was none.
 func sourceOf(p Policy) string {
 	if p.Source == "" {

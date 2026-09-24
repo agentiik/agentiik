@@ -432,7 +432,46 @@ func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
 	}
 }
 
-// A [hooks] table in the file is read past, and opening the daemon says so once, because
+// A cpu_cap is what every step naming no cpu is given, and the daemon refuses a container
+// asking for more cores than it has, so a cap above the host's cores is refused when the
+// daemon is opened, naming the count, rather than failing every such step as it is
+// created. The fake daemon has two.
+func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
+	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
+	if err != nil {
+		t.Fatalf("starting a fake daemon: %s", err)
+	}
+	defer daemon.Close()
+
+	p, err := LoadPolicy(writePolicyFile(t, "cpu_cap = \"4\"\n"))
+	if err != nil {
+		t.Fatalf("LoadPolicy: %s", err)
+	}
+	d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir()})
+	if err == nil {
+		d.Close()
+		t.Fatalf("a runner opened a daemon with 2 CPUs under a cap of 4")
+	}
+	for _, want := range []string{"cpu_cap in " + p.Source, "is 4 cores", "this daemon has 2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %s", want, err)
+		}
+	}
+
+	for _, cores := range []string{"2", "0.5"} {
+		p, err := LoadPolicy(writePolicyFile(t, "cpu_cap = \""+cores+"\"\n"))
+		if err != nil {
+			t.Fatalf("LoadPolicy: %s", err)
+		}
+		d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir()})
+		if err != nil {
+			t.Fatalf("a cap of %s on a daemon with 2 CPUs was refused: %s", cores, err)
+		}
+		d.Close()
+	}
+}
+
+// A [hooks] table in the file runs nothing, and opening the daemon says so once, because
 // an operator who wrote a pre_task is relying on it having run.
 func TestNewSaysTheHooksDoNotRun(t *testing.T) {
 	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
