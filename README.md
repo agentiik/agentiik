@@ -16,6 +16,7 @@ The specification is the documentation at <https://agentiik.github.io/docs>; whe
 | `driver` | One task as one container, through the Docker Engine API. The only package that reaches a daemon. |
 | `controller` | The one active decider: elected, fenced, woken by the API, and sweeping anyway. |
 | `bus` | The task bus on NATS JetStream, and the short-lived credentials a runner reaches it with. |
+| `bus/control` | The controller's half of the bus: `controller.Queue`, and results taken back as `controller.Answer`. |
 | `db` | PostgreSQL: the schema, its migrations, and a handle that makes the namespace impossible to forget. |
 | `api` | The HTTP boundary, where every request is authorised, deny by default. |
 | `secret` | The built-in secret store, on envelope encryption. |
@@ -25,7 +26,7 @@ The specification is the documentation at <https://agentiik.github.io/docs>; whe
 
 Under `internal/`: CEL (`expr`), the Engine API client and a fake daemon (`docker`, `dockertest`), a throwaway test database (`dbtest`), credential minting (`token`), identifiers (`ulid`) and the vendored schema fixtures (`fixtures`). Each package's doc comment, in `doc.go` where there is one, says what it is for and what it is not.
 
-The evaluator and the driver stay libraries with no server, bus or database behind them, so that `agk run --local` takes the same code path as a server run instead of a second one that drifts. `graph/boundary_test.go` and `driver/boundary_test.go` hold that.
+The evaluator and the driver stay libraries with no server, bus or database behind them, so that `agk run --local` takes the same code path as a server run instead of a second one that drifts. `graph/boundary_test.go` and `driver/boundary_test.go` hold that. The bus links no controller, database or secret store, since a runner links it, and `bus/boundary_test.go` holds that.
 
 ## Dependencies
 
