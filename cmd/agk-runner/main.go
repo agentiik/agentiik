@@ -66,7 +66,7 @@ type command struct {
 var commands = []command{
 	{
 		name:    "join",
-		usage:   "agk-runner join --api <url> --token <token>",
+		usage:   "agk-runner join --api <url> --token <token> --labels <labels>",
 		summary: "trade a join token for this runner's identity",
 		run:     join,
 	},

@@ -178,3 +178,21 @@ func TestJoinTakesFlagsAlone(t *testing.T) {
 		t.Error("a join refused on its command line reached the API or wrote something")
 	}
 }
+
+// Run as root, join gives its files to the agent's account, which a test that is not root sees
+// by naming an account it cannot give a file to and being refused for it.
+func TestJoinAsRootGivesItsFilesAwayRatherThanKeepingThemAsRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("run as root, the files would be given away, which the join test run as root holds")
+	}
+	j := newJoiner(t, 0, map[string]runner.Owner{"agentiik": {UID: 12345, GID: 12345}})
+	if code := j.join(t); code != exitRefused {
+		t.Fatalf("join exited %d, and a test that is not root cannot give a file to account 12345:\n%s", code, j.err)
+	}
+	if !strings.Contains(j.err.String(), "account 12345") {
+		t.Errorf("the refusal does not name the account:\n%s", j.err)
+	}
+	if j.joins.Load() != 0 || j.wrote() {
+		t.Error("a join that could not give its files away reached the API or wrote something")
+	}
+}
