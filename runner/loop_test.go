@@ -395,15 +395,57 @@ func TestEachRedemptionAnswerLeadsToTheBusActionTheTableNames(t *testing.T) {
 	}
 }
 
-// A runner the API refuses every task, because it is draining, puts each back and does not take it
-// straight back again: a pool with no other runner would otherwise spin on the message as fast as
-// the API answers.
+// A host with room for several tasks takes one as soon as it is on the queue, and does not hold it,
+// unacknowledged and handed to nobody else, until its take would have filled the room or its long
+// poll run out.
+func TestAHostWithRoomForSeveralTakesATaskAsSoonAsItIsThere(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		redeemed time.Time
+	)
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		mu.Lock()
+		if redeemed.IsZero() {
+			redeemed = time.Now()
+		}
+		mu.Unlock()
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Concurrency, l.loop.Wait = 4, 10*time.Second
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.loop.Run(ctx) }()
+	time.Sleep(500 * time.Millisecond)
+	published := time.Now()
+	m, _ := l.task(t, nil)
+	for deadline := time.Now().Add(15 * time.Second); l.api.redemptions(m.TaskID) == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if redeemed.IsZero() {
+		t.Fatal("the task was never redeemed")
+	}
+	if took := redeemed.Sub(published); took > 2*time.Second {
+		t.Errorf("a host with four free slots redeemed a task %s after it was published", took)
+	}
+}
+
+// A runner the API refuses every task, because it is draining, puts each back held back a moment,
+// and does not take it straight back into another of its free slots: a pool with no other runner
+// would otherwise spin on the message as fast as the API answers.
 func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
 	api := anAPIAnswering(t, func(int, string) (int, any) {
 		return http.StatusForbidden, refusedWith("this runner is draining and takes nothing new")
 	})
 	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
-	l.loop.Concurrency, l.loop.Retry = 1, 500*time.Millisecond
+	l.loop.Concurrency, l.loop.Retry = 4, 500*time.Millisecond
 	l.loop.Log = nil
 	m, _ := l.task(t, nil)
 
@@ -413,7 +455,7 @@ func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := l.api.redemptions(m.TaskID); n < 2 || n > 6 {
-		t.Errorf("in two seconds the grant was redeemed %d times, where a pause of half a second after each put back allows four or five", n)
+		t.Errorf("in two seconds the grant was redeemed %d times, where holding each put back for half a second allows four or five, however many slots are free", n)
 	}
 	if n := l.containersOf(m.IdempotencyKey); n != 0 {
 		t.Errorf("%d containers were created for a task every redemption refused", n)

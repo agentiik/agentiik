@@ -283,7 +283,7 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		l.say(fmt.Sprintf("task %s (%s) is left on the queue, since this host has its key in flight: %s", m.TaskID, m.IdempotencyKey, err))
 		return
 	case err != nil:
-		l.putBack(ctx, t, fmt.Sprintf("task %s (%s) is put back, since its key could not be written down: %s", m.TaskID, m.IdempotencyKey, err))
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back, since its key could not be written down: %s", m.TaskID, m.IdempotencyKey, err))
 		return
 	}
 	l.holding(m.IdempotencyKey)
@@ -301,7 +301,7 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		l.run(ctx, t, r)
 	case next == RedeemPutBack:
 		l.Holder.Release(id)
-		l.putBack(ctx, t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool: %s", m.TaskID, m.IdempotencyKey, err))
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool: %s", m.TaskID, m.IdempotencyKey, err))
 	case next == RedeemLetGo:
 		if err := t.Refused(ctx); err != nil {
 			l.say(err.Error())
@@ -320,18 +320,18 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 	}
 }
 
-// putBack puts a message back for another runner of the pool, and keeps its slot a moment longer.
+// putBack puts a message back for another runner of the pool, held back a moment from every
+// runner.
 //
-// A message put back is handed out again at once, and this runner would be refused it again for
-// the same reason: its credential draining, its disk full. Freed at once, its slot would take the
-// message straight back, and a pool with no other runner would spin on it, writing a key down and
-// redeeming a grant as fast as the API answers.
-func (l *Loop) putBack(ctx context.Context, t bus.Taken, why string) {
+// This runner would be refused the same message again for the same reason: its credential
+// draining, its disk full. Put back at once, the message would come straight back to its next free
+// slot, and a pool with no other runner would spin on it, writing a key down and redeeming a grant
+// as fast as the API answers.
+func (l *Loop) putBack(t bus.Taken, why string) {
 	l.say(why)
-	if err := t.Again(); err != nil {
+	if err := t.AgainAfter(l.retryFirst()); err != nil {
 		l.say(err.Error())
 	}
-	sleep(ctx, l.retryFirst())
 }
 
 // redeem redeems a task's grant, and asks again, as the holder it may already be, for as long as

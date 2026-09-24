@@ -118,7 +118,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `taskResult.usage` carries `cpu_seconds` and `max_rss_bytes` together or not at all, omitted where no sample was read, so `bus.Usage` holds them as pointers and a result carrying one without the other is refused.
 - The vendored wire says a stopped container reports the code its stop left, a runner reports 121 for refused outputs, and a task that did not succeed publishes no port.
 - `bus.TaskResult.Check` holds a result to what `Report` holds it to.
-- `Bus.Take` gives up its wait when its context ends, so a stopping agent is not held for the rest of a long poll.
+- `Bus.Take` answers as soon as one task is there, with whatever else is already queued, rather than holding it until the batch fills or the wait runs out, and gives up its wait when its context ends.
+- `Taken.AgainAfter` puts a message back held off for a while, so a runner that would be refused it again does not take it straight back.
 
 ### Driver
 

@@ -884,6 +884,27 @@ func TestAResultIsHandedOnWithTheRunnerWhoseSubjectItCameOn(t *testing.T) {
 	}
 }
 
+// A take asking for a batch answers as soon as one task is there, with whatever else is already
+// there, rather than holding the first until the batch fills or the wait runs out.
+func TestATakeForABatchAnswersOnceOneTaskIsThere(t *testing.T) {
+	b := open(t)
+	m := message(step(t))
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := b.Publish(context.Background(), m); err != nil {
+			t.Error(err)
+		}
+	}()
+	began := time.Now()
+	taken, err := b.Take(t.Context(), DefaultPool, 8, 20*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("a take for 8 answered %d tasks and %v", len(taken), err)
+	}
+	if waited := time.Since(began); waited > 5*time.Second {
+		t.Errorf("a take for 8 held the one task there for %s", waited)
+	}
+}
+
 // A take waits for work until its wait runs out or its context ends, whichever comes first, so an
 // agent being stopped is not held for the rest of a long poll. A wait that runs out with nothing
 // taken is no failure.
