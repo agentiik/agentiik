@@ -180,6 +180,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Every secret the configuration holds is a `config.Secret`, which prints and marshals as `[secret]` whatever the verb, so a configuration logged whole shows none of them.
 - `AGK_PUBLIC_URL` ending in a bare `?` or `#` is refused, since every path added to it would land in the query or the fragment, and every slash at its end is trimmed rather than one.
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
+- `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 
 ### Command line
 

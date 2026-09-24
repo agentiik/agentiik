@@ -107,7 +107,8 @@ const DefaultListen = ":8080"
 // DefaultTaskCeiling is how long a task no timeout bounds may run, where AGK_TASK_CEILING is unset.
 //
 // The installation ceiling row of the step keywords: "A step when none of the three is written. An
-// hour by default."
+// hour by default." The controller bounds a task by it and the API defaults the revocation grace
+// to it, so both programs read AGK_TASK_CEILING and are given the same value.
 const DefaultTaskCeiling = time.Hour
 
 // DefaultJoinRotation is how long a runner credential is accepted for, where AGK_JOIN_ROTATION is
@@ -282,6 +283,11 @@ type Migration struct {
 }
 
 // ReadAPI reads the API's configuration through lookup, which is os.LookupEnv when nil.
+//
+// The API reads AGK_TASK_CEILING although it runs no task, because the revocation grace defaults to
+// it, and nothing but the environment tells the API the controller's ceiling. An API given none
+// while the controller's is longer would refuse, an hour after a revocation, the results of tasks
+// the controller still lets run, so the two programs are given the same ceiling.
 func ReadAPI(lookup Lookup) (API, error) {
 	r := newReader(lookup)
 	var c API
