@@ -395,6 +395,31 @@ func TestEachRedemptionAnswerLeadsToTheBusActionTheTableNames(t *testing.T) {
 	}
 }
 
+// A runner the API refuses every task, because it is draining, puts each back and does not take it
+// straight back again: a pool with no other runner would otherwise spin on the message as fast as
+// the API answers.
+func TestARunnerRefusedEveryTaskDoesNotSpinOnTheQueue(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusForbidden, refusedWith("this runner is draining and takes nothing new")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Concurrency, l.loop.Retry = 1, 500*time.Millisecond
+	l.loop.Log = nil
+	m, _ := l.task(t, nil)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := l.loop.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := l.api.redemptions(m.TaskID); n < 2 || n > 6 {
+		t.Errorf("in two seconds the grant was redeemed %d times, where a pause of half a second after each put back allows four or five", n)
+	}
+	if n := l.containersOf(m.IdempotencyKey); n != 0 {
+		t.Errorf("%d containers were created for a task every redemption refused", n)
+	}
+}
+
 // "No answer at all, a 401 or any other 5xx: keeps the key, names it in its heartbeat and redeems
 // again, acknowledging nothing. Once the deadline the message carries has passed, no answer can
 // come, since the grant expires with it: it reports the task timed_out with no container ran, then
