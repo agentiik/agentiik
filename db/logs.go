@@ -215,7 +215,8 @@ func (w *Wide) ShippedChunk(ctx context.Context, l TaskLog, seq int) (LogChunk, 
 // A chunk is recorded unless the log was already cut short before it arrived, since from then on
 // nothing is written and a runner that went on shipping would otherwise grow the index a row per
 // request. The task's row is given the log's URI the first time, which is what the purge finds a
-// log by: a task whose result never came back still has its log swept with its run.
+// log by: a task whose result never came back still has its log swept with its run. Whoever
+// follows the log is told on LogChannel, which PostgreSQL delivers once the chunk is committed.
 func (w *Wide) ShipChunk(ctx context.Context, was, now TaskLog, c *LogChunk) error {
 	if c != nil {
 		var key, digest *string
@@ -240,14 +241,17 @@ func (w *Wide) ShipChunk(ctx context.Context, was, now TaskLog, c *LogChunk) err
 		was.Namespace, was.Row, now.NextSeq, now.ShippedLines, now.Lines, now.Bytes, now.Truncated, final); err != nil {
 		return fmt.Errorf("db: the log of task %s could not be moved on: %w", was.Row, err)
 	}
+	if _, err := w.tx.Exec(ctx, `select pg_notify($1, $2)`, LogChannel, string(was.Task)); err != nil {
+		return fmt.Errorf("db: the readers of the log of task %s could not be told it moved on: %w", was.Row, err)
+	}
 	return w.nameLog(ctx, was)
 }
 
 // TaskLog reads one dispatch's log as a reader follows it: where it stands, and the chunks that
 // hold lines, in order. A dispatch that has shipped nothing is ErrNoLog.
 //
-// It is what GET /api/v1/runs/{id}/steps/{step}/logs is to read the history from once it is built,
-// in the namespace its run was authorised in, before it follows what is shipped next.
+// GET /api/v1/runs/{id}/steps/{step}/logs follows a whole step instead, with StepLog and
+// LogChunks, which read a chunk once rather than every chunk each time the log moves on.
 func (n *NS) TaskLog(ctx context.Context, row string) (TaskLog, []LogChunk, error) {
 	l := TaskLog{Namespace: n.namespace, Row: row}
 	var final *int
