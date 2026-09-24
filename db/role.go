@@ -37,6 +37,17 @@ const (
 	scramIterations = 4096
 )
 
+// provisionLock is the advisory lock a provisioning holds from before it migrates until its role
+// is committed.
+//
+// Two at once is an ordinary deployment rather than a mistake: each replica of the API runs
+// migrate before it serves, and a rolling upgrade starts them together. Unserialised, they race
+// on the catalogue rows a migration or a grant writes, and one fails on a unique index or with
+// "tuple concurrently updated" though the other did all it would have done. Serialised, the
+// second waits, then finds nothing left to apply. The number is the bytes of "migrate", which is
+// not the controller's key, and is written as a literal so that a person can search for it.
+const provisionLock int64 = 0x6d696772617465
+
 // Provision applies the migrations as the privileged connection it is given, then creates the
 // role the API and the controller connect as, or brings an existing one back to that shape, and
 // answers with the migrations it applied.
@@ -60,7 +71,8 @@ const (
 // The connection needs no superuser, only the right to create roles and to own the schema,
 // which is what a managed PostgreSQL gives its administrator. It refuses the role the
 // connection itself is, before anything is applied, since a role made NOSUPERUSER by its own
-// migration is an installation nobody can migrate again.
+// migration is an installation nobody can migrate again. Two provisionings of one database at
+// once take turns.
 func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]string, error) {
 	if role == "" {
 		return nil, errors.New("db: Provision was given no role, and the application needs one to connect as")
@@ -75,6 +87,11 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 	if itself {
 		return nil, fmt.Errorf("db: %s is the role this connection migrates as, and making it NOSUPERUSER NOBYPASSRLS would take from the migrations the privileges they run with: the application connects as a role of its own", role)
 	}
+
+	if _, err := admin.Exec(ctx, `select pg_advisory_lock($1)`, provisionLock); err != nil {
+		return nil, fmt.Errorf("db: the connection could not wait for another provisioning of this database to end: %w", err)
+	}
+	defer admin.Exec(context.WithoutCancel(ctx), `select pg_advisory_unlock($1)`, provisionLock)
 
 	ran, err := Migrate(ctx, admin)
 	if err != nil {

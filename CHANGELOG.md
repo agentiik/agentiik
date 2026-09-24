@@ -64,6 +64,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
 - `db.Provision` applies the migrations and creates, or brings back to shape, the `NOSUPERUSER NOBYPASSRLS` role the API and the controller connect as, with read and write on every table but `schema_migrations`. It needs no superuser, the password reaches PostgreSQL as a SCRAM verifier, and the tests provision through it.
+- `db.Provision` holds an advisory lock while it runs, so two replicas migrating one database at once take turns rather than one of them failing.
 
 ### Bus
 

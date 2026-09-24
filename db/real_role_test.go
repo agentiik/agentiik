@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -393,6 +394,51 @@ func TestAPasswordOpensTheRoleHoweverItIsComposed(t *testing.T) {
 	for _, password := range []string{"pässwörd", "pässwörd"} {
 		if err := login(t, super, role, password); err != nil {
 			t.Errorf("the role does not open with %+q: %s", password, err)
+		}
+	}
+}
+
+// Every replica of the API runs migrate before it serves, and a rolling upgrade starts them
+// together. Provisionings at once take turns: none of them fails, and between them they apply
+// each migration once, whether everything is left to apply or nothing is.
+func TestProvisioningsAtOnceTakeTurns(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const replicas = 4
+	conns := make([]*pgx.Conn, replicas)
+	for i := range conns {
+		conns[i] = connect(t, super)
+	}
+	for round := range 3 {
+		ran := make([][]string, replicas)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i, conn := range conns {
+			wg.Go(func() {
+				<-start
+				var err error
+				if ran[i], err = Provision(ctx, conn, role, "test"); err != nil {
+					t.Errorf("round %d, replica %d: %s", round+1, i+1, err)
+				}
+			})
+		}
+		close(start)
+		wg.Wait()
+
+		applied, left := 0, 0
+		if round == 0 {
+			left = len(all)
+		}
+		for _, r := range ran {
+			applied += len(r)
+		}
+		if applied != left {
+			t.Errorf("round %d applied %d migrations between the replicas, and %d were left", round+1, applied, left)
 		}
 	}
 }
