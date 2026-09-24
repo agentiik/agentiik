@@ -76,6 +76,12 @@ type Usage struct {
 	CPUSeconds  float64 `json:"cpu_seconds,omitempty"`
 	MaxRSSBytes int64   `json:"max_rss_bytes,omitempty"`
 	ImagePullMS int64   `json:"image_pull_ms,omitempty"`
+
+	// Sampled says the two figures were read off at least one sample, so that a zero
+	// among them is a zero the daemon counted rather than nothing counted at all. It is
+	// not on the wire: what a result carries for a container nobody sampled is the
+	// runner's to decide.
+	Sampled bool `json:"-"`
 }
 
 // IsZero says there is nothing to report, which is what lets the field be omitted.

@@ -16,9 +16,12 @@ import (
 // ends at that sample, so that everything read before the exit is counted, and at this
 // bound where the daemon is slower than that. The bound is short because it is a wait on
 // every task: a sample read in the last moment before the exit is on the wire long before
-// the exit has travelled through the wait, and the drain runs while the outputs are
-// collected, so a task is kept longer only by however much of it is left then.
-const statsDrain = 250 * time.Millisecond
+// the exit has travelled through the wait. It runs from the moment the exit is seen and
+// the outputs are collected meanwhile, so a task is kept longer only by however much of
+// it is left once they are.
+//
+// It is a variable so that a test can lengthen it, which is the only reason.
+var statsDrain = 250 * time.Millisecond
 
 // sampler reads what one container consumes while it runs, from the daemon's statistics.
 //
@@ -41,9 +44,12 @@ type sampler struct {
 	cancel context.CancelFunc
 
 	// over is closed once the container is known to have exited, which is when the
-	// first sample carrying nothing means there is nothing more to come.
+	// first sample carrying nothing means there is nothing more to come, and until is
+	// when the drain that begins then ends. Both are set on the goroutine running the
+	// task, which is the one that reads until.
 	over     chan struct{}
 	overOnce sync.Once
+	until    time.Time
 
 	// done is closed when the goroutine reading the samples has returned, and the
 	// three fields below are its until then.
@@ -65,8 +71,9 @@ func (d *Docker) sample(ctx context.Context, container string) *sampler {
 // read is the goroutine: one sample now, then the stream until the container is over.
 //
 // The one sample now is what a container gets that exits before the stream's first
-// collection, which on a daemon collecting once a second is every container that runs
-// for less than one.
+// collection. A daemon that was collecting nothing collects at once for a new stream, and
+// one already collecting for other containers keeps its own second, so on a busy runner
+// that is a container that runs for less than one.
 func (s *sampler) read(ctx context.Context, cli *docker.Client, container string) {
 	defer close(s.done)
 	if now, err := cli.ContainerStatsOnce(ctx, container); err == nil && now.Sampled() {
@@ -110,7 +117,10 @@ func (s *sampler) exited() {
 	if s == nil {
 		return
 	}
-	s.overOnce.Do(func() { close(s.over) })
+	s.overOnce.Do(func() {
+		s.until = time.Now().Add(statsDrain)
+		close(s.over)
+	})
 }
 
 // stop ends the reading at once, and is what every path out of a task that did not come
@@ -133,7 +143,7 @@ func (s *sampler) usage(image resolved) Usage {
 		return u
 	}
 	s.exited()
-	drain := time.NewTimer(statsDrain)
+	drain := time.NewTimer(time.Until(s.until))
 	defer drain.Stop()
 	select {
 	case <-s.done:
@@ -141,6 +151,7 @@ func (s *sampler) usage(image resolved) Usage {
 	}
 	s.stop()
 	if s.seen {
+		u.Sampled = true
 		u.CPUSeconds = float64(s.cpu) / 1e9
 		u.MaxRSSBytes = int64(s.peak)
 	}

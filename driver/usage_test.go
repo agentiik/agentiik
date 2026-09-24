@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -133,6 +134,9 @@ func TestUsageIsSampledFromTheDaemonWhileTheContainerRuns(t *testing.T) {
 			if e.State != c.state {
 				t.Fatalf("the task ended %s, want %s", e.State, c.state)
 			}
+			if !e.Usage.Sampled {
+				t.Error("figures read off the daemon's samples say nothing was sampled")
+			}
 			if e.Usage.CPUSeconds != 2.5 {
 				t.Errorf("the task spent %v CPU seconds, and the last total the daemon read was 2.5", e.Usage.CPUSeconds)
 			}
@@ -160,7 +164,7 @@ func TestAContainerGoneBeforeTheFirstCollectionReportsTheSampleNowOrNothing(t *t
 			t.Fatalf("running: %v", err)
 		}
 		u := r.ending(t).Usage
-		if u.CPUSeconds != 0.04 || u.MaxRSSBytes != 2<<20 {
+		if !u.Sampled || u.CPUSeconds != 0.04 || u.MaxRSSBytes != 2<<20 {
 			t.Errorf("the usage is %+v, and the one sample read was 0.04 CPU seconds and %d bytes", u, 2<<20)
 		}
 	})
@@ -173,7 +177,7 @@ func TestAContainerGoneBeforeTheFirstCollectionReportsTheSampleNowOrNothing(t *t
 		if _, err := r.Run(t.Context(), oneTask(ref)); err != nil {
 			t.Fatalf("running: %v", err)
 		}
-		if u := r.ending(t).Usage; u.CPUSeconds != 0 || u.MaxRSSBytes != 0 {
+		if u := r.ending(t).Usage; u.Sampled || u.CPUSeconds != 0 || u.MaxRSSBytes != 0 {
 			t.Errorf("the usage is %+v, and no sample was ever read", u)
 		}
 	})
@@ -188,7 +192,7 @@ func TestAContainerGoneBeforeTheFirstCollectionReportsTheSampleNowOrNothing(t *t
 		if err != nil || result.State != agk.TaskSucceeded {
 			t.Fatalf("a task whose figures could not be read ended %s: %v", result.State, err)
 		}
-		if u := r.ending(t).Usage; u.CPUSeconds != 0 || u.MaxRSSBytes != 0 {
+		if u := r.ending(t).Usage; u.Sampled || u.CPUSeconds != 0 || u.MaxRSSBytes != 0 {
 			t.Errorf("the usage is %+v, and the daemon refused every sample", u)
 		}
 	})
@@ -209,5 +213,109 @@ func TestAPullThatHappenedIsReportedOnTheEnding(t *testing.T) {
 	}
 	if got := r.ending(t).Usage.ImagePullMS; got <= 0 {
 		t.Errorf("the image was pulled and the ending says the pull took %dms", got)
+	}
+}
+
+// drainFor lengthens the drain for one test.
+func drainFor(t *testing.T, d time.Duration) {
+	was := statsDrain
+	statsDrain = d
+	t.Cleanup(func() { statsDrain = was })
+}
+
+// A sample the daemon read before the exit and that arrives after it is seen is counted:
+// the statistics are read on until the daemon says there is nothing more, which is the
+// sample carrying nothing it writes once the container has gone.
+func TestASampleStillOnItsWayAtTheExitIsCounted(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	drainFor(t, 10*time.Second)
+
+	exiting := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) {
+		close(exiting)
+		return 0, nil
+	})
+	r.daemon.Handle("GET", "/containers/{id}/stats", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		if req.URL.Query().Get("stream") == "false" {
+			enc.Encode(docker.Stats{})
+			return
+		}
+		w.(http.Flusher).Flush()
+		select {
+		case <-exiting:
+		case <-req.Context().Done():
+			return
+		}
+		// Long enough after the exit for the driver to have seen it and collected
+		// the outputs, which is where a driver that did not read on stops reading.
+		time.Sleep(200 * time.Millisecond)
+		enc.Encode(reading(700*time.Millisecond, 9<<20, 0))
+		enc.Encode(docker.Stats{})
+		w.(http.Flusher).Flush()
+		<-req.Context().Done()
+	})
+
+	if _, err := r.Run(t.Context(), oneTask(ref)); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if u := r.ending(t).Usage; u.CPUSeconds != 0.7 || u.MaxRSSBytes != 9<<20 {
+		t.Errorf("the usage is %+v, and the sample on its way at the exit read 0.7 CPU seconds and %d bytes", u, 9<<20)
+	}
+}
+
+// slowCollection is an observer that takes its time over the publishing transition, which
+// stands for outputs that take that long to collect, and notes when it was done.
+type slowCollection struct {
+	recorder
+	took      time.Duration
+	collected time.Time
+	ended     time.Time
+}
+
+func (o *slowCollection) Observe(ctx context.Context, e Event) {
+	switch {
+	case e.State == agk.TaskPublishing:
+		time.Sleep(o.took)
+		o.collected = time.Now()
+	case e.State.Terminal():
+		o.ended = time.Now()
+	}
+	o.recorder.Observe(ctx, e)
+}
+
+// The drain runs from the moment the exit is seen, while the outputs are collected, so a
+// task whose collection outlasts it is kept no longer for it, even on a daemon that never
+// says there is nothing more.
+func TestTheDrainRunsWhileTheOutputsAreCollected(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	const drain = 600 * time.Millisecond
+	drainFor(t, drain)
+
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
+	slow := &slowCollection{took: drain}
+	r = reopen(t, r, func(cfg *Config) { cfg.Observer = slow })
+	r.daemon.Handle("GET", "/containers/{id}/stats", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		for {
+			if enc.Encode(reading(time.Second, 1<<20, 0)) != nil || req.URL.Query().Get("stream") == "false" {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-req.Context().Done():
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	})
+
+	if _, err := r.Run(t.Context(), oneTask(ref)); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if kept := slow.ended.Sub(slow.collected); kept > drain/2 {
+		t.Errorf("the ending came %s after the outputs were collected, and the drain of %s had run out while they were", kept, drain)
 	}
 }
