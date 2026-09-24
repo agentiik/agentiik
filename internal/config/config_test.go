@@ -358,7 +358,10 @@ func TestAFileThatCannotBeReadRefusesTheStart(t *testing.T) {
 		config.OperatorTokenFile:           {theAPI},
 	}
 	faults := map[string]func(t *testing.T, i *installation, path string) string{
-		"a relative path": func(_ *testing.T, _ *installation, path string) string {
+		// Relative to the directory the program starts in, where the file is, so that only the
+		// path being relative can refuse it.
+		"a relative path": func(t *testing.T, i *installation, path string) string {
+			t.Chdir(i.dir)
 			return filepath.Base(path)
 		},
 		"a file that is not there": func(_ *testing.T, _ *installation, path string) string {
@@ -402,6 +405,9 @@ func TestAFileThatCannotBeReadRefusesTheStart(t *testing.T) {
 					err := p.read(p.environment(i))
 					if names := refused(err); !slices.Equal(names, []string{variable}) {
 						t.Fatalf("the start was refused naming %v: %v", names, err)
+					}
+					if fault == "a relative path" && !strings.Contains(err.Error(), "is not an absolute path") {
+						t.Errorf("a relative path was refused for another reason: %v", err)
 					}
 					saysNothingOf(t, err, append(i.secrets, i.env[variable])...)
 				})
@@ -476,6 +482,11 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 	anAccountSeedAsACredential := func(t *testing.T, i *installation) string {
 		return i.write(t, "account.creds", []byte(i.accountSeed))
 	}
+	objectsWhereTheProgramStarts := func(t *testing.T, i *installation) string {
+		// The directory is there, so that only the path being relative can refuse it.
+		t.Chdir(i.dir)
+		return "objects"
+	}
 	aFile := func(t *testing.T, i *installation) string {
 		// Not a secret's file, so not one of the paths a refusal may not repeat.
 		path := filepath.Join(i.dir, "not-a-directory")
@@ -519,7 +530,7 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"a user's seed for the account's":       {config.BusAccountSeedFile, aUsersSeed, api},
 		"an account seed that is not a seed":    {config.BusAccountSeedFile, holding("SAnotaseed\n"), api},
 		"no objects":                            {config.ObjectsDir, unset, both},
-		"objects at a relative path":            {config.ObjectsDir, is("objects"), both},
+		"objects at a relative path":            {config.ObjectsDir, objectsWhereTheProgramStarts, both},
 		"objects that are not there":            {config.ObjectsDir, is("/nonexistent/agentiik/objects"), both},
 		"objects that are a file":               {config.ObjectsDir, aFile, both},
 		"no public URL":                         {config.PublicURL, unset, api},
@@ -822,8 +833,13 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 func TestASecretsFileIsReadAsItsToolsWriteIt(t *testing.T) {
 	i := anInstallation(t)
 
-	// A link to the file, where the link's own mode is not the file's.
-	target := i.write(t, "..data-presign.key", []byte(base64.RawStdEncoding.EncodeToString(i.presignKey)))
+	// A link to the file, where the link's own mode is not the file's, holding a key of 32 bytes
+	// written without the padding base64 gives it.
+	key := randomBytes(t, 32)
+	if !strings.HasSuffix(base64.StdEncoding.EncodeToString(key), "=") {
+		t.Fatal("a key of 32 bytes has no padding to leave out, so the case proves nothing")
+	}
+	target := i.write(t, "..data-presign.key", []byte(base64.RawStdEncoding.EncodeToString(key)))
 	link := filepath.Join(i.dir, "linked-presign.key")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
@@ -841,7 +857,7 @@ func TestASecretsFileIsReadAsItsToolsWriteIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal([]byte(api.PresignKey), i.presignKey) {
+	if !bytes.Equal([]byte(api.PresignKey), key) {
 		t.Error("a presign key read through a link, in base64 without padding, is not the key written")
 	}
 	if string(api.AccountSeed) != i.accountSeed {
