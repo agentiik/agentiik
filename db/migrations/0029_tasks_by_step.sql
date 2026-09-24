@@ -4,4 +4,8 @@
 -- again on every sweep, for as long as somebody reads it. Without this the only way to a step's
 -- tasks is the primary key, which is every task of the namespace, so the cost of an open stream
 -- would grow with everything the namespace ever ran rather than with the step it follows.
-create index tasks_by_step on tasks (namespace, run_id, step, id);
+--
+-- The identifier byte by byte, as StepLog sorts and bounds it, since a ULID sorts that way whatever
+-- collation the database was created with: in the default one the index would find the step's rows
+-- and leave every one of them to be read and sorted before the first batch could be taken.
+create index tasks_by_step on tasks (namespace, run_id, step, id collate "C");

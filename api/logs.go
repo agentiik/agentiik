@@ -485,16 +485,16 @@ func logKey(l db.TaskLog, seq int, shippedDigest string) (string, error) {
 		l.Namespace, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, shippedDigest), nil
 }
 
-// errChunkAltered is a chunk of a log whose object holds other bytes than the ones it was written
-// with, which reading it again will not change.
-var errChunkAltered = errors.New("api: the chunk was altered since it was written")
+// errChunkUnreadable is a chunk of a log whose object does not hold the lines it was written with,
+// its bytes changed or never lines at all, which reading it again will not change.
+var errChunkUnreadable = errors.New("api: the chunk does not hold the lines of a log it was written with")
 
 // ReadLogChunk reads back the lines of one chunk of a log, as the index names it, and refuses bytes
 // that are not the ones the chunk was written with.
 //
-// It is what a reader of a log follows the index with, db.NS.TaskLog giving the chunks in order and
-// this the lines of each, which is how GET /api/v1/runs/{id}/steps/{step}/logs is to read a log's
-// history once it is built.
+// It is what a reader of a log follows the index with, db.NS.TaskLog or db.NS.LogChunks giving the
+// chunks in order and this the lines of each, which is how GET /api/v1/runs/{id}/steps/{step}/logs
+// reads a log.
 func ReadLogChunk(ctx context.Context, objects artifact.Objects, c db.LogChunk) ([]LogLine, error) {
 	r, err := objects.Open(ctx, c.Key)
 	if err != nil {
@@ -506,14 +506,14 @@ func ReadLogChunk(ctx context.Context, objects artifact.Objects, c db.LogChunk) 
 		return nil, err
 	}
 	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != c.Digest {
-		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with: %w", c.Key, errChunkAltered)
+		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with: %w", c.Key, errChunkUnreadable)
 	}
 	var lines []LogLine
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	for dec.More() {
 		var l LogLine
 		if err := dec.Decode(&l); err != nil {
-			return nil, fmt.Errorf("api: the chunk of a log at %s is not lines of a log (%w): %w", c.Key, err, errChunkAltered)
+			return nil, fmt.Errorf("api: the chunk of a log at %s is not lines of a log (%w): %w", c.Key, err, errChunkUnreadable)
 		}
 		lines = append(lines, l)
 	}

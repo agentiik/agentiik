@@ -44,9 +44,10 @@ import (
 // again after a loss, under the same key and a new task_id. final is false where the stream let
 // go of a log its runner never closed: lost, or stopped and silent past logSettling.
 //
-// A line, a gap and a dispatch event carry an id, a gap its last line's, <task_id>/<seq>/<line>, the dispatch event 0 and 0,
-// which is everything a reconnect has to name. dispatch_end and end carry none, and a reconnect
-// between a dispatch_end and what follows it is sent that dispatch_end again.
+// A line, a gap and a dispatch event carry an id, <task_id>/<seq>/<line>, which is everything a
+// reconnect has to name: a gap names its last line, and a dispatch event names line 0 of chunk 0.
+// dispatch_end and end carry none, and a reconnect between a dispatch_end and what follows it is
+// sent that dispatch_end again.
 //
 // Nothing asks the database on a clock per stream. A shipment notifies in the transaction that
 // records its chunk (db.LogChannel), one connection per API listens for every stream it serves,
@@ -82,9 +83,11 @@ type streamTiming struct {
 // request that never ends.
 //
 // logSettling is how long a dispatch cancelled or stopped at its deadline is waited for: its
-// runner sends the container SIGTERM, then SIGKILL after stop_grace, thirty seconds by default,
-// and only then ships the chunk that closes the log. Twice that covers a container that takes its
-// whole grace and a runner that ships after it.
+// runner sends the container SIGTERM, then SIGKILL after stop_grace, ten seconds by default as the
+// daemon's own, and only then ships the chunk that closes the log. A minute covers a host that
+// raised its grace to forty seconds or so and a runner that ships after it; on a host whose grace
+// is longer, the last lines of a stopped task arrive after the stream let go of it, and are in the
+// history of the next request.
 const (
 	logSweep       = 5 * time.Second
 	logPace        = 250 * time.Millisecond
@@ -345,7 +348,7 @@ func (f *follower) stream(ctx context.Context, out *eventStream, wake <-chan str
 // Where the step stands is read logStepBatch dispatches at a time, from the one the stream follows
 // on, so that a step of ten thousand dispatches costs a read of each once, and a stream held on
 // its first shard reads a batch each time it is woken rather than all ten thousand. Whether the
-// step is over is only asked once the last batch is in. The chunks are read after it, which misses
+// stream ends is only decided once the last batch is in. The chunks are read after it, which misses
 // nothing: a log closed by then had every chunk recorded by then, and one still open is waited
 // for, or let go of for how it ended, which no chunk read later can change.
 func (f *follower) advance(ctx context.Context, out *eventStream) (bool, agk.Verdict, error) {
@@ -413,7 +416,11 @@ func (f *follower) chunks(ctx context.Context, out *eventStream, row string) err
 		for _, c := range chunks {
 			lines, err := ReadLogChunk(ctx, f.server.objects, c)
 			switch {
-			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errChunkAltered):
+			case errors.Is(err, fs.ErrNotExist) && f.expired(ctx):
+				// Gone with the run's other logs, past their retention, which is no fault:
+				// the reader reconnects and is told so.
+				return errors.New("api: the logs of the run went past their retention while a stream read them")
+			case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errChunkUnreadable):
 				last := c.FirstLine + c.Lines - 1
 				f.server.report(fmt.Errorf("api: chunk %d of the log of task %s, lines %d to %d, could not be read back: %w", c.Seq, row, c.FirstLine, last, err))
 				if last > f.line {
@@ -445,6 +452,18 @@ func (f *follower) chunks(ctx context.Context, out *eventStream, row string) err
 			return nil
 		}
 	}
+}
+
+// expired says whether the run's logs are past their retention, and false where that could not be
+// read, which leaves an object that is gone reported as a fault.
+func (f *follower) expired(ctx context.Context) bool {
+	var state db.StepLog
+	err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		state, err = ns.StepLog(ctx, f.run, f.step, "", 0)
+		return err
+	})
+	return err == nil && state.Expired
 }
 
 // lettingGo says whether the stream is done with a dispatch whose chunks it has read as far as the

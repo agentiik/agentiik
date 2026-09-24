@@ -29,8 +29,8 @@
 // the bus with the control plane's credential, which creates the streams, and serves every route
 // built so far on AGK_LISTEN: runs and versions, cancelling a run, a step's log stream, the secret
 // declarations, the runners, their pools and join tokens, the bus credential, and the built-in
-// object store at /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be a second way to say what
-// the environment says.
+// object store at /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be a second
+// way to say what the environment says.
 //
 // At SIGINT or SIGTERM it stops taking connections, ends the log streams at once so that their
 // readers resume at another API, and finishes the requests being answered, for up to thirty

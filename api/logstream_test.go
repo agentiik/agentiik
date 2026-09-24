@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -32,11 +34,19 @@ const (
 	thirdRow  = "01M3B00000000000000000000C"
 )
 
-// switchable is an authorizer that allows alice everything until it is switched off.
-type switchable struct{ off atomic.Bool }
+// switchable is an authorizer that allows alice everything until it is switched off, and says who
+// a bearer token names until its tokens are revoked.
+type switchable struct{ off, revoked atomic.Bool }
 
 func (s *switchable) Allow(_ context.Context, who api.Principal, _ api.Permission, _ api.Target) (bool, error) {
 	return who == "alice" && !s.off.Load(), nil
+}
+
+func (s *switchable) identify(r *http.Request) (api.Principal, error) {
+	if s.revoked.Load() {
+		return "", nil
+	}
+	return bearer(r)
 }
 
 // timing is what a test gives the streams in place of the defaults.
@@ -56,8 +66,9 @@ type streams struct {
 	credential string
 	runner     string
 
-	// troubles is what the server reported.
+	// troubles is what the server reported, and objects the directory the store keeps objects in.
 	troubles chan error
+	objects  string
 }
 
 func withStreams(t *testing.T, tm timing) streams {
@@ -72,7 +83,8 @@ func withStreams(t *testing.T, tm timing) streams {
 			t.Fatalf("seeding: %s", err)
 		}
 	}
-	objects := artifact.Dir(t.TempDir())
+	store := t.TempDir()
+	objects := artifact.Dir(store)
 	grants{pool: pool, objects: objects, super: super}.recorded(t, "a3f9c1e", theTree())
 	for _, stmt := range []string{
 		`insert into runs (namespace, id, workflow, commit, trigger, state)
@@ -96,7 +108,7 @@ func withStreams(t *testing.T, tm timing) streams {
 		t.Fatal(err)
 	}
 	auth := &switchable{}
-	rt, err := api.NewRouter(auth, bearer)
+	rt, err := api.NewRouter(auth, auth.identify)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +132,7 @@ func withStreams(t *testing.T, tm timing) streams {
 
 	served := httptest.NewServer(rt)
 	t.Cleanup(served.Close)
-	s := streams{handler: rt, served: served, pool: pool, super: super, auth: auth, stop: stop, troubles: troubles}
+	s := streams{handler: rt, served: served, pool: pool, super: super, auth: auth, stop: stop, troubles: troubles, objects: store}
 
 	var token db.JoinToken
 	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
@@ -188,6 +200,17 @@ func (s streams) ship(t *testing.T, key agk.TaskID, grant string, seq, first int
 func (s streams) ended(t *testing.T, verdict string) {
 	t.Helper()
 	s.sql(t, `update steps set state = $1 where namespace = 'finance' and run_id = $2 and step = 'render'`, verdict, string(streamRun))
+}
+
+// firstKeyOf is where chunk seq of the first dispatch's log is kept.
+func firstKeyOf(t *testing.T, s streams, seq int) string {
+	t.Helper()
+	var key string
+	if err := dbtest.Superuser(t, s.super).QueryRow(t.Context(),
+		`select object_key from task_log_chunks where task_id = $1 and seq = $2`, firstRow, seq).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
 
 // event is one server-sent event, or a comment, whose event is ":".
@@ -375,13 +398,13 @@ func TestAStepLogIsItsHistoryThenWhatIsShippedWhileItIsRead(t *testing.T) {
 	}
 	rd.line(t, secondRow, 1, 1, "again")
 
-	// Live, and told by the shipment: the sweep is a minute away.
+	// Live: shipped once the stream waits on it.
 	s.ship(t, second, secondGrant, 2, 2, false, "still going")
 	rd.line(t, secondRow, 2, 2, "still going")
 
 	// The step's verdict, then the chunk that closes the last log, whose shipment is what the
-	// stream hears: a runner closes a log before it reports, so the task is still running when
-	// its last chunk lands.
+	// stream hears, and nothing else could tell it: the sweep is a minute away. A runner closes a
+	// log before it reports, so the task is still running when its last chunk lands.
 	s.ended(t, "succeeded")
 	s.ship(t, second, secondGrant, 3, 3, true)
 	if end := rd.expect(t, "dispatch_end", ""); end["final"] != true || end["lines"] != float64(2) {
@@ -420,7 +443,7 @@ func TestAStreamResumesFromTheLastEventItsReaderHad(t *testing.T) {
 	rd.expect(t, "dispatch_end", "")
 	rd.expect(t, "end", "")
 
-	for _, id := range []string{"yesterday", firstRow + "/1", firstRow + "/-1/2", thirdRow + "/1/1", "01M3B00000000000000000000A/99999999999/1"} {
+	for _, id := range []string{"yesterday", firstRow + "/1", firstRow + "/-1/2", thirdRow + "/1/1", firstRow + "/9999999999/1", firstRow + "/1/9999999999"} {
 		if resp := s.get(t, "alice", "render", id); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("Last-Event-ID %q answered %d", id, resp.StatusCode)
 		}
@@ -481,7 +504,7 @@ func TestAStoppedDispatchIsWaitedForUntilItsLastLinesArrive(t *testing.T) {
 		t.Errorf("the step's log ends as %v", end)
 	}
 
-	// Stopped a minute ago and never closed: let go of on the next sweep.
+	// Stopped a minute ago and never closed: let go of on the stream's first read.
 	s.sql(t, `update tasks set finished_at = now() - interval '61 seconds' where id = $1`, firstRow)
 	s.sql(t, `delete from task_log_chunks where task_id = $1 and seq = 2`, firstRow)
 	s.sql(t, `update task_logs set final_seq = null, next_seq = 2, lines = 1 where task_id = $1`, firstRow)
@@ -537,6 +560,16 @@ func TestAReaderWhoLosesAccessIsCutOff(t *testing.T) {
 	if resp := s.get(t, "alice", "render", firstRow+"/1/1"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("reconnecting without access answered %d", resp.StatusCode)
 	}
+}
+
+// A reader whose credential stops working while they read is cut off too, though their grants
+// remain: a revoked token is access lost.
+func TestAReaderWhoseCredentialIsRevokedIsCutOff(t *testing.T) {
+	s := withStreams(t, timing{sweep: time.Minute, keepAlive: time.Minute, reauthorise: 100 * time.Millisecond, settling: time.Minute})
+	rd := s.open(t, "")
+	rd.silent(t, 300*time.Millisecond)
+	s.auth.revoked.Store(true)
+	rd.closed(t)
 }
 
 // An API asked to stop ends its streams at once, without the event that says the log is over, so
@@ -710,4 +743,14 @@ func TestAChunkThatCannotBeReadBackIsAGap(t *testing.T) {
 		t.Errorf("the gap resumed inside is %v", gap)
 	}
 	rd.line(t, firstRow, 3, 4, "four")
+
+	// An object that is gone is a gap too, while the run's logs are within their retention.
+	if err := os.Remove(filepath.Join(s.objects, firstKeyOf(t, s, 3))); err != nil {
+		t.Fatal(err)
+	}
+	rd = s.open(t, firstRow+"/2/3")
+	if gap := rd.expect(t, "gap", firstRow+"/3/4"); gap["first_line"] != float64(4) || gap["lines"] != float64(1) {
+		t.Errorf("the gap of a chunk whose object is gone is %v", gap)
+	}
+	rd.expect(t, "dispatch_end", "")
 }

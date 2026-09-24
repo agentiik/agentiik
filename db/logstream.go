@@ -119,7 +119,7 @@ func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step, since st
 		from tasks t
 		left join task_logs l on l.namespace = t.namespace and l.task_id = t.id
 		where t.namespace = $1 and t.run_id = $2 and t.step = $3
-		  and ($4 = '' or t.id collate "C" >= $4 collate "C")
+		  and t.id collate "C" >= $4 collate "C"
 		order by t.id collate "C"
 		limit $5`, n.namespace, string(run), string(step), since, limit)
 	if err != nil {
