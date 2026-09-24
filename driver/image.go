@@ -26,6 +26,11 @@ import (
 // accepted."
 var ErrRootUser = errors.New("the container user is non-root, required by the manifest and checked at publication: root, 0 and 0:0 are refused, because a read-only root filesystem and dropped capabilities are worth little to a process running as uid 0")
 
+// ErrNotPushed is an image no registry serves under the digest this machine holds it by,
+// which Pin refuses. No credentials is this release's pull: a namespace's own registry
+// credentials, and the pulls they open, arrive with v0.8.0.
+var ErrNotPushed = errors.New("a server run names every image by the digest its registry serves it under, and a runner pulls it from there with no credentials")
+
 // ErrImagePullFailed is a pull that died. It is charged to the platform and never to the
 // brick: the image was not reached, so nothing in it can have failed.
 var ErrImagePullFailed = errors.New("the image could not be pulled, which is the runner's failure and not the brick's")
@@ -114,34 +119,9 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 			"the step names no image, and a step carries an image or a call and never both")
 	}
 
-	var pullMillis int64
-	image, err := cli.ImageInspect(ctx, ref)
+	image, pullMillis, err := hold(ctx, cli, t.Step, ref, auth, onProgress)
 	if err != nil {
-		if docker.IsUnreachable(err) {
-			return resolved{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
-		}
-		if !docker.IsNotFound(err) {
-			return resolved{}, fault(t.Step, ErrImagePullFailed, ChargePlatform,
-				"%s could not be inspected: %v", ref, err)
-		}
-
-		started := time.Now()
-		if err := cli.ImagePull(ctx, ref, auth, onProgress); err != nil {
-			if docker.IsUnreachable(err) {
-				return resolved{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "pulling %s: %v", ref, err)
-			}
-			return resolved{}, fault(t.Step, ErrImagePullFailed, ChargePlatform, "%v", err)
-		}
-		pullMillis = time.Since(started).Milliseconds()
-
-		image, err = cli.ImageInspect(ctx, ref)
-		if err != nil {
-			if docker.IsUnreachable(err) {
-				return resolved{}, fault(t.Step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
-			}
-			return resolved{}, fault(t.Step, ErrImagePullFailed, ChargePlatform,
-				"%s was pulled and then could not be inspected: %v", ref, err)
-		}
+		return resolved{}, err
 	}
 	// A reference is a digest in production, and "a tag is a mutable pointer and has
 	// no place in something that claims a commit determines what ran". A tag is not
@@ -191,6 +171,41 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 	out.Manifest = &m
 	out.User = m.Spec.Runtime.User
 	return out, nil
+}
+
+// hold is the image a reference names as the daemon holds it, pulled first where the
+// daemon holds nothing under the reference, and how long that pull took.
+func hold(ctx context.Context, cli *docker.Client, step agk.Step, ref, auth string, onProgress func(docker.Progress)) (docker.Image, int64, error) {
+	image, err := cli.ImageInspect(ctx, ref)
+	if err == nil {
+		return image, 0, nil
+	}
+	if docker.IsUnreachable(err) {
+		return docker.Image{}, 0, fault(step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
+	}
+	if !docker.IsNotFound(err) {
+		return docker.Image{}, 0, fault(step, ErrImagePullFailed, ChargePlatform,
+			"%s could not be inspected: %v", ref, err)
+	}
+
+	started := time.Now()
+	if err := cli.ImagePull(ctx, ref, auth, onProgress); err != nil {
+		if docker.IsUnreachable(err) {
+			return docker.Image{}, 0, fault(step, ErrDaemonUnreachable, ChargePlatform, "pulling %s: %v", ref, err)
+		}
+		return docker.Image{}, 0, fault(step, ErrImagePullFailed, ChargePlatform, "%v", err)
+	}
+	pullMillis := time.Since(started).Milliseconds()
+
+	image, err = cli.ImageInspect(ctx, ref)
+	if err != nil {
+		if docker.IsUnreachable(err) {
+			return docker.Image{}, 0, fault(step, ErrDaemonUnreachable, ChargePlatform, "inspecting %s: %v", ref, err)
+		}
+		return docker.Image{}, 0, fault(step, ErrImagePullFailed, ChargePlatform,
+			"%s was pulled and then could not be inspected: %v", ref, err)
+	}
+	return image, pullMillis, nil
 }
 
 // readManifest reads /agk/brick.yaml out of an image, and answers with nothing at all
@@ -295,4 +310,55 @@ func (d *Docker) Manifest(ctx context.Context, step agk.Step, image string) (bri
 			"%s carries no %s: an image becomes a brick by carrying one, and a step that is not a script step is held to the ports and the parameters its manifest declares", r.Ref, brick.ManifestPath)
 	}
 	return *r.Manifest, nil
+}
+
+// Pin answers the reference a server run names image by: image's repository, spelt as
+// image spells it, at the digest of the manifest its registry serves, which is the
+// digest this daemon holds the image under there. The image is pulled first where the
+// daemon holds nothing under the reference, as it is for Manifest.
+//
+// It is how agk push resolves a tag, because "a tag is a mutable pointer, and a commit
+// must determine what ran": the version records the digest once, and every run of it
+// runs the same bytes. A reference that already names a digest is recorded as it is
+// written, and agk push asks nothing about it.
+//
+// The registry is asked whether it serves that digest, because nothing on this machine
+// can say: the containerd store holds an image built here and never pushed under a
+// digest of its registry exactly as it holds one it pulled, as
+// docker.Image.RegistryDigests explains. It is asked with no credentials because a runner
+// pulls with none, so a digest the registry will not serve to such a pull is one no run
+// of the version could start from. Either way the image is refused with ErrNotPushed,
+// naming it. A registry that could not be asked at all is the platform's trouble rather
+// than the image's.
+func (d *Docker) Pin(ctx context.Context, step agk.Step, image string) (string, error) {
+	ref := strings.TrimSpace(image)
+	held, _, err := hold(ctx, d.cli, step, ref, "", nil)
+	if err != nil {
+		return "", err
+	}
+	candidates := held.RegistryDigests(ref)
+	if len(candidates) == 0 {
+		return "", fault(step, ErrNotPushed, ChargeBrick,
+			"%s is held on this machine under no digest of its registry, which is an image built here and never pushed: push it to a registry every runner can reach, then push the workflow", ref)
+	}
+	var refused error
+	for _, pinned := range candidates {
+		_, digest, _ := strings.Cut(pinned, "@")
+		served, err := d.cli.DistributionInspect(ctx, pinned, "")
+		switch {
+		case err == nil && served.Descriptor.Digest == digest:
+			return pinned, nil
+		case err == nil:
+			refused = fmt.Errorf("asked for %s, the registry answers %s", digest, served.Descriptor.Digest)
+		case docker.IsUnreachable(err):
+			return "", fault(step, ErrDaemonUnreachable, ChargePlatform, "asking the registry of %s about %s: %v", ref, pinned, err)
+		case docker.IsNotFound(err), docker.IsDenied(err):
+			refused = err
+		default:
+			return "", fault(step, nil, ChargePlatform,
+				"the registry of %s could not be asked whether it serves %s, and a version is not recorded under a digest nobody could confirm: %v", ref, pinned, err)
+		}
+	}
+	return "", fault(step, ErrNotPushed, ChargeBrick,
+		"%s is held on this machine as %s, which its registry does not serve to a pull with no credentials (%v), so it was built here and never pushed, or pushed where a runner cannot pull it: push it to a registry every runner can reach, then push the workflow", ref, candidates[0], refused)
 }
