@@ -221,8 +221,10 @@ steps:
 // label is what the driver puts there for exactly this: "a startup sweep can tell a container
 // of this driver's from everything else on the host".
 //
-// Four steps, because a fan-out is where the count of containers stops being one and a step
-// that fails is where a cleanup path is most likely to be skipped.
+// Three steps, because a fan-out is where the count of containers stops being one and a step
+// that fails is where a cleanup path is most likely to be skipped. The step that fails is on
+// network: internal, the posture that creates a network, so that the question asked about
+// networks has one to find.
 func TestARealRunLeavesNoContainerAndNoNetworkBehind(t *testing.T) {
 	needsARealDaemon(t)
 	dir := oneEntryPoint(t, `
@@ -259,12 +261,14 @@ steps:
 
   # A step that fails, under continue_on_error so the run still reaches succeeded and the
   # outputs are handed back: what is being asked is about containers, and a failed step is
-  # where a cleanup is most easily skipped.
+  # where a cleanup is most easily skipped. network: none creates nothing, so this one
+  # asks for a network of its own.
   breaks:
     image: alpine:3.21
     needs:
       - { step: seed, port: out, as: in }
     continue_on_error: true
+    network: internal
     outputs: [out]
     script:
       - exit 9
