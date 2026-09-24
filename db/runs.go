@@ -458,7 +458,10 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // evaluator on its next pass, so a decision that still has the dispatch in flight is behind rather
 // than right, and writing it over the loss would erase the one record that the runner went quiet.
 // An ending is different. It came back from the runner, so the dispatch was not lost after all,
-// and it is written.
+// and it is written. Except the one the controller writes itself as it stops a task superseded or
+// sibling_failed while the run goes on, cancelled with nothing its runner said: the runner said
+// nothing, which is the loss, and the loss is kept, as CancelTasks and EndTasks keep one, so that it
+// is heard and a lost dispatch is never named in the heartbeat's cancel.
 //
 // Nor does a decision move a dispatch back along the way to its ending. Running and publishing
 // are written by Progress, from the runner holding the dispatch, and the evaluator never hears of
@@ -501,6 +504,9 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		 on conflict (namespace, idempotency_key, requeue) do update
 		 set state = case when tasks.state = 'lost'
 		                   and excluded.state in ('pending', 'dispatched', 'running', 'publishing')
+		                  then tasks.state
+		                  when tasks.state = 'lost' and excluded.state = 'cancelled'
+		                   and excluded.started_at is null and excluded.exit_code is null
 		                  then tasks.state
 		                  when tasks.state in ('running', 'publishing')
 		                   and excluded.state in ('pending', 'dispatched')

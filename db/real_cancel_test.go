@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/jackc/pgx/v5"
 )
 
 // A cancellation, against a real PostgreSQL: asked for by the API on the run's row, found there by
@@ -324,6 +325,74 @@ func TestARunsEndingEndsItsTasksStillInFlightWhateverItsVerdict(t *testing.T) {
 				if task.Task == invoice && c.run.Terminal() && (task.ExitCode == nil || *task.ExitCode != 143 || !task.FinishedAt.Equal(later)) {
 					t.Errorf("in a %s run the stopped task reads exit %v, finished at %s", c.run, task.ExitCode, task.FinishedAt)
 				}
+			}
+		})
+	}
+}
+
+// A task the controller stops as superseded or sibling_failed while its run goes on is written
+// cancelled by the decision that sends the stop. Where the sweep declared its dispatch lost after
+// that decision was read, the loss stands: the runner said nothing, which is what a loss is, so
+// the next pass hears it and the heartbeat's cancel never names it. A runner's own report of how
+// its stopped container exited is another matter: the dispatch was not lost after all.
+func TestAStopWrittenOverALossKeepsTheLoss(t *testing.T) {
+	invoice := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	stopped := 143
+	for _, c := range []struct {
+		name string
+		row  TaskRow
+		want agk.TaskState
+	}{
+		{"stopped by the controller", TaskRow{State: agk.TaskCancelled}, agk.TaskLost},
+		{"reported by its runner", TaskRow{State: agk.TaskCancelled, ExitCode: &stopped}, agk.TaskCancelled},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool, super := created(t)
+			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+				return ns.CreateRun(ctx, aRun())
+			}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			decidedAs(t, pool, agk.Running, now,
+				TaskRow{ID: invoice, Step: "invoice", Attempt: 1, State: agk.TaskRunning, Runner: "runner-1", DispatchedAt: now})
+			conn, err := pgx.Connect(t.Context(), super)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close(context.Background())
+			if _, err := conn.Exec(t.Context(),
+				`update tasks set state = 'lost', finished_at = $2 where idempotency_key = $1`, string(invoice), now); err != nil {
+				t.Fatal(err)
+			}
+
+			row := c.row
+			row.ID, row.Step, row.Attempt, row.FinishedAt = invoice, "invoice", 1, now.Add(time.Second)
+			if row.ExitCode != nil {
+				row.StartedAt = now
+			}
+			if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+				return w.SaveDecision(ctx, Decision{
+					Namespace: "finance", Run: theRun, Was: 1, Seq: 2,
+					Document: json.RawMessage(`{"version":1}`), State: agk.Running, StartedAt: now,
+					WakeAt: now.Add(time.Hour), Tasks: []TaskRow{row},
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			var state string
+			var wake *time.Time
+			if err := conn.QueryRow(t.Context(),
+				`select t.state, r.wake_at from tasks t join runs r on r.id = t.run_id where t.idempotency_key = $1`,
+				string(invoice)).Scan(&state, &wake); err != nil {
+				t.Fatal(err)
+			}
+			if state != c.want.String() {
+				t.Errorf("a lost dispatch written cancelled, %s, reads %s, want %s", c.name, state, c.want)
+			}
+			if c.want == agk.TaskLost && wake != nil {
+				t.Errorf("the run waits until %s, and the loss the decision did not hear is for the next pass", wake)
 			}
 		})
 	}
