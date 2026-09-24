@@ -9,17 +9,21 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing/fstest"
 	"time"
 	"unicode/utf8"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/graph"
 	versions "github.com/agentiik/agentiik/version"
 )
@@ -27,9 +31,9 @@ import (
 // agk push: "Registers the workflow in a namespace on a server."
 //
 // What it sends is what the server stores: the entry point, every file it includes, the manifest
-// of every image it names, and the tree every step sees under /agk/repo. The server rebuilds it
-// before writing it, so a push that would not come back is refused in front of the person pushing
-// rather than at the first run.
+// of every image it names, the digest each image it names by tag resolves to, and the tree every
+// step sees under /agk/repo. The server rebuilds it before writing it, so a push that would not
+// come back is refused in front of the person pushing rather than at the first run.
 //
 // # Why everything is read out of the commit
 //
@@ -146,9 +150,10 @@ func push(ctx context.Context, e Env, args []string) int {
 		return exitRefused
 	}
 
-	// The manifests are read the way validate reads them, because a version the server
-	// cannot build is a version it will refuse, and finding that out here is cheaper.
-	read, code := readManifests(ctx, e, references(wf))
+	// Every tag is resolved to its digest, and the manifests are read the way validate reads
+	// them, out of those digests: a version the server cannot build is a version it will
+	// refuse, and finding that out here is cheaper.
+	images, read, code := pinned(ctx, e, wf)
 	if code != exitSucceeded {
 		return code
 	}
@@ -164,6 +169,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	body := api.Push{
 		Entry: captured.Entry, Document: captured.Document,
 		Includes: captured.Includes, Manifests: captured.Manifests,
+		Images: images,
 		Tree:   files,
 		Branch: branchOf(ctx, repo.top),
 	}
@@ -176,12 +182,96 @@ func push(ctx context.Context, e Env, args []string) int {
 	}
 
 	fmt.Fprintf(e.Out, "%s/%s@%s pushed to %s\n", *namespace, name, short(sha), where)
-	fmt.Fprintf(e.Out, "%s, %s, %s, %s\n",
+	fmt.Fprintf(e.Out, "%s, %s, %s, %s, %s\n",
 		counted(len(wf.Steps), "step", "steps"),
 		counted(len(files), "file", "files"),
 		counted(len(captured.Includes), "included file", "included files"),
-		counted(len(captured.Manifests), "manifest", "manifests"))
+		counted(len(captured.Manifests), "manifest", "manifests"),
+		counted(len(images), "tag resolved to its digest", "tags resolved to their digests"))
 	return exitSucceeded
+}
+
+// pinned is what the images of a version are pushed as: the digest each image the workflow names
+// by tag was resolved to, and the manifest of every image a step is held to, by the reference as
+// the workflow writes it.
+//
+// A tag is resolved here, on the machine that built or pulled the image, because "a tag is a
+// mutable pointer, and a commit must determine what ran": the version records the digest once, so
+// every run of it runs the same bytes, and the installation, which reaches no registry, never has
+// one to resolve. A script step's base image is resolved too, since a runner pulls it by digest
+// like any other. An image the workflow already names by digest is sent as written and nothing is
+// asked about it, so a workflow of script steps pinned by hand pushes from a machine with no
+// Docker at all.
+//
+// Each digest is resolved before the manifest is read, and the manifest is read out of it, so
+// that a tag moved on this machine between the two cannot pair the manifest of one image with the
+// digest of another.
+func pinned(ctx context.Context, e Env, wf *graph.Workflow) (map[string]string, map[string]brick.Manifest, int) {
+	tagged, err := byTag(wf)
+	if err != nil {
+		refusal(e.Err, err)
+		return nil, nil, exitRefused
+	}
+	referenced := references(wf)
+	if len(tagged) == 0 && len(referenced) == 0 {
+		return nil, map[string]brick.Manifest{}, exitSucceeded
+	}
+	d, code := imageReader(e)
+	if code != exitSucceeded {
+		return nil, nil, code
+	}
+	defer d.Close()
+
+	var images map[string]string
+	for _, r := range tagged {
+		pin, err := d.Pin(ctx, r.Step, r.Image)
+		if err != nil {
+			refusal(e.Err, err)
+			return nil, nil, leaving(err)
+		}
+		if images == nil {
+			images = map[string]string{}
+		}
+		images[r.Image] = pin
+		fmt.Fprintf(e.Out, "%s resolved to %s\n", r.Image, pin)
+	}
+
+	byDigest := make([]reference, 0, len(referenced))
+	for _, r := range referenced {
+		if pin, held := images[r.Image]; held {
+			r.Image = pin
+		}
+		byDigest = append(byDigest, r)
+	}
+	read, code := manifestsThrough(ctx, e, d, byDigest)
+	if code != exitSucceeded {
+		return nil, nil, code
+	}
+	manifests := make(map[string]brick.Manifest, len(referenced))
+	for i, r := range referenced {
+		manifests[r.Image] = read[byDigest[i].Image]
+	}
+	return images, manifests, exitSucceeded
+}
+
+// byTag are the images the workflow names by tag, each with the first step in name order that
+// names it, script steps included. A reference that writes a digest the wire does not carry is
+// refused, since a runner is handed nothing else.
+func byTag(wf *graph.Workflow) ([]reference, error) {
+	var tagged []reference
+	seen := map[string]bool{}
+	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
+		image := wf.Steps[name].Image
+		switch {
+		case image == "" || seen[image] || agk.ImageByDigest(image):
+			continue
+		case strings.Contains(image, "@"):
+			return nil, fmt.Errorf("step %s names %s, and a digest is written sha256: and sixty-four lowercase hexadecimal characters, which is what a runner is handed", name, image)
+		}
+		seen[image] = true
+		tagged = append(tagged, reference{Image: image, Step: name})
+	}
+	return tagged, nil
 }
 
 // entryOf is where the entry point is on the disk.

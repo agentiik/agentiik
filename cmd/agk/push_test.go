@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // agk push, which is where "a version is a commit" stops being a sentence and starts refusing
@@ -973,4 +976,170 @@ func keysOf(m map[string]api.PushFile) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// taggedWorkflow names its images by tag, as a workflow written against a laptop's daemon does: a
+// brick step, and a script step in a base image.
+const taggedWorkflow = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+outputs:
+  invoices: { from: { step: normalize, port: ok } }
+steps:
+  normalize:
+    image: ghcr.io/acme/agk-invoice:1.4.0
+    outputs: [ok]
+  report:
+    image: alpine:3.21
+    needs: [{ step: normalize, port: ok, as: in }]
+    script: ["cat /agk/in/in/envelope.json"]
+    outputs: [out]
+`
+
+const invoiceManifest = `apiVersion: agentiik.dev/v1
+kind: Brick
+metadata: { name: invoice, version: 1.4.0 }
+spec:
+  outputs:
+    ok: {}
+  runtime: { user: "65532:65532" }
+`
+
+const (
+	invoiceDigest = "sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc"
+	alpineDigest  = "sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+)
+
+// taggedRepository is a repository holding taggedWorkflow, committed.
+func taggedRepository(t *testing.T) string {
+	t.Helper()
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", taggedWorkflow)
+	commitAll(t, dir, "images by tag")
+	return dir
+}
+
+// aDaemon is a fake daemon holding images, which the push reaches as it reaches any daemon: through
+// DOCKER_HOST.
+func aDaemon(t *testing.T, images map[string]dockertest.Image, bs ...dockertest.Behaviour) {
+	t.Helper()
+	daemon, err := dockertest.NewDaemon(append(bs, dockertest.With(dockertest.Options{Images: images}))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { daemon.Close() })
+	t.Setenv("DOCKER_HOST", "unix://"+daemon.Socket())
+}
+
+// "A tag is a mutable pointer, and a commit must determine what ran." So every tag a workflow
+// names, a script step's base image included, travels with the digest the registry serves it
+// under, which the daemon holds it by; the file itself travels as it was committed, and the
+// manifest under the tag it writes.
+func TestEveryTagIsPushedWithTheDigestItsRegistryServes(t *testing.T) {
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest, Remote: true},
+	})
+
+	code, out, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitSucceeded {
+		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	}
+	want := map[string]string{
+		"ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@" + invoiceDigest,
+		"alpine:3.21":                    "alpine@" + alpineDigest,
+	}
+	if !maps.Equal(got.Images, want) {
+		t.Errorf("the push carries the images %v, want %v", got.Images, want)
+	}
+	if _, held := got.Manifests["ghcr.io/acme/agk-invoice:1.4.0"]; !held || len(got.Manifests) != 1 {
+		t.Errorf("the push carries manifests for %v", slices.Sorted(maps.Keys(got.Manifests)))
+	}
+	if string(got.Document) != taggedWorkflow {
+		t.Error("the entry point travelled as something other than what was committed")
+	}
+	for _, line := range []string{
+		"ghcr.io/acme/agk-invoice:1.4.0 resolved to ghcr.io/acme/agk-invoice@" + invoiceDigest,
+		"alpine:3.21 resolved to alpine@" + alpineDigest,
+		"2 tags resolved to their digests",
+	} {
+		if !strings.Contains(out, line) {
+			t.Errorf("the push does not say %q: %s", line, out)
+		}
+	}
+}
+
+// An image built on the machine and never pushed is refused naming it, and nothing is sent: a
+// version naming it would be a version no runner could pull an image for. The containerd store,
+// which holds such an image under a digest as it holds any other, is caught by asking the
+// registry; the classic one holds it under none.
+func TestAnImageNeverPushedIsRefusedAndNothingIsSent(t *testing.T) {
+	for _, c := range []struct {
+		store string
+		bs    []dockertest.Behaviour
+	}{
+		{"containerd", nil},
+		{"classic", []dockertest.Behaviour{dockertest.ClassicImageStore}},
+	} {
+		t.Run(c.store, func(t *testing.T) {
+			dir := taggedRepository(t)
+			aDaemon(t, map[string]dockertest.Image{
+				"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest), Unpushed: true},
+				"alpine:3.21":                    {Digest: alpineDigest},
+			}, c.bs...)
+
+			code, out, errs, got := pushing(t, dir, http.StatusOK)
+			if code != exitRefused {
+				t.Fatalf("a push naming an image never pushed answered %d: %s%s", code, out, errs)
+			}
+			if got != nil {
+				t.Error("the version reached the server anyway")
+			}
+			for _, want := range []string{"normalize", "ghcr.io/acme/agk-invoice:1.4.0", "never pushed"} {
+				if !strings.Contains(errs, want) {
+					t.Errorf("the refusal does not name %q: %s", want, errs)
+				}
+			}
+		})
+	}
+}
+
+// A registry that could not be asked has not said anything about the image, so the push stops
+// with exit 4, as a daemon that is not there does, rather than telling somebody off their network
+// that their image was never pushed.
+func TestARegistryThatCannotBeAskedIsNoOutcome(t *testing.T) {
+	dir := taggedRepository(t)
+	aDaemon(t, map[string]dockertest.Image{
+		"ghcr.io/acme/agk-invoice:1.4.0": {Digest: invoiceDigest, Manifest: []byte(invoiceManifest)},
+		"alpine:3.21":                    {Digest: alpineDigest},
+	}, dockertest.RegistryUnreachable)
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitNoOutcome || got != nil {
+		t.Errorf("a push whose registry could not be asked answered %d, and sent %v: %s", code, got != nil, errs)
+	}
+	if strings.Contains(errs, "never pushed") {
+		t.Errorf("a registry nobody reached was taken for an image nobody pushed: %s", errs)
+	}
+}
+
+// A reference that writes a digest the wire does not carry is refused before any daemon is asked,
+// naming the step, and so is nothing a runner could be handed.
+func TestADigestThatIsNotOneIsRefusedBeforeADaemonIsAsked(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", strings.Replace(scriptWorkflow, "@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc", "@sha256:1ab74e66", 1))
+	commitAll(t, dir, "a digest cut short")
+	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(t.TempDir(), "nobody.sock"))
+
+	code, _, errs, got := pushing(t, dir, http.StatusOK)
+	if code != exitRefused || got != nil {
+		t.Fatalf("a digest cut short answered %d: %s", code, errs)
+	}
+	for _, want := range []string{"normalize", "sixty-four"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("the refusal does not name %q: %s", want, errs)
+		}
+	}
 }

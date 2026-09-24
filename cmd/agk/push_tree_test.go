@@ -28,7 +28,10 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/dockertest"
+	"github.com/agentiik/agentiik/internal/fixtures"
 	versions "github.com/agentiik/agentiik/version"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // The tree a push carries, followed all the way to the runner: agk push reads a commit out of
@@ -209,6 +212,38 @@ func (in installation) pushFrom(t *testing.T, dir string, args ...string) (int, 
 	return code, out.String() + errs.String()
 }
 
+// firstDispatch starts a run of the commit, as alice, and answers the one task the controller
+// dispatches for it, with the grant the controller wrote.
+func (in installation) firstDispatch(t *testing.T, sha string) controller.Dispatch {
+	t.Helper()
+	var started struct {
+		Run string `json:"run"`
+	}
+	if code := in.ask(t, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", api.Start{Commit: sha}, &started); code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d", code)
+	}
+	c, err := controller.New(in.pool, "end-to-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	term, err := in.pool.BeginTerm(t.Context(), "end-to-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &dispatched{}
+	core, err := controller.NewCore(c, term, controller.Options{Queue: q, Versions: in.store, Objects: in.objects})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Decide(t.Context(), agk.RunID(started.Run)); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.sent) != 1 {
+		t.Fatalf("the controller dispatched %d tasks", len(q.sent))
+	}
+	return q.sent[0]
+}
+
 // committedFile is one file of a commit as git itself gives it.
 type committedFile struct {
 	content []byte
@@ -339,32 +374,7 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 
 	// A run of that commit, and the task the controller dispatches for it, with the grant
 	// the controller wrote.
-	var started struct {
-		Run string `json:"run"`
-	}
-	if code := in.ask(t, "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "alice", api.Start{Commit: sha}, &started); code != http.StatusAccepted {
-		t.Fatalf("starting a run answered %d", code)
-	}
-	c, err := controller.New(in.pool, "end-to-end")
-	if err != nil {
-		t.Fatal(err)
-	}
-	term, err := in.pool.BeginTerm(t.Context(), "end-to-end")
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := &dispatched{}
-	core, err := controller.NewCore(c, term, controller.Options{Queue: q, Versions: in.store, Objects: in.objects})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := core.Decide(t.Context(), agk.RunID(started.Run)); err != nil {
-		t.Fatal(err)
-	}
-	if len(q.sent) != 1 {
-		t.Fatalf("the controller dispatched %d tasks", len(q.sent))
-	}
-	d := q.sent[0]
+	d := in.firstDispatch(t, sha)
 
 	// A machine joins, and redeems the task's grant.
 	var join db.JoinToken
@@ -430,4 +440,59 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 	if urls["scripts/render.sh"] == "" || urls["scripts/render.sh"] != urls["data/render copy.sh"] {
 		t.Error("two files of identical bytes were not handed one URL")
 	}
+}
+
+// A tag a workflow names is dispatched as the digest the push resolved it to, whichever day the
+// run starts: what the controller hands the bus is what the wire's imageRef takes, compiled out of
+// the vendored document, and never the tag the file writes, which that same schema refuses.
+func TestATaskOfAPushedVersionNamesItsImageByDigest(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on this machine")
+	}
+	in := anInstallation(t)
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", strings.Replace(scriptWorkflow,
+		"docker.io/library/alpine@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc", "alpine:3.21", 1))
+	commitAll(t, dir, "a base image by tag")
+	sha := gitIn(t, dir, "rev-parse", "HEAD")
+	aDaemon(t, map[string]dockertest.Image{"alpine:3.21": {Digest: alpineDigest}})
+
+	if code, said := in.pushFrom(t, dir); code != exitSucceeded {
+		t.Fatalf("push answered %d: %s", code, said)
+	}
+	d := in.firstDispatch(t, sha)
+	if want := "alpine@" + alpineDigest; d.Task.Image != want {
+		t.Errorf("the task names %q, and its tag was pushed as %s", d.Task.Image, want)
+	}
+
+	imageRef := wireSchema(t, "imageRef")
+	if err := imageRef.Validate(d.Task.Image); err != nil {
+		t.Errorf("the wire refuses the image the task names: %v", err)
+	}
+	if imageRef.Validate("alpine:3.21") == nil {
+		t.Error("the wire's imageRef accepts a tag, so holding the task to it holds it to nothing")
+	}
+}
+
+// wireSchema compiles one definition of the vendored wire document.
+func wireSchema(t *testing.T, definition string) *jsonschema.Schema {
+	t.Helper()
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := jsonschema.UnmarshalJSON(bytes.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := jsonschema.NewCompiler()
+	c.DefaultDraft(jsonschema.Draft2020)
+	if err := c.AddResource("wire.schema.json", raw); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile("wire.schema.json#/$defs/" + definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
