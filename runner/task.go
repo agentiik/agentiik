@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -188,15 +190,40 @@ func (a *Assembled) Context(ctx context.Context) context.Context {
 	return driver.WithSources(ctx, a.Sources)
 }
 
-// Remove takes away the tree this assembly laid out, once the container it was bound into is gone.
-// It is this assembly's tree alone, so an assembly that was not the one a running container was
-// given takes nothing from under it. A tree already gone is the outcome asked for and no error.
+// Remove takes away every tree laid out for the task, once its container is gone.
+//
+// Every tree, and not only this assembly's: an agent that restarted under the task's running
+// container assembled it again, and the tree that container was given was laid out by the
+// assembly before the restart, which nothing else holds any more. A host runs one container of a
+// key at a time, since the driver refuses a key in flight or ended, so once this one is gone none
+// of the key's trees is bound into anything. A tree already gone is the outcome asked for and no
+// error.
 func (a *Assembled) Remove() error {
 	if a == nil || a.Sources.Repo == "" {
 		return nil
 	}
-	if err := os.RemoveAll(a.Sources.Repo); err != nil {
-		return fmt.Errorf("runner: task %s: the tree %s could not be removed: %w", a.Task.ID, a.Sources.Repo, err)
+	trees, name := filepath.Split(a.Sources.Repo)
+	at := strings.LastIndex(name, ".")
+	if at < 0 {
+		// Not a directory newTreeDir named, so nothing tells which trees are the key's.
+		return os.RemoveAll(a.Sources.Repo)
+	}
+	of := name[:at]
+	entries, err := os.ReadDir(trees)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("runner: task %s: the trees under %s could not be listed: %w", a.Task.ID, trees, err)
+	}
+	var left []error
+	for _, e := range entries {
+		if at := strings.LastIndex(e.Name(), "."); at < 0 || e.Name()[:at] != of {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(trees, e.Name())); err != nil {
+			left = append(left, err)
+		}
+	}
+	if err := errors.Join(left...); err != nil {
+		return fmt.Errorf("runner: task %s: a tree could not be removed: %w", a.Task.ID, err)
 	}
 	return nil
 }
@@ -204,8 +231,7 @@ func (a *Assembled) Remove() error {
 // Assemble turns a task message and the redemption of its grant into the graph.Task driver.Run
 // takes, and the driver.Sources it takes it with.
 //
-// Everything the redemption names is fetched and checked here, before the image is pulled and
-// before any container exists: each input envelope against the digest and the count the message
+// Everything the redemption names is fetched and checked here, before any container exists: each input envelope against the digest and the count the message
 // gives it, and each file of the tree against its digest. The secret values are decoded from the
 // encoding they travelled in, and are the task's own driver.Secrets, so that two tasks this runner
 // holds at once, from two namespaces that both name billing, are each given their own value and
@@ -214,7 +240,8 @@ func (a *Assembled) Remove() error {
 //
 // A refusal wraps ErrAnswerUnusable where the redemption does not answer the message, and
 // ErrNotAsNamed where what was fetched is not what was named. Anything else is a fetch that may
-// pass, which redeeming again, for fresh URLs, may get past.
+// pass, and assembling again with the same redemption, whose URLs hold until the deadline, may get
+// past it without reading the secrets a second time.
 func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) (*Assembled, error) {
 	if err := r.answers(m); err != nil {
 		return nil, fmt.Errorf("%w: task %s: %w", ErrAnswerUnusable, m.IdempotencyKey, err)

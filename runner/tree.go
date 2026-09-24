@@ -123,7 +123,8 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 	}
 
 	// The directories first, one after the other, so that the fetchers only ever create
-	// files, and a file that some other entry needs as a directory is refused here.
+	// files. A path another entry needs as a directory is refused by Redemption.answers, and
+	// would be refused here by the file's creation, which finds a directory in its place.
 	byDigest := map[string][]TreeEntry{}
 	for _, e := range entries {
 		if err := treePath(e.Path); err != nil {

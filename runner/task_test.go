@@ -41,9 +41,10 @@ func envelopesFor(m bus.TaskMessage) map[agk.Port]agk.Envelope {
 }
 
 // Every task message the corpus holds valid, answered by the corpus's redemption as the API
-// answers it, assembles into the task the driver runs: the redemption answers the message, its
-// secrets decode, and the message reads back as a graph.Task with every field it carries.
-func TestEveryValidTaskMessageWithItsRedemptionAssemblesIntoATask(t *testing.T) {
+// answers it, reads back as the task the driver runs: the redemption answers the message, its
+// secrets decode, and the message reads back as a graph.Task with every field it carries. The
+// corpus's URLs reach nothing, so fetching is held by the tests against the built-in store.
+func TestEveryValidTaskMessageWithItsRedemptionReadsBackAsATask(t *testing.T) {
 	cases, err := fixtures.TaskMessages()
 	if err != nil {
 		t.Fatal(err)

@@ -171,7 +171,10 @@ func TestEachAnswerToARedemptionLeadsWhereThePageSays(t *testing.T) {
 		"200 from a proxy":           {http.StatusOK, []byte("<html>maintenance</html>"), RedeemAgain},
 		"200 with nothing":           {http.StatusOK, nil, RedeemAgain},
 		"200 of another shape":       {http.StatusOK, reshaped, RedeemReport},
-		"200 for another task":       {http.StatusOK, bytes.Replace(answer, []byte(m.TaskID), []byte("01JMZ8V1PC7K3M0QY4B8ZR6TDM"), 1), RedeemReport},
+		"200 for another task":       {http.StatusOK, bytes.Replace(answer, []byte(m.TaskID), []byte("01JMZ8V1PC7K3M0QY4B8ZR6TDM"), 1), RedeemAgain},
+		"200 of a proxy's JSON":      {http.StatusOK, []byte(`{"message":"Service Unavailable"}`), RedeemAgain},
+		"200 of a list":              {http.StatusOK, []byte(`[]`), RedeemAgain},
+		"200 of the task, unusable":  {http.StatusOK, bytes.Replace(answer, []byte(`"finance/sha256/"`), []byte(`"payroll/sha256/"`), 1), RedeemReport},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := api(t, func(w http.ResponseWriter, r *http.Request) {
@@ -257,14 +260,19 @@ func TestARedemptionThatDoesNotAnswerTheMessageIsRefused(t *testing.T) {
 		"an artifact by name": func(r *Redemption) {
 			r.Inputs[0].Artifacts = []RedeemedArtifact{{URI: "invoice.pdf", SHA256: strings.Repeat("a", 64), URL: "https://x"}}
 		},
-		"a secret not named":    func(r *Redemption) { r.Secrets[0].Name = "payroll" },
-		"a secret twice":        func(r *Redemption) { r.Secrets = append(r.Secrets, r.Secrets[0]) },
-		"a secret missing":      func(r *Redemption) { r.Secrets = nil },
-		"a secret elsewhere":    func(r *Redemption) { r.Secrets[0].Mount = "/agk/secrets/other" },
-		"a secret in hex":       func(r *Redemption) { r.Secrets[0].Encoding = "hex" },
-		"a tree path climbing":  func(r *Redemption) { r.Tree[0].Path = "../agentiik.yaml" },
-		"a tree path absolute":  func(r *Redemption) { r.Tree[0].Path = "/agentiik.yaml" },
-		"a tree path twice":     func(r *Redemption) { r.Tree = append(r.Tree, r.Tree[0]) },
+		"a secret not named":   func(r *Redemption) { r.Secrets[0].Name = "payroll" },
+		"a secret twice":       func(r *Redemption) { r.Secrets = append(r.Secrets, r.Secrets[0]) },
+		"a secret missing":     func(r *Redemption) { r.Secrets = nil },
+		"a secret elsewhere":   func(r *Redemption) { r.Secrets[0].Mount = "/agk/secrets/other" },
+		"a secret in hex":      func(r *Redemption) { r.Secrets[0].Encoding = "hex" },
+		"a tree path climbing": func(r *Redemption) { r.Tree[0].Path = "../agentiik.yaml" },
+		"a tree path absolute": func(r *Redemption) { r.Tree[0].Path = "/agentiik.yaml" },
+		"a tree path twice":    func(r *Redemption) { r.Tree = append(r.Tree, r.Tree[0]) },
+		"a tree file under a file": func(r *Redemption) {
+			below := r.Tree[0]
+			below.Path += "/below"
+			r.Tree = append(r.Tree, below)
+		},
 		"a tree file relocated": func(r *Redemption) { r.Tree[0].To = "/etc/ssl/certs/internal-ca.pem" },
 		"a tree file by name":   func(r *Redemption) { r.Tree[0].SHA256 = "agentiik.yaml" },
 		"no upload policy":      func(r *Redemption) { r.Uploads.URL = "" },

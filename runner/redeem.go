@@ -1,12 +1,12 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path"
@@ -127,32 +127,41 @@ var ErrAnswerUnusable = errors.New("runner: the redemption bound the task to thi
 
 // Redeem redeems the grant of one task message.
 //
-// The answer is read strictly, as every answer is, and then held to the message it answers: the
-// same task, the same input ports with the same digests, the same secrets at the same mounts, a
-// tree that stays inside /agk/repo and an upload policy for the task's own namespace. An answer
-// that fails either is ErrAnswerUnusable. NextAfter says what the runner does with any error this
-// returns.
+// A 200 is taken as the API's only once it echoes the task_id the runner asked for, which nothing
+// but the API that read the grant can know. Anything else answered 200, a proxy's page or its JSON,
+// an empty body or one cut short, says nothing of whose the task is, and is asked again, which the
+// holder is answered as the first time. An answer that is the API's is then read strictly, as
+// every answer is, and held to the message it answers: the same task, the same input ports with the
+// same digests, the same secrets at the same mounts, a tree that stays inside /agk/repo and an
+// upload policy for the task's own namespace. One that fails either is ErrAnswerUnusable. NextAfter
+// says what the runner does with any error this returns.
 func (c *Client) Redeem(ctx context.Context, m bus.TaskMessage) (Redemption, error) {
-	var r Redemption
+	var raw json.RawMessage
 	err := c.Do(ctx, http.MethodPost, redeemPath, redemptionRequest{
 		Grant: m.Grant, TaskID: m.TaskID, IdempotencyKey: m.IdempotencyKey,
-	}, &r)
+	}, &raw)
 	var refused *APIError
-	var syntax *json.SyntaxError
 	switch {
 	case err == nil:
 	case errors.As(err, &refused), errors.Is(err, ErrUnavailable), ctx.Err() != nil:
 		return Redemption{}, err
-	case errors.As(err, &syntax), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
-		// A success that is not JSON at all, is empty or stops short, is not an API of another
-		// version: it is a proxy's page, or a body cut off, and the 200 may not even be
-		// the API's. Nothing says the task was bound, so it is asked again, which the
-		// holder is answered as the first time.
-		return Redemption{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	default:
-		// A document that reads as JSON and not as this runner's answer: an API of another
-		// version, whose 200 said the task is bound here.
-		return Redemption{}, fmt.Errorf("%w: %w", ErrAnswerUnusable, err)
+		// Not JSON at all, empty or cut short.
+		return Redemption{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	var echo struct {
+		TaskID any `json:"task_id"`
+	}
+	if json.Unmarshal(raw, &echo) != nil || echo.TaskID != m.TaskID {
+		return Redemption{}, fmt.Errorf("runner: POST %s: %w: the answer is not the API's answer for task_id %s", redeemPath, ErrUnavailable, m.TaskID)
+	}
+
+	// The API's, whose 200 bound the task here.
+	var r Redemption
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&r); err != nil {
+		return Redemption{}, fmt.Errorf("%w: task %s: the answer is not the one this runner reads, which is an API of another version: %w", ErrAnswerUnusable, m.IdempotencyKey, err)
 	}
 	if err := r.answers(m); err != nil {
 		return Redemption{}, fmt.Errorf("%w: task %s: %w", ErrAnswerUnusable, m.IdempotencyKey, err)
@@ -184,7 +193,7 @@ const (
 
 	// RedeemAgain is no answer at all, a 401 or any other 5xx: the grant expired or opens
 	// nothing, the runner's own credential was refused, or a failure that may pass. A 200 that
-	// is not JSON, or stops short, is one too, since it may not be the API's at all. The
+	// does not echo the task_id asked for is one too, since it may not be the API's at all. The
 	// answer may have been lost after the binding, so the runner keeps the key, names it in
 	// its heartbeat and redeems again, acknowledging nothing, until the deadline the message
 	// carries has passed, when it reports the task timed_out with no container ran.
@@ -299,6 +308,15 @@ func (r Redemption) answers(m bus.TaskMessage) error {
 			return fmt.Errorf("the tree names %s twice", f.Path)
 		}
 		paths[f.Path] = true
+	}
+	for _, f := range r.Tree {
+		// A file one entry names is a directory another entry is below, and no tree can
+		// be laid out with both, on any try.
+		for dir := path.Dir(f.Path); dir != "."; dir = path.Dir(dir) {
+			if paths[dir] {
+				return fmt.Errorf("the tree names %s as a file and %s below it", dir, f.Path)
+			}
+		}
 		if _, err := treeMode(f.Mode); err != nil {
 			return fmt.Errorf("the tree gives %s %w", f.Path, err)
 		}

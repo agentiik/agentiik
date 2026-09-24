@@ -93,9 +93,8 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 	})
 }
 
-// A task assembled again, as it is when its message comes round to its holder or when the agent
-// restarts under its running container, lays out a tree of its own, and the tree the running
-// container was given is neither rewritten nor taken away, by the assembly or by its removal.
+// A task assembled again, as it is when the agent restarts under its running container, lays out a
+// tree of its own, and the tree the running container was given is not rewritten under it.
 func TestEachAssemblyOfATaskLaysOutATreeOfItsOwn(t *testing.T) {
 	s := newObjectStore(t)
 	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
@@ -111,16 +110,27 @@ func TestEachAssemblyOfATaskLaysOutATreeOfItsOwn(t *testing.T) {
 	if first.Sources.Repo == again.Sources.Repo {
 		t.Fatalf("two assemblies of one task share the tree %s", first.Sources.Repo)
 	}
-	if err := again.Remove(); err != nil {
-		t.Fatal(err)
-	}
 	if b, err := os.ReadFile(filepath.Join(first.Sources.Repo, "agentiik.yaml")); err != nil || string(b) != "version: 1\n" {
-		t.Errorf("the first tree reads %q once the second is removed: %v", b, err)
+		t.Errorf("the first tree reads %q once the second is laid out: %v", b, err)
 	}
-	if err := first.Remove(); err != nil {
+
+	// Once the container is gone, the key's trees go with it, the one an assembly before a
+	// restart laid out included, and another task's stays.
+	other := m
+	other.IdempotencyKey, other.Step = string(storeRun)+"/invoice-copy/1", "invoice-copy"
+	kept, err := Assemble(t.Context(), other, r, Assembly{WorkRoot: work})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if left, _ := os.ReadDir(filepath.Join(work, TreesDir)); len(left) != 0 {
+	restarted, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := os.ReadDir(filepath.Join(work, TreesDir))
+	if len(left) != 1 || filepath.Join(work, TreesDir, left[0].Name()) != kept.Sources.Repo {
 		t.Errorf("the trees left behind: %v", left)
 	}
 }
