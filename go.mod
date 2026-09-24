@@ -26,7 +26,9 @@ require (
 	// holds LISTEN while the API wakes it with NOTIFY. A pooled database/sql connection
 	// is handed back between statements, which drops the lock and carries the LISTEN to
 	// the next caller; this driver pins one. It also takes parameters natively, which is
-	// what keeps a namespace a parameter and never a string interpolated into SQL.
+	// what keeps a namespace a parameter and never a string interpolated into SQL. The tests
+	// of package internal/config parse a database URL with it, since the reading that package
+	// makes of one is only right where it is the reading of the driver that connects.
 	github.com/jackc/pgx/v5 v5.11.0
 	// NATS credentials, used by package bus to mint the "short-lived token minted by the API"
 	// that a runner reaches the bus with. This is the library the server verifies with, so the

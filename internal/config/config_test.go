@@ -20,6 +20,7 @@ import (
 
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/config"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 )
@@ -489,6 +490,8 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"a database written as keywords":        {config.DatabaseURL, is("host=db user=agentiik dbname=agentiik"), all},
 		"a database naming no role":             {config.DatabaseURL, is("postgres://db:5432/agentiik"), all},
 		"a database at no port":                 {config.DatabaseURL, is("postgres://agentiik@db:postgres/agentiik"), all},
+		"a database parameter with no value":    {config.DatabaseURL, is("postgres://agentiik@db/agentiik?sslmode"), all},
+		"a database parameter with a space":     {config.DatabaseURL, is("postgres://agentiik@db/agentiik?application_name=a b"), all},
 		"a database password of two lines":      {config.DatabasePasswordFile, holding("one\ntwo\n"), all},
 		"no migration database":                 {config.MigrateDatabaseURL, unset, []program{migrating}},
 		"a migration database that is not one":  {config.MigrateDatabaseURL, is("https://db/agentiik"), []program{migrating}},
@@ -590,6 +593,7 @@ func TestASecretPassedAsAValueIsRefused(t *testing.T) {
 		"a password in the database":    {config.DatabaseURL, as("postgres://agentiik:hunter2@db/agentiik"), everyProgram},
 		"a password as a parameter":     {config.DatabaseURL, as("postgres://agentiik@db/agentiik?password=hunter2"), everyProgram},
 		"a key password as a parameter": {config.DatabaseURL, as("postgres://agentiik@db/agentiik?sslpassword=hunter2"), everyProgram},
+		"a key password holding a ;":    {config.DatabaseURL, as("postgres://agentiik@db/agentiik?sslpassword=hunter;2"), everyProgram},
 		"a password in the migration":   {config.MigrateDatabaseURL, as("postgres://postgres:hunter3@db/agentiik"), []program{migrating}},
 		"a password in the bus":         {config.BusURL, as("nats://controller:hunter4@nats:4222"), []program{theAPI, theController}},
 		"a token in the bus":            {config.BusURL, as("nats://s3cr3tt0k3n@nats:4222"), []program{theAPI, theController}},
@@ -804,6 +808,60 @@ func TestADatabasePasswordReachesTheConnectionAndNothingElse(t *testing.T) {
 	d := config.Database{URL: "postgres://agentiik@db/agentiik", Role: "agentiik"}
 	if d.ConnString() != d.URL {
 		t.Errorf("a database with no password connects to %s", d.ConnString())
+	}
+}
+
+// A database URL is read the way pgx, which connects with it, reads it, and not the way net/url
+// does: the role is the one pgx signs in as, and a password is refused wherever pgx would find one.
+// Every case here is checked against pgx itself, so the two readings cannot drift apart unseen.
+func TestADatabaseURLIsReadAsPgxReadsIt(t *testing.T) {
+	// Nothing of the environment the test runs in is pgx's to sign in with.
+	t.Setenv("PGUSER", "")
+	t.Setenv("PGPASSWORD", "")
+	t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "no.pgpass"))
+
+	signsInAs := map[string]string{
+		"postgres://agentiik@db:5432/agentiik?sslmode=require":                      "agentiik",
+		"postgres://agentiik@db:5432/agentiik?user=app&sslmode=require":             "app",
+		"postgres://db:5432/agentiik?user=app&sslmode=require":                      "app",
+		"postgres://agentiik@db:5432/agentiik?sslmode=require&application_name=a;b": "agentiik",
+	}
+	for raw, role := range signsInAs {
+		i := anInstallation(t)
+		i.env[config.DatabaseURL] = raw
+		api, err := config.ReadAPI(theAPI.environment(i))
+		if err != nil {
+			t.Errorf("%s: %v", raw, err)
+			continue
+		}
+		read, err := pgconn.ParseConfig(api.Database.ConnString())
+		if err != nil {
+			t.Fatalf("%s: pgx cannot read the connection string: %v", raw, err)
+		}
+		if api.Database.Role != role || read.User != role || read.Password != i.databasePassword {
+			t.Errorf("%s reads as the role %q, and pgx signs in as %q, with the password given: %t", raw, api.Database.Role, read.User, read.Password == i.databasePassword)
+		}
+	}
+
+	passwords := []string{
+		"postgres://agentiik@db:5432/agentiik?sslmode=require&password=Tr0ub;dor",
+		"postgres://agentiik@db:5432/agentiik?sslmode=require& password =Tr0ub4dor",
+		"postgres://agentiik@db:5432/agentiik?sslmode=require&pass%77ord=Tr0ub4dor",
+	}
+	for _, raw := range passwords {
+		if read, err := pgconn.ParseConfig(raw); err != nil || read.Password == "" {
+			t.Fatalf("%s: pgx finds no password in it, so the case proves nothing: %v", raw, err)
+		}
+		for _, p := range everyProgram {
+			i := anInstallation(t)
+			i.env[config.DatabaseURL] = raw
+			err := p.read(p.environment(i))
+			if names := refused(err); !slices.Equal(names, []string{config.DatabaseURL}) {
+				t.Errorf("%s, for %s: the start was refused naming %v: %v", raw, p.name, names, err)
+				continue
+			}
+			saysNothingOf(t, err, "Tr0ub")
+		}
 	}
 }
 

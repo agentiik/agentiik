@@ -457,11 +457,25 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 		r.refuse(name, "is not a PostgreSQL URL, which begins postgres://")
 		return Database{}
 	}
-	if u.Query().Has("password") || u.Query().Has("sslpassword") {
+	params, ok := parameters(v)
+	if !ok {
+		r.refuse(name, "has a parameter pgx cannot read, which is a key, one = and a value, with no space inside either")
+		return Database{}
+	}
+	if _, has := params["password"]; has {
+		r.refuse(name, carriesAPassword)
+		return Database{}
+	}
+	if _, has := params["sslpassword"]; has {
 		r.refuse(name, carriesAPassword)
 		return Database{}
 	}
 	d := Database{URL: v, Role: u.User.Username()}
+	// pgx signs in as the user a parameter names over the one before the @, so the role is read
+	// the same way: migrating creates the role the programs then sign in as, and no other.
+	if user, has := params["user"]; has {
+		d.Role = user
+	}
 	if needsRole && d.Role == "" {
 		r.refuse(name, "names no role, and it names the role the API and the controller connect as, which migrating creates")
 	}
@@ -474,6 +488,45 @@ func (r *reader) database(name, passwordFile string, needsRole bool) Database {
 		d.Password = p
 	}
 	return d
+}
+
+// parameters is a PostgreSQL URL's query as pgx reads it, which is libpq's reading, and false
+// where pgx would refuse it.
+//
+// The text after the first ?, in pairs separated by &, each cut on its one =, both halves decoded,
+// and the last value of a key standing. net/url reads it otherwise: it drops a pair holding a ;
+// without a word, and keeps the spaces pgx trims from a key, so a password=Tr0ub;dor it never saw
+// would still sign in. The first ? is the query's, since a URL with one before its @ is refused as
+// carrying a password before this reads it.
+func parameters(raw string) (map[string]string, bool) {
+	params := map[string]string{}
+	_, query, _ := strings.Cut(raw, "?")
+	for query != "" {
+		var pair string
+		pair, query, _ = strings.Cut(query, "&")
+		key, value, found := strings.Cut(pair, "=")
+		if !found || strings.Contains(value, "=") {
+			return nil, false
+		}
+		key, keyRead := unescape(key)
+		value, valueRead := unescape(value)
+		if !keyRead || !valueRead {
+			return nil, false
+		}
+		params[key] = value
+	}
+	return params, true
+}
+
+// unescape decodes one half of a parameter as libpq does: the spaces around it dropped, none
+// inside it, and every %XX its byte, except a NUL.
+func unescape(s string) (string, bool) {
+	s = strings.Trim(s, " ")
+	if strings.Contains(s, " ") {
+		return "", false
+	}
+	v, err := url.PathUnescape(s)
+	return v, err == nil && !strings.Contains(v, "\x00")
 }
 
 // bus reads where the control plane reaches the bus, and its credential.
