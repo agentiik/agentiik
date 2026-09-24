@@ -118,8 +118,9 @@ func newRunner(t *testing.T, images map[string]dockertest.Image, run func(docker
 	policy.RequireUsernsRemap = RemapLifted
 	policy.StopGrace = 200 * time.Millisecond
 	// A secret written into the task's working directory rather than onto a tmpfs,
-	// which is what a laptop with no /dev/shm does.
+	// which is what a laptop with no /dev/shm does, and a laptop is not held to one.
 	policy.SecretsDir = ""
+	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
 
 	d, err := New(Config{
 		Socket:   daemon.Socket(),
@@ -130,6 +131,9 @@ func newRunner(t *testing.T, images map[string]dockertest.Image, run func(docker
 		Policy:   policy,
 		WorkRoot: work,
 		Announce: said.say,
+		// A process that holds no capability, whichever account runs the test, so
+		// that a daemon restarted into remapping is refused the same way everywhere.
+		Host: holding(0),
 	})
 	if err != nil {
 		t.Fatalf("opening the driver: %s", err)

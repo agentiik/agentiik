@@ -401,13 +401,14 @@ func TestAProfileTheDaemonCannotApplyIsRefused(t *testing.T) {
 // rather than a value handed to a function: a runner opening a daemon without seccomp is
 // refused, and a local caller opening the same daemon is told once and goes on.
 func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
+	host := holding(ownershipSet())
 	daemon, err := dockertest.NewDaemon(dockertest.WithoutSeccomp, dockertest.WithUsernsRemap(165536, 165536))
 	if err != nil {
 		t.Fatalf("starting a fake daemon: %s", err)
 	}
 	defer daemon.Close()
 
-	d, err := New(Config{Socket: daemon.Socket(), Policy: DefaultPolicy(), WorkRoot: t.TempDir()})
+	d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: DefaultPolicy(), WorkRoot: t.TempDir()})
 	if err == nil {
 		d.Close()
 		t.Fatalf("a runner opened a daemon that applies no seccomp profile")
@@ -418,8 +419,9 @@ func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
 
 	p := DefaultPolicy()
 	p.RequireSeccomp = SeccompLifted
+	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	var said []string
-	d, err = New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
+	d, err = New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
 	if err != nil {
 		t.Fatalf("a lifted seccomp floor refused anyway: %s", err)
 	}
@@ -440,6 +442,7 @@ func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
 // daemon is opened, naming the count, rather than failing every such step as it is
 // created. The fake daemon has two.
 func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
+	host := holding(ownershipSet())
 	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
 	if err != nil {
 		t.Fatalf("starting a fake daemon: %s", err)
@@ -450,7 +453,8 @@ func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPolicy: %s", err)
 	}
-	d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir()})
+	p.RequireSecretsTmpfs = SecretsTmpfsLifted
+	d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir()})
 	if err == nil {
 		d.Close()
 		t.Fatalf("a runner opened a daemon with 2 CPUs under a cap of 4")
@@ -466,7 +470,8 @@ func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadPolicy: %s", err)
 		}
-		d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir()})
+		p.RequireSecretsTmpfs = SecretsTmpfsLifted
+		d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir()})
 		if err != nil {
 			t.Fatalf("a cap of %s on a daemon with 2 CPUs was refused: %s", cores, err)
 		}
@@ -477,6 +482,7 @@ func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
 // A [hooks] table in the file runs nothing, and opening the daemon says so once, because
 // an operator who wrote a pre_task is relying on it having run.
 func TestNewSaysTheHooksDoNotRun(t *testing.T) {
+	host := holding(ownershipSet())
 	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
 	if err != nil {
 		t.Fatalf("starting a fake daemon: %s", err)
@@ -487,8 +493,9 @@ func TestNewSaysTheHooksDoNotRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPolicy: %s", err)
 	}
+	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	var said []string
-	d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
+	d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
 	if err != nil {
 		t.Fatalf("New: %s", err)
 	}

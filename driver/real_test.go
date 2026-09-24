@@ -39,6 +39,7 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	// Docker Desktop does not offer user namespace remapping, and this is the machine
 	// the floor is lifted for.
 	policy.RequireUsernsRemap = RemapLifted
+	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
 	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
 	return realDriverWith(t, policy, images...)
@@ -354,6 +355,7 @@ seccomp_profile = "`+profile+`"
 		t.Fatalf("LoadPolicy: %s", err)
 	}
 	policy.SecretsDir = ""
+	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
 	d, image := realDriverWith(t, policy)
 
 	task := graph.Task{

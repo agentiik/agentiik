@@ -139,6 +139,9 @@ func Open(ctx context.Context, d Daemon, l Layout) (*Session, error) {
 	// loud rather than refused, as the lifted userns floor is: the laptop is somebody's
 	// own, and what it gives up is theirs to hear about.
 	policy.RequireSeccomp = driver.SeccompLifted
+	// Nor is it held to a tmpfs of the runner's own for its secret values: a laptop has
+	// none, and the driver says where a value lands instead.
+	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
 
 	dk, err := driver.New(driver.Config{
 		Socket:   d.Socket,

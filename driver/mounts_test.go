@@ -30,6 +30,16 @@ func (v vault) Value(_ context.Context, name string) ([]byte, error) {
 	return []byte(value), nil
 }
 
+// laptop is the policy these tests prepare under: the one of a machine with no tmpfs of
+// the runner's own, where a secret value is written under the task's working directory,
+// which is the directory newWorkdir is given here.
+func laptop() Policy {
+	p := DefaultPolicy()
+	p.SecretsDir = ""
+	p.RequireSecretsTmpfs = SecretsTmpfsLifted
+	return p
+}
+
 // prepared runs the whole of the host side for one task and hands back what a create
 // would have been given, with the working directory removed when the test ends.
 func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*given, *workdir) {
@@ -45,10 +55,10 @@ func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*giv
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
-	t.Cleanup(w.remove)
+	t.Cleanup(func() { w.remove() })
 
 	run := agk.Run{ID: "01JMZ8V1P9C4", Workflow: "finance/monthly-invoicing@a3f9c1e", Namespace: "finance", Commit: "a3f9c1e"}
-	g, err := prepare(context.Background(), task, w, DefaultPolicy(), store, run, repo, secrets)
+	g, err := prepare(context.Background(), task, w, laptop(), kernel{}, store, run, repo, secrets)
 	if err != nil {
 		t.Fatalf("prepare: %s", err)
 	}
@@ -215,7 +225,7 @@ func TestASelectorThatLeavesTheTreeIsRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "../../etc/shadow", To: "/etc/shadow"}}}
-	_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, t.TempDir(), nil)
+	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, t.TempDir(), nil)
 	if err == nil {
 		t.Fatalf("a selector reaching outside the repository tree was mounted")
 	}
@@ -320,7 +330,7 @@ func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: "/run/secrets/bearer"}}}
-	_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", vault{"bearer": "token"})
+	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"bearer": "token"})
 	if err == nil {
 		t.Fatalf("a secret was mounted at /run/secrets/bearer")
 	}
@@ -351,7 +361,7 @@ func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
 			t.Fatalf("newWorkdir: %s", err)
 		}
 		task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: mount}}}
-		_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", vault{"bearer": "token"})
+		_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"bearer": "token"})
 		w.remove()
 		if err == nil {
 			t.Errorf("a secret was mounted at %s", mount)
@@ -379,7 +389,7 @@ func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 		{Name: "billing", Mount: "/agk/secrets/token"},
 		{Name: "bearer", Mount: "/agk/secrets/token"},
 	}}
-	_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", vault{"billing": "a", "bearer": "b"})
+	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"billing": "a", "bearer": "b"})
 	if err == nil {
 		t.Fatalf("two secrets were mounted at one path")
 	}
@@ -396,7 +406,7 @@ func TestSecretsWithNoSourceAreRefused(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	if _, err := prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", nil); err == nil {
+	if _, err := prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", nil); err == nil {
 		t.Fatalf("a task naming a secret was prepared with no secret source")
 	}
 }
@@ -412,7 +422,7 @@ func TestASecretThatCannotBeRedeemedRefusesTheTask(t *testing.T) {
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	_, err = prepare(context.Background(), task, w, DefaultPolicy(), store, agk.Run{}, "", vault{})
+	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{})
 	if err == nil || !strings.Contains(err.Error(), "billing") {
 		t.Fatalf("the refusal does not name the secret: %v", err)
 	}

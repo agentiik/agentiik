@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/internal/dockertest"
 	"github.com/agentiik/agentiik/runner"
 )
@@ -95,9 +96,28 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		Geteuid:    func() int { return 1000 },
 		EnvFile:    envFile,
 		PolicyFile: policyFile,
+		Host:       installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoExec: true, NoSUID: true, NoDev: true}},
 	}
 	return h
 }
+
+// installed is the machine an agent installed as the page says finds, whoever runs the test:
+// the three capabilities its unit grants, and a secrets directory on a tmpfs mounted
+// noexec,nosuid,nodev. A test takes one away to see the start refused.
+type installed struct {
+	caps uint64
+	fs   driver.Filesystem
+}
+
+func (m installed) Capabilities() (uint64, error)                { return m.caps, nil }
+func (m installed) Filesystem(string) (driver.Filesystem, error) { return m.fs, nil }
+
+// ownership is CAP_CHOWN, CAP_DAC_OVERRIDE and CAP_FOWNER, bits 0, 1 and 3 of the kernel's sets.
+const ownership = 1<<0 | 1<<1 | 1<<3
+
+// secretsTmpfs is the line of runner.toml that names the host's secrets tmpfs, which a start
+// that is to say ready needs: without it a secret value would have nowhere to go but a disk.
+const secretsTmpfs = "secrets_dir = \"/run/agentiik/secrets\"\n"
 
 // set adds a variable to the host's environment.
 func (h *host) set(name, value string) {
@@ -226,7 +246,7 @@ func TestNoFlagLiftsTheFloor(t *testing.T) {
 }
 
 func TestRequireUsernsRemapFalseInRunnerTomlIsTheOneWayPastTheFloor(t *testing.T) {
-	h := newHost(t, daemon(t, false), "require_userns_remap = false\n")
+	h := newHost(t, daemon(t, false), "require_userns_remap = false\n"+secretsTmpfs)
 	h.serving(t)
 }
 
@@ -256,7 +276,7 @@ func TestADirectoryAsRunnerTomlRefusesTheStart(t *testing.T) {
 }
 
 func TestServeSaysReadyOnceTheFloorHoldsAndTheDaemonIsOpen(t *testing.T) {
-	h := newHost(t, daemon(t, true), "")
+	h := newHost(t, daemon(t, true), secretsTmpfs)
 	h.serving(t)
 	for _, want := range []string{"serving as runner-dmz-02 in pool dmz", "2 tasks at once", "the daemon speaking API"} {
 		if !strings.Contains(h.err.String(), want) {
@@ -265,6 +285,34 @@ func TestServeSaysReadyOnceTheFloorHoldsAndTheDaemonIsOpen(t *testing.T) {
 	}
 	if strings.Contains(h.err.String(), credential[len("agkrunner_"):]) {
 		t.Errorf("the agent's log carries its credential:\n%s", h.err)
+	}
+}
+
+// "Give the agent CAP_CHOWN, CAP_FOWNER and CAP_DAC_OVERRIDE and nothing else." An agent that
+// finds a remapped daemon and lacks one refuses its start before the API hears from it, and
+// says which lines of its unit grant them.
+func TestServeRefusesARemappedDaemonWithoutTheThreeCapabilities(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.e.Host = installed{caps: 1<<0 | 1<<1, fs: h.e.Host.(installed).fs}
+	said := h.refused(t)
+	for _, want := range []string{"lacks CAP_FOWNER", "AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE", "CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, said)
+		}
+	}
+}
+
+// "A server runner requires its secrets directory to be a tmpfs mounted noexec,nosuid,nodev."
+// One that is a tmpfs without noexec, as /dev/shm is on most distributions, refuses the start
+// and names the file it is set in.
+func TestServeRefusesASecretsDirectoryThatIsNotANoexecTmpfs(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.e.Host = installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoSUID: true, NoDev: true}}
+	said := h.refused(t)
+	for _, want := range []string{"/run/agentiik/secrets is a tmpfs mounted without noexec.", h.e.PolicyFile} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, said)
+		}
 	}
 }
 
@@ -311,7 +359,7 @@ func TestAStopBeforeTheStartIsNotFollowedByReady(t *testing.T) {
 }
 
 func TestAStartThatCannotTellSystemdItIsReadyFails(t *testing.T) {
-	h := newHost(t, daemon(t, true), "")
+	h := newHost(t, daemon(t, true), secretsTmpfs)
 	h.set(runner.NotifySocket, filepath.Join(t.TempDir(), "nobody"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

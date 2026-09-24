@@ -88,6 +88,35 @@ const (
 // Lifted says whether the refusal has been lifted.
 func (s SeccompFloor) Lifted() bool { return s == SeccompLifted }
 
+// SecretsFloor says whether a secrets directory that is not a tmpfs mounted
+// noexec,nosuid,nodev is refused.
+//
+// A secret value is written on this side and bound into the container, because a tmpfs the
+// daemon creates at container start is empty and cannot be pre-populated. A bind keeps the
+// flags of the mount its source sits on, so the flags the Tmpfs row promises for a secret
+// mount point are the flags of the host directory, and a runner holds that directory to
+// them rather than trusting whatever /dev/shm happens to be mounted with: on most
+// distributions it is nosuid,nodev and not noexec.
+//
+// It is an enumeration for the reason the other two floors are one, and like the seccomp
+// floor no line of runner.toml lifts it. The callers that are not runners lift it, agk run
+// --local first among them, since a laptop has no such tmpfs and macOS has no tmpfs at
+// all; the driver then says where a value lands instead.
+type SecretsFloor int
+
+const (
+	// SecretsTmpfsRequired refuses a secrets directory that is not a tmpfs mounted
+	// noexec,nosuid,nodev, and an empty one. It is the zero value, so a Policy{} is a
+	// runner's.
+	SecretsTmpfsRequired SecretsFloor = iota
+
+	// SecretsTmpfsLifted takes whatever directory the policy names, and none.
+	SecretsTmpfsLifted
+)
+
+// Lifted says whether the refusal has been lifted.
+func (s SecretsFloor) Lifted() bool { return s == SecretsTmpfsLifted }
+
 // Ulimit is one soft and hard pair, as the daemon's Ulimits carry them.
 type Ulimit struct {
 	Soft int64
@@ -117,6 +146,10 @@ type Policy struct {
 
 	// RequireSeccomp is the seccomp floor, which no key of the file sets.
 	RequireSeccomp SeccompFloor
+
+	// RequireSecretsTmpfs holds SecretsDir to a tmpfs mounted noexec,nosuid,nodev,
+	// and no key of the file sets it either.
+	RequireSecretsTmpfs SecretsFloor
 
 	// StopGrace is the t of the daemon's own stop, the wait between SIGTERM and
 	// SIGKILL. The escalation belongs to the daemon rather than to a timer here, so
@@ -157,6 +190,10 @@ type Policy struct {
 	// /dev/shm on Linux, because a value that touched a disk is a value somebody has
 	// to erase. Empty means the task's working directory, which is the laptop case
 	// and which the driver says out loud.
+	//
+	// A runner holds it to more than a tmpfs, RequireSecretsTmpfs, and /dev/shm is
+	// mounted without noexec on most distributions, so an installation mounts one of
+	// its own and names it with secrets_dir.
 	SecretsDir string
 
 	// LogMaxBytes and LogMaxLines cap the collected standard error. A log is a
@@ -210,8 +247,9 @@ type Policy struct {
 // runner.
 func DefaultPolicy() Policy {
 	return Policy{
-		RequireUsernsRemap: RemapRequired,
-		RequireSeccomp:     SeccompRequired,
+		RequireUsernsRemap:  RemapRequired,
+		RequireSeccomp:      SeccompRequired,
+		RequireSecretsTmpfs: SecretsTmpfsRequired,
 
 		// The daemon's own default for POST /containers/{id}/stop. Taking a
 		// different number here would make the driver's grace and the grace of a

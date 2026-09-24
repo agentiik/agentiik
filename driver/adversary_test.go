@@ -50,7 +50,7 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("preparing the repository: %s", err)
 	}
-	given, err := prepare(ctx, task, w, r.cfg.Policy, store, run, repo, r.secrets(ctx))
+	given, err := prepare(ctx, task, w, r.cfg.Policy, r.cfg.host(), store, run, repo, r.secrets(ctx))
 	if err != nil {
 		t.Fatalf("preparing what the container is given: %s", err)
 	}
@@ -409,4 +409,56 @@ func createdFor(r *runner, id agk.TaskID) dockertest.Container {
 		}
 	}
 	return created
+}
+
+// "Removed with the container, so no residue of one namespace survives into the next task
+// on that host." What a brick left that the runner cannot remove is said, naming the step,
+// the task and where the removal stopped, and it changes nothing about the task's ending:
+// the brick ran and succeeded whatever is left of its directory.
+func TestAWorkingDirectoryThatCannotBeRemovedIsSaid(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where every directory can be removed and there is nothing to say")
+	}
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	var locked string
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		// A directory the brick made and left unwritable, as a brick running as an
+		// account of the remapped range leaves one for a runner that cannot override
+		// its mode.
+		locked = filepath.Join(c.Work, "scratch")
+		if err := os.MkdirAll(locked, 0o755); err != nil {
+			return 1, err
+		}
+		if err := os.WriteFile(filepath.Join(locked, "left.txt"), []byte("residue"), 0o644); err != nil {
+			return 1, err
+		}
+		if err := os.Chmod(locked, 0o500); err != nil {
+			return 1, err
+		}
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": 1}))
+	})
+	t.Cleanup(func() {
+		if locked != "" {
+			os.Chmod(locked, 0o755)
+		}
+	})
+
+	task := oneTask(ref)
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("Run: %s", err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Fatalf("the task ended %s, and a directory left behind changes nothing about how it ended", result.State)
+	}
+	said := r.said.count("left files on this host that were not removed with its container")
+	if said != 1 {
+		t.Fatalf("the directory left behind was said %d times: %v", said, r.said.s)
+	}
+	for _, want := range []string{string(task.Step), string(task.ID), locked} {
+		if r.said.count(want) == 0 {
+			t.Errorf("what was said does not name %s: %v", want, r.said.s)
+		}
+	}
 }
