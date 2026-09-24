@@ -105,6 +105,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A `driver.Completed` is whole with its `Ending` alone, so one written as a literal reads as `driver.ErrCompleted` and names its key instead of dereferencing nothing.
 - A secret mount is one file directly under `/agk/secrets/`, on the grammar the manifest, the task message and the redemption now share. `client.key` is mounted; `.`, which replaced the secrets directory with the value, and `..`, which failed as the platform's fault, are refused, as is any name beginning with a dot.
 
+### Artifacts
+
+- `artifact/granted` is how a runner reads and writes objects. It reads through the presigned GET its task's redemption named for each key, and refuses any other key with `granted.ErrNotGranted` without sending anything. It writes through the task's upload policy: the policy's fields, then `key`, then `file`, last. It cannot ask what the store holds, so it posts every object, and the store keeps the one copy it had.
+- The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
+
 ### API
 
 - Deny by default is structural: a route is registered with the permission it needs and the router checks it.
