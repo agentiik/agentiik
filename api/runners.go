@@ -671,7 +671,8 @@ func (s *RunnerAPI) beat(w http.ResponseWriter, r *http.Request, runner Runner) 
 	// a runner is present: there is no separate liveness channel to keep in sync." The answer is
 	// closed and always carries these three, so that a runner reads a list and a boolean rather
 	// than testing whether a field arrived. The interval is not among them: the page fixes it,
-	// and db.HeartbeatInterval is the one constant both sides count in.
+	// and db.HeartbeatInterval, which the sweep counts silence in, is held to the page's figure
+	// by a test.
 	answer := map[string]any{
 		"received_at": at.UTC().Format(time.RFC3339Nano),
 		"drain":       false,

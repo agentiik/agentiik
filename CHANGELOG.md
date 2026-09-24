@@ -55,7 +55,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The idempotency key column carries the shard cardinality, as `agk.NewTaskID` does.
 - `tasks` keeps one row per dispatch of a key, numbered by `requeue`, and at most one of them that is not `lost`.
 - `Wide.RedeemedBefore` says whether a runner redeemed an earlier dispatch of a key, and `Wide.BindUnreached` is now `Wide.BindUnredeemed`, since it also binds a requeue answered from a host's record.
-- `Pool.Lost` is now `Wide.Lost`, which the controller calls through its fence with its own clock. `db.HeartbeatInterval` is the interval the API tells a runner, and `db.LostAfter` is three of them. A test holds both to the documented figures.
+- `Pool.Lost` is now `Wide.Lost`, which the controller calls through its fence with its own clock. `db.HeartbeatInterval` is the documented interval `Lost` counts silence in, and `db.LostAfter` is three of them. A test holds both to the documented figures.
 - `agk.TriggerKind` has the seven kinds the documentation names, and `cron` is now `schedule`.
 - `agk.LogURI` addresses a log by the task that wrote it: `agk://log/<run>/<task>`.
 - `secret_declarations` keeps where each secret of a namespace lives, provider and path, one row per secret and behind the namespace policy. No column could hold a value, and a test holds the columns.
