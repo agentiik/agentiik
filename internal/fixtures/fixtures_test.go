@@ -114,6 +114,29 @@ func TestStopsCarriesTheWholeCorpus(t *testing.T) {
 	}
 }
 
+func TestTaskProgressesCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := TaskProgresses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	// Both states progress says, and the two refusals that keep it apart from a result: an
+	// ending, and the keyword a result is told apart by.
+	if valid != 2 || invalid != 2 {
+		t.Fatalf("the corpus holds %d valid and %d invalid progress messages, want 2 and 2", valid, invalid)
+	}
+}
+
 func TestRunnerHeartbeatsCarriesTheWholeCorpus(t *testing.T) {
 	cases, err := RunnerHeartbeats()
 	if err != nil {

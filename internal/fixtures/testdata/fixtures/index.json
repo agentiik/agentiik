@@ -7,6 +7,7 @@
     "envelope": "../envelope.schema.json",
     "task-message": "../wire.schema.json",
     "task-result": "../wire.schema.json",
+    "task-progress": "../wire.schema.json",
     "runner-registration": "../wire.schema.json",
     "runner-heartbeat": "../wire.schema.json",
     "runner-rotation": "../wire.schema.json",
@@ -681,6 +682,30 @@
         {
           "file": "wire/invalid/task-result-state-of-a-run.json",
           "rule": "queued is a run state, not a task state, and the two vocabularies are separate on purpose",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "task-progress": {
+      "valid": [
+        {
+          "file": "wire/valid/task-progress-running.json",
+          "covers": "a runner saying the container of a task it holds has started"
+        },
+        {
+          "file": "wire/valid/task-progress-publishing.json",
+          "covers": "a runner saying the container has exited and its outputs are being collected and uploaded"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/task-progress-an-ending.json",
+          "rule": "progress is running or publishing and never an ending, which only a result reports",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-progress-carrying-state.json",
+          "rule": "progress never carries state, the keyword a result is told apart by, so that no document is both a result and a progress message",
           "refused_by": "schema"
         }
       ]

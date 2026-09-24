@@ -541,3 +541,51 @@ func TestARevokedRunnerPublishesItsResultsAndTakesNothing(t *testing.T) {
 		t.Errorf("the pool holds %+v, and the task published to it was left alone", theirs)
 	}
 }
+
+// A runner says how the tasks it holds are getting on under the credential it takes work with, and
+// under the narrower one it finishes a revocation's grace with, since "Revoking a credential never
+// destroys work already done" and the work is still showing. Both publish on the runner's results
+// subject and nowhere else, so neither can say how another runner's tasks are getting on.
+func TestARunnerAndARevokedRunnerSayHowTheirTasksAreGettingOn(t *testing.T) {
+	a := withAccounts(t)
+	until := time.Now().UTC().Add(time.Hour)
+	control := openControlPlane(t, a, until)
+	got := reporting(t, control, func(heard) error { return nil })
+
+	taking, err := a.issuer.ForRunner("runner-1", "dmz", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := a.issuer.ForRevokedRunner("runner-1", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, minted := range map[string]Credentials{"a runner": taking, "a revoked runner": revoked} {
+		runner, err := OpenRunner(Options{URL: minted.URL, Name: "runner-1", Credentials: &minted})
+		if err != nil {
+			t.Fatalf("%s could not connect: %s", name, err)
+		}
+		p := aProgress(aTask("mine").ID)
+		p.Runner = "runner-1"
+		if err := runner.Progress(t.Context(), p); err != nil {
+			t.Errorf("%s's progress was refused: %s", name, err)
+		}
+		select {
+		case h := <-got:
+			if h.sender != "runner-1" || h.progress == nil || *h.progress != p {
+				t.Errorf("the controller heard %s as %+v from %s", name, h.progress, h.sender)
+			}
+		case <-time.After(10 * time.Second):
+			t.Errorf("%s's progress never reached the controller", name)
+		}
+
+		theirs := aProgress(aTask("theirs").ID)
+		theirs.Runner = "runner-2"
+		short, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		if err := runner.Progress(short, theirs); err == nil {
+			t.Errorf("%s published progress as another runner", name)
+		}
+		cancel()
+		runner.Close()
+	}
+}
