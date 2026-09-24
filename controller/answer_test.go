@@ -683,4 +683,90 @@ func TestAStoppedTasksExitCodeIsRecordedAndRead(t *testing.T) {
 	if got := codes(t, pool)[string(first[0].Task.ID)]; got != "timed_out 143" {
 		t.Errorf("a task that obeyed the stop at its deadline reads %q", got)
 	}
+
+	// Reported with no code, as a host answering from a record kept before stops kept theirs
+	// reports it: the row says none rather than the 0 of success.
+	core, q, pool, _ = deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first = q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	silent := stopped(first[0].Task, 0, core.now())
+	silent.NoExitCode = true
+	core.answer(t, silent)
+	if got := codes(t, pool)[string(first[0].Task.ID)]; got != "timed_out none" {
+		t.Errorf("a stopped task reported with no code reads %q", got)
+	}
+}
+
+// A run's ending stops what it holds before any container has exited, so the rows it ends carry no
+// code, and the runner's report comes to a run with nothing left to decide. The code it reports
+// for its own dispatch still lands on that row, once, and a runner that reports none, as a host
+// answering from a record kept before stops kept their code does, leaves none rather than the 0 of
+// success.
+func TestTheCodeOfAContainerARunsEndingStoppedIsRecorded(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, bothAtOnceWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.dispatched()
+	if len(sent) != 2 {
+		t.Fatalf("the first pass published %d tasks", len(sent))
+	}
+	for _, d := range sent {
+		if err := core.redeem(t, d, theRunner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	askedToCancel(t, pool, core, decidedRun)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Fatalf("a run somebody asked to cancel is %s after a sweep", got)
+	}
+
+	at := core.now()
+	obeyed, silent := sent[0], sent[1]
+	stop := func(d Dispatch, code int, none bool) Answer {
+		return Answer{
+			Result: graph.Result{Task: d.Task.ID, State: agk.TaskCancelled, ExitCode: code, NoExitCode: none, StartedAt: at, FinishedAt: at},
+			Row:    d.Row, Runner: theRunner,
+		}
+	}
+	for _, a := range []Answer{stop(obeyed, 143, false), stop(obeyed, 137, false), stop(silent, 0, true)} {
+		if err := core.Answer(t.Context(), a); err != nil {
+			t.Fatalf("the report of a container the cancellation stopped answered %s", err)
+		}
+	}
+	other := stop(silent, 143, false)
+	other.Runner = "runner-lan-01"
+	if err := core.Answer(t.Context(), other); !errors.Is(err, ErrNotTheHolder) {
+		t.Errorf("another runner's code for a dispatch it does not hold answered %v", err)
+	}
+
+	var detail db.RunDetail
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		var err error
+		detail, err = ns.RunDetail(ctx, decidedRun)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[agk.TaskID]string{}
+	for _, task := range detail.Tasks {
+		code := "none"
+		if task.ExitCode != nil {
+			code = strconv.Itoa(*task.ExitCode)
+		}
+		got[task.Task] = task.State.String() + " " + code
+	}
+	if got[obeyed.Task.ID] != "cancelled 143" || got[silent.Task.ID] != "cancelled none" {
+		t.Errorf("the stopped tasks read %v: the one that obeyed exited 143, reported once and then again as 137, and the other reported no code", got)
+	}
 }

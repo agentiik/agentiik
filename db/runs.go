@@ -931,6 +931,28 @@ func (w *Wide) TimeOutTasks(ctx context.Context, namespace string, run agk.RunID
 	return w.endTasks(ctx, namespace, run, agk.TaskTimedOut, at)
 }
 
+// StopCode writes onto one dispatch that a run's ending stopped the exit code its container
+// stopped with, as its runner reported it, and answers whether a row took it.
+//
+// CancelTasks and TimeOutTasks end a run's tasks in the pass that ends the run, before any
+// container has exited, so the rows they end carry no code; the runner's report comes later, to a
+// run with nothing left to decide. "A timed_out or cancelled task carries an exit code wherever a
+// container ran" all the same, and this is where it lands. Only on a row that is stopped and has no
+// code yet, so an ending is written once; only on the dispatch named by its row and its key, as
+// HeldBy compares them; and only from the runner the dispatch is bound to. When it started is kept
+// where the row has none, and when it finished is the moment the run ended it, which stays.
+func (w *Wide) StopCode(ctx context.Context, namespace string, key agk.TaskID, row, runner string, code int, started time.Time) (bool, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update tasks set exit_code = $5, started_at = coalesce(started_at, $6)
+		 where namespace = $1 and id = $2::text and idempotency_key = $3 and runner = $4
+		   and state in ('cancelled', 'timed_out') and exit_code is null`,
+		namespace, row, string(key), runner, code, nilIfZero(started))
+	if err != nil {
+		return false, fmt.Errorf("db: the exit code of dispatch %s of task %s could not be written: %w", row, key, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // endTasks writes the ending given over every task of a run that is not over, and answers the
 // keys of those a runner had redeemed.
 func (w *Wide) endTasks(ctx context.Context, namespace string, run agk.RunID, ending agk.TaskState, at time.Time) ([]agk.TaskID, error) {
