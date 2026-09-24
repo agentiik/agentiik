@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -208,7 +209,11 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 			Containment: &Containment{Runtime: "runc", UsernsRemap: false, remapWritten: true},
 		},
 		&Join{Token: "agkjoin_x", Labels: []string{}, Capacity: &Capacity{}},
-		&Beat{Tasks: []agk.TaskID{"01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1", "01M2Z8V1P9C4XQ7K2N4D6F8H0B/charge/1/2/3"}},
+		&Beat{
+			Runner: "01m2z8v1p9c4xq7k2n4d6f8h0d", AgentVersion: "0.2.0", State: "draining", Concurrency: 8,
+			Tasks:  []agk.TaskID{"01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1", "01M2Z8V1P9C4XQ7K2N4D6F8H0B/charge/1/2/3"},
+			SentAt: time.Date(2026, 9, 10, 6, 41, 9, 104e6, time.UTC),
+		},
 		&Beat{Tasks: nil},
 		&Redemption{Grant: "agkgrant_x", TaskID: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", IdempotencyKey: "01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1"},
 		&Declare{Provider: "builtin", Value: &value, Encoding: "utf-8"},
