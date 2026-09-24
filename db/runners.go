@@ -63,7 +63,7 @@ func (w *Wide) IssueJoinToken(ctx context.Context, pool string, labels []string,
 	case until.IsZero():
 		return JoinToken{}, errors.New("db: a join token that never expires, and one only has to survive the minutes between an administrator copying it and a machine presenting it")
 	case !until.After(at):
-		return JoinToken{}, errors.New("db: a join token that expires before it is issued")
+		return JoinToken{}, errors.New("db: a join token that has expired by the moment it is issued")
 	}
 
 	// A token draws its labels from its pool, which is where somebody wrote them down. A
