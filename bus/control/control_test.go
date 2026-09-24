@@ -135,7 +135,7 @@ func aResult(task graph.Task) bus.TaskResult {
 			Port: "ok", Digest: "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11", Items: 1,
 		}},
 		Log:   &bus.Log{URI: log.String(), Lines: 412},
-		Usage: &bus.Usage{CPUSeconds: 12.4, MaxRSSBytes: 198443008},
+		Usage: &bus.Usage{CPUSeconds: new(12.4), MaxRSSBytes: new(int64(198443008))},
 	}
 }
 

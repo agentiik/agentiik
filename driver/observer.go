@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -50,6 +51,16 @@ type Event struct {
 	Artifacts []agk.File `json:"artifacts,omitempty"`
 
 	Usage Usage `json:"usage,omitzero"`
+
+	// ExitCode, StartedAt and FinishedAt are the exit of a container that ran, on the
+	// terminal event, and absent where none started. A Result carries them too, but reads
+	// an exit code for succeeded and failed alone, and a result message carries one wherever
+	// a container ran: a container stopped at its deadline or cancelled exited with the code
+	// the stop left, 137 or 143, and a container whose outputs were refused ends in an error
+	// and no Result at all, with ExitContractBroken and the span it ran for.
+	ExitCode   *int      `json:"exit_code,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
 
 	// Err is why, on a task that produced no container at all, and on the failed
 	// ending of a container that exited 0 and whose outputs were refused or could not

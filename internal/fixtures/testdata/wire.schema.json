@@ -562,7 +562,7 @@
     },
     "taskResult": {
       "title": "Task result",
-      "description": "What a runner publishes when a task ends, and the only message the controller reads to decide what happens next: whether the step is done, whether it is retried, what the next tasks are handed and what the run detail shows. It names the task twice, by dispatch and by idempotency key, and repeats nothing the key already spells, so the run, the step, the attempt and the shard have one source on the wire rather than two that can disagree. It carries no item and no artifact content: what travels is a digest per port and a digest per artifact, which is what lets the controller schedule on metadata while the payload stays behind run:read_data. The fields that describe a container are present exactly where a container ran, and the state says which case this is: succeeded and failed report an exit code and a span, lost reports neither, because the point of lost is that there is no outcome to report. The bus delivers at least once, so the controller has to read a redelivered result as the same result; nothing here is a counter it could add twice.",
+      "description": "What a runner publishes when a task ends, and the only message the controller reads to decide what happens next: whether the step is done, whether it is retried, what the next tasks are handed and what the run detail shows. It names the task twice, by dispatch and by idempotency key, and repeats nothing the key already spells, so the run, the step, the attempt and the shard have one source on the wire rather than two that can disagree. It carries no item and no artifact content: what travels is a digest per port and a digest per artifact, which is what lets the controller schedule on metadata while the payload stays behind run:read_data. The fields that describe a container are present exactly where a container ran, and the state says which case this is: succeeded and failed report an exit code and a span; timed_out and cancelled report both wherever a container started, since a stopped container exits too; lost reports neither, because the point of lost is that there is no outcome to report. The bus delivers at least once, so the controller has to read a redelivered result as the same result; nothing here is a counter it could add twice.",
       "type": "object",
       "required": [
         "task_id",
@@ -591,7 +591,7 @@
       },
       "allOf": [
         {
-          "$comment": "A container that ran under a state that reports an outcome exited, and an exit is a code and an instant. With the dependentRequired above, exit_code and started_at imply each other in those two states, which is the whole of the rule that an exit code exists where a container ran and does not where none did.",
+          "$comment": "A container that ran under a state that reports an outcome exited, and an exit is a code and an instant. With the dependentRequired above, exit_code and started_at imply each other in those two states. A timed_out or cancelled task carries a code wherever its container started too, as the descriptions say, and that is not enforced here: a host that recorded such an ending before it kept the code a stop left still answers a requeue from that record, and a schema refusing the answer would leave the requeue with none.",
           "if": {
             "properties": {
               "state": {
@@ -706,7 +706,7 @@
         },
         "exit_code": {
           "title": "Exit code",
-          "description": "The status the container exited with, present wherever one ran. Nothing else declares the verdict: 0 is success, 1 to 99 is an application failure retried only where retry.on says so, 100 to 119 is transient and retried by the step policy, 120 is never retried whatever retry says, 121 to 124 are reserved for the runner, and 125 and above is read as infrastructure and charged to the runner rather than to the brick. The ceiling is 255 and not 124 because a container stopped at its deadline reports 128 plus the signal, so 137 is an ordinary value here and not an eighth band.",
+          "description": "The status the container exited with, present wherever one ran. Nothing else declares the verdict: 0 is success, 1 to 99 is an application failure retried only where retry.on says so, 100 to 119 is transient and retried by the step policy, 120 is never retried whatever retry says, 121 to 124 are reserved for the runner, which reports 121 for a container that exited 0 and whose outputs broke the output contract, and 125 and above is read as infrastructure and charged to the runner rather than to the brick. The ceiling is 255 and not 124 because a container stopped at its deadline reports 128 plus the signal, so 137 is an ordinary value here and not an eighth band: a timed_out or cancelled task carries the code its stop left wherever its container started.",
           "type": "integer",
           "minimum": 0,
           "maximum": 255,
@@ -714,6 +714,7 @@
             0,
             108,
             120,
+            121,
             137
           ]
         },
@@ -733,7 +734,7 @@
         },
         "outputs": {
           "title": "Published ports",
-          "description": "One entry per declared output port, naming the envelope published on it. Every declared port appears, including the ones the container never wrote, because an unwritten port publishes an empty envelope and an empty envelope has a digest like any other. A failed task may carry ports too: the documentation's own result example is a failed task publishing two of them, which is how a brick separates the items it rejected from the run failing whole. uniqueItems refuses the same entry twice; that two entries name one port with different digests is a thing the controller refuses, not a shape this schema can describe.",
+          "description": "One entry per declared output port, naming the envelope published on it. Every declared port appears, including the ones the container never wrote, because an unwritten port publishes an empty envelope and an empty envelope has a digest like any other. A task that did not succeed publishes none, and says so with an empty list wherever its container ran: its step publishes an empty envelope on each port for it, which is the engine's rule for a shard that failed, so a brick that sets rejected items apart does it on a port of a success. uniqueItems refuses the same entry twice; that two entries name one port with different digests is a thing the controller refuses, not a shape this schema can describe.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -901,18 +902,24 @@
         },
         "usage": {
           "title": "Usage",
-          "description": "What the container actually consumed, measured by the runner because nothing else can see it and reported here because the container is gone by the time anyone asks. It is what an author reads before changing resources, and what an operator reads when a ceiling turns out to be the thing that failed. The three figures come from one read of the container's statistics, so a result carrying a usage block carries all three: two numbers and a gap is a number nobody can compare.",
+          "description": "What the container actually consumed, measured by the runner because nothing else can see it and reported here because the container is gone by the time anyone asks. It is what an author reads before changing resources, and what an operator reads when a ceiling turns out to be the thing that failed. cpu_seconds and max_rss_bytes are read off the same samples of the container's statistics, taken while it runs, so they travel together or not at all: a container that exited before the first sample was read carries neither, because a zero there would be a measurement nobody made. image_pull_ms is timed before the container starts and is always there.",
           "type": "object",
           "required": [
-            "cpu_seconds",
-            "max_rss_bytes",
             "image_pull_ms"
           ],
+          "dependentRequired": {
+            "cpu_seconds": [
+              "max_rss_bytes"
+            ],
+            "max_rss_bytes": [
+              "cpu_seconds"
+            ]
+          },
           "additionalProperties": false,
           "properties": {
             "cpu_seconds": {
               "title": "CPU seconds",
-              "description": "CPU time consumed, in seconds. It is not the wall clock span between started_at and finished_at, and the two differ by however oversubscribed the host was, which is the difference an author has to see before blaming the brick for a slow step.",
+              "description": "CPU time consumed, in seconds. It is not the wall clock span between started_at and finished_at, and the two differ by however oversubscribed the host was, which is the difference an author has to see before blaming the brick for a slow step. Absent, with max_rss_bytes, where no sample was read.",
               "type": "number",
               "minimum": 0,
               "examples": [
@@ -922,7 +929,7 @@
             },
             "max_rss_bytes": {
               "title": "Peak resident set",
-              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened.",
+              "description": "The largest resident set the container reached, in bytes. It says how close the memory ceiling was, which is the number to raise or lower resources.memory against rather than guessing; a task the kernel killed for memory reports a figure at its ceiling and not the one it was reaching for, and the exit code is what says that is what happened. Absent, with cpu_seconds, where no sample was read.",
               "type": "integer",
               "minimum": 0,
               "examples": [
@@ -945,6 +952,9 @@
               "cpu_seconds": 12.4,
               "max_rss_bytes": 198443008,
               "image_pull_ms": 0
+            },
+            {
+              "image_pull_ms": 3184
             }
           ]
         }
@@ -958,24 +968,8 @@
           "exit_code": 108,
           "started_at": "2026-09-10T06:41:09.104Z",
           "finished_at": "2026-09-10T06:42:32.117Z",
-          "outputs": [
-            {
-              "port": "out",
-              "digest": "sha256:a10b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d74c8e",
-              "items": 0
-            },
-            {
-              "port": "error",
-              "digest": "sha256:7c2e1f4a9b8c0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c9f11",
-              "items": 3
-            }
-          ],
-          "artifacts": [
-            {
-              "sha256": "c1f4a91dd87852afdeab8ce3212cb8fd034a63f37cc523c8fa6d9ead34c1d02b",
-              "bytes": 1284
-            }
-          ],
+          "outputs": [],
+          "artifacts": [],
           "log": {
             "uri": "agk://log/01JMZ8V1P9C4XQ7K2N4D6F8H0A/01JMZ8V1P9C4XQ7K2N4D6F8H0A%2Finvoice%2F1",
             "lines": 412,
