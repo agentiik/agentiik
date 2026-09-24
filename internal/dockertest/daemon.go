@@ -250,6 +250,8 @@ func describe(o Options) docker.Info {
 		NCPU:          2,
 		MemTotal:      2 << 30,
 		DockerRootDir: "/var/lib/docker",
+		// What a daemon nobody configured otherwise answers.
+		DefaultRuntime: "runc",
 	}
 	if !o.noSeccomp {
 		i.SecurityOptions = append(i.SecurityOptions, "name=seccomp,profile=builtin")

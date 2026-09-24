@@ -450,8 +450,10 @@ func TestTheVerbsAreTheDocumentedThree(t *testing.T) {
 			t.Errorf("agk-runner %q exited %d, want %d", args, code, exitUsage)
 		}
 	}
-	if code := run(context.Background(), h.e, []string{"join", "--api", "https://agentiik.example.com", "--token", "agkjoin_x"}); code != exitRefused {
-		t.Errorf("join exited %d, and it is refused until it is built", code)
+	// Reset, since the usage printed above names --token too.
+	h.err.b.Reset()
+	if code := run(context.Background(), h.e, []string{"join", "--api", "https://agentiik.example.com", "--token", "agkjoin_x", "--labels", "zone=dmz"}); code != exitRefused || !strings.Contains(h.err.String(), "--token") {
+		t.Errorf("join exited %d given a token that is not one, and it refuses it naming --token:\n%s", code, h.err)
 	}
 
 	h.out.b.Reset()
