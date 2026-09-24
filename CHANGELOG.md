@@ -200,6 +200,21 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret.Providers` fills `api.Secrets`: it reads a secret through the namespace's declaration, from the store the declaration names, as bytes. A store the installation does not read, or does not know, is refused naming the secret and never a value.
 - `secret.Attach` wires both stores into the API's options from one configuration, so the routes and the redemption cannot disagree. `api` holds only the interfaces, and `cmd/agk` links none of it.
 
+### Configuration
+
+- Package `internal/config` reads the API's, the controller's and migrating's settings from `AGK_*` variables, each only its own. A setting missing, unreadable or malformed refuses the start, and every one is named on it. `max_requeues` is `AGK_MAX_REQUEUES`, 3 where unset.
+- A secret is a file an `AGK_*_FILE` variable names by absolute path, readable by its owner alone. A secret set as a value, a password in a URL or a file its group can read is refused, and a refusal repeats no value.
+- The database password is `AGK_DATABASE_PASSWORD_FILE`, since a URL in the environment carries none, and `AGK_ENV_PREFIXES` opts namespaces in to `env`.
+- The controller refuses to start with `AGK_MASTER_KEY_FILE` set, since the master key is the API's alone.
+- A URL's user and password are looked for up to its last `@` before any parser reads it, so a password holding a `/`, a `?`, a `#`, a `%` or, in the bus's list of servers, a `,` is refused as a password rather than read as a host, a path or a query. A URL that does not parse is refused without the parser's reason, which quotes part of it.
+- A database URL's parameters are read as pgx reads them, so a `password` holding a `;` or a key written with spaces around it is refused, and the role is the one a `user` parameter names, which is the one pgx signs in as.
+- `PGPASSWORD` and `PGSSLPASSWORD` refuse the start of every program, since pgx would take a secret from either where the URL gives none.
+- A database's password file is read even when its URL is refused, so one start names both.
+- Every secret the configuration holds is a `config.Secret`, which prints and marshals as `[secret]` whatever the verb, so a configuration logged whole shows none of them.
+- `AGK_PUBLIC_URL` ending in a bare `?` or `#` is refused, since every path added to it would land in the query or the fragment, and every slash at its end is trimmed rather than one.
+- No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
+- `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
+
 ### Command line
 
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
