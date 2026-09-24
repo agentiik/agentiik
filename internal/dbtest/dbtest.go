@@ -44,7 +44,7 @@ import (
 func Open(t *testing.T) (pool *db.Pool, super string) {
 	t.Helper()
 	super = Migrated(t)
-	pool, err := db.Open(t.Context(), withCredentials(super, roleOf(super), "test"))
+	pool, err := db.Open(t.Context(), Application(super))
 	if err != nil {
 		t.Fatalf("the pool could not be opened: %s", err)
 	}
@@ -101,6 +101,12 @@ func Migrated(t *testing.T) string {
 		t.Fatalf("the database could not be provisioned: %s", err)
 	}
 	return super
+}
+
+// Application is the address the application role signs in at, for the database super names: what
+// Open opens its pool on, for a test that hands it to a process of its own.
+func Application(super string) string {
+	return withCredentials(super, roleOf(super), "test")
 }
 
 // drop runs one tidying statement and says nothing if it cannot: a test that has finished is

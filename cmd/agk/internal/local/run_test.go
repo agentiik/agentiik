@@ -379,6 +379,32 @@ func TestADriverThatProducedNoContainerIsChargedAndReportsNoExitCode(t *testing.
 	}
 }
 
+func TestOutputsRefusedAfterTheExitAreReportedWithTheirCode(t *testing.T) {
+	// A container that exited 0 and left an envelope a size rule refused did run, and
+	// the table has a code of its own for it, 121, which the report names beside the
+	// driver's sentence.
+	f := newFake(func(t graph.Task) (graph.Result, error) {
+		// The driver's own is a Fault whose sentinel is ErrOutputsRefused, which only the
+		// driver can compose; this reads the same through errors.As and errors.Is.
+		return graph.Result{}, errors.Join(&driver.Fault{Step: t.Step, Charge: driver.ChargeBrick, Detail: "the envelope holds 2 items"}, driver.ErrOutputsRefused)
+	})
+	s := session(t, f)
+
+	out, err := s.Run(t.Context(), Request{Graph: built(t, oneScriptStep), Tree: t.TempDir()})
+	if err != nil {
+		t.Fatalf("running the graph: %s", err)
+	}
+	if got := out.State.Steps["only"].Shards[0].ExitCode; got != driver.ExitContractBroken {
+		t.Errorf("the evaluator was told exit code %d, want %d", got, driver.ExitContractBroken)
+	}
+	if len(out.Failures) != 1 {
+		t.Fatalf("%d failures reported: %+v", len(out.Failures), out.Failures)
+	}
+	if f0 := out.Failures[0]; !f0.HasExit || f0.ExitCode != driver.ExitContractBroken || f0.Charge != driver.ChargeBrick || f0.Refused == "" {
+		t.Errorf("the failure is %+v, want exit code 121 charged to the brick, with what was refused", f0)
+	}
+}
+
 func TestABrickChargeWithNoContainerIsInvalidInput(t *testing.T) {
 	// A manifest that breaks the contract is the brick's, and the code for it is 120:
 	// a permanent failure, never retried, whatever retry says.

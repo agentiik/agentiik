@@ -72,9 +72,6 @@ func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reade
 	if err := checkURI(u); err != nil {
 		return agk.File{}, err
 	}
-	if mediaType == "" {
-		mediaType = defaultMediaType
-	}
 
 	// The key is not known until the last byte has been read, so the bytes are staged
 	// while they are counted and digested. A file rather than memory, because what is
@@ -87,6 +84,52 @@ func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reade
 		stage.Close()
 		os.Remove(stage.Name())
 	}()
+
+	f, err := s.measure(ctx, u, mediaType, r, stage)
+	if err != nil {
+		return agk.File{}, err
+	}
+
+	key := Key(s.namespace, f.SHA256)
+	held, err := s.objects.Has(ctx, key)
+	if err != nil {
+		return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
+	}
+	if !held {
+		if _, err := stage.Seek(0, io.SeekStart); err != nil {
+			return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
+		}
+		if err := s.objects.Put(ctx, key, stage); err != nil {
+			return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
+		}
+	}
+	return f, nil
+}
+
+// Describe answers with the entry Put would answer for the same bytes, and writes nothing.
+//
+// It is for a caller that must not write anything until it knows the whole of what it will
+// publish: a runner holds every envelope of a task to the size rules before the first
+// upload, and the envelope it holds to them names each artifact by the entry this answers.
+// The entry is Put's own, digest, size and media type, and an artifact above
+// artifact_max_bytes is refused exactly as Put refuses it. Nothing is staged, because
+// nothing is kept: the caller hands Put the same bytes when it writes them.
+func (s *Store) Describe(ctx context.Context, u agk.URI, mediaType string, r io.Reader) (agk.File, error) {
+	return s.measure(ctx, u, mediaType, r, io.Discard)
+}
+
+// measure reads r to its end, or to one byte past artifact_max_bytes, copying what it read
+// to w, and answers with the files[] entry those bytes travel under.
+//
+// It is the half Put and Describe share, so that what Describe answers is what Put would
+// have, by construction rather than by keeping two copies of the rule in step.
+func (s *Store) measure(ctx context.Context, u agk.URI, mediaType string, r io.Reader, w io.Writer) (agk.File, error) {
+	if err := checkURI(u); err != nil {
+		return agk.File{}, err
+	}
+	if mediaType == "" {
+		mediaType = defaultMediaType
+	}
 
 	digest := sha256.New()
 	source := io.Reader(ctxReader{ctx: ctx, r: r})
@@ -101,7 +144,7 @@ func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reade
 		}
 		source = io.LimitReader(source, ceiling)
 	}
-	size, err := io.Copy(io.MultiWriter(stage, digest), source)
+	size, err := io.Copy(io.MultiWriter(w, digest), source)
 	if err != nil {
 		return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
 	}
@@ -120,27 +163,12 @@ func (s *Store) Put(ctx context.Context, u agk.URI, mediaType string, r io.Reade
 		}
 	}
 
-	sum := hex.EncodeToString(digest.Sum(nil))
-	key := Key(s.namespace, sum)
-	held, err := s.objects.Has(ctx, key)
-	if err != nil {
-		return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
-	}
-	if !held {
-		if _, err := stage.Seek(0, io.SeekStart); err != nil {
-			return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
-		}
-		if err := s.objects.Put(ctx, key, stage); err != nil {
-			return agk.File{}, fmt.Errorf("artifact %s: %w", u, err)
-		}
-	}
-
 	return agk.File{
 		Name:      u.Name,
 		URI:       u,
 		MediaType: mediaType,
 		Size:      size,
-		SHA256:    sum,
+		SHA256:    hex.EncodeToString(digest.Sum(nil)),
 	}, nil
 }
 

@@ -91,8 +91,8 @@ func TestRunnerPoolsCarriesTheWholeCorpus(t *testing.T) {
 	}
 }
 
-func TestRunnerRegistrationsCarriesTheWholeCorpus(t *testing.T) {
-	cases, err := RunnerRegistrations()
+func TestStopsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := Stops()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +107,10 @@ func TestRunnerRegistrationsCarriesTheWholeCorpus(t *testing.T) {
 			t.Errorf("%s names no rule it is refused by", c.File)
 		}
 	}
-	// A join and its answer that must be accepted, and one that must be refused: a join
-	// carrying the private half of the host's keypair.
+	// A stop that must be accepted, and one that must be refused: a reason written as the task
+	// state the stop ends in.
 	if valid != 1 || invalid != 1 {
-		t.Fatalf("the corpus holds %d valid and %d invalid registrations, want 1 and 1", valid, invalid)
+		t.Fatalf("the corpus holds %d valid and %d invalid stops, want 1 and 1", valid, invalid)
 	}
 }
 
@@ -191,5 +191,28 @@ func TestTheWorkflowAndBrickSchemasAreVendoredWithTheirFixtures(t *testing.T) {
 		if !strings.Contains(string(b), `"$id": "https://schemas.agentiik.dev/`+name+`"`) {
 			t.Fatalf("the vendored %s is not the released one", name)
 		}
+	}
+}
+
+func TestRunnerRegistrationsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := RunnerRegistrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	// A join and its answer that must be accepted, and one that must be refused: a join
+	// carrying the private half of the host's keypair.
+	if valid != 1 || invalid != 1 {
+		t.Fatalf("the corpus holds %d valid and %d invalid registrations, want 1 and 1", valid, invalid)
 	}
 }

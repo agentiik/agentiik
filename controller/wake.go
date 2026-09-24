@@ -45,7 +45,11 @@ func (c *Controller) Watch(ctx context.Context, on func(context.Context, Wake) e
 		if _, err := conn.Exec(ctx, `listen `+db.RunChannel); err != nil {
 			return fmt.Errorf("controller: the run channel could not be listened to: %w", err)
 		}
-		defer conn.Exec(context.WithoutCancel(ctx), `unlisten `+db.RunChannel)
+		defer func() {
+			unlisten, stop := context.WithTimeout(context.WithoutCancel(ctx), cleanupWithin)
+			defer stop()
+			conn.Exec(unlisten, `unlisten `+db.RunChannel)
+		}()
 
 		if err := on(ctx, Wake{Swept: true}); err != nil {
 			return err

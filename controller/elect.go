@@ -25,9 +25,11 @@ type Controller struct {
 	pool *db.Pool
 	name string
 
-	// Poll is how often a standby tries the lock. It is a latency and not a correctness
-	// setting: whatever it is, the standby takes over the instant a try succeeds, and the
-	// only thing a shorter one buys is the time between the holder going and that.
+	// Poll is how often a standby tries the lock, and how often the holder asks whether it
+	// still holds it. It is a latency and not a correctness setting: whatever it is, the
+	// standby takes over the instant a try succeeds, the fence refuses a former holder's
+	// writes, and the only thing a shorter one buys is the time between the holder going and
+	// that, or between the holder losing the lock and stopping.
 	Poll time.Duration
 
 	// Sweep is how often the active controller looks for work nobody told it about.
@@ -68,12 +70,30 @@ func New(pool *db.Pool, name string) (*Controller, error) {
 // Name is what this instance is called.
 func (c *Controller) Name() string { return c.name }
 
+// ErrLockLost is why a term ended where the session holding the lock stopped answering, or
+// answered that it no longer holds it.
+var ErrLockLost = errors.New("controller: the session holding the lock stopped holding it, so this instance no longer leads")
+
+// cleanupWithin bounds what is sent to the database on the way out of a term or a watch, where
+// the connection it goes on may be one that no longer answers: unlocking or unlistening on a
+// connection cut off without a reset would otherwise wait for TCP to give up, which is hours, and
+// a process asked to stop would not.
+const cleanupWithin = 5 * time.Second
+
 // Lead waits for the lock, then runs fn for as long as this instance holds it.
 //
 // It blocks: a standby is a process sitting in here, trying the non-blocking variant on a loop
 // and taking over the instant it succeeds. fn is called once, with the term that has just
 // started, and Lead returns what fn returns. The lock is released when fn returns, when ctx is
 // done, and by the database itself if this process dies without either.
+//
+// And fn is stopped when the lock is gone. The lock is a property of one session, which nothing
+// in fn uses, so nothing in fn would notice it end: a backend terminated, or a connection a
+// middlebox dropped without a reset, leaves a controller deciding with no lock held, and in the
+// second case with every statement waiting on a network that does not answer. So the session is
+// asked on every poll whether it still holds the lock, within the poll's own bound, and a session
+// that fails to say so ends the term with ErrLockLost. Asking also keeps the session from ever
+// looking idle to whatever closes idle connections.
 func (c *Controller) Lead(ctx context.Context, fn func(context.Context, db.Term) error) error {
 	return c.pool.Session(ctx, func(ctx context.Context, conn *pgxpool.Conn) error {
 		if err := c.waitForTheLock(ctx, conn); err != nil {
@@ -81,14 +101,73 @@ func (c *Controller) Lead(ctx context.Context, fn func(context.Context, db.Term)
 		}
 		// Released explicitly rather than left to the session, because a Session hands
 		// its connection back to the pool and a lock still held would travel with it.
-		defer conn.Exec(context.WithoutCancel(ctx), `select pg_advisory_unlock($1)`, lockKey)
+		defer func() {
+			unlock, stop := context.WithTimeout(context.WithoutCancel(ctx), cleanupWithin)
+			defer stop()
+			conn.Exec(unlock, `select pg_advisory_unlock($1)`, lockKey)
+		}()
 
 		term, err := c.pool.BeginTerm(ctx, c.name)
 		if err != nil {
 			return err
 		}
-		return fn(ctx, term)
+
+		leading, lost := context.WithCancelCause(ctx)
+		defer lost(nil)
+		held := make(chan struct{})
+		go func() {
+			defer close(held)
+			c.holdTheLock(leading, conn, lost)
+		}()
+		err = fn(leading, term)
+		lost(nil)
+		// The connection is the unlock's once this returns, and is not shared.
+		<-held
+		if cause := context.Cause(leading); errors.Is(cause, ErrLockLost) {
+			return cause
+		}
+		return err
 	})
+}
+
+// holdTheLock asks the session on every poll whether it still holds the lock, until ctx is done,
+// and ends the term through lost the first time it cannot say it does.
+func (c *Controller) holdTheLock(ctx context.Context, conn *pgxpool.Conn, lost context.CancelCauseFunc) {
+	poll := c.poll()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(poll):
+		}
+		// Bounded by the poll and never less than a second, so that a database slow for a
+		// moment is not mistaken for one that is gone.
+		asking, stop := context.WithTimeout(ctx, max(poll, time.Second))
+		var held bool
+		err := conn.QueryRow(asking,
+			`select exists (select 1 from pg_locks where locktype = 'advisory' and granted
+			   and pid = pg_backend_pid() and objsubid = 1
+			   and (classid::bigint << 32 | objid::bigint) = $1)`, lockKey).Scan(&held)
+		stop()
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err != nil:
+			lost(fmt.Errorf("%w: %w", ErrLockLost, err))
+			return
+		case !held:
+			lost(ErrLockLost)
+			return
+		}
+	}
+}
+
+// poll is how often a standby tries the lock and a leader asks whether it still holds it.
+func (c *Controller) poll() time.Duration {
+	if c.Poll <= 0 {
+		return time.Second
+	}
+	return c.Poll
 }
 
 // waitForTheLock tries the non-blocking variant until it succeeds or ctx is done.
@@ -98,10 +177,7 @@ func (c *Controller) Lead(ctx context.Context, fn func(context.Context, db.Term)
 // connection, and a controller that cannot be shut down cleanly is a controller that leaves a
 // lock to be noticed rather than released.
 func (c *Controller) waitForTheLock(ctx context.Context, conn *pgxpool.Conn) error {
-	poll := c.Poll
-	if poll <= 0 {
-		poll = time.Second
-	}
+	poll := c.poll()
 	for {
 		var got bool
 		if err := conn.QueryRow(ctx, `select pg_try_advisory_lock($1)`, lockKey).Scan(&got); err != nil {
