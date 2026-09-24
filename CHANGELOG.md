@@ -191,6 +191,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` takes work: it gets its bus credential from the API, publishes kept results, and takes from its pool only when it has room, as many tasks as `AGK_RUNNER_CONCURRENCY` less those it holds, each written down, redeemed, acknowledged, assembled, run and reported in the page's order. A task on a label the runner does not claim, or refused with 403, is put back held off for a second. `runner.Agent` takes the driver's `Endings`.
 - A redemption or fetch with no answer is tried again, from 1 s doubling to 30 s, until the deadline, then reported `timed_out` with no container ran; a 422, an unusable 200, a fetch that is not what was named, or a message no runner can run (`runner.ErrNotRunnable`) is reported `failed` with no container ran.
 - A task's `running` and `publishing` are published from a goroutine of their own, dropped rather than holding up the driver.
+- A message whose image is not `name@sha256` is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 
 ### Artifacts
 

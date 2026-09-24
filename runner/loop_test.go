@@ -773,3 +773,38 @@ func (h *countingHolder) Hold(id agk.TaskID) error {
 type progressFunc func(context.Context, bus.TaskProgress) error
 
 func (f progressFunc) Progress(ctx context.Context, p bus.TaskProgress) error { return f(ctx, p) }
+
+// "A message whose image is not name@sha256 is reported as no container ran, on the platform's
+// account, then acknowledged, since no runner of any pool could ever run it", before anything is
+// written down and before any redemption.
+func TestATaskWhoseImageIsATagIsReportedUnredeemedAndAcknowledged(t *testing.T) {
+	// An answer that ends the message at once, so that a redemption, which must not happen,
+	// shows in the count rather than in a test that waits for a deadline.
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	m, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+
+	l.carryOne(t)
+
+	results := l.bus.all()
+	if len(results) != 1 || results[0].State != agk.TaskFailed || !results[0].StartedAt.IsZero() || results[0].ExitCode != nil || results[0].TaskID != m.TaskID {
+		t.Fatalf("the results reported are %+v, want one failed that reached no container", results)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting+unacknowledged != 0 {
+		t.Errorf("the message is still on the queue once it was reported: %d waiting and %d unacknowledged", waiting, unacknowledged)
+	}
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("the grant of a task naming a tag was redeemed %d times", n)
+	}
+	if held := l.loop.Held(); len(held) != 0 {
+		t.Errorf("the loop names %v for a task it reported", held)
+	}
+	if err := l.loop.Holder.Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
+		t.Errorf("the key of a task naming a tag was written down: %s", err)
+	}
+	if n := l.containersOf(m.IdempotencyKey); n != 0 {
+		t.Errorf("%d containers were created for a task naming a tag", n)
+	}
+}
