@@ -168,7 +168,7 @@ func TestARevokedRunnerIsHeardUntilItsGraceEnds(t *testing.T) {
 		t.Errorf("a revoked runner was answered %v", answer)
 	}
 	if len(made.made) != 0 {
-		t.Errorf("a queue was made ready for a runner that may take nothing from it: %v", made.made)
+		t.Errorf("minting a revoked runner's credential asked the bus for the consumers of %v", made.made)
 	}
 
 	w, _ = call(t, ro.handler, "POST", "/api/v1/runners/rotate", credential, ro.signed(runner, key))
