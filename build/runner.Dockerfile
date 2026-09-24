@@ -36,15 +36,19 @@ RUN apk add --no-cache libcap-setcap
 # root is given no capability by cap_add, which only keeps them in its bounding set; the file's
 # are what an exec raises within it. Without them the agent refuses a remapped daemon, since it
 # could not own a task's directory inside the range. The effective bit makes the kernel refuse the
-# exec outright where the bounding set lacks one of the three, as cap_drop ALL alone leaves it, and
-# no-new-privileges drops them at exec, which the agent then refuses naming what it lacks.
+# exec outright where the bounding set lacks one of the three, as cap_drop ALL alone leaves it.
+# no-new-privileges takes nothing away: the runtime has already put the three in the permitted set
+# of the process it execs from, so the file's gain nothing it would refuse.
 COPY agk-runner-linux-${TARGETARCH} /out/usr/local/bin/agk-runner
 RUN setcap cap_chown,cap_fowner,cap_dac_override=ep /out/usr/local/bin/agk-runner
 
 # The account the agent runs as, by name as the page's Compose file and the unit name it, and at
 # 65532 as every image of this project runs. join, run as root to write runner.env and the key,
 # gives them to agentiik, and finds that account here; scratch has no /etc/passwd to find it in.
-RUN mkdir -p /out/etc && \
+#
+# /tmp is where the standard library stages a file when nothing names another place, as the
+# artifact store does before it knows a file's digest, and scratch has none.
+RUN mkdir -p /out/etc && mkdir -m 1777 /out/tmp && \
     printf 'root:x:0:0:root:/:/sbin/nologin\nagentiik:x:65532:65532:Agentiik runner:/var/lib/agentiik:/sbin/nologin\n' > /out/etc/passwd && \
     printf 'root:x:0:\nagentiik:x:65532:\n' > /out/etc/group
 
