@@ -44,6 +44,18 @@ func identifier(name, what, where string) error {
 	return fmt.Errorf("%s names %s %q, which is not an identifier: a name is letters, digits, hyphens and underscores, beginning with a letter or a digit, so that one name survives a URL, a directory and a tool list unchanged", where, what, name)
 }
 
+// namespaceName holds a namespace to the identifier grammar and refuses the words the API
+// routes on, which no namespace can be named after.
+func namespaceName(name, where string) error {
+	if err := identifier(name, "the namespace", where); err != nil {
+		return err
+	}
+	if agk.IsReservedNamespace(name) {
+		return fmt.Errorf("%s names the namespace %q, a word the API routes on: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", where, name, strings.Join(agk.ReservedNamespaces, ", "))
+	}
+	return nil
+}
+
 // parameter refuses a parameter name that could not become AGK_PARAM_<NAME>.
 func parameter(name, where string) error {
 	if parameterName.MatchString(name) {
@@ -94,7 +106,7 @@ func parseWorkflowRef(s, where string) (WorkflowRef, error) {
 	if !ok {
 		return r, fmt.Errorf("%s names the workflow %q: a workflow is named <namespace>/<name>, because a workflow belongs to exactly one namespace", where, s)
 	}
-	if err := identifier(namespace, "the namespace", where); err != nil {
+	if err := namespaceName(namespace, where); err != nil {
 		return r, err
 	}
 	if err := identifier(name, "the workflow", where); err != nil {

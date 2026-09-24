@@ -72,18 +72,21 @@ func (r *rotated) read() []string {
 // bus delivering it twice, and that second delivery, redeemed once the store holds the value, is
 // given it, after which the first runner is told the task is not its own.
 func TestASecretTheStoreCannotGiveLeavesTheTaskUntaken(t *testing.T) {
-	for what, broken := range map[string]error{
-		"a secret nobody holds":             nil,
-		"a secret held that cannot be read": errors.New("secret: finance/stripe was sealed under a master key this installation's keyring does not hold"),
+	for what, c := range map[string]struct {
+		broken error
+		status int
+	}{
+		"a secret nobody holds":             {nil, http.StatusUnprocessableEntity},
+		"a secret held that cannot be read": {errors.New("secret: finance/stripe was sealed under a master key this installation's keyring does not hold"), http.StatusInternalServerError},
 	} {
 		t.Run(what, func(t *testing.T) {
-			store := &rotated{broken: broken}
+			store := &rotated{broken: c.broken}
 			g := withGrants(t, store)
 			first, second := g.joined(t), g.joined(t)
 			clear, _, _ := g.dispatched(t, []string{"stripe"})
 
 			w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", first, asking(clear))
-			if w.Code != http.StatusInternalServerError {
+			if w.Code != c.status {
 				t.Fatalf("%s answered %d: %s", what, w.Code, w.Body)
 			}
 			if said, _ := answer["error"].(string); !strings.Contains(said, "stripe") {
@@ -134,7 +137,7 @@ func TestASecretIsReadOnlyOnceNothingElseCanRefuse(t *testing.T) {
 			Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "deadbee",
 			Inputs:  []db.GrantInput{{Port: "in", Digest: envelope, Items: 1}},
 			Secrets: stripe,
-		}), http.StatusInternalServerError},
+		}), http.StatusUnprocessableEntity},
 		{"an input the object store does not hold", g.granted(t, db.GrantScope{
 			Run: grantRun, Step: "render", Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Inputs:  []db.GrantInput{{Port: "in", Digest: digestOf([]byte("an envelope nobody wrote")), Items: 1}},

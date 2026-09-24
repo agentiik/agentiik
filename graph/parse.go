@@ -280,7 +280,7 @@ func metadataOf(root map[string]any) (Metadata, error) {
 		return Metadata{}, err
 	}
 	if md.Namespace != "" {
-		if err := identifier(md.Namespace, "the namespace", "metadata"); err != nil {
+		if err := namespaceName(md.Namespace, "metadata"); err != nil {
 			return Metadata{}, err
 		}
 	}

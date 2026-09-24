@@ -2,6 +2,7 @@ package graph
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
@@ -201,5 +202,22 @@ func TestTheGraphCarriesTheResolvedStep(t *testing.T) {
 	}
 	if g.Workflow() == nil || g.Workflow().Metadata.Name != "monthly-invoicing" {
 		t.Error("the graph does not carry the workflow it was built from")
+	}
+}
+
+// TestAWorkflowCalledInAReservedNamespaceIsRefused holds the one name the corpus does not
+// write: the namespace half of a sub-workflow call, which is a namespace's name like any
+// other, and so cannot be a word the API routes on.
+func TestAWorkflowCalledInAReservedNamespaceIsRefused(t *testing.T) {
+	_, err := Parse([]byte(`
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: order-loading }
+steps:
+  remind:
+    workflow: runs/common@v2.1.0
+`))
+	if err == nil || !strings.Contains(err.Error(), `"runs"`) {
+		t.Fatalf("a call into the namespace runs was read: %v", err)
 	}
 }

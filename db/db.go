@@ -135,6 +135,12 @@ const (
 	// grant, the task it names, and the tree of the one version the grant's scope names.
 	Redemption Reason = "a grant redemption"
 
+	// LogShipment is a runner shipping a chunk of a task's log, which it is authorised for
+	// the way it redeems: by the task's grant, whose namespace is found from the grant and
+	// never taken from the request, and by the task being bound to it. What it reads and
+	// writes is the grant, the task it names, and the index to that task's log.
+	LogShipment Reason = "a runner shipping a task's log"
+
 	// RunRoute is a route about one run, whose path names the run and not the workflow it is
 	// of, and often not its namespace: "Agentiik sends the push service an identifier and a
 	// state", and the application a notification opens holds that identifier and nothing

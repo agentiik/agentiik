@@ -321,6 +321,9 @@ func (rt *Router) register(method, pattern string, h http.HandlerFunc) (err erro
 			word = first
 		}
 	}
+	if word != "" && !agk.IsReservedNamespace(word) {
+		return fmt.Errorf("api: %s %s routes on %q, which is not a reserved namespace name: a namespace of that name would lose its routes to this one, so the word joins agk.ReservedNamespaces, and the schemas' list, first", method, pattern, word)
+	}
 	mux.HandleFunc(method+" "+pattern, h)
 	if word != "" {
 		rt.words[word] = true

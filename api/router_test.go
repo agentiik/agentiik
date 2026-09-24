@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 )
 
@@ -303,6 +304,23 @@ func TestTheAPIsOwnWordsAreServedBesideTheNamespacedRoutes(t *testing.T) {
 	for _, path := range []string{"/api/v1/runs/runs", "/api/v1/runs/secrets", "/api/v1/artifacts/runs"} {
 		if code, body := reached(t, rt, "GET", path, "alice"); code != http.StatusNotFound || body == "listing" || body == "secrets" {
 			t.Errorf("%s answered %d %q, and reached a namespaced route", path, code, body)
+		}
+	}
+}
+
+// A word the API routes on is a namespace nobody can reach, so a route is registered under a
+// word only once the word is reserved, and the reserved list is fixed rather than read off the
+// routes: otherwise a new route would quietly take an existing namespace's paths.
+func TestARouteOnlyTakesAWordAlreadyReserved(t *testing.T) {
+	rt := router(t, api.DenyAll{})
+	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
+	err := rt.Handle("GET", "/api/v1/widgets/{id}", api.Needs{Permission: api.RunRead, Scope: api.Installation}, ok)
+	if err == nil || !strings.Contains(err.Error(), "widgets") {
+		t.Fatalf("a route on an unreserved word was registered: %v", err)
+	}
+	for _, word := range agk.ReservedNamespaces {
+		if err := rt.Handle("GET", "/api/v1/"+word+"/probe", api.Needs{Permission: api.RunRead, Scope: api.Installation}, ok); err != nil {
+			t.Errorf("a route on the reserved word %s was refused: %v", word, err)
 		}
 	}
 }

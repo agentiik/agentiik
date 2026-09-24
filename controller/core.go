@@ -203,12 +203,16 @@ func (co *Core) Wake(ctx context.Context, w Wake) error {
 func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	var e db.Evaluation
 	var losses []db.Loss
+	var pools []db.RunnerPool
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		if e, err = w.Run(ctx, run); err != nil {
 			return err
 		}
-		losses, err = w.Losses(ctx, e.Namespace, run)
+		if losses, err = w.Losses(ctx, e.Namespace, run); err != nil {
+			return err
+		}
+		pools, err = w.RunnerPools(ctx)
 		return err
 	}); err != nil {
 		return err
@@ -264,6 +268,13 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 
 	plan, err := ev.Next(now)
 	if err != nil {
+		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
+	}
+
+	// A step whose pool will not run the namespace ends before anything is counted against
+	// the quota, since it will never hold a slot, and before the decision is written, so that
+	// the pass that finds it is the pass that fails it.
+	if plan, err = refuseUnpooled(ev, e.Namespace, pools, plan, now); err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
@@ -448,7 +459,9 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 //
 // A failure here is not a failure of the decision: the decision is committed, and what is left
 // is a courier's job. So it is reported, the pass is not unwound, and what did not go stays
-// pending in the state, which is what makes the next pass send it again.
+// pending in the state, which is what makes the next pass send it again. That includes a task
+// its pool refuses here, which the pass refused none of when it read the pools: the next pass
+// reads them again and ends the step.
 func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) []agk.TaskID {
 	for _, s := range plan.Stop {
 		if err := co.queue.Stop(ctx, s); err != nil {
@@ -503,12 +516,19 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 	}
 
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+		// The pool's policy before the grant, so that a task no runner may be handed is
+		// given no credential either, and read in the transaction that issues it.
+		resources, err := policed(ctx, w, namespace, t)
+		if err != nil {
+			return err
+		}
+		d.Task.Resources = resources
 		row, err := w.TaskRow(ctx, namespace, t.ID)
 		if err != nil {
 			return err
 		}
 		d.Row = row
-		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, scopeOf(t, d.Inputs), t.Deadline)
+		granted, err := w.IssueGrant(ctx, namespace, t.ID, row, scopeOf(d.Task, d.Inputs), t.Deadline)
 		if err != nil {
 			return err
 		}
