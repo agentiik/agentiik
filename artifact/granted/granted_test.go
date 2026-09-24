@@ -2,6 +2,7 @@ package granted_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -533,6 +534,43 @@ func TestAStoreInTroubleIsNoneOfTheRefusalsAndNamesNoURL(t *testing.T) {
 	}
 }
 
+// A store has stored an object when it answers 201, which is the answer the task message sets out,
+// and at no other. S3 answers 204 unless the policy's fields ask it for 201, and a runner taking
+// 204 as stored would settle for the presigner of MinIO and S3 what only its fields should say.
+func TestOnlyA201IsAnObjectStored(t *testing.T) {
+	const content = "the whole of an invoice"
+	key := artifact.Key("finance", digestOf(content))
+	for _, status := range []int{http.StatusOK, http.StatusNoContent} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(status)
+		}))
+		o := objects(t, granted.Options{Uploads: artifact.Policy{URL: srv.URL + "/objects/finance", KeyPrefix: artifact.Prefix("finance")}})
+		err := o.Put(t.Context(), key, strings.NewReader(content))
+		srv.Close()
+		if err == nil {
+			t.Errorf("a store answering %d was taken to have stored the object", status)
+			continue
+		}
+		for _, refusal := range []error{artifact.ErrNotSigned, artifact.ErrWrongDigest, artifact.ErrTooLarge} {
+			if errors.Is(err, refusal) {
+				t.Errorf("a store answering %d reads as %v", status, refusal)
+			}
+		}
+	}
+}
+
+// Has asks nothing, and still answers a context that is over as one that is over, as every byte
+// layer does.
+func TestHasAnswersAContextThatIsOver(t *testing.T) {
+	o := objects(t, granted.Options{Uploads: artifact.Policy{URL: "https://agentiik.example.com/objects/finance", KeyPrefix: artifact.Prefix("finance")}})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if held, err := o.Has(ctx, artifact.Key("finance", digestOf("the whole of an invoice"))); held || !errors.Is(err, context.Canceled) {
+		t.Errorf("asking with a cancelled context answered %t, %v", held, err)
+	}
+}
+
 // A presigned URL is its own authorisation, and following a redirect would send it on to the next
 // host in the Referer header, so a redirect is an answer like any other.
 func TestARedirectIsNotFollowed(t *testing.T) {
@@ -576,7 +614,8 @@ func TestNewRefusesAPolicyNothingCouldBePostedWith(t *testing.T) {
 		{"a policy with no URL", artifact.Policy{KeyPrefix: good.KeyPrefix}},
 		{"a policy with no key prefix", artifact.Policy{URL: good.URL}},
 		{"a policy posted somewhere that is not HTTP", artifact.Policy{URL: "ftp://agentiik.example.com/objects/finance", KeyPrefix: good.KeyPrefix}},
-		{"a policy posted to no host", artifact.Policy{URL: "/objects/finance", KeyPrefix: good.KeyPrefix}},
+		{"a policy posted to a path alone", artifact.Policy{URL: "/objects/finance", KeyPrefix: good.KeyPrefix}},
+		{"a policy posted to no host", artifact.Policy{URL: "https:///objects/finance", KeyPrefix: good.KeyPrefix}},
 		{"a policy carrying the key", artifact.Policy{URL: good.URL, KeyPrefix: good.KeyPrefix, Fields: map[string]string{"key": "finance/sha256/"}}},
 		{"a policy carrying the file", artifact.Policy{URL: good.URL, KeyPrefix: good.KeyPrefix, Fields: map[string]string{"file": ""}}},
 	} {
