@@ -36,9 +36,9 @@ import (
 // output is the digest of bytes that do not exist until the container has exited. So it is told at
 // the first redemption, beside everything else, as one policy for the task's namespace, and a task
 // never comes back at the end to ask where its outputs go, which would read its secrets a second
-// time for nothing. The holder may still redeem again, when a message it redeemed comes round
-// because its acknowledgement never arrived, and it is answered as the first time was, with fresh
-// URLs.
+// time for nothing. The holder may still redeem again, when the answer to its first redemption
+// never reached it, or when a message it redeemed comes round to it after a restart because its
+// acknowledgement never arrived, and it is answered as the first time was, with fresh URLs.
 
 // Secrets is where a secret value comes from.
 //

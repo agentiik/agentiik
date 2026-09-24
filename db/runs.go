@@ -669,8 +669,9 @@ type Loss struct {
 // database beside the task state", so a loss is written here first, by Lost or by Lose, and
 // the evaluator is told on the next pass rather than by whoever noticed: a requeue is a decision,
 // and deciding is the controller's. A dispatch already requeued past is not named, since the loss
-// has been heard; one that was not requeued, because its step is not idempotent or its policy
-// does not name lost, is named on every pass and changes nothing on any but the first.
+// has been heard; one that was not requeued, because its step is not idempotent, its policy does
+// not name lost or its key was already handed out again as often as max_requeues allows, is named
+// on every pass and changes nothing on any but the first.
 func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]Loss, error) {
 	rows, err := w.tx.Query(ctx, `
 		select t.idempotency_key, t.requeue, t.finished_at from tasks t

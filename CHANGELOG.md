@@ -26,6 +26,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run that ends emits a completion carrying an identifier and a state and nothing else, preceded by a failure when it `failed` or `timed_out`.
 - `retain` is resolved by the controller and recorded on the artifact reference.
 - A lost task is requeued at once under the same idempotency key and a new `task_id`, where the step is idempotent and `retry.on` names `lost`. A loss does not use up a `retry.max` attempt.
+- A key is handed out again after a loss at most `max_requeues` times: three where `controller.Options.MaxRequeues` is unset, none where it is zero, and a negative number is refused. Past it the loss stands: the task stays `lost`, spends no `retry.max` attempt, and its step fails on the infrastructure's account, saying why. `graph.New` takes the bound beside the size rules.
+- A step a `merge: first` cancelled keeps the reason it was cancelled for when its task in flight is then lost past `max_requeues`.
+- Only a loss counts against `max_requeues`, which is a runner the control plane stopped hearing from. A message the bus hands on because its runner died before redeeming it is the same dispatch delivered again, and a task waiting on a full pool's queue is never lost, so neither spends a requeue.
 - A loss is heard from the tasks table on the next pass, whether the heartbeat declared it or the runner holding the task reported it. A loss reported twice requeues once. One naming a dispatch bound to another runner, or to none, is refused with `controller.ErrNotTheHolder`, and binds nobody.
 - An answer carries the `task_id` of its dispatch. A reported loss moves that dispatch alone, so one delivered late or twice moves nothing, even once the same runner holds the requeue.
 - An ending reported for a dispatch its key was requeued past is not news, since the attempt waits on the requeue, and it writes nothing on the requeue's row. An answer naming no dispatch of its key is refused with `controller.ErrNotAResult`.
@@ -83,7 +86,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner no longer holds back a task it redeemed because `Taken.Held` failed: every other runner is refused the message that comes round again.
 - `bus.AckWait` is a minute, sized for a take and a redemption rather than a task.
 - `Bus.Ended` publishes the recorded ending before it acknowledges the message, so a requeue whose report did not go out stays on the queue. Acknowledged first, it left the queue bound to nobody, out of any sweep's reach.
-- A redemption that failed without refusing the task, the runner's own credential refused or the API failing on its side, is not acknowledged, and the message comes round after `bus.AckWait`.
+- A redemption that failed without refusing the task, with no answer, the runner's own credential refused or the API failing on its side, is not acknowledged, and the runner keeps the key, names it in its heartbeat and redeems again. Letting go, it left a task its lost answer had bound for the sweep to declare lost before the message came round, spending a requeue on a host that was never lost.
 - A test holds `bus.AckWait` to the documented minute.
 
 ### Driver
@@ -93,6 +96,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A key that has completed on a host is never started there again, even once its container is gone: every ending is written under `.keys` in the work root before the container is removed and kept seven days, and a later delivery is refused with `driver.ErrCompleted` before anything is created.
 - `Docker.Hold` writes a key down when a runner takes it, before the message is acknowledged, and refuses one that has completed.
 - `Docker.Hold` also holds the task in memory, so a stop that lands between the redemption and `Run` is kept and its container is never started. `Docker.Release` lets go of a key the runner will not run.
+- `Docker.Hold` refuses a key its host still has in flight with `driver.ErrTaskInFlight`, before anything is redeemed. A requeue reaching the host still running its key waits unredeemed and is answered from the record, where it was bound, never answered and lost a second time, so one cut spent two of `max_requeues`.
 - A secret the source cannot give fails saying the value comes from the redemption, made before the pull, rather than at the last moment.
 - A container that ran to its end ends its key even when what it left cannot be collected or uploaded: Run still answers the error, and the key is written down `failed`.
 - The record of a key's ending keeps what it left by reference and never a payload: each port's envelope by digest and count, each artifact by digest and size, the log's address and length.
@@ -174,6 +178,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `driver` has a boundary test, like `graph`.
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
+- A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
 
 ## v0.1.2, 2026-09-13
 

@@ -44,6 +44,7 @@ type Core struct {
 	objects  artifact.Objects
 	limits   agk.Limits
 	ceiling  time.Duration
+	requeues int
 	now      func() time.Time
 }
 
@@ -72,6 +73,36 @@ type Options struct {
 	// default for that case, and refusing to run such a workflow would be inventing a
 	// rule rather than filling a gap. The zero value is an hour.
 	Ceiling time.Duration
+
+	// MaxRequeues is the installation's max_requeues: how many times one key is handed
+	// out again after a loss before the loss stands and fails its step.
+	//
+	// Nothing else bounds a requeue. A loss uses up no retry.max attempt, since it is
+	// charged to the infrastructure, so a step whose container takes down every host it
+	// lands on would otherwise be requeued until the run's timeout, and for ever where
+	// there is none. It reaches the evaluator as an argument on every pass, as the size
+	// rules do, and the evaluator counts it against the key. Nil is
+	// graph.DefaultMaxRequeues, three, and zero requeues nothing, as max_requeues: 0 reads
+	// wherever the setting is written; graph.Options says why it is a pointer. A negative
+	// number is refused.
+	//
+	// Only a loss counts, and only a dispatch a runner redeemed can be lost: the heartbeat's
+	// sweep declares it once that runner goes quiet, or the runner reports it. A message the
+	// bus hands to another runner because the first died before redeeming it is the same
+	// dispatch delivered again, under its row and its grant, and a task waiting on the queue
+	// of a full pool is not lost however long it waits. Neither is handed out again, so
+	// neither spends a requeue, and a pool slow to take its work never fails a step for it.
+	//
+	// The runner's order is what keeps a loss to a runner that went quiet, and package bus
+	// sets it out. A runner that never heard its redemption answered keeps the key, names it
+	// in its heartbeat and redeems again, rather than letting it go and leaving a task the
+	// lost answer had bound to be declared lost before the message came round. A host still
+	// running a key redeems nothing of its requeue until the key has ended there, and then
+	// answers it from its record, rather than binding a requeue its one ending would never
+	// answer. So what spends a requeue is a host the control plane stopped hearing from,
+	// which is a host lost as far as it can tell, one only cut off included, and one cut
+	// costs its key one requeue however the host comes back.
+	MaxRequeues *int
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -87,6 +118,8 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		return nil, errors.New("controller: a core with no object store, and the envelopes live there")
 	case term.Token < 1:
 		return nil, errors.New("controller: a core outside a term: deciding is what the election decides who may do")
+	case o.MaxRequeues != nil && *o.MaxRequeues < 0:
+		return nil, fmt.Errorf("controller: max_requeues is how many times one key is handed out again after a loss, and %d is no number of times: zero is what requeues nothing", *o.MaxRequeues)
 	}
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
@@ -97,10 +130,14 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 	if o.Ceiling <= 0 {
 		o.Ceiling = time.Hour
 	}
+	requeues := graph.DefaultMaxRequeues
+	if o.MaxRequeues != nil {
+		requeues = *o.MaxRequeues
+	}
 	return &Core{
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
-		limits: o.Limits, ceiling: o.Ceiling, now: o.Now,
+		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
 	}, nil
 }
 
@@ -367,7 +404,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Limits: co.limits}, now)
+		}, graph.Options{Inputs: e.Inputs, Limits: co.limits, MaxRequeues: new(co.requeues)}, now)
 	}
 
 	var doc Document
@@ -378,7 +415,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	if err != nil {
 		return nil, err
 	}
-	ev, err := graph.New(g, state, co.limits)
+	ev, err := graph.New(g, state, co.limits, co.requeues)
 	if err != nil {
 		return nil, fmt.Errorf("controller: run %s could not be resumed: %w", e.Run, err)
 	}

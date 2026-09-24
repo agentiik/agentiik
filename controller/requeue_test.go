@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -420,6 +421,83 @@ func TestTheSweepDecidesTheRunItsLossWoke(t *testing.T) {
 	}
 }
 
+// A key is handed out again after a loss as often as the installation's max_requeues allows, three
+// where it sets nothing and none where it sets zero, and no more. Each dispatch is redeemed by a
+// runner of its own, which then goes quiet, as a container that takes down every host it lands on
+// would leave it, and the heartbeat declares it lost. The loss past the bound stands: the key goes
+// out no more, its last grant opens nothing even to the runner it was bound to, and the run fails
+// on it rather than spending the attempt max: 1 has left, since the brick never failed. A negative
+// bound counts no number of times, and no core is built on one.
+func TestAKeyLostPastMaxRequeuesIsNotRequeued(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		set        *int
+		dispatches []string
+	}{
+		{"the default", nil, []string{"0 lost runner-1", "1 lost runner-2", "2 lost runner-3", "3 lost runner-4"}},
+		{"one", new(1), []string{"0 lost runner-1", "1 lost runner-2"}},
+		{"none", new(0), []string{"0 lost runner-1"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			deciding, q, pool, super := decidingOn(t, requeueingWorkflow)
+			core, err := NewCore(deciding.controller, deciding.term, Options{
+				Queue: q, Versions: deciding.versions, Objects: deciding.objects, Now: deciding.now,
+				MaxRequeues: c.set,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			sent := q.dispatched()
+			if len(sent) != 1 {
+				t.Fatalf("the first pass dispatched %d tasks", len(sent))
+			}
+			key := sent[0].Task.ID
+			for n := range len(c.dispatches) {
+				last, holder := sent[0], fmt.Sprintf("runner-%d", n+1)
+				if err := core.redeem(t, last, holder); err != nil {
+					t.Fatal(err)
+				}
+				core.silence(t)
+				sent = q.dispatched()
+				if n == len(c.dispatches)-1 {
+					if len(sent) != 0 {
+						t.Errorf("a key lost past max_requeues went out again as %+v", sent)
+					}
+					// Its own holder, since a stranger is refused a dispatch bound to
+					// somebody else before anything asks whether it is over.
+					if err := core.redeem(t, last, holder); !errors.Is(err, db.ErrTaskHeld) {
+						t.Errorf("the grant of a dispatch lost past max_requeues was redeemed again, answering %v", err)
+					}
+					break
+				}
+				if len(sent) != 1 || sent[0].Task.ID != key || sent[0].Task.Attempt != 1 || sent[0].Row == last.Row {
+					t.Fatalf("after loss %d the controller dispatched %+v, want %s again on attempt 1 under a new task_id", n+1, sent, key)
+				}
+			}
+
+			conn := dbtest.Superuser(t, super)
+			if got := dispatchesOf(t, conn, key); !slices.Equal(got, c.dispatches) {
+				t.Errorf("the key holds %q, want %q", got, c.dispatches)
+			}
+			if got := stateOf(t, core); got != agk.Failed {
+				t.Errorf("the run is %s after its one step lost a key past max_requeues", got)
+			}
+		})
+	}
+
+	deciding, q, _, _ := decidingOn(t, requeueingWorkflow)
+	if _, err := NewCore(deciding.controller, deciding.term, Options{
+		Queue: q, Versions: deciding.versions, Objects: deciding.objects, Now: deciding.now,
+		MaxRequeues: new(-1),
+	}); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a core was built under max_requeues: -1, which is no number of times, answering %v", err)
+	}
+}
+
 // A sweep that cannot look for lost tasks still decides the runs that are due, and says why it could
 // not. The losses wait for the next sweep, and the runs have nothing to do with them: a sweep that
 // stopped there would leave every run of the installation waiting on the one statement.
@@ -706,6 +784,72 @@ func TestARequeueThatCameBackToTheHostThatEndedItsKeyIsAnsweredFromItsRecord(t *
 	}
 	if got := q.taken(); len(got) != 0 {
 		t.Errorf("the run published %+v after its one step succeeded", got)
+	}
+}
+
+// runner-1 redeemed the dispatch and was cut off while its container ran, and the heartbeat declared
+// the dispatch lost. The requeue reaches runner-1's host with the container still running there,
+// and the host refuses it as it writes the key down, before anything is redeemed
+// (driver.ErrTaskInFlight), so nobody holds the requeue and no sweep declares it lost while it
+// waits. The container's one ending goes to the dispatch that was lost, which is not news, and the
+// requeue, come round once the key has ended, is answered from the record. One cut spends one
+// requeue, and the run succeeds under max_requeues: 1: the requeue redeemed and bound to a host
+// that would never answer it would have been lost in its turn, and the bound would have failed a
+// step whose brick succeeded.
+func TestOneCutSpendsOneRequeueWhereTheRequeueReachesTheHostStillRunningItsKey(t *testing.T) {
+	deciding, q, pool, super := decidingOn(t, requeueingWorkflow)
+	core, err := NewCore(deciding.controller, deciding.term, Options{
+		Queue: q, Versions: deciding.versions, Objects: deciding.objects, Now: deciding.now,
+		MaxRequeues: new(1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	lost := first[0]
+	if err := core.redeem(t, lost, "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+	core.silence(t)
+	again := q.dispatched()
+	if len(again) != 1 || again[0].Task.ID != lost.Task.ID || again[0].Row == lost.Row {
+		t.Fatalf("after the loss the controller dispatched %+v, want %s again under a new task_id", again, lost.Task.ID)
+	}
+	requeued := again[0]
+
+	// The host refused the requeue unredeemed, and the container runs on past another sweep.
+	core.silence(t)
+	if got := q.dispatched(); len(got) != 0 {
+		t.Errorf("a requeue nobody redeemed went out again as %+v", got)
+	}
+	conn := dbtest.Superuser(t, super)
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 dispatched -"}; !slices.Equal(got, want) {
+		t.Errorf("while the container ran the key holds %q, want %q", got, want)
+	}
+
+	ran := core.fromTheRecord(t, succeeded(t, lost.Task, core.now()), lost.Row, "runner-1")
+	if err := core.Answer(t.Context(), ran); err != nil {
+		t.Fatalf("runner-1's ending of the dispatch it held was refused: %s", err)
+	}
+	if got := stateOf(t, core); got != agk.Running {
+		t.Fatalf("the run is %s, and the ending of the dispatch that was lost is not news", got)
+	}
+	recorded := core.fromTheRecord(t, succeeded(t, requeued.Task, core.now()), requeued.Row, "runner-1")
+	if err := core.Answer(t.Context(), recorded); err != nil {
+		t.Fatalf("the ending runner-1 recorded, reported under the requeue's task_id, was refused: %s", err)
+	}
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Errorf("the run is %s after one cut and one requeue answered from the record", got)
+	}
+	if got, want := dispatchesOf(t, conn, lost.Task.ID), []string{"0 lost runner-1", "1 succeeded runner-1"}; !slices.Equal(got, want) {
+		t.Errorf("the key holds %q, want %q", got, want)
 	}
 }
 

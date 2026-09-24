@@ -20,10 +20,37 @@ import (
 // A lost task is the exception, and requeued answers it rather than nextAttempt. "A
 // requeue after loss keeps the idempotency key and takes a new task_id": the attempt
 // is handed out again under the key it was lost under, so it is the same attempt and
-// not a further one, and it uses up nothing that max counts.
+// not a further one, and it uses up nothing that max counts. What bounds it instead is
+// the installation's max_requeues, counted per key.
+
+// DefaultMaxRequeues is how many times one key is handed out again after a loss where the
+// installation sets nothing else.
+//
+// A loss uses up no retry.max attempt, so without a bound of its own a step whose
+// container takes down every host it lands on would be requeued until the run's timeout,
+// and for ever where the run has none. The bound is the installation's and not the file's
+// because a loss is charged to the infrastructure, and how many hosts one key may cost is
+// for whoever runs them to weigh: an author who could raise it would be spending somebody
+// else's fleet.
+const DefaultMaxRequeues = 3
 
 // requeued says whether a shard whose task was lost is handed out again, under the same
-// idempotency key and on the same attempt.
+// idempotency key and on the same attempt, where most is how many times one key may be.
+//
+// The file is asked first, by requeueable, and then the installation: a key already
+// handed out again as often as max_requeues allows is not handed out again. Its loss
+// stands, and the shard ends on it, lost and never failed, so the step fails on the
+// infrastructure's account and not the brick's.
+//
+// The count is per key, which is ShardState.Requeue, and a further attempt starts it
+// again: that is a new key, a unit of work of its own that max granted for a failure the
+// brick reported, and the bound is on how often one unit of work is handed out.
+func requeued(r Retry, idempotent bool, sh ShardState, most int) bool {
+	return requeueable(r, idempotent, sh) && sh.Requeue < most
+}
+
+// requeueable says whether the file asks for a shard whose task was lost to be handed out
+// again.
 //
 // Two questions are asked. A lost task may well have finished without the result coming
 // back, so only an idempotent step is requeued after one; and the policy has to name
@@ -37,7 +64,7 @@ import (
 // lists. A backoff spaces attempts out so that a dependency which is briefly unwell is
 // not hammered while it recovers, and what failed here was the host, which the requeue
 // leaves behind by going back on the queue for any runner of the pool.
-func requeued(r Retry, idempotent bool, sh ShardState) bool {
+func requeueable(r Retry, idempotent bool, sh ShardState) bool {
 	if sh.Task != agk.TaskLost || !idempotent {
 		return false
 	}

@@ -120,10 +120,10 @@ func TestMaxCountsFurtherAttempts(t *testing.T) {
 // again is safe only where the author said it is.
 func TestOnlyAnIdempotentStepIsRequeuedAfterALoss(t *testing.T) {
 	policy := Retry{Max: 3, On: []agk.Failure{agk.FailureLost}}
-	if !requeued(policy, true, outcomeEnded(1, agk.TaskLost, 0)) {
+	if !requeued(policy, true, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("an idempotent step was not requeued after its task was lost")
 	}
-	if requeued(policy, false, outcomeEnded(1, agk.TaskLost, 0)) {
+	if requeued(policy, false, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("a step declared idempotent: false was requeued after its task was lost")
 	}
 	// The rule is about loss and not about the policy: a step that is not
@@ -133,7 +133,7 @@ func TestOnlyAnIdempotentStepIsRequeuedAfterALoss(t *testing.T) {
 		t.Error("a step declared idempotent: false was not retried on a transient failure")
 	}
 	// And only a loss is requeued: every other failure is a further attempt or the end.
-	if requeued(both, true, outcomeEnded(1, agk.TaskFailed, 100)) {
+	if requeued(both, true, outcomeEnded(1, agk.TaskFailed, 100), DefaultMaxRequeues) {
 		t.Error("a transient failure was requeued on the attempt that failed, and a failure the brick reported is a further attempt")
 	}
 }
@@ -148,20 +148,40 @@ func TestALossIsRequeuedAndNotRetried(t *testing.T) {
 	if _, again := nextAttempt(policy, outcomeEnded(1, agk.TaskLost, 0)); again {
 		t.Error("a lost task was given a further attempt, and a requeue after loss keeps the attempt it was lost on")
 	}
-	if !requeued(policy, true, outcomeEnded(3, agk.TaskLost, 0)) {
+	if !requeued(policy, true, outcomeEnded(3, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("the last attempt max: 2 allows was not requeued after a loss, and a loss does not use up an attempt")
 	}
-	if !requeued(Retry{On: []agk.Failure{agk.FailureLost}}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+	if !requeued(Retry{On: []agk.Failure{agk.FailureLost}}, true, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("retry: {on: [lost]} did not requeue a lost task, and a requeue is not a further attempt for max to grant")
 	}
-	if requeued(Retry{Max: 2, On: []agk.Failure{agk.FailureTransient}}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+	if requeued(Retry{Max: 2, On: []agk.Failure{agk.FailureTransient}}, true, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("a policy that does not name lost requeued a lost task")
 	}
-	if requeued(Retry{Max: 2}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+	if requeued(Retry{Max: 2}, true, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("retry: {max: 2} requeued a lost task, and a policy that names nothing accepts the transient band alone")
 	}
-	if requeued(Retry{}, true, outcomeEnded(1, agk.TaskLost, 0)) {
+	if requeued(Retry{}, true, outcomeEnded(1, agk.TaskLost, 0), DefaultMaxRequeues) {
 		t.Error("a step with no retry policy requeued a lost task")
+	}
+}
+
+// TestMaxRequeuesBoundsHowOftenOneKeyIsRequeued holds the installation's question, asked
+// after the file's: a key is handed out again after a loss as many times as max_requeues
+// allows and no more, whatever the policy names, and a bound of none requeues nothing.
+func TestMaxRequeuesBoundsHowOftenOneKeyIsRequeued(t *testing.T) {
+	policy := Retry{Max: 2, On: []agk.Failure{agk.FailureLost}}
+	for requeue, want := range map[int]bool{0: true, 1: true, 2: true, 3: false, 4: false} {
+		sh := outcomeEnded(1, agk.TaskLost, 0)
+		sh.Requeue = requeue
+		if got := requeued(policy, true, sh, 3); got != want {
+			t.Errorf("a key handed out again %d times was requeued %v on its next loss, under max_requeues: 3", requeue, got)
+		}
+		if !requeueable(policy, true, sh) {
+			t.Errorf("a key handed out again %d times is no longer one the file asks to requeue, and the bound is the installation's", requeue)
+		}
+	}
+	if requeued(policy, true, outcomeEnded(1, agk.TaskLost, 0), 0) {
+		t.Error("an installation that requeues nothing requeued a lost task")
 	}
 }
 

@@ -334,14 +334,30 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 // task_id and then acknowledges the message: a key comes back to the host that ended it as
 // the requeue of a task declared lost, and the run is waiting on the requeue's answer.
 //
+// A key this host still has in flight, a Run carrying it or another delivery holding it, is
+// refused as well, with ErrTaskInFlight, and before anything is redeemed for the same reason.
+// It comes back while the host still has it as the requeue of a task the heartbeat declared
+// lost while its host was only cut off and its container ran on. Redeemed, that requeue would
+// be bound to this runner, and Run would refuse it as a second delivery of the key, so the one
+// ending the container produces would be reported under the dispatch that was lost, which the
+// controller reads as no news, and the requeue, bound and never answered, would be declared
+// lost in its turn once the key was let go of: one cut costing the key two of max_requeues, and
+// a step whose brick succeeded failing on it where the bound had no second to spend. Refused
+// here, the requeue binds nobody, and nothing sweeps a dispatch nobody redeemed. The runner
+// says nothing and the message comes round once AckWait has passed, by when the key has ended
+// and Hold answers with its *Completed, or is still running and refused again. Another runner
+// of the pool may take it meanwhile, and redeem and run it, which is what a requeue is for.
+//
 // A key written down is also held in memory, as Run holds the task it runs, so that a stop
 // is kept from here on. The redemption that follows binds the task to this runner, and from
 // then a cancel names it and the controller sends its one stop, which can arrive while the
 // runner is still acknowledging and before Run has begun: answered nil and forgotten, it
 // would leave Run to start a brick for a run already called off. Recorded here, it is what
 // Run finds, and the container is never started. A runner that does not go on to Run the
-// task, its redemption refused or failed or the message put back, lets go of it with
-// Release.
+// task, its redemption refused or the message put back, lets go of it with Release, and a
+// delivery Hold refused holds nothing and lets go of nothing. A redemption that got no
+// answer is neither: it may have bound the task, so the runner keeps the key, which its
+// heartbeat goes on naming, and redeems again, as package bus says.
 func (d *Docker) Hold(id agk.TaskID) error {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
@@ -349,13 +365,20 @@ func (d *Docker) Hold(id agk.TaskID) error {
 	if err != nil {
 		return err
 	}
+	// The ending first: a key whose ending is written and whose Run is still removing
+	// what it left is answered from the record, and waiting for the removal would gain
+	// nothing.
 	if found && e.State.Terminal() {
 		return &Completed{Ending: e}
 	}
+	if !d.hold(id) {
+		_, step, _, _, _ := agk.ParseTaskID(string(id))
+		return fault(step, ErrTaskInFlight, ChargePlatform, "task %s", id)
+	}
 	if err := d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()}); err != nil {
+		d.Release(id)
 		return err
 	}
-	d.hold(id)
 	return nil
 }
 

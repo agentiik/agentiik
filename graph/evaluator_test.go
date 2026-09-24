@@ -443,7 +443,7 @@ func TestARunIsPickedUpWhereItWasLeft(t *testing.T) {
 	if err := json.Unmarshal(doc, &resumed); err != nil {
 		t.Fatal(err)
 	}
-	second, err := New(e.Graph(), &resumed, agk.DefaultLimits())
+	second, err := New(e.Graph(), &resumed, agk.DefaultLimits(), DefaultMaxRequeues)
 	if err != nil {
 		t.Fatalf("resuming the run: %v", err)
 	}
@@ -754,6 +754,169 @@ func TestALostTaskOfAStepThatIsNotIdempotentIsNotRequeued(t *testing.T) {
 	}
 	if got := e.State().Run.State; got != agk.Failed {
 		t.Errorf("the run is %s, and its one step lost a task it may not run again", got)
+	}
+}
+
+// lose dispatches a task and loses it on the dispatch named, as the controller records a
+// loss the heartbeat declared.
+func lose(t *testing.T, e *Evaluator, task Task, requeue int, at time.Time) {
+	t.Helper()
+	record(t, e, Result{Task: task.ID, State: agk.TaskDispatched, DispatchedAt: at}, at)
+	record(t, e, Result{Task: task.ID, State: agk.TaskLost, Requeue: requeue, FinishedAt: at}, at)
+}
+
+// Past max_requeues a lost task is not requeued: it stays lost, and its step fails,
+// charged to the infrastructure and not to the brick. So under the default of three a key
+// goes out four times, and the fourth loss ends the shard lost rather than failed: the
+// attempt max: 1 has left is not spent on it, since the brick never failed, and the step
+// says why it failed.
+func TestAKeyLostPastMaxRequeuesFailsItsStep(t *testing.T) {
+	e := started(t, requeueing, Options{})
+	task := next(t, e, runAt).Start[0]
+	for requeue := range DefaultMaxRequeues {
+		lose(t, e, task, requeue, runAt)
+		plan := next(t, e, runAt)
+		if len(plan.Start) != 1 || plan.Start[0].ID != task.ID || plan.Start[0].Attempt != 1 {
+			t.Fatalf("after loss %d the plan starts %s, want %s again", requeue+1, starts(plan), task.ID)
+		}
+	}
+
+	lose(t, e, task, DefaultMaxRequeues, runAt)
+	plan := next(t, e, runAt.Add(time.Hour))
+	if len(plan.Start) != 0 {
+		t.Errorf("a key lost past max_requeues went out again as %s", starts(plan))
+	}
+	st := e.State().Steps["invoice"]
+	if sh := st.Shards[0]; sh.Task != agk.TaskLost || sh.Attempt != 1 || sh.Requeue != DefaultMaxRequeues {
+		t.Errorf("the shard is attempt %d, requeue %d, %s, and a loss past the bound stands where it happened", sh.Attempt, sh.Requeue, sh.Task)
+	}
+	if st.Verdict != agk.VerdictFailed || !strings.Contains(st.Reason, "max_requeues") {
+		t.Errorf("the step is %s because %q, and a loss past max_requeues fails it and says so", st.Verdict, st.Reason)
+	}
+	if got := e.State().Run.State; got != agk.Failed {
+		t.Errorf("the run is %s, and its one step failed on a loss", got)
+	}
+
+	// The loss the controller keeps hearing until the run ends is no news.
+	unchanged(t, e, Result{Task: task.ID, State: agk.TaskLost, Requeue: DefaultMaxRequeues}, "the last loss delivered again")
+}
+
+// The bound is the installation's, handed to the evaluator rather than read from anywhere:
+// one requeue under max_requeues: 1, and none under max_requeues: 0, which says none and
+// not the default the setting takes where it is not written. A negative bound counts no
+// number of times and is refused. A resumed run decides under the bound it is resumed
+// with, since a bound is not the run's.
+func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		most     int
+		requeues int
+	}{
+		{"one", 1, 1},
+		{"none", 0, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := started(t, requeueing, Options{MaxRequeues: new(c.most)})
+			task := next(t, e, runAt).Start[0]
+			for requeue := range c.requeues + 1 {
+				lose(t, e, task, requeue, runAt)
+				next(t, e, runAt)
+			}
+			if sh := e.State().Steps["invoice"].Shards[0]; sh.Task != agk.TaskLost || sh.Requeue != c.requeues {
+				t.Errorf("the shard is requeue %d, %s, want lost after %d requeues", sh.Requeue, sh.Task, c.requeues)
+			}
+			if got := e.State().Run.State; got != agk.Failed {
+				t.Errorf("the run is %s once the bound refused a requeue", got)
+			}
+		})
+	}
+
+	g := built(t, requeueing, evaluatorManifest)
+	if _, err := Start(g, agk.Run{ID: "01HZXRUN", Namespace: "finance"}, Options{MaxRequeues: new(-1)}, runAt); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a run started under max_requeues: -1, which is no number of times, answering %v", err)
+	}
+
+	e := started(t, requeueing, Options{})
+	task := next(t, e, runAt).Start[0]
+	lose(t, e, task, 0, runAt)
+	next(t, e, runAt)
+	if _, err := New(e.Graph(), e.State(), agk.DefaultLimits(), -1); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+		t.Errorf("a run resumed under max_requeues: -1, which is no number of times, answering %v", err)
+	}
+	resumed, err := New(e.Graph(), e.State(), agk.DefaultLimits(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lose(t, resumed, task, 1, runAt)
+	if plan := next(t, resumed, runAt); len(plan.Start) != 0 || resumed.State().Run.State != agk.Failed {
+		t.Errorf("resumed under max_requeues: 1, a second loss started %s and left the run %s", starts(plan), resumed.State().Run.State)
+	}
+}
+
+// A step a merge: first cancelled keeps the reason that cancelled it. The stop is only a
+// request, so its task in flight can still be lost, and a loss past max_requeues there
+// fails nothing: the verdict is already cancelled, and a reason saying the step fails
+// would contradict it.
+func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
+	e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: whichever, namespace: finance }
+steps:
+  quick:
+    image: `+image+`
+    outputs: [ok]
+  slow:
+    image: `+image+`
+    retry: { on: [lost] }
+    outputs: [ok]
+  whichever:
+    image: `+image+`
+    needs:
+      - { step: quick, port: ok, as: orders }
+      - { step: slow,  port: ok, as: orders }
+    merge: first
+    outputs: [ok]
+`, Options{MaxRequeues: new(0)})
+
+	plan := next(t, e, runAt)
+	slow := taskOf(t, plan, "slow")
+	record(t, e, Result{Task: slow.ID, State: agk.TaskRunning}, runAt)
+	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+	next(t, e, runAt.Add(2*time.Minute))
+	cancelled := e.State().Steps["slow"]
+	if cancelled.Verdict != agk.VerdictCancelled {
+		t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
+	}
+
+	record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
+	next(t, e, runAt.Add(3*time.Minute))
+	st := e.State().Steps["slow"]
+	if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
+		t.Errorf("slow is %s because %q after its task was lost, and it was cancelled because %q", st.Verdict, st.Reason, cancelled.Reason)
+	}
+	if sh := st.Shards[0]; sh.Task != agk.TaskLost {
+		t.Errorf("the shard of slow is %s, and the loss is recorded where it happened", sh.Task)
+	}
+}
+
+// The count is per key. A further attempt is a new key, granted by max for a failure the
+// brick reported, so it is handed out again after a loss as often as the first was.
+func TestAFurtherAttemptIsRequeuedAsOftenAsTheFirst(t *testing.T) {
+	e := started(t, requeueing, Options{MaxRequeues: new(1)})
+	first := next(t, e, runAt).Start[0]
+	lose(t, e, first, 0, runAt)
+	next(t, e, runAt)
+	record(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 108, Requeue: 1, FinishedAt: runAt}, runAt)
+
+	second := next(t, e, runAt.Add(time.Minute)).Start
+	if len(second) != 1 || second[0].Attempt != 2 {
+		t.Fatalf("a transient failure after a requeue starts %s, and max: 1 owes attempt 2", starts(Plan{Start: second}))
+	}
+	lose(t, e, second[0], 0, runAt.Add(time.Minute))
+	again := next(t, e, runAt.Add(time.Minute)).Start
+	if len(again) != 1 || again[0].ID != second[0].ID {
+		t.Errorf("attempt 2 lost for the first time starts %s, and its key has not been requeued yet", starts(Plan{Start: again}))
 	}
 }
 

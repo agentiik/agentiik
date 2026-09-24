@@ -163,6 +163,77 @@ func TestAKeyIsWrittenDownWhenItIsHeld(t *testing.T) {
 	}
 }
 
+// A key this host still has in flight is refused where it is written down again, before anything
+// is redeemed for it, whether a Run is carrying it or another delivery holds it. That is the
+// requeue of a task the heartbeat declared lost while its host was only cut off, reaching the host
+// whose container still runs it: redeemed, it would be bound to this runner and answered by
+// nobody, the container's one ending going to the dispatch that was lost. So the refusal leaves the
+// key as it was, held for the delivery that has it, and once that delivery has ended the key the
+// next one is answered with the ending, which the runner reports under the requeue's task_id.
+func TestAKeyInFlightOnThisHostIsRefusedWhereItIsWrittenDown(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		once.Do(func() { close(running) })
+		<-release
+		return bricks.run(func(string) int { return 0 })(c)
+	})
+	task := oneTask(ref)
+
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := r.Hold(task.ID)
+	if !errors.Is(err, ErrTaskInFlight) {
+		t.Fatalf("a second delivery of a key another delivery holds answered %v, and it is refused before anything is redeemed", err)
+	}
+	if charge, decided := Charged(err); !decided || charge != ChargePlatform {
+		t.Errorf("the refusal is charged to %s, and a key delivered twice is not the brick's failure", charge)
+	}
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := r.Run(context.Background(), task)
+		first <- err
+	}()
+	select {
+	case <-running:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held key's container never ran")
+	}
+	if err := r.Hold(task.ID); !errors.Is(err, ErrTaskInFlight) {
+		t.Fatalf("a delivery of a key whose container is running here answered %v, and it is refused before anything is redeemed", err)
+	}
+	if r.lookup(task.ID) == nil {
+		t.Error("the refusals let go of the key the running delivery holds, which is what a stop reaches the task through")
+	}
+	if e, _, _ := r.keys.read(task.ID); e.State != agk.TaskDispatched {
+		t.Errorf("the refusals left the key recorded %s", e.State)
+	}
+
+	close(release)
+	select {
+	case err := <-first:
+		if err != nil {
+			t.Fatalf("the running delivery: %s", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the running delivery never came back")
+	}
+	err = r.Hold(task.ID)
+	var done *Completed
+	if !errors.As(err, &done) || done.Ending.State != agk.TaskSucceeded {
+		t.Fatalf("a delivery of the key once it had ended answered %v, and it is answered with the ending", err)
+	}
+	if n := bricks.times("fetch"); n != 1 {
+		t.Errorf("the brick ran %d times for one key delivered three times", n)
+	}
+}
+
 // The ending is written after everything is collected and before anything is removed.
 // After the collection, because a key recorded before its outputs were read would be
 // refused on the delivery that could still have produced them. Before the removal,

@@ -75,11 +75,10 @@ type held struct {
 	// ending keeps.
 	told Event
 
-	// running says a Run has taken the task, and holds counts the deliveries Hold wrote
-	// the key down for that no Run has taken and no Release has let go of. Both are the
-	// registry's, and read and written under Docker.mu rather than under mu.
+	// running says a Run has taken the task, where it was only held before. It is the
+	// registry's, and read and written under Docker.mu rather than under mu. One delivery
+	// holds a key at a time, since Hold refuses a second, so nothing here counts them.
 	running bool
-	holds   int
 }
 
 // end keeps what the observer is told of the task's ending.
@@ -241,19 +240,24 @@ func (d *Docker) dispatch(e docker.Event) {
 	}
 }
 
-// ErrTaskInFlight is a second Run for a task this driver is already running.
+// ErrTaskInFlight is a second delivery of a key this driver already has in flight.
 //
-// At-least-once delivery can hand one task to one host twice while the first delivery is
+// At-least-once delivery can hand one key to one host twice while the first delivery is
 // still in hand. Through the ack window, where the runner holding the task acknowledged it
 // and the acknowledgement never arrived: the message comes round again, every other runner
-// is refused it at the redemption, and the runner it is bound to, redeeming it again as its
-// holder, brings it here, since package bus has a runner go on with a task whose
-// acknowledgement it could not confirm. And through the requeue of a task the heartbeat
-// declared lost, which keeps its key and can reach the host that is still running it: one
-// whose heartbeat was cut off while its container ran. The second is refused rather than
-// run beside the first, because two Runs carrying one container would each collect it and
-// each remove it, and the one that removed it first would take it away under the other. The
-// first delivery is the one that reports.
+// is refused it at the redemption, and it can come back to the runner it is bound to, since
+// package bus has a runner go on with a task whose acknowledgement it could not confirm. And
+// through the requeue of a task the heartbeat declared lost, which keeps its key and can
+// reach the host that is still running it: one whose heartbeat was cut off while its
+// container ran.
+//
+// Hold refuses either as the key is written down, before anything is redeemed, and says why
+// that matters for the requeue: the one ending the host produces answers it from the record
+// once the key has ended. Run refuses a second Run of a key it is carrying, which is the same
+// refusal for a caller that did not Hold first, agk run --local among them. The second is
+// never run beside the first, because two Runs carrying one container would each collect it
+// and each remove it, and the one that removed it first would take it away under the other.
+// The first delivery is the one that reports.
 var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
 
 // register records a task as being run, and answers with what to call when it is not.
@@ -273,7 +277,7 @@ func (d *Docker) register(id agk.TaskID) (func(), bool) {
 	case h.running:
 		return nil, false
 	}
-	h.running, h.holds = true, 0
+	h.running = true
 	return func() {
 		d.mu.Lock()
 		delete(d.inflight, id)
@@ -281,35 +285,34 @@ func (d *Docker) register(id agk.TaskID) (func(), bool) {
 	}, true
 }
 
-// hold records a key Hold wrote down, so that a stop landing before Run takes the task is
-// kept rather than answered nil and forgotten. A key a Run already has is left to it.
-func (d *Docker) hold(id agk.TaskID) {
+// hold records a key Hold is writing down, so that a stop landing before Run takes the
+// task is kept rather than answered nil and forgotten, and answers false where the key is
+// already in flight here, a Run carrying it or another delivery holding it. The check and
+// the entry are one step under the registry's lock, so two deliveries of one key are never
+// both let through.
+func (d *Docker) hold(id agk.TaskID) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	h := d.inflight[id]
-	if h == nil {
-		h = &held{}
-		d.inflight[id] = h
+	if d.inflight[id] != nil {
+		return false
 	}
-	if !h.running {
-		h.holds++
-	}
+	d.inflight[id] = &held{}
+	return true
 }
 
 // Release lets go of a key Hold wrote down and no Run has taken, which is what a runner
-// does with a task it is not going to run after all: its redemption was refused or
-// failed, or it puts the message back with Again. A key a Run has is left alone, since
-// that Run lets go of it when it returns, and so is a key another delivery still holds,
-// since a stop that landed on it is that delivery's. The record under the work root keeps
-// the key as taken and not ended, which refuses nothing.
+// does with a task it is not going to run after all: its redemption was refused, or it
+// puts the message back with Again. Not one whose redemption got no answer, which may have
+// bound the task and is redeemed again, the key held and named in the heartbeat meanwhile,
+// as package bus says. A key a Run has is left alone, since that Run lets go of it when it
+// returns and a stop reaches the task through it. It is for a delivery Hold answered nil,
+// the one delivery holding the key, and never for one Hold refused, which holds nothing.
+// The record under the work root keeps the key as taken and not ended, which refuses
+// nothing.
 func (d *Docker) Release(id agk.TaskID) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	h := d.inflight[id]
-	if h == nil || h.running {
-		return
-	}
-	if h.holds--; h.holds <= 0 {
+	if h := d.inflight[id]; h != nil && !h.running {
 		delete(d.inflight, id)
 	}
 }

@@ -252,6 +252,18 @@ func (tk taking) swept(t *testing.T, at time.Time) int {
 	return lost
 }
 
+// beat is one heartbeat of a runner naming the keys it holds, recorded as the API records it and
+// at a moment of the test's choosing.
+func (tk taking) beat(t *testing.T, r runner, at time.Time, holding ...agk.TaskID) {
+	t.Helper()
+	if err := tk.pool.Installation(t.Context(), db.Heartbeat, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.Beat(ctx, r.id, holding, at)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A runner that took a task and wrote its key down, and died before redeeming it, never
 // acknowledged it. Nobody is bound to it, so the heartbeat's sweep declares nothing about it however
 // long it waits, and the bus hands the message to another runner of the pool once AckWait has
@@ -380,5 +392,45 @@ func TestARunnerThatDiesAfterRedeemingLeavesALossAndAMessageTheNextRunnerDrops(t
 	}
 	if got, want := tk.task(t), "lost "+tk.first.id; got != want {
 		t.Errorf("after the refusal the task reads %q, want %q", got, want)
+	}
+}
+
+// A runner whose redemption bound the task and whose answer never reached it, a client that gave up
+// on a slow API or a connection that dropped once the binding had committed, has heard nothing of
+// whose the task is. It keeps the key, which its heartbeats go on naming, and redeems again as the
+// holder it turns out to be, which is answered as the first time would have been, and acknowledges
+// then. The heartbeat's sweep counts a bound task from its redemption and its last heartbeat, so
+// it declares nothing lost three intervals after the redemption whose answer was lost, where a
+// runner that let go of the key and waited for the message to come round would have left the task
+// to be declared lost before AckWait had passed, spending a requeue on a host that was never lost.
+func TestARunnerThatNeverHeardItsRedemptionAnsweredKeepsTheKeyAndRedeemsAgain(t *testing.T) {
+	tk := dispatched(t)
+	first, ok := tk.first.take(t, 5*time.Second)
+	if !ok {
+		t.Fatal("the first runner was handed nothing")
+	}
+	redeemed := time.Now().UTC()
+	if code, answer := tk.redeem(t, tk.first, first.Task); code != http.StatusOK {
+		t.Fatalf("the first runner's redemption answered %d: %v", code, answer)
+	}
+	// The answer is lost on the way back, and the runner goes on naming the key it kept.
+	key := agk.TaskID(first.Task.IdempotencyKey)
+	tk.beat(t, tk.first, redeemed.Add(db.HeartbeatInterval), key)
+	tk.beat(t, tk.first, redeemed.Add(2*db.HeartbeatInterval), key)
+
+	if n := tk.swept(t, redeemed.Add(db.LostAfter+5*time.Second)); n != 0 {
+		t.Errorf("three intervals after a redemption whose answer was lost, the sweep declared %d tasks lost that their runner still named", n)
+	}
+	if code, answer := tk.redeem(t, tk.first, first.Task); code != http.StatusOK {
+		t.Fatalf("the runner redeeming again as the holder it turned out to be answered %d: %v", code, answer)
+	}
+	if err := first.Held(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tk.task(t), "dispatched "+tk.first.id; got != want {
+		t.Errorf("the task reads %q, want %q", got, want)
+	}
+	if n := tk.bus.Outstanding(t, "dmz"); n != 0 {
+		t.Errorf("a task redeemed again and acknowledged leaves %d messages for the pool to hand out", n)
 	}
 }

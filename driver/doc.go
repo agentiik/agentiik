@@ -141,9 +141,13 @@
 // one that has ended with a *Completed holding the recorded Ending, before any grant is
 // redeemed for it, which the runner reports under the task_id of the message it took: that
 // is how the requeue of a task declared lost is answered by the host that had already ended
-// it. A key Hold wrote down is held in the in-flight registry from then on, as Run holds the
-// task it runs, so that a stop sent once the redemption has bound the task, and before Run
-// has begun, is kept for Run to find; Release lets go of a key the runner will not run.
+// it. It refuses one the host still has in flight with ErrTaskInFlight, also before any
+// grant is redeemed, so that a requeue reaching the host still running its key binds nobody
+// and is answered from the record once the key has ended, rather than bound to a runner
+// that will never answer it and declared lost a second time. A key Hold wrote down is held
+// in the in-flight registry from then on, as Run holds the task it runs, so that a stop sent
+// once the redemption has bound the task, and before Run has begun, is kept for Run to find;
+// Release lets go of a key the runner will not run.
 //
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this
