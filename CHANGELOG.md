@@ -47,7 +47,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Controller.Lead` asks its session on every poll whether it still holds the lock and ends the term with `controller.ErrLockLost` when it cannot say so, where a terminated or silently dropped session had left it deciding with no lock. Unlocking, unlistening and rolling back on the way out wait five seconds at most.
 - `agentiik-controller` asks PostgreSQL to probe its connections every few seconds, so a controller cut off without a reset frees the lock within half a minute rather than two hours. A second SIGINT or SIGTERM ends a process still stopping.
 - A task reads `running` while its container runs and `publishing` while its outputs go up, rather than `dispatched` until it ends. `Core.Progress` writes what the runner holding the dispatch reports, only forwards and never over an ending or on a run that has ended; another runner's is refused with `controller.ErrNotTheHolder`, and one arriving before the dispatch is recorded comes round again. A decision no longer moves such a row back to `dispatched`.
-- A task whose pool does not exist, or does not accept the run's namespace, is not published and gets no grant: every pending shard of its step fails with exit code 125 on the pass that finds it, before the quota, on the infrastructure's account, and the step's reason names the pool. The pool is the one `bus.PoolOf` routes to, so a step naming no `pool=` label needs a pool called `default`. `graph.Result.Reason` carries why.
+- A task whose pool does not exist, or does not accept the run's namespace, is not published and gets no grant: every pending shard of its step fails with exit code 125 on the pass that finds it, before the quota, on the infrastructure's account, and the step's reason names the pool. `graph.Result.Reason` carries why.
+- A step goes to the pool whose labels include every label of its `runs_on`, chosen among every pool while no namespace lists its allowed pools, and one naming no label goes to the pool `default`. No pool, or more than one, matching fails the step the same way, its reason saying which. The `pool=` label is no longer a shortcut. `controller.Dispatch.Pool` names the pool chosen in the transaction that issues the grant.
 - Resources are capped to the pool's cpu, memory and pids ceilings on the task message, and an ask left out takes the ceiling.
 
 ### State
@@ -85,6 +86,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `artifacts.fetches_held_until` holds each fetch of a budget being served until an instant, so a transfer that does not complete never spends one, and one whose API died gives it back when its hold lapses. `db.NS.Fetched` gives way to `Reserve`, `Delivered` and `Release`.
 - `runners` keeps who drained and who revoked a runner and when, until the audit log does, and the end of a revocation's grace. `Wide.Drain` and `Wide.Revoke` take who, why and when, and the grace for a revocation, and answer the runner; a drain of a revoked runner is `db.ErrRunnerRevoked`; `Wide.Authenticate` and `Wide.Beat` take a revoked runner until its grace ends, `Wide.Rotate` refuses one in its grace with `db.ErrRunnerRevoked`, and a redemption binding a runner that is not ready is `db.ErrRunnerNotTaking`. Migration `0025_revocation.sql`.
 - A redemption that would bind is `db.ErrPoolRefusesNamespace` where the runner's pool does not accept the task's namespace, and `db.ErrRunnerNarrowed` where the runner's own namespaces leave it out.
+- An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 
 ### Bus
 
@@ -121,6 +123,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `taskResult.usage` carries `cpu_seconds` and `max_rss_bytes` together or not at all, omitted where no sample was read, so `bus.Usage` holds them as pointers and a result carrying one without the other is refused.
 - The vendored wire says a stopped container reports the code its stop left, a runner reports 121 for refused outputs, and a task that did not succeed publishes no port.
 - `bus.TaskResult.Check` holds a result to what `Report` holds it to.
+- `bus.Route` chooses a task's pool from the pools it is given, and `bus.Publish` takes the pool rather than reading one off a `pool=` label, which `bus.PoolOf` did.
+- A task message leaves out a resource nothing decided, where it wrote `"cpu": ""`, `"memory": ""` and `"pids": 0`, which the wire refuses.
 
 ### Driver
 

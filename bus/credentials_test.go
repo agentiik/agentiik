@@ -175,10 +175,10 @@ func takesFromThePoolsConsumer(t *testing.T, a authenticated) {
 			t.Fatal(err)
 		}
 	}
-	if err := b.Publish(t.Context(), message("mine", "pool=dmz")); err != nil {
+	if err := b.Publish(t.Context(), "dmz", message("mine", "zone=dmz")); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Publish(t.Context(), message("theirs", "pool=lan")); err != nil {
+	if err := b.Publish(t.Context(), "lan", message("theirs", "zone=lan")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +287,7 @@ func TestARunnerHearsNothingHandedToAnotherRunner(t *testing.T) {
 
 	// runner-1 takes a task of dmz, holds it and answers it, and the controller takes the
 	// answer back.
-	if err := b.Publish(t.Context(), message("mine", "pool=dmz")); err != nil {
+	if err := b.Publish(t.Context(), "dmz", message("mine", "zone=dmz")); err != nil {
 		t.Fatal(err)
 	}
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
@@ -459,7 +459,7 @@ func TestARevokedRunnerPublishesItsResultsAndTakesNothing(t *testing.T) {
 	if err := control.Consumer(t.Context(), "dmz"); err != nil {
 		t.Fatal(err)
 	}
-	if err := control.Publish(t.Context(), message("waiting", "pool=dmz")); err != nil {
+	if err := control.Publish(t.Context(), "dmz", message("waiting", "zone=dmz")); err != nil {
 		t.Fatal(err)
 	}
 	got := reporting(t, control, func(heard) error { return nil })
