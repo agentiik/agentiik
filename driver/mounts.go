@@ -59,7 +59,10 @@ const (
 // API the per-task grant the controller issued for that one task and that one secret",
 // which it did before it pulled the image, and agk run --local answers it off the command
 // line. Neither is this package's business, which is why the source arrives at
-// construction and not in a Task: a Task "carries no secret value at all".
+// construction, or with one task's Run in Sources, and never in a Task: a Task "carries
+// no secret value at all". A source given in Sources is that task's alone, which is what
+// lets it be asked by name: two tasks from two namespaces that both name billing are
+// asked of two sources.
 type Secrets interface {
 	Value(ctx context.Context, name string) ([]byte, error)
 }
@@ -298,8 +301,9 @@ func inside(repo, rel string) (string, error) {
 
 // writeSecrets asks for the values and lays them down where the manifest asked for them.
 //
-// The value is asked of Config.Secrets here, and never travels on the task message: what
-// a Task carries is "names and mount points and never values". A server runner answers
+// The value is asked of the task's secret source here, Sources.Secrets where the runner
+// gave one and Config.Secrets otherwise, and never travels on the task message: what a
+// Task carries is "names and mount points and never values". A server runner answers
 // from the task's redemption, which it made before the pull, since it redeems before it
 // acknowledges the task message, and agk run --local from the command line. Each one
 // becomes a file of its own, bound read-only at its mount point, so a brick opens a path
