@@ -104,7 +104,14 @@ const (
 func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) error {
 	defer ln.Close()
 	in, err := open(ctx, s, log)
-	if err != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// A stop asked for while the database or the bus was still being reached, which
+		// is what a stack still coming up looks like: the failure is the stop's, not the
+		// installation's, and the program says nothing of it and exits 0, as the
+		// controller does.
+		return nil
+	case err != nil:
 		return err
 	}
 	defer in.close()

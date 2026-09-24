@@ -772,3 +772,36 @@ func TestASecondSignalEndsAProcessStillStopping(t *testing.T) {
 		t.Fatal("the second SIGTERM did not end a process still stopping")
 	}
 }
+
+// A stop asked for while the API is still reaching what it stands on is a stop, and exits 0: here
+// a database that accepts the connection and never answers, as one still starting can.
+func TestStoppedWhileStartingTheAPIExitsZero(t *testing.T) {
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	go func() {
+		for {
+			conn, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { conn.Close() })
+		}
+	}()
+
+	dir := filepath.Join(t.TempDir(), "bus")
+	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	database := config.Database{URL: "postgres://agentiik@" + silent.Addr().String() + "/agentiik?sslmode=disable&connect_timeout=60", Role: "agentiik"}
+	s := servingSettings(t, database, dir, "nats://127.0.0.1:1")
+
+	ctx, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	var stderr bytes.Buffer
+	if code := start(ctx, s, &stderr); code != exitStopped {
+		t.Errorf("stopped while it was reaching its database, the API exited %d: %s", code, stderr.String())
+	}
+}
