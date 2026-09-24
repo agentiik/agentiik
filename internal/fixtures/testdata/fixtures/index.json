@@ -662,7 +662,7 @@
       "valid": [
         {
           "file": "wire/valid/task-result.json",
-          "covers": "a task that ran: the state, the exit code, the instants, the ports it published, the artifacts, the log and the usage"
+          "covers": "a task that ran and failed, as the page prints it: the state, the exit code, the instants, the empty lists of ports and artifacts a failed task reports, the log and the usage"
         },
         {
           "file": "wire/valid/task-result-lost.json",
@@ -670,7 +670,11 @@
         },
         {
           "file": "wire/valid/task-result-timed-out.json",
-          "covers": "a task stopped at its deadline, which carries no exit code because nothing decided anything: the ending the wire could not express until the page named all nine states"
+          "covers": "a task stopped at its deadline, which carries the exit code its stop left, 137 after the grace ran out, since its container started and exited: the ending the wire could not express until the page named all nine states"
+        },
+        {
+          "file": "wire/valid/task-result-unsampled.json",
+          "covers": "a success whose container exited before the first sample of its statistics was read, which reports the image pull and neither sampled figure rather than zeros nobody measured"
         }
       ],
       "invalid": [
@@ -682,6 +686,11 @@
         {
           "file": "wire/invalid/task-result-state-of-a-run.json",
           "rule": "queued is a run state, not a task state, and the two vocabularies are separate on purpose",
+          "refused_by": "schema"
+        },
+        {
+          "file": "wire/invalid/task-result-usage-half-sampled.json",
+          "rule": "cpu_seconds and max_rss_bytes are read off the same samples, so a usage block carries both or neither",
           "refused_by": "schema"
         }
       ]
