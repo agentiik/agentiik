@@ -65,6 +65,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
 - A runner pool's name is lowercase and hyphenated, at most 255 characters, and its labels, its namespaces and a join token's labels are held to the wire's grammar by the table. Its ceilings are cpu, memory and pids, kept as written, and there is no disk ceiling, since nothing can enforce one. Migration `0019_pool_shape.sql`.
 - A pool's pids ceiling is a `bigint`, 64 bits as the wire and `PidsLimit` allow, so one past 32 bits is kept where it was a 500. Migration `0019_pool_shape.sql`.
+- A runner keeps the Ed25519 public key it joined with, the namespaces its host narrows itself to and the containment it reported, and its identifier is held to the wire's lowercase grammar. Migration `0021_runner_identity.sql`.
 - `Wide.IssueJoinToken` takes the moment a token is issued, and the row keeps it, so its expiry counts from the API's clock and not the database's.
 - `db.Provision` applies the migrations and creates, or brings back to shape, the `NOSUPERUSER NOBYPASSRLS` role the API and the controller connect as, with read and write on the tables the migrations created and read on `schema_migrations`, so a binary can tell a database ahead of it. It needs no superuser, the password reaches PostgreSQL as a SCRAM verifier, and the tests provision through it.
 - `db.Provision` holds an advisory lock while it runs, so two replicas migrating one database at once take turns rather than one of them failing.
@@ -79,7 +80,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `bus` fills `controller.Queue` over NATS JetStream: one WorkQueue stream, one subject per runner pool, results on a stream of their own.
 - A task message matches `wire.schema.json`, vendored with its fixtures, and carries names and digests rather than the input envelopes.
 - A message nobody can decode is taken off the queue and reported, never dropped silently.
-- A result travels as `wire.schema.json` `$defs/taskResult`, with its outputs as digests. `bus.Report` takes a `bus.TaskResult`, and a result the reader refuses (an unknown field, not an ending, what no container could report, a malformed name or digest, a log outside its run) is taken off the queue and reported. The reader takes a runner by the ULID the API mints, which the wire's lowercase pattern for `runner` refuses.
+- A result travels as `wire.schema.json` `$defs/taskResult`, with its outputs as digests. `bus.Report` takes a `bus.TaskResult`, and a result the reader refuses (an unknown field, not an ending, what no container could report, a malformed name or digest, a log outside its run) is taken off the queue and reported. The reader holds a runner to the wire's lowercase pattern, which is the grammar the API mints it in, and refuses one in capitals.
 - A runner publishes its results on `agentiik.results.<runner>`, the one results subject its bus credential allows, and a result naming another runner is taken off the queue and reported.
 - A result the controller could not record comes back after a pause, from a second doubling to a minute, rather than at once.
 - A stop is published on one subject every runner listens to and acted on by whoever holds the task, rather than put on the queue.
@@ -99,6 +100,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redemption that failed without refusing the task, with no answer, the runner's own credential refused or the API failing on its side, is not acknowledged, and the runner keeps the key, names it in its heartbeat and redeems again. Letting go, it left a task its lost answer had bound for the sweep to declare lost before the message came round, spending a requeue on a host that was never lost.
 - A test holds `bus.AckWait` to the documented minute.
 - The controller's half is package `bus/control`, which fills `controller.Queue` and answers results as `controller.Answer`, so a runner links `bus` without the controller or the database. `Bus.Publish` takes a `bus.TaskMessage`, and `Bus.Reports` hands on each result with the runner it came from.
+- `bus.NewInstallation` creates an installation's NATS operator, application account and system account, and writes its three files once, readable by their owner alone: `accounts.conf` for the server to include, `account.seed` for the API to mint runner credentials with, and `control-plane.creds` for the API and the controller. The operator's seed is kept nowhere. The bus tests run on a server started from that configuration, and the API and the controller read the files as written.
 
 ### Driver
 
@@ -119,6 +121,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redelivery that adopts the container of a task naming secrets, with no secret source and none of the values the first delivery wrote left on the host, is refused rather than writing that log in the clear.
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
+- Every envelope of a task is held to `inline_max_bytes`, `envelope_max_bytes` and `max_items` before the first upload, the shorthand included, so a refusal leaves the store untouched. A container that exited 0 and left outputs the collection refused is `failed` with exit code 121 (`driver.ExitContractBroken`), charged to the brick, and its key is written down with that code and its span. Run's error keeps the `*agk.Refusal` for `errors.As` and is `driver.ErrOutputsRefused`, since `driver.Fault.Unwrap` now answers the error its detail wraps beside its sentinel. A store that will not take outputs that passed is charged to the platform.
+- A container stopped at its deadline or by a stop is logged as `timed_out` or `cancelled`, and no longer as the runtime's failure its kill code reads as.
 
 ### Runner
 
@@ -134,6 +138,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+- `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
@@ -156,6 +161,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
 - The pool and join token routes speak the `runnerPool` shape of `wire.schema.json`: a pool is `name`, `labels`, `namespaces`, `resource_ceilings` (`cpu`, `memory`, `pids`) and `containment`, the first four always written, and a token is answered beside its pool with `id`, `single_use`, `issued_at` and `expires_at`. A name already taken is a 409, and `sandboxed` and `separated` are refused until v1.0.0. The listing no longer counts runners.
+- A join speaks `wire.schema.json` `$defs/runnerRegistration`: `public_key` (an Ed25519 key in PEM), `labels`, `capacity` (`vcpu`, `memory` and `disk` in the `Ki`/`Mi`/`Gi`/`Ti` grammar), `architecture` and `agent_version`, with `namespaces` and `containment` optional. A machine's description the wire refuses is a 400 before the token is spent, a private key sent beside the public one is refused by name, and a namespace its pool does not accept gets the one 401 every bad token gets. The runner is answered with a lowercase identifier.
 - A join token asked to live more seconds than a duration holds is refused as longer than a day, where it was issued already dead, or living a fraction of a second, or failed with a 500.
 - A pool's `cpu`, `memory`, `pids` or `containment` written `null`, or any of them but `pids` written `""`, is refused with 400, where it was read as no ceiling or as `hardened`. Only a ceiling left out is no ceiling.
 - Runner routes have a guard of their own, and every bad runner credential is the same 401. Draining is told in the heartbeat; a revoked credential just stops working.
@@ -233,6 +239,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
+- `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
 
 ### Tests
 

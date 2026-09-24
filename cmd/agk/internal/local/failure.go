@@ -97,6 +97,9 @@ func failures(state *graph.State, g *graph.Graph, refused map[agk.TaskID]trouble
 				// is what a person can act on.
 				f.Refused, f.Charge = t.refused, t.charge
 				f.Band = agk.Band(sh.ExitCode)
+				if t.exited {
+					f.HasExit, f.ExitCode = true, sh.ExitCode
+				}
 			} else if sh.Task == agk.TaskFailed {
 				f.HasExit, f.ExitCode = true, sh.ExitCode
 				f.Band = agk.Band(sh.ExitCode)

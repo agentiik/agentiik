@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -332,6 +333,10 @@ type finished struct {
 type trouble struct {
 	refused string
 	charge  driver.Charge
+
+	// exited says a container ran to its end before the refusal, so the code the
+	// evaluator was given is one the report names.
+	exited bool
 }
 
 // record takes one finished task back into the evaluator.
@@ -343,7 +348,8 @@ type trouble struct {
 // charge is exit 125, which the exit-code table charges to the runner and which agk.Band
 // already makes unretryable and nameless to retry.on; a brick charge with no container is
 // exit 120, invalid input, which the evaluator itself already uses for a task it could not
-// build and which is never retried whatever retry says.
+// build and which is never retried whatever retry says. A container that exited 0 and whose
+// outputs were refused did run, and is recorded with the table's own code for it, 121.
 //
 // The state is failed and never lost. Lost is the heartbeat's word for a runner that
 // stopped reporting, and it means the work may well have finished, which is false for a
@@ -363,7 +369,13 @@ func (s *Session) record(ev *graph.Evaluator, done finished, refused map[agk.Tas
 		if charge == driver.ChargePlatform {
 			code = platformFailure
 		}
-		refused[done.task.ID] = trouble{refused: done.err.Error(), charge: charge}
+		// A container that exited 0 and left outputs the driver refused did run, and
+		// the table has a code of its own for it, which is the one reported.
+		exited := errors.Is(done.err, driver.ErrOutputsRefused)
+		if exited {
+			code = driver.ExitContractBroken
+		}
+		refused[done.task.ID] = trouble{refused: done.err.Error(), charge: charge, exited: exited}
 		result = graph.Result{
 			Task:     done.task.ID,
 			State:    agk.TaskFailed,

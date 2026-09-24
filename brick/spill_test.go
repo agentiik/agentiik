@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -335,6 +336,21 @@ func TestASpilledNameDoesNotLandOnAFileTheItemAlreadyCarries(t *testing.T) {
 	for name, n := range names {
 		if n > 1 {
 			t.Errorf("the port carries %q %d times, and one mount cannot hold both", name, n)
+		}
+	}
+}
+
+// A store never opened is refused as no store at all, whether it arrives as no Putter or as
+// a nil *artifact.Store, which is a Putter that is not nil.
+func TestSpillingWithNoStoreIsRefused(t *testing.T) {
+	e := agk.Empty("01JMZ8W4K2R7Q0E3N5T9A1B2C3", "render", "out", 1, time.Now())
+	e.Items = []agk.Item{agk.NewItem(map[string]any{"body": strings.Repeat("x", 256)})}
+	e.Meta.Count = 1
+	l := agk.DefaultLimits()
+	l.InlineMaxBytes = 16
+	for name, s := range map[string]brick.Putter{"no Putter": nil, "a nil store": (*artifact.Store)(nil)} {
+		if _, err := brick.Spill(t.Context(), s, e, l); err == nil || !strings.Contains(err.Error(), "no artifact store") {
+			t.Errorf("spilling with %s answered %v", name, err)
 		}
 	}
 }
