@@ -65,7 +65,10 @@ const maxFieldSegment = 64
 // Items and files already carried are left as they are: a files[] entry is already a
 // reference, and nothing is spilled twice.
 func Spill(ctx context.Context, s Putter, e agk.Envelope, l agk.Limits) (agk.Envelope, error) {
-	if s == nil {
+	// A nil *artifact.Store is a Putter that is not nil, so it is asked for by name: the
+	// store is the Putter every caller but the runner's passes, and one left unopened is
+	// refused here rather than at the first value that spills.
+	if store, ok := s.(*artifact.Store); s == nil || ok && store == nil {
 		return agk.Envelope{}, errors.New("brick: no artifact store: a value above the threshold is written to one")
 	}
 	if l.InlineMaxBytes <= 0 {
