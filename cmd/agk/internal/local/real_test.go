@@ -16,8 +16,9 @@ import (
 )
 
 // This file is the one that needs a daemon that is actually there. It is skipped where there
-// is none, so that the suite stays green in CI, and it runs where there is one, exactly as
-// driver/real_test.go does.
+// is none, so that a machine with nothing installed still runs the rest, and it runs where
+// there is one, failing rather than skipping where AGENTIIK_TEST_REQUIRE_DOCKER is 1, exactly
+// as driver/real_test.go does.
 //
 // What it holds that the fake driver cannot is that the loop, the working directory and the
 // four things the driver asks for work against real containers: the tree is bound at
@@ -25,21 +26,22 @@ import (
 // fan-out is three containers and not one, a merge concatenates what they published, and
 // every envelope that came back was collected by the driver out of /agk/out/ports.
 
-// realSession opens a session on the daemon of this machine, or skips.
+// realSession opens a session on the daemon of this machine, or ends the test through
+// dockertest.Unavailable.
 func realSession(t *testing.T, tree string) (*Session, Layout) {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("the daemon at %s did not answer: %v", socket, err)
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
 	_, err = cli.ImageInspect(t.Context(), realImage)
 	cli.Close()
 	if err != nil {
-		t.Skipf("%s is not on this machine: docker pull %s", realImage, realImage)
+		dockertest.Unavailable(t, "%s is not on this machine: docker pull %s", realImage, realImage)
 	}
 
 	layout, err := NewLayout(filepath.Join(tree, DefaultDir))
@@ -51,14 +53,14 @@ func realSession(t *testing.T, tree string) (*Session, Layout) {
 		Announce: func(s string) { t.Log(s) },
 	}, layout)
 	if err != nil {
-		t.Skipf("opening a session on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a session on %s: %v", socket, err)
 	}
 	t.Cleanup(func() { session.Close() })
 	return session, layout
 }
 
 // realImage is the base image every step of the fixture runs in. It is pinned and small, and
-// it is the one already on this machine, so nothing is pulled.
+// it is the one already on this machine, so nothing is pulled; CI pulls it before the tests.
 const realImage = "alpine:3.21"
 
 // realWorkflow is a fan-out and a merge, in script steps, with one step that is given a

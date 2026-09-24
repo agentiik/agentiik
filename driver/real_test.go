@@ -18,14 +18,21 @@ import (
 )
 
 // This file is the one that needs a daemon that is actually there. It is skipped where
-// there is none, so that the suite stays green in CI, and it runs where there is one.
+// there is none, so that a machine with nothing installed still runs the rest, and it runs
+// where there is one. CI has one, pulls the image and sets AGENTIIK_TEST_REQUIRE_DOCKER, so
+// there a test that cannot run fails rather than skips.
 //
 // What it holds that the fake cannot is that the sequence works against the daemon rather
 // than against this project's reading of it: the bind mounts land, the account the image
 // declares can write into /agk/out, the hijacked attach carries standard input, and the
 // exit code comes back through a wait that was opened before the start.
 
-// realDriver opens a driver on the daemon of this machine, or skips.
+// realDriver opens a driver on the daemon of this machine, or ends the test through
+// dockertest.Unavailable.
+//
+// alpine:3.21 comes first because it is the image every other real test and fixture
+// names, and the one CI pulls: a tag that moves, as latest does, would change what these
+// tests run on under a branch nobody touched.
 func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	t.Helper()
 	policy := DefaultPolicy()
@@ -42,15 +49,15 @@ func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, str
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
-		t.Skip("no Docker daemon on this machine")
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
 	}
 
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("the daemon at %s did not answer: %v", socket, err)
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
 	}
 	image := ""
-	for _, ref := range append(images, "alpine:latest", "busybox:latest") {
+	for _, ref := range append(images, "alpine:3.21", "alpine:latest", "busybox:latest") {
 		if _, err := cli.ImageInspect(t.Context(), ref); err == nil {
 			image = ref
 			break
@@ -58,7 +65,7 @@ func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, str
 	}
 	cli.Close()
 	if image == "" {
-		t.Skip("no small image on this machine to run a script step in: docker pull alpine")
+		dockertest.Unavailable(t, "no small image on this machine to run a script step in: docker pull alpine:3.21")
 	}
 
 	store, err := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
@@ -75,7 +82,7 @@ func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, str
 		Announce: func(s string) { t.Log(s) },
 	})
 	if err != nil {
-		t.Skipf("opening a driver on %s: %v", socket, err)
+		dockertest.Unavailable(t, "opening a driver on %s: %v", socket, err)
 	}
 	t.Cleanup(func() { d.Close() })
 	return d, image
@@ -205,7 +212,7 @@ func TestTheSettingsTableIsReadBackOffTheContainerTheDaemonHolds(t *testing.T) {
 	socket, _ := dockertest.Socket()
 	cli, err := docker.Dial(socket)
 	if err != nil {
-		t.Skipf("dialing %s to read the container back: %v", socket, err)
+		dockertest.Unavailable(t, "dialing %s to read the container back: %v", socket, err)
 	}
 	t.Cleanup(func() { cli.Close() })
 
