@@ -99,6 +99,23 @@ func publishedIn(t *testing.T, r *runner, task agk.TaskID, port agk.Port, object
 	return agk.Envelope{}, nil
 }
 
+// runnersOwn fails the test unless err is a refusal charged to the platform that names no
+// rule of the brick contract. What it refuses is a runner's omission, which no brick had a
+// part in, and a runner that sorts its errors with errors.Is has to find it apart from an
+// image that broke the contract.
+func runnersOwn(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s was not refused", what)
+	}
+	if charge, ok := Charged(err); !ok || charge != ChargePlatform {
+		t.Errorf("%s is charged to %s, and it is the runner's own doing", what, charge)
+	}
+	if errors.Is(err, ErrContractBroken) || strings.Contains(err.Error(), ErrContractBroken.Error()) {
+		t.Errorf("%s blames an image that has no part in it: %s", what, err)
+	}
+}
+
 // Two tasks from two namespaces, both naming billing, in flight on one driver at the same
 // moment. A source asked by name alone could give them one value between them; each is
 // given the value its own redemption answered, masked in its own log, and its tree and
@@ -395,12 +412,17 @@ func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *tes
 	}
 
 	_, err := r.Run(t.Context(), task)
-	if !errors.Is(err, ErrContractBroken) {
-		t.Fatalf("a redelivery with no secret source answered %v", err)
-	}
+	runnersOwn(t, err, "a redelivery with no secret source")
 	if strings.Contains(written.String(), "s3cr3t-value") {
 		t.Errorf("the log carries the secret value: %q", written.String())
 	}
+
+	// The same omission on a delivery that creates its container is the same refusal,
+	// so a runner that sorts its errors sorts the two alike.
+	fresh := taskWithASecret(ref)
+	fresh.ID, fresh.Attempt = agk.NewTaskID(fresh.Run, fresh.Step, 2, agk.Shard{}), 2
+	_, err = r.Run(t.Context(), fresh)
+	runnersOwn(t, err, "a first delivery with no secret source")
 }
 
 // What the first delivery wrote is read back only as a file. A link left under its name is
@@ -520,9 +542,7 @@ func TestAStoreOpenedForAnotherNamespaceIsRefused(t *testing.T) {
 		t.Fatalf("opening the store: %s", err)
 	}
 	_, err = r.Run(WithSources(t.Context(), Sources{Store: store}), oneTask(ref))
-	if !errors.Is(err, ErrContractBroken) {
-		t.Fatalf("a finance task given the payroll store answered %v", err)
-	}
+	runnersOwn(t, err, "a finance task given the payroll store")
 	if !strings.Contains(err.Error(), "payroll") || !strings.Contains(err.Error(), "finance") {
 		t.Errorf("the refusal does not name both namespaces: %s", err)
 	}

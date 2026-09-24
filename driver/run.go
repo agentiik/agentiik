@@ -594,7 +594,7 @@ func (d *Docker) store(ctx context.Context, t graph.Task) (*artifact.Store, erro
 		// runner that paired a task with another task's store would upload one
 		// namespace's outputs under another's prefix.
 		if s.Namespace() != t.Namespace {
-			return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
+			return nil, fault(t.Step, nil, ChargePlatform,
 				"the artifact store this task was given is namespace %s's and the task is namespace %s's, and an artifact never crosses a namespace boundary", s.Namespace(), t.Namespace)
 		}
 		return s, nil
@@ -683,8 +683,10 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		// A server runner leaves Config.Secrets nil and gives each task its own, so a
 		// redelivery that came without them to a host that no longer holds what the
 		// first delivery wrote would otherwise mask nothing. It is refused for the
-		// reason a value that cannot be redeemed is.
-		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
+		// reason a value that cannot be redeemed is, and as writeSecrets refuses the
+		// same omission on a delivery that creates its container: the runner's, with
+		// no rule of the brick contract, which no image had a part in.
+		return nil, fault(t.Step, nil, ChargePlatform,
 			"secret %s is no longer where the first delivery wrote it and there is no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", missing)
 	}
 	for _, s := range t.Secrets {
