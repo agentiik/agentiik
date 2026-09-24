@@ -25,11 +25,15 @@ type minting struct {
 	// with, and until when.
 	revoked []string
 	until   []time.Time
+
+	// full is until when each ForRunner credential was minted.
+	full []time.Time
 }
 
 func (m *minting) ForRunner(name, pool string, until time.Time) (bus.Credentials, error) {
 	m.names = append(m.names, name)
 	m.pools = append(m.pools, pool)
+	m.full = append(m.full, until)
 	if m.fail {
 		return bus.Credentials{}, context.DeadlineExceeded
 	}

@@ -62,7 +62,17 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 	// No longer than the runner credential it was asked for with: "A credential past its
 	// rotate_by is refused everywhere", and a bus credential outliving it by up to an hour would
 	// be a runner that has to join again still pulling work.
-	until := s.now().Add(BusLife)
+	//
+	// Nor longer than a revocation's grace, for a runner that is not revoked yet. A NATS
+	// credential is not revoked but runs out, so one minted a moment before a revocation keeps
+	// what it allowed, pulling included, until it expires: no later than the grace, it is gone
+	// by the time "every call is 401", and nothing it publishes arrives after the grace. An
+	// installation whose grace is shorter than BusLife renews that much more often.
+	now := s.now()
+	until := now.Add(BusLife)
+	if limit := now.Add(s.grace); limit.Before(until) {
+		until = limit
+	}
 	if !runner.RotateBy.IsZero() && runner.RotateBy.Before(until) {
 		until = runner.RotateBy
 	}

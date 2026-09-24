@@ -629,8 +629,8 @@ func (w *Wide) Beat(ctx context.Context, runner string, b Beating, at time.Time)
 	return beaten, nil
 }
 
-// ErrRunnerRevoked is an order or a rotation for a runner that is revoked and still in its grace:
-// a drain would only undo part of the revocation, and a rotation would carry the runner past it.
+// ErrRunnerRevoked is a drain ordered for a revoked runner, which would only undo part of the
+// revocation, or a rotation by one still in its grace, which would carry the runner past it.
 var ErrRunnerRevoked = errors.New("db: that runner is revoked")
 
 // Drain tells a runner to stop taking work and finish what it holds, and answers the runner as it

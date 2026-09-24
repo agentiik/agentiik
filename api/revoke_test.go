@@ -243,6 +243,20 @@ func TestARotationCrossingARevocationIsToldTheRunnerIsRevoked(t *testing.T) {
 	}
 }
 
+// A NATS credential is not revoked but runs out, so every bus credential runs out no later than a
+// revocation's grace would: one minted a moment before a revocation is gone by the grace's end.
+func TestNoBusCredentialOutlivesAGrace(t *testing.T) {
+	ro, _ := withGrace(t, 30*24*time.Hour, 10*time.Minute)
+	_, credential := ro.joinedAs(t, host(1))
+	if w, _ := call(t, ro.handler, "POST", "/api/v1/bus/token", credential, nil); w.Code != http.StatusOK {
+		t.Fatalf("a ready runner's bus credential answered %d: %s", w.Code, w.Body)
+	}
+	want := ro.clock.Add(10 * time.Minute)
+	if got := mintedUntil(t, ro); !got.Equal(want) {
+		t.Errorf("a ready runner's bus credential lasts until %s, past a grace that would end at %s", got, want)
+	}
+}
+
 // A draining runner is only told to take nothing new: its bus credential is the one it always had,
 // and it renews its runner credential, since it stays up for as long as it is left drained.
 func TestADrainingRunnerKeepsItsCredentials(t *testing.T) {
@@ -330,4 +344,13 @@ func when(t *testing.T, written any) time.Time {
 		t.Fatalf("%v is not an instant: %s", written, err)
 	}
 	return at
+}
+
+// mintedUntil is until when the last full bus credential was minted.
+func mintedUntil(t *testing.T, ro rotations) time.Time {
+	t.Helper()
+	if len(ro.minted.full) == 0 {
+		t.Fatal("no bus credential was minted")
+	}
+	return ro.minted.full[len(ro.minted.full)-1]
 }
