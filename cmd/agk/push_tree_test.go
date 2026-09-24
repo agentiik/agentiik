@@ -370,7 +370,8 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 	var join db.JoinToken
 	if err := in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		join, err = w.IssueJoinToken(ctx, "dmz", nil, "alice", time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		join, err = w.IssueJoinToken(ctx, "dmz", nil, "alice", now, now.Add(time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)

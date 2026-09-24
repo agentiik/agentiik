@@ -142,6 +142,12 @@ func GrantRedemptions() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.GrantRedemption })
 }
 
+// RunnerPools returns the runner pool corpus: a pool and the join token issued from it, which is
+// what an administrator writes and what the API answers.
+func RunnerPools() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.RunnerPool })
+}
+
 // Wire is the schema document every message above is held to.
 func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 
