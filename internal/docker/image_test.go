@@ -1,6 +1,8 @@
 package docker_test
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -110,5 +112,117 @@ func TestAnInspectIsWhereAReferenceBecomesADigest(t *testing.T) {
 	}
 	if img.Config.User != "65532:65532" {
 		t.Errorf("Config.User: got %q, want the account the image declares", img.Config.User)
+	}
+}
+
+// TestAnImageIsPinnedUnderItsOwnRepository holds what a reference may be pinned to: the
+// digests the daemon holds the image under in the repository the reference names, however
+// either of them spells it, and never one held under another repository.
+func TestAnImageIsPinnedUnderItsOwnRepository(t *testing.T) {
+	const other = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	img := docker.Image{RepoDigests: []string{
+		"alpine@" + digest,
+		"ghcr.io/acme/alpine@" + other,
+		"registry.example:5000/acme/brick@" + other,
+		"Registry/acme/brick@" + digest,
+		"alpine@sha256:abc",
+		"no-digest-at-all",
+	}}
+	for ref, want := range map[string][]string{
+		"alpine:3.21":                      {"alpine@" + digest},
+		"alpine":                           {"alpine@" + digest},
+		"docker.io/library/alpine:3.21":    {"docker.io/library/alpine@" + digest},
+		"index.docker.io/library/alpine":   {"index.docker.io/library/alpine@" + digest},
+		"library/alpine:3.21":              {"library/alpine@" + digest},
+		"ghcr.io/acme/alpine:3.21":         {"ghcr.io/acme/alpine@" + other},
+		"registry.example:5000/acme/brick": {"registry.example:5000/acme/brick@" + other},
+		"Registry/acme/brick:1":            {"Registry/acme/brick@" + digest},
+		"registry/acme/brick:1":            nil,
+		"acme/alpine:3.21":                 nil,
+		"ghcr.io/acme/other:1":             nil,
+	} {
+		if got := img.RegistryDigests(ref); !slices.Equal(got, want) {
+			t.Errorf("%s may be pinned to %q, want %q", ref, got, want)
+		}
+	}
+	if got := (docker.Image{}).RegistryDigests("alpine:3.21"); got != nil {
+		t.Errorf("an image held under no digest may be pinned to %q", got)
+	}
+}
+
+// TestTheRegistryIsAskedWhatItServes holds the question a push puts to the registry
+// behind an image, through the daemon, and the answers it can get: the manifest, a
+// manifest the registry does not hold in a repository it does, and a repository it holds
+// nothing of, which it will not talk about, with 403 or with 401 depending on the
+// registry. The last two are what an image built on a machine and never pushed gets.
+func TestTheRegistryIsAskedWhatItServes(t *testing.T) {
+	const otherDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	images := dockertest.With(dockertest.Options{
+		Images: map[string]dockertest.Image{
+			"ghcr.io/acme/brick:1.4.0":     {Digest: digest},
+			"ghcr.io/acme/brick:1.5.0-dev": {Digest: otherDigest, Unpushed: true},
+			"ghcr.io/acme/local:1.0.0":     {Digest: digest, Unpushed: true},
+		},
+	})
+	client, _ := dial(t, images)
+
+	d, err := client.DistributionInspect(ctxOf(t), "ghcr.io/acme/brick@"+digest, "")
+	if err != nil {
+		t.Fatalf("asking about a pushed image: %v", err)
+	}
+	if d.Descriptor.Digest != digest {
+		t.Errorf("the registry serves %q, want %q", d.Descriptor.Digest, digest)
+	}
+
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/brick@"+otherDigest, "")
+	if !docker.IsNotFound(err) {
+		t.Errorf("an image never pushed to a repository the registry holds answered %v, and the registry holds no such manifest", err)
+	}
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/local@"+digest, "")
+	if !docker.IsDenied(err) || answered(err) != 403 {
+		t.Errorf("an image never pushed to a repository the registry never heard of answered %v", err)
+	}
+
+	client, _ = dial(t, images, dockertest.RegistryAnswers401)
+	_, err = client.DistributionInspect(ctxOf(t), "ghcr.io/acme/local@"+digest, "")
+	if !docker.IsDenied(err) || answered(err) != 401 {
+		t.Errorf("a registry answering 401 for a repository it never heard of answered %v", err)
+	}
+}
+
+// answered is the status a refusal carries, so that a test holding a registry to 401 or
+// to 403 is not satisfied by IsDenied answering for the other.
+func answered(err error) int {
+	var refused *docker.Error
+	if errors.As(err, &refused) {
+		return refused.Status
+	}
+	return 0
+}
+
+// TestOnlyTheClassicStoreSaysAnImageWasNeverPushed holds why the registry is asked at all:
+// the containerd store holds an image built on the machine under a digest of its own
+// repository exactly as it holds one it pulled, and only the classic store leaves it with
+// none.
+func TestOnlyTheClassicStoreSaysAnImageWasNeverPushed(t *testing.T) {
+	images := dockertest.With(dockertest.Options{Images: map[string]dockertest.Image{
+		"ghcr.io/acme/local:1.0.0": {Digest: digest, Unpushed: true},
+	}})
+	for _, c := range []struct {
+		store string
+		bs    []dockertest.Behaviour
+		held  int
+	}{
+		{"containerd", []dockertest.Behaviour{images}, 1},
+		{"classic", []dockertest.Behaviour{images, dockertest.ClassicImageStore}, 0},
+	} {
+		client, _ := dial(t, c.bs...)
+		img, err := client.ImageInspect(ctxOf(t), "ghcr.io/acme/local:1.0.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(img.RegistryDigests("ghcr.io/acme/local:1.0.0")); got != c.held {
+			t.Errorf("the %s store holds an image never pushed under %d registry digests, want %d", c.store, got, c.held)
+		}
 	}
 }

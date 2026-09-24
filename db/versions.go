@@ -28,14 +28,18 @@ type Version struct {
 
 	// Entry is the path of the entry point in the tree, Document is what it held, and
 	// Includes are the files it pulled in, by the path each was named at. Manifests are the
-	// brick manifests of every image the workflow names, by image reference.
+	// brick manifests of every image the workflow names, by image reference. Images are the
+	// references the workflow names by tag, each with the digest it was resolved to when the
+	// version was pushed, written name@sha256:<hex>.
 	//
 	// Together these are what the graph is rebuilt from: loading them back gives the same
-	// workflow resolved the same way, with nothing fetched from anywhere.
+	// workflow resolved the same way, with nothing fetched from anywhere, and every run of it
+	// names the same image bytes.
 	Entry     string
 	Document  []byte
 	Includes  map[string][]byte
 	Manifests map[string][]byte
+	Images    map[string]string
 
 	// Tree is the repository as the runner will see it, named rather than carried: "every
 	// step of every run sees it, mounted read-only at /agk/repo". The bytes are objects in
@@ -79,6 +83,7 @@ type stored struct {
 	Document  []byte            `json:"document"`
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
+	Images    map[string]string `json:"images,omitempty"`
 }
 
 // ErrNoVersion is nothing of that commit.
@@ -167,7 +172,7 @@ func (n *NS) SaveVersion(ctx context.Context, v Version) (Saved, error) {
 	}
 	body, err := json.Marshal(stored{
 		Entry: v.Entry, Document: v.Document,
-		Includes: v.Includes, Manifests: v.Manifests,
+		Includes: v.Includes, Manifests: v.Manifests, Images: v.Images,
 	})
 	if err != nil {
 		return Saved{}, fmt.Errorf("db: version %s@%s could not be written: %w", v.Workflow, v.Commit, err)
@@ -254,10 +259,12 @@ func (n *NS) CheckVersion(ctx context.Context, v Version) error {
 // and ErrNoVersion where it is not recorded.
 //
 // Compared by tree and by nothing else: the tree is the commit, and the rest of the row is either
-// read out of it or resolved around it, like the manifests of the images it names, which may have
-// moved since without the commit having changed. A version recorded without its tree differs
-// from every tree a push carries, because a version is written once, and a second push is not how
-// it acquires the files it was recorded without.
+// read out of it or resolved around it, like the manifests of the images it names and the digests
+// their tags were resolved to, which may have moved since without the commit having changed. The
+// first push of a commit is the one that settles them, so that every run of a version runs what
+// its first run ran. A version recorded without its tree differs from every tree a push carries,
+// because a version is written once, and a second push is not how it acquires the files it was
+// recorded without.
 func compareTree(ctx context.Context, tx pgx.Tx, namespace, workflow, commit string, tree []TreeFile) error {
 	held, err := readTree(ctx, tx, namespace, workflow, commit)
 	if err != nil && !errors.Is(err, ErrNoTree) {
@@ -370,7 +377,7 @@ func readVersion(ctx context.Context, tx pgx.Tx, namespace, workflow, commit str
 	if err := json.Unmarshal(body, &s); err != nil {
 		return Version{}, fmt.Errorf("db: version %s@%s could not be read: %w", workflow, commit, err)
 	}
-	v.Entry, v.Document, v.Includes, v.Manifests = s.Entry, s.Document, s.Includes, s.Manifests
+	v.Entry, v.Document, v.Includes, v.Manifests, v.Images = s.Entry, s.Document, s.Includes, s.Manifests, s.Images
 
 	// A version without its tree is still a version a run can be decided from, so a null
 	// here is a nil Tree rather than a refusal. What refuses it is the redemption.

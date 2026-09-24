@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -337,6 +339,99 @@ func TestAVersionThatCannotBeRebuiltIsRefused(t *testing.T) {
 	w, _ = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", empty)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a version with no document answered %d", w.Code)
+	}
+}
+
+// A push naming its images by tag carries the digest agk push resolved each to, and the version
+// is rebuilt naming the digest: what the controller dispatches from it is what the wire's imageRef
+// takes, and the same image whichever day it runs. A push carrying no digest for a tag is refused
+// before anything is stored, naming the tag.
+func TestAVersionRunsTheDigestsItsTagsWerePushedWith(t *testing.T) {
+	h, pool, _ := serving(t)
+	push := taggedPush(t)
+
+	w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+anotherCommit, "alice", push)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), taggedImage) || !strings.Contains(w.Body.String(), "agk push") {
+		t.Errorf("a push carrying no digest for its tag answered %d: %s", w.Code, w.Body)
+	}
+
+	push.Images = map[string]string{taggedImage: image}
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", push); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	store, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.Graph(t.Context(), "finance", "monthly-invoicing", aCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range g.Steps() {
+		if st, _ := g.Step(step); st.Image != image {
+			t.Errorf("%s names %q, and its tag was pushed as %s", step, st.Image, image)
+		}
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		_, err := ns.Version(ctx, "monthly-invoicing", anotherCommit)
+		return err
+	}); !errors.Is(err, db.ErrNoVersion) {
+		t.Errorf("the refused push recorded a version: %v", err)
+	}
+}
+
+// A commit pushed again is the version its first push recorded, digests included: a tag that
+// moved in between changes nothing a run of it names. So the answer says which digests the version
+// records, which are the first push's, and the pusher is not left believing the new ones were
+// taken.
+func TestAPushIsAnsweredWithTheDigestsTheVersionRecords(t *testing.T) {
+	h, _, _ := serving(t)
+	const moved = "ghcr.io/acme/agk-invoice@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	push := taggedPush(t)
+	path := "/api/v1/finance/workflows/monthly-invoicing/versions/" + aCommit
+
+	answered := func(images map[string]string) api.Pushed {
+		t.Helper()
+		push.Images = images
+		w, _ := call(t, h, "PUT", path, "alice", push)
+		if w.Code != http.StatusOK {
+			t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+		}
+		var pushed api.Pushed
+		if err := json.Unmarshal(w.Body.Bytes(), &pushed); err != nil {
+			t.Fatalf("the push answered %s: %v", w.Body, err)
+		}
+		return pushed
+	}
+
+	first := map[string]string{taggedImage: image}
+	if got := answered(first); !maps.Equal(got.Images, first) || got.Commit != aCommit {
+		t.Errorf("the first push is answered with %+v", got)
+	}
+	if got := answered(map[string]string{taggedImage: moved}); !maps.Equal(got.Images, first) {
+		t.Errorf("the same commit pushed again once its tag moved is answered with the images %v, and its version records %v", got.Images, first)
+	}
+}
+
+// taggedImage is the image of workflowDocument, named by a tag rather than by its digest.
+const taggedImage = "ghcr.io/acme/agk-invoice:1.4.0"
+
+// taggedPush is a push of workflowDocument naming its image by taggedImage, carrying no digest
+// for it.
+func taggedPush(t *testing.T) api.Push {
+	t.Helper()
+	document := strings.ReplaceAll(workflowDocument, image, taggedImage)
+	m, err := brick.ParseManifest([]byte(brickManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Capture(fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}, "agentiik.yaml", map[string]brick.Manifest{taggedImage: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api.Push{
+		Entry: v.Entry, Document: v.Document, Manifests: v.Manifests,
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
 	}
 }
 

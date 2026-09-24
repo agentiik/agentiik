@@ -72,6 +72,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Provision` grants only the tables of `public` that belong to no extension and whose owner the migrating role answers for, so an extension's view neither stops a managed administrator nor reaches the application.
 - `db.Provision` takes the role out of every role it is a member of, and back from what it holds on the database, on a parameter and on any relation of `public`, columns included, before granting it anything.
 - A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
+- A version keeps the digest each tag was resolved to in `graph`, beside its manifests, settled by the commit's first push. Migration `0020_version_images.sql`.
 
 ### Bus
 
@@ -134,6 +135,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A `seccomp_profile` that lets every system call through, or names an action seccomp does not have, is refused, and a `Policy.Seccomp` that filters nothing counts as no profile under the floor. `selinux_label` refuses the unconfined types `spc_t`, `unconfined_t` and `container_runtime_t` as it refuses `disable`.
 - A cap the daemon would refuse for every step naming no resources is refused before any container exists: a `memory_cap` under 6Mi or a `cpu_cap` under 0.01 by `LoadPolicy`, and a `cpu_cap` above the daemon's CPUs by `New`. A hard `nofile` above 1048576, the kernel's default `fs.nr_open`, is refused too.
 - After the daemon's event stream drops, which is what a restart looks like, the floors are read again before the next container is created or first started. A daemon restarted without seccomp or the remapping refuses each task with the sentinel `New` would have answered, on the platform's account, until it is put right. `dockertest.Daemon.Restart` and `Streams` stage it.
+- `Docker.Pin` answers a tag at the digest its registry serves, asking the registry with no credentials, since the containerd store lists a digest even for an image never pushed. One it does not serve is `driver.ErrNotPushed`.
 
 ### API
 
@@ -185,6 +187,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A route whose body is optional, a bus credential or a cancellation, reads one that declares no length, as a body sent in chunks does. A field it refuses was accepted and dropped that way.
 - `api.OnRun` authorises a route whose path names a run and nothing it is of against the namespace and workflow the run is of, found by its identifier alone. `POST /api/v1/runs/{run}/cancel` is the first to take it. A run that is not there, or an identifier no run was minted with, is the same 404 as a run the caller may not reach, where U+0000 or bytes that are not UTF-8 were a 500.
 - `POST /api/v1/runs/{run}/cancel` asks for a run to be cancelled, with `workflow:run` on its workflow. It writes the request and notifies, and the controller does the rest. The answer is 202 and the run, the same whether the run is going or has ended, since its state is for `run:read` to show. Asking twice is asking once. The audit log records it once there is one.
+- A push carries `images`, each tag's digest, and a version's graph names the digest in the tag's place, so a task carries `name@sha256:<hex>` as `imageRef` requires. A tag without one is refused with 422.
+- A push is answered with `images`, the digest each tag of the version is recorded with. For a commit pushed before, those are its first push's, whatever the tag names now.
 
 ### Secrets
 
@@ -219,6 +223,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
 - `agk validate` and `agk run --local` refuse a name longer than 255 characters in a workflow file or a brick's manifest: a step, a port or a secret becomes a file or a directory name, and none is longer.
+- `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
+- `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
 
 ### Tests
 
@@ -236,6 +242,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The pool routes are held to the vendored runner pool corpus, a join token's default hour to its `issued_at` and `expires_at`, and every administrator route to a 403 for anybody without `grant:manage` over the installation.
 - That 403 is given to a principal holding every other permission over the installation, so an administrator route asking for anything but `grant:manage` there fails the test.
 - The pool listing's order by name is held through the API with a pool created last whose name sorts first.
+- The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
+- `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
 
 ## v0.1.2, 2026-09-13
 

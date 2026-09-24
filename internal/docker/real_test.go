@@ -230,6 +230,36 @@ func TestARealDaemonStopsAContainerWithTheGraceItWasGiven(t *testing.T) {
 	}
 }
 
+// TestARealDaemonPinsAPulledImageToWhatItsRegistryServes is what agk push does with a tag,
+// against the daemon on this machine and the registry behind the image: the digest the
+// daemon holds the image under, matched by repository although the daemon writes it in
+// docker pull's short form, is one the registry serves to somebody with no credentials.
+//
+// It skips where the registry cannot be reached, for the reason localImage gives.
+func TestARealDaemonPinsAPulledImageToWhatItsRegistryServes(t *testing.T) {
+	c := real(t)
+	image := localImage(t, c)
+
+	img, err := c.ImageInspect(t.Context(), image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := img.RegistryDigests("docker.io/library/" + image)
+	if len(pinned) == 0 {
+		t.Fatalf("%s, pulled from Docker Hub, may be pinned to nothing: the daemon holds it under %q", image, img.RepoDigests)
+	}
+	d, err := c.DistributionInspect(t.Context(), pinned[0], "")
+	if err != nil && !docker.IsNotFound(err) && !docker.IsDenied(err) {
+		t.Skipf("the registry behind %s could not be asked: %v", image, err)
+	}
+	if err != nil {
+		t.Fatalf("%s is pinned to %s, which its registry does not serve: %v", image, pinned[0], err)
+	}
+	if _, want, _ := strings.Cut(pinned[0], "@"); d.Descriptor.Digest != want {
+		t.Errorf("the registry serves %s under %s, and it was asked for %s", image, d.Descriptor.Digest, want)
+	}
+}
+
 // localImage is a small image that is already on this machine, or the end of the test.
 // Pulling one would make this a test of somebody's registry, so CI pulls alpine:3.21, the
 // image every fixture names, before the tests start.

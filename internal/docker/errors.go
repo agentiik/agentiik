@@ -49,6 +49,13 @@ func IsNotFound(err error) bool { return status(err) == 404 }
 // removing one that is not stopped, creating a name that exists.
 func IsConflict(err error) bool { return status(err) == 409 }
 
+// IsDenied says the daemon answered 401 or 403, which from a registry it asked on a
+// caller's behalf is that registry declining to say what it holds to whoever asked.
+func IsDenied(err error) bool {
+	s := status(err)
+	return s == 401 || s == 403
+}
+
 // IsUnreachable says nothing answered. It is the question a driver asks before charging
 // a failure to a brick, because a daemon that is not there failed nobody's step.
 func IsUnreachable(err error) bool {
