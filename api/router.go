@@ -86,6 +86,10 @@ type Route struct {
 	OfRun  bool
 	Across bool
 	Why    string
+
+	// Reveals is the permission whose holder the route answers more than Permission alone
+	// is answered, where it declares one.
+	Reveals Permission
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -236,6 +240,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		Method: method, Pattern: pattern,
 		Permission: guard.permission, Scope: guard.scope,
 		Public: guard.public, OfRun: guard.run, Why: guard.why,
+		Reveals: guard.reveals,
 	})
 	return nil
 }
@@ -423,6 +428,15 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	if !allowed {
 		rt.deny(w, g.scope)
 		return
+	}
+	if g.reveals != "" {
+		authorised := target.Namespace
+		r = r.WithContext(context.WithValue(r.Context(), revealingKey{}, Holds(func(ctx context.Context, over Target) (bool, error) {
+			if over.Namespace != authorised {
+				return false, fmt.Errorf("api: a route authorised in namespace %q asked what it may reveal in %q, which it was not authorised in", authorised, over.Namespace)
+			}
+			return rt.auth.Allow(ctx, who, g.reveals, over)
+		})))
 	}
 	h(w, r, who, target)
 }

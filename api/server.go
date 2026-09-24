@@ -99,13 +99,13 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		{"GET", "/api/v1/{namespace}/runs",
 			Needs{Permission: RunRead, Scope: Namespace}, s.list},
 		{"GET", "/api/v1/{namespace}/runs/{run}",
-			Needs{Permission: RunRead, Scope: Namespace}, s.detail},
+			Needs{Permission: RunRead, Scope: Namespace, Reveals: RunReadData}, s.detail},
 		{"POST", "/api/v1/runs/{run}/cancel",
 			OnRun{Permission: WorkflowRun}, s.cancel},
 		// The run by its identifier alone, which is all a push notification carries, read
 		// exactly as the namespaced route reads it: the router found the namespace.
 		{"GET", "/api/v1/runs/{run}",
-			OnRun{Permission: RunRead}, s.detail},
+			OnRun{Permission: RunRead, Reveals: RunReadData}, s.detail},
 		{"GET", "/api/v1/runs/{run}/outputs/{name}",
 			OnRun{Permission: RunReadData}, s.output},
 		{"GET", "/api/v1/artifacts/{uri}",
@@ -812,6 +812,16 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, who Principal, ove
 	write(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
+// detail answers one run: "run state, per-step state, envelope digests" to whoever holds
+// run:read, and the inputs it was started with only to whoever also holds run:read_data.
+//
+// The inputs are what the run's first steps are handed as the envelopes of the ports they feed,
+// which makes them "envelope contents", and seeing those is what run:read_data is, "not only state
+// and digests". So they are left out of the answer rather than blanked, as the console hides a
+// payload pane rather than disabling it: a caller who may not see them is answered a run that
+// names no inputs, which is also how a run started with none reads. The outputs stay, since what
+// the run records of each is the step and the port it is a view of, and the envelope behind it is
+// GET /api/v1/runs/{id}/outputs/{name}, guarded by run:read_data of its own.
 func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	run := agk.RunID(r.PathValue("run"))
 	var detail db.RunDetail
@@ -827,6 +837,17 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the run could not be read")
 		return
+	}
+	// Asked about the run's own workflow, which the namespaced route was not authorised over, so
+	// that a deny of run:read_data on that workflow is in the answer; and asked once the
+	// transaction is over, since an authorizer may read the database itself.
+	seeing, err := Revealing(r)(r.Context(), Target{Namespace: over.Namespace, Workflow: detail.Workflow})
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
+	if !seeing {
+		detail.Inputs = nil
 	}
 	write(w, http.StatusOK, detail)
 }

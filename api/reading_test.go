@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -284,6 +285,110 @@ func TestARunIsReadByItsIdentifierAlone(t *testing.T) {
 	for _, id := range []string{"%00", "%ff", "not-a-run"} {
 		if w, _ := call(t, h, "GET", "/api/v1/runs/"+id, "alice", nil); w.Code != http.StatusNotFound {
 			t.Errorf("a run named %s answered %d: %s", id, w.Code, w.Body)
+		}
+	}
+}
+
+// denying is granted with a deny beside it, which wins over any allow at any scope, as a deny does:
+// "Grants add up; a deny is the only thing that subtracts."
+type denying struct {
+	allowed, denied granted
+}
+
+func (d denying) Allow(ctx context.Context, who api.Principal, what api.Permission, over api.Target) (bool, error) {
+	if denied, _ := d.denied.Allow(ctx, who, what, over); denied {
+		return false, nil
+	}
+	return d.allowed.Allow(ctx, who, what, over)
+}
+
+// failingOn is an authorizer that cannot answer about one permission and answers as another does
+// about the rest.
+type failingOn struct {
+	api.Authorizer
+	what api.Permission
+}
+
+func (f failingOn) Allow(ctx context.Context, who api.Principal, what api.Permission, over api.Target) (bool, error) {
+	if what == f.what {
+		return false, context.DeadlineExceeded
+	}
+	return f.Authorizer.Allow(ctx, who, what, over)
+}
+
+// "run:read: See run state, per-step state, timings and log lines", and "run:read_data: See envelope
+// contents and download artifacts, not only state and digests." A run's inputs are what its first
+// steps are handed as envelope contents, so a run read with run:read alone answers everything else
+// and names no inputs, by either route, whether run:read is held on the namespace or on the
+// workflow. run:read_data held on the namespace or on the run's own workflow shows them, held on
+// another workflow does not, and denied on the run's workflow it withholds them even through the
+// route authorised over the whole namespace. A question about it that could not be answered is a
+// 500 rather than a guess either way, and no listing carries inputs to anybody.
+func TestARunsInputsAreShownOnlyToWhoeverHoldsRunReadData(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	finance := api.Target{Namespace: "finance"}
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	payroll := api.Target{Namespace: "finance", Workflow: "payroll"}
+	allowed := granted{
+		"alice": {{api.RunRead, finance}},
+		"bob":   {{api.RunRead, invoicing}},
+		"carol": {{api.RunRead, finance}, {api.RunReadData, finance}},
+		"dave":  {{api.RunRead, invoicing}, {api.RunReadData, invoicing}},
+		"erin":  {{api.RunRead, finance}, {api.RunReadData, invoicing}},
+		"frank": {{api.RunRead, finance}, {api.RunReadData, payroll}},
+		"grace": {{api.RunRead, finance}, {api.RunReadData, finance}},
+	}
+	h := s.servedTo(t, denying{allowed: allowed, denied: granted{"grace": {{api.RunReadData, invoicing}}}})
+
+	byID, namespaced := "/api/v1/runs/"+run, "/api/v1/finance/runs/"+run
+	_, whole := call(t, h, "GET", byID, "carol", nil)
+	if inputs, _ := whole["inputs"].(map[string]any); len(inputs) != 1 || inputs["orders"] == nil {
+		t.Fatalf("the run was started with inputs and reads %v", whole)
+	}
+	delete(whole, "inputs")
+	for _, c := range []struct {
+		as, path string
+		shown    bool
+	}{
+		{"alice", byID, false},
+		{"alice", namespaced, false},
+		{"bob", byID, false},
+		{"carol", byID, true},
+		{"carol", namespaced, true},
+		{"dave", byID, true},
+		{"erin", byID, true},
+		{"erin", namespaced, true},
+		{"frank", byID, false},
+		{"frank", namespaced, false},
+		{"grace", byID, false},
+		{"grace", namespaced, false},
+	} {
+		w, detail := call(t, h, "GET", c.path, c.as, nil)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s reading %s was answered %d: %s", c.as, c.path, w.Code, w.Body)
+			continue
+		}
+		_, named := detail["inputs"]
+		if named != c.shown {
+			t.Errorf("%s reading %s was answered the inputs %t, want %t: %s", c.as, c.path, named, c.shown, w.Body)
+		}
+		delete(detail, "inputs")
+		if !reflect.DeepEqual(detail, whole) {
+			t.Errorf("%s reading %s was answered %v, and the rest of the run is %v", c.as, c.path, detail, whole)
+		}
+	}
+
+	broken := s.servedTo(t, failingOn{Authorizer: allowed, what: api.RunReadData})
+	for _, path := range []string{byID, namespaced} {
+		if w, _ := call(t, broken, "GET", path, "carol", nil); w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "orders") {
+			t.Errorf("reading %s where run:read_data could not be asked about was answered %d: %s", path, w.Code, w.Body)
+		}
+	}
+
+	for _, path := range []string{"/api/v1/runs", "/api/v1/finance/runs"} {
+		if w, _ := call(t, h, "GET", path, "carol", nil); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "inputs") || strings.Contains(w.Body.String(), "orders") {
+			t.Errorf("listing %s was answered %d: %s", path, w.Code, w.Body)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -32,16 +33,24 @@ type guard struct {
 	artifact   bool
 	across     bool
 	why        string
+
+	// reveals is the permission a handler may ask about to decide what its answer holds,
+	// and is empty on a route that asks about none.
+	reveals Permission
 }
 
 // Needs is a route that requires one permission at one scope.
 type Needs struct {
 	Permission Permission
 	Scope      Scope
+
+	// Reveals is a permission the route does not need and whose holder it answers more:
+	// see Revealing.
+	Reveals Permission
 }
 
 func (n Needs) guards() guard {
-	return guard{permission: n.Permission, scope: n.Scope}
+	return guard{permission: n.Permission, scope: n.Scope, reveals: n.Reveals}
 }
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
@@ -56,10 +65,14 @@ func (n Needs) guards() guard {
 // why it may not.
 type OnRun struct {
 	Permission Permission
+
+	// Reveals is a permission the route does not need and whose holder it answers more:
+	// see Revealing.
+	Reveals Permission
 }
 
 func (o OnRun) guards() guard {
-	return guard{permission: o.Permission, scope: Workflow, run: true}
+	return guard{permission: o.Permission, scope: Workflow, run: true, reveals: o.Reveals}
 }
 
 // OnArtifact is a route about one artifact, named by its logical URI, which requires one permission
@@ -99,6 +112,32 @@ func (a Across) guards() guard {
 // A target naming no namespace is the installation, which no such route answers about, and is an
 // error rather than a refusal.
 type Holds func(ctx context.Context, over Target) (bool, error)
+
+// Revealing answers, for the route serving r, whether its caller holds the permission its guard
+// names as Reveals over one target in the namespace the route was authorised in.
+//
+// Some routes answer one caller more than another without refusing either: GET /api/v1/runs/{id}
+// is "run state, per-step state, envelope digests" to whoever holds run:read, and the inputs the
+// run was started with are "envelope contents", which run:read_data alone sees. Which it answers is
+// the handler's to decide, since only the handler knows which part of its answer is which, but the
+// question is still the router's to ask: the handler is given this, which asks about the one
+// permission its guard declared, for the caller the router identified, and about nothing outside
+// the namespace it authorised. A route declaring no such permission, or a request the router did
+// not serve, is answered false, so a handler that asks where nothing was declared withholds rather
+// than reveals.
+//
+// A workflow's data is asked about over that workflow rather than over its namespace, even where
+// the route was authorised over the namespace alone: "a deny wins at any scope", and a deny on one
+// workflow is only in the answer where the workflow is in the question.
+func Revealing(r *http.Request) Holds {
+	if held, ok := r.Context().Value(revealingKey{}).(Holds); ok {
+		return held
+	}
+	return func(context.Context, Target) (bool, error) { return false, nil }
+}
+
+// revealingKey is where the router leaves the question a route declared for its handler.
+type revealingKey struct{}
 
 // FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
 // authorised against. A run nobody minted is ErrNoRun.
@@ -143,6 +182,9 @@ func (g guard) check(method, pattern string) error {
 	}
 	if !g.permission.Valid() {
 		return fmt.Errorf("api: %s %s needs %q, which is not one of the permissions the documentation names", method, pattern, g.permission)
+	}
+	if g.reveals != "" && !g.reveals.Valid() {
+		return fmt.Errorf("api: %s %s reveals more to %q, which is not one of the permissions the documentation names", method, pattern, g.reveals)
 	}
 	return nil
 }
