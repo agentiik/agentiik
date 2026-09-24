@@ -49,6 +49,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task reads `running` while its container runs and `publishing` while its outputs go up, rather than `dispatched` until it ends. `Core.Progress` writes what the runner holding the dispatch reports, only forwards and never over an ending or on a run that has ended; another runner's is refused with `controller.ErrNotTheHolder`, and one arriving before the dispatch is recorded comes round again. A decision no longer moves such a row back to `dispatched`.
 - A task whose pool does not exist, or does not accept the run's namespace, is not published and gets no grant: every pending shard of its step fails with exit code 125 on the pass that finds it, before the quota, on the infrastructure's account, and the step's reason names the pool. The pool is the one `bus.PoolOf` routes to, so a step naming no `pool=` label needs a pool called `default`. `graph.Result.Reason` carries why.
 - Resources are capped to the pool's cpu, memory and pids ceilings on the task message, and an ask left out takes the ceiling.
+- A `timed_out` or `cancelled` task keeps its container's exit code on its row, 137 or 143 for a stop, including one its run's ending stopped, whose runner reports after the run ended. A lost task, an ending no container reached and a stop reported with no code have none; `graph.Result.NoExitCode` tells that from 0.
 
 ### State
 
@@ -85,6 +86,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `artifacts.fetches_held_until` holds each fetch of a budget being served until an instant, so a transfer that does not complete never spends one, and one whose API died gives it back when its hold lapses. `db.NS.Fetched` gives way to `Reserve`, `Delivered` and `Release`.
 - `runners` keeps who drained and who revoked a runner and when, until the audit log does, and the end of a revocation's grace. `Wide.Drain` and `Wide.Revoke` take who, why and when, and the grace for a revocation, and answer the runner; a drain of a revoked runner is `db.ErrRunnerRevoked`; `Wide.Authenticate` and `Wide.Beat` take a revoked runner until its grace ends, `Wide.Rotate` refuses one in its grace with `db.ErrRunnerRevoked`, and a redemption binding a runner that is not ready is `db.ErrRunnerNotTaking`. Migration `0025_revocation.sql`.
 - A redemption that would bind is `db.ErrPoolRefusesNamespace` where the runner's pool does not accept the task's namespace, and `db.ErrRunnerNarrowed` where the runner's own namespaces leave it out.
+- A `timed_out` or `cancelled` row of `tasks` may carry an exit code, and a lost one still may not. `Wide.StopCode` writes one, once, on a row a run's ending stopped, from the runner bound to it. Migration `0027_stopped_exit_codes.sql`.
+- `NS.Runs` and `RunQuery.Workflow` are gone: one namespace's runs are listed by `Wide.Runs` over the workflows the authorizer allowed, as every namespace's are.
 
 ### Bus
 
@@ -264,6 +267,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/artifacts/{uri}` redirects to a presigned URL of five minutes, or serves the bytes where the artifact has a fetch budget, within an hour. A fetch is held before the bytes go and spent only if all of them went, so the last one is served once, and an artifact whose every remaining fetch is being served is 409. 410 once expired, spent or past its duration, swept or not. `api.OnArtifact` authorises it with `run:read_data` on the run the URI names.
 - A route under a word of its own, `/api/v1/runs/{run}` or `/api/v1/artifacts/{uri}`, is served beside the routes under `/api/v1/{namespace}/`, which net/http cannot hold on one mux. A namespace named after such a word is reached by nothing under `/api/v1/`.
 - `POST /api/v1/tasks/logs` takes a chunk of a task's log from the runner its task is bound to, draining or revoked in its grace included, with the task's grant in `Agentiik-Grant`, as `$defs/logShipment` describes: at most 1 MiB and 4,096 lines, written in order to the object store, one object a chunk, and indexed by migration `0026_task_logs.sql`. A chunk sent again is written once, one past a gap is kept nowhere, the last closes the log, and the log is capped at the runner policy's default caps. `db.Pool.ExpiredLogs` hands over an expired log's objects a batch at a time, and `LogsPurged` forgets only the keys it was handed and counts the logs gone whole.
+- `GET /api/v1/{ns}/runs` and `GET /api/v1/{ns}/runs/{run}` ask about each run's workflow, not the namespace: a deny of `run:read` on one workflow hides its runs, and `run:read` on one workflow reads them. A namespace the caller holds nothing in lists nothing, where it was a 404. `api.OnRun` and `api.Across` take a `{namespace}` in their pattern, and `api.AcrossHandler` is handed it as `within`.
 
 ### Secrets
 

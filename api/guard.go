@@ -34,6 +34,10 @@ type guard struct {
 	across     bool
 	why        string
 
+	// within is set by the router on a route taking OnRun or Across whose pattern names
+	// {namespace}, which then answers about that namespace and no other.
+	within bool
+
 	// reveals is the permission a handler may ask about to decide what its answer holds,
 	// and is empty on a route that asks about none.
 	reveals Permission
@@ -55,14 +59,17 @@ func (n Needs) guards() guard {
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
 //
-// Its path names the run and nothing the run is of, as the documentation lists every route about
-// one: /api/v1/runs/{id}/cancel. "Agentiik sends the push service an identifier and a state", and
+// Its path names the run, as the documentation lists every route about one:
+// /api/v1/runs/{id}/cancel. "Agentiik sends the push service an identifier and a state", and
 // the application a notification opens holds that identifier and nothing else. A permission such
 // as workflow:run is held on a single workflow as well as on a whole namespace: "access is granted
 // by binding a principal to a role, either on the whole namespace or on a single workflow". So the
-// router asks which namespace and workflow the run is of, and asks the authorizer about those. A
-// path naming either as well could name one the caller holds beside a run of another, which is
-// why it may not.
+// router asks which namespace and workflow the run is of, and asks the authorizer about those.
+//
+// A path may name the namespace as well, as /api/v1/{ns}/runs/{id} does, the path a Location names
+// a run by. The router then answers a run of another namespace as absent before it asks anything,
+// so that the path cannot name a namespace the caller holds beside a run of one they do not. It
+// may not name a workflow: no route needs one, and every check a path can dodge is one too many.
 type OnRun struct {
 	Permission Permission
 
@@ -90,16 +97,21 @@ func (o OnArtifact) guards() guard {
 	return guard{permission: o.Permission, scope: Workflow, run: true, artifact: true}
 }
 
-// Across is a route answering, across the installation, what its caller holds one permission over:
-// GET /api/v1/runs, "across every namespace the caller can read".
+// Across is a route answering, across the installation or one namespace, what its caller holds one
+// permission over: GET /api/v1/runs, "across every namespace the caller can read".
 //
-// Its path names no namespace, so there is no one target to authorise before the handler runs, and
+// Its path names no workflow, so there is no one target to authorise before the handler runs, and
 // what the caller may see is a question asked of each thing the answer could hold. The router asks
 // it rather than the handler: a route taking Across is registered with HandleAcross, and its handler
 // is given Holds, which asks the authorizer about this permission for this principal and nothing
 // else, so a handler cannot ask about another permission or another caller. That it answers only
 // what Holds let through is the handler's to keep, and its tests' to hold it to: nothing here can
 // see what it answers.
+//
+// A path may name a namespace, as GET /api/v1/{ns}/runs does, and the route then answers across that
+// namespace alone, with a Holds that answers about nothing outside it. It is still asked of each
+// workflow rather than authorised over the namespace: a permission held on a single workflow is held
+// there too, and "a deny wins at any scope" only where the workflow denied is in the question.
 type Across struct {
 	Permission Permission
 }
@@ -109,8 +121,9 @@ func (a Across) guards() guard {
 }
 
 // Holds answers whether the caller of a route taking Across holds its permission over one target.
-// A target naming no namespace is the installation, which no such route answers about, and is an
-// error rather than a refusal.
+// A target naming no namespace is the installation, which no such route answers about, and one
+// outside the namespace the route's path names is one it was not asked about: each is an error
+// rather than a refusal.
 type Holds func(ctx context.Context, over Target) (bool, error)
 
 // Revealing answers, for the route serving r, whether its caller holds the permission its guard
@@ -142,8 +155,9 @@ type revealingKey struct{}
 // FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
 // authorised against. A run nobody minted is ErrNoRun.
 //
-// It is asked before anything is authorised, across the installation since the path names no
-// namespace, and its answer goes to the authorizer and nowhere else: a run that is not there and a
+// It is asked before anything is authorised, across the installation since a path naming a run
+// names no namespace or names one to be checked against the answer, and its answer goes to the
+// router and the authorizer and nowhere else: a run that is not there and a
 // run the caller may not reach are the same 404, so asking tells a caller nothing the refusal
 // would not.
 type FindRun interface {

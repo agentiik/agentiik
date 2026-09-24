@@ -80,7 +80,8 @@ type Route struct {
 	// where it is authorised by a runner credential instead. OfRun is set where the namespace and
 	// workflow the route is authorised against are the ones the run in its path is of, named by
 	// its identifier or by an artifact's URI. Across is set where the route answers what its
-	// caller holds Permission over, across the installation.
+	// caller holds Permission over, across the installation or across the namespace its pattern
+	// names.
 	Public bool
 	Runner bool
 	OfRun  bool
@@ -186,8 +187,9 @@ func bearerOf(r *http.Request) (string, bool) {
 // name. The two the router reads are namespace and workflow, and a route whose scope needs one it
 // does not carry is refused here rather than at the first request: a workflow-scoped route with
 // no {workflow} in its pattern would be a route authorised against an empty workflow, which any
-// authorizer would either always allow or always refuse. A route taking OnRun carries {run} and
-// neither of the others, since the router finds both from the run.
+// authorizer would either always allow or always refuse. A route taking OnRun carries {run} and no
+// {workflow}, since the router finds both from the run, and a {namespace} only as one the run has to
+// be in.
 func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	if h == nil {
 		return fmt.Errorf("api: %s %s has no handler", method, pattern)
@@ -200,7 +202,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		return err
 	}
 	if guard.across {
-		return fmt.Errorf("api: %s %s answers across the installation, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
+		return fmt.Errorf("api: %s %s answers across what its caller holds, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
 	}
 	if !guard.public && !guard.run {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
@@ -224,11 +226,12 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		switch {
 		case !strings.Contains(pattern, "{run}"):
 			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and its pattern names no {run}", method, pattern)
-		case strings.Contains(pattern, "{namespace}") || strings.Contains(pattern, "{workflow}"):
-			return fmt.Errorf("api: %s %s is authorised against the namespace and workflow of its run and names one of them as well, which a request could make another", method, pattern)
+		case strings.Contains(pattern, "{workflow}"):
+			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and names a workflow as well, which a request could make another", method, pattern)
 		case rt.runs == nil:
 			return fmt.Errorf("api: %s %s is authorised against the workflow of its run and nothing was given to find one in", method, pattern)
 		}
+		guard.within = strings.Contains(pattern, "{namespace}")
 	}
 
 	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -245,11 +248,12 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	return nil
 }
 
-// HandleAcross registers one route answering across the installation what its caller holds one
-// permission over.
+// HandleAcross registers one route answering, across the installation or one namespace, what its
+// caller holds one permission over.
 //
 // Separate from Handle for the reason HandleRunner is: the handler is given something else, here
-// Holds in place of a target, since there is no one target to give it.
+// Holds in place of a target to authorise, since there is no one target to give it. A pattern may
+// name a {namespace}, which the route then answers across alone, and nothing narrower.
 func (rt *Router) HandleAcross(method, pattern string, g Across, h AcrossHandler) error {
 	if h == nil {
 		return fmt.Errorf("api: %s %s has no handler", method, pattern)
@@ -258,11 +262,12 @@ func (rt *Router) HandleAcross(method, pattern string, g Across, h AcrossHandler
 	if err := guard.check(method, pattern); err != nil {
 		return err
 	}
-	for _, named := range []string{"{namespace}", "{workflow}", "{run}", "{uri}"} {
+	for _, named := range []string{"{workflow}", "{run}", "{uri}"} {
 		if strings.Contains(pattern, named) {
-			return fmt.Errorf("api: %s %s answers across the installation and names %s, which is a target to authorise before the handler runs rather than one to ask about", method, pattern, named)
+			return fmt.Errorf("api: %s %s answers across a namespace or the installation and names %s, which is a target to authorise before the handler runs rather than one to ask about", method, pattern, named)
 		}
 	}
+	guard.within = strings.Contains(pattern, "{namespace}")
 	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
 		rt.serveAcross(w, r, guard, h)
 	}); err != nil {
@@ -282,9 +287,13 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 	}
 }
 
-// AcrossHandler is a route answering across the installation, given who asks and what it may ask
-// about them.
-type AcrossHandler func(w http.ResponseWriter, r *http.Request, who Principal, holds Holds)
+// AcrossHandler is a route answering across the installation or one namespace, given who asks,
+// the namespace its path names, if any, and what it may ask about them.
+//
+// The namespace is handed over rather than read from the path by the handler, for the reason a
+// Handler is given its target: it is the one Holds answers about, and a handler reading its own
+// could read another.
+type AcrossHandler func(w http.ResponseWriter, r *http.Request, who Principal, within Target, holds Holds)
 
 // apiPrefix is where the routes under a namespace and the routes under a word of their own part.
 const apiPrefix = "/api/v1/"
@@ -408,9 +417,10 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			}
 			run = string(u.Run)
 		}
-		// Looked up across the installation, since the path names no namespace, before
-		// anything is authorised, and answered to nobody but the authorizer: a run that is not
-		// there is refused exactly as one the caller may not reach is.
+		// Looked up across the installation, since the path names no namespace or names one
+		// the run has to be in, before anything is authorised, and answered to nobody but the
+		// router and the authorizer: a run that is not there is refused exactly as one the
+		// caller may not reach is.
 		of, err := rt.runs.RunOf(r.Context(), run)
 		switch {
 		case errors.Is(err, ErrNoRun):
@@ -418,6 +428,12 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			return
 		case err != nil:
 			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+			return
+		}
+		if g.within && of.Namespace != target.Namespace {
+			// A run asked for under a namespace it is not in is not there, and is refused
+			// before anything is asked about the namespace it is in.
+			rt.deny(w, g.scope)
 			return
 		}
 		target = of
@@ -464,9 +480,22 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 		refuse(w, http.StatusUnauthorized, "this request carries no credential")
 		return
 	}
-	h(w, r, who, func(ctx context.Context, over Target) (bool, error) {
-		if over.Namespace == "" {
+	var within Target
+	if g.within {
+		// The mux matches no empty segment, so this is never empty; it is refused all the
+		// same, since a route naming a namespace and handed none would answer across the
+		// installation.
+		if within.Namespace = r.PathValue("namespace"); within.Namespace == "" {
+			rt.deny(w, Namespace)
+			return
+		}
+	}
+	h(w, r, who, within, func(ctx context.Context, over Target) (bool, error) {
+		switch {
+		case over.Namespace == "":
 			return false, errors.New("api: a route answering across the installation asked about a target naming no namespace, which is the installation itself")
+		case within.Namespace != "" && over.Namespace != within.Namespace:
+			return false, fmt.Errorf("api: a route answering across namespace %q asked about %q, which its path does not name", within.Namespace, over.Namespace)
 		}
 		return rt.auth.Allow(ctx, who, g.permission, over)
 	})
