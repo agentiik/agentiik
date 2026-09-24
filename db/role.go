@@ -53,14 +53,15 @@ const provisionLock int64 = 0x6d696772617465
 // answers with the migrations it applied.
 //
 // The role is LOGIN NOSUPERUSER NOBYPASSRLS, and creates no database, no role and no replication
-// slot. It may connect to this database, use the schema, and read and write every table the
-// migrations created but schema_migrations, which the application never reads and which a role
-// that could delete a row of would have the next upgrade apply that migration again. Before any
-// of that is granted, in the same transaction, the role is taken out of every role it is a member
-// of and loses what it holds on the database, on a parameter, on the schema and on every relation
-// in it, so it ends with exactly these whatever it held there before: a role somebody widened by
-// hand is narrowed back, and a second call changes nothing. What it may hold elsewhere, in
-// another schema or another database, is not this installation's to reset.
+// slot. It may connect to this database, use the schema, read and write every table the
+// migrations created, and read schema_migrations, which a binary reads to refuse to start
+// against a database ahead of it, and which a role that could write to would have the next
+// upgrade apply a migration again or skip one. Before any of that is granted, in the same
+// transaction, the role is taken out of every role it is a member of and loses what it holds on
+// the database, on a parameter, on the schema and on every relation in it, so it ends with
+// exactly these whatever it held there before: a role somebody widened by hand is narrowed back,
+// and a second call changes nothing. What it may hold elsewhere, in another schema or another
+// database, is not this installation's to reset.
 //
 // A role that owns the database or anything in it is refused before anything is applied, and the
 // refusal names what it owns. No revoke reaches an owner: the owner of a table may switch off its
@@ -353,7 +354,7 @@ func privileges(ctx context.Context, tx pgx.Tx, role string) ([]string, error) {
 	if len(tables) > 0 {
 		out = append(out, "grant select, insert, update, delete on "+relations(tables)+" to "+name)
 	}
-	return out, nil
+	return append(out, "grant select on public.schema_migrations to "+name), nil
 }
 
 // relations is a list of relations of schema public, each quoted, as GRANT and REVOKE take it.

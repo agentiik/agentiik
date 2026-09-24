@@ -38,8 +38,9 @@
 //
 // So an installation holds two addresses. The privileged one migrates, and Provision,
 // which applies the migrations through it, also creates the role the other names: LOGIN
-// NOSUPERUSER NOBYPASSRLS, granted read and write on the tables and nothing more. The API
-// and the controller connect as that role, and a test does too.
+// NOSUPERUSER NOBYPASSRLS, owning nothing, granted read and write on the tables and read
+// on the migration record, and nothing more. The API and the controller connect as that
+// role, and a test does too.
 //
 // # Installation is a door and not a loophole
 //

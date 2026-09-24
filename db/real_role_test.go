@@ -97,8 +97,8 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 }
 
 // provisioned is the shape Provision promises, written out: a login that bypasses nothing and
-// creates nothing, is a member of nothing and connects without a limit or an expiry, and read
-// and write on every table the migrations created but the migration record.
+// creates nothing, is a member of nothing and connects without a limit or an expiry, read and
+// write on every table the migrations created, and read on the migration record.
 //
 // The tables the migrations created are the ones owned by whoever recorded them, which is how
 // this tells them from a table somebody else put in the schema.
@@ -120,6 +120,7 @@ func provisioned(t *testing.T, conn *pgx.Conn) []string {
 		"database connect",
 		"role login=true super=false bypassrls=false createdb=false createrole=false replication=false connections=-1 expires=never",
 		"schema usage=true create=false",
+		"table schema_migrations select",
 	}
 	for _, table := range tables {
 		if table == "schema_migrations" {
@@ -184,14 +185,35 @@ func TestOpenAcceptsTheProvisionedRoleAndRefusesTheAdministrator(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Even through the installation door, the migration record is not the application's to
-	// read, let alone to rewrite.
+	// Through the installation door, the migration record is the application's to read, since a
+	// binary refuses to start against a database ahead of it, and never to rewrite: a row gone
+	// is a migration the next upgrade applies again, and a row added is one it skips.
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded int
 	err = pool.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
-		_, err := w.tx.Exec(ctx, `delete from schema_migrations`)
-		return err
+		return w.tx.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&recorded)
 	})
-	if err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Errorf("the application role could delete the migration record: %v", err)
+	if err != nil {
+		t.Errorf("the application role cannot read the migration record: %s", err)
+	} else if recorded != len(all) {
+		t.Errorf("the application role reads %d migrations of the %d applied", recorded, len(all))
+	}
+	for _, stmt := range []string{
+		`delete from schema_migrations`,
+		`insert into schema_migrations (name) values ('9999_never.sql')`,
+		`update schema_migrations set name = name || '.old'`,
+		`truncate schema_migrations`,
+	} {
+		err = pool.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
+			_, err := w.tx.Exec(ctx, stmt)
+			return err
+		})
+		if err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("the application role could rewrite the migration record with %q: %v", stmt, err)
+		}
 	}
 
 	if _, err := Open(ctx, super); err == nil || !strings.Contains(err.Error(), "NOSUPERUSER") {
