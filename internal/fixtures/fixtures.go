@@ -106,6 +106,7 @@ type index struct {
 		GrantRedemption    corpus `json:"grant-redemption"`
 		LogShipment        corpus `json:"log-shipment"`
 		RunnerPool         corpus `json:"runner-pool"`
+		Stop               corpus `json:"stop"`
 	} `json:"fixtures"`
 }
 
@@ -146,6 +147,12 @@ func GrantRedemptions() ([]Case, error) {
 // what an administrator writes and what the API answers.
 func RunnerPools() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.RunnerPool })
+}
+
+// Stops returns the stop corpus: what the controller publishes on agentiik.stops to have a task in
+// flight stopped, and what a runner reads.
+func Stops() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.Stop })
 }
 
 // Wire is the schema document every message above is held to.
