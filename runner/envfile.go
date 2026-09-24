@@ -46,6 +46,8 @@ func renderEnv(path string, vars []variable) ([]byte, error) {
 	r.api()
 	r.labels()
 	r.namespaces()
+	r.concurrency()
+	r.workDir()
 	r.name(RunnerID, "the identifier the API minted for this runner")
 	r.name(RunnerPool, "the pool this runner joined")
 	r.credential()

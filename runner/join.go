@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/agentiik/agentiik/internal/token"
@@ -79,16 +82,17 @@ type joinAnswer struct {
 //
 // Everything that can refuse the join refuses it before the token is spent: the settings, an
 // identity the host already has, the host's capacity and its daemon, and the two directories
-// written to, where both files are created, empty and given to the agent's account, before the
-// API is asked anything. What is left once it answers is to write them and move them into place,
-// so that a token the API refused leaves nothing behind, key included, and a token it took is
-// rarely spent on a host that then cannot keep what it was given.
+// written to, where both files are created beside where they go and given to the agent's
+// account, and the key written, before the API is asked anything. What is left once it answers is
+// to write runner.env and move both into place, so that a token the API refused leaves nothing
+// behind, key included, and a token it took is rarely spent on a host that then cannot keep what
+// it was given.
 func Join(ctx context.Context, j Joining) (Joined, error) {
 	settings, err := j.settings()
 	if err != nil {
 		return Joined{}, err
 	}
-	if err := j.unjoined(); err != nil {
+	if err := j.unjoined(settings.identity); err != nil {
 		return Joined{}, err
 	}
 
@@ -161,6 +165,8 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 		{RunnerPool, answer.Pool},
 		{Labels, strings.Join(settings.Labels, ",")},
 		{Namespaces, strings.Join(settings.Namespaces, ",")},
+		{Concurrency, settings.kept[Concurrency]},
+		{WorkDir, settings.kept[WorkDir]},
 		{Credential, string(answer.Credential)},
 	})
 	if err != nil {
@@ -184,7 +190,7 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 	if err := keyFile.commit(j.Replace); err != nil {
 		return Joined{}, spent(err)
 	}
-	if err := envFile.commit(j.Replace); err != nil {
+	if err := envFile.commit(j.Replace || settings.settingsOnly); err != nil {
 		return Joined{}, spent(err)
 	}
 	return Joined{Runner: answer.Runner, Pool: answer.Pool, RotateBy: answer.RotateBy}, nil
@@ -196,7 +202,24 @@ type joinSettings struct {
 
 	// written is AGK_API as it was given, which is what runner.env carries.
 	written string
+
+	// kept are the settings an operator wrote in a runner.env already there, which join
+	// writes again as they were rather than dropping them.
+	kept map[string]string
+
+	// identity says that runner.env already holds a runner's identity, and settingsOnly that
+	// it is there and holds none, which join replaces as it would with --replace.
+	identity, settingsOnly bool
 }
+
+// joinWrites are the settings join writes to runner.env from what it was given, and what a
+// runner.env already there says of them is read only where join was given nothing: the file is
+// replaced whole, so its old value and the one given are not two values serve would compare.
+var joinWrites = []string{API, Labels, Namespaces}
+
+// joinKeeps are the settings join has no say in, which it keeps from a runner.env already there.
+// Written there and in the environment, the two are held to agreeing, as serve holds them.
+var joinKeeps = []string{Concurrency, WorkDir}
 
 // settings reads what join sends and writes, held to the grammars serve reads them in.
 func (j Joining) settings() (joinSettings, error) {
@@ -205,7 +228,16 @@ func (j Joining) settings() (joinSettings, error) {
 		lookup = os.LookupEnv
 	}
 	r := &reader{path: j.EnvPath, file: map[string]string{}, written: map[string]bool{}}
-	// The command line stands in front of the environment, as a flag given means that value.
+	var c joinSettings
+	there, identity := j.existing(r)
+	c.identity, c.settingsOnly, c.kept = identity, there != nil && !identity, map[string]string{}
+	for _, name := range joinKeeps {
+		if v, ok := there[name]; ok {
+			r.file[name], c.kept[name] = v, v
+		}
+	}
+	// The command line stands in front of the environment, as a flag given means that value,
+	// and the environment in front of the file join is about to replace.
 	r.lookup = func(name string) (string, bool) {
 		switch {
 		case name == API && j.API != "":
@@ -213,7 +245,14 @@ func (j Joining) settings() (joinSettings, error) {
 		case name == Labels && j.Labels != "":
 			return j.Labels, true
 		}
-		return lookup(name)
+		if v, ok := lookup(name); ok && v != "" {
+			return v, true
+		}
+		if slices.Contains(joinWrites, name) {
+			v, ok := there[name]
+			return v, ok
+		}
+		return "", false
 	}
 
 	// A flag that disagrees with the environment join runs in is refused, since serve reads
@@ -225,7 +264,6 @@ func (j Joining) settings() (joinSettings, error) {
 		}
 	}
 
-	var c joinSettings
 	if written, set := r.env(API); set {
 		c.API, c.written = r.api(), written
 	} else {
@@ -236,7 +274,9 @@ func (j Joining) settings() (joinSettings, error) {
 	} else {
 		r.refuse("--labels", "is not given and "+Labels+" is not set, and they are the labels this runner claims, within what the token permits, such as zone=dmz,arch=amd64: serve refuses to start without them")
 	}
-	c.Namespaces, c.WorkDir = r.namespaces(), r.workDir()
+	// The work root is where the disk is measured, so it is read as serve will read it, from
+	// the environment or the file join keeps it in.
+	c.Namespaces, c.WorkDir, _ = r.namespaces(), r.workDir(), r.concurrency()
 	switch kind, ok := token.KindOf(string(j.Token)); {
 	case j.Token == "":
 		r.refuse("--token", "is not given, and it is the join token an administrator issued for this host's pool")
@@ -256,23 +296,63 @@ func (j Joining) settings() (joinSettings, error) {
 	return c, r.err()
 }
 
+// existing reads the runner.env already on the host, where there is one: its settings, and
+// whether it holds a runner's identity. "Also where the settings above may be written", so a file
+// an operator wrote settings to before joining is one join keeps them from rather than a host
+// that has joined. What is wrong with it is refused through r, as serve would refuse it.
+func (j Joining) existing(r *reader) (map[string]string, bool) {
+	checked, err := os.Lstat(j.EnvPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, false
+	case err != nil:
+		r.refuse(j.EnvPath, "cannot be read, so whether this host has already joined cannot be told: "+reasonOf(err))
+		return nil, false
+	case !checked.Mode().IsRegular():
+		r.refuse(j.EnvPath, "is not a file, and it is where join writes this runner's identity: remove it")
+		return nil, false
+	}
+	f, err := os.OpenFile(j.EnvPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		r.refuse(j.EnvPath, "cannot be read, so whether this host has already joined cannot be told: "+reasonOf(err))
+		return nil, false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !os.SameFile(checked, info) {
+		r.refuse(j.EnvPath, "was replaced while it was being read")
+		return nil, false
+	}
+	text, err := io.ReadAll(io.LimitReader(f, envFileMaxBytes+1))
+	if err != nil || len(text) > envFileMaxBytes {
+		r.refuse(j.EnvPath, fmt.Sprintf("cannot be read whole within %d bytes", envFileMaxBytes))
+		return nil, false
+	}
+	p := &reader{path: j.EnvPath, file: map[string]string{}, written: map[string]bool{}}
+	p.parse(text)
+	r.refused = append(r.refused, p.refused...)
+	return p.file, p.written[RunnerID] || p.written[RunnerPool] || p.written[Credential]
+}
+
 // unjoined refuses a host that already has an identity, unless it is to be replaced.
 //
-// A key or a runner.env already there is a runner already registered, and joining again would
-// orphan it: its record stays in the API with a credential nobody holds any longer. So that is
-// something an operator asks for, and is told the consequence of.
-func (j Joining) unjoined() error {
+// A key, or a runner.env holding an identity, is a runner already registered, and joining again
+// would orphan it: its record stays in the API with a credential nobody holds any longer. So that
+// is something an operator asks for, and is told the consequence of.
+func (j Joining) unjoined(identity bool) error {
+	const again = " agk-runner join --replace makes it a new runner with a new key, and the runner it was stays registered until an administrator revokes it"
 	if j.Replace {
 		return nil
 	}
-	for _, path := range []string{j.KeyPath, j.EnvPath} {
-		_, err := os.Lstat(path)
-		switch {
-		case err == nil:
-			return fmt.Errorf("runner: this host has already joined, since %s is there. agk-runner join --replace makes it a new runner with a new key, and the runner it was stays registered until an administrator revokes it", path)
-		case !errors.Is(err, fs.ErrNotExist):
-			return fmt.Errorf("runner: %s cannot be read, so whether this host has already joined cannot be told: %s", path, reasonOf(err))
-		}
+	if identity {
+		return fmt.Errorf("runner: this host has already joined, since %s holds a runner's identity.%s", j.EnvPath, again)
+	}
+	_, err := os.Lstat(j.KeyPath)
+	switch {
+	case err == nil:
+		return fmt.Errorf("runner: this host has already joined, since %s is there.%s", j.KeyPath, again)
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("runner: %s cannot be read, so whether this host has already joined cannot be told: %s", j.KeyPath, reasonOf(err))
 	}
 	return nil
 }

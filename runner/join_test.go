@@ -410,15 +410,16 @@ func TestAJoinIsRefusedBeforeAnythingIsSentWhereItsSettingsAreWrong(t *testing.T
 		change func(*Joining)
 		names  string
 	}{
-		"no address":             {func(j *Joining) { j.API = "" }, "--api"},
-		"a plaintext address":    {func(j *Joining) { j.API = "http://agentiik.example.com" }, API},
-		"an address with a $":    {func(j *Joining) { j.API = "https://agentiik.example.com/$x" }, API},
-		"no labels":              {func(j *Joining) { j.Labels = "" }, "--labels"},
-		"a label out of grammar": {func(j *Joining) { j.Labels = "zone dmz" }, Labels},
-		"no token":               {func(j *Joining) { j.Token = "" }, "--token"},
-		"a runner credential":    {func(j *Joining) { j.Token = credential }, "--token"},
-		"no daemon":              {func(j *Joining) { j.Socket = filepath.Join(t.TempDir(), "docker.sock") }, "daemon"},
-		"no meminfo":             {func(j *Joining) { j.MemInfo = filepath.Join(t.TempDir(), "meminfo") }, "memory"},
+		"no address":                     {func(j *Joining) { j.API = "" }, "--api"},
+		"a plaintext address":            {func(j *Joining) { j.API = "http://agentiik.example.com" }, API},
+		"an address with a $":            {func(j *Joining) { j.API = "https://agentiik.example.com/$x" }, API},
+		"no labels":                      {func(j *Joining) { j.Labels = "" }, "--labels"},
+		"a label out of grammar":         {func(j *Joining) { j.Labels = "zone dmz" }, Labels},
+		"no token":                       {func(j *Joining) { j.Token = "" }, "--token"},
+		"a runner credential":            {func(j *Joining) { j.Token = credential }, "--token"},
+		"a token with a stray character": {func(j *Joining) { j.Token = aToken + "\nX" }, "--token"},
+		"no daemon":                      {func(j *Joining) { j.Socket = filepath.Join(t.TempDir(), "docker.sock") }, "daemon"},
+		"no meminfo":                     {func(j *Joining) { j.MemInfo = filepath.Join(t.TempDir(), "meminfo") }, "memory"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			url, sent := fakeAPI(t, aJoined)
@@ -552,5 +553,77 @@ func TestAReplaceThatFailsHalfwayLeavesNoOldRunnerEnvBesideTheNewKey(t *testing.
 	}
 	if _, err := os.Lstat(h.EnvPath); err == nil {
 		t.Error("the old runner.env is still in place, beside a key that is not its own")
+	}
+}
+
+// runner.env is "also where the settings above may be written", so settings an operator wrote
+// there before joining are no identity, are kept, and the disk is measured where they put the
+// work root.
+func TestSettingsWrittenInRunnerEnvBeforeJoiningAreKept(t *testing.T) {
+	url, sent := fakeAPI(t, aJoined)
+	h := aJoiningHost(t, url, aToken)
+	h.Lookup = environment(nil)
+	work := filepath.Join(t.TempDir(), "nvme", "work")
+	if err := os.MkdirAll(filepath.Dir(h.EnvPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := "AGK_RUNNER_WORKDIR=" + work + "\nAGK_RUNNER_CONCURRENCY=3\n"
+	if err := os.WriteFile(h.EnvPath, []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, replace := range []bool{false, true} {
+		h.Replace = replace
+		if _, err := Join(t.Context(), h); err != nil {
+			t.Fatalf("joining with --replace %v: %s", replace, err)
+		}
+		c, err := ReadConfig(environment(nil), h.EnvPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.WorkDir != work || c.Concurrency != 3 || c.Runner != "runner-dmz-02" {
+			t.Errorf("with --replace %v, serve reads the work root %s, %d at once, as %s", replace, c.WorkDir, c.Concurrency, c.Runner)
+		}
+	}
+	if sent() == nil {
+		t.Fatal("the join did not reach the API")
+	}
+}
+
+// A setting kept in runner.env and written differently in the environment is one serve would
+// refuse, so join refuses it before the token is spent.
+func TestAKeptSettingTheEnvironmentDisagreesWithIsRefused(t *testing.T) {
+	url, sent := fakeAPI(t, aJoined)
+	h := aJoiningHost(t, url, aToken)
+	h.Lookup = environment(map[string]string{WorkDir: t.TempDir()})
+	if err := os.MkdirAll(filepath.Dir(h.EnvPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.EnvPath, []byte("AGK_RUNNER_WORKDIR=/nvme/work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Join(t.Context(), h)
+	if err == nil || !strings.Contains(err.Error(), WorkDir) {
+		t.Fatalf("the join answered %v", err)
+	}
+	if sent() != nil {
+		t.Error("the join reached the API")
+	}
+}
+
+// The API's 400 is a description of the host it refused, before any token was spent.
+func TestADescriptionTheAPIRefusesSpendsNoToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error": "the machine declares 0 vCPU"}`)
+	}))
+	t.Cleanup(srv.Close)
+	h := aJoiningHost(t, srv.URL, aToken)
+	_, err := Join(t.Context(), h)
+	if err == nil || !strings.Contains(err.Error(), "spent no token") || !strings.Contains(err.Error(), "0 vCPU") {
+		t.Fatalf("the join answered %v", err)
+	}
+	if files := written(t, filepath.Dir(filepath.Dir(h.EnvPath))); len(files) > 0 {
+		t.Errorf("a refused join left %v", files)
 	}
 }
