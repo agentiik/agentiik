@@ -167,6 +167,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret.Providers` fills `api.Secrets`: it reads a secret through the namespace's declaration, from the store the declaration names, as bytes. A store the installation does not read, or does not know, is refused naming the secret and never a value.
 - `secret.Attach` wires both stores into the API's options from one configuration, so the routes and the redemption cannot disagree. `api` holds only the interfaces, and `cmd/agk` links none of it.
 
+### Configuration
+
+- Package `internal/config` reads the API's, the controller's and migrating's settings from `AGK_*` variables, each only its own. A setting missing, unreadable or malformed refuses the start, and every one is named on it. `max_requeues` is `AGK_MAX_REQUEUES`, 3 where unset.
+- A secret is a file an `AGK_*_FILE` variable names by absolute path, readable by its owner alone. A secret set as a value, a password in a URL or a file its group can read is refused, and a refusal repeats no value.
+- The database password is `AGK_DATABASE_PASSWORD_FILE`, since a URL in the environment carries none, and `AGK_ENV_PREFIXES` opts namespaces in to `env`.
+- The controller refuses to start with `AGK_MASTER_KEY_FILE` set, since the master key is the API's alone.
+
 ### Command line
 
 - `agk push` sends a version and the commit's tree, both read from git's objects rather than the working copy. A dirty tree is refused unless `--allow-dirty`, which pushes the commit and leaves the edits behind. `--commit` takes a hash, a branch or a tag. Symbolic links, submodules, SHA-256 repositories and a directory outside a repository are refused before any file is read. The credential comes from `AGENTIIK_TOKEN`, never a flag.
