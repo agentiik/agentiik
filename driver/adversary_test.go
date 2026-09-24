@@ -34,7 +34,7 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	t.Helper()
 	ctx := t.Context()
 
-	store, err := r.store(task)
+	store, err := r.store(ctx, task)
 	if err != nil {
 		t.Fatalf("opening the store: %s", err)
 	}
@@ -50,7 +50,7 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("preparing the repository: %s", err)
 	}
-	given, err := prepare(ctx, task, w, r.cfg.Policy, store, run, repo, r.cfg.Secrets)
+	given, err := prepare(ctx, task, w, r.cfg.Policy, store, run, repo, r.secrets(ctx))
 	if err != nil {
 		t.Fatalf("preparing what the container is given: %s", err)
 	}

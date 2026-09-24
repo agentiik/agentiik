@@ -47,7 +47,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			"the step is a call to another workflow, which the evaluator expands and no container runs")
 	}
 
-	store, err := d.store(t)
+	store, err := d.store(ctx, t)
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -147,7 +147,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.cfg.Secrets)
+	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.secrets(ctx))
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -429,9 +429,11 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 			"the container adopted for this task has nothing bound at %s, so there is nowhere to collect its outputs from", brick.OutDir))
 	}
 
-	// The values are redeemed again rather than remembered, because the masker needs
-	// them and the first delivery's copy of them left with the process that had it.
-	// Nothing is written: this is the list the literal match runs against.
+	// The masker needs the values the container was given, and the first delivery's
+	// copy of them in memory left with the process that had it. Its files are still in
+	// the task's secrets directory, which is removed only once this returns, and they are
+	// read back, with this delivery's own redemption beside them. Nothing is written:
+	// this is the list the literal match runs against.
 	values, err := d.values(ctx, t)
 	if err != nil {
 		return fail(err)
@@ -583,8 +585,20 @@ func (d *Docker) openLog(ctx context.Context, t graph.Task) (io.Writer, func(), 
 	return sink, func() { sink.Close() }, nil
 }
 
-// store opens the artifact store of the task's namespace.
-func (d *Docker) store(t graph.Task) (*artifact.Store, error) {
+// store is the artifact store of the task's namespace: the one its sources carry, or the one
+// Config opens for the namespace.
+func (d *Docker) store(ctx context.Context, t graph.Task) (*artifact.Store, error) {
+	if s := sourcesOf(ctx).Store; s != nil {
+		// Config.Store is asked for the task's namespace, so what it answers is that
+		// namespace's by construction. A store handed over already opened is not, and a
+		// runner that paired a task with another task's store would upload one
+		// namespace's outputs under another's prefix.
+		if s.Namespace() != t.Namespace {
+			return nil, fault(t.Step, nil, ChargePlatform,
+				"the artifact store this task was given is namespace %s's and the task is namespace %s's, and an artifact never crosses a namespace boundary", s.Namespace(), t.Namespace)
+		}
+		return s, nil
+	}
 	if d.cfg.Store == nil {
 		return nil, fault(t.Step, ErrContractBroken, ChargePlatform,
 			"this driver was built with no artifact store, and what a container leaves under %s is uploaded to one", brick.OutFilesDir)
@@ -613,8 +627,12 @@ func (d *Docker) runOf(ctx context.Context, t graph.Task) (agk.Run, error) {
 	return run, nil
 }
 
-// repo is the path of the workflow repository tree at the task's commit.
+// repo is the path of the workflow repository tree at the task's commit: the one its sources
+// name, or the one Config prepares.
 func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
+	if repo := sourcesOf(ctx).Repo; repo != "" {
+		return repo, nil
+	}
 	if d.cfg.Repo == nil {
 		return "", nil
 	}
@@ -626,15 +644,53 @@ func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
 	return repo, nil
 }
 
-// values redeems the secrets of one task without writing any of them, which is what the
-// masker needs and all it needs.
+// values are what the masker of an adopted container needs and all it needs: the values
+// the first delivery wrote for the container, where they are still on this host, and the
+// ones this delivery's own source redeems. Nothing is written.
+//
+// Both, because a secret rotated between the two redemptions leaves the container holding
+// the first value and this delivery the second, and the container can print only the
+// first: masked with the second alone, it would reach the log and the published outputs
+// in the clear. The second is kept for the host that no longer has the first, a tmpfs a
+// restart cleared, where it is the closest to the container's there is.
 func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
-	if d.cfg.Secrets == nil {
+	if len(t.Secrets) == 0 {
 		return nil, nil
 	}
+	// The directory is named from the task identifier rather than read off the
+	// container, as the one Run takes away is: a container carrying the task's label
+	// may have been started by anything, and what is read here is only ever this
+	// runner's own.
+	w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
+	if err != nil {
+		w = nil
+	}
 	var values [][]byte
+	missing := ""
 	for _, s := range t.Secrets {
-		value, err := d.cfg.Secrets.Value(ctx, s.Name)
+		if value, ok := w.written(s); ok {
+			values = append(values, value)
+		} else if missing == "" {
+			missing = s.Name
+		}
+	}
+
+	secrets := d.secrets(ctx)
+	if secrets == nil {
+		if missing == "" {
+			return values, nil
+		}
+		// A server runner leaves Config.Secrets nil and gives each task its own, so a
+		// redelivery that came without them to a host that no longer holds what the
+		// first delivery wrote would otherwise mask nothing. It is refused for the
+		// reason a value that cannot be redeemed is, and as writeSecrets refuses the
+		// same omission on a delivery that creates its container: the runner's, with
+		// no rule of the brick contract, which no image had a part in.
+		return nil, fault(t.Step, nil, ChargePlatform,
+			"secret %s is no longer where the first delivery wrote it and there is no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", missing)
+	}
+	for _, s := range t.Secrets {
+		value, err := secrets.Value(ctx, s.Name)
 		if err != nil {
 			// A value that cannot be redeemed is a value the masker cannot
 			// see, and a log written without it would carry the secret in

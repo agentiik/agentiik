@@ -17,6 +17,13 @@ import (
 // secret source, the log sink, the policy and the work root, arrives once, here. A wider
 // Run would be the evaluator learning about grants, trees and sockets, which is the
 // thing graph/driver.go exists to prevent.
+//
+// Three of those are about the task after all where a server runs it: Store, Secrets and
+// Repo, which a runner has from the redemption of one task's grant. A runner gives them
+// per task, as Sources on the context of that task's Run through WithSources, and each
+// one given there answers in place of the hook of the same name here. agk run --local
+// gives none and is answered from these. Every other field is the machine's, and is
+// never overridden per task.
 type Config struct {
 	// Socket is the daemon to talk to, and empty means wherever one is:
 	// DOCKER_HOST, then the per-user path Docker Desktop uses, then the system
@@ -26,14 +33,16 @@ type Config struct {
 	// Store opens the artifact store of one namespace. It is per namespace because
 	// a Store is opened for one, and because an artifact "never crosses a namespace
 	// boundary": a driver holding one store for every tenant would be the place that
-	// boundary stopped being true.
+	// boundary stopped being true. A runner gives the store of each task in
+	// Sources.Store instead, opened on that task's presigned URLs and upload policy.
 	Store func(namespace string) (*artifact.Store, error)
 
 	// Repo answers with the path of the workflow repository tree at one commit,
 	// which is what gets bound read-only at /agk/repo. A server runner lays that
 	// directory out itself from the files its grant redemption names, one
-	// content-addressed object per file, and holds no checkout and no credential
-	// for the repository; agk run --local has the working tree.
+	// content-addressed object per file, holds no checkout and no credential for
+	// the repository, and names the directory in Sources.Repo; agk run --local has
+	// the working tree.
 	Repo func(ctx context.Context, namespace, workflow, commit string) (string, error)
 
 	// Runs answers with the run a task belongs to, which is what /agk/run.json
@@ -44,7 +53,8 @@ type Config struct {
 	// Secrets is where a value comes from when the container is prepared. A server
 	// runner answers from its redemption of the per-task grant the controller issued,
 	// which it made before the pull, since it redeems before it acknowledges the task
-	// message; agk run --local reads the command line.
+	// message, and gives it in Sources.Secrets, because two tasks it holds at once may
+	// name one secret and be owed two values; agk run --local reads the command line.
 	Secrets Secrets
 
 	// Logs is where a task's log is written. A nil Logs is a runner that keeps
