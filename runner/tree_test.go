@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
@@ -38,7 +39,7 @@ func TestAnExecutableTreeFileStaysExecutable(t *testing.T) {
 		"scripts/lib.sh":   {"echo sourced\n", "0644"},
 		"scripts/run.sh":   {"#!/bin/sh\necho by owner alone\n", "0700"},
 	})
-	dir := filepath.Join(t.TempDir(), "tree")
+	dir := emptyDir(t)
 	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 			entries[0].Path = path
-			dir := filepath.Join(t.TempDir(), "tree")
+			dir := emptyDir(t)
 			if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err == nil {
 				t.Fatal("the tree was laid out")
 			}
@@ -80,38 +81,72 @@ func TestATreePathOutsideTheRepositoryIsRefused(t *testing.T) {
 	t.Run("twice", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}})
 		entries = append(entries, entries[0])
-		if err := layOutTree(t.Context(), o, "finance", filepath.Join(t.TempDir(), "tree"), entries, agk.DefaultLimits()); err == nil {
+		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a path named twice was laid out")
 		}
 	})
 	t.Run("a file under a file", func(t *testing.T) {
 		entries, o := treeOf(t, s, map[string]file{"a": {"x", "0644"}, "a/b": {"y", "0644"}})
-		if err := layOutTree(t.Context(), o, "finance", filepath.Join(t.TempDir(), "tree"), entries, agk.DefaultLimits()); err == nil {
+		if err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, agk.DefaultLimits()); err == nil {
 			t.Fatal("a file was laid out as a directory of another")
 		}
 	})
 }
 
-// What an earlier delivery of the task laid out is replaced, not built on: a file this delivery
-// does not name is gone, and one it names is the bytes it names.
-func TestATreeIsLaidOutFresh(t *testing.T) {
+// A task assembled again, as it is when its message comes round to its holder or when the agent
+// restarts under its running container, lays out a tree of its own, and the tree the running
+// container was given is neither rewritten nor taken away, by the assembly or by its removal.
+func TestEachAssemblyOfATaskLaysOutATreeOfItsOwn(t *testing.T) {
 	s := newObjectStore(t)
-	entries, o := treeOf(t, s, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}})
-	dir := filepath.Join(t.TempDir(), "tree")
-	if err := os.MkdirAll(filepath.Join(dir, "stale"), 0o700); err != nil {
+	m, r := s.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	work := t.TempDir()
+	first, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: work})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "agentiik.yaml"), []byte("version: 0\n"), 0o644); err != nil {
+	again, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: work})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Sources.Repo == again.Sources.Repo {
+		t.Fatalf("two assemblies of one task share the tree %s", first.Sources.Repo)
+	}
+	if err := again.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(first.Sources.Repo, "agentiik.yaml")); err != nil || string(b) != "version: 1\n" {
+		t.Errorf("the first tree reads %q once the second is removed: %v", b, err)
+	}
+	if err := first.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := os.ReadDir(filepath.Join(work, TreesDir)); len(left) != 0 {
+		t.Errorf("the trees left behind: %v", left)
+	}
+}
+
+// Every directory of the tree is open to the container, whatever the agent's umask closes: the
+// container reads the tree as an account the files do not belong to.
+func TestATreeIsOpenToTheContainerWhateverTheUmask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a mode bit is what this is about, and Windows has none")
+	}
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+	s := newObjectStore(t)
+	entries, o := treeOf(t, s, map[string]file{"src/pkg/main.py": {"print(1)\n", "0644"}, "src/deep/er/x": {"x", "0644"}})
+	dir := emptyDir(t)
 	if err := layOutTree(t.Context(), o, "finance", dir, entries, agk.DefaultLimits()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "stale")); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("what an earlier delivery left is still there: %v", err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "agentiik.yaml")); string(b) != "version: 1\n" {
-		t.Errorf("the entry point reads %q", b)
+	for _, rel := range []string{".", "src", "src/pkg", "src/deep", "src/deep/er"} {
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != treeDirMode {
+			t.Errorf("%s is %o, want %o", rel, got, treeDirMode)
+		}
 	}
 }
 
@@ -121,28 +156,42 @@ func TestATreeFileAboveTheObjectLimitIsRefused(t *testing.T) {
 	entries, o := treeOf(t, s, map[string]file{"big": {strings.Repeat("x", 64), "0644"}})
 	l := agk.DefaultLimits()
 	l.ArtifactMaxBytes = 32
-	err := layOutTree(t.Context(), o, "finance", filepath.Join(t.TempDir(), "tree"), entries, l)
+	err := layOutTree(t.Context(), o, "finance", emptyDir(t), entries, l)
 	if !errors.Is(err, ErrNotAsNamed) {
 		t.Errorf("a file above artifact_max_bytes answered %v", err)
 	}
 }
 
-// A task's tree sits beside the task directories under the work root, in none of them, and is
-// named after the task.
+// A task's tree sits beside the task directories under the work root, in none of them, in a
+// directory private to the agent, and is named after the task.
 func TestATreeIsNamedAfterItsTask(t *testing.T) {
-	dir, err := treeDir("/var/lib/agentiik/work", "01JMZ8V1P9C4/invoice/2/3/8")
+	work := t.TempDir()
+	dir, err := newTreeDir(work, "01JMZ8V1P9C4/invoice/2/3/8")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.FromSlash("/var/lib/agentiik/work/.trees/01JMZ8V1P9C4/invoice/2/3/8"); dir != want {
-		t.Errorf("the tree is at %s, want %s", dir, want)
+	if parent, base := filepath.Dir(dir), filepath.Base(dir); parent != filepath.Join(work, TreesDir) || !strings.HasPrefix(base, "01JMZ8V1P9C4.invoice.2.3-8.") {
+		t.Errorf("the tree is at %s", dir)
 	}
-	for _, id := range []agk.TaskID{"../../etc", "01JMZ8V1P9C4/invoice", ""} {
-		if _, err := treeDir("/var/lib/agentiik/work", id); err == nil {
+	if info, err := os.Stat(filepath.Join(work, TreesDir)); err != nil || info.Mode().Perm() != treesMode {
+		t.Errorf("the trees directory is %v: %v", info.Mode(), err)
+	}
+	for _, id := range []agk.TaskID{"../../etc", "01JMZ8V1P9C4/invoice", "01JMZ8V1P9C4/invoice/02", ""} {
+		if _, err := newTreeDir(work, id); err == nil {
 			t.Errorf("a tree was named after %q", id)
 		}
 	}
-	if _, err := treeDir("", "01JMZ8V1P9C4/invoice/2"); err == nil {
+	if _, err := newTreeDir("", "01JMZ8V1P9C4/invoice/2"); err == nil {
 		t.Error("a tree was named with no work root")
 	}
+}
+
+// emptyDir is a new, empty directory for a tree, as newTreeDir makes one.
+func emptyDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(t.TempDir(), "tree.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

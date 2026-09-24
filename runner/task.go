@@ -188,8 +188,9 @@ func (a *Assembled) Context(ctx context.Context) context.Context {
 	return driver.WithSources(ctx, a.Sources)
 }
 
-// Remove takes the task's tree away, once its container is gone. A tree already gone is the
-// outcome asked for and no error.
+// Remove takes away the tree this assembly laid out, once the container it was bound into is gone.
+// It is this assembly's tree alone, so an assembly that was not the one a running container was
+// given takes nothing from under it. A tree already gone is the outcome asked for and no error.
 func (a *Assembled) Remove() error {
 	if a == nil || a.Sources.Repo == "" {
 		return nil
@@ -218,6 +219,14 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 	if err := r.answers(m); err != nil {
 		return nil, fmt.Errorf("%w: task %s: %w", ErrAnswerUnusable, m.IdempotencyKey, err)
 	}
+	// Nothing fetched for the task is any use past its deadline, when the grant and every
+	// URL it answered expire, so a store that stops answering does not hold the assembly
+	// longer than that.
+	if deadline, err := time.Parse(time.RFC3339Nano, m.Deadline); err == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	limits := o.Limits
 	if limits == (agk.Limits{}) {
 		limits = agk.DefaultLimits()
@@ -245,7 +254,7 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 		return nil, err
 	}
 
-	dir, err := treeDir(o.WorkRoot, t.ID)
+	dir, err := newTreeDir(o.WorkRoot, t.ID)
 	if err != nil {
 		return nil, err
 	}

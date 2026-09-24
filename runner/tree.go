@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/agentiik/agentiik/agk"
@@ -38,9 +41,15 @@ import (
 // identifier, for the reason driver.KeysDir has one. It is outside every task's directory,
 // because the driver creates that directory fresh, removing whatever it held, when the task's
 // container is prepared, which is after the tree is laid out.
+//
+// It is private to the agent, as the driver keeps the parents of a task's directory, so that the
+// permissive modes of a tree sit behind a directory nothing else on the host can enter. The
+// container is not held back by it: the daemon resolves a bind's source as root, and the container
+// reaches the tree through the bind, whose own modes are the whole of its access.
 const TreesDir = ".trees"
 
 const (
+	treesMode    os.FileMode = 0o700
 	treeDirMode  os.FileMode = 0o755
 	treeFileMode os.FileMode = 0o444
 	treeExecMode os.FileMode = 0o555
@@ -52,33 +61,56 @@ const (
 // trees opening hundreds of connections to the store.
 const treeFetchers = 8
 
-// treeDir is the directory one task's tree is laid out in, named after the task's identity as the
-// driver names its working directory, so two tasks can no more share a tree than an identity.
-func treeDir(workRoot string, id agk.TaskID) (string, error) {
+// newTreeDir creates the directory one assembly of a task lays its tree out in: new, empty, and
+// named after the task, so that a person listing the trees can tell whose each is.
+//
+// It is one directory per assembly and never one per task. A task is assembled again when its
+// message comes round to the host that holds it, and when the agent restarts under a container
+// that is still running and redeems again for the values its log is masked with. That container
+// has the earlier tree bound at /agk/repo, and a tree removed or rewritten in place under it
+// would be a step losing its repository halfway through. So each assembly has its own, and takes
+// away its own.
+func newTreeDir(workRoot string, id agk.TaskID) (string, error) {
 	if workRoot == "" {
 		return "", errors.New("runner: no work root: a task's tree is laid out under one")
 	}
-	if err := id.Validate(); err != nil {
+	run, step, attempt, shard, err := agk.ParseTaskID(string(id))
+	if err == nil {
+		err = id.Validate()
+	}
+	if err != nil {
 		return "", fmt.Errorf("runner: %w", err)
 	}
-	return filepath.Join(workRoot, TreesDir, filepath.FromSlash(string(id))), nil
+	// Dots between the parts, since neither a run identifier nor a step name can hold one,
+	// and the shard as the driver writes it in a directory name.
+	name := string(run) + "." + string(step) + "." + strconv.Itoa(attempt)
+	if !shard.IsZero() {
+		name += "." + strconv.Itoa(shard.Index) + "-" + strconv.Itoa(shard.Of)
+	}
+	trees := filepath.Join(workRoot, TreesDir)
+	if err := os.MkdirAll(trees, treesMode); err != nil {
+		return "", fmt.Errorf("runner: the trees directory %s could not be created: %w", trees, err)
+	}
+	if err := os.Chmod(trees, treesMode); err != nil {
+		return "", fmt.Errorf("runner: the trees directory %s: %w", trees, err)
+	}
+	dir, err := os.MkdirTemp(trees, name+".")
+	if err != nil {
+		return "", fmt.Errorf("runner: task %s: a directory for its tree could not be created: %w", id, err)
+	}
+	return dir, nil
 }
 
-// layOutTree writes every file of a tree under dir, fresh, each fetched through objects and held
-// to its digest.
+// layOutTree writes every file of a tree under dir, which is new and empty, each fetched through
+// objects and held to its digest.
 //
-// A directory left by an earlier delivery of the task is removed first rather than reused, for
-// the reason the driver gives its working directory: a file from the delivery before this one is
-// a file nobody checked this time. On any refusal the directory is taken away again, so what is
-// left behind is either a whole, checked tree or nothing.
+// On any refusal the directory is taken away again, so what is left behind is either a whole,
+// checked tree or nothing.
 //
 // A file above artifact_max_bytes is refused as it arrives, since a tree file is an object of the
 // store like any other and the store holds none larger. Files of one digest are fetched once and
 // copied, since they are one object.
 func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir string, entries []TreeEntry, l agk.Limits) (err error) {
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("runner: the tree %s left by an earlier delivery could not be removed: %w", dir, err)
-	}
 	defer func() {
 		if err != nil {
 			if left := os.RemoveAll(dir); left != nil {
@@ -86,8 +118,8 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 			}
 		}
 	}()
-	if err := mkdirTree(dir); err != nil {
-		return err
+	if err := os.Chmod(dir, treeDirMode); err != nil {
+		return fmt.Errorf("runner: the tree's directory %s: %w", dir, err)
 	}
 
 	// The directories first, one after the other, so that the fetchers only ever create
@@ -97,7 +129,7 @@ func layOutTree(ctx context.Context, objects artifact.Objects, namespace, dir st
 		if err := treePath(e.Path); err != nil {
 			return fmt.Errorf("runner: %w", err)
 		}
-		if err := mkdirTree(filepath.Join(dir, filepath.FromSlash(path.Dir(e.Path)))); err != nil {
+		if err := mkdirTree(dir, path.Dir(e.Path)); err != nil {
 			return err
 		}
 		byDigest[e.SHA256] = append(byDigest[e.SHA256], e)
@@ -149,14 +181,29 @@ feed:
 	return ctx.Err()
 }
 
-// mkdirTree creates a directory of the tree and its parents with the tree's mode, which is set
-// rather than requested, since the process umask would otherwise decide it.
-func mkdirTree(dir string) error {
-	if err := os.MkdirAll(dir, treeDirMode); err != nil {
-		return fmt.Errorf("runner: the tree's directory %s could not be created: %w", dir, err)
+// mkdirTree creates a directory of the tree, rel below dir, and every directory between the two,
+// each with the tree's mode. The mode is set on each rather than requested, since the process
+// umask would otherwise decide it, and a directory an agent's umask left closed to others is one a
+// remapped container cannot enter to reach what is below it.
+func mkdirTree(dir, rel string) error {
+	if rel == "." {
+		return nil
 	}
-	if err := os.Chmod(dir, treeDirMode); err != nil {
-		return fmt.Errorf("runner: the tree's directory %s: %w", dir, err)
+	at := dir
+	for _, segment := range strings.Split(rel, "/") {
+		at = filepath.Join(at, segment)
+		err := os.Mkdir(at, treeDirMode)
+		if errors.Is(err, fs.ErrExist) {
+			// Made for an earlier entry, with its mode set then; anything else under
+			// this name is refused when a file is created beneath it.
+			continue
+		}
+		if err == nil {
+			err = os.Chmod(at, treeDirMode)
+		}
+		if err != nil {
+			return fmt.Errorf("runner: the tree's directory %s could not be created: %w", at, err)
+		}
 	}
 	return nil
 }

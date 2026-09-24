@@ -200,8 +200,8 @@ func TestATaskIsAssembledFromWhatItsRedemptionNames(t *testing.T) {
 	if v, err := a.Sources.Secrets.Value(t.Context(), "billing"); err != nil || string(v) != "bk_live_7Qm2rXt9vZa4" {
 		t.Errorf("the secret reads as %q: %v", v, err)
 	}
-	if want := filepath.Join(work, TreesDir, string(storeRun), "invoice", "1"); a.Sources.Repo != want {
-		t.Errorf("the tree is laid out at %s, want %s", a.Sources.Repo, want)
+	if filepath.Dir(a.Sources.Repo) != filepath.Join(work, TreesDir) {
+		t.Errorf("the tree is laid out at %s, outside %s", a.Sources.Repo, TreesDir)
 	}
 	if b, err := os.ReadFile(filepath.Join(a.Sources.Repo, "config", "copy-of.json")); err != nil || string(b) != "{}\n" {
 		t.Errorf("a file sharing another's bytes reads as %q: %v", b, err)
@@ -270,8 +270,8 @@ func TestATamperedInputOrTreeFileIsRefused(t *testing.T) {
 			if !errors.Is(err, ErrNotAsNamed) {
 				t.Fatalf("assembling answered %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(work, TreesDir, string(storeRun), "invoice", "1")); !errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("a refused task left its tree behind: %v", err)
+			if left, _ := os.ReadDir(filepath.Join(work, TreesDir)); len(left) != 0 {
+				t.Errorf("a refused task left its tree behind: %v", left)
 			}
 		})
 	}
