@@ -1,8 +1,11 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -11,6 +14,11 @@ import (
 )
 
 // A machine joins, says it is there, and stops saying it.
+
+// hostKey is the public half of the keypair a host generates at join, one host to a seed.
+func hostKey(seed byte) ed25519.PublicKey {
+	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+}
 
 func joining(t *testing.T) (*Pool, string) {
 	t.Helper()
@@ -63,7 +71,7 @@ func TestAMachineJoinsWithATokenAndGetsACredential(t *testing.T) {
 			return err
 		}
 		joined, err = w.Join(ctx, Joining{
-			Token: issued.Clear, Labels: []string{"zone=dmz"},
+			Token: issued.Clear, PublicKey: hostKey(1), Labels: []string{"zone=dmz"},
 			CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}, 30*24*time.Hour, now)
@@ -112,7 +120,7 @@ func TestAJoinTokenIsSpentOnce(t *testing.T) {
 			return err
 		}
 		machine := Joining{
-			Token: issued.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}
 		if _, err := w.Join(ctx, machine, time.Hour, now); err != nil {
@@ -141,7 +149,7 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 			return err
 		}
 		_, err = w.Join(ctx, Joining{
-			Token: issued.Clear, Labels: []string{"zone=dmz", "zone=lan"},
+			Token: issued.Clear, PublicKey: hostKey(1), Labels: []string{"zone=dmz", "zone=lan"},
 			CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}, time.Hour, now)
@@ -161,7 +169,7 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 			return err
 		}
 		_, err = w.Join(ctx, Joining{
-			Token: issued.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}, time.Hour, now.Add(2*time.Minute))
 		if !errors.Is(err, ErrNoJoinToken) {
@@ -173,6 +181,305 @@ func TestAMachineCannotClaimALabelItsTokenDoesNotPermit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// What a host says of itself at join is what the inventory reads back: the key it will sign a
+// rotation with, the namespaces it narrows itself to and what it can prove of its containment.
+// The identifier it is answered with is lowercase, which is the grammar the wire prints a runner
+// in and the one the result reader holds it to.
+func TestAHostsKeyAndNamespacesAreKeptAsItSentThem(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC()
+	narrowed(t, pool, []string{"finance", "team-ops"})
+
+	var joined Joined
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		issued, err := w.IssueJoinToken(ctx, "narrow", nil, "admin", now, now.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		joined, err = w.Join(ctx, Joining{
+			Token: issued.Clear, PublicKey: hostKey(7), Labels: []string{},
+			CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
+			Architecture: "arm64", AgentVersion: "0.2.0",
+			Namespaces:  []string{"finance"},
+			Containment: &Containment{Runtime: "runsc", UsernsRemap: false},
+		}, time.Hour, now)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runnerForm.MatchString(joined.Runner) {
+		t.Errorf("the runner was minted as %q, which the wire does not print a runner as", joined.Runner)
+	}
+
+	var listed []Runner
+	var opened Runner
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		if listed, err = w.Runners(ctx); err != nil {
+			return err
+		}
+		opened, err = w.Authenticate(ctx, joined.Credential)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("the inventory holds %d runners", len(listed))
+	}
+	for _, r := range []Runner{listed[0], opened} {
+		if !bytes.Equal(r.PublicKey, hostKey(7)) {
+			t.Errorf("the runner's key reads back as %x", r.PublicKey)
+		}
+		if len(r.Namespaces) != 1 || r.Namespaces[0] != "finance" {
+			t.Errorf("the host's namespaces read back as %v", r.Namespaces)
+		}
+		if r.Containment == nil || *r.Containment != (Containment{Runtime: "runsc", UsernsRemap: false}) {
+			t.Errorf("the host's containment reads back as %+v", r.Containment)
+		}
+	}
+
+	// A host that narrows nothing and reports no containment reads back as having said
+	// nothing, rather than as narrowed to no namespace or contained by no runtime.
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		issued, err := w.IssueJoinToken(ctx, "narrow", nil, "admin", now, now.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		plain, err := w.Join(ctx, Joining{
+			Token: issued.Clear, PublicKey: hostKey(8),
+			CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
+			Architecture: "amd64", AgentVersion: "0.2.0",
+		}, time.Hour, now)
+		if err != nil {
+			return err
+		}
+		r, err := w.Authenticate(ctx, plain.Credential)
+		if err != nil {
+			return err
+		}
+		if r.Namespaces != nil || r.Containment != nil {
+			t.Errorf("a host that said nothing of either reads back as narrowed to %v and contained by %+v", r.Namespaces, r.Containment)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// "It narrows and never widens": a host naming a namespace its pool does not accept is refused
+// whole, as a label its token does not permit is, and the token is left unspent.
+func TestAHostCannotNarrowItselfToANamespaceItsPoolDoesNotAccept(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC()
+	narrowed(t, pool, []string{"finance"})
+
+	var issued JoinToken
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		issued, err = w.IssueJoinToken(ctx, "narrow", nil, "admin", now, now.Add(time.Hour))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := Joining{
+		Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+		Architecture: "amd64", AgentVersion: "0.2.0", Namespaces: []string{"finance", "payroll"},
+	}
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.Join(ctx, machine, time.Hour, now)
+		return err
+	})
+	if !errors.Is(err, ErrNoJoinToken) {
+		t.Fatalf("a host widening its pool's namespaces answered %v", err)
+	}
+
+	// The refusal spent nothing, and the same host asking for what its pool accepts joins.
+	machine.Namespaces = []string{"finance"}
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.Join(ctx, machine, time.Hour, now)
+		return err
+	})
+	if err != nil {
+		t.Errorf("the token a refused join presented answered %v", err)
+	}
+
+	// A pool accepting every namespace, which is one that lists none, takes any narrowing.
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		issued, err := w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		if err != nil {
+			return err
+		}
+		machine.Token, machine.Namespaces = issued.Clear, []string{"payroll"}
+		_, err = w.Join(ctx, machine, time.Hour, now)
+		return err
+	})
+	if err != nil {
+		t.Errorf("a host narrowing a pool that accepts every namespace answered %v", err)
+	}
+}
+
+// "It is single use, so a second registration presenting it is refused rather than producing a
+// second runner." A second machine presenting the token while the first has spent it and not yet
+// committed waits for the first, and is then refused as a spent token is: one token, one runner.
+func TestTwoJoinsWithOneTokenAtOnceMakeOneRunner(t *testing.T) {
+	pool, super := joining(t)
+	now := time.Now().UTC()
+
+	var issued JoinToken
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		issued, err = w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := func(host byte) Joining {
+		return Joining{
+			Token: issued.Clear, PublicKey: hostKey(host),
+			CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Architecture: "amd64", AgentVersion: "0.2.0",
+		}
+	}
+
+	second := make(chan error, 1)
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		if _, err := w.Join(ctx, machine(1), time.Hour, now); err != nil {
+			return err
+		}
+		go func() {
+			second <- pool.Installation(context.Background(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+				_, err := w.Join(ctx, machine(2), time.Hour, now)
+				return err
+			})
+		}()
+		// The first commits only once the second is waiting on it, so that the second
+		// has read the token before the first's spending of it is visible.
+		waitingOnALock(t, super)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; !errors.Is(err, ErrNoJoinToken) {
+		t.Errorf("a machine presenting a token another was spending answered %v", err)
+	}
+
+	var listed []Runner
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		listed, err = w.Runners(ctx)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Errorf("one token made %d runners", len(listed))
+	}
+}
+
+// waitingOnALock returns once a session of the test's database is waiting on a lock another holds.
+func waitingOnALock(t *testing.T, super string) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := conn.QueryRow(t.Context(),
+			`select count(*) from pg_stat_activity
+			 where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no session came to wait on a lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// "reimaged host: A new runner, which joins again, as is any host whose key is gone. The old
+// record stays for the audit log." A host joining a second time, with a second token and even with
+// the same key, is a second runner under a new identifier and a new credential, and the first is
+// left as it was: never silently reused.
+func TestASecondJoinFromOneHostIsASecondRunner(t *testing.T) {
+	pool, _ := joining(t)
+	now := time.Now().UTC()
+
+	join := func() Joined {
+		t.Helper()
+		var joined Joined
+		err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+			issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now, now.Add(time.Hour))
+			if err != nil {
+				return err
+			}
+			joined, err = w.Join(ctx, Joining{
+				Token: issued.Clear, PublicKey: hostKey(1), Labels: []string{"zone=dmz"},
+				CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+				Architecture: "amd64", AgentVersion: "0.2.0",
+			}, time.Hour, now)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return joined
+	}
+	first, second := join(), join()
+	if first.Runner == second.Runner || first.Credential == second.Credential {
+		t.Fatalf("a host joining twice was answered %+v and %+v", first, second)
+	}
+
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		listed, err := w.Runners(ctx)
+		if err != nil {
+			return err
+		}
+		if len(listed) != 2 {
+			t.Errorf("a host joining twice left %d runners", len(listed))
+		}
+		for _, j := range []Joined{first, second} {
+			r, err := w.Authenticate(ctx, j.Credential)
+			if err != nil {
+				t.Errorf("the credential of %s answered %v", j.Runner, err)
+				continue
+			}
+			if r.ID != j.Runner || r.State != "ready" {
+				t.Errorf("the credential of %s opened %+v", j.Runner, r)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// narrowed creates a pool accepting only the namespaces named, for a host to narrow itself inside.
+func narrowed(t *testing.T, p *Pool, namespaces []string) {
+	t.Helper()
+	err := p.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		return w.CreateRunnerPool(ctx, RunnerPool{Name: "narrow", AcceptedNamespaces: namespaces, CreatedBy: "admin"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runnerForm is the wire's pattern for a runner, $defs/runnerRegistration/response/runner.
+var runnerForm = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // "A runner posts one heartbeat every 10 seconds to the API", and "three missed intervals move a
 // task to lost". The tests that follow count in these two constants, so this one holds them to the
@@ -199,7 +506,7 @@ func TestATaskWhoseRunnerStoppedReportingIsLost(t *testing.T) {
 			return err
 		}
 		joined, err := w.Join(ctx, Joining{
-			Token: issued.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}, time.Hour, now)
 		runner = joined.Runner
@@ -310,7 +617,7 @@ func TestAHeartbeatCannotKeepSomebodyElseTaskAlive(t *testing.T) {
 				return err
 			}
 			joined, err := w.Join(ctx, Joining{
-				Token: issued.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+				Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 				Architecture: "amd64", AgentVersion: "0.2.0",
 			}, time.Hour, now.Add(time.Duration(i)*time.Second))
 			if err != nil {
@@ -613,7 +920,7 @@ func TestARevokedCredentialOpensNothing(t *testing.T) {
 			return err
 		}
 		joined, err := w.Join(ctx, Joining{
-			Token: issued.Clear, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Token: issued.Clear, PublicKey: hostKey(1), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
 		}, time.Hour, now)
 		if err != nil {
