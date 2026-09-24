@@ -64,10 +64,12 @@ func serve(ctx context.Context, e env, args []string) int {
 	// Limits is left at its zero value, which is agk's own size rules: no installation setting
 	// changes them, and the controller holds a task's envelopes to the same ones.
 	socket, _ := e.Lookup("DOCKER_HOST")
+	endings := &runner.Endings{}
 	d, err := openDriver(ctx, driver.Config{
 		Socket:   socket,
 		WorkRoot: cfg.WorkDir,
 		Policy:   policy,
+		Observer: endings,
 		Announce: log,
 		Host:     e.Host,
 	})
@@ -97,7 +99,7 @@ func serve(ctx context.Context, e env, args []string) int {
 
 	notify, _ := e.Lookup(runner.NotifySocket)
 	err = runner.Serve(ctx, runner.Agent{
-		Config: cfg, Driver: d, Client: client, Log: log,
+		Config: cfg, Driver: d, Client: client, Endings: endings, Log: log,
 		Ready: func() error { return runner.Notify(notify, runner.Ready) },
 	})
 	if err != nil {
