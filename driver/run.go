@@ -103,7 +103,11 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	defer func() {
 		tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
 		defer cancel()
-		removeNetwork(tidy, d.cli, n)
+		// Said and not returned, for the reason tidy says a directory: the task has
+		// ended by now, and a network left behind changes nothing about how.
+		if err := removeNetwork(tidy, d.cli, n); err != nil {
+			d.say(fmt.Sprintf("%s left the network %s of task %s on this host, where it holds its share of the daemon's address pools until the runner's next start sweeps it: %v", t.Step, n.Mode, t.ID, err))
+		}
 	}()
 
 	image, err := resolveImage(ctx, d.cli, d.cache, t, "", nil)
