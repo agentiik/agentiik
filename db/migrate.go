@@ -71,7 +71,9 @@ create table if not exists schema_migrations (
 //
 // It takes a connection rather than a Pool because it is the one thing that legitimately
 // runs as a role that may create tables, and that role is not the one the application
-// connects as. Open would refuse it.
+// connects as. Open would refuse it. An installation calls Provision, which calls this and
+// then creates the role the application does connect as. Two calls at once race on the
+// catalogue, so Provision holds a lock around this one.
 func Migrate(ctx context.Context, conn *pgx.Conn) ([]string, error) {
 	if _, err := conn.Exec(ctx, schemaTable); err != nil {
 		return nil, fmt.Errorf("db: the migration record could not be created: %w", err)

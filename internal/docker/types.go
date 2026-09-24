@@ -3,6 +3,7 @@ package docker
 import (
 	"encoding/json"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -172,6 +173,50 @@ type Image struct {
 	Architecture string      `json:"Architecture,omitempty"`
 	Os           string      `json:"Os,omitempty"`
 	Created      string      `json:"Created,omitempty"`
+}
+
+// RegistryDigests are what ref can be pinned to: its repository, spelt as ref spells it,
+// at each digest the daemon holds this image under in that repository, in the order the
+// daemon lists them.
+//
+// The daemon writes RepoDigests in the short form docker pull takes, alpine@sha256:...
+// for docker.io/library/alpine, so each is matched with ref by the repository both of
+// them name rather than as text. A digest held under another repository, from a pull or
+// a push of the same image elsewhere, names nothing ref's registry was asked to serve,
+// and is left out.
+//
+// Which image store the daemon runs decides what an answer means. On the one Docker had
+// before containerd's, an image built on the machine and never pushed is held under no
+// digest, and this answers nothing. On the containerd store, the daemon's own since
+// Docker 29, every image is held under one, pushed or not: the digest a registry would
+// serve once the image was pushed there. Only the registry knows whether it was, and
+// DistributionInspect is how it is asked.
+func (i Image) RegistryDigests(ref string) []string {
+	repository := repositoryOf(ref)
+	want := canonical(repository)
+	var out []string
+	for _, held := range i.RepoDigests {
+		name, digest, ok := strings.Cut(held, "@")
+		if !ok || canonical(name) != want || !sha256Digest.MatchString(digest) {
+			continue
+		}
+		out = append(out, repository+"@"+digest)
+	}
+	return out
+}
+
+// Distribution is what a registry serves under a reference, as the daemon asked it on
+// this client's behalf.
+type Distribution struct {
+	Descriptor Descriptor `json:"Descriptor"`
+}
+
+// Descriptor names one manifest of a registry by the digest of its bytes, which is the
+// digest an image is pinned by.
+type Descriptor struct {
+	MediaType string `json:"mediaType,omitempty"`
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size,omitempty"`
 }
 
 // ImageConfig is what the image itself declares, before any of it is overridden by a

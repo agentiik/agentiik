@@ -43,6 +43,10 @@
 //	WithoutSeccomp       an /info listing no name=seccomp, the seccomp floor refusing
 //	APIVersion           a daemon answering an older version than the ceiling
 //	OOMKills             a die event with an oom before it, which the wait never sees
+//	ClassicImageStore    no RepoDigests for an image built on the machine and never pushed
+//	RegistryUnreachable  a registry the daemon cannot reach when it is asked what it serves
+//	RegistryAnswers401   a 401 where a registry that never heard of a repository answers 403
+//	TagMoves             a tag pointed at another image once it has been inspected
 //
 // Restart is the one change made to a daemon already serving: it drops every event stream
 // and answers /info as configured by the behaviours it is given, which is a daemon

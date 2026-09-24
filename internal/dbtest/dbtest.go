@@ -29,8 +29,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The unprivileged role is created per database and named after it, NOSUPERUSER NOBYPASSRLS
-// the way a deployment profile creates it. Per database because a role is a property of the
+// The unprivileged role is created per database and named after it, by db.Provision, which is
+// how an installation's migrate step creates it: a test runs as the role an installation runs
+// as, with its grants and nothing more. Per database because a role is a property of the
 // cluster and not of a database: one role shared by every test is a role that two packages
 // testing at once each drop while the other is using it, which fails as a dependency error
 // nobody reads as a shared name.
@@ -71,8 +72,11 @@ func Migrated(t *testing.T) string {
 	if len(name) > 60 {
 		name = name[:60]
 	}
+	// A role left by a run that never tidied up goes too, once the database that granted it
+	// something has, so that the role a test starts from is one it created.
 	for _, stmt := range []string{
 		fmt.Sprintf(`drop database if exists %s with (force)`, name),
+		`drop role if exists ` + name,
 		fmt.Sprintf(`create database %s`, name),
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
@@ -93,19 +97,8 @@ func Migrated(t *testing.T) string {
 		t.Fatal(err)
 	}
 	defer sc.Close(ctx)
-	if _, err := db.Migrate(ctx, sc); err != nil {
-		t.Fatalf("the schema could not be created: %s", err)
-	}
-	role := name
-	for _, stmt := range []string{
-		`drop role if exists ` + role,
-		`create role ` + role + ` login password 'test' nosuperuser nobypassrls`,
-		`grant usage on schema public to ` + role,
-		`grant select, insert, update, delete on all tables in schema public to ` + role,
-	} {
-		if _, err := sc.Exec(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
-			t.Fatalf("%s: %s", stmt, err)
-		}
+	if _, err := db.Provision(ctx, sc, name, "test"); err != nil {
+		t.Fatalf("the database could not be provisioned: %s", err)
 	}
 	return super
 }

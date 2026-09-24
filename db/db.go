@@ -54,7 +54,7 @@ func checkTheRoleCannotBypass(ctx context.Context, pool *pgxpool.Pool) error {
 			which = "holds BYPASSRLS"
 		}
 		return fmt.Errorf(
-			"db: this connection is %s and %s, so row level security does not apply to it and the namespace on every query path would be enforced nowhere: connect as a role created NOSUPERUSER NOBYPASSRLS, which is what the deployment profiles create. A superuser is for migrations and for nothing else",
+			"db: this connection is %s and %s, so row level security does not apply to it and the namespace on every query path would be enforced nowhere: connect as a role created NOSUPERUSER NOBYPASSRLS, which is the role Provision creates beside the migrations. A superuser is for migrations and for nothing else",
 			role, which)
 	}
 	return nil
