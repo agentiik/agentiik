@@ -12,9 +12,9 @@ import (
 //
 // "The key proves the machine": a rotation is signed with it, so a credential stolen without it
 // cannot be renewed, and a host whose key is gone is a new runner that joins again. It is under
-// /var/lib/agentiik rather than beside runner.env because the agent reads it and that is the one
-// tree the unit's ProtectSystem=strict leaves the agent, and it is owned by the agent's account
-// with mode 0600 because the agent is the one process that signs with it.
+// /var/lib/agentiik, where the decision put it, the one tree the unit's ProtectSystem=strict leaves
+// the agent to write in, and it is owned by the agent's account with mode 0600 because the agent
+// is the one process that signs with it.
 const KeyPath = "/var/lib/agentiik/runner.key"
 
 // hostKey is a keypair join generated, written the two ways it leaves memory: the private half as
