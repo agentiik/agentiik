@@ -580,3 +580,25 @@ func TestAStepLogIsGuardedByRunRead(t *testing.T) {
 	}
 	t.Fatal("the log stream is not served")
 }
+
+// A log shipped in more chunks than one read takes is sent whole and in order, the last chunk
+// included, before the stream lets go of it.
+func TestALogOfManyChunksIsSentWhole(t *testing.T) {
+	s := withStreams(t, quiet)
+	key, grant := s.dispatched(t, firstRow, 1, agk.Shard{}, 0, "succeeded")
+	const chunks = 40
+	for seq := 1; seq <= chunks; seq++ {
+		s.ship(t, key, grant, seq, seq, seq == chunks, "line "+strconv.Itoa(seq))
+	}
+	s.ended(t, "succeeded")
+
+	rd := s.open(t, "")
+	rd.expect(t, "dispatch", firstRow+"/0/0")
+	for seq := 1; seq <= chunks; seq++ {
+		rd.line(t, firstRow, seq, seq, "line "+strconv.Itoa(seq))
+	}
+	if end := rd.expect(t, "dispatch_end", ""); end["lines"] != float64(chunks) || end["final"] != true {
+		t.Errorf("the log ends as %v", end)
+	}
+	rd.expect(t, "end", "")
+}

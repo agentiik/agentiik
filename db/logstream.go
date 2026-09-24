@@ -74,12 +74,14 @@ type Dispatch struct {
 	FinalSeq  int
 }
 
-// StepLog reads where the log of one step stands, its dispatches in the order they were made,
-// which is the order of their identifiers: a task_id is minted when its row is, and a row is made
+// StepLog reads where the log of one step stands, and its dispatches in the order they were made,
+// from the one since names on where it names one, since a reader has let go of those before it.
+//
+// The order is that of their identifiers: a task_id is minted when its row is, and a row is made
 // when the evaluator hands the attempt out, so a dispatch made later sorts later and a reader that
 // has gone past one never finds another made before it. Sorted byte by byte, as a ULID sorts,
 // whatever collation the database was created with.
-func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step) (StepLog, error) {
+func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step, since string) (StepLog, error) {
 	var s StepLog
 	var runState, verdict string
 	err := n.tx.QueryRow(ctx, `
@@ -115,7 +117,8 @@ func (n *NS) StepLog(ctx context.Context, run agk.RunID, step agk.Step) (StepLog
 		from tasks t
 		left join task_logs l on l.namespace = t.namespace and l.task_id = t.id
 		where t.namespace = $1 and t.run_id = $2 and t.step = $3
-		order by t.id collate "C"`, n.namespace, string(run), string(step))
+		  and ($4 = '' or t.id collate "C" >= $4 collate "C")
+		order by t.id collate "C"`, n.namespace, string(run), string(step), since)
 	if err != nil {
 		return StepLog{}, fmt.Errorf("db: the tasks of step %s of run %s could not be read: %w", step, run, err)
 	}

@@ -153,7 +153,7 @@ func (s *Server) stepLog(w http.ResponseWriter, r *http.Request, who Principal, 
 	var state db.StepLog
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		state, err = ns.StepLog(ctx, run, step)
+		state, err = ns.StepLog(ctx, run, step, from.row)
 		return err
 	})
 	switch {
@@ -172,7 +172,7 @@ func (s *Server) stepLog(w http.ResponseWriter, r *http.Request, who Principal, 
 		fail(w, http.StatusGone, "the logs of that run are past the retention its workflow declared, and are deleted with it")
 		return
 	}
-	f := &follower{server: s, namespace: over.Namespace, run: run, step: step, done: map[string]bool{}, stopped: map[string]time.Time{}}
+	f := &follower{server: s, namespace: over.Namespace, run: run, step: step, stopped: map[string]time.Time{}}
 	if from.row != "" && !f.resume(state, from) {
 		fail(w, http.StatusBadRequest, "Last-Event-ID names no dispatch of this step, and a stream resumes from a position it gave")
 		return
@@ -233,32 +233,29 @@ type follower struct {
 	run       agk.RunID
 	step      agk.Step
 
-	// done are the dispatches the stream has let go of, and at the one it follows now: its
-	// dispatch event sent or not, the last chunk read whole, and the last line sent.
-	done      map[string]bool
+	// at is the dispatch the stream follows now, every one made before it let go of: its
+	// dispatch event sent or not, the last chunk read whole, the last line sent, and whether it
+	// was let go of too, which it is until a dispatch made after it is found.
 	at        string
 	announced bool
 	after     int
 	line      int
+	gone      bool
 
 	// stopped is when the stream first found a dispatch stopped with its log open, where its row
 	// says no moment it ended, which logSettling is counted from.
 	stopped map[string]time.Time
 }
 
-// resume places the stream where a reconnecting reader stood: every dispatch made before theirs
-// let go of, and theirs from the line after the one they had. It answers false for a dispatch the
-// step does not have.
+// resume places the stream where a reconnecting reader stood, given the step's dispatches from
+// theirs on: every dispatch made before theirs let go of, and theirs from the line after the one
+// they had. It answers false for a dispatch the step does not have.
 func (f *follower) resume(state db.StepLog, from position) bool {
-	for _, d := range state.Dispatches {
-		if d.Row == from.row {
-			f.at, f.announced, f.after, f.line = d.Row, true, max(from.seq-1, 0), from.line
-			return true
-		}
-		f.done[d.Row] = true
+	if len(state.Dispatches) == 0 || state.Dispatches[0].Row != from.row {
+		return false
 	}
-	clear(f.done)
-	return false
+	f.at, f.announced, f.after, f.line = from.row, true, max(from.seq-1, 0), from.line
+	return true
 }
 
 // stream sends the step's log until it is over, the reader goes, the API stops, or the reader may
@@ -329,83 +326,79 @@ func (f *follower) stream(ctx context.Context, out *eventStream, wake <-chan str
 // advance sends what the step's log holds past where the stream stands, dispatch after dispatch,
 // until it reaches one whose log may still grow. It answers whether the step's log is over, with
 // the step's verdict, and an error where the stream cannot go on.
+//
+// Where the step stands is read once, and the dispatches from the one the stream follows on, so
+// that a step of ten thousand dispatches costs a read of each once and not a read of all of them
+// for each. The chunks are read after it, which misses nothing: a log closed by then had every
+// chunk recorded by then, and one still open is waited for, or let go of for how it ended, which
+// no chunk read later can change.
 func (f *follower) advance(ctx context.Context, out *eventStream) (bool, agk.Verdict, error) {
-	for {
-		var state db.StepLog
-		var chunks []db.LogChunk
-		var head *db.Dispatch
-		err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
-			var err error
-			if state, err = ns.StepLog(ctx, f.run, f.step); err != nil {
-				return err
-			}
-			if head = f.next(state); head == nil {
-				return nil
-			}
-			after := 0
-			if head.Row == f.at {
-				after = f.after
-			}
-			chunks, err = ns.LogChunks(ctx, head.Row, after, logChunkBatch)
-			return err
-		})
-		switch {
-		case err != nil:
-			return false, 0, err
-		case state.Expired:
-			return false, 0, errors.New("api: the logs of the run went past their retention while a stream read them")
-		case head == nil:
-			return state.Over(), state.Verdict, nil
+	var state db.StepLog
+	err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		state, err = ns.StepLog(ctx, f.run, f.step, f.at)
+		return err
+	})
+	switch {
+	case err != nil:
+		return false, 0, err
+	case state.Expired:
+		return false, 0, errors.New("api: the logs of the run went past their retention while a stream read them")
+	}
+	for _, d := range state.Dispatches {
+		if d.Row == f.at && f.gone {
+			continue
 		}
-
-		if head.Row != f.at {
-			f.at, f.announced, f.after, f.line = head.Row, false, 0, 0
+		if d.Row != f.at {
+			f.at, f.announced, f.after, f.line, f.gone = d.Row, false, 0, 0, false
 		}
 		if !f.announced {
-			out.send("dispatch", position{row: head.Row}.id(), streamedDispatch{
-				TaskID: head.Row, IdempotencyKey: head.Task, Attempt: head.Attempt, Shard: head.Shard, Requeue: head.Requeue,
+			out.send("dispatch", position{row: d.Row}.id(), streamedDispatch{
+				TaskID: d.Row, IdempotencyKey: d.Task, Attempt: d.Attempt, Shard: d.Shard, Requeue: d.Requeue,
 			})
 			f.announced = true
 		}
-		for _, c := range chunks {
-			lines, err := ReadLogChunk(ctx, f.server.objects, c)
+		for {
+			var chunks []db.LogChunk
+			err := f.server.pool.In(ctx, f.namespace, func(ctx context.Context, ns *db.NS) error {
+				var err error
+				chunks, err = ns.LogChunks(ctx, d.Row, f.after, logChunkBatch)
+				return err
+			})
 			if err != nil {
 				return false, 0, err
 			}
-			for i, l := range lines {
-				n := c.FirstLine + i
-				if n <= f.line {
-					continue
+			for _, c := range chunks {
+				lines, err := ReadLogChunk(ctx, f.server.objects, c)
+				if err != nil {
+					return false, 0, err
 				}
-				out.send("line", position{row: head.Row, seq: c.Seq, line: n}.id(), streamedLine{
-					TaskID: head.Row, Line: n, At: l.At, Text: l.Text,
-				})
-				f.line = n
+				for i, l := range lines {
+					n := c.FirstLine + i
+					if n <= f.line {
+						continue
+					}
+					out.send("line", position{row: d.Row, seq: c.Seq, line: n}.id(), streamedLine{
+						TaskID: d.Row, Line: n, At: l.At, Text: l.Text,
+					})
+					f.line = n
+				}
+				f.after = c.Seq
 			}
-			f.after = c.Seq
+			if out.flush() != nil {
+				return false, 0, out.err
+			}
+			if len(chunks) < logChunkBatch {
+				break
+			}
 		}
-		if out.flush() != nil {
-			return false, 0, out.err
-		}
-		if len(chunks) == logChunkBatch {
-			continue
-		}
-		if !f.lettingGo(*head) {
+		if !f.lettingGo(d) {
 			return false, 0, nil
 		}
-		out.send("dispatch_end", "", streamedEnd{TaskID: head.Row, Lines: head.Lines, Truncated: head.Truncated, Final: head.FinalSeq != 0})
-		f.done[head.Row] = true
+		out.send("dispatch_end", "", streamedEnd{TaskID: d.Row, Lines: d.Lines, Truncated: d.Truncated, Final: d.FinalSeq != 0})
+		f.gone = true
 	}
-}
-
-// next is the first dispatch the stream has not let go of, in the order they were made.
-func (f *follower) next(state db.StepLog) *db.Dispatch {
-	for i := range state.Dispatches {
-		if !f.done[state.Dispatches[i].Row] {
-			return &state.Dispatches[i]
-		}
-	}
-	return nil
+	return state.Over(), state.Verdict, nil
 }
 
 // lettingGo says whether the stream is done with a dispatch whose chunks it has read as far as the
