@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -101,6 +102,25 @@ var ErrTaskHeld = errors.New("db: that task is held by another runner")
 // nobody's yet and some other runner of the pool should have it, so it is put back rather than
 // acknowledged.
 var ErrRunnerNotTaking = errors.New("db: that runner is draining or revoked, and takes no new task")
+
+// ErrPoolRefusesNamespace is a redemption of a task whose namespace the redeeming runner's pool does
+// not accept.
+//
+// No runner of that pool may ever run it, since what a pool accepts is the pool's and every one of
+// its runners carries it, so it is not put back for the next one: the redemption can never be
+// answered, and the runner reports that no container ran. The controller refuses to publish such a
+// task in the first place, so this is a pool whose policy changed while the task waited, or a grant
+// presented by a runner the task was never offered to.
+var ErrPoolRefusesNamespace = errors.New("db: that runner's pool does not accept the task's namespace")
+
+// ErrRunnerNarrowed is a redemption of a task whose namespace the redeeming runner's own narrowing,
+// AGK_RUNNER_NAMESPACES, leaves out.
+//
+// Separate from ErrPoolRefusesNamespace because the runner does the opposite with the message: the
+// pool accepts the namespace, so another runner of the pool may take the task, and it is put back
+// rather than reported. The runner checks its narrowing before it redeems; this is the API holding
+// it to the same list, sent at join, rather than trusting it to.
+var ErrRunnerNarrowed = errors.New("db: that runner narrows itself to namespaces that leave out the task's")
 
 // IssueGrant mints the grant for one task and records what it takes to check it.
 //
@@ -248,24 +268,49 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 	}
 
 	// "A redemption by a draining or revoked runner gets 403, binds nothing", since both take
-	// nothing new. What they already hold is not new: the holder asking again, after a lost
-	// answer or a restart, is finishing what it holds, which is what a drain and a grace are
-	// for, and refused it would put back a message nobody else may redeem and leave its task to
-	// be declared lost. So only a redemption that would bind is refused. It is read here, where
-	// the binding reads it again under the lock, so that a drain or a revocation that commits
-	// while a redemption is under way is obeyed and the secrets read in between go nowhere. The
-	// runner is read by what its row says of it, and the names this package is handed carry no
-	// promise of a row: the API hands it the runner a credential opened, which has one.
+	// nothing new, and so does one whose pool does not accept the run's namespace (422) or whose
+	// own narrowing leaves it out (403). What a runner already holds is not new: the holder asking
+	// again, after a lost answer or a restart, is finishing what it holds, which is what a drain
+	// and a grace are for, and refused it would put back a message nobody else may redeem and
+	// leave its task to be declared lost. It passed these checks when it bound the task. So only a
+	// redemption that would bind is refused. They are read here, where the binding reads them
+	// again under the lock, so that a drain or a revocation that commits while a redemption is
+	// under way is obeyed and the secrets read in between go nowhere. The runner is read by what
+	// its row says of it, and the names this package is handed carry no promise of a row: the API
+	// hands it the runner a credential opened, which has one.
 	if holder == nil {
-		var withdrawn bool
-		if err := w.tx.QueryRow(ctx,
-			`select exists (select 1 from runners where id = $1 and state <> 'ready')`, runner).
-			Scan(&withdrawn); err != nil {
-			return Redeemed{}, fmt.Errorf("db: the runner redeeming the grant could not be read: %w", err)
-		}
-		if withdrawn {
-			return Redeemed{}, ErrRunnerNotTaking
+		if err := w.mayTake(ctx, runner, namespace); err != nil {
+			return Redeemed{}, err
 		}
 	}
 	return Redeemed{Namespace: namespace, Row: id, Task: key, Scope: scope, ExpiresAt: expires}, nil
+}
+
+// mayTake holds a runner that would bind a task to what it may take: its standing first, then its
+// pool, then its own narrowing.
+//
+// In that order for a reason each. A draining or revoked runner settles nothing new, and a 422 would
+// have it report the task, which binds it. A namespace the pool refuses is one every runner of the
+// pool refuses, since a host's narrowing may only name namespaces its pool accepts, so it is
+// answered as never answerable rather than put back to go round the pool until its deadline.
+func (w *Wide) mayTake(ctx context.Context, runner, namespace string) error {
+	var state string
+	var accepted, narrowed []string
+	err := w.tx.QueryRow(ctx, `
+		select r.state, p.accepted_namespaces::text[], r.accepted_namespaces::text[]
+		from runners r join runner_pools p on p.name = r.pool
+		where r.id = $1`, runner).Scan(&state, &accepted, &narrowed)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("db: the runner redeeming the grant could not be read: %w", err)
+	case state != "ready":
+		return ErrRunnerNotTaking
+	case !(RunnerPool{AcceptedNamespaces: accepted}).Accepts(namespace):
+		return ErrPoolRefusesNamespace
+	case narrowed != nil && !slices.Contains(narrowed, namespace):
+		return ErrRunnerNarrowed
+	}
+	return nil
 }
