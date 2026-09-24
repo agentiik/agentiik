@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -50,9 +53,20 @@ import (
 // and is how TestMain knows it is one.
 const instanceVariable = "AGENTIIK_CONTROLLER_TEST_INSTANCE"
 
+// slowStopVariable makes a process of this test binary one that takes the first signal as the
+// controller does and then never finishes stopping.
+const slowStopVariable = "AGENTIIK_CONTROLLER_TEST_SLOW_STOP"
+
 func TestMain(m *testing.M) {
 	if raw := os.Getenv(instanceVariable); raw != "" {
 		os.Exit(instance(raw))
+	}
+	if os.Getenv(slowStopVariable) != "" {
+		ctx, _ := signalled()
+		fmt.Println("waiting")
+		<-ctx.Done()
+		fmt.Println("stopping")
+		select {}
 	}
 	os.Exit(m.Run())
 }
@@ -62,22 +76,23 @@ type instanceConfig struct {
 	Database, Bus, JWT, Seed, Objects string
 }
 
-// instance is the controller, as main runs it once the configuration is read.
+// instance is the controller, as main runs it once the configuration is read: started the one way
+// main starts it, and handed what reading would have given.
 func instance(raw string) int {
 	var s instanceConfig
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		fmt.Fprintf(os.Stderr, "the configuration a test handed over could not be read: %s\n", err)
 		return exitUsage
 	}
-	ctx, stop := signalled()
-	defer stop()
-	return start(ctx, config.Controller{
-		Database:    config.Database{URL: s.Database},
-		Bus:         config.Bus{URL: s.Bus, JWT: s.JWT, Seed: config.Secret(s.Seed)},
-		Objects:     s.Objects,
-		MaxRequeues: graph.DefaultMaxRequeues,
-		TaskCeiling: config.DefaultTaskCeiling,
-	}, os.Stderr)
+	return untilSignalled(func(ctx context.Context) int {
+		return start(ctx, config.Controller{
+			Database:    config.Database{URL: s.Database},
+			Bus:         config.Bus{URL: s.Bus, JWT: s.JWT, Seed: config.Secret(s.Seed)},
+			Objects:     s.Objects,
+			MaxRequeues: graph.DefaultMaxRequeues,
+			TaskCeiling: config.DefaultTaskCeiling,
+		}, os.Stderr)
+	})
 }
 
 // The workflow every run of these tests is of: normalize is ready at once and archive waits on
@@ -627,5 +642,191 @@ func TestTheProgramEndsWhenItsBusCredentialExpires(t *testing.T) {
 	}
 	if !strings.Contains(standing.String(), "standing by") || termOf(t, conn) != began {
 		t.Errorf("the controller whose credential expired was not standing by: the term went from %+v to %+v\n%s", began, termOf(t, conn), standing.String())
+	}
+}
+
+// The first SIGTERM is a stop asked for, and the program takes it. The second is somebody for whom
+// the way out is taking too long, and it ends the process as it would any other.
+func TestASecondSignalEndsAProcessStillStopping(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &output{}
+	cmd := exec.Command(self, "-test.run=^$")
+	cmd.Env = append(os.Environ(), slowStopVariable+"=1")
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() { cmd.Process.Kill() })
+
+	for _, want := range []string{"waiting", "stopping"} {
+		if want == "stopping" {
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+		}
+		eventually(t, 10*time.Second, "the process "+want, func() bool { return strings.Contains(out.String(), want) })
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGTERM {
+			t.Errorf("the second SIGTERM ended the process with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second SIGTERM did not end a process still stopping")
+	}
+}
+
+// The server is asked to probe every connection of the controller, so that a lock held by a
+// session whose controller was cut off without a reset is released within half a minute rather
+// than when the operating system's two hours are up. A URL that sets a keepalive of its own keeps
+// it.
+func TestTheServerProbesTheControllersConnections(t *testing.T) {
+	super := dbtest.Migrated(t)
+	for _, c := range []struct {
+		url, idle string
+	}{
+		{dbtest.Application(super), "10"},
+		{dbtest.Application(super) + "?application_name=agentiik-controller&tcp_keepalives_idle=42", "42"},
+	} {
+		conn, err := pgx.Connect(t.Context(), withKeepalives(c.url))
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings := map[string]string{}
+		for _, k := range keepalives {
+			var v string
+			if err := conn.QueryRow(t.Context(), "select current_setting($1)", k.name).Scan(&v); err != nil {
+				t.Fatal(err)
+			}
+			settings[k.name] = v
+		}
+		conn.Close(context.WithoutCancel(t.Context()))
+		if settings["tcp_keepalives_idle"] != c.idle || settings["tcp_keepalives_interval"] != "5" || settings["tcp_keepalives_count"] != "3" {
+			t.Errorf("a session opened on %s asks the server for %v", c.url, settings)
+		}
+	}
+}
+
+// partition stands between a controller and PostgreSQL and, once frozen, forwards nothing either
+// way while keeping every connection open: a network that stopped answering without a reset,
+// which neither end can tell from a slow one.
+type partition struct {
+	listener net.Listener
+	frozen   atomic.Bool
+}
+
+func withPartition(t *testing.T, target string) *partition {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &partition{listener: l}
+	var conns sync.WaitGroup
+	t.Cleanup(func() {
+		l.Close()
+		p.frozen.Store(false)
+		conns.Wait()
+	})
+	go func() {
+		for {
+			near, err := l.Accept()
+			if err != nil {
+				return
+			}
+			far, err := net.Dial("tcp", target)
+			if err != nil {
+				near.Close()
+				continue
+			}
+			conns.Add(2)
+			relay := func(to, from net.Conn) {
+				defer conns.Done()
+				defer to.Close()
+				defer from.Close()
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := from.Read(buf)
+					for p.frozen.Load() {
+						time.Sleep(10 * time.Millisecond)
+					}
+					if n > 0 {
+						if _, err := to.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}
+			go relay(far, near)
+			go relay(near, far)
+		}
+	}()
+	return p
+}
+
+// A leader whose database stops answering, with no reset to say so, stops leading within a few
+// polls rather than going on with every statement waiting on a network that does not answer, and
+// its way out is bounded as well: the unlock and the unlisten go on a connection nothing answers
+// on either.
+//
+// Asked to stop while cut off, before it has noticed, it stops as well, and says nothing went wrong.
+func TestALeaderCutOffFromItsDatabaseStops(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		stopped bool
+	}{{"noticing", false}, {"asked to stop", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			super := dbtest.Migrated(t)
+			u, err := url.Parse(dbtest.Application(super))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := withPartition(t, u.Host)
+			u.Host = p.listener.Addr().String()
+
+			b := withInstallationBus(t)
+			credential := b.controlPlane(t, "agentiik-controller")
+			var log output
+			configured := config.Controller{
+				Database: config.Database{URL: u.String()},
+				Bus:      config.Bus{URL: b.url, JWT: credential.JWT, Seed: config.Secret(credential.Seed)},
+				Objects:  t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour,
+			}
+			ctx, stop := context.WithCancel(t.Context())
+			defer stop()
+			ended := make(chan error, 1)
+			go func() { ended <- serve(ctx, configured, logger(&log)) }()
+			eventually(t, 30*time.Second, "the controller leading", func() bool {
+				return strings.Contains(log.String(), "leading")
+			})
+
+			p.frozen.Store(true)
+			if c.stopped {
+				stop()
+			}
+			select {
+			case err := <-ended:
+				switch {
+				case c.stopped && err != nil:
+					t.Errorf("asked to stop while cut off from its database, the controller ended with %v\n%s", err, log.String())
+				case !c.stopped && !errors.Is(err, controller.ErrLockLost):
+					t.Errorf("cut off from its database, the controller ended with %v\n%s", err, log.String())
+				}
+			case <-time.After(45 * time.Second):
+				t.Fatalf("the controller was still running 45s after its database stopped answering\n%s", log.String())
+			}
+		})
 	}
 }

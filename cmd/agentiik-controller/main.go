@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,17 +34,76 @@ const (
 const program = "agentiik-controller"
 
 func main() {
+	os.Exit(untilSignalled(func(ctx context.Context) int {
+		return run(ctx, os.Args[1:], nil, os.Stdout, os.Stderr)
+	}))
+}
+
+// untilSignalled runs fn with a context signalled makes, and answers its exit code. It is the one
+// way the program is started, which a test starts it through too.
+func untilSignalled(fn func(context.Context) int) int {
 	ctx, stop := signalled()
-	code := run(ctx, os.Args[1:], nil, os.Stdout, os.Stderr)
-	stop()
-	os.Exit(code)
+	defer stop()
+	return fn(ctx)
 }
 
 // signalled is done at the first SIGINT or SIGTERM: a person's interrupt, and what systemd and
 // docker stop send before they kill. Either is a stop asked for, and the lock is released on the
 // way out rather than left for the database to notice.
+//
+// Only the first is taken. The signals go back to their default once it has arrived, so that a
+// second one ends a process whose way out is taking too long, as a person pressing Ctrl-C twice
+// means it to.
 func signalled() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
+}
+
+// keepalives are the settings every connection of the controller asks its server for, as run-time
+// parameters of the session, unless the URL sets them itself.
+//
+// The lock is held by a session, and PostgreSQL releases it when it notices the session is gone.
+// A controller that died or was cut off without a reset leaves nothing on the wire to notice, and
+// the server's own default is the operating system's, which on Linux probes an idle connection
+// after two hours. For all that time no standby could take over, and every run would wait. With
+// these the server probes a silent session after ten seconds and drops it after three unanswered
+// probes five seconds apart, so a standby takes over within half a minute.
+var keepalives = []struct{ name, value string }{
+	{"tcp_keepalives_idle", "10"},
+	{"tcp_keepalives_interval", "5"},
+	{"tcp_keepalives_count", "3"},
+}
+
+// withKeepalives adds the keepalives to a PostgreSQL URL that does not already set them.
+//
+// Added to the text rather than through net/url, which drops a parameter holding a ; without a
+// word and would lose a setting the operator wrote. pgx takes a parameter it has no use for as a
+// run-time parameter of the session, which is how these reach the server.
+func withKeepalives(conn string) string {
+	_, query, _ := strings.Cut(conn, "?")
+	set := map[string]bool{}
+	for pair := range strings.SplitSeq(query, "&") {
+		key, _, _ := strings.Cut(pair, "=")
+		set[strings.TrimSpace(key)] = true
+	}
+	separator := "&"
+	switch {
+	case !strings.Contains(conn, "?"):
+		separator = "?"
+	case strings.HasSuffix(conn, "?") || strings.HasSuffix(conn, "&"):
+		separator = ""
+	}
+	for _, k := range keepalives {
+		if !set[k.name] {
+			conn += separator + k.name + "=" + k.value
+			separator = "&"
+		}
+	}
+	return conn
 }
 
 // run is the whole program: the arguments, the configuration, and the exit code. lookup reads the
@@ -143,7 +203,7 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		return err
 	}
 
-	pool, err := db.Open(work, c.Database.ConnString())
+	pool, err := db.Open(work, withKeepalives(c.Database.ConnString()))
 	if err != nil {
 		return ended(err)
 	}

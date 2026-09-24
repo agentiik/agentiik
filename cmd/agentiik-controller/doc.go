@@ -39,11 +39,20 @@
 // could not be decided is reported and left to the next sweep, as the sweep already treats one,
 // and a result that could not be recorded is reported and delivered again. A write refused by the
 // fence is a term that has passed to somebody else, and the listening connection, the result
-// consumer or the lock's own session failing is a controller that can no longer hear or decide.
-// Each of those ends the program rather than the term alone: the lock is released on the way out,
-// a standby takes over from the database, where the state lives, and the process's supervisor
-// starts it again as a standby. A controller that retried in place would be the partitioned former
-// holder the fence exists to refuse.
+// consumer or the lock's own session failing is a controller that can no longer hear or decide:
+// controller.Lead asks that session on every poll whether it still holds the lock. Each of those
+// ends the program rather than the term alone: the lock is released on the way out, a standby
+// takes over from the database, where the state lives, and the process's supervisor starts it
+// again as a standby. A controller that retried in place would be the partitioned former holder
+// the fence exists to refuse.
+//
+// A controller cut off from the database without a reset is the worst of these, because neither
+// end hears anything. Its own side notices within a few polls, as above, and what it sends on the
+// way out is bounded, so a stop asked for then still stops. The server's side is asked of the
+// server: every connection sets tcp_keepalives_idle, tcp_keepalives_interval and
+// tcp_keepalives_count, unless the URL sets them, so that PostgreSQL drops the silent session and
+// frees the lock within half a minute rather than the operating system's two hours, and a standby
+// takes over. A second SIGINT or SIGTERM ends a process whose way out takes too long.
 //
 // So does the control plane's bus credential running out, at the instant it does. The bus refuses
 // it from then on, and a controller left running would publish nothing and hear nothing while
@@ -58,7 +67,11 @@
 // # What it ships as
 //
 // A static binary, CGO_ENABLED=0, and an image, build/controller.Dockerfile, holding that same
-// file, the certificates it verifies the database and the bus with, and nothing else, run as a user
-// that is not root. static_test.go builds both and checks each property on what was built rather
+// file, the certificates it verifies the database and the bus with, and an empty
+// /var/lib/agentiik/objects for the object store's volume, run as a user that is not root and owns
+// that directory. static_test.go builds both and checks each property on what was built rather
 // than on the flags passed.
+//
+// The controller writes in the object store's directory as well as reading it, since it puts every
+// task's inputs there, so internal/config refuses a directory the program cannot write in.
 package main

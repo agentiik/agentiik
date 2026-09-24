@@ -36,7 +36,9 @@ require (
 	// than two readings of a specification. Hand-rolling a JWT for somebody else's verifier is
 	// the kind of clever that is wrong once and wrong for ever. Package internal/config reads
 	// the control plane's credential file and the account seed with it for the same reason:
-	// the file is in the format this library writes and the nats and nsc tools read.
+	// the file is in the format this library writes and the nats and nsc tools read. The tests
+	// of cmd/agentiik-controller write such a file with it, and sign the accounts of the bus
+	// they run on.
 	github.com/nats-io/jwt/v2 v2.8.2
 	// The NATS server, used by packages bus and bus/control and by cmd/agentiik-controller in
 	// tests alone, and never linked into anything this module ships. What a runner credential
@@ -48,7 +50,8 @@ require (
 	// the shared one before each of its tests.
 	github.com/nats-io/nats-server/v2 v2.15.0
 	// NATS, used by package bus alone, and in tests by bus/control, which publishes where a
-	// runner's credential would refuse to. The documentation names the broker and names the
+	// runner's credential would refuse to, and by cmd/agentiik-controller, which reads the
+	// streams the controllers it starts write. The documentation names the broker and names the
 	// two properties it is chosen for: "NATS JetStream, with WorkQueue retention, where a
 	// message is removed as soon as it has been consumed, which is precisely what work
 	// distribution needs", and pull consumers, so that "a runner asks for a batch of tasks
@@ -57,8 +60,8 @@ require (
 	// subject or a database table gives, and the deployment chapter substitutes SQS on one
 	// profile precisely because the contract this fills is narrow enough to state.
 	github.com/nats-io/nats.go v1.53.1
-	// The NATS key pairs, used by package bus, and in tests by package internal/config, which
-	// mints the credentials it reads. A user credential is an Ed25519 key pair and a JWT naming
+	// The NATS key pairs, used by package bus, and in tests by packages internal/config and
+	// cmd/agentiik-controller, which mint the credentials they read. A user credential is an Ed25519 key pair and a JWT naming
 	// its public half, and this is what mints one and what signs with an account key. It was
 	// already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
