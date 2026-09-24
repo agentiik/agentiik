@@ -28,11 +28,13 @@ require (
 	// the next caller; this driver pins one. It also takes parameters natively, which is
 	// what keeps a namespace a parameter and never a string interpolated into SQL.
 	github.com/jackc/pgx/v5 v5.11.0
-	// NATS credentials, used by package bus alone, to mint the "short-lived token minted by
-	// the API" that a runner reaches the bus with. This is the library the server verifies
-	// with, so the claims this module writes and the claims the far end reads are the same
-	// structure rather than two readings of a specification. Hand-rolling a JWT for somebody
-	// else's verifier is the kind of clever that is wrong once and wrong for ever.
+	// NATS credentials, used by package bus to mint the "short-lived token minted by the API"
+	// that a runner reaches the bus with. This is the library the server verifies with, so the
+	// claims this module writes and the claims the far end reads are the same structure rather
+	// than two readings of a specification. Hand-rolling a JWT for somebody else's verifier is
+	// the kind of clever that is wrong once and wrong for ever. Package internal/config reads
+	// the control plane's credential file and the account seed with it for the same reason:
+	// the file is in the format this library writes and the nats and nsc tools read.
 	github.com/nats-io/jwt/v2 v2.8.2
 	// The NATS server, used by package bus in tests alone, and never linked into anything
 	// this module ships. What a runner credential may do is a permission set an installation
@@ -50,9 +52,10 @@ require (
 	// subject or a database table gives, and the deployment chapter substitutes SQS on one
 	// profile precisely because the contract this fills is narrow enough to state.
 	github.com/nats-io/nats.go v1.53.1
-	// The NATS key pairs, used by package bus alone. A user credential is an Ed25519 key
-	// pair and a JWT naming its public half, and this is what mints one and what signs with
-	// an account key. It was already here as an indirect dependency of the client.
+	// The NATS key pairs, used by package bus, and in tests by package internal/config, which
+	// mints the credentials it reads. A user credential is an Ed25519 key pair and a JWT naming
+	// its public half, and this is what mints one and what signs with an account key. It was
+	// already here as an indirect dependency of the client.
 	github.com/nats-io/nkeys v0.4.16
 	// JSON Schema 2020-12, used by package schema, and in tests by packages bus and api,
 	// which hold what they put on the wire to the vendored wire.schema.json rather than to a
