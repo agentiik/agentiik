@@ -60,6 +60,11 @@ const provisionLock int64 = 0x6d696772617465
 // ends with exactly these whatever it held before: a role somebody widened by hand is narrowed
 // back, and a second call changes nothing.
 //
+// A role that owns the database or anything in it is refused before anything is applied, and the
+// refusal names what it owns. No revoke reaches an owner: the owner of a table may switch off its
+// row level security, and the owner of the database owns schema public and may drop
+// schema_migrations there.
+//
 // A password is set as a SCRAM verifier computed here, so the password itself never reaches
 // the server. Written into CREATE ROLE, it is statement text, and PostgreSQL logs statement
 // text whenever log_statement covers DDL and whenever a statement fails, which it does by
@@ -81,7 +86,8 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 		return nil, fmt.Errorf("db: the role name %q is %d bytes long, and PostgreSQL would cut it to %d and create a role the address does not name", role, len(role), maxIdentifier)
 	}
 	var itself bool
-	if err := admin.QueryRow(ctx, `select $1::text in (current_user, session_user)`, role).Scan(&itself); err != nil {
+	var self string
+	if err := admin.QueryRow(ctx, `select $1::text in (current_user, session_user), current_user::text`, role).Scan(&itself, &self); err != nil {
 		return nil, fmt.Errorf("db: the connection could not be asked which role it is: %w", err)
 	}
 	if itself {
@@ -92,6 +98,10 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 		return nil, fmt.Errorf("db: the connection could not wait for another provisioning of this database to end: %w", err)
 	}
 	defer admin.Exec(context.WithoutCancel(ctx), `select pg_advisory_unlock($1)`, provisionLock)
+
+	if err := refuseAnOwner(ctx, admin, role, self); err != nil {
+		return nil, err
+	}
 
 	ran, err := Migrate(ctx, admin)
 	if err != nil {
@@ -153,6 +163,33 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 		return ran, fmt.Errorf("db: the role %s could not be committed: %w", role, err)
 	}
 	return ran, nil
+}
+
+// refuseAnOwner answers an error naming what role owns in this database, the database included,
+// and nil when it owns nothing there. The ownership is read from pg_shdepend, where PostgreSQL
+// records it for every object that has an owner, whatever its kind.
+func refuseAnOwner(ctx context.Context, admin *pgx.Conn, role, self string) error {
+	rows, err := admin.Query(ctx, `
+		select pg_describe_object(d.classid, d.objid, d.objsubid)
+		  from pg_shdepend d, pg_database this
+		 where this.datname = current_database()
+		   and d.refclassid = 'pg_authid'::regclass
+		   and d.refobjid = (select oid from pg_roles where rolname = $1)
+		   and d.deptype = 'o'
+		   and (d.dbid = this.oid or (d.classid = 'pg_database'::regclass and d.objid = this.oid))
+		 order by 1`, role)
+	if err != nil {
+		return fmt.Errorf("db: the connection could not be asked what %s owns: %w", role, err)
+	}
+	owned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("db: the connection could not be asked what %s owns: %w", role, err)
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+	return fmt.Errorf("db: %s owns %s, and no revoke reaches an owner, which may drop what it owns or switch off its row level security: hand what it owns to the role that migrates, with REASSIGN OWNED BY %s TO %s run in this database, then provision again",
+		role, strings.Join(owned, ", "), pgx.Identifier{role}.Sanitize(), pgx.Identifier{self}.Sanitize())
 }
 
 // roleShape answers the verb and the attributes that give role the shape Provision promises:

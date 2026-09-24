@@ -398,6 +398,56 @@ func TestAPasswordOpensTheRoleHoweverItIsComposed(t *testing.T) {
 	}
 }
 
+// A role that owns the database, or anything in it, is refused before anything is applied. An
+// owner holds every privilege on what it owns whatever it is granted: the owner of the database
+// owns schema public and may drop schema_migrations there, and the owner of a table may switch
+// off its row level security. The refusal names what the role owns and how to hand it on.
+func TestProvisionRefusesAnOwnerAndAppliesNothing(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	conn := connect(t, super)
+
+	// The recipe most installations start from: the application's role owns its database.
+	for _, stmt := range []string{
+		`create role ` + role + ` login password 'test'`,
+		`alter database ` + role + ` owner to ` + role,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	_, err := Provision(ctx, conn, role, "test")
+	if err == nil {
+		t.Fatal("Provision took the role that owns the database")
+	}
+	for _, says := range []string{"owns database " + role, `REASSIGN OWNED BY "` + role + `"`} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %s", says, err)
+		}
+	}
+	var migrated bool
+	if err := conn.QueryRow(ctx, `select to_regclass('schema_migrations') is not null`).Scan(&migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated {
+		t.Error("a refused provisioning migrated the database")
+	}
+
+	// A table handed to the role after a provisioning that went well is refused the same way.
+	if _, err := conn.Exec(ctx, `alter database `+role+` owner to current_user`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `alter table runs owner to `+role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err == nil || !strings.Contains(err.Error(), "owns table runs") {
+		t.Errorf("Provision took a role that owns a table: %v", err)
+	}
+}
+
 // Every replica of the API runs migrate before it serves, and a rolling upgrade starts them
 // together. Provisionings at once take turns: none of them fails, and between them they apply
 // each migration once, whether everything is left to apply or nothing is.
