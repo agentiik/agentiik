@@ -35,6 +35,18 @@ import (
 // task is refused before any container exists.
 var ErrNotAsNamed = errors.New("runner: what was fetched for the task is not what the task names")
 
+// ErrNotRunnable is a task message that does not describe a task any runner could run: one that
+// contradicts itself, names its workflow, deadline, timeout or network in a way nothing reads, or
+// names a namespace no store can be opened for. Every runner reads it the same way, so nothing
+// fetched again or asked again changes it, and it is refused before any container exists.
+var ErrNotRunnable = errors.New("runner: the task message describes no task a runner can run")
+
+// notRunnable marks a refusal as ErrNotRunnable and says what the refusal says.
+type notRunnable struct{ err error }
+
+func (n notRunnable) Error() string   { return n.err.Error() }
+func (n notRunnable) Unwrap() []error { return []error{ErrNotRunnable, n.err} }
+
 // TaskOf is a task message read back as the graph.Task the controller wrote it from, with inputs,
 // the envelopes fetched for its input ports.
 //
@@ -238,10 +250,11 @@ func (a *Assembled) Remove() error {
 // each masked against it. The store reads through the redemption's URLs and writes under its one
 // upload policy, and nothing else.
 //
-// A refusal wraps ErrAnswerUnusable where the redemption does not answer the message, and
-// ErrNotAsNamed where what was fetched is not what was named. Anything else is a fetch that may
-// pass, and assembling again with the same redemption, whose URLs hold until the deadline, may get
-// past it without reading the secrets a second time.
+// A refusal wraps ErrAnswerUnusable where the redemption does not answer the message,
+// ErrNotAsNamed where what was fetched is not what was named, and ErrNotRunnable where the message
+// itself names no task a runner can run. Anything else is a fetch that may pass, and assembling
+// again with the same redemption, whose URLs hold until the deadline, may get past it without
+// reading the secrets a second time.
 func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) (*Assembled, error) {
 	if err := r.answers(m); err != nil {
 		return nil, fmt.Errorf("%w: task %s: %w", ErrAnswerUnusable, m.IdempotencyKey, err)
@@ -269,7 +282,7 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 	}
 	store, err := artifact.New(objects, m.Namespace, limits)
 	if err != nil {
-		return nil, fmt.Errorf("runner: task %s: %w", m.IdempotencyKey, err)
+		return nil, notRunnable{fmt.Errorf("runner: task %s: %w", m.IdempotencyKey, err)}
 	}
 
 	inputs, err := fetchInputs(ctx, objects, m, r, limits)
@@ -278,7 +291,10 @@ func Assemble(ctx context.Context, m bus.TaskMessage, r Redemption, o Assembly) 
 	}
 	t, err := TaskOf(m, inputs)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, ErrNotAsNamed) {
+			return nil, err
+		}
+		return nil, notRunnable{err}
 	}
 
 	dir, err := newTreeDir(o.WorkRoot, t.ID)

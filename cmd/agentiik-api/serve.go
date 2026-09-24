@@ -183,7 +183,9 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		pool.Close()
 	}
 
-	router, err := routes(s, pool, b, issuer, operator, log)
+	// The log streams end when the stop is asked for rather than when the grace runs out, so
+	// that their readers reconnect to another API at once.
+	router, err := routes(s, pool, b, issuer, operator, log, ctx.Done())
 	if err != nil {
 		closeAll()
 		return nil, err
@@ -191,9 +193,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 	return &installation{router: router, close: closeAll}, nil
 }
 
-// routes builds every route built so far on one router: runs and versions, the secret
-// declarations, the runners and their pools, the bus credential, and the built-in object store.
-func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, operator *operator, log *slog.Logger) (*api.Router, error) {
+// routes builds every route built so far on one router: runs and versions, the step log streams,
+// the secret declarations, the runners and their pools, the bus credential, and the built-in object
+// store. The log streams end when stopping closes.
+func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, operator *operator, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
 	rt, err := api.NewRouter(operator, operator.identify)
 	if err != nil {
 		return nil, err
@@ -229,7 +232,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 
-	if _, err := api.NewServer(rt, api.ServerOptions{Pool: pool, Versions: versions, Objects: objects, URLs: signed}); err != nil {
+	if _, err := api.NewServer(rt, api.ServerOptions{
+		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping,
+		Trouble: func(err error) { log.Warn("a log stream could not read back a chunk the API wrote", "error", err) },
+	}); err != nil {
 		return nil, err
 	}
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {

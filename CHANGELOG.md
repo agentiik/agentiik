@@ -126,6 +126,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `taskResult.usage` carries `cpu_seconds` and `max_rss_bytes` together or not at all, omitted where no sample was read, so `bus.Usage` holds them as pointers and a result carrying one without the other is refused.
 - The vendored wire says a stopped container reports the code its stop left, a runner reports 121 for refused outputs, and a task that did not succeed publishes no port.
 - `bus.TaskResult.Check` holds a result to what `Report` holds it to.
+- `Bus.Take` answers as soon as one task is there, with whatever else is already queued, rather than holding it until the batch fills or the wait runs out, and gives up its wait when its context ends.
+- `Taken.AgainAfter` puts a message back held off for a while, so a runner that would be refused it again does not take it straight back.
 - `bus.Route` chooses a task's pool from the pools it is given, and `bus.Publish` takes the pool rather than reading one off a `pool=` label, which `bus.PoolOf` did.
 - A task message leaves out a resource nothing decided, where it wrote `"cpu": ""`, `"memory": ""` and `"pids": 0`, which the wire refuses.
 
@@ -186,6 +188,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
 - `runner.Carrier` runs an assembled task and reports its ending as the wire's `taskResult` once `driver.Run` has returned and the trees are gone, never from the terminal event: the exit code wherever a container ran, ports and artifacts by digest (empty lists where it did not succeed), the log at `agk.NewLogURI` and the usage. A task that reached no container is reported `failed` and nothing else. `runner.EndingOf` reports a recorded ending for `Bus.Ended`.
 - A result is written under `<work root>/.results` before it is published and taken away once the bus has it, so one the bus did not take goes out with `Results.Flush`, after a restart too, and `Results.Keys` names its key for the heartbeat until then. A kept result of another runner, left by a host that joined again, is taken away.
+- `serve` takes work: it gets its bus credential from the API, publishes kept results, and takes from its pool only when it has room, as many tasks as `AGK_RUNNER_CONCURRENCY` less those it holds, each written down, redeemed, acknowledged, assembled, run and reported in the page's order. A task on a label the runner does not claim, or refused with 403, is put back held off for a second. `runner.Agent` takes the driver's `Endings`.
+- A redemption or fetch with no answer is tried again, from 1 s doubling to 30 s, until the deadline, then reported `timed_out` with no container ran; a 422, an unusable 200, a fetch that is not what was named, or a message no runner can run (`runner.ErrNotRunnable`) is reported `failed` with no container ran.
+- A task's `running` and `publishing` are published from a goroutine of their own, dropped rather than holding up the driver.
 
 ### Artifacts
 
@@ -213,6 +218,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Until access control arrives in v0.3.0, every route that needs a permission is refused.
 - A ninth permission, `secret:write`, declares and removes a namespace's secrets.
 - Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field, or anything after its document, is refused.
+- `GET /api/v1/runs/{run}/steps/{step}/logs` streams a step's log as server-sent events under `run:read`: each dispatch in the order it was made (`dispatch`, `line`, `dispatch_end`, and `gap` for a chunk that cannot be read back), its history then what its runner ships, woken by a `NOTIFY` on `db.LogChannel` from the shipment and a sweep every 5 s, and `end` once the step has its verdict or its run has ended. `Last-Event-ID` (`task_id/seq/line`) resumes; a reader who loses access or whose credential stops working is cut off within 30 s, and a stopping API ends its streams at once. Migration `0029_tasks_by_step.sql`.
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
