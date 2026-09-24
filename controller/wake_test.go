@@ -133,6 +133,51 @@ func TestTheSweepComesRoundWithNobodyAsking(t *testing.T) {
 	}
 }
 
+// And it comes round however busy the channel is. A sweep that waited for a quiet spell would
+// never come where some run is written every few seconds, and a notification missed there would
+// wait on it for ever: "the notification is a latency optimisation; the sweep is the correctness
+// guarantee."
+func TestTheSweepComesRoundWhileNotificationsKeepComing(t *testing.T) {
+	pool, _ := dbtest.Open(t)
+	wakes, stop := watching(t, pool, 300*time.Millisecond)
+	defer stop()
+	next(t, wakes, 10*time.Second, "the first sweep")
+
+	busy, quiet := context.WithCancel(t.Context())
+	still := make(chan struct{})
+	defer func() {
+		quiet()
+		<-still
+	}()
+	go func() {
+		defer close(still)
+		run := agk.RunID("01JMZ8V1P9C4XQ7K2N4D6F8H0A")
+		for busy.Err() == nil {
+			pool.In(busy, "finance", func(ctx context.Context, ns *db.NS) error {
+				return ns.NotifyRun(ctx, run)
+			})
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	notified := 0
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case w := <-wakes:
+			if w.Swept {
+				if notified == 0 {
+					t.Fatal("the sweep came round before any notification did, which proves nothing")
+				}
+				return
+			}
+			notified++
+		case <-deadline:
+			t.Fatalf("%d notifications in 10s and no sweep, on a sweep of 300ms", notified)
+		}
+	}
+}
+
 // A payload that is not a run identifier is not worth stopping for: the sweep finds the work
 // anyway, so it is reported as one.
 func TestAPayloadThatIsNotARunIsSweptInstead(t *testing.T) {

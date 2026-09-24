@@ -55,14 +55,18 @@ func (c *Controller) Watch(ctx context.Context, on func(context.Context, Wake) e
 			return err
 		}
 
+		// The sweep keeps a clock of its own, and a notification does not move it. A wait
+		// that started over on every notification would sweep only after a quiet spell, and
+		// on an installation where some run is written every few seconds that spell never
+		// comes: a notification missed there would wait on it for ever, and the sweep is
+		// the correctness guarantee only if it happens whatever else is heard.
+		next := time.Now().Add(sweep)
 		for {
-			// The wait is bounded by the sweep, so a quiet installation still sweeps
-			// and a busy one still sweeps on time. A notification arriving inside the
-			// window ends the wait early, which is the whole of what the channel buys.
-			waiting, stop := context.WithTimeout(ctx, sweep)
+			waiting, stop := context.WithDeadline(ctx, next)
 			note, err := conn.Conn().WaitForNotification(waiting)
 			stop()
 
+			swept := false
 			switch {
 			case err == nil:
 				run := agk.RunID(note.Payload)
@@ -73,7 +77,8 @@ func (c *Controller) Watch(ctx context.Context, on func(context.Context, Wake) e
 					if err := on(ctx, Wake{Swept: true}); err != nil {
 						return err
 					}
-					continue
+					swept = true
+					break
 				}
 				if err := on(ctx, Wake{Run: run}); err != nil {
 					return err
@@ -81,11 +86,17 @@ func (c *Controller) Watch(ctx context.Context, on func(context.Context, Wake) e
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
+			default:
+				return fmt.Errorf("controller: the listening connection failed: %w", err)
+			}
+			if !swept && !time.Now().Before(next) {
 				if err := on(ctx, Wake{Swept: true}); err != nil {
 					return err
 				}
-			default:
-				return fmt.Errorf("controller: the listening connection failed: %w", err)
+				swept = true
+			}
+			if swept {
+				next = time.Now().Add(sweep)
 			}
 		}
 	})

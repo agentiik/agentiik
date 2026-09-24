@@ -8,6 +8,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - One active controller, elected by a PostgreSQL advisory lock. Every write carries a fencing counter, so a partitioned former holder is refused.
 - Woken by `NOTIFY` when the API writes a run, and sweeping on an interval anyway.
+- The sweep keeps its own interval, which a notification does not reset, so a busy installation still sweeps on time.
 - Decides through the v0.1.0 evaluator rather than a scheduler of its own. The run stores the evaluator's state, so failover is a resume, and each write is refused if the row moved since it was read.
 - Envelopes are lifted out of that state into the object store and replaced by their digests.
 - A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
