@@ -164,13 +164,16 @@ jobs:
   # Then, on amd64, the daemon is set to userns-remap and serve runs past the floor. That is what
   # proves the three capabilities: cap_add leaves an account that is not root none, and the ones
   # the agent holds are the file capabilities the image set on it, which a multi-stage COPY has to
-  # have kept. The same run with no-new-privileges, which drops them at exec, is refused naming
-  # them, so the one that passed passed on the file's and not on anything else.
+  # have kept. The same image with the file capabilities removed, run the same way, is refused
+  # naming them, so the one that passed passed on the file's and not on anything else.
   #
   # The shell runs with pipefail, so no pipeline here ends in grep -q, which stops reading at its
   # first match and would fail the command writing to it with SIGPIPE.
   runner-image:
     runs-on: ubuntu-latest
+    # A serve that starts where it should have been refused runs until it is stopped, and every
+    # foreground one below is also held to two minutes.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -243,7 +246,7 @@ jobs:
             echo "$arch: agk-runner $version"
             echo "$version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' >/dev/null
 
-            if said=$(docker run --rm --platform linux/$arch $(compose_form) $image 2>&1); then
+            if said=$(timeout 120 docker run --rm --platform linux/$arch $(compose_form) $image 2>&1); then
               echo "serve started on a daemon that does not remap user namespaces:"; echo "$said"; exit 1
             fi
             echo "$said"
@@ -276,8 +279,16 @@ jobs:
           # finds it at the same path.
           sudo file /var/lib/agentiik/work/.bin/agk | tee /dev/stderr | grep x86-64 >/dev/null
 
-          if said=$(docker run --rm $(compose_form) --security-opt no-new-privileges $image 2>&1); then
-            echo "serve started with no-new-privileges, which drops the file capabilities:"; echo "$said"; exit 1
+          # The control: the same image with setcap -r on the agent. The builder is the daemon's own,
+          # which sees the image loaded above.
+          printf '%s\n' 'FROM alpine:3.21 AS strip' \
+            "COPY --from=$image /usr/local/bin/agk-runner /agk-runner" \
+            'RUN apk add --no-cache libcap-setcap && setcap -r /agk-runner' \
+            "FROM $image" \
+            'COPY --from=strip /agk-runner /usr/local/bin/agk-runner' \
+            | docker buildx build --builder default --load -t agentiik-test/runner:nocaps -
+          if said=$(timeout 120 docker run --rm $(compose_form) agentiik-test/runner:nocaps 2>&1); then
+            echo "serve started with no file capabilities, and the three were not held:"; echo "$said"; exit 1
           fi
           echo "$said"
           echo "$said" | grep 'lacks CAP_CHOWN' >/dev/null
