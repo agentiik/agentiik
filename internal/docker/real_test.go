@@ -230,8 +230,6 @@ func TestARealDaemonStopsAContainerWithTheGraceItWasGiven(t *testing.T) {
 	}
 }
 
-// localImage is a small image that is already on this machine, or a skip. Pulling one
-// would make this a test of somebody's registry.
 // TestARealDaemonPinsAPulledImageToWhatItsRegistryServes is what agk push does with a tag,
 // against the daemon on this machine and the registry behind the image: the digest the
 // daemon holds the image under, matched by repository although the daemon writes it in
@@ -262,6 +260,8 @@ func TestARealDaemonPinsAPulledImageToWhatItsRegistryServes(t *testing.T) {
 	}
 }
 
+// localImage is a small image that is already on this machine, or a skip. Pulling one
+// would make this a test of somebody's registry.
 func localImage(t *testing.T, c *docker.Client) string {
 	t.Helper()
 	for _, ref := range []string{"alpine:latest", "busybox:latest", "alpine", "busybox", "debian:stable-slim"} {
