@@ -9,6 +9,7 @@
     "task-result": "../wire.schema.json",
     "runner-registration": "../wire.schema.json",
     "runner-heartbeat": "../wire.schema.json",
+    "runner-rotation": "../wire.schema.json",
     "grant-redemption": "../wire.schema.json",
     "log-shipment": "../wire.schema.json",
     "runner-pool": "../wire.schema.json",
@@ -710,6 +711,21 @@
         {
           "file": "wire/invalid/runner-heartbeat-key-without-attempt.json",
           "rule": "a heartbeat lists idempotency keys, and a key without its attempt names no attempt at anything",
+          "refused_by": "schema"
+        }
+      ]
+    },
+    "runner-rotation": {
+      "valid": [
+        {
+          "file": "wire/valid/runner-rotation.json",
+          "covers": "a rotation as the agent makes it: the runner and the time signed by its key, answered with a new credential and its rotate_by"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/runner-rotation-credential-in-the-body.json",
+          "rule": "the credential a rotation renews is the bearer credential of the call and never a field of the request, which is closed",
           "refused_by": "schema"
         }
       ]
