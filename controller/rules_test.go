@@ -455,9 +455,10 @@ func stateOf(t *testing.T, co *Core) agk.RunState {
 	return e.State
 }
 
-// An exit code is recorded where a container exited, and where the evaluator gave a task it could
-// not build the code for invalid input. A failure that never reached a container has neither, and
-// recording the 0 its shard holds would be recording success.
+// An exit code is recorded where a container exited, a stopped one included, and where the
+// evaluator gave a task it could not build the code for invalid input. A failure or a stop that
+// never reached a container has neither, nor has a loss, and recording the 0 such a shard holds
+// would be recording success.
 func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
 	at := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
 	for _, c := range []struct {
@@ -470,7 +471,15 @@ func TestAnExitCodeIsRecordedWhereOneWasGiven(t *testing.T) {
 		{"a container that exited 0 and whose outputs could not be collected", graph.ShardState{Task: agk.TaskFailed, StartedAt: at}, ptr(0)},
 		{"a task the evaluator could not build", graph.ShardState{Task: agk.TaskFailed, ExitCode: 120}, ptr(120)},
 		{"a failure that never reached a container", graph.ShardState{Task: agk.TaskFailed}, nil},
-		{"a task stopped at its deadline", graph.ShardState{Task: agk.TaskTimedOut, ExitCode: 137, StartedAt: at}, nil},
+		{"a container that broke the output contract", graph.ShardState{Task: agk.TaskFailed, ExitCode: 121, StartedAt: at}, ptr(121)},
+		{"a container killed at its deadline after the grace", graph.ShardState{Task: agk.TaskTimedOut, ExitCode: 137, StartedAt: at}, ptr(137)},
+		{"a container that obeyed the stop at its deadline", graph.ShardState{Task: agk.TaskTimedOut, ExitCode: 143, StartedAt: at}, ptr(143)},
+		{"a container that obeyed a cancellation", graph.ShardState{Task: agk.TaskCancelled, ExitCode: 143, StartedAt: at}, ptr(143)},
+		{"a cancelled container that exited 0", graph.ShardState{Task: agk.TaskCancelled, StartedAt: at}, ptr(0)},
+		{"a task whose deadline passed before it reached a container", graph.ShardState{Task: agk.TaskTimedOut}, nil},
+		{"a task cancelled before it reached a container", graph.ShardState{Task: agk.TaskCancelled}, nil},
+		{"a lost task", graph.ShardState{Task: agk.TaskLost, StartedAt: at}, nil},
+		{"a stopped container its runner reported no code for", graph.ShardState{Task: agk.TaskTimedOut, StartedAt: at, NoExitCode: true}, nil},
 	} {
 		c.shard.Attempt = 1
 		got := taskOf(decidedRun, "normalize", c.shard).ExitCode

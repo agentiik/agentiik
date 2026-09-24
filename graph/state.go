@@ -104,6 +104,9 @@ type ShardState struct {
 	Task     agk.TaskState `json:"task"`
 	ExitCode int           `json:"exit_code,omitempty"`
 
+	// NoExitCode is Result's: the ending reported no exit code, which ExitCode's 0 cannot say.
+	NoExitCode bool `json:"no_exit_code,omitempty"`
+
 	// Ports is what this shard published, before the shards of the step are
 	// concatenated port by port into what the step publishes.
 	Ports map[agk.Port]agk.Envelope `json:"ports,omitempty"`

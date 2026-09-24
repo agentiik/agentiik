@@ -213,11 +213,25 @@ func (s *StopReason) UnmarshalText(text []byte) error {
 // dispatch before it was judged lost and handed out again: its loss has been heard, and
 // whatever its runner reports afterwards is the report of a runner the attempt stopped
 // waiting on, while the requeue is still out and still owed an answer.
+//
+// Reason is why a failure that no container explains happened, in words for a person: the
+// controller refusing to publish a task to a pool that does not accept its namespace, for
+// one. It becomes the step's reason where the failure ends the step and nothing gave the
+// step one first, since an exit code of 125 says whose account a failure is on and not what
+// it was.
 type Result struct {
 	Task     agk.TaskID    `json:"task"`
 	State    agk.TaskState `json:"state"`
 	ExitCode int           `json:"exit_code,omitempty"`
 	Requeue  int           `json:"requeue,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
+
+	// NoExitCode says the result reported no exit code at all, which the 0 of ExitCode cannot
+	// say. A stopped task whose container started may report none: a host answering a requeue
+	// from a record it kept before stops kept their code has none to give. The evaluator reads
+	// no code off a stopped task, so nothing is decided by it; it keeps the task's row from
+	// reading 0, the code of success.
+	NoExitCode bool `json:"no_exit_code,omitempty"`
 
 	Outputs map[agk.Port]agk.Envelope `json:"outputs,omitempty"`
 

@@ -159,16 +159,25 @@ func (g grants) recorded(t *testing.T, commit string, files map[string]api.PushF
 // joined puts a machine in the pool and answers its credential.
 func (g grants) joined(t *testing.T) string {
 	t.Helper()
+	return g.joinedTo(t, "dmz", nil)
+}
+
+// joinedTo puts a machine in a pool, narrowed to the namespaces given where there are any, and
+// answers its credential.
+func (g grants) joinedTo(t *testing.T, pool string, namespaces []string) string {
+	t.Helper()
 	var token db.JoinToken
 	if err := g.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		now := time.Now().UTC()
-		token, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Hour))
+		token, err = w.IssueJoinToken(ctx, pool, nil, "admin", now, now.Add(time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w, answer := call(t, g.handler, "POST", "/api/v1/runners", "", aMachine(token.Clear))
+	machine := aMachine(token.Clear)
+	machine.Namespaces = namespaces
+	w, answer := call(t, g.handler, "POST", "/api/v1/runners", "", machine)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("joining answered %d: %s", w.Code, w.Body)
 	}
@@ -512,7 +521,9 @@ func TestACredentialPastItsRotateByRedeemsNothing(t *testing.T) {
 
 // An installation with no secret provider holds nothing, and a task naming a secret fails in
 // front of somebody rather than mounting an empty file. That is also what an installation that
-// attached no store at all gets, since the runner half's options default to holding nothing.
+// attached no store at all gets, since the runner half's options default to holding nothing. It is
+// a 422 and binds nothing, since asking again will not find the secret: the runner reports that no
+// container ran, and the task ends then rather than at its deadline.
 func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 	for what, secrets := range map[string]api.Secrets{"NoSecrets": api.NoSecrets{}, "nothing attached": nil} {
 		t.Run(what, func(t *testing.T) {
@@ -521,11 +532,14 @@ func TestATaskNamingASecretNobodyHoldsFails(t *testing.T) {
 			clear, _, _ := g.dispatched(t, []string{"stripe"})
 
 			w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
-			if w.Code != http.StatusInternalServerError {
+			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("a secret nobody holds answered %d: %s", w.Code, w.Body)
 			}
 			if said, _ := answer["error"].(string); said == "" || !strings.Contains(said, "stripe") {
 				t.Errorf("the refusal does not name the secret: %v", answer)
+			}
+			if runner := g.bound(t); runner != nil {
+				t.Errorf("a secret nobody holds bound the task to %s", *runner)
 			}
 		})
 	}
@@ -540,16 +554,19 @@ func (unreadable) Value(_ context.Context, namespace, name string) ([]byte, erro
 }
 
 // A secret the store holds and could not read is told apart from one it does not hold. The runner
-// is told which secret and which of the two, and the store's reason goes to whoever runs the
-// installation, naming the task and the secret, since they are the one who can act on it.
+// is told which secret and which of the two, by its status as well as in words: one nobody holds is
+// never answerable (422), and one that could not be read may be read on the next attempt (500). The
+// store's reason goes to whoever runs the installation, naming the task and the secret, since they
+// are the one who can act on it.
 func TestWhyASecretWasNotGivenGoesToTheInstallation(t *testing.T) {
 	for what, c := range map[string]struct {
 		secrets    api.Secrets
+		status     int
 		says, not  string
 		reasonSays string
 	}{
-		"a secret nobody holds":             {api.NoSecrets{}, "is not held", "could not be read", "no secret of that name"},
-		"a secret held that cannot be read": {unreadable{}, "could not be read", "is not held", "keyring does not hold"},
+		"a secret nobody holds":             {api.NoSecrets{}, http.StatusUnprocessableEntity, "is not held", "could not be read", "no secret of that name"},
+		"a secret held that cannot be read": {unreadable{}, http.StatusInternalServerError, "could not be read", "is not held", "keyring does not hold"},
 	} {
 		t.Run(what, func(t *testing.T) {
 			g := withGrants(t, api.NoSecrets{})
@@ -566,7 +583,7 @@ func TestWhyASecretWasNotGivenGoesToTheInstallation(t *testing.T) {
 			clear, _, _ := g.dispatched(t, []string{"stripe"})
 
 			w, answer := call(t, rt, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
-			if w.Code != http.StatusInternalServerError {
+			if w.Code != c.status {
 				t.Fatalf("%s answered %d: %s", what, w.Code, w.Body)
 			}
 			said, _ := answer["error"].(string)
@@ -943,7 +960,8 @@ func TestAGrantAnswersTheTreeOfItsOwnVersion(t *testing.T) {
 
 // A redemption that cannot say what the task's repository is refuses, with a sentence, rather than
 // answering an empty tree: an empty /agk/repo is a directory that looks like a repository and is
-// not one. None of these is the runner's doing, and none of them binds the task to it.
+// not one. None of these is the runner's doing, and none of them binds the task to it. Each is a
+// 422, since asking again finds no more of the version than the first time did.
 func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 	g := withGrants(t, api.NoSecrets{})
 	credential := g.joined(t)
@@ -966,7 +984,7 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 	} {
 		clear := g.grantedFor(t, c.workflow, c.commit)
 		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
-		if w.Code != http.StatusInternalServerError {
+		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
 			continue
 		}
@@ -981,6 +999,54 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 			t.Errorf("%s bound the task to %s, and a runner told there is no tree has not taken it", c.name, *runner)
 		}
 	}
+}
+
+// "The API checks the pool's namespaces again at the redemption (422)", and a host's own narrowing,
+// AGK_RUNNER_NAMESPACES, gets 403, "so another runner of the pool takes the task". Neither reads a
+// secret or binds anything, which a forged redemption shows: a runner holding a grant it was never
+// offered, of a pool that does not run finance, or narrowed to leave finance out.
+func TestARedemptionOutsideThePoolOrTheHostsNamespacesBindsNothing(t *testing.T) {
+	store := &rotated{values: map[string]string{"finance/stripe": "sk_live_notreal"}}
+	g := withGrants(t, store)
+	if err := g.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: "ops", AcceptedNamespaces: []string{"team-ops"}, CreatedBy: "admin"}); err != nil {
+			return err
+		}
+		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "shared", AcceptedNamespaces: []string{"finance", "team-ops"}, CreatedBy: "admin"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, _ := g.dispatched(t, []string{"stripe"})
+
+	for _, c := range []struct {
+		name       string
+		pool       string
+		namespaces []string
+		status     int
+		says       string
+	}{
+		{"a runner of a pool that does not accept finance", "ops", nil, http.StatusUnprocessableEntity, "report that no container ran"},
+		{"a runner narrowed to leave finance out", "shared", []string{"team-ops"}, http.StatusForbidden, "put the message back"},
+	} {
+		credential := g.joinedTo(t, c.pool, c.namespaces)
+		w, answer := call(t, g.handler, "POST", "/api/v1/tasks/redeem", credential, asking(clear))
+		if w.Code != c.status {
+			t.Errorf("%s answered %d: %s", c.name, w.Code, w.Body)
+		}
+		if said, _ := answer["error"].(string); !strings.Contains(said, c.says) {
+			t.Errorf("%s was told %q", c.name, said)
+		}
+		if reads := store.read(); len(reads) != 0 {
+			t.Errorf("%s read %v from the store", c.name, reads)
+		}
+		if runner := g.bound(t); runner != nil {
+			t.Fatalf("%s bound the task to %s", c.name, *runner)
+		}
+	}
+
+	// The grant was good all along, for a runner of a pool that runs finance and a host whose
+	// narrowing keeps it.
+	g.redeemed(t, g.joinedTo(t, "shared", []string{"finance"}), asking(clear))
 }
 
 func readerOf(s string) *strings.Reader { return strings.NewReader(s) }

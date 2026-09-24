@@ -145,6 +145,8 @@ func answerOf(r bus.TaskResult) (controller.Answer, error) {
 	}
 	if r.ExitCode != nil {
 		a.Result.ExitCode = *r.ExitCode
+	} else {
+		a.Result.NoExitCode = true
 	}
 	for _, o := range r.Outputs {
 		// The reader held the digest to sha256: and sixty-four lowercase hexadecimal
