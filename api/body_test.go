@@ -184,6 +184,10 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 			Entry: "agentiik.yaml", Document: []byte("kind: Workflow\n"),
 			Includes:  map[string][]byte{"common.yaml": []byte(".brick: {}\n")},
 			Manifests: map[string][]byte{"ghcr.io/acme/agk-invoice:1": []byte("kind: Brick\n"), "ghcr.io/acme/empty:1": {}},
+			Images: map[string]string{
+				"ghcr.io/acme/agk-invoice:1": "ghcr.io/acme/agk-invoice@sha256:1ab74e66e7966eea770c1042664af5f550650f299ce00e02132ffa4fec5039cc",
+				"alpine:3.21":                "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d",
+			},
 			Tree: map[string]PushFile{
 				"agentiik.yaml":     {Content: []byte("kind: Workflow\n"), Mode: "0644"},
 				"scripts/render.sh": {Content: []byte{0xff, 0x00, '\n'}, Mode: "0755"},
@@ -251,6 +255,8 @@ func TestABodyIsReadClosed(t *testing.T) {
 		"a number in a list of strings":          {`{"labels":["zone=dmz",4]}`, new(Join)},
 		"a tree file written twice":              {`{"tree":{"a.sh":{"mode":"0644"},"a.sh":{"mode":"0755"}}}`, new(Push)},
 		"an include written twice":               {`{"includes":{"a.yaml":"","a.yaml":"eA=="}}`, new(Push)},
+		"an image resolved twice":                {`{"images":{"alpine:3.21":"alpine@sha256:a","alpine:3.21":"alpine@sha256:b"}}`, new(Push)},
+		"an image resolved to a list":            {`{"images":{"alpine:3.21":["alpine@sha256:a"]}}`, new(Push)},
 		"a tree file with a field nobody reads":  {`{"tree":{"a.sh":{"mode":"0644","owner":"root"}}}`, new(Push)},
 		"a tree file's mode written twice":       {`{"tree":{"a.sh":{"mode":"0644","mode":"0755"}}}`, new(Push)},
 		"content that is not base64":             {`{"tree":{"a.sh":{"content":"not base64!","mode":"0644"}}}`, new(Push)},
@@ -361,6 +367,9 @@ func TestACollectionPastItsCountIsTooLarge(t *testing.T) {
 		}, func() request { return new(Push) }, pushMaxBytes},
 		{"manifests", TreeMaxFiles, func(n int) string {
 			return entries(`{"manifests":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
+		}, func() request { return new(Push) }, pushMaxBytes},
+		{"images", TreeMaxFiles, func(n int) string {
+			return entries(`{"images":{`, n, func(i int) string { return fmt.Sprintf(`"i%d":""`, i) }) + `}}`
 		}, func() request { return new(Push) }, pushMaxBytes},
 		{"a pool's labels", namesMax, labels("labels"), func() request { return new(Pool) }, smallMaxBytes},
 		{"a pool's namespaces", namesMax, labels("accepted_namespaces"), func() request { return new(Pool) }, smallMaxBytes},

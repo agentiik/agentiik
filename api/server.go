@@ -110,6 +110,13 @@ type Push struct {
 	Includes  map[string][]byte `json:"includes,omitempty"`
 	Manifests map[string][]byte `json:"manifests,omitempty"`
 
+	// Images are the references the workflow names by tag, each with the digest agk push
+	// resolved it to, name@sha256:<hex>, which every run of the version names in its place.
+	// A tag is resolved where the image is, on the machine that built or pulled it, because
+	// the installation reaches no registry to do it with and a tag resolved at each run
+	// would be whatever it pointed at that day.
+	Images map[string]string `json:"images,omitempty"`
+
 	// Tree is the commit's tree, every file of it, as every step will see it under /agk/repo.
 	// It travels in the push because there is nowhere else it could come from yet: a version
 	// is a commit, and until the installation hosts the repository itself it holds no copy
@@ -137,6 +144,23 @@ func (p *Push) field(b *body, name string) error {
 		// anybody reviews, and without a count a push of a million empty manifests cost a
 		// million entries of a map before anything could refuse it.
 		return files(b, &p.Manifests, TreeMaxFiles, "the manifest of", fmt.Sprintf("this push carries more image manifests than the %d it may, one per image the workflow names", TreeMaxFiles))
+	case "images":
+		// One per image the workflow names, and bounded as the manifests are.
+		tooMany := fmt.Sprintf("this push resolves more images than the %d it may, one per image the workflow names by tag", TreeMaxFiles)
+		return b.object(TreeMaxFiles, tooMany, func(ref string) error {
+			if _, held := p.Images[ref]; held {
+				return twice("the image", ref)
+			}
+			var pinned string
+			if err := text(b, &pinned); err != nil {
+				return err
+			}
+			if p.Images == nil {
+				p.Images = map[string]string{}
+			}
+			p.Images[ref] = pinned
+			return nil
+		})
 	case "tree":
 		// Counted as the files arrive, so that a tree of too many is refused at the first
 		// one past the limit rather than once every one of them is an entry of a map.
@@ -318,10 +342,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	v := db.Version{
 		Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Parent: p.Parent,
 		Entry: p.Entry, Document: p.Document, Includes: p.Includes, Manifests: p.Manifests,
-		Tree: tree, Author: string(who), CreatedAt: s.now(),
+		Images: p.Images, Tree: tree, Author: string(who), CreatedAt: s.now(),
 	}
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
-	// push rather than discovered by the first run of it.
+	// push rather than discovered by the first run of it. That includes a tag no digest was
+	// resolved for, which is a push from an agk that resolves none.
 	if _, err := version.Build(v); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -337,6 +338,57 @@ func TestAVersionThatCannotBeRebuiltIsRefused(t *testing.T) {
 	w, _ = call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", empty)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a version with no document answered %d", w.Code)
+	}
+}
+
+// A push naming its images by tag carries the digest agk push resolved each to, and the version
+// is rebuilt naming the digest: what the controller dispatches from it is what the wire's imageRef
+// takes, and the same image whichever day it runs. A push carrying no digest for a tag is refused
+// before anything is stored, naming the tag.
+func TestAVersionRunsTheDigestsItsTagsWerePushedWith(t *testing.T) {
+	h, pool, _ := serving(t)
+	const tag = "ghcr.io/acme/agk-invoice:1.4.0"
+	document := strings.ReplaceAll(workflowDocument, image, tag)
+	m, err := brick.ParseManifest([]byte(brickManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := version.Capture(fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}, "agentiik.yaml", map[string]brick.Manifest{tag: m})
+	if err != nil {
+		t.Fatal(err)
+	}
+	push := api.Push{
+		Entry: v.Entry, Document: v.Document, Manifests: v.Manifests,
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
+	}
+
+	w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+anotherCommit, "alice", push)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), tag) || !strings.Contains(w.Body.String(), "agk push") {
+		t.Errorf("a push carrying no digest for its tag answered %d: %s", w.Code, w.Body)
+	}
+
+	push.Images = map[string]string{tag: image}
+	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", push); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	store, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.Graph(t.Context(), "finance", "monthly-invoicing", aCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range g.Steps() {
+		if st, _ := g.Step(step); st.Image != image {
+			t.Errorf("%s names %q, and its tag was pushed as %s", step, st.Image, image)
+		}
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		_, err := ns.Version(ctx, "monthly-invoicing", anotherCommit)
+		return err
+	}); !errors.Is(err, db.ErrNoVersion) {
+		t.Errorf("the refused push recorded a version: %v", err)
 	}
 }
 
