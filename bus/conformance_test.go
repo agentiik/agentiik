@@ -330,6 +330,7 @@ func TestAResultFromARunnerTheAPIMintedIsRead(t *testing.T) {
 	}
 	for what, wire := range map[string]string{
 		"a result's runner":             schema.Defs["taskResult"].Properties["runner"].Pattern,
+		"a progress message's runner":   schema.Defs["taskProgress"].Properties["runner"].Pattern,
 		"the runner a join is answered": schema.Defs["runnerRegistration"].Properties["response"].Properties["runner"].Pattern,
 	} {
 		if wire != runnerName.String() {

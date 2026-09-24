@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/graph"
@@ -46,17 +47,22 @@ func (q *Queue) Publish(ctx context.Context, d controller.Dispatch) error {
 // Stop asks for a task in flight to be stopped, as bus.Stop does and says why.
 func (q *Queue) Stop(ctx context.Context, s graph.Stop) error { return q.bus.Stop(ctx, s) }
 
-// Answers hands every result to fn until ctx is done, as the controller takes it.
+// Answers hands every result to fn, and every progress message to progress, until ctx is done, as
+// the controller takes them.
 //
-// It is bus.Reports with the controller's rules on top, and that says when a result is
+// It is bus.Reports with the controller's rules on top, and that says when a message is
 // acknowledged and when it comes round again. A result is handed on with its outputs as digests,
 // and fn returning an error that wraps controller.ErrNotAResult has it taken off the queue and said
 // out loud through the bus's Trouble, since no delivery would change it, where any other error
 // leaves it for a later delivery. So is one naming a runner other than the one whose subject it
-// came on, as controller.ErrNotTheHolder, for the reason bus.ResultSubject gives.
-func (q *Queue) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
+// came on, as controller.ErrNotTheHolder, for the reason bus.ResultSubject gives. A progress
+// message is held to the same two rules, by progress and by its subject.
+func (q *Queue) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error, progress func(context.Context, controller.Progress) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
+	}
+	if progress == nil {
+		return errors.New("bus: consuming results with nothing to hand progress to")
 	}
 	return q.bus.Reports(ctx, func(ctx context.Context, sender string, r bus.TaskResult) error {
 		a, err := answerOf(r)
@@ -69,15 +75,24 @@ func (q *Queue) Answers(ctx context.Context, fn func(context.Context, controller
 		if sender != a.Runner {
 			return bus.Drop(fmt.Errorf("%w: %w: the result of %s names %s and was published by %s", controller.ErrNotAResult, controller.ErrNotTheHolder, a.Result.Task, a.Runner, sender))
 		}
-		if err := fn(ctx, a); err != nil {
-			if errors.Is(err, controller.ErrNotAResult) {
-				// Readable, and still nothing a controller could ever record: it
-				// would be the same on every delivery, and the bus delivers
-				// without limit.
-				return bus.Drop(err)
-			}
-			return err
+		return dropping(fn(ctx, a))
+	}, func(ctx context.Context, sender string, m bus.TaskProgress) error {
+		p := controller.Progress{Task: agk.TaskID(m.IdempotencyKey), Row: m.TaskID, State: m.Progress, Runner: m.Runner}
+		// Taken as the word of the runner whose subject it came on or not at all, as a
+		// result is.
+		if sender != p.Runner {
+			return bus.Drop(fmt.Errorf("%w: %w: the progress of %s names %s and was published by %s", controller.ErrNotAResult, controller.ErrNotTheHolder, p.Task, p.Runner, sender))
 		}
-		return nil
+		return dropping(progress(ctx, p))
 	})
+}
+
+// dropping is what the controller answered, with a refusal no delivery would change made one the
+// bus takes off the queue: it would be the same on every delivery, and the bus delivers without
+// limit.
+func dropping(err error) error {
+	if errors.Is(err, controller.ErrNotAResult) {
+		return bus.Drop(err)
+	}
+	return err
 }

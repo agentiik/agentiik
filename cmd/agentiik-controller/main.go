@@ -272,8 +272,8 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 	}
 }
 
-// lead is one term: watching and sweeping on one side, taking results back on the other, until
-// the fence refuses a write, either of them fails, or ctx is done.
+// lead is one term: watching and sweeping on one side, taking results and progress back on the
+// other, until the fence refuses a write, either of them fails, or ctx is done.
 //
 // Each goes through the core of the term, and neither ends it for a run or a result it could not
 // handle. Watch returns whatever the function it calls returns, so a notification about one run
@@ -320,6 +320,20 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 				// Taken off the queue and said through the bus's Trouble.
 			default:
 				log.Warn("a result could not be recorded, and it is delivered again", "task", a.Result.Task, "runner", a.Runner, "error", err)
+			}
+			return err
+		}, func(ctx context.Context, p controller.Progress) error {
+			// Held to the fence as an answer is, and otherwise left to the bus: one
+			// refused is said through its Trouble, and any other error brings it round
+			// again, by when the task may have ended and it changes nothing.
+			err := core.Progress(ctx, p)
+			switch {
+			case err == nil, ctx.Err() != nil:
+			case errors.Is(err, db.ErrFenced):
+				cancel(err)
+			case errors.Is(err, controller.ErrNotAResult):
+			default:
+				log.Warn("a task's progress could not be recorded, and it is delivered again", "task", p.Task, "runner", p.Runner, "state", p.State, "error", err)
 			}
 			return err
 		})
