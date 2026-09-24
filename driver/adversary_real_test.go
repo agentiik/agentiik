@@ -194,6 +194,10 @@ func TestARealContainerOnTheInternalPostureHasNoWayOut(t *testing.T) {
 // machine's shell with stand-ins for its two tools, because what was wrong with it was the
 // script and not the network. A stand-in answers as the real tool would: 1 for a connection
 // that did not get out, 0 for one that did.
+//
+// Each connection gets out on its own in a case of its own. With only one of them, the other
+// line could be dropped from the probe, or never say what it found, and this would still pass
+// while the probe tried one way out where it claims two.
 func TestTheNoWayOutProbeTellsAMissingToolFromANetworkThatHeld(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -204,7 +208,8 @@ func TestTheNoWayOutProbeTellsAMissingToolFromANetworkThatHeld(t *testing.T) {
 		{name: "without wget", tools: map[string]int{"nc": 1}, code: 3, said: "NO wget IN THE IMAGE"},
 		{name: "without nc", tools: map[string]int{"wget": 1}, code: 3, said: "NO nc IN THE IMAGE"},
 		{name: "with both and no way out", tools: map[string]int{"wget": 1, "nc": 1}, code: 0},
-		{name: "with both and a way out", tools: map[string]int{"wget": 1, "nc": 0}, code: 0, said: "REACHED THE INTERNET"},
+		{name: "with both and wget getting out", tools: map[string]int{"wget": 0, "nc": 1}, code: 0, said: "REACHED THE INTERNET"},
+		{name: "with both and nc getting out", tools: map[string]int{"wget": 1, "nc": 0}, code: 0, said: "REACHED THE INTERNET"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
