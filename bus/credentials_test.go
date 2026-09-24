@@ -2,11 +2,11 @@ package bus
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -24,87 +24,26 @@ type authenticated struct {
 	issuer *Issuer
 }
 
-// withAccounts runs a server that trusts one operator and one account, with the features named
-// turned on.
+// withAccounts runs a server on the bus identity NewInstallation writes, with the features named
+// turned on, and an Issuer holding the account seed it wrote for the API. So every test here holds
+// the credentials the API mints to a server configured the way an installation's is, rather than to
+// one a test built for itself.
 func withAccounts(t *testing.T, features ...string) authenticated {
 	t.Helper()
-	operator, err := nkeys.CreateOperator()
+	in, err := NewInstallation(t.TempDir(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	operatorPublic, _ := operator.PublicKey()
-
-	account, _ := nkeys.CreateAccount()
-	accountPublic, _ := account.PublicKey()
-	accountSeed, _ := account.Seed()
-	claims := jwt.NewAccountClaims(accountPublic)
-	claims.Name = "agentiik"
-	claims.Limits.JetStreamLimits.DiskStorage = -1
-	claims.Limits.JetStreamLimits.MemoryStorage = -1
-	accountJWT, err := claims.Encode(operator)
+	url := serveInstallation(t, in, features...)
+	seed, err := os.ReadFile(in.AccountSeed)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// JetStream refuses to start without a system account, which is a thing an operator
-	// configures and not a thing this package has an opinion about.
-	system, _ := nkeys.CreateAccount()
-	systemPublic, _ := system.PublicKey()
-	systemClaims := jwt.NewAccountClaims(systemPublic)
-	systemClaims.Name = "SYS"
-	systemJWT, err := systemClaims.Encode(operator)
+	issuer, err := NewIssuer(strings.TrimSpace(string(seed)), url)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	operatorClaims := jwt.NewOperatorClaims(operatorPublic)
-	operatorClaims.Name = "agentiik"
-	operatorClaims.SystemAccount = systemPublic
-	operatorJWT, err := operatorClaims.Encode(operator)
-	if err != nil {
-		t.Fatal(err)
-	}
-	trusted, err := jwt.DecodeOperatorClaims(operatorJWT)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resolver := &natsserver.MemAccResolver{}
-	for public, encoded := range map[string]string{accountPublic: accountJWT, systemPublic: systemJWT} {
-		if err := resolver.Store(public, encoded); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	flags := map[string]bool{}
-	for _, f := range features {
-		flags[f] = true
-	}
-	server, err := natsserver.NewServer(&natsserver.Options{
-		Port:             -1,
-		JetStream:        true,
-		StoreDir:         t.TempDir(),
-		TrustedOperators: []*jwt.OperatorClaims{trusted},
-		AccountResolver:  resolver,
-		SystemAccount:    systemPublic,
-		NoLog:            true,
-		NoSigs:           true,
-		FeatureFlags:     flags,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go server.Start()
-	if !server.ReadyForConnections(10 * time.Second) {
-		t.Fatal("the server did not come up")
-	}
-	t.Cleanup(server.Shutdown)
-
-	issuer, err := NewIssuer(string(accountSeed), server.ClientURL())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authenticated{url: server.ClientURL(), issuer: issuer}
+	return authenticated{url: url, issuer: issuer}
 }
 
 func TestARunnerTakesItsOwnWorkAndCanDoNothingElse(t *testing.T) {
