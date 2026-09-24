@@ -167,8 +167,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		return nil, err
 	}
 	// The API's connection to the bus creates the streams, which it would otherwise wait for
-	// the controller to, and each pool's consumer when a runner of that pool first asks for a
-	// credential, since a runner may create neither.
+	// the controller to, and each pool's consumer, since a runner may create neither: every
+	// pool's here, the default pool the installation was migrated with among them, and a new
+	// pool's when it is created. Never when a runner asks for its bus credential, so that
+	// asking still works once this connection's own credential has expired.
 	b, err := bus.Open(ctx, bus.Options{
 		URL:         s.Bus.URL,
 		Name:        program + " " + instanceName(os.Getpid()),
@@ -181,6 +183,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 	closeAll := func() {
 		b.Close()
 		pool.Close()
+	}
+	if err := api.ReadyQueues(ctx, pool, b); err != nil {
+		closeAll()
+		return nil, err
 	}
 
 	router, err := routes(s, pool, b, issuer, operator, log)
@@ -278,13 +284,12 @@ func sleep(ctx context.Context, d time.Duration) bool {
 // passes it, until ctx is done.
 //
 // The API goes on serving past it, though what it serves narrows. Its bus connection is refused
-// from then on, and every request for a runner's bus credential makes its pool's consumer ready
-// on that connection first, so each is answered 500: a runner keeps the bus credential it holds,
-// which is signed with the account seed and not with this one, until that expires within the
-// hour, and loses the bus then. Its heartbeats are still heard throughout. An API that ended
-// would stop those too, and the controller's first sweep after a restart would declare lost every
-// task in flight, where one that goes on leaves the tasks to finish if the credential is renewed
-// within the hour.
+// from then on, so a runner pool can no longer be created, since its consumer is made ready on that
+// connection. A runner is still given its bus credential, which is signed with the account seed
+// and not with this one, so the runners keep the bus and finish what they hold, and their
+// heartbeats are still heard. An API that ended would stop both, and the controller's first sweep
+// after a restart would declare lost every task in flight. The controller holds the same
+// credential and ends, so nothing new is dispatched until it is renewed.
 func watchCredential(ctx context.Context, expires time.Time, log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
 	if expires.IsZero() {
 		return
@@ -295,7 +300,7 @@ func watchCredential(ctx context.Context, expires time.Time, log *slog.Logger, n
 		var next time.Duration
 		switch {
 		case left <= 0:
-			log.Error("the control plane's bus credential has expired, and the bus refuses it: no runner is given a bus credential until it is renewed, so each loses the bus when the one it holds runs out, within the hour, and the controller, which holds the same credential, ends", "expired", expires.UTC().Format(time.RFC3339), "renew", renew)
+			log.Error("the control plane's bus credential has expired, and the bus refuses it: the controller, which holds the same credential, ends, so nothing is dispatched until it is renewed, and no runner pool can be created, while the runners are still given their bus credentials and finish what they hold", "expired", expires.UTC().Format(time.RFC3339), "renew", renew)
 			return
 		case left <= credentialWarning:
 			log.Warn("the control plane's bus credential expires soon", "expires", expires.UTC().Format(time.RFC3339), "left", left.Round(time.Minute).String(), "renew", renew)

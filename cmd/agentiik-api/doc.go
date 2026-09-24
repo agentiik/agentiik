@@ -25,19 +25,19 @@
 //
 // It reads its environment through config.ReadAPI, then parses the master key and checks the env
 // prefixes, which only the API may do; every setting that refuses the start is named on the same
-// start, and nothing is opened. It then opens the database as the application role, connects to
-// the bus with the control plane's credential, which creates the streams, and serves every route
-// built so far on AGK_LISTEN: runs and versions, cancelling a run, the secret declarations, the
-// runners, their pools and join tokens, the bus credential, and the built-in object store at
-// /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be a second way to say what
-// the environment says.
+// start, and nothing is opened. It then opens the database as the application role, connects to the
+// bus with the control plane's credential, which creates the streams and every runner pool's
+// consumer, and serves every route built so far on AGK_LISTEN: runs and versions, cancelling a run,
+// the secret declarations, the runners, their pools and join tokens, the bus credential, and the
+// built-in object store at /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be
+// a second way to say what the environment says.
 //
 // At SIGINT or SIGTERM it stops taking connections and finishes the requests being answered, for up
 // to thirty seconds, then cuts what is left.
 //
 // The control plane's bus credential expires. From fourteen days before, the API says so once a
 // day, and says so again when it has; it goes on serving past it, for the reason watchCredential
-// gives, but gives no runner a bus credential, so every runner loses the bus within the hour.
+// gives, and still gives runners their bus credentials, but creates no runner pool.
 //
 // # The interim operator
 //
