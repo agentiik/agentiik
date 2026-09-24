@@ -2,9 +2,12 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"io"
+	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +16,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/internal/dbtest"
 )
 
@@ -72,7 +76,7 @@ func (g grants) logged(t *testing.T) (db.TaskLog, []string) {
 	}
 	var texts []string
 	for _, c := range chunks {
-		lines, err := api.ReadLogChunk(t.Context(), g.objects, c.Key)
+		lines, err := api.ReadLogChunk(t.Context(), g.objects, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -294,6 +298,7 @@ func TestAChunkThatIsNotOneIsRefused(t *testing.T) {
 		"empty and not the last":     chunk(func(c map[string]any) { c["lines"] = []any{} }),
 		"counted from 0":             chunk(func(c map[string]any) { c["seq"] = 0 }),
 		"first, beginning at line 2": chunk(func(c map[string]any) { c["first_line"] = 2 }),
+		"beginning past any line":    chunk(func(c map[string]any) { c["seq"], c["first_line"] = 2, int64(math.MaxInt64) }),
 		"with no key":                chunk(func(c map[string]any) { delete(c, "idempotency_key") }),
 		"with a key that is not one": chunk(func(c map[string]any) { c["idempotency_key"] = "render/1" }),
 		"with a line saying no at":   chunk(func(c map[string]any) { c["lines"] = []any{map[string]any{"text": "one"}} }),
@@ -404,20 +409,18 @@ func TestThePurgeStillFindsTheLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expired) != 1 || expired[0].Task != grantTaskRow || expired[0].URI != uri || len(expired[0].Keys) != 2 {
+	if len(expired) != 1 || expired[0].Task != grantTaskRow || expired[0].URI != uri {
 		t.Fatalf("the purge found %+v", expired)
 	}
-	_, held := g.logged(t)
-	for i, key := range expired[0].Keys {
-		if _, err := api.ReadLogChunk(t.Context(), g.objects, key); err != nil {
-			t.Errorf("the purge was handed %s, which is not a chunk of the log: %s", key, err)
-		}
-		if !strings.Contains(key, "/"+grantTaskRow+"/") || !strings.HasPrefix(key, "finance/logs/"+grantRun+"/") {
-			t.Errorf("chunk %d is kept at %s", i+1, key)
+	var indexed []string
+	for _, c := range chunksOf(t, g) {
+		indexed = append(indexed, c.Key)
+		if !strings.HasPrefix(c.Key, "finance/logs/"+grantRun+"/"+grantRun+"%2Frender%2F1/"+grantTaskRow+"/") {
+			t.Errorf("chunk %d is kept at %s", c.Seq, c.Key)
 		}
 	}
-	if len(held) != 2 {
-		t.Errorf("the log holds %q", held)
+	if !slices.Equal(expired[0].Keys, indexed) || len(indexed) != 2 {
+		t.Errorf("the purge was handed %q, and the log is kept at %q", expired[0].Keys, indexed)
 	}
 
 	if n, err := g.pool.LogsPurged(t.Context(), expired); err != nil || n != 1 {
@@ -431,38 +434,36 @@ func TestThePurgeStillFindsTheLog(t *testing.T) {
 	}
 }
 
-// A reader follows the index to the chunks and takes from each only the bytes its key was written
-// for, so an object that holds anything else is refused rather than read as the log.
+// A reader follows the index to the chunks and takes from each only the bytes it was written with,
+// so an object that holds anything else is refused rather than read as the log.
 func TestAChunkIsReadBackOnlyAsItWasWritten(t *testing.T) {
 	g := withGrants(t, held{})
 	credential, grant := g.holding(t)
 	g.ship(t, credential, grant, aChunk(1, 1, false, "one"))
-	keys := chunkKeys(t, g)
-	if len(keys) != 1 {
-		t.Fatalf("the log is indexed as %q", keys)
+	chunks := chunksOf(t, g)
+	if len(chunks) != 1 {
+		t.Fatalf("the log is indexed as %+v", chunks)
 	}
-	if err := g.objects.Put(t.Context(), keys[0], strings.NewReader(`{"at":"2026-09-10T06:42:31Z","text":"not one"}`+"\n")); err != nil {
+	if err := g.objects.Put(t.Context(), chunks[0].Key, strings.NewReader(`{"at":"2026-09-10T06:42:31Z","text":"not one"}`+"\n")); err != nil {
 		t.Fatal(err)
 	}
-	if lines, err := api.ReadLogChunk(t.Context(), g.objects, keys[0]); err == nil {
+	if lines, err := api.ReadLogChunk(t.Context(), g.objects, chunks[0]); err == nil {
 		t.Errorf("a chunk holding other bytes was read as %v", lines)
 	}
 }
 
-// chunkKeys are the objects the task's log is indexed at, in order.
-func chunkKeys(t *testing.T, g grants) []string {
+// chunksOf is the chunks the task's log is indexed at, in order.
+func chunksOf(t *testing.T, g grants) []db.LogChunk {
 	t.Helper()
-	var keys []string
+	var chunks []db.LogChunk
 	if err := g.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-		_, chunks, err := ns.TaskLog(ctx, grantTaskRow)
-		for _, c := range chunks {
-			keys = append(keys, c.Key)
-		}
+		var err error
+		_, chunks, err = ns.TaskLog(ctx, grantTaskRow)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return keys
+	return chunks
 }
 
 // Shipments of one log arriving at once are taken one after the other, so a chunk a runner retried
@@ -497,4 +498,176 @@ func TestOneChunkShippedManyTimesAtOnceIsWrittenOnce(t *testing.T) {
 	if l, lines := g.logged(t); l.Lines != 3 || !slices.Equal(lines, []string{"zero", "one", "two"}) {
 		t.Errorf("the log stands at %+v holding %q", l, lines)
 	}
+}
+
+// failingAfter is a store that writes an object and then says it could not, which is a transaction
+// failing after the write as far as the log is concerned.
+type failingAfter struct{ artifact.Objects }
+
+func (f failingAfter) Put(ctx context.Context, key string, r io.Reader) error {
+	if err := f.Objects.Put(ctx, key, r); err != nil {
+		return err
+	}
+	return errors.New("the connection dropped after the write")
+}
+
+// expire ends the run's retention, as the controller does once the run has finished and its
+// retain has run out.
+func (g grants) expire(t *testing.T) {
+	t.Helper()
+	if _, err := dbtest.Superuser(t, g.super).Exec(t.Context(), `
+		update runs set started_at = now() - interval '2 days', finished_at = now() - interval '1 day',
+		                expires_at = now() - interval '1 second'
+		where id = $1`, grantRun); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An object written for a chunk whose shipment then failed, and which the runner never ships again,
+// is still handed to the purge: its key was recorded before it was written.
+func TestAnObjectAFailedShipmentWroteIsStillPurged(t *testing.T) {
+	g := withRunnerOptions(t, func(o *api.RunnerOptions) { o.Objects = failingAfter{o.Objects} })
+	credential, grant := g.holding(t)
+	if w, _ := shipped(t, g.handler, credential, grant, aChunk(1, 1, false, "lost")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("a chunk the store failed answered %d: %s", w.Code, w.Body)
+	}
+	if chunks := chunksOf(t, g); len(chunks) != 0 {
+		t.Fatalf("a chunk that failed is indexed: %+v", chunks)
+	}
+	g.expire(t)
+	expired, err := g.pool.ExpiredLogs(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || len(expired[0].Keys) != 1 || expired[0].URI != "" {
+		t.Fatalf("the purge found %+v", expired)
+	}
+	if found, err := g.objects.Has(t.Context(), expired[0].Keys[0]); err != nil || !found {
+		t.Errorf("the purge was handed %s, which holds nothing: %v", expired[0].Keys[0], err)
+	}
+	if n, err := g.pool.LogsPurged(t.Context(), expired); err != nil || n != 1 {
+		t.Errorf("the purge confirmed %d: %v", n, err)
+	}
+}
+
+// holding is a store that holds every write until it is let go, the moment a purge claiming the log
+// would lose the object being written.
+type holding struct {
+	artifact.Objects
+	entered, release chan struct{}
+}
+
+func (h holding) Put(ctx context.Context, key string, r io.Reader) error {
+	h.entered <- struct{}{}
+	<-h.release
+	return h.Objects.Put(ctx, key, r)
+}
+
+// A log being written to is not claimed by the purge until the chunk and its object are recorded,
+// and then it is, the new object with it.
+func TestThePurgeWaitsForAChunkBeingWritten(t *testing.T) {
+	h := holding{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	g := withRunnerOptions(t, func(o *api.RunnerOptions) { h.Objects = o.Objects; o.Objects = h })
+	credential, grant := g.holding(t)
+	go func() { <-h.entered; h.release <- struct{}{} }()
+	g.ship(t, credential, grant, aChunk(1, 1, false, "one"))
+
+	done := make(chan int)
+	go func() {
+		w, _ := shipped(t, g.handler, credential, grant, aChunk(2, 2, false, "two"))
+		done <- w.Code
+	}()
+	<-h.entered
+	g.expire(t)
+	expired, err := g.pool.ExpiredLogs(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 0 {
+		t.Errorf("the purge claimed a log while a chunk of it was being written: %+v", expired)
+	}
+	h.release <- struct{}{}
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("the chunk being written answered %d", code)
+	}
+	expired, err = g.pool.ExpiredLogs(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 1 || len(expired[0].Keys) != 2 {
+		t.Errorf("once written, the purge found %+v", expired)
+	}
+}
+
+// The purge takes a log written in many chunks a batch of objects at a time, and the task keeps
+// naming its log until the last of them is gone.
+func TestThePurgeTakesALogABatchAtATime(t *testing.T) {
+	g := withGrants(t, held{})
+	credential, grant := g.holding(t)
+	for i := 1; i <= 3; i++ {
+		g.ship(t, credential, grant, aChunk(i, i, false, "line"))
+	}
+	g.expire(t)
+	for round := 1; round <= 3; round++ {
+		expired, err := g.pool.ExpiredLogs(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(expired) != 1 || len(expired[0].Keys) != 1 {
+			t.Fatalf("round %d of the purge found %+v", round, expired)
+		}
+		n, err := g.pool.LogsPurged(t.Context(), expired)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gone := round == 3; (n == 1) != gone {
+			t.Errorf("round %d confirmed %d logs gone whole", round, n)
+		}
+	}
+	if again, err := g.pool.ExpiredLogs(t.Context(), 0); err != nil || len(again) != 0 {
+		t.Errorf("a log purged whole is found again: %+v, %v", again, err)
+	}
+}
+
+// A runner left at its own caps never has a line dropped here: not the last line it kept, and not
+// the one the driver writes after it to say why the log stops.
+func TestARunnerAtItsDefaultCapsLosesNothingHere(t *testing.T) {
+	policy := driver.DefaultPolicy()
+	marker := "driver: the log reached the " + strconv.FormatInt(policy.LogMaxBytes, 10) + " bytes the runner policy allows, and the rest of it was dropped"
+
+	t.Run("lines", func(t *testing.T) {
+		g := withGrants(t, held{})
+		credential, grant := g.holding(t)
+		lines := make([]string, policy.LogMaxLines)
+		for i := range lines {
+			lines[i] = "x"
+		}
+		lines = append(lines, marker)
+		seq := 1
+		for first := 0; first < len(lines); first += 4096 {
+			chunk := lines[first:min(first+4096, len(lines))]
+			g.ship(t, credential, grant, aChunk(seq, first+1, false, chunk...))
+			seq++
+		}
+		answer := g.ship(t, credential, grant, aChunk(seq, len(lines)+1, true))
+		stands(t, answer, 0, seq+1, policy.LogMaxLines+1, false)
+	})
+
+	t.Run("bytes", func(t *testing.T) {
+		g := withGrants(t, held{})
+		credential, grant := g.holding(t)
+		long := strings.Repeat("x", 64<<10)
+		var lines []string
+		for range policy.LogMaxBytes / int64(len(long)) {
+			lines = append(lines, long)
+		}
+		lines = append(lines, marker)
+		seq := 1
+		for first := 0; first < len(lines); first += 15 {
+			g.ship(t, credential, grant, aChunk(seq, first+1, false, lines[first:min(first+15, len(lines))]...))
+			seq++
+		}
+		answer := g.ship(t, credential, grant, aChunk(seq, len(lines)+1, true))
+		stands(t, answer, 0, seq+1, len(lines), false)
+	})
 }

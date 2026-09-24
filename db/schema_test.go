@@ -240,7 +240,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"workflows": true, "workflow_versions": true, "runs": true, "steps": true,
 		"tasks": true, "approvals": true, "artifacts": true, "artifact_objects": true,
 		"notification_events": true, "task_grants": true, "secret_declarations": true,
-		"secret_values": true, "task_logs": true, "task_log_chunks": true,
+		"secret_values": true, "task_logs": true, "task_log_chunks": true, "task_log_objects": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace

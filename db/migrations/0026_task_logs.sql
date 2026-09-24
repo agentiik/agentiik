@@ -58,22 +58,49 @@ create table task_log_chunks (
   -- seq is refused rather than answered as the one already held.
   shipped_digest text not null check (shipped_digest ~ '^[0-9a-f]{64}$'),
 
-  -- What was written: the lines kept, their bytes, and the object holding them, which is null
-  -- where the cap kept none of them.
+  -- What was written: the lines kept, their bytes, and the object holding them with the digest
+  -- of its bytes, both null where the cap kept none of them.
   lines      integer not null check (lines >= 0 and lines <= shipped),
   bytes      bigint not null check (bytes >= 0),
   object_key text check (object_key is null or object_key <> ''),
+  object_digest text check (object_digest ~ '^[0-9a-f]{64}$'),
 
   written_at timestamptz not null default now(),
   primary key (namespace, task_id, seq),
   foreign key (namespace, task_id) references task_logs (namespace, task_id) on delete cascade,
-  check ((object_key is null) = (lines = 0))
+  check ((object_key is null) = (lines = 0)),
+  check ((object_key is null) = (object_digest is null))
+);
+
+-- Every object a log is written to, recorded before the write in a transaction of its own.
+--
+-- The index above is written in the same transaction as the chunk it names, after the object, so
+-- that it never names an object that is not there. That leaves the other failure: an object
+-- written and a transaction that never commits, because the API died or the request was dropped,
+-- and a runner that never ships the chunk again, because it died too or its grace ended. Nothing
+-- could name that object, since the store is never listed. So its key is written here first, and
+-- this, not the index, is what the purge deletes by: a key recorded for a write that never
+-- happened costs the purge a deletion of nothing.
+create table task_log_objects (
+  namespace  text not null,
+  task_id    ulid not null,
+  object_key text not null check (object_key <> ''),
+  recorded_at timestamptz not null default now(),
+  primary key (namespace, task_id, object_key),
+  foreign key (namespace, task_id) references tasks (namespace, id) on delete cascade
 );
 
 alter table task_logs enable row level security;
 alter table task_logs force row level security;
 
 create policy task_logs_by_namespace on task_logs
+  using (namespace = agentiik_namespace() or agentiik_installation())
+  with check (namespace = agentiik_namespace() or agentiik_installation());
+
+alter table task_log_objects enable row level security;
+alter table task_log_objects force row level security;
+
+create policy task_log_objects_by_namespace on task_log_objects
   using (namespace = agentiik_namespace() or agentiik_installation())
   with check (namespace = agentiik_namespace() or agentiik_installation());
 

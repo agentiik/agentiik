@@ -56,11 +56,12 @@ type LogChunk struct {
 	Shipped       int
 	ShippedDigest string
 
-	// Lines and Bytes are what was written, and Key the object holding them, empty where the
-	// cap kept none of the chunk's lines.
-	Lines int
-	Bytes int64
-	Key   string
+	// Lines and Bytes are what was written, and Key the object holding them with Digest the
+	// digest of its bytes, both empty where the cap kept none of the chunk's lines.
+	Lines  int
+	Bytes  int64
+	Key    string
+	Digest string
 }
 
 // ShippingLog finds the log a shipment writes to, and holds it until the transaction ends.
@@ -92,15 +93,11 @@ func (w *Wide) ShippingLog(ctx context.Context, clear string, task agk.TaskID, r
 
 	var l TaskLog
 	var holder *string
-	var expired bool
 	err := w.tx.QueryRow(ctx, `
-		select g.namespace, t.idempotency_key, t.runner,
-		       coalesce(r.expires_at <= now(), false)
-		from task_grants g
-		join tasks t on t.namespace = g.namespace and t.id = g.task_id
-		join runs r on r.namespace = t.namespace and r.id = t.run_id
+		select g.namespace, t.idempotency_key, t.runner
+		from task_grants g join tasks t on t.namespace = g.namespace and t.id = g.task_id
 		where g.task_id = $1 and g.hash = $2`, id, token.Hash(clear)).
-		Scan(&l.Namespace, &l.Task, &holder, &expired)
+		Scan(&l.Namespace, &l.Task, &holder)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TaskLog{}, ErrNoGrant
 	}
@@ -114,8 +111,6 @@ func (w *Wide) ShippingLog(ctx context.Context, clear string, task agk.TaskID, r
 		return TaskLog{}, ErrNoGrant
 	case holder == nil || *holder != runner:
 		return TaskLog{}, ErrTaskHeld
-	case expired:
-		return TaskLog{}, ErrLogExpired
 	}
 
 	// Made on the first chunk and held from there: two shipments of one log at once are taken
@@ -136,7 +131,53 @@ func (w *Wide) ShippingLog(ctx context.Context, clear string, task agk.TaskID, r
 	if final != nil {
 		l.FinalSeq = *final
 	}
+
+	// Then the task, held against the log purge until the transaction ends, which claims a log
+	// by holding its task's row the other way and skips one held: an object written while the
+	// purge was listing what to delete would be named by nothing it held. Held first and asked
+	// about after, on the clock rather than on the transaction's start, so that a shipment that
+	// waited for a claim to finish sees the retention the claim acted on and writes nothing.
+	// Held after the log, never before, so that two shipments of one log, the second waiting on
+	// the log, never wait on each other for the task.
+	if _, err := w.tx.Exec(ctx,
+		`select 1 from tasks where namespace = $1 and id = $2 for key share`, l.Namespace, l.Row); err != nil {
+		return TaskLog{}, fmt.Errorf("db: task %s could not be held against the purge: %w", l.Row, err)
+	}
+	var expired bool
+	if err := w.tx.QueryRow(ctx, `
+		select coalesce(r.expires_at <= clock_timestamp(), false)
+		from tasks t join runs r on r.namespace = t.namespace and r.id = t.run_id
+		where t.namespace = $1 and t.id = $2`, l.Namespace, l.Row).Scan(&expired); err != nil {
+		return TaskLog{}, fmt.Errorf("db: the retention of the run of task %s could not be read: %w", l.Row, err)
+	}
+	if expired {
+		return TaskLog{}, ErrLogExpired
+	}
 	return l, nil
+}
+
+// RecordLogObject records that an object of a log is about to be written, in a transaction that
+// commits before the write, so that the purge can name it whatever becomes of the transaction
+// that records the chunk it holds.
+func (w *Wide) RecordLogObject(ctx context.Context, l TaskLog, key string) error {
+	if _, err := w.tx.Exec(ctx,
+		`insert into task_log_objects (namespace, task_id, object_key) values ($1, $2, $3) on conflict do nothing`,
+		l.Namespace, l.Row, key); err != nil {
+		return fmt.Errorf("db: an object of the log of task %s could not be recorded: %w", l.Row, err)
+	}
+	return nil
+}
+
+// LogObjectRecorded says whether RecordLogObject recorded that key for that log, and not only
+// asked to: a key is written to only once it could be purged.
+func (w *Wide) LogObjectRecorded(ctx context.Context, l TaskLog, key string) (bool, error) {
+	var recorded bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select 1 from task_log_objects where namespace = $1 and task_id = $2 and object_key = $3)`,
+		l.Namespace, l.Row, key).Scan(&recorded); err != nil {
+		return false, fmt.Errorf("db: the objects of the log of task %s could not be read: %w", l.Row, err)
+	}
+	return recorded, nil
 }
 
 // ShippedChunk is one chunk of a log the index already holds, and false where it holds none.
@@ -162,14 +203,14 @@ func (w *Wide) ShippedChunk(ctx context.Context, l TaskLog, seq int) (LogChunk, 
 // log by: a task whose result never came back still has its log swept with its run.
 func (w *Wide) ShipChunk(ctx context.Context, was, now TaskLog, c *LogChunk) error {
 	if c != nil {
-		var key *string
+		var key, digest *string
 		if c.Key != "" {
-			key = &c.Key
+			key, digest = &c.Key, &c.Digest
 		}
 		if _, err := w.tx.Exec(ctx, `
-			insert into task_log_chunks (namespace, task_id, seq, first_line, shipped, shipped_digest, lines, bytes, object_key)
-			values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			was.Namespace, was.Row, c.Seq, c.FirstLine, c.Shipped, c.ShippedDigest, c.Lines, c.Bytes, key); err != nil {
+			insert into task_log_chunks (namespace, task_id, seq, first_line, shipped, shipped_digest, lines, bytes, object_key, object_digest)
+			values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			was.Namespace, was.Row, c.Seq, c.FirstLine, c.Shipped, c.ShippedDigest, c.Lines, c.Bytes, key, digest); err != nil {
 			return fmt.Errorf("db: chunk %d of the log of task %s could not be recorded: %w", c.Seq, was.Row, err)
 		}
 	}
@@ -235,10 +276,10 @@ func (n *NS) TaskLog(ctx context.Context, row string) (TaskLog, []LogChunk, erro
 // ErrNoLog is a dispatch nothing has shipped a log for.
 var ErrNoLog = errors.New("db: nothing has shipped a log for that task")
 
-const chunkColumns = `seq, first_line, shipped, shipped_digest, lines, bytes, coalesce(object_key, '')`
+const chunkColumns = `seq, first_line, shipped, shipped_digest, lines, bytes, coalesce(object_key, ''), coalesce(object_digest, '')`
 
 func scanChunk(row pgx.Row) (LogChunk, error) {
 	var c LogChunk
-	err := row.Scan(&c.Seq, &c.FirstLine, &c.Shipped, &c.ShippedDigest, &c.Lines, &c.Bytes, &c.Key)
+	err := row.Scan(&c.Seq, &c.FirstLine, &c.Shipped, &c.ShippedDigest, &c.Lines, &c.Bytes, &c.Key, &c.Digest)
 	return c, err
 }

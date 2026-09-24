@@ -13,7 +13,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -63,11 +62,13 @@ const shipMaxLines = 4096
 
 // The caps a log is held to where it is written, "so that one component keeps one account of how
 // much of a task's log exists". They are the runner's own defaults, log_max_bytes and
-// log_max_lines, so that a runner left at them never has a line it kept dropped here, and the API
-// is the backstop for one that raised them: "a log is a diagnostic and not a payload".
+// log_max_lines, and room for the line the driver writes past them to say it cut the log, so that
+// a runner left at its defaults never has a line it kept dropped here, the one saying why the log
+// stops least of all. The API is the backstop for a runner that raised them: "a log is a
+// diagnostic and not a payload".
 const (
-	DefaultLogMaxBytes = 4 << 20
-	DefaultLogMaxLines = 50000
+	DefaultLogMaxBytes = 4<<20 + 1<<10
+	DefaultLogMaxLines = 50000 + 1
 )
 
 // LogShipment is one chunk of a task's log, in the shape wire.schema.json gives it:
@@ -164,7 +165,7 @@ func (s LogShipment) check() error {
 		return fmt.Errorf("%.100q is not an idempotency key: one is run/step/attempt, and run/step/attempt/index/of where a fan-out produced it", string(s.IdempotencyKey))
 	case s.Seq < 1 || s.Seq >= math.MaxInt32:
 		return fmt.Errorf("the shipment is chunk %d: chunks are counted from 1, once per chunk", s.Seq)
-	case s.FirstLine < 1 || s.FirstLine+int64(len(s.Lines)) >= math.MaxInt32:
+	case s.FirstLine < 1 || s.FirstLine >= math.MaxInt32-int64(len(s.Lines)):
 		return fmt.Errorf("the shipment says its first line is %d: lines are counted from 1 across the whole of the log", s.FirstLine)
 	case !s.saidFinal:
 		return errors.New("the shipment does not say whether it is final: every chunk says so, the last one true")
@@ -227,21 +228,44 @@ func (s *RunnerAPI) shipLog(w http.ResponseWriter, r *http.Request, runner Runne
 		return
 	}
 
-	// One transaction, the log held from the first read to the last write, and the chunk written
-	// to the store inside it. Two shipments of one log are then taken one after the other, which
+	// Two transactions. The first decides where the chunk would be written and records the key,
+	// and commits, so that the object can be named by the purge whatever happens next. The second
+	// holds the log from its first read to its last write, decides again, writes the chunk to the
+	// store and indexes it. Two shipments of one log are taken one after the other there, which
 	// they have to be, since what the second may write depends on what the first did. The store
-	// is written before the index: a transaction that fails after the write leaves an object
-	// nothing names, where the other order would leave an index naming an object that is not
-	// there. The runner ships the chunk again, and its object is the same key with the same bytes.
+	// is written before the index, so that the index never names an object that is not there, and
+	// a transaction that fails after the write leaves an object the first transaction recorded.
+	// One that finds a key nobody recorded, because another chunk was taken in between, goes back
+	// to the first, which then records it.
 	var answer LogShipped
-	err := s.pool.Installation(r.Context(), db.LogShipment, func(ctx context.Context, wide *db.Wide) error {
-		held, err := wide.ShippingLog(ctx, grant, ship.IdempotencyKey, runner.ID)
+	var err error
+	for attempt := 1; ; attempt++ {
+		err = s.pool.Installation(r.Context(), db.LogShipment, func(ctx context.Context, wide *db.Wide) error {
+			held, err := wide.ShippingLog(ctx, grant, ship.IdempotencyKey, runner.ID)
+			if err != nil {
+				return err
+			}
+			_, key, err := s.take(ctx, wide, held, ship, true)
+			if err != nil || key == "" {
+				return err
+			}
+			return wide.RecordLogObject(ctx, held, key)
+		})
 		if err != nil {
-			return err
+			break
 		}
-		answer, err = s.take(ctx, wide, held, ship)
-		return err
-	})
+		err = s.pool.Installation(r.Context(), db.LogShipment, func(ctx context.Context, wide *db.Wide) error {
+			held, err := wide.ShippingLog(ctx, grant, ship.IdempotencyKey, runner.ID)
+			if err != nil {
+				return err
+			}
+			answer, _, err = s.take(ctx, wide, held, ship, false)
+			return err
+		})
+		if !errors.Is(err, errNotRecorded) || attempt == 3 {
+			break
+		}
+	}
 	var conflict errChunk
 	switch {
 	case err == nil:
@@ -263,18 +287,25 @@ func (s *RunnerAPI) shipLog(w http.ResponseWriter, r *http.Request, runner Runne
 	}
 }
 
+// errNotRecorded is a chunk to be written at a key nobody recorded, which is written only once it
+// has been.
+var errNotRecorded = errors.New("api: the object a chunk is written to was not recorded first")
+
 // take decides what one chunk does to a log, writes what it keeps, and answers where the log
-// stands.
-func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, ship LogShipment) (LogShipped, error) {
+// stands. Dry, it writes nothing and answers only the key it would write the chunk at, or none.
+func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, ship LogShipment, dry bool) (LogShipped, string, error) {
 	seq := int(ship.Seq)
 	shipped, err := chunkOf(ship.FirstLine, ship.Final, ship.Lines)
 	if err != nil {
-		return LogShipped{}, err
+		return LogShipped{}, "", err
 	}
 	digest := sha256.Sum256(shipped)
 	shippedDigest := hex.EncodeToString(digest[:])
 
 	switch {
+	case seq < was.NextSeq && dry:
+		return LogShipped{}, "", nil
+
 	case seq < was.NextSeq:
 		// A chunk already taken, shipped again because its answer was lost: answered again and
 		// not appended twice. It has to be the same chunk, since the key and the seq together
@@ -283,39 +314,45 @@ func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, shi
 		// either way.
 		held, found, err := wide.ShippedChunk(ctx, was, seq)
 		if err != nil {
-			return LogShipped{}, err
+			return LogShipped{}, "", err
 		}
 		if found && held.ShippedDigest != shippedDigest {
-			return LogShipped{}, errChunk{fmt.Sprintf("chunk %d of that log was shipped before with other lines, and a chunk is shipped again as it was the first time", seq)}
+			return LogShipped{}, "", errChunk{fmt.Sprintf("chunk %d of that log was shipped before with other lines, and a chunk is shipped again as it was the first time", seq)}
 		}
 		return answerOf(was, 0)
 
 	case was.FinalSeq != 0:
-		return LogShipped{}, errChunk{fmt.Sprintf("the log of that task was closed by chunk %d, and nothing follows the last chunk", was.FinalSeq)}
+		return LogShipped{}, "", errChunk{fmt.Sprintf("the log of that task was closed by chunk %d, and nothing follows the last chunk", was.FinalSeq)}
 
 	case was.Truncated:
 		// Nothing more is written, so the chunk moves the log past itself and is kept nowhere,
 		// the last one closing it: "a runner reading true stops shipping", and one still sending
 		// what was already on its way is told where it stands without the index growing a row a
 		// request.
+		if dry {
+			return LogShipped{}, "", nil
+		}
 		now := was
 		now.NextSeq = seq + 1
 		if ship.Final {
 			now.FinalSeq = seq
 		}
 		if err := wide.ShipChunk(ctx, was, now, nil); err != nil {
-			return LogShipped{}, err
+			return LogShipped{}, "", err
 		}
 		return answerOf(now, 0)
 
 	case seq > was.NextSeq:
 		// Past a gap: next_seq "never runs past a gap: a runner whose chunk five never arrived is
 		// told five and not eight", and the runner ships from there.
+		if dry {
+			return LogShipped{}, "", nil
+		}
 		return answerOf(was, 0)
 	}
 
 	if int(ship.FirstLine) != was.ShippedLines+1 {
-		return LogShipped{}, errChunk{fmt.Sprintf("chunk %d says it begins at line %d, and the chunks before it end at line %d", seq, ship.FirstLine, was.ShippedLines)}
+		return LogShipped{}, "", errChunk{fmt.Sprintf("chunk %d says it begins at line %d, and the chunks before it end at line %d", seq, ship.FirstLine, was.ShippedLines)}
 	}
 	kept, cut := capped(ship.Lines, was.Lines, was.Bytes, s.logMaxLines, s.logMaxBytes)
 	c := &db.LogChunk{Seq: seq, FirstLine: int(ship.FirstLine), Shipped: len(ship.Lines), ShippedDigest: shippedDigest, Lines: len(kept)}
@@ -325,15 +362,29 @@ func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, shi
 	if len(kept) > 0 {
 		object, err := chunkOf(0, false, kept)
 		if err != nil {
-			return LogShipped{}, err
+			return LogShipped{}, "", err
 		}
-		c.Key, err = logKey(was, seq, object)
+		sum := sha256.Sum256(object)
+		c.Digest = hex.EncodeToString(sum[:])
+		if c.Key, err = logKey(was, seq, shippedDigest); err != nil {
+			return LogShipped{}, "", err
+		}
+		if dry {
+			return LogShipped{}, c.Key, nil
+		}
+		recorded, err := wide.LogObjectRecorded(ctx, was, c.Key)
 		if err != nil {
-			return LogShipped{}, err
+			return LogShipped{}, "", err
+		}
+		if !recorded {
+			return LogShipped{}, "", errNotRecorded
 		}
 		if err := s.objects.Put(ctx, c.Key, bytes.NewReader(object)); err != nil {
-			return LogShipped{}, fmt.Errorf("the chunk could not be written to the store: %w", err)
+			return LogShipped{}, "", fmt.Errorf("the chunk could not be written to the store: %w", err)
 		}
+	}
+	if dry {
+		return LogShipped{}, "", nil
 	}
 
 	now := was
@@ -346,19 +397,19 @@ func (s *RunnerAPI) take(ctx context.Context, wide *db.Wide, was db.TaskLog, shi
 		now.FinalSeq = seq
 	}
 	if err := wide.ShipChunk(ctx, was, now, c); err != nil {
-		return LogShipped{}, err
+		return LogShipped{}, "", err
 	}
 	return answerOf(now, c.Lines)
 }
 
 // answerOf is the answer a log standing where it does gives, with how many lines of this chunk were
 // written.
-func answerOf(l db.TaskLog, accepted int) (LogShipped, error) {
+func answerOf(l db.TaskLog, accepted int) (LogShipped, string, error) {
 	uri, err := l.URI()
 	if err != nil {
-		return LogShipped{}, err
+		return LogShipped{}, "", err
 	}
-	return LogShipped{URI: uri, Accepted: accepted, NextSeq: l.NextSeq, Lines: l.Lines, Truncated: l.Truncated}, nil
+	return LogShipped{URI: uri, Accepted: accepted, NextSeq: l.NextSeq, Lines: l.Lines, Truncated: l.Truncated}, "", nil
 }
 
 // capped is what of a chunk the caps leave, and whether they cut it: a log already holding lines
@@ -408,32 +459,31 @@ func chunkOf(firstLine int64, final bool, lines []LogLine) ([]byte, error) {
 }
 
 // logKey is where one chunk of a log is kept: under its namespace, as every object is, then under
-// the run and the task the log's URI names, "so the logs of a run are one prefix and a retention
-// sweep over them is one listing", then under the dispatch, since a requeue keeps its key and ships
-// a log of its own, and last the seq, padded so that a listing is in order, and the digest of the
-// bytes, so that a key names one content: a chunk written again with other bytes, which a chunk the
-// cap cut differently would be, never replaces what an index already names.
-func logKey(l db.TaskLog, seq int, object []byte) (string, error) {
+// the run and the task the log's URI names, "so the logs of a run are one prefix", then under the
+// dispatch, since a requeue keeps its key and ships a log of its own, and last the seq, padded so
+// that a listing is in order, and the digest of what was shipped.
+//
+// The shipped digest rather than the digest of what is kept, because the key has to be known, and
+// recorded, before the chunk is decided under the log's lock. It names one content all the same:
+// what a chunk keeps is decided by the chunks before it, which are fixed once it can be taken, so a
+// chunk shipped again with the same lines is kept the same way, and one with other lines is
+// another key.
+func logKey(l db.TaskLog, seq int, shippedDigest string) (string, error) {
 	uri, err := l.URI()
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(object)
 	return fmt.Sprintf("%s/logs/%s/%s/%s/%010d-%s",
-		l.Namespace, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, hex.EncodeToString(sum[:])), nil
+		l.Namespace, uri.Run, url.PathEscape(string(uri.Task)), l.Row, seq, shippedDigest), nil
 }
 
-// ReadLogChunk reads back the lines of one chunk of a log, from the key the index names it by, and
-// refuses bytes that are not the ones the key was written for.
+// ReadLogChunk reads back the lines of one chunk of a log, as the index names it, and refuses bytes
+// that are not the ones the chunk was written with.
 //
 // It is what a reader of a log follows the index with: GET /api/v1/runs/{id}/steps/{step}/logs
 // reads db.NS.TaskLog for the chunks in order and this for each of their lines.
-func ReadLogChunk(ctx context.Context, objects artifact.Objects, key string) ([]LogLine, error) {
-	_, want, ok := strings.Cut(key[strings.LastIndexByte(key, '/')+1:], "-")
-	if !ok {
-		return nil, fmt.Errorf("api: %q is not the key of a chunk of a log", key)
-	}
-	r, err := objects.Open(ctx, key)
+func ReadLogChunk(ctx context.Context, objects artifact.Objects, c db.LogChunk) ([]LogLine, error) {
+	r, err := objects.Open(ctx, c.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -442,15 +492,15 @@ func ReadLogChunk(ctx context.Context, objects artifact.Objects, key string) ([]
 	if err != nil {
 		return nil, err
 	}
-	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != want {
-		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with", key)
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != c.Digest {
+		return nil, fmt.Errorf("api: the chunk of a log at %s does not hold the bytes it was written with", c.Key)
 	}
 	var lines []LogLine
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	for dec.More() {
 		var l LogLine
 		if err := dec.Decode(&l); err != nil {
-			return nil, fmt.Errorf("api: the chunk of a log at %s: %w", key, err)
+			return nil, fmt.Errorf("api: the chunk of a log at %s: %w", c.Key, err)
 		}
 		lines = append(lines, l)
 	}
