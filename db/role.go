@@ -70,10 +70,12 @@ const provisionLock int64 = 0x6d696772617465
 // A password is set as a SCRAM verifier computed here, so the password itself never reaches
 // the server. Written into CREATE ROLE, it is statement text, and PostgreSQL logs statement
 // text whenever log_statement covers DDL and whenever a statement fails, which it does by
-// default; createuser and psql's \password send a verifier for the same reason. An empty
-// password leaves the role's as it was, and a role created without one authenticates some
-// other way, such as the client certificate the Channels table allows: an address that
-// carries no password, because pgx reads it from a password file, must not be what removes it.
+// default; createuser and psql's \password send a verifier for the same reason. It is valid
+// until it is replaced, since an expiry the role held before would lock the application out at
+// a moment nobody chose, with a password that is right. An empty password leaves the role's as
+// it was, and a role created without one authenticates some other way, such as the client
+// certificate the Channels table allows: an address that carries no password, because pgx
+// reads it from a password file, must not be what removes it.
 //
 // The connection needs no superuser, only the right to create roles and to own the schema,
 // which is what a managed PostgreSQL gives its administrator. It refuses the role the
@@ -132,7 +134,7 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 	if secret != "" {
 		// Written as a literal as it is: a verifier is base64, digits and the separators SCRAM
 		// puts between them, and holds no quote to escape.
-		options = append(options, "password '"+secret+"'")
+		options = append(options, "password '"+secret+"'", "valid until 'infinity'")
 	}
 	if len(options) > 0 {
 		stmt := verb + " role " + pgx.Identifier{role}.Sanitize() + " with " + strings.Join(options, " ")
@@ -195,10 +197,11 @@ func refuseAnOwner(ctx context.Context, admin *pgx.Conn, role, self string) erro
 // judged by the values and takes them all.
 func roleShape(ctx context.Context, tx pgx.Tx, role string) (string, []string, error) {
 	var super, bypass, login, createdb, createrole, replication bool
+	var connections int32
 	err := tx.QueryRow(ctx,
-		`select rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole, rolreplication
+		`select rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole, rolreplication, rolconnlimit
 		   from pg_roles where rolname = $1`, role,
-	).Scan(&super, &bypass, &login, &createdb, &createrole, &replication)
+	).Scan(&super, &bypass, &login, &createdb, &createrole, &replication, &connections)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "create", []string{"login", "nosuperuser", "nobypassrls", "nocreatedb", "nocreaterole", "noreplication"}, nil
 	}
@@ -220,6 +223,11 @@ func roleShape(ctx context.Context, tx pgx.Tx, role string) (string, []string, e
 		if a.holds != a.wanted {
 			options = append(options, a.option)
 		}
+	}
+	// A limit of no connections is a login that opens nothing, as NOLOGIN is, and is lifted for
+	// the same reason. Any other limit is the installation's own sizing, and is kept.
+	if connections == 0 {
+		options = append(options, "connection limit -1")
 	}
 	return "alter", options, nil
 }

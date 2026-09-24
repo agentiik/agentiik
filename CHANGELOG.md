@@ -68,6 +68,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Provision` refuses a role that owns the database or anything in it, before applying anything, since no revoke reaches an owner. It names what the role owns and the `REASSIGN OWNED BY` that hands it on.
 - `db.Provision` grants only the tables of `public` that belong to no extension and whose owner the migrating role answers for, so an extension's view neither stops a managed administrator nor reaches the application.
 - `db.Provision` takes the role out of every role it is a member of, and back from what it holds on the database, on a parameter and on any relation of `public`, columns included, before granting it anything.
+- A password `db.Provision` sets is valid until it is replaced, and a connection limit of 0 is lifted, so a rotation never leaves the role locked out.
 
 ### Bus
 

@@ -55,9 +55,10 @@ func login(t *testing.T, super, role, password string) error {
 func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 	t.Helper()
 	rows, err := conn.Query(t.Context(), `
-		select format('role login=%s super=%s bypassrls=%s createdb=%s createrole=%s replication=%s',
+		select format('role login=%s super=%s bypassrls=%s createdb=%s createrole=%s replication=%s connections=%s expires=%s',
 		              rolcanlogin::text, rolsuper::text, rolbypassrls::text,
-		              rolcreatedb::text, rolcreaterole::text, rolreplication::text)
+		              rolcreatedb::text, rolcreaterole::text, rolreplication::text,
+		              rolconnlimit::text, coalesce(nullif(rolvaliduntil, 'infinity')::text, 'never'))
 		  from pg_roles where rolname = $1::text
 		union all
 		select format('member of %s', r.rolname)
@@ -96,8 +97,8 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 }
 
 // provisioned is the shape Provision promises, written out: a login that bypasses nothing and
-// creates nothing and is a member of nothing, and read and write on every table the migrations
-// created but the migration record.
+// creates nothing, is a member of nothing and connects without a limit or an expiry, and read
+// and write on every table the migrations created but the migration record.
 //
 // The tables the migrations created are the ones owned by whoever recorded them, which is how
 // this tells them from a table somebody else put in the schema.
@@ -117,7 +118,7 @@ func provisioned(t *testing.T, conn *pgx.Conn) []string {
 	}
 	want := []string{
 		"database connect",
-		"role login=true super=false bypassrls=false createdb=false createrole=false replication=false",
+		"role login=true super=false bypassrls=false createdb=false createrole=false replication=false connections=-1 expires=never",
 		"schema usage=true create=false",
 	}
 	for _, table := range tables {
@@ -199,7 +200,8 @@ func TestOpenAcceptsTheProvisionedRoleAndRefusesTheAdministrator(t *testing.T) {
 }
 
 // A role somebody widened by hand is brought back, attribute by attribute, membership by
-// membership and grant by grant, and a password given again replaces the one it had.
+// membership and grant by grant, and a password given again replaces the one it had, however
+// the old one had been left to expire.
 //
 // The membership in a superuser role is one another role granted, which a superuser's REVOKE
 // passes over unless it names that grantor, and is what would let the application SET ROLE out
@@ -234,7 +236,7 @@ func TestProvisioningNarrowsAWidenedRoleBack(t *testing.T) {
 		`grant ` + powerful + ` to ` + granter + ` with admin option`,
 		`grant ` + powerful + ` to ` + role + ` granted by ` + granter,
 		`grant pg_write_all_data to ` + role,
-		`alter role ` + role + ` nologin bypassrls createdb createrole replication`,
+		`alter role ` + role + ` nologin bypassrls createdb createrole replication connection limit 0 valid until '2001-01-01'`,
 		`grant truncate, references, trigger on runs to ` + role,
 		`grant all on schema_migrations to ` + role,
 		`grant update (name) on schema_migrations to ` + role,
