@@ -170,9 +170,22 @@ func (o *Objects) Put(ctx context.Context, key string, r io.Reader) error {
 	w.Close()
 	body := io.MultiReader(bytes.NewReader(form.Bytes()[:head]), r, bytes.NewReader(form.Bytes()[head:]))
 
+	// A store honouring a POST policy is told how long the form is before it reads it: MinIO
+	// answers a form sent chunked with a 400 before it looks at the policy, which would read here
+	// as bytes that do not hash to their key. net/http cannot know the length of a MultiReader,
+	// so it is worked out from the one part whose length is not already known. Both readers a
+	// runner posts can say it, the file Store.Put stages an artifact in and the bytes of an
+	// envelope, and only a reader that cannot goes out chunked, which the built-in store takes.
+	size, known, err := remaining(r)
+	if err != nil {
+		return fmt.Errorf("granted: object %s: %w", key, err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.policy.URL, body)
 	if err != nil {
 		return fmt.Errorf("granted: object %s: %w", key, unsigned(err))
+	}
+	if known {
+		req.ContentLength = int64(form.Len()) + size
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := o.client.Do(req)
@@ -191,6 +204,28 @@ func (o *Objects) Put(ctx context.Context, key string, r io.Reader) error {
 		return fmt.Errorf("granted: object %s: the store answered %d: %w", key, resp.StatusCode, artifact.ErrTooLarge)
 	}
 	return fmt.Errorf("granted: object %s: the store answered %d", key, resp.StatusCode)
+}
+
+// remaining is how many bytes are left to read from r, when r can say without being read, and
+// leaves r where it found it. A file and bytes in memory can say; a pipe is a file too, and one
+// that cannot be asked where it is is a reader of no known length rather than a failure.
+func remaining(r io.Reader) (size int64, known bool, err error) {
+	s, ok := r.(io.Seeker)
+	if !ok {
+		return 0, false, nil
+	}
+	at, err := s.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, false, nil
+	}
+	end, err := s.Seek(0, io.SeekEnd)
+	if _, back := s.Seek(at, io.SeekStart); back != nil {
+		return 0, false, back
+	}
+	if err != nil || end < at {
+		return 0, false, nil
+	}
+	return end - at, true, nil
 }
 
 // unsigned leaves the URL out of an error from net/http, which names the one it failed on in full.

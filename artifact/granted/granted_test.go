@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -401,6 +402,94 @@ func TestAFormIsTheFieldsThenTheKeyThenTheFile(t *testing.T) {
 	}
 	if !bytes.Equal(file, []byte(content)) {
 		t.Errorf("the file part carried %q", file)
+	}
+}
+
+// A form says how long it is before it is read. MinIO refuses one sent chunked before it looks at
+// the policy, so a runner posting chunked would lose every output on a store honouring POST
+// policies. Both readers a runner posts can say how long they are, the file Store.Put stages an
+// artifact in and the bytes of an envelope, and so can one somebody has already read part of.
+func TestAFormSaysHowLongItIs(t *testing.T) {
+	type post struct {
+		length, received int64
+		chunked          bool
+	}
+	var mu sync.Mutex
+	var posts []post
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received, _ := io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		posts = append(posts, post{length: r.ContentLength, received: received, chunked: slices.Contains(r.TransferEncoding, "chunked")})
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	o := objects(t, granted.Options{Uploads: artifact.Policy{
+		URL:       srv.URL + "/objects/finance",
+		Fields:    map[string]string{"signature": "9d4b71e0"},
+		KeyPrefix: artifact.Prefix("finance"),
+	}})
+	st, err := artifact.New(o, "finance", agk.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const content = "the whole of an invoice"
+	if _, err := st.Put(t.Context(), agk.URI{Run: run, Step: "invoice", Port: "out", Name: "invoice.pdf"}, "application/pdf", strings.NewReader(content)); err != nil {
+		t.Fatalf("storing an artifact: %s", err)
+	}
+	if _, _, err := st.PutEnvelope(t.Context(), agk.Empty(run, "invoice", "out", 1, time.Date(2026, 9, 10, 6, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("storing an envelope: %s", err)
+	}
+	partway := strings.NewReader("the invoice " + content)
+	io.CopyN(io.Discard, partway, int64(len("the invoice ")))
+	if err := o.Put(t.Context(), artifact.Key("finance", digestOf(content)), partway); err != nil {
+		t.Fatalf("posting what is left of a reader: %s", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(posts) != 3 {
+		t.Fatalf("%d forms were posted, where three were", len(posts))
+	}
+	for i, p := range posts {
+		if p.chunked || p.length != p.received {
+			t.Errorf("form %d said it was %d bytes long, chunked %t, and carried %d", i+1, p.length, p.chunked, p.received)
+		}
+	}
+}
+
+// A reader that cannot say how long it is still goes out, chunked, which the built-in store takes.
+// A pipe is a file that cannot be asked where it is, and is posted the same way.
+func TestAReaderThatCannotSayHowLongItIsIsStillPosted(t *testing.T) {
+	s := serve(t, agk.Limits{})
+	o := objects(t, granted.Options{Uploads: s.policy(t)})
+
+	const content = "the whole of an invoice"
+	key := artifact.Key("finance", digestOf(content))
+	if err := o.Put(t.Context(), key, io.MultiReader(strings.NewReader(content))); err != nil {
+		t.Fatalf("posting a reader of no known length: %s", err)
+	}
+	if !s.holds(t, key) {
+		t.Error("a reader of no known length stored nothing")
+	}
+
+	const piped = "the whole of a ledger"
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	go func() {
+		io.WriteString(pw, piped)
+		pw.Close()
+	}()
+	key = artifact.Key("finance", digestOf(piped))
+	if err := o.Put(t.Context(), key, pr); err != nil {
+		t.Fatalf("posting a pipe: %s", err)
+	}
+	if !s.holds(t, key) {
+		t.Error("a pipe stored nothing")
 	}
 }
 
