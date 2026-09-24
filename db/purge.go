@@ -74,7 +74,12 @@ type Object struct {
 type Log struct {
 	Namespace string
 	Task      string
-	URI       string
+
+	URI string
+
+	// Keys are objects its lines were written to, for the caller to delete before it
+	// confirms. A log written in many chunks may be handed over across several claims.
+	Keys []string
 }
 
 // ExpireArtifacts retires every reference whose duration has run out.
@@ -200,6 +205,14 @@ func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 // A log is a URI and not a digest: one task wrote it, nothing else names it, and there is
 // nothing to count. So it is claim, delete, confirm, with LogsPurged as the confirmation, and
 // the line count and the truncation flag stay behind as the record that there was a log.
+//
+// The keys are every object recorded for the log, those a failed write left behind included,
+// and batch bounds them as it bounds the logs, since one log may be written in thousands of
+// chunks: a log with more is handed over again, the rest of it, at the next claim. A task whose
+// log is being written to is skipped, since its row is held until the chunk and its key are
+// recorded, and is claimed on a later pass: claimed now, the object being written would be
+// written after the claim and named by nothing the purge still holds. A shipment arriving once
+// the run's retention has run out is refused, so a log claimed is one nothing is added to.
 func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -213,19 +226,51 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 			where t.log_uri is not null
 			  and r.expires_at is not null and r.expires_at <= now()
 			order by r.expires_at
-			limit $1`, batch)
+			limit $1
+			for update of t skip locked`, batch)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		index := map[[2]string]int{}
 		for rows.Next() {
 			var l Log
 			if err := rows.Scan(&l.Namespace, &l.Task, &l.URI); err != nil {
+				rows.Close()
 				return err
 			}
+			index[[2]string{l.Namespace, l.Task}] = len(out)
 			out = append(out, l)
 		}
-		return rows.Err()
+		rows.Close()
+		if err := rows.Err(); err != nil || len(out) == 0 {
+			return err
+		}
+
+		namespaces := make([]string, len(out))
+		tasks := make([]string, len(out))
+		for i, l := range out {
+			namespaces[i], tasks[i] = l.Namespace, l.Task
+		}
+		keys, err := w.tx.Query(ctx, `
+			select o.namespace, o.task_id, o.object_key
+			from task_log_objects o
+			join unnest($1::text[], $2::text[]) as g(namespace, id)
+			  on o.namespace = g.namespace and o.task_id = g.id
+			order by o.recorded_at, o.object_key
+			limit $3`, namespaces, tasks, batch)
+		if err != nil {
+			return err
+		}
+		defer keys.Close()
+		for keys.Next() {
+			var namespace, task, key string
+			if err := keys.Scan(&namespace, &task, &key); err != nil {
+				return err
+			}
+			l := &out[index[[2]string{namespace, task}]]
+			l.Keys = append(l.Keys, key)
+		}
+		return keys.Err()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("db: the logs due for purging could not be read: %w", err)
@@ -233,27 +278,58 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 	return out, nil
 }
 
-// LogsPurged records that those logs are gone from the store.
+// LogsPurged records that the objects of those logs are gone from the store, and answers how many
+// of the logs are now gone whole.
+//
+// It forgets the keys it was handed and the chunks they held, and nothing else, so an object
+// recorded after the claim is still there for the next one. A log none of whose objects is left
+// has its URI taken off its task; where each log stood stays: how many lines it held and whether
+// the cap cut it short.
 func (p *Pool) LogsPurged(ctx context.Context, logs []Log) (int, error) {
 	if len(logs) == 0 {
 		return 0, nil
 	}
 	namespaces := make([]string, len(logs))
 	tasks := make([]string, len(logs))
+	var keyNamespaces, keyTasks, keys []string
 	for i, l := range logs {
 		namespaces[i], tasks[i] = l.Namespace, l.Task
+		for _, k := range l.Keys {
+			keyNamespaces, keyTasks, keys = append(keyNamespaces, l.Namespace), append(keyTasks, l.Task), append(keys, k)
+		}
 	}
 	var cleared int
 	err := p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
-		tag, err := w.tx.Exec(ctx, `
-			update tasks t set log_uri = null
-			from unnest($1::text[], $2::text[]) as g(namespace, id)
-			where t.namespace = g.namespace and t.id = g.id`, namespaces, tasks)
-		if err != nil {
+		if len(keys) > 0 {
+			if _, err := w.tx.Exec(ctx, `
+				delete from task_log_objects o
+				using unnest($1::text[], $2::text[], $3::text[]) as g(namespace, id, object_key)
+				where o.namespace = g.namespace and o.task_id = g.id and o.object_key = g.object_key`,
+				keyNamespaces, keyTasks, keys); err != nil {
+				return err
+			}
+			if _, err := w.tx.Exec(ctx, `
+				delete from task_log_chunks c
+				using unnest($1::text[], $2::text[], $3::text[]) as g(namespace, id, object_key)
+				where c.namespace = g.namespace and c.task_id = g.id and c.object_key = g.object_key`,
+				keyNamespaces, keyTasks, keys); err != nil {
+				return err
+			}
+		}
+		if err := w.tx.QueryRow(ctx, `
+			select count(*) from unnest($1::text[], $2::text[]) as g(namespace, id)
+			where not exists (select 1 from task_log_objects o
+			                  where o.namespace = g.namespace and o.task_id = g.id)`,
+			namespaces, tasks).Scan(&cleared); err != nil {
 			return err
 		}
-		cleared = int(tag.RowsAffected())
-		return nil
+		_, err := w.tx.Exec(ctx, `
+			update tasks t set log_uri = null
+			from unnest($1::text[], $2::text[]) as g(namespace, id)
+			where t.namespace = g.namespace and t.id = g.id
+			  and not exists (select 1 from task_log_objects o
+			                  where o.namespace = t.namespace and o.task_id = t.id)`, namespaces, tasks)
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("db: the purged logs could not be recorded: %w", err)
