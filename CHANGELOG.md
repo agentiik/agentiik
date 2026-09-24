@@ -118,6 +118,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `taskResult.usage` carries `cpu_seconds` and `max_rss_bytes` together or not at all, omitted where no sample was read, so `bus.Usage` holds them as pointers and a result carrying one without the other is refused.
 - The vendored wire says a stopped container reports the code its stop left, a runner reports 121 for refused outputs, and a task that did not succeed publishes no port.
 - `bus.TaskResult.Check` holds a result to what `Report` holds it to.
+- `Bus.Take` gives up its wait when its context ends, so a stopping agent is not held for the rest of a long poll.
 
 ### Driver
 
@@ -172,6 +173,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` binds the helper installed at `/usr/local/lib/agentiik/agk-helper` where `runner.toml` names none, from a copy under the work root, since the daemon resolves a bind's source on the host and the image's paths are not there. None installed, or a work root mounted `noexec`, binds none; a directory there refuses the start.
 - `runner.Carrier` runs an assembled task and reports its ending as the wire's `taskResult` once `driver.Run` has returned and the trees are gone, never from the terminal event: the exit code wherever a container ran, ports and artifacts by digest (empty lists where it did not succeed), the log at `agk.NewLogURI` and the usage. A task that reached no container is reported `failed` and nothing else. `runner.EndingOf` reports a recorded ending for `Bus.Ended`.
 - A result is written under `<work root>/.results` before it is published and taken away once the bus has it, so one the bus did not take goes out with `Results.Flush`, after a restart too, and `Results.Keys` names its key for the heartbeat until then. A kept result of another runner, left by a host that joined again, is taken away.
+- `serve` takes work. It asks the API for its bus credential at start, publishes what an earlier agent kept, and takes from its pool's consumer only when it has room, asking for `AGK_RUNNER_CONCURRENCY` less the tasks it holds. Each message is written down, redeemed, acknowledged, assembled, run and reported in the order the page's table sets out: a key the host already ended is answered from the record, one still in flight is left for AckWait, and nothing is put back once a redemption may have bound it.
+- A redemption with no answer is asked again, from a second doubling to thirty, until the message's deadline, then reported `timed_out` with no container ran and acknowledged. An assembly that fails the same way is tried again with the same redemption.
+- A 422, a 200 the task cannot be run on, what was fetched not being what was named, and a message no runner can run (`runner.ErrNotRunnable`) are reported `failed` with no container ran, on the platform's account.
+- A task's `running` and `publishing` go out as progress from a goroutine of their own, dropped rather than holding up the driver.
 
 ### Artifacts
 
