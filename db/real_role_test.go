@@ -49,8 +49,8 @@ func login(t *testing.T, super, role, password string) error {
 }
 
 // shape is everything Provision decides about a role, as one list a test can compare: its
-// attributes, whether it may connect and use the schema, and each privilege it holds on each
-// table of the schema.
+// attributes, whether it may connect, whether it may use the schema and create in it, and each
+// privilege it holds on each table of the schema and on each column.
 func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 	t.Helper()
 	rows, err := conn.Query(t.Context(), `
@@ -68,6 +68,11 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 		select format('table %s %s', c.relname, lower(a.privilege_type))
 		  from pg_class c cross join lateral aclexplode(c.relacl) a
 		 where c.relnamespace = 'public'::regnamespace and a.grantee = to_regrole($1::text)
+		union all
+		select format('column %s.%s %s', c.relname, f.attname, lower(a.privilege_type))
+		  from pg_class c join pg_attribute f on f.attrelid = c.oid
+		       cross join lateral aclexplode(f.attacl) a
+		 where c.relnamespace = 'public'::regnamespace and a.grantee = to_regrole($1::text)
 		order by 1`, role)
 	if err != nil {
 		t.Fatal(err)
@@ -80,12 +85,17 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 }
 
 // provisioned is the shape Provision promises, written out: a login that bypasses nothing and
-// creates nothing, and read and write on every table of the schema but the migration record.
+// creates nothing, and read and write on every table the migrations created but the migration
+// record.
+//
+// The tables the migrations created are the ones owned by whoever recorded them, which is how
+// this tells them from a table somebody else put in the schema.
 func provisioned(t *testing.T, conn *pgx.Conn) []string {
 	t.Helper()
 	rows, err := conn.Query(t.Context(),
 		`select relname::text from pg_class
 		  where relnamespace = 'public'::regnamespace and relkind in ('r', 'p')
+		    and relowner = (select relowner from pg_class where oid = 'public.schema_migrations'::regclass)
 		  order by 1`)
 	if err != nil {
 		t.Fatal(err)
@@ -177,8 +187,8 @@ func TestOpenAcceptsTheProvisionedRoleAndRefusesTheAdministrator(t *testing.T) {
 	}
 }
 
-// A role somebody widened by hand is brought back, attribute by attribute and grant by grant, and
-// a password given again replaces the one it had.
+// A role somebody widened by hand is brought back, attribute by attribute and grant by grant, a
+// column's included, and a password given again replaces the one it had.
 func TestProvisioningNarrowsAWidenedRoleBack(t *testing.T) {
 	super, role := blank(t)
 	ctx := t.Context()
@@ -191,6 +201,7 @@ func TestProvisioningNarrowsAWidenedRoleBack(t *testing.T) {
 		`alter role ` + role + ` nologin bypassrls createdb createrole replication`,
 		`grant truncate, references, trigger on runs to ` + role,
 		`grant all on schema_migrations to ` + role,
+		`grant update (name) on schema_migrations to ` + role,
 		`grant create on schema public to ` + role,
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
@@ -489,6 +500,87 @@ func TestProvisioningsAtOnceTakeTurns(t *testing.T) {
 		}
 		if applied != left {
 			t.Errorf("round %d applied %d migrations between the replicas, and %d were left", round+1, applied, left)
+		}
+	}
+}
+
+// A managed PostgreSQL's administrator may grant only on what it owns, and the schema holds
+// something else as soon as an extension or another role puts it there, as pg_stat_statements
+// does. Provision grants on the tables the migrations created and passes over the rest, rather
+// than failing on every run from then on.
+func TestAManagedAdministratorPassesOverWhatItDoesNotOwn(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
+	admin := role[:min(len(role), maxIdentifier-len("_admin"))] + "_admin"
+	other := role[:min(len(role), maxIdentifier-len("_other"))] + "_other"
+
+	// The administrator and the other role own the database and a table in it, so they go after
+	// both: this runs before the cleanups blank registered.
+	t.Cleanup(func() {
+		drop(ctx, url, `drop database if exists `+role+` with (force)`)
+		drop(ctx, url, `drop role if exists `+role)
+		drop(ctx, url, `drop role if exists `+admin)
+		drop(ctx, url, `drop role if exists `+other)
+	})
+	conn := connect(t, super)
+	for _, stmt := range []string{
+		`drop role if exists ` + admin,
+		`drop role if exists ` + other,
+		`create role ` + admin + ` login createrole nosuperuser nobypassrls password 'test'`,
+		`create role ` + other + ` nologin`,
+		`alter database ` + role + ` owner to ` + admin,
+		`create extension pg_buffercache schema public`,
+		`create table public.elsewhere (x integer)`,
+		`alter table public.elsewhere owner to ` + other,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+
+	as := connect(t, withCredentials(super, admin, "test"))
+	if _, err := Provision(ctx, as, role, "test"); err != nil {
+		t.Fatalf("provisioning beside relations the administrator does not own: %s", err)
+	}
+	if got, want := shape(t, conn, role), provisioned(t, conn); !slices.Equal(got, want) {
+		t.Errorf("the role came out as\n%s\nand Provision promises\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// What an extension brought into the schema is the extension's, even though the role that
+// migrates owns it, as it does when it installed the extension: postgis brings a table, and
+// pg_stat_statements brings views. So is a view somebody made, since the migrations make tables.
+// None of them is granted, and a privilege the role was given on one, a column's included, is
+// taken back.
+func TestProvisionGrantsNothingTheMigrationsDidNotCreate(t *testing.T) {
+	super, role := blank(t)
+	ctx := t.Context()
+	conn := connect(t, super)
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`create extension pg_buffercache schema public`,
+		`create table public.spatial_ref_sys (srid integer primary key)`,
+		`alter extension pg_buffercache add table public.spatial_ref_sys`,
+		`create view public.stats as select count(*) as runs from runs`,
+		`grant select on public.stats to ` + role,
+		`grant select (bufferid) on public.pg_buffercache to ` + role,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range shape(t, conn, role) {
+		for _, relation := range []string{"pg_buffercache", "spatial_ref_sys", "stats"} {
+			if strings.HasPrefix(line, "table "+relation+" ") || strings.HasPrefix(line, "column "+relation+".") {
+				t.Errorf("the role holds %q", line)
+			}
 		}
 	}
 }

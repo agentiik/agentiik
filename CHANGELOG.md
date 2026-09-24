@@ -66,6 +66,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Provision` applies the migrations and creates, or brings back to shape, the `NOSUPERUSER NOBYPASSRLS` role the API and the controller connect as, with read and write on every table but `schema_migrations`. It needs no superuser, the password reaches PostgreSQL as a SCRAM verifier, and the tests provision through it.
 - `db.Provision` holds an advisory lock while it runs, so two replicas migrating one database at once take turns rather than one of them failing.
 - `db.Provision` refuses a role that owns the database or anything in it, before applying anything, since no revoke reaches an owner. It names what the role owns and the `REASSIGN OWNED BY` that hands it on.
+- `db.Provision` grants only the tables of `public` that belong to no extension and whose owner the migrating role answers for, so an extension's view neither stops a managed administrator nor reaches the application.
 
 ### Bus
 

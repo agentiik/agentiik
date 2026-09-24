@@ -52,13 +52,13 @@ const provisionLock int64 = 0x6d696772617465
 // role the API and the controller connect as, or brings an existing one back to that shape, and
 // answers with the migrations it applied.
 //
-// The role is LOGIN NOSUPERUSER NOBYPASSRLS, and holds nothing else a role can hold: it creates
-// no database, no role and no replication slot. It may connect to this database, use the schema,
-// and read and write every table but schema_migrations, which the application never reads and
-// which a role that could delete a row of would have the next upgrade apply that migration
-// again. Its privileges are revoked before they are granted, in one transaction, so the role
-// ends with exactly these whatever it held before: a role somebody widened by hand is narrowed
-// back, and a second call changes nothing.
+// The role is LOGIN NOSUPERUSER NOBYPASSRLS, and creates no database, no role and no replication
+// slot. It may connect to this database, use the schema, and read and write every table the
+// migrations created but schema_migrations, which the application never reads and which a role
+// that could delete a row of would have the next upgrade apply that migration again. What it
+// holds on the schema and on every relation in it is revoked before it is granted, in one
+// transaction, so the role ends with exactly these whatever it held there before: a role somebody
+// widened by hand is narrowed back, and a second call changes nothing.
 //
 // A role that owns the database or anything in it is refused before anything is applied, and the
 // refusal names what it owns. No revoke reaches an owner: the owner of a table may switch off its
@@ -123,10 +123,6 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 
-	var database string
-	if err := tx.QueryRow(ctx, `select current_database()`).Scan(&database); err != nil {
-		return ran, fmt.Errorf("db: the connection could not be asked which database it is on: %w", err)
-	}
 	verb, options, err := roleShape(ctx, tx, role)
 	if err != nil {
 		return ran, err
@@ -136,27 +132,22 @@ func Provision(ctx context.Context, admin *pgx.Conn, role, password string) ([]s
 		// puts between them, and holds no quote to escape.
 		options = append(options, "password '"+secret+"'")
 	}
-
-	// Names are quoted as identifiers, since a role and a database cannot be parameters of the
-	// statements that name them.
-	name := pgx.Identifier{role}.Sanitize()
-	var statements []string
 	if len(options) > 0 {
-		statements = append(statements, verb+" role "+name+" with "+strings.Join(options, " "))
+		stmt := verb + " role " + pgx.Identifier{role}.Sanitize() + " with " + strings.Join(options, " ")
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			// The statement is not repeated, since it may carry the verifier.
+			return ran, fmt.Errorf("db: the role %s could not be provisioned, and was left as it was: %w", role, err)
+		}
 	}
-	statements = append(statements,
-		// Granted rather than left to PUBLIC, since a hardened cluster revokes it from PUBLIC.
-		"grant connect on database "+pgx.Identifier{database}.Sanitize()+" to "+name,
-		"revoke all on schema public from "+name,
-		"grant usage on schema public to "+name,
-		"revoke all on all tables in schema public from "+name,
-		"grant select, insert, update, delete on all tables in schema public to "+name,
-		"revoke all on schema_migrations from "+name,
-	)
+
+	// The role exists from here, so what it holds can be read before it is taken back.
+	statements, err := privileges(ctx, tx, role)
+	if err != nil {
+		return ran, err
+	}
 	for _, stmt := range statements {
 		if _, err := tx.Exec(ctx, stmt); err != nil {
-			// The statement is not repeated, since the first one may carry the verifier.
-			return ran, fmt.Errorf("db: the role %s could not be provisioned, and was left as it was: %w", role, err)
+			return ran, fmt.Errorf("db: the role %s could not be provisioned, and was left as it was: %s: %w", role, stmt, err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -229,6 +220,92 @@ func roleShape(ctx context.Context, tx pgx.Tx, role string) (string, []string, e
 		}
 	}
 	return "alter", options, nil
+}
+
+// privileges answers the statements that take from role what it holds on this database, and
+// then grant it what Provision promises, in that order.
+//
+// A relation is granted when it is a table of schema public, belongs to no extension, and is
+// owned by a role whose privileges the connection has. Those are the tables the migrations
+// created, since the migrations make tables and whoever migrates owns them, and they are the
+// ones the connection may grant on: a managed PostgreSQL's administrator is refused a grant on
+// a relation it does not own, and a schema holds one as soon as an extension or another role
+// puts one there. For a superuser, every owner's table qualifies, so an installation migrated
+// by one superuser and then another keeps its grants. A migration that made a view or a
+// sequence the application uses would have to be granted here too.
+func privileges(ctx context.Context, tx pgx.Tx, role string) ([]string, error) {
+	name := pgx.Identifier{role}.Sanitize()
+	var out []string
+	read := func(what, query string, args []any, each func(pgx.CollectableRow) (string, error)) ([]string, error) {
+		rows, err := tx.Query(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("db: the connection could not be asked %s: %w", what, err)
+		}
+		found, err := pgx.CollectRows(rows, each)
+		if err != nil {
+			return nil, fmt.Errorf("db: the connection could not be asked %s: %w", what, err)
+		}
+		return found, nil
+	}
+	of := []any{role}
+
+	var database string
+	if err := tx.QueryRow(ctx, `select current_database()`).Scan(&database); err != nil {
+		return nil, fmt.Errorf("db: the connection could not be asked which database it is on: %w", err)
+	}
+	database = pgx.Identifier{database}.Sanitize()
+	out = append(out,
+		// Granted rather than left to PUBLIC, since a hardened cluster revokes it from PUBLIC.
+		"grant connect on database "+database+" to "+name,
+		"revoke all on schema public from "+name,
+		"grant usage on schema public to "+name,
+	)
+
+	// Every relation of the schema the role holds anything on, a column of it included, since
+	// a column's privileges are kept apart from the table's and go with a revoke on the table.
+	held, err := read("what "+role+" holds in schema public", `
+		select c.relname::text from pg_class c
+		 where c.relnamespace = 'public'::regnamespace
+		   and exists (
+		         select from aclexplode(c.relacl) a
+		          where a.grantee = (select oid from pg_roles where rolname = $1)
+		         union all
+		         select from pg_attribute f cross join lateral aclexplode(f.attacl) a
+		          where f.attrelid = c.oid and a.grantee = (select oid from pg_roles where rolname = $1))
+		 order by 1`, of, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	if len(held) > 0 {
+		out = append(out, "revoke all on "+relations(held)+" from "+name)
+	}
+
+	tables, err := read("which tables the migrations created", `
+		select c.relname::text from pg_class c
+		 where c.relnamespace = 'public'::regnamespace
+		   and c.relkind in ('r', 'p')
+		   and c.relname <> 'schema_migrations'
+		   and pg_has_role(current_user, c.relowner, 'usage')
+		   and not exists (
+		         select from pg_depend d
+		          where d.classid = 'pg_class'::regclass and d.objid = c.oid and d.deptype = 'e')
+		 order by 1`, nil, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	if len(tables) > 0 {
+		out = append(out, "grant select, insert, update, delete on "+relations(tables)+" to "+name)
+	}
+	return out, nil
+}
+
+// relations is a list of relations of schema public, each quoted, as GRANT and REVOKE take it.
+func relations(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = pgx.Identifier{"public", n}.Sanitize()
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // scramVerifier is what PostgreSQL stores for a SCRAM-SHA-256 password, as RFC 5802 and 7677
