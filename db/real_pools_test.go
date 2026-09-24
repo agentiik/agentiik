@@ -3,28 +3,36 @@ package db
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The pool, which exists before any machine does.
 
-func TestAPoolCarriesItsPolicyAndCountsWhatIsInIt(t *testing.T) {
+func TestAPoolCarriesItsPolicyAsItWasWritten(t *testing.T) {
 	pool, _ := joining(t)
-	now := time.Now().UTC()
 
 	var listed []RunnerPool
+	var named RunnerPool
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
 		if err := w.CreateRunnerPool(ctx, RunnerPool{
 			Name: "sandboxed", Labels: []string{"runtime=runsc"},
 			AcceptedNamespaces: []string{"finance"},
-			MaxCPU:             4, MaxMemoryBytes: 1 << 33, MaxDiskBytes: 1 << 36,
-			CreatedBy: "admin",
+			Ceilings:           Ceilings{CPU: "0.5", Memory: "8Gi", PIDs: 512},
+			CreatedBy:          "admin",
 		}); err != nil {
 			return err
 		}
 		var err error
-		listed, err = w.RunnerPools(ctx)
+		if listed, err = w.RunnerPools(ctx); err != nil {
+			return err
+		}
+		named, err = w.RunnerPoolNamed(ctx, "sandboxed")
 		return err
 	})
 	if err != nil {
@@ -32,82 +40,108 @@ func TestAPoolCarriesItsPolicyAndCountsWhatIsInIt(t *testing.T) {
 	}
 
 	byName := map[string]RunnerPool{}
+	var order []string
 	for _, p := range listed {
 		byName[p.Name] = p
+		order = append(order, p.Name)
+	}
+	if !slices.IsSorted(order) {
+		t.Errorf("the pools are listed as %v, and a listing is ordered by name", order)
 	}
 	made, ok := byName["sandboxed"]
 	switch {
 	case !ok:
 		t.Fatalf("the listing holds %v", byName)
-	case made.MaxCPU != 4 || made.MaxMemoryBytes != 1<<33 || made.MaxDiskBytes != 1<<36:
-		t.Errorf("the ceilings came back as %d, %d, %d", made.MaxCPU, made.MaxMemoryBytes, made.MaxDiskBytes)
-	case made.Runners != 0 || made.Ready != 0:
-		t.Errorf("a pool nothing has joined holds %d runners", made.Runners)
+	case made.Ceilings != (Ceilings{CPU: "0.5", Memory: "8Gi", PIDs: 512}):
+		// As it was written: half a core stays "0.5" and eight gibibytes stay "8Gi".
+		t.Errorf("the ceilings came back as %+v", made.Ceilings)
+	case made.Containment != ContainmentHardened:
+		t.Errorf("a pool that named no tier is %q", made.Containment)
 	case made.CreatedBy != "admin" || made.CreatedAt.IsZero():
 		t.Errorf("the pool says it was created by %q at %s", made.CreatedBy, made.CreatedAt)
 	}
+	if named.Name != made.Name || named.Ceilings != made.Ceilings || !slices.Equal(named.AcceptedNamespaces, made.AcceptedNamespaces) {
+		t.Errorf("the pool reads as %+v by its name and as %+v in the listing", named, made)
+	}
+
+	// A pool with no ceilings has none, rather than ceilings of nothing.
+	if dmz := byName["dmz"]; dmz.Ceilings != (Ceilings{}) {
+		t.Errorf("a pool created with no ceiling reads as %+v", dmz.Ceilings)
+	}
 
 	// A pool with no list of its own accepts every namespace, which is what an installation
-	// with one pool has and should not have to write down.
+	// with one pool has.
 	if !byName["dmz"].Accepts("finance") {
 		t.Error("a pool that names no namespace refuses one")
 	}
 	if made.Accepts("team-ops") {
 		t.Error("a pool that names finance accepts team-ops")
 	}
+}
 
-	// What it holds is counted from the runners, and a state change moves the count without
-	// anything having to remember to write it.
-	var runner string
-	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		issued, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz"}, "admin", now.Add(time.Hour))
-		if err != nil {
-			return err
-		}
-		joined, err := w.Join(ctx, Joining{
-			Token: issued.Clear, Labels: []string{"zone=dmz"},
-			CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
-			Architecture: "amd64", AgentVersion: "0.2.0",
-		}, 30*24*time.Hour, now)
-		runner = joined.Runner
-		return err
+// A pool's name is its only identity, and a second pool of the same name is refused rather than
+// merged into the first.
+func TestAPoolNameIsTakenOnce(t *testing.T) {
+	pool, _ := joining(t)
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		return w.CreateRunnerPool(ctx, RunnerPool{Name: "dmz", Labels: []string{"zone=lan"}, CreatedBy: "admin"})
 	})
+	if !errors.Is(err, ErrRunnerPoolExists) {
+		t.Fatalf("a second pool called dmz answered %v", err)
+	}
+}
+
+// The table holds a pool to the grammar the wire gives it, whatever wrote the row: a name the API
+// would refuse, a label that is not key=value or a tier nobody named is refused by PostgreSQL
+// itself.
+func TestThePoolTableRefusesWhatTheWireRefuses(t *testing.T) {
+	pool, super := joining(t)
+
+	for _, c := range []struct {
+		name string
+		pool RunnerPool
+	}{
+		{"a name in capitals", RunnerPool{Name: "DMZ"}},
+		{"a name with an underscore", RunnerPool{Name: "gpu_nvme"}},
+		{"a name beginning with a hyphen", RunnerPool{Name: "-dmz"}},
+		{"a name with two hyphens together", RunnerPool{Name: "gpu--nvme"}},
+		{"a name longer than the bus names a consumer", RunnerPool{Name: strings.Repeat("a", 256)}},
+		{"a label with no value", RunnerPool{Name: "lan", Labels: []string{"zone"}}},
+		{"a label with an empty value", RunnerPool{Name: "lan", Labels: []string{"zone="}}},
+		{"a label whose key is in capitals", RunnerPool{Name: "lan", Labels: []string{"Zone=lan"}}},
+		{"a label with a space in it", RunnerPool{Name: "lan", Labels: []string{"zone=lan dmz"}}},
+		{"a namespace in capitals", RunnerPool{Name: "lan", AcceptedNamespaces: []string{"Finance"}}},
+		{"a cpu ceiling of no cores", RunnerPool{Name: "lan", Ceilings: Ceilings{CPU: "0"}}},
+		{"a cpu ceiling in words", RunnerPool{Name: "lan", Ceilings: Ceilings{CPU: "4 cores"}}},
+		{"a memory ceiling in decimal units", RunnerPool{Name: "lan", Ceilings: Ceilings{Memory: "8GB"}}},
+		{"a memory ceiling in bytes", RunnerPool{Name: "lan", Ceilings: Ceilings{Memory: "8589934592"}}},
+		{"a pids ceiling below one", RunnerPool{Name: "lan", Ceilings: Ceilings{PIDs: -1}}},
+		{"a tier nobody named", RunnerPool{Name: "lan", Containment: "gvisor"}},
+	} {
+		c.pool.CreatedBy = "admin"
+		err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+			return w.CreateRunnerPool(ctx, c.pool)
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != checkViolation {
+			t.Errorf("%s answered %v, where the table refuses it", c.name, err)
+		}
+	}
+
+	// A token's labels are held by the table too, and not only by the check that they are
+	// its pool's, which a row written some other way would never meet.
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	for _, step := range []struct {
-		name           string
-		do             func(context.Context, *Wide) error
-		runners, ready int
-	}{
-		{name: "joined", do: func(context.Context, *Wide) error { return nil }, runners: 1, ready: 1},
-		{name: "draining", do: func(ctx context.Context, w *Wide) error {
-			return w.Drain(ctx, runner, "the host is being retired")
-		}, runners: 1, ready: 0},
-		{name: "revoked", do: func(ctx context.Context, w *Wide) error {
-			return w.Revoke(ctx, runner, "the credential leaked")
-		}, runners: 0, ready: 0},
-	} {
-		var dmz RunnerPool
-		err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-			if err := step.do(ctx, w); err != nil {
-				return err
-			}
-			all, err := w.RunnerPools(ctx)
-			for _, p := range all {
-				if p.Name == "dmz" {
-					dmz = p
-				}
-			}
-			return err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if dmz.Runners != step.runners || dmz.Ready != step.ready {
-			t.Errorf("%s: the pool holds %d runners, %d ready", step.name, dmz.Runners, dmz.Ready)
-		}
+	defer conn.Close(ctx)
+	_, err = conn.Exec(ctx,
+		`insert into join_tokens (id, pool, labels, hash, issued_by, expires_at)
+		 values ('01M2AAZ9G62NQXFAFCXKRPJEH5', 'dmz', '{zone}', repeat('a', 64), 'admin', now() + interval '1 hour')`)
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != checkViolation {
+		t.Errorf("a token permitting the label zone was written: %v", err)
 	}
 }
 
@@ -117,19 +151,64 @@ func TestAPoolCarriesItsPolicyAndCountsWhatIsInIt(t *testing.T) {
 func TestATokenCannotPermitALabelItsPoolDoesNotCarry(t *testing.T) {
 	pool, _ := joining(t)
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		_, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "zone=lan"}, "admin",
-			time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		_, err := w.IssueJoinToken(ctx, "dmz", []string{"zone=dmz", "zone=lan"}, "admin", now, now.Add(time.Hour))
+		return err
+	})
+	if !errors.Is(err, ErrNotThePoolsLabel) {
+		t.Fatalf("a token permitting a label its pool does not carry answered %v", err)
+	}
+}
+
+// A token is issued at the moment its caller says, and expires when its caller says, so the hour
+// it is given is the hour it has.
+func TestATokenLivesFromTheMomentItIsIssued(t *testing.T) {
+	pool, super := joining(t)
+	at := time.Date(2026, 9, 10, 6, 12, 0, 0, time.UTC)
+
+	var issued JoinToken
+	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		var err error
+		issued, err = w.IssueJoinToken(ctx, "dmz", nil, "admin", at, at.Add(time.Hour))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !issued.IssuedAt.Equal(at) || !issued.ExpiresAt.Equal(at.Add(time.Hour)) {
+		t.Errorf("the token says it was issued at %s and expires at %s", issued.IssuedAt, issued.ExpiresAt)
+	}
+
+	// And the row says what the answer said, rather than the database's own clock.
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var stored time.Time
+	if err := conn.QueryRow(ctx, `select issued_at from join_tokens where id = $1`, issued.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Equal(at) {
+		t.Errorf("the row says the token was issued at %s, and it was issued at %s", stored, at)
+	}
+
+	// One that would expire before it is issued is not a token at all.
+	err = pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
+		_, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", at, at)
 		return err
 	})
 	if err == nil {
-		t.Fatal("a token was issued permitting a label its pool does not carry")
+		t.Error("a token was issued that expires at the moment it is issued")
 	}
 }
 
 func TestAJoinTokenForAPoolNobodyCreated(t *testing.T) {
 	pool, _ := joining(t)
 	err := pool.Installation(t.Context(), RunnerInventory, func(ctx context.Context, w *Wide) error {
-		_, err := w.IssueJoinToken(ctx, "imaginary", nil, "admin", time.Now().UTC().Add(time.Hour))
+		now := time.Now().UTC()
+		_, err := w.IssueJoinToken(ctx, "imaginary", nil, "admin", now, now.Add(time.Hour))
 		return err
 	})
 	if !errors.Is(err, ErrNoRunnerPool) {

@@ -68,6 +68,29 @@ func TestGrantRedemptionsCarriesTheWholeCorpus(t *testing.T) {
 	}
 }
 
+func TestRunnerPoolsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := RunnerPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	// A pool and the token issued from it that must be accepted, and one that must be
+	// refused: a token permitting a label with no value.
+	if valid != 1 || invalid != 1 {
+		t.Fatalf("the corpus holds %d valid and %d invalid pools, want 1 and 1", valid, invalid)
+	}
+}
+
 func TestTheEnvelopeSchemaIsVendoredWithIt(t *testing.T) {
 	b, err := fs.ReadFile(FS, "envelope.schema.json")
 	if err != nil {

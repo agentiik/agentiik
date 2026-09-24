@@ -123,7 +123,7 @@ func dispatched(t *testing.T) taking {
 			return err
 		}
 		for i := range runners {
-			token, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", now.Add(time.Hour))
+			token, err := w.IssueJoinToken(ctx, "dmz", nil, "admin", now, now.Add(time.Hour))
 			if err != nil {
 				return err
 			}

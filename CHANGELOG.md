@@ -63,6 +63,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
+- A runner pool's name is lowercase and hyphenated, at most 255 characters, and its labels, its namespaces and a join token's labels are held to the wire's grammar by the table. Its ceilings are cpu, memory and pids, kept as written, and there is no disk ceiling, since nothing can enforce one. Migration `0019_pool_shape.sql`.
+- A pool's pids ceiling is a `bigint`, 64 bits as the wire and `PidsLimit` allow, so one past 32 bits is kept where it was a 500. Migration `0019_pool_shape.sql`.
+- `Wide.IssueJoinToken` takes the moment a token is issued, and the row keeps it, so its expiry counts from the API's clock and not the database's.
 
 ### Bus
 
@@ -127,6 +130,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.
+- The pool and join token routes speak the `runnerPool` shape of `wire.schema.json`: a pool is `name`, `labels`, `namespaces`, `resource_ceilings` (`cpu`, `memory`, `pids`) and `containment`, the first four always written, and a token is answered beside its pool with `id`, `single_use`, `issued_at` and `expires_at`. A name already taken is a 409, and `sandboxed` and `separated` are refused until v1.0.0. The listing no longer counts runners.
+- A join token asked to live more seconds than a duration holds is refused as longer than a day, where it was issued already dead, or living a fraction of a second, or failed with a 500.
+- A pool's `cpu`, `memory`, `pids` or `containment` written `null`, or any of them but `pids` written `""`, is refused with 400, where it was read as no ceiling or as `hardened`. Only a ceiling left out is no ceiling.
 - Runner routes have a guard of their own, and every bad runner credential is the same 401. Draining is told in the heartbeat; a revoked credential just stops working.
 - A heartbeat keeps alive only the runner's own tasks. A runner silent for three intervals leaves its tasks `lost`, not `failed`.
 - Only a task a runner has redeemed can be `lost`, counted from its last heartbeat or its redemption, so a task waiting on the queue of a full pool is neither failed nor requeued for the wait.
@@ -197,6 +203,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The probe holding `network: internal` to no way out fails where its image lacks `wget` or `nc`, rather than passing as a network that held, and the `network: none` probe must list the loopback.
 - The no-way-out probe is held to reporting its HTTP request and its TCP connection each on its own, so a probe that drops either one fails.
 - `agk run --local`'s leftover-network check has a step on `network: internal` to find, and the repository-mount adversary no longer fails on Linux over a file it may not read.
+- The pool routes are held to the vendored runner pool corpus, a join token's default hour to its `issued_at` and `expires_at`, and every administrator route to a 403 for anybody without `grant:manage` over the installation.
+- That 403 is given to a principal holding every other permission over the installation, so an administrator route asking for anything but `grant:manage` there fails the test.
+- The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 
 ## v0.1.2, 2026-09-13
 
