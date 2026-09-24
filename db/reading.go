@@ -19,14 +19,47 @@ import (
 // wrote, which is what the projection is for.
 
 // RunQuery is how a listing is narrowed.
+//
+// Since and Until bound when a run was created, both included, and the zero time bounds nothing.
+// Included at both ends, so that a client paging back through time by passing the last run it was
+// given as Until is given that run again rather than skipping the ones created in the same instant.
 type RunQuery struct {
 	Workflow string
 	State    string
 	Limit    int
+
+	Since time.Time
+	Until time.Time
+}
+
+// check refuses a query that names no state there is, and bounds its limit.
+func (q *RunQuery) check() error {
+	if q.Limit < 1 || q.Limit > 500 {
+		q.Limit = 50
+	}
+	if q.State != "" {
+		var state agk.RunState
+		if err := state.UnmarshalText([]byte(q.State)); err != nil {
+			return fmt.Errorf("db: %q is not a run state: %w", q.State, err)
+		}
+	}
+	return nil
+}
+
+// bound is a time as the query binds it, where the zero time is null and bounds nothing.
+func bound(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // RunSummary is one row of a listing.
 type RunSummary struct {
+	// Namespace is where the run is, which a listing across namespaces has to say and a run
+	// read by its identifier alone is the only place to learn.
+	Namespace string `json:"namespace"`
+
 	Run      agk.RunID    `json:"run"`
 	Workflow string       `json:"workflow"`
 	Commit   string       `json:"commit"`
@@ -93,30 +126,29 @@ type RunDetail struct {
 // listing whose second page overlapped its first. The surfacing is the client's to do over what
 // it was given.
 func (n *NS) Runs(ctx context.Context, q RunQuery) ([]RunSummary, error) {
-	if q.Limit < 1 || q.Limit > 500 {
-		q.Limit = 50
+	if err := q.check(); err != nil {
+		return nil, err
 	}
-	if q.State != "" {
-		var state agk.RunState
-		if err := state.UnmarshalText([]byte(q.State)); err != nil {
-			return nil, fmt.Errorf("db: %q is not a run state: %w", q.State, err)
-		}
-	}
-
 	rows, err := n.tx.Query(ctx, `
-		select id, workflow, commit, state, trigger, triggered_by,
+		select namespace, id, workflow, commit, state, trigger, triggered_by,
 		       created_at, started_at, finished_at
 		from runs
 		where namespace = $1
 		  and ($2 = '' or workflow = $2)
 		  and ($3 = '' or state = $3)
+		  and ($5::timestamptz is null or created_at >= $5)
+		  and ($6::timestamptz is null or created_at <= $6)
 		order by created_at desc, id desc
-		limit $4`, n.namespace, q.Workflow, q.State, q.Limit)
+		limit $4`, n.namespace, q.Workflow, q.State, q.Limit, bound(q.Since), bound(q.Until))
 	if err != nil {
 		return nil, fmt.Errorf("db: the runs could not be read: %w", err)
 	}
-	defer rows.Close()
+	return summaries(rows)
+}
 
+// summaries reads the rows of a listing.
+func summaries(rows pgx.Rows) ([]RunSummary, error) {
+	defer rows.Close()
 	out := []RunSummary{}
 	for rows.Next() {
 		r, err := scanRun(rows)
@@ -137,10 +169,10 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 	var started, finished *time.Time
 
 	err := n.tx.QueryRow(ctx, `
-		select id, workflow, commit, state, trigger, triggered_by,
+		select namespace, id, workflow, commit, state, trigger, triggered_by,
 		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only
 		from runs where namespace = $1 and id = $2`, n.namespace, string(run)).
-		Scan(&d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
+		Scan(&d.Namespace, &d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
 			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunDetail{}, fmt.Errorf("%w: %s", ErrNoRun, run)
@@ -281,7 +313,7 @@ func scanRun(rows pgx.Rows) (RunSummary, error) {
 	var state, trigger string
 	var by *string
 	var started, finished *time.Time
-	if err := rows.Scan(&r.Run, &r.Workflow, &r.Commit, &state, &trigger, &by,
+	if err := rows.Scan(&r.Namespace, &r.Run, &r.Workflow, &r.Commit, &state, &trigger, &by,
 		&r.CreatedAt, &started, &finished); err != nil {
 		return RunSummary{}, err
 	}
@@ -301,4 +333,122 @@ func scanRun(rows pgx.Rows) (RunSummary, error) {
 		r.FinishedAt = *finished
 	}
 	return r, nil
+}
+
+// Workflow is one workflow, named as the installation names it: by its namespace and its name.
+type Workflow struct {
+	Namespace string
+	Name      string
+}
+
+// Workflows are every workflow there is, narrowed to one namespace or one name where either is
+// given, in order.
+//
+// It is the first half of a listing across namespaces: what the authorizer is asked about, one
+// workflow at a time, since a permission is held on a whole namespace or on a single workflow and
+// both are answered by asking about the workflow.
+func (w *Wide) Workflows(ctx context.Context, namespace, name string) ([]Workflow, error) {
+	rows, err := w.tx.Query(ctx, `
+		select namespace, name from workflows
+		where ($1 = '' or namespace = $1)
+		  and ($2 = '' or name = $2)
+		order by namespace, name`, namespace, name)
+	if err != nil {
+		return nil, fmt.Errorf("db: the workflows could not be read: %w", err)
+	}
+	defer rows.Close()
+	out := []Workflow{}
+	for rows.Next() {
+		var wf Workflow
+		if err := rows.Scan(&wf.Namespace, &wf.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, wf)
+	}
+	return out, rows.Err()
+}
+
+// Runs lists the runs of the workflows given and of no others, newest first, as NS.Runs orders
+// one namespace's.
+//
+// The second half of a listing across namespaces, given the workflows the authorizer allowed. None
+// given reads nothing, rather than everything: the filter is the authorisation decision, and a
+// missing one fails closed. q.Workflow narrows nothing here, since the workflows given already
+// have.
+func (w *Wide) Runs(ctx context.Context, among []Workflow, q RunQuery) ([]RunSummary, error) {
+	if err := q.check(); err != nil {
+		return nil, err
+	}
+	if len(among) == 0 {
+		return []RunSummary{}, nil
+	}
+	namespaces := make([]string, len(among))
+	names := make([]string, len(among))
+	for i, wf := range among {
+		namespaces[i], names[i] = wf.Namespace, wf.Name
+	}
+	rows, err := w.tx.Query(ctx, `
+		select namespace, id, workflow, commit, state, trigger, triggered_by,
+		       created_at, started_at, finished_at
+		from runs
+		where (namespace, workflow::text) in (select * from unnest($1::text[], $2::text[]))
+		  and ($3 = '' or state = $3)
+		  and ($4::timestamptz is null or created_at >= $4)
+		  and ($5::timestamptz is null or created_at <= $5)
+		order by created_at desc, id desc
+		limit $6`, namespaces, names, q.State, bound(q.Since), bound(q.Until), q.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("db: the runs could not be read: %w", err)
+	}
+	return summaries(rows)
+}
+
+// ErrNoOutput is no output of that name recorded on the run: the workflow declares none, or the
+// run has not ended, or it ended without every output it declares, since a run's outputs are
+// written when it ends and only when all of them are there.
+var ErrNoOutput = errors.New("db: the run records no output of that name")
+
+// Output is one workflow output of a run: the step port it is a view of, and the envelope that
+// port published.
+type Output struct {
+	Step     agk.Step
+	Port     agk.Port
+	Envelope Envelope
+}
+
+// Output reads one of a run's workflow outputs.
+//
+// runs.outputs names the step and the port each output is a view of, and steps.ports holds the
+// digest that port published, which is where the envelope is: the database keeps its digest and
+// never its bytes.
+func (n *NS) Output(ctx context.Context, run agk.RunID, name string) (Output, error) {
+	var raw []byte
+	err := n.tx.QueryRow(ctx,
+		`select outputs -> $3::text from runs where namespace = $1 and id = $2`,
+		n.namespace, string(run), name).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Output{}, fmt.Errorf("%w: %s", ErrNoRun, run)
+	}
+	if err != nil {
+		return Output{}, fmt.Errorf("db: the outputs of run %s could not be read: %w", run, err)
+	}
+	if len(raw) == 0 {
+		return Output{}, fmt.Errorf("%w: %s of run %s", ErrNoOutput, name, run)
+	}
+	var of struct {
+		Step agk.Step `json:"step"`
+		Port agk.Port `json:"port"`
+	}
+	if err := json.Unmarshal(raw, &of); err != nil || of.Step == "" || of.Port == "" {
+		return Output{}, fmt.Errorf("db: the output %s of run %s is recorded as %s, which names no step port", name, run, raw)
+	}
+	ports, err := n.PublishedPorts(ctx, run, of.Step)
+	if err != nil {
+		return Output{}, err
+	}
+	e, published := ports[of.Port]
+	if !published {
+		return Output{}, fmt.Errorf("db: the output %s of run %s is a view of %s/%s, which published nothing", name, run, of.Step, of.Port)
+	}
+	return Output{Step: of.Step, Port: of.Port, Envelope: e}, nil
 }

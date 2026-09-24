@@ -243,6 +243,20 @@ type Resolved struct {
 // beside it: the name, the size and the digest are what the run detail keeps showing, and
 // the error is what tells an API to answer 410 rather than 404.
 func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
+	return n.resolve(ctx, u, "")
+}
+
+// Claim is Resolve, holding the reference until the transaction ends.
+//
+// It is what a fetch against a budget is served under. The fetch counts when the response
+// completes, which is after the bytes have gone, so two fetches of the last one that each read the
+// budget before either counted would both be served it. Held, the second waits for the first, and
+// then reads the reference the first retired.
+func (n *NS) Claim(ctx context.Context, u agk.URI) (Resolved, error) {
+	return n.resolve(ctx, u, " for update")
+}
+
+func (n *NS) resolve(ctx context.Context, u agk.URI, lock string) (Resolved, error) {
 	out := Resolved{URI: u}
 	var stored string
 	var retired *time.Time
@@ -250,7 +264,7 @@ func (n *NS) Resolve(ctx context.Context, u agk.URI) (Resolved, error) {
 	err := n.tx.QueryRow(ctx,
 		`select digest, size_bytes, media_type, status, expires_at, retired_at, fetches_left
 		 from artifacts
-		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`,
+		 where namespace = $1 and run_id = $2 and step = $3 and port = $4 and name = $5`+lock,
 		n.namespace, string(u.Run), string(u.Step), string(u.Port), u.Name,
 	).Scan(&stored, &out.Size, &out.MediaType, &out.Status, &out.ExpiresAt, &retired, &left)
 	if errors.Is(err, pgx.ErrNoRows) {
