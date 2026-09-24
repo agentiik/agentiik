@@ -148,6 +148,12 @@ func RunnerPools() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.RunnerPool })
 }
 
+// RunnerRegistrations returns the join corpus: what a machine sends the API to become a runner, and
+// what the API answers, each document the pair.
+func RunnerRegistrations() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.RunnerRegistration })
+}
+
 // Wire is the schema document every message above is held to.
 func Wire() ([]byte, error) { return fs.ReadFile(FS, "wire.schema.json") }
 

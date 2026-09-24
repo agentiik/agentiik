@@ -205,8 +205,8 @@ func readResult(body []byte) (TaskResult, error) {
 // against the vendored document. What is written out here is what a controller would otherwise
 // read wrongly or not at all: which dispatch and which runner, whether it is an ending, what a
 // container reported where one ran, and every name that is about to become an object key, a row or
-// a subject. The runner is held to a subject token rather than to the lowercase names the wire
-// prints, because a runner answers to the identifier the API minted it, which is a ULID.
+// a subject. The runner is held to the wire's lowercase grammar, which is the one the API mints
+// its identifier in, and which can be a subject token.
 func (r TaskResult) check() error {
 	if !isULID(r.TaskID) {
 		return fmt.Errorf("task_id %q is not a dispatch identifier: a result carries back the one its task message carried", r.TaskID)

@@ -2,9 +2,19 @@ package api
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json/jsontext"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -163,39 +173,284 @@ func (s *RunnerAPI) Runner(ctx context.Context, credential string) (Runner, erro
 	return Runner{ID: found.ID, Pool: found.Pool, State: found.State}, nil
 }
 
-// Join is what a machine presents.
+// Join is what a machine presents, in the shape wire.schema.json gives it:
+// $defs/runnerRegistration/request.
+//
+// "the public key, the labels it claims, its AGK_RUNNER_NAMESPACES, its capacity in vCPU, memory
+// and disk, its architecture and its agent version". What work the machine will accept is its
+// pool's to say, and the host's namespaces only narrow that. The pool is not claimed at all: it
+// travels in the token, "so that a machine cannot join a pool by naming it".
 type Join struct {
-	Token  string   `json:"token"`
-	Labels []string `json:"labels,omitempty"`
+	Token        string    `json:"token"`
+	PublicKey    string    `json:"public_key"`
+	Labels       []string  `json:"labels"`
+	Capacity     *Capacity `json:"capacity"`
+	Architecture string    `json:"architecture"`
+	AgentVersion string    `json:"agent_version"`
 
-	// "the labels it claims, its capacity in vCPU, memory and disk, its architecture and
-	// its agent version". What work the machine will accept is not in that list and is not
-	// the machine's to say: it is its pool's.
-	CPU          int    `json:"cpu"`
-	MemoryBytes  int64  `json:"memory_bytes"`
-	DiskBytes    int64  `json:"disk_bytes"`
-	Architecture string `json:"architecture"`
-	AgentVersion string `json:"agent_version"`
+	// Namespaces is sent "only when it accepts fewer than its pool does", and nil narrows
+	// nothing.
+	Namespaces []string `json:"namespaces,omitempty"`
+
+	// Containment is optional, as the wire has it: the floor is held by the runner's own
+	// refusal to take work on a daemon without the remapping, and this is what the inventory
+	// shows of it.
+	Containment *Containment `json:"containment,omitempty"`
 }
+
+// Capacity is what the machine has, "as the agent measured it on the host rather than as an
+// operator typed it", memory and disk in the grammar a step writes its own memory in.
+type Capacity struct {
+	VCPU   int    `json:"vcpu"`
+	Memory string `json:"memory"`
+	Disk   string `json:"disk"`
+}
+
+// Containment is what the host can prove about how a container will be contained on it.
+type Containment struct {
+	Runtime     string `json:"runtime"`
+	UsernsRemap bool   `json:"userns_remap"`
+
+	// remapWritten is whether userns_remap was written, since false is a value a running
+	// runner reports and the wire requires one or the other.
+	remapWritten bool
+}
+
+// The grammars the wire holds a join to, copied from wire.schema.json and held to the patterns it
+// writes by a test, as a pool's are.
+var (
+	// publicKeyForm is "PEM around a SubjectPublicKeyInfo", one block and nothing around it.
+	publicKeyForm = regexp.MustCompile(`^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/\n]+={0,2}\n-----END PUBLIC KEY-----\n?$`)
+	// architectureForm is "spelled exactly as the arch= label spells it".
+	architectureForm = regexp.MustCompile(`^[a-z0-9]+$`)
+	// versionForm is the agent's version "written as the release is tagged".
+	versionForm = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	// runtimeForm is the runtime "under the name the daemon knows it by".
+	runtimeForm = regexp.MustCompile(`^[a-z][a-z0-9_.-]*$`)
+)
 
 func (j *Join) field(b *body, name string) error {
 	switch name {
 	case "token":
 		return text(b, &j.Token)
+	case "public_key":
+		return text(b, &j.PublicKey)
 	case "labels":
 		return texts(b, &j.Labels, namesMax, fmt.Sprintf("a machine claims at most %d labels, all of them ones its join token permits", namesMax))
-	case "cpu":
-		return integer(b, &j.CPU)
-	case "memory_bytes":
-		return integer(b, &j.MemoryBytes)
-	case "disk_bytes":
-		return integer(b, &j.DiskBytes)
+	case "capacity":
+		if err := joinNotNull(b, "the capacity the machine measured"); err != nil {
+			return err
+		}
+		var c Capacity
+		if err := b.fields(&c); err != nil {
+			return err
+		}
+		j.Capacity = &c
+		return nil
 	case "architecture":
 		return text(b, &j.Architecture)
 	case "agent_version":
 		return text(b, &j.AgentVersion)
+	case "namespaces":
+		if err := joinNotNull(b, "the namespaces the host narrows itself to, and a host that narrows nothing leaves namespaces out"); err != nil {
+			return err
+		}
+		return texts(b, &j.Namespaces, namesMax, fmt.Sprintf("a machine narrows itself to at most %d namespaces", namesMax))
+	case "containment":
+		if err := joinNotNull(b, "what the host can prove of its containment, and a host that reports none leaves containment out"); err != nil {
+			return err
+		}
+		var c Containment
+		if err := b.fields(&c); err != nil {
+			return err
+		}
+		j.Containment = &c
+		return nil
+	case "private_key":
+		// Named, because it is the one field somebody might send meaning well: "The private
+		// half never leaves the machine and has no field here".
+		return errors.New("the request body carries a private key, and the private half of a runner's keypair never leaves its host: a join sends public_key alone. Generate a new keypair, since this one has been sent somewhere")
 	}
 	return unknown(name)
+}
+
+func (c *Capacity) field(b *body, name string) error {
+	switch name {
+	case "vcpu":
+		return integer(b, &c.VCPU)
+	case "memory":
+		return text(b, &c.Memory)
+	case "disk":
+		return text(b, &c.Disk)
+	}
+	return unknown(name)
+}
+
+func (c *Containment) field(b *body, name string) error {
+	switch name {
+	case "runtime":
+		return text(b, &c.Runtime)
+	case "userns_remap":
+		if err := joinNotNull(b, "true or false"); err != nil {
+			return err
+		}
+		c.remapWritten = true
+		return flag(b, &c.UsernsRemap)
+	}
+	return unknown(name)
+}
+
+// joinNotNull refuses null where a join writes an object, a list or a boolean, and reads nothing
+// otherwise. The wire types each and allows no null, and read as left out, null would be a host
+// saying nothing where it meant to say something.
+func joinNotNull(b *body, want string) error {
+	if b.d.PeekKind() != jsontext.KindNull {
+		return nil
+	}
+	if _, err := b.d.ReadToken(); err != nil {
+		return malformed(err)
+	}
+	return fmt.Errorf("the request body holds null at %.100q, where it holds %s", b.d.StackPointer(), want)
+}
+
+// joining checks a join the way the wire would, and answers it as the database takes it.
+//
+// Everything but the token, which is checked where it is spent and refused there with the one
+// answer every bad token gets. What is refused here is the machine's description of itself, and
+// saying why costs nothing: none of it says whether a token exists.
+func (j Join) joining() (db.Joining, error) {
+	switch {
+	case j.PublicKey == "":
+		return db.Joining{}, errors.New("the join sends no public_key: the host generates an Ed25519 keypair, keeps the private half and sends the public one, which is what makes the runner that comes back after a restart provably the one that joined")
+	case j.Labels == nil:
+		return db.Joining{}, errors.New("the join claims no labels: a machine claiming none writes \"labels\": [], so that claiming nothing is something the request says")
+	case j.Capacity == nil:
+		return db.Joining{}, errors.New("the join sends no capacity: a machine says what it has, {\"vcpu\", \"memory\", \"disk\"}, since a runner refuses a task that would take it past what it declared")
+	case j.Architecture == "":
+		return db.Joining{}, errors.New("the join names no architecture: a machine says what it is, spelled as its arch= label spells it")
+	case !architectureForm.MatchString(j.Architecture):
+		return db.Joining{}, fmt.Errorf("%.64q is not an architecture: it is spelled as the arch= label spells it, amd64 or arm64, lowercase letters and digits", j.Architecture)
+	case j.AgentVersion == "":
+		return db.Joining{}, errors.New("the join names no agent_version: a machine says which agent it runs, so that one left behind on a host nobody reimaged can be told from the rest")
+	case !versionForm.MatchString(j.AgentVersion):
+		return db.Joining{}, fmt.Errorf("%.64q is not an agent version: it is written as the release is tagged, 0.2.0", j.AgentVersion)
+	}
+
+	key, err := publicKeyOf(j.PublicKey)
+	if err != nil {
+		return db.Joining{}, err
+	}
+	if err := distinct(j.Labels, "label", func(label string) error {
+		if !labelForm.MatchString(label) {
+			return fmt.Errorf("%.64q is not a label: a label is key=value, the key in lowercase, and a machine claims only labels its token permits", label)
+		}
+		return nil
+	}); err != nil {
+		return db.Joining{}, err
+	}
+
+	c := *j.Capacity
+	if c.VCPU < 1 {
+		return db.Joining{}, fmt.Errorf("the machine declares %d vCPU, and one that runs anything has one or more", c.VCPU)
+	}
+	memory, err := sizeOf("memory", c.Memory)
+	if err != nil {
+		return db.Joining{}, err
+	}
+	disk, err := sizeOf("disk", c.Disk)
+	if err != nil {
+		return db.Joining{}, err
+	}
+
+	if j.Namespaces != nil {
+		if len(j.Namespaces) == 0 {
+			return db.Joining{}, errors.New("the join narrows the host to no namespace, and a runner accepting none could never be handed a task: a host that narrows nothing leaves namespaces out")
+		}
+		if err := distinct(j.Namespaces, "namespace", func(namespace string) error {
+			if !givenName.MatchString(namespace) {
+				return fmt.Errorf("%.64q is not a namespace: a namespace is named in lowercase words joined by hyphens", namespace)
+			}
+			return nil
+		}); err != nil {
+			return db.Joining{}, err
+		}
+	}
+
+	var contained *db.Containment
+	if cn := j.Containment; cn != nil {
+		switch {
+		case cn.Runtime == "":
+			return db.Joining{}, errors.New("the containment names no runtime: it is the one the daemon creates this runner's containers with, runc or runsc, under the name the daemon knows it by")
+		case !runtimeForm.MatchString(cn.Runtime):
+			return db.Joining{}, fmt.Errorf("%.64q is not a container runtime: it is named as the daemon names it, lowercase, runc or runsc", cn.Runtime)
+		case !cn.remapWritten:
+			return db.Joining{}, errors.New("the containment does not say whether the daemon remaps container root: userns_remap is true or false, and a host that says nothing would have to be read as meeting the floor")
+		}
+		contained = &db.Containment{Runtime: cn.Runtime, UsernsRemap: cn.UsernsRemap}
+	}
+
+	return db.Joining{
+		Token: j.Token, Labels: j.Labels, PublicKey: key,
+		CPU: c.VCPU, MemoryBytes: memory, DiskBytes: disk,
+		Architecture: j.Architecture, AgentVersion: j.AgentVersion,
+		Namespaces: j.Namespaces, Containment: contained,
+	}, nil
+}
+
+// publicKeyOf reads the host's public key: one PEM block of type PUBLIC KEY around a
+// SubjectPublicKeyInfo, holding an Ed25519 key.
+//
+// Ed25519 and nothing else, because the key is what a rotation is signed with, "an Ed25519
+// signature over the runner identifier and the request time", and a key of another algorithm
+// would be a runner that joined and could never renew.
+func publicKeyOf(written string) (ed25519.PublicKey, error) {
+	if !publicKeyForm.MatchString(written) {
+		return nil, errors.New("the public_key is not a PEM public key: it is one block, -----BEGIN PUBLIC KEY----- and its base64 and -----END PUBLIC KEY-----, with nothing around it, as x509.MarshalPKIXPublicKey and pem.Encode write one")
+	}
+	block, _ := pem.Decode([]byte(written))
+	if block == nil {
+		return nil, errors.New("the public_key is not a PEM public key: its base64 does not decode")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, errors.New("the public_key is not a SubjectPublicKeyInfo, which is what the block around it says it holds")
+	}
+	key, ok := parsed.(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("the public_key is %s, and a runner's key is Ed25519, the algorithm a rotation is signed with", algorithmOf(parsed))
+	}
+	return key, nil
+}
+
+// algorithmOf names the kind of a key that is not the one asked for, for the sentence refusing it.
+func algorithmOf(key any) string {
+	switch key.(type) {
+	case *rsa.PublicKey:
+		return "an RSA key"
+	case *ecdsa.PublicKey:
+		return "an ECDSA key"
+	case *ecdh.PublicKey:
+		return "an X25519 key"
+	}
+	return "a key of another algorithm"
+}
+
+// sizeOf reads a size the machine measured, "a whole number above zero with a binary suffix", as
+// bytes. One past what 63 bits count is refused, since no host has eight exbibytes of anything and
+// the inventory counts in bytes.
+func sizeOf(what, written string) (int64, error) {
+	if written == "" {
+		return 0, fmt.Errorf("the capacity writes no %s: it is a whole number above zero with a binary suffix, as a step writes its own, 64Gi or 1Ti", what)
+	}
+	if !memoryForm.MatchString(written) {
+		return 0, fmt.Errorf("the capacity's %s is %.64q: it is a whole number above zero with a binary suffix, Ki, Mi, Gi or Ti, so that 64Gi cannot be read as 64 bytes", what, written)
+	}
+	unit := map[string]int64{"Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40}[written[len(written)-2:]]
+	n, err := strconv.ParseInt(written[:len(written)-2], 10, 64)
+	if err != nil || n > math.MaxInt64/unit {
+		return 0, fmt.Errorf("the capacity's %s is %.64q, which is more than a host has", what, written)
+	}
+	return n * unit, nil
 }
 
 func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
@@ -204,27 +459,30 @@ func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 		fail(w, statusOf(err), err.Error())
 		return
 	}
+	machine, err := j.joining()
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var joined db.Joined
-	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+	err = s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		joined, err = wide.Join(ctx, db.Joining{
-			Token: j.Token, Labels: j.Labels,
-			CPU: j.CPU, MemoryBytes: j.MemoryBytes, DiskBytes: j.DiskBytes,
-			Architecture: j.Architecture, AgentVersion: j.AgentVersion,
-		}, s.rotation, s.now())
+		joined, err = wide.Join(ctx, machine, s.rotation, s.now())
 		return err
 	})
 	switch {
 	case errors.Is(err, db.ErrNoJoinToken):
-		// Wrong, spent, expired, or claiming a label it may not: one answer for all of
-		// them, because a machine that gets a different answer for each is a machine
-		// somebody is using to find out which tokens exist.
+		// Wrong, spent, expired, claiming a label it may not or a namespace its pool does
+		// not accept: one answer for all of them, because a machine that gets a different
+		// answer for each is a machine somebody is using to find out which tokens exist.
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, "that join token cannot be redeemed")
 		return
 	case err != nil:
-		fail(w, http.StatusBadRequest, err.Error())
+		// Everything the machine said was checked above, so what is left is the
+		// installation's, and a caller nobody has authenticated is told nothing of it.
+		fail(w, http.StatusInternalServerError, "the runner could not be created")
 		return
 	}
 
@@ -233,7 +491,7 @@ func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 		"runner":     joined.Runner,
 		"pool":       joined.Pool,
 		"credential": joined.Credential,
-		"rotate_by":  joined.RotateBy.Format(time.RFC3339Nano),
+		"rotate_by":  joined.RotateBy.UTC().Format(time.RFC3339Nano),
 	})
 }
 
