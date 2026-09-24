@@ -346,14 +346,31 @@ func (d *Docker) hold(id agk.TaskID) bool {
 // as package bus says. A key a Run has is left alone, since that Run lets go of it when it
 // returns and a stop reaches the task through it. It is for a delivery Hold answered nil,
 // the one delivery holding the key, and never for one Hold refused, which holds nothing.
-// The record under the work root keeps the key as taken and not ended, which refuses
-// nothing.
+//
+// The record under the work root forgets the key as well, where it says the key was taken
+// and nothing more. Kept, the entry would refuse nothing, but Dispatched would go on
+// listing it, and a restarted runner would name in its heartbeat every key it ever put
+// back: on a host that claims fewer labels than its pool carries, that is most of what the
+// pool publishes in a week.
 func (d *Docker) Release(id agk.TaskID) {
+	// The record's lock first, as Hold takes it, so that no Hold of the key comes between
+	// letting go of it here and forgetting it on disk.
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	if d.release(id) {
+		d.keys.forget(id)
+	}
+}
+
+// release lets go of a key held and not run, and answers whether it did.
+func (d *Docker) release(id agk.TaskID) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if h := d.inflight[id]; h != nil && !h.running {
 		delete(d.inflight, id)
+		return true
 	}
+	return false
 }
 
 // lookup answers with the task in flight, where this process is holding it.

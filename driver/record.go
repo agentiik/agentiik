@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -268,6 +270,19 @@ func (k *keys) write(e Ending) error {
 	return nil
 }
 
+// forget takes away one key's entry where it says the key was taken and nothing more. An
+// ending is kept, being what refuses the key. A failure is not said: an entry left behind
+// refuses nothing, and is only listed by Dispatched until the prune takes it.
+func (k *keys) forget(id agk.TaskID) {
+	e, found, err := k.read(id)
+	if err != nil || !found || e.State.Terminal() {
+		return
+	}
+	if path, err := k.path(id); err == nil {
+		os.Remove(path)
+	}
+}
+
 // prune takes away every entry last written before the record's retention, and the
 // directories that leaves empty.
 //
@@ -379,10 +394,77 @@ func (d *Docker) Hold(id agk.TaskID) error {
 		return fault(step, ErrTaskInFlight, ChargePlatform, "task %s", id)
 	}
 	if err := d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()}); err != nil {
-		d.Release(id)
+		d.release(id)
 		return err
 	}
 	return nil
+}
+
+// Dispatched are the keys the record says this host took and never carried to an ending,
+// the most recently taken first.
+//
+// A runner calls it as it starts, before it takes anything, and what it answers then is
+// what an earlier process on this host held when it stopped: written down by Hold and never
+// ended, since Release forgets a key let go of and an ending replaces the entry. Some of
+// those were redeemed and are bound to this runner, their containers perhaps still running
+// on the daemon, and the controller counts a bound task as held only while its runner goes
+// on naming it. So the heartbeat names these from the first, for as long as the message of
+// one may still come round to be taken again here.
+//
+// An entry that does not read is passed over rather than refusing the rest, since this is a
+// list of what to name and one key left out of it is one task the sweep may declare lost,
+// which is what happens to all of them where nothing is listed.
+func (d *Docker) Dispatched() ([]agk.TaskID, error) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	if d.keys.root == "" {
+		return nil, errors.New("driver: no work root: the record of the keys this host has taken is kept under one")
+	}
+	type taken struct {
+		key agk.TaskID
+		at  time.Time
+	}
+	var found []taken
+	top := filepath.Join(d.keys.root, KeysDir)
+	err := filepath.WalkDir(top, func(path string, e fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist) && path == top:
+			return fs.SkipAll
+		case err != nil:
+			return err
+		case !e.Type().IsRegular() || filepath.Ext(path) != ".json":
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var entry Ending
+		if json.Unmarshal(b, &entry) != nil || entry.State.Terminal() || entry.Key.Validate() != nil {
+			return nil
+		}
+		// Only an entry kept where its key's entry is kept, so that a file copied or
+		// renamed under the record does not name a key it is not the entry of.
+		if want, err := d.keys.path(entry.Key); err != nil || want != path {
+			return nil
+		}
+		found = append(found, taken{entry.Key, entry.At})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("driver: the record of the keys this host has taken could not be read: %w", err)
+	}
+	slices.SortFunc(found, func(a, b taken) int {
+		if c := b.at.Compare(a.at); c != 0 {
+			return c
+		}
+		return strings.Compare(string(a.key), string(b.key))
+	})
+	keys := make([]agk.TaskID, len(found))
+	for i, f := range found {
+		keys[i] = f.key
+	}
+	return keys, nil
 }
 
 // refuseCompleted is the refusal Run makes of a key this host has already carried to an
