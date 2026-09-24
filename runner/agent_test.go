@@ -18,10 +18,12 @@ func agent(t *testing.T, readies *int) Agent {
 	t.Cleanup(func() { daemon.Close() })
 	// The host an installed agent finds: the three capabilities a remapped daemon asks
 	// for, and a secrets directory on a tmpfs mounted noexec,nosuid,nodev.
+	endings := &Endings{}
 	d, err := driver.New(driver.Config{
 		Socket:   daemon.Socket(),
 		WorkRoot: t.TempDir(),
 		Policy:   driver.Policy{SecretsDir: "/run/agentiik/secrets"},
+		Observer: endings,
 		Host:     installed{},
 	})
 	if err != nil {
@@ -32,7 +34,7 @@ func agent(t *testing.T, readies *int) Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Agent{Driver: d, Client: client, Ready: func() error { *readies++; return nil }}
+	return Agent{Driver: d, Client: client, Endings: endings, Ready: func() error { *readies++; return nil }}
 }
 
 // installed answers as the host of an agent installed as the page says.

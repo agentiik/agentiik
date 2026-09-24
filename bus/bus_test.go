@@ -892,6 +892,52 @@ func TestAResultIsHandedOnWithTheRunnerWhoseSubjectItCameOn(t *testing.T) {
 	}
 }
 
+// A take asking for a batch answers as soon as one task is there, with whatever else is already
+// there, rather than holding the first until the batch fills or the wait runs out.
+func TestATakeForABatchAnswersOnceOneTaskIsThere(t *testing.T) {
+	b := open(t)
+	m := message(step(t))
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := b.Publish(context.Background(), DefaultPool, m); err != nil {
+			t.Error(err)
+		}
+	}()
+	began := time.Now()
+	taken, err := b.Take(t.Context(), DefaultPool, 8, 20*time.Second)
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("a take for 8 answered %d tasks and %v", len(taken), err)
+	}
+	if waited := time.Since(began); waited > 5*time.Second {
+		t.Errorf("a take for 8 held the one task there for %s", waited)
+	}
+}
+
+// A take waits for work until its wait runs out or its context ends, whichever comes first, so an
+// agent being stopped is not held for the rest of a long poll. A wait that runs out with nothing
+// taken is no failure.
+func TestATakeEndsWhenItsContextDoes(t *testing.T) {
+	b := open(t)
+
+	taken, err := b.Take(t.Context(), "dmz", 8, 300*time.Millisecond)
+	if err != nil || len(taken) != 0 {
+		t.Fatalf("a take that found nothing answered %d tasks and %v", len(taken), err)
+	}
+
+	// Stopped, as an agent is, rather than given a deadline, which a take reads as a shorter
+	// wait.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	time.AfterFunc(300*time.Millisecond, cancel)
+	began := time.Now()
+	if _, err := b.Take(ctx, "dmz", 8, time.Minute); !errors.Is(err, context.Canceled) {
+		t.Errorf("a take whose context was cancelled answered %v", err)
+	}
+	if waited := time.Since(began); waited > 5*time.Second {
+		t.Errorf("a take whose context was cancelled after 300ms waited %s", waited)
+	}
+}
+
 // A pool the control plane made no consumer for has nothing to take from, and Take says so
 // rather than making one. A runner able to create a consumer could create one with no filter,
 // and the credential a runner holds is refused the attempt anyway.
