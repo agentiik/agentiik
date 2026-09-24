@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentiik/agentiik/controller"
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -236,10 +235,10 @@ func takesFromThePoolsConsumer(t *testing.T, a authenticated) {
 			t.Fatal(err)
 		}
 	}
-	if err := b.Publish(t.Context(), dispatch("mine", "pool=dmz")); err != nil {
+	if err := b.Publish(t.Context(), message("mine", "pool=dmz")); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Publish(t.Context(), dispatch("theirs", "pool=lan")); err != nil {
+	if err := b.Publish(t.Context(), message("theirs", "pool=lan")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -348,7 +347,7 @@ func TestARunnerHearsNothingHandedToAnotherRunner(t *testing.T) {
 
 	// runner-1 takes a task of dmz, holds it and answers it, and the controller takes the
 	// answer back.
-	if err := b.Publish(t.Context(), dispatch("mine", "pool=dmz")); err != nil {
+	if err := b.Publish(t.Context(), message("mine", "pool=dmz")); err != nil {
 		t.Fatal(err)
 	}
 	minted, err := a.issuer.ForRunner("runner-1", "dmz", until)
@@ -372,7 +371,7 @@ func TestARunnerHearsNothingHandedToAnotherRunner(t *testing.T) {
 	if err := runner.Report(t.Context(), result); err != nil {
 		t.Fatalf("reporting: %s", err)
 	}
-	got := answering(t, b, func(controller.Answer) error { return nil })
+	got := reporting(t, b, func(heard) error { return nil })
 	select {
 	case <-got:
 	case <-time.After(10 * time.Second):

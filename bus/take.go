@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentiik/agentiik/controller"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -301,22 +300,28 @@ func (b *Bus) Report(ctx context.Context, r TaskResult) error {
 	return nil
 }
 
-// Answers hands every result to fn until ctx is done.
+// Reports hands every result to fn until ctx is done, with the runner whose subject it arrived on.
 //
-// One durable consumer, because there is one active controller. fn is called before the message
-// is acknowledged and never after, so a controller dying in the middle gets the result again
-// rather than losing it, and fn returning an error leaves the message for a later delivery, timed
-// by again, unless the error is controller.ErrNotAResult, which no delivery would change. Nothing
-// deduplicates: "the same result delivered twice writes the same thing" is the controller's
-// promise, made good by the evaluator answering a duplicate with no decision.
+// It is Report's other end, and the control plane's: package bus/control is what calls it, and
+// what turns each result into the answer the controller takes. One durable consumer, because there
+// is one active controller. fn is called before the message is acknowledged and never after, so a
+// controller dying in the middle gets the result again rather than losing it, and fn returning an
+// error leaves the message for a later delivery, timed by again, unless the error is one Drop made,
+// which no delivery would change. Nothing deduplicates: "the same result delivered twice writes the
+// same thing" is the controller's promise, made good by the evaluator answering a duplicate with no
+// decision.
 //
-// A result is read as the wire describes it, and handed on with its outputs as digests. One the
-// reader refuses is taken off the queue and said out loud, as one nobody can decode is: a result
-// that is not an ending, or that says what no container could, reads the same on every delivery.
-// So is one naming a runner other than the one whose subject it came on, for the reason
-// ResultSubject gives. The reader is not the schema, and readResult and check say where the two
-// part.
-func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.Answer) error) error {
+// A result is read as the wire describes it, with its outputs as digests. One the reader refuses
+// is taken off the queue and said out loud, as one nobody can decode is: a result that is not an
+// ending, or that says what no container could, reads the same on every delivery. The reader is
+// not the schema, and readResult and check say where the two part.
+//
+// The runner is handed on beside the result rather than held to it here. The subject is who sent
+// it, for the reason ResultSubject gives, and a result naming anybody else is a result from a
+// runner that does not hold the task, which is the controller's to name, as
+// controller.ErrNotTheHolder. Naming it here would link the controller into every runner, so
+// package bus/control compares the two and drops such a result.
+func (b *Bus) Reports(ctx context.Context, fn func(ctx context.Context, sender string, r TaskResult) error) error {
 	if fn == nil {
 		return errors.New("bus: consuming results with nothing to hand them to")
 	}
@@ -343,29 +348,22 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 			return fmt.Errorf("bus: results could not be taken: %w", err)
 		}
 		for msg := range msgs.Messages() {
-			a, err := readResult(msg.Data())
+			r, err := readResult(msg.Data())
 			if err != nil {
 				b.report(msg.Subject(), fmt.Errorf("a result could not be read: %w", err))
 				msg.Term()
 				continue
 			}
-			// The subject is who sent it, and the result is taken as that
-			// runner's word or not at all. One naming somebody else is a
-			// machine of the pool speaking for another, the same on every
-			// delivery, and the controller is not shown it.
-			if sender := strings.TrimPrefix(msg.Subject(), resultPrefix); sender != a.Runner {
-				b.report(msg.Subject(), fmt.Errorf("%w: %w: the result of %s names %s and was published by %s", controller.ErrNotAResult, controller.ErrNotTheHolder, a.Result.Task, a.Runner, sender))
-				msg.Term()
-				continue
-			}
-			if err := fn(ctx, a); err != nil {
-				if errors.Is(err, controller.ErrNotAResult) {
+			sender := strings.TrimPrefix(msg.Subject(), resultPrefix)
+			if err := fn(ctx, sender, r); err != nil {
+				var drop *dropped
+				if errors.As(err, &drop) {
 					// Readable, and still nothing a controller could ever
 					// record: it would be the same on every delivery, and
 					// this consumer delivers without limit. So it goes the
 					// way of a message nobody can read, off the queue and
 					// said out loud.
-					b.report(msg.Subject(), err)
+					b.report(msg.Subject(), drop.err)
 					msg.Term()
 					continue
 				}
@@ -386,6 +384,27 @@ func (b *Bus) Answers(ctx context.Context, fn func(context.Context, controller.A
 	}
 	return ctx.Err()
 }
+
+// Drop is what the function Reports hands a result to answers for one no delivery would change,
+// err saying why. Reports takes that result off the queue and says err through Trouble, where it
+// leaves one answered with any other error for a later delivery.
+//
+// Which results no controller could ever record is for the controller's rules to say, and this
+// package links no controller, so the function says it: package bus/control drops a result the
+// controller refused with controller.ErrNotAResult, and one naming a runner other than its sender.
+func Drop(err error) error {
+	if err == nil {
+		err = errors.New("a result taken off the queue with no reason given")
+	}
+	return &dropped{err: err}
+}
+
+// dropped is an error Drop made. It reads as the error it carries and unwraps to it, so Trouble is
+// told what the function said and errors.Is still finds whatever that wraps.
+type dropped struct{ err error }
+
+func (d *dropped) Error() string { return d.err.Error() }
+func (d *dropped) Unwrap() error { return d.err }
 
 // again is how long a result the controller could not record waits before it is delivered again.
 //
