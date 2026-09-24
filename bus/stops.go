@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -115,9 +114,10 @@ func (b *Bus) Stop(ctx context.Context, s graph.Stop) error {
 //
 // It is Stop's other end, and a runner's: the connection OpenRunner opened is the one its
 // credential allows to hear StopSubject, and a runner has no other. Every runner hears every stop,
-// and fn is what finds out whether this one holds the task, since a stop is published without
-// knowing where the task runs: the controller "does not choose a machine", so it cannot address
-// one either.
+// and fn is what finds out whether this one holds the task. A stop names a key and no runner,
+// because the evaluator that decides it knows nothing of runners, and a dispatch taken and not yet
+// redeemed is bound to none, so the one place its holder is sure to be listening is a subject every
+// runner hears.
 //
 // It answers once the server has the subscription, and not before, so a stop published after it
 // returns is one fn is handed. A runner therefore calls it before it takes anything: a task taken
@@ -127,47 +127,90 @@ func (b *Bus) Stop(ctx context.Context, s graph.Stop) error {
 //
 // The subject keeps nothing, and neither does this. A stop published while the connection was
 // down is not handed over when it comes back, and neither is one the client dropped because fn
-// fell behind: the client resubscribes on its own, and the heartbeat's cancel list is the
-// backstop for the gap, carrying the same meaning. So fn is handed stops one at a time, in the
-// order they arrived, and one that blocks holds back those behind it: it should hand the stop on
-// rather than wait out a container's grace. A stop nobody can read is said through Trouble and
-// nothing is handed over for it, where handing over a guess would stop a container for a reason
-// nobody gave, or the wrong one.
+// fell behind, which is said through Trouble: the client resubscribes on its own, and the
+// heartbeat's cancel list is the backstop for the gap, carrying the same meaning. So fn is handed
+// stops one at a time, in the order they arrived, and one that blocks holds back those behind it:
+// it should hand the stop on rather than wait out a container's grace. A stop nobody can read is
+// said through Trouble and nothing is handed over for it, where handing over a guess would stop a
+// container for a reason nobody gave, or the wrong one.
 func (b *Bus) Stops(ctx context.Context, fn func(graph.Stop)) error {
 	if fn == nil {
 		return errors.New("bus: hearing stops with nothing to hand them to")
 	}
-	sub, err := b.conn.Subscribe(StopSubject, func(msg *nats.Msg) {
-		// A message already on its way when ctx ended is not handed over: the caller
-		// said it had stopped listening.
-		if ctx.Err() != nil {
-			return
-		}
-		s, err := readStop(msg.Data)
-		if err != nil {
-			b.report(StopSubject, fmt.Errorf("a stop could not be read: %w", err))
-			return
-		}
-		fn(s)
-	})
+	// A subscription read by hand rather than through a handler, because it is the one kind
+	// the client keeps the server's refusal on, which is what the connection was opened
+	// with PermissionErrOnSubscribe for. The connection's last error is no place to look: any
+	// later refusal on the same connection, a result published under another runner's name,
+	// overwrites it, and a refusal to publish a stop reads much like a refusal to hear one.
+	sub, err := b.conn.SubscribeSync(StopSubject)
 	if err != nil {
 		return fmt.Errorf("bus: stops could not be listened for: %w", err)
 	}
 
-	// The server answers a subscription it refuses with an error of its own, which the
-	// client records rather than returns, and it answers before the flush's round trip
-	// comes back. So once the flush is through, a refusal is there to read. Bounded for the
-	// reason Stop gives.
+	// The server answers a subscription it refuses with an error of its own, and it answers
+	// before the flush's round trip comes back, so once the flush is through the client has
+	// recorded a refusal against the subscription. Bounded for the reason Stop gives.
 	flush, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	if err := b.conn.FlushWithContext(flush); err != nil {
 		sub.Unsubscribe()
 		return fmt.Errorf("bus: the server did not confirm it had the subscription to stops: %w", err)
 	}
-	if err := b.conn.LastError(); errors.Is(err, nats.ErrPermissionViolation) && strings.Contains(err.Error(), `"`+StopSubject+`"`) {
+	// Reading with no wait answers the recorded refusal before it looks for a message, and a
+	// stop that already arrived is kept for fn rather than lost to the look.
+	first, err := sub.NextMsg(0)
+	switch {
+	case errors.Is(err, nats.ErrPermissionViolation):
 		sub.Unsubscribe()
 		return fmt.Errorf("bus: this credential may not hear stops, and a runner that cannot would run every stopped container to its deadline: %w", err)
+	case err != nil && !errors.Is(err, nats.ErrTimeout):
+		sub.Unsubscribe()
+		return fmt.Errorf("bus: stops could not be listened for: %w", err)
 	}
-	context.AfterFunc(ctx, func() { sub.Unsubscribe() })
+	go b.hear(ctx, sub, first, fn)
 	return nil
+}
+
+// hear hands fn each stop sub holds, first included where there is one, until ctx is done or the
+// connection is closed.
+func (b *Bus) hear(ctx context.Context, sub *nats.Subscription, first *nats.Msg, fn func(graph.Stop)) {
+	defer sub.Unsubscribe()
+	// said is what was last said through Trouble about the subscription, so that one that
+	// keeps failing, refused again after a reconnect, is said once rather than every second.
+	var said string
+	msg := first
+	for {
+		if msg != nil {
+			said = ""
+			s, err := readStop(msg.Data)
+			if err != nil {
+				b.report(StopSubject, fmt.Errorf("a stop could not be read: %w", err))
+			} else {
+				fn(s)
+			}
+		}
+		// Asked of ctx before anything is taken, so a stop that arrived while fn was busy
+		// and after ctx ended is not handed over: the caller said it had stopped listening.
+		var err error
+		msg, err = sub.NextMsgWithContext(ctx)
+		switch {
+		case err == nil:
+		case ctx.Err() != nil, errors.Is(err, nats.ErrConnectionClosed), errors.Is(err, nats.ErrBadSubscription):
+			return
+		case errors.Is(err, nats.ErrSlowConsumer):
+			b.report(StopSubject, errors.New("stops were dropped because they were handed over more slowly than they arrived, and the heartbeat's cancel list is all that will carry them"))
+		default:
+			// Nothing else is expected, and nothing else goes away by asking again at
+			// once, so it is said and asked about again a second later.
+			if err.Error() != said {
+				said = err.Error()
+				b.report(StopSubject, fmt.Errorf("stops are not being heard: %w", err))
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}
 }

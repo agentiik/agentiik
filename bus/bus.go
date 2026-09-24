@@ -170,6 +170,11 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 		nats.Name(o.Name),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
+		// So that a subscription read by hand carries the server's refusal of it, which
+		// is how Stops tells a runner that may not hear stops from one that heard none
+		// yet. It changes nothing for a subscription that is not read by hand, and the
+		// JetStream client reads none by hand.
+		nats.PermissionErrOnSubscribe(true),
 	}
 	if o.Name == "" {
 		options[0] = nats.Name("agentiik")
