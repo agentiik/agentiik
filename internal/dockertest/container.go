@@ -293,9 +293,13 @@ func (d *Daemon) containerAttach(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	io.WriteString(conn, "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
-
-	l.rec.attach(conn)
+	// The stream is registered before the upgrade is answered, and under the same lock
+	// the container writes through, which is the order a daemon keeps: moby attaches
+	// the container's streams before it writes the 101. A caller that has read the
+	// answer may start the container at once, and answering first would leave a window
+	// in which a fast container writes and exits before the stream is there to carry
+	// it, so the reader sees an empty stream end.
+	l.rec.attach(conn, "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 	if r.URL.Query().Get("stdin") == "true" {
 		// Standard input arrives raw on the same connection, and its end is the
 		// client half-closing, which reaches this side as an ordinary EOF.
@@ -858,9 +862,16 @@ type recorder struct {
 	closed  bool
 }
 
-func (r *recorder) attach(conn net.Conn) {
+// attach answers the upgrade on conn and makes it the stream, in one step under the lock,
+// so no frame can reach the connection ahead of the answer and none written after
+// the answer can miss the connection.
+func (r *recorder) attach(conn net.Conn, answer string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, err := io.WriteString(conn, answer); err != nil {
+		conn.Close()
+		return
+	}
 	if r.closed {
 		// The container is already over. A stream attached to it has nothing
 		// to carry, and an end is what its reader needs.
