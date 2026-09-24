@@ -185,6 +185,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A requeue answered from a host's record is checked acknowledged on the pool's consumer, which a second take inside AckWait could not tell.
 - `Wide.RedeemedBefore` is held to leaving out a dispatch redeemed after the one asked about.
 - A key lost past `max_requeues` is held through the controller to going out no more, its last grant opening nothing even to the runner that held it, and failing its run, at the default and at a number the installation sets.
+- The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
+- `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
 
 ## v0.1.2, 2026-09-13
 
