@@ -110,6 +110,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An adopted container is masked with the values the first delivery wrote for it as well as those the adopting delivery redeemed, so a secret rotated between the two reaches neither the log nor the published outputs in the clear.
 - A store opened for another namespace, and a redelivery with nothing to mask with, are refused as the runner's fault and not as `driver.ErrContractBroken`, which says an image broke the brick contract; a first delivery with no secret source already was.
 
+### Artifacts
+
+- `artifact/granted` is how a runner reads and writes objects. It reads through the presigned GET its task's redemption named for each key, and refuses any other key with `granted.ErrNotGranted` without sending anything. It writes through the task's upload policy: the policy's fields, then `key`, then `file`, last. It cannot ask what the store holds, so it posts every object, and the built-in store writes one it already held again under the same key: a replay costs the upload and the write, never a second copy.
+- The store's refusals come back as its own errors: 403 as `artifact.ErrNotSigned`, 400 as `artifact.ErrWrongDigest`, 413 as `artifact.ErrTooLarge`, and a 404 on a read as `fs.ErrNotExist`. A key outside the policy's prefix is refused before anything is sent, a redirect is not followed, and no error names the URL it failed on.
+- A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
+- Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
+
 ### API
 
 - Deny by default is structural: a route is registered with the permission it needs and the router checks it.
