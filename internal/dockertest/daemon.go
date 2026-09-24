@@ -39,6 +39,7 @@ type Daemon struct {
 	pulled     map[string]bool
 	moved      map[string]Image
 	networks   map[string]docker.NetworkSpec
+	madeAt     map[string]time.Time
 	events     []docker.Event
 	watchers   map[chan docker.Event]struct{}
 	vanished   bool
@@ -83,6 +84,7 @@ func NewDaemon(bs ...Behaviour) (*Daemon, error) {
 		pulled:     map[string]bool{},
 		moved:      map[string]Image{},
 		networks:   map[string]docker.NetworkSpec{},
+		madeAt:     map[string]time.Time{},
 		watchers:   map[chan docker.Event]struct{}{},
 		described:  describe(o),
 	}
@@ -261,7 +263,9 @@ func describe(o Options) docker.Info {
 	return i
 }
 
-// networkCreate records one network.
+// networkCreate records one network, and refuses a second of a name already taken with
+// the 409 a daemon answers since names became unique, which is the answer a redelivered
+// task gets when the first delivery created its network.
 func (d *Daemon) networkCreate(w http.ResponseWriter, r *http.Request) {
 	var spec docker.NetworkSpec
 	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
@@ -271,7 +275,15 @@ func (d *Daemon) networkCreate(w http.ResponseWriter, r *http.Request) {
 	id := newID()
 
 	d.mu.Lock()
+	for _, taken := range d.networks {
+		if taken.Name == spec.Name {
+			d.mu.Unlock()
+			writeError(w, http.StatusConflict, "network with name "+spec.Name+" already exists")
+			return
+		}
+	}
 	d.networks[id] = spec
+	d.madeAt[id] = time.Now().UTC()
 	d.mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, docker.NetworkCreated{ID: id})
@@ -290,29 +302,79 @@ func (d *Daemon) networkList(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, docker.NetworkSummary{
 			ID: id, Name: spec.Name, Driver: spec.Driver,
-			Internal: spec.Internal, Labels: spec.Labels,
+			Internal: spec.Internal, Options: spec.Options, Labels: spec.Labels,
+			Created: d.madeAt[id],
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
 }
 
-// networkRemove removes one, and records that it was removed.
+// networkRemove removes one, named by its identifier or by its name as a daemon takes
+// either, and records that it was removed. A network a running container is on is
+// refused with the 403 a daemon answers for a network with active endpoints.
 func (d *Daemon) networkRemove(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	ref := r.PathValue("id")
 
 	d.mu.Lock()
-	_, ok := d.networks[id]
-	if ok {
+	id, spec, ok := d.network(ref)
+	busy := ok && d.endpointsOn(id, spec.Name)
+	if ok && !busy {
 		delete(d.networks, id)
+		delete(d.madeAt, id)
 		d.removed = append(d.removed, id)
 	}
 	d.mu.Unlock()
 
-	if !ok {
-		writeError(w, http.StatusNotFound, "no such network: "+id)
-		return
+	switch {
+	case !ok:
+		writeError(w, http.StatusNotFound, "no such network: "+ref)
+	case busy:
+		writeError(w, http.StatusForbidden, "error while removing network: network "+spec.Name+" id "+id+" has active endpoints")
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
-	w.WriteHeader(http.StatusNoContent)
+}
+
+// Backdate makes a network older than it is, by its identifier or its name, which is how a
+// test leaves one behind as a process that died a while ago left it. It answers false where
+// there is no such network.
+func (d *Daemon) Backdate(ref string, by time.Duration) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	id, _, ok := d.network(ref)
+	if ok {
+		d.madeAt[id] = d.madeAt[id].Add(-by)
+	}
+	return ok
+}
+
+// network finds one network by its identifier or its name. The lock is held.
+func (d *Daemon) network(ref string) (string, docker.NetworkSpec, bool) {
+	if spec, ok := d.networks[ref]; ok {
+		return ref, spec, true
+	}
+	for id, spec := range d.networks {
+		if spec.Name == ref {
+			return id, spec, true
+		}
+	}
+	return "", docker.NetworkSpec{}, false
+}
+
+// endpointsOn says whether a running container is on a network, which is what a daemon
+// calls an active endpoint. A container that was created and never started, or that has
+// exited, holds none. The lock is held.
+func (d *Daemon) endpointsOn(id, name string) bool {
+	for _, l := range d.containers {
+		l.mu.Lock()
+		running := l.started && !l.exited
+		mode := l.host.NetworkMode
+		l.mu.Unlock()
+		if running && (mode == id || mode == name) {
+			return true
+		}
+	}
+	return false
 }
 
 // eventStream writes events as newline-delimited JSON, replaying whatever happened at or

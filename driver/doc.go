@@ -209,12 +209,14 @@
 // each task with the sentinel New would have answered, and nothing is created on it.
 //
 // Network egress is refused for now. network: none takes the none network mode and
-// network: internal takes a per-task network with no outbound route. network: egress
-// returns ErrEgressProxyMissing before anything is created, saying the proxy does not
-// exist yet, so a workflow cannot believe its egress.allow list is being enforced when it
-// is not. The proxy is a task in the v0.2.0 runner group. Every task gets a network of
-// its own in all three cases, so two containers on one host never see each other whatever
-// the posture. Nothing opens the network and calls it filtered.
+// network: internal takes a per-task network with no outbound route and no address of the
+// runner host in it, which a daemon older than Docker 28.0 cannot make and is refused for
+// with ErrInternalNotIsolated. network: egress returns ErrEgressProxyMissing before
+// anything is created, saying the proxy does not exist yet, so a workflow cannot believe
+// its egress.allow list is being enforced when it is not. The proxy is v0.9.0 work. Every
+// task gets a network of its own in all three cases, so two containers on one host never
+// see each other whatever the posture. Nothing opens the network and calls it filtered.
+// A network a runner that died left behind is removed by Sweep when the next one starts.
 //
 // # Why the policy is a value and the file has one reader
 //

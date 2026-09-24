@@ -68,6 +68,14 @@ func serve(ctx context.Context, e env, args []string) int {
 	}
 	defer d.Close()
 
+	// Before any work is taken, so that nothing this agent is carrying can be taken for
+	// something an earlier one left. A sweep that could not look is said and does not refuse
+	// the start: what it would have removed only costs address space, and the start that
+	// follows has everything else it needs of the daemon.
+	if err := d.Sweep(ctx); err != nil {
+		log(err.Error())
+	}
+
 	client, err := runner.NewClient(cfg.API, cfg.Credential, nil)
 	if err != nil {
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
