@@ -53,6 +53,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Resources are capped to the pool's cpu, memory and pids ceilings on the task message, and an ask left out takes the ceiling.
 - A `timed_out` or `cancelled` task keeps its container's exit code on its row, 137 or 143 for a stop, including one its run's ending stopped, whose runner reports after the run ended. A lost task, an ending no container reached and a stop reported with no code have none; `graph.Result.NoExitCode` tells that from 0.
 - A run that succeeds or fails with a task a `merge: first` superseded still in flight writes it `cancelled` in the pass that ends the run, so it frees its slot, is named in the heartbeat's `cancel` and takes its exit code when its runner reports, where it read in flight for good. A redeemed one the document never saw dispatched is sent the `superseded` stop. `db.Wide.EndTasks` ends a run's tasks with the ending its own ending names, and replaces `TimeOutTasks`.
+- A task stopped as `superseded` or `sibling_failed` while its run goes on is written `cancelled` in the pass that sends the stop, so the heartbeat's `cancel` repeats it to a runner that missed it, a `fail_fast` step is judged at once, and the slot is freed. The runner's later report adds the exit code and nothing else, and later decisions keep it.
 
 ### State
 
