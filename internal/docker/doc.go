@@ -61,7 +61,8 @@
 //
 // The six the runner section names, GET /containers/{id}/json, POST
 // /containers/{id}/stop, GET /containers/json, GET /containers/{id}/archive, GET /images
-// /{name}/json, POST /images/create, the network calls, and GET /events.
+// /{name}/json, POST /images/create, GET /containers/{id}/stats, the network calls, and
+// GET /events.
 //
 //	GET  /_ping                          negotiate the version, once per daemon
 //	GET  /info                           SecurityOptions, for userns and the profiles applied

@@ -53,13 +53,10 @@ func (s Stats) Sampled() bool { return !s.Read.IsZero() }
 // that read a large file once would otherwise report the file as its own. It is the
 // figure docker stats shows, computed the same way: total_inactive_file is cgroup v1's
 // name for the counter and inactive_file cgroup v2's, and a counter above the usage, which
-// the two are not read atomically enough to rule out, leaves the usage as it is.
+// the two are not read atomically enough to rule out, is passed over.
 func (m MemoryStats) Resident() uint64 {
-	if v, v1 := m.Stats["total_inactive_file"]; v1 {
-		if v < m.Usage {
-			return m.Usage - v
-		}
-		return m.Usage
+	if v, v1 := m.Stats["total_inactive_file"]; v1 && v < m.Usage {
+		return m.Usage - v
 	}
 	if v := m.Stats["inactive_file"]; v < m.Usage {
 		return m.Usage - v

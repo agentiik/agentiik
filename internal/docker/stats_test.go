@@ -98,6 +98,7 @@ func TestTheResidentSetLeavesOutTheInactivePageCache(t *testing.T) {
 		{"cgroup v1", docker.MemoryStats{Usage: 100 << 20, Stats: map[string]uint64{"total_inactive_file": 30 << 20, "inactive_file": 10 << 20}}, 70 << 20},
 		{"a counter above the usage", docker.MemoryStats{Usage: 10 << 20, Stats: map[string]uint64{"inactive_file": 30 << 20}}, 10 << 20},
 		{"a cgroup v1 counter above the usage", docker.MemoryStats{Usage: 10 << 20, Stats: map[string]uint64{"total_inactive_file": 30 << 20}}, 10 << 20},
+		{"a cgroup v1 counter above the usage beside the other", docker.MemoryStats{Usage: 10 << 20, Stats: map[string]uint64{"total_inactive_file": 30 << 20, "inactive_file": 4 << 20}}, 6 << 20},
 		{"no breakdown", docker.MemoryStats{Usage: 10 << 20}, 10 << 20},
 	} {
 		if got := c.mem.Resident(); got != c.want {
