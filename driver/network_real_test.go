@@ -296,8 +296,13 @@ func TestANameResolvedOnTheInternalPostureDoesNotLeaveTheHost(t *testing.T) {
 		`sed 's/^/RESOLV /' /etc/resolv.conf >&2`,
 		// Script steps run under set -e, and a lookup that fails is the outcome
 		// hoped for rather than the end of the probe.
-		resolved(`"$(hostname)"`, "ITS OWN NAME"),
-		resolved("example.com", "example.com"),
+		// Both names end in a dot, so that nslookup asks for them as written. A host
+		// whose resolv.conf has a search domain, as a cloud runner's does, passes it into
+		// the container, and a bare name is asked with the domain appended: the container's
+		// own name then went unanswered, and example.com could have been answered under
+		// someone else's domain.
+		resolved(`"$(hostname)."`, "ITS OWN NAME"),
+		resolved("example.com.", "example.com"),
 		`exit 0`,
 	)
 
