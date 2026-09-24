@@ -20,7 +20,8 @@ require (
 	// duplicate key without being asked, and keeps the line and column a value was
 	// written at, which is what lets a refusal point at the text the author wrote.
 	github.com/goccy/go-yaml v1.19.2
-	// PostgreSQL, used by package db alone. The documentation names the database and
+	// PostgreSQL, used by package db, and by agentiik-api migrate, which opens with it the one
+	// connection db.Provision takes. The documentation names the database and
 	// names two things database/sql cannot express: the controller is elected by a
 	// session-level PostgreSQL advisory lock, held for the life of a connection, and it
 	// holds LISTEN while the API wakes it with NOTIFY. A pooled database/sql connection
@@ -28,8 +29,7 @@ require (
 	// the next caller; this driver pins one. It also takes parameters natively, which is
 	// what keeps a namespace a parameter and never a string interpolated into SQL. The tests
 	// of package internal/config parse a database URL with it, since the reading that package
-	// makes of one is only right where it is the reading of the driver that connects, and
-	// agentiik-api migrate opens with it the one connection db.Provision takes.
+	// makes of one is only right where it is the reading of the driver that connects.
 	github.com/jackc/pgx/v5 v5.11.0
 	// NATS credentials, used by package bus to mint the "short-lived token minted by the API"
 	// that a runner reaches the bus with, and to sign the operator and the accounts an

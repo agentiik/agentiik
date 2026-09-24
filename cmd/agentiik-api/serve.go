@@ -277,12 +277,14 @@ func sleep(ctx context.Context, d time.Duration) bool {
 // watchCredential says when the control plane's bus credential nears its expiry, and when it
 // passes it, until ctx is done.
 //
-// The API goes on serving past it. Its bus connection is refused from then on, so a runner asking
-// for a bus credential for a pool whose consumer is not there yet is answered 500, but every
-// runner credential it mints is signed with the account seed and not with this credential, so the
-// runners already working keep working, their heartbeats are still heard, and the results they
-// publish wait on the bus for the controller. An API that ended would stop the heartbeats, and the
-// controller's first sweep after a restart would declare lost every task in flight.
+// The API goes on serving past it, though what it serves narrows. Its bus connection is refused
+// from then on, and every request for a runner's bus credential makes its pool's consumer ready
+// on that connection first, so each is answered 500: a runner keeps the bus credential it holds,
+// which is signed with the account seed and not with this one, until that expires within the
+// hour, and loses the bus then. Its heartbeats are still heard throughout. An API that ended
+// would stop those too, and the controller's first sweep after a restart would declare lost every
+// task in flight, where one that goes on leaves the tasks to finish if the credential is renewed
+// within the hour.
 func watchCredential(ctx context.Context, expires time.Time, log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
 	if expires.IsZero() {
 		return
@@ -293,7 +295,7 @@ func watchCredential(ctx context.Context, expires time.Time, log *slog.Logger, n
 		var next time.Duration
 		switch {
 		case left <= 0:
-			log.Error("the control plane's bus credential has expired, and the bus refuses it: runners already working keep working, a pool with no consumer yet gets none, and the controller, which holds the same credential, ends", "expired", expires.UTC().Format(time.RFC3339), "renew", renew)
+			log.Error("the control plane's bus credential has expired, and the bus refuses it: no runner is given a bus credential until it is renewed, so each loses the bus when the one it holds runs out, within the hour, and the controller, which holds the same credential, ends", "expired", expires.UTC().Format(time.RFC3339), "renew", renew)
 			return
 		case left <= credentialWarning:
 			log.Warn("the control plane's bus credential expires soon", "expires", expires.UTC().Format(time.RFC3339), "left", left.Round(time.Minute).String(), "renew", renew)

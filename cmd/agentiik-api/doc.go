@@ -37,7 +37,7 @@
 //
 // The control plane's bus credential expires. From fourteen days before, the API says so once a
 // day, and says so again when it has; it goes on serving past it, for the reason watchCredential
-// gives.
+// gives, but gives no runner a bus credential, so every runner loses the bus within the hour.
 //
 // # The interim operator
 //

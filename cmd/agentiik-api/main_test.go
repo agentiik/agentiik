@@ -149,7 +149,7 @@ func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 
 // bus-init writes the identity and says what to name in the settings; bus-credential renews the
 // credential it wrote and leaves the rest. A directory others may write to refuses both.
-func TestBusInitAndBusCredential(t *testing.T) {
+func TestBusInitWritesANinetyDayCredentialThatBusCredentialRenews(t *testing.T) {
 	now := time.Now()
 	dir := filepath.Join(t.TempDir(), "bus")
 	var stdout, stderr bytes.Buffer

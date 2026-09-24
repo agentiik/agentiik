@@ -43,9 +43,10 @@ COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-ce
 COPY agentiik-api-linux-${TARGETARCH} /agentiik-api
 COPY --from=certificates --chown=65532:65532 /var/lib/agentiik /var/lib/agentiik
 
-# A user that is not root, by number, since scratch has no /etc/passwd to name one in. The API
-# writes nothing but to the object-store directory, which the installation mounts writable by this
-# user, and listens on 8080, AGK_LISTEN's default, which a user that is not root may bind.
+# A user that is not root, by number, since scratch has no /etc/passwd to name one in. serve writes
+# nothing but to the object-store directory, and bus-init and bus-credential to the bus identity's,
+# which the installation mounts writable by this user. serve listens on 8080, AGK_LISTEN's default,
+# which a user that is not root may bind.
 USER 65532:65532
 EXPOSE 8080
 
