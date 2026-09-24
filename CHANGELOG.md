@@ -193,6 +193,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### API
 
+- `agk.ReservedNamespaces` fixes the words the API routes on as the first segment after `/api/v1/`; a route under any other word is refused at registration, and a workflow naming one of them as its namespace, or calling into one, is refused when parsed.
 - Deny by default is structural: a route is registered with the permission it needs and the router checks it.
 - A refusal at a namespace or a workflow is the same 404 as an absence. 403 is for the installation scope, and a failure to decide is a 500.
 - Until access control arrives in v0.3.0, every route that needs a permission is refused.
