@@ -226,3 +226,30 @@ func TestOnlyTheClassicStoreSaysAnImageWasNeverPushed(t *testing.T) {
 		}
 	}
 }
+
+// TestAPullARegistryRefusedIsToldApartFromOneThatFailed holds IsPullDenied to what Docker
+// 29.8 answered for an anonymous pull of a private or missing repository on four registries,
+// to a refusal that arrives inside the progress stream, and to failures that are not a
+// registry refusing anybody.
+func TestAPullARegistryRefusedIsToldApartFromOneThatFailed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		err    error
+		denied bool
+	}{
+		{"Docker Hub", &docker.Error{Status: 404, Message: "pull access denied for acme/private, repository does not exist or may require 'docker login'"}, true},
+		{"ghcr.io", &docker.Error{Status: 500, Message: "error from registry: denied\ndenied"}, true},
+		{"GitLab", &docker.Error{Status: 403, Message: "error from registry: access forbidden"}, true},
+		{"quay.io", &docker.Error{Status: 500, Message: `unknown: failed to resolve reference "quay.io/acme/private@sha256:00": unexpected status from HEAD request to https://quay.io/v2/acme/private/manifests/sha256:00: 401 Unauthorized`}, true},
+		{"a 401 with no words", &docker.Error{Status: 401}, true},
+		{"in the stream", errors.New("pulling ghcr.io/acme/private@sha256:00: unauthorized: authentication required"), true},
+		{"a disk", &docker.Error{Status: 500, Message: "failed to register layer: open /var/lib/docker/tmp: permission denied"}, false},
+		{"a manifest not found", &docker.Error{Status: 404, Message: `failed to resolve reference "mcr.microsoft.com/acme/x@sha256:00": not found`}, false},
+		{"a layer cut short", errors.New("pulling ghcr.io/acme/brick@sha256:00: failed to register layer: unexpected EOF"), false},
+		{"nothing", nil, false},
+	} {
+		if got := docker.IsPullDenied(c.err); got != c.denied {
+			t.Errorf("%s: IsPullDenied(%v) is %t, want %t", c.name, c.err, got, c.denied)
+		}
+	}
+}

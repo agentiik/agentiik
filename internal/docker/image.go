@@ -72,6 +72,44 @@ func (c *Client) ImagePull(ctx context.Context, ref, auth string, onProgress fun
 	}
 }
 
+// IsPullDenied says a pull failed because the registry would not serve the image to
+// whoever asked, which for a pull with no credentials is a registry that wants some.
+//
+// The status alone cannot say so. The daemon passes a registry's refusal on in four shapes,
+// which Docker 29.8 answered for an anonymous pull of a private or missing repository:
+//
+//	Docker Hub   404  pull access denied for <repository>, repository does not exist or may require 'docker login'
+//	ghcr.io      500  error from registry: denied
+//	GitLab       403  error from registry: access forbidden
+//	quay.io      500  ... unexpected status from HEAD request to https://quay.io/v2/...: 401 Unauthorized
+//
+// and a refusal that comes after the 200 arrives in the progress stream, with no status at
+// all. So a 401 or a 403 is one, and so is any refusal whose message says a registry denied
+// access. Docker Hub's sentence also covers a repository that does not exist, since a
+// registry will not say to somebody with no credentials whether a private one does.
+func IsPullDenied(err error) bool {
+	if IsDenied(err) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, said := range []string{
+		"pull access denied",
+		"error from registry: denied",
+		"access forbidden",
+		"denied: requested access",
+		"unauthorized",
+		"authentication required",
+	} {
+		if strings.Contains(message, said) {
+			return true
+		}
+	}
+	return false
+}
+
 // failure is what a progress message says went wrong, or nothing where it reports
 // progress. The daemon writes the same trouble twice, once as a string and once as an
 // object, and either one alone is enough to know the pull died.
