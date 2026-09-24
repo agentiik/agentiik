@@ -214,6 +214,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Until access control arrives in v0.3.0, every route that needs a permission is refused.
 - A ninth permission, `secret:write`, declares and removes a namespace's secrets.
 - Push a version, start a run, list runs, read one. Starting a run answers 202 and creates no task. A body with an unknown field, or anything after its document, is refused.
+- `GET /api/v1/runs/{run}/steps/{step}/logs` streams a step's log as server-sent events under `run:read`: each dispatch in the order it was made (`dispatch`, `line`, `dispatch_end`, and `gap` for a chunk that cannot be read back), its history then what its runner ships, woken by a `NOTIFY` on `db.LogChannel` from the shipment and a sweep every 5 s, and `end` once the step has its verdict or its run has ended. `Last-Event-ID` (`task_id/seq/line`) resumes; a reader who loses access or whose credential stops working is cut off within 30 s, and a stopping API ends its streams at once. Migration `0029_tasks_by_step.sql`.
 - A version stores the entry point, every file the loader read and every image manifest, so it rebuilds with no tree and no registry. It is built before it is saved, and pushing the same commit again changes nothing.
 - A runner pool is a row an administrator creates, holding its labels, accepted namespaces and ceilings.
 - A join token names one pool and the exact labels a machine may claim, all of them labels that pool carries, and is spent on use. Every bad token gets the same answer.

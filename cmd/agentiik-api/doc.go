@@ -27,13 +27,14 @@
 // prefixes, which only the API may do; every setting that refuses the start is named on the same
 // start, and nothing is opened. It then opens the database as the application role, connects to
 // the bus with the control plane's credential, which creates the streams, and serves every route
-// built so far on AGK_LISTEN: runs and versions, cancelling a run, the secret declarations, the
-// runners, their pools and join tokens, the bus credential, and the built-in object store at
-// /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be a second way to say what
-// the environment says.
+// built so far on AGK_LISTEN: runs and versions, cancelling a run, a step's log stream, the secret
+// declarations, the runners, their pools and join tokens, the bus credential, and the built-in
+// object store at /objects on AGK_PUBLIC_URL. It takes no argument, since a flag would be a second
+// way to say what the environment says.
 //
-// At SIGINT or SIGTERM it stops taking connections and finishes the requests being answered, for up
-// to thirty seconds, then cuts what is left.
+// At SIGINT or SIGTERM it stops taking connections, ends the log streams at once so that their
+// readers resume at another API, and finishes the requests being answered, for up to thirty
+// seconds, then cuts what is left.
 //
 // The control plane's bus credential expires. From fourteen days before, the API says so once a
 // day, and says so again when it has; it goes on serving past it, for the reason watchCredential

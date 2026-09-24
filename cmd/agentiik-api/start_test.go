@@ -286,6 +286,7 @@ func TestServeRegistersEveryRouteBuiltSoFar(t *testing.T) {
 		"GET /api/v1/runs",
 		"GET /api/v1/runs/{run}",
 		"GET /api/v1/runs/{run}/outputs/{name}",
+		"GET /api/v1/runs/{run}/steps/{step}/logs",
 		"POST /api/v1/runs/{run}/cancel",
 		"GET /api/v1/artifacts/{uri}",
 		"GET /api/v1/{namespace}/runs",
