@@ -75,6 +75,12 @@ func main() {
 	// SIGTERM is how systemd and a container runtime stop a service, and an interrupt is how
 	// a person at a terminal does. Either ends serve through its context.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// The first signal is taken, and the second is not: a person pressing Ctrl-C twice, or a
+	// service manager that has waited long enough, means now.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	code := run(ctx, env{
 		Out: os.Stdout, Err: os.Stderr,
 		Lookup:  os.LookupEnv,

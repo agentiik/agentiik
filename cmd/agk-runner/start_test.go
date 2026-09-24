@@ -268,6 +268,61 @@ func TestServeSaysReadyOnceTheFloorHoldsAndTheDaemonIsOpen(t *testing.T) {
 	}
 }
 
+func TestAStopWhileTheDaemonHangsEndsTheStartWithoutSayingReady(t *testing.T) {
+	d := daemon(t, true)
+	hung := make(chan struct{})
+	t.Cleanup(func() { close(hung) })
+	d.Handle("GET", "/info", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	})
+	h := newHost(t, d, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- run(ctx, h.e, []string{"serve"}) }()
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitSucceeded {
+			t.Errorf("serve stopped while it started exited %d:\n%s", code, h.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("serve was stopped while the daemon hung and is still starting:\n%s", h.err)
+	}
+	if said := h.heard(50 * time.Millisecond); said != "" {
+		t.Errorf("systemd was told %q by a start that was stopped", said)
+	}
+}
+
+func TestAStopBeforeTheStartIsNotFollowedByReady(t *testing.T) {
+	h := newHost(t, daemon(t, true), "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if code := run(ctx, h.e, []string{"serve"}); code != exitSucceeded {
+		t.Errorf("serve stopped before it started exited %d:\n%s", code, h.err)
+	}
+	if said := h.heard(50 * time.Millisecond); said != "" {
+		t.Errorf("systemd was told %q by a start that was stopped", said)
+	}
+}
+
+func TestAStartThatCannotTellSystemdItIsReadyFails(t *testing.T) {
+	h := newHost(t, daemon(t, true), "")
+	h.set(runner.NotifySocket, filepath.Join(t.TempDir(), "nobody"))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if code := run(ctx, h.e, []string{"serve"}); code != exitRefused {
+		t.Errorf("serve that could not say it was ready exited %d:\n%s", code, h.err)
+	}
+	if !strings.Contains(h.err.String(), runner.Ready) {
+		t.Errorf("the refusal does not say what it could not tell:\n%s", h.err)
+	}
+}
+
 func TestServeRefusesToRunAsRoot(t *testing.T) {
 	h := newHost(t, daemon(t, true), "")
 	h.e.Geteuid = func() int { return 0 }

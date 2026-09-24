@@ -56,6 +56,11 @@ func Serve(ctx context.Context, a Agent) error {
 		Version(), a.Config.Runner, a.Config.Pool, a.Config.Concurrency, a.Config.WorkDir,
 		strings.Join(a.Config.Labels, ","), namespaces, a.Driver.APIVersion()))
 
+	// A stop that arrived while the agent was starting is not followed by a ready it would
+	// contradict.
+	if ctx.Err() != nil {
+		return nil
+	}
 	if a.Ready != nil {
 		if err := a.Ready(); err != nil {
 			return err

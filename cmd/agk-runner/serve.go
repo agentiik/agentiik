@@ -48,14 +48,20 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 
+	// Limits is left at its zero value, which is agk's own size rules: no installation setting
+	// changes them, and the controller holds a task's envelopes to the same ones.
 	socket, _ := e.Lookup("DOCKER_HOST")
-	d, err := driver.New(driver.Config{
+	d, err := openDriver(ctx, driver.Config{
 		Socket:   socket,
 		WorkRoot: cfg.WorkDir,
 		Policy:   policy,
 		Announce: log,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, context.Canceled):
+		fmt.Fprintln(e.Err, "agk-runner serve: stopped while the daemon was being opened, before it was ready")
+		return exitSucceeded
+	case err != nil:
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitRefused
 	}
@@ -77,6 +83,35 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 	return exitSucceeded
+}
+
+// openDriver opens the driver on the daemon, or gives up on it when the agent is stopped.
+//
+// driver.New takes no context, and it asks the daemon what it is with none: a daemon that answers
+// its ping and then hangs would hold the start until the service manager killed it, since the
+// signal that should stop it is the one this process has taken over. A driver that opens after
+// the agent gave up on it is closed as it arrives.
+func openDriver(ctx context.Context, cfg driver.Config) (*driver.Docker, error) {
+	type opened struct {
+		d   *driver.Docker
+		err error
+	}
+	done := make(chan opened, 1)
+	go func() {
+		d, err := driver.New(cfg)
+		done <- opened{d, err}
+	}()
+	select {
+	case o := <-done:
+		return o.d, o.err
+	case <-ctx.Done():
+		go func() {
+			if o := <-done; o.d != nil {
+				o.d.Close()
+			}
+		}()
+		return nil, context.Canceled
+	}
 }
 
 // loadPolicy reads the host's runner.toml.
