@@ -91,6 +91,29 @@ func TestRunnerPoolsCarriesTheWholeCorpus(t *testing.T) {
 	}
 }
 
+func TestRunnerRegistrationsCarriesTheWholeCorpus(t *testing.T) {
+	cases, err := RunnerRegistrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var valid, invalid int
+	for _, c := range cases {
+		if c.Valid {
+			valid++
+			continue
+		}
+		invalid++
+		if c.Rule == "" {
+			t.Errorf("%s names no rule it is refused by", c.File)
+		}
+	}
+	// A join and its answer that must be accepted, and one that must be refused: a join
+	// carrying the private half of the host's keypair.
+	if valid != 1 || invalid != 1 {
+		t.Fatalf("the corpus holds %d valid and %d invalid registrations, want 1 and 1", valid, invalid)
+	}
+}
+
 func TestTheEnvelopeSchemaIsVendoredWithIt(t *testing.T) {
 	b, err := fs.ReadFile(FS, "envelope.schema.json")
 	if err != nil {

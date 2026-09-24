@@ -65,10 +65,16 @@ func issue(t *testing.T, pool *db.Pool, labels []string) db.JoinToken {
 	return token
 }
 
+// aKey is the public half of a host's keypair, as the wire's own example writes one.
+const aKey = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXiy2zvWwTpj67NwwKIgCbjFcQdrNAboeffNXm+aJUcM=\n-----END PUBLIC KEY-----\n"
+
 func aMachine(token string, labels ...string) api.Join {
+	if labels == nil {
+		labels = []string{}
+	}
 	return api.Join{
-		Token: token, Labels: labels,
-		CPU: 8, MemoryBytes: 1 << 34, DiskBytes: 1 << 38,
+		Token: token, PublicKey: aKey, Labels: labels,
+		Capacity:     &api.Capacity{VCPU: 8, Memory: "16Gi", Disk: "256Gi"},
 		Architecture: "amd64", AgentVersion: "0.2.0",
 	}
 }
