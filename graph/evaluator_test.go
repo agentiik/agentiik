@@ -874,9 +874,10 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	}
 }
 
-// A step a merge: first cancelled keeps the reason that cancelled it. The stop is only a
-// request, so its task in flight can still be lost, and a loss past max_requeues there
-// fails nothing: the verdict is already cancelled, and a reason saying the step fails
+// A step a merge: first cancelled keeps the reason that cancelled it. Its task in flight
+// ended cancelled as the stop went out, but one handed out before its dispatch was recorded
+// is still pending in the state and can be lost all the same, and a loss past max_requeues
+// there fails nothing: the verdict is already cancelled, and a reason saying the step fails
 // would contradict it.
 func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
 	e := started(t, `
@@ -902,7 +903,6 @@ steps:
 
 	plan := next(t, e, runAt)
 	slow := taskOf(t, plan, "slow")
-	record(t, e, Result{Task: slow.ID, State: agk.TaskRunning}, runAt)
 	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
 	next(t, e, runAt.Add(2*time.Minute))
 	cancelled := e.State().Steps["slow"]

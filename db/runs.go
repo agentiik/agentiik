@@ -458,7 +458,7 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // evaluator on its next pass, so a decision that still has the dispatch in flight is behind rather
 // than right, and writing it over the loss would erase the one record that the runner went quiet.
 // An ending is different. It came back from the runner, so the dispatch was not lost after all,
-// and it is written. Except the one the controller writes itself as it stops a task superseded or
+// and it is written. Except the one the evaluator decides itself as it stops a task superseded or
 // sibling_failed while the run goes on, cancelled with nothing its runner said: the runner said
 // nothing, which is the loss, and the loss is kept, as CancelTasks and EndTasks keep one, so that it
 // is heard and a lost dispatch is never named in the heartbeat's cancel.
@@ -935,7 +935,8 @@ func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID,
 // only a cancellation's. A run that succeeded or failed has ended every step, and a step ends once
 // every shard of it has, except the one a merge: first superseded: that step is cancelled the
 // moment the barrier lifts on another edge, while its tasks are still in flight and only asked to
-// stop. The controller ends each one it knows was dispatched as its stop goes out, but a dispatch
+// stop. The evaluator ends each one it knows was dispatched, cancelled, as its stop goes out, and
+// the controller writes that, but a dispatch
 // whose publication it never saw acknowledged is pending in its document and may have been
 // redeemed all the same. Its runner's ending would then reach a run with nothing left to learn,
 // and the row would read dispatched or running for ever. "cancelled: Stopped because the run was
@@ -961,8 +962,9 @@ func (w *Wide) EndTasks(ctx context.Context, namespace string, run agk.RunID, at
 	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
 }
 
-// Stopped is what a runner reports of a dispatch the controller stopped: what the evaluator no
-// longer hears, since the task was over before the report came.
+// Stopped is what a runner reports of a dispatch the controller stopped that the evaluator does not
+// take: all of it for a task a run's ending stopped, and all but the exit code for one stopped
+// while the run went on, since the task was over before the report came.
 type Stopped struct {
 	// ExitCode is the code the container exited with, and nil where no container reported one.
 	ExitCode  *int
@@ -980,11 +982,13 @@ type Stopped struct {
 //
 // CancelTasks and EndTasks end a run's tasks in the pass that ends the run, before any container
 // has exited, so the rows they end carry no code; the runner's report comes later, to a run with
-// nothing left to decide. A task stopped as superseded or sibling_failed while its run goes on is
-// ended the same way, in the pass that sends the stop, and its report comes to a task that is
-// over. "A timed_out or cancelled task carries an exit code wherever a container ran" all the
-// same, and this is where it lands, beside the log and the usage a decision would have written
-// had the task still been in flight; the decisions written after it keep them. Only on a row that
+// nothing left to decide. "A timed_out or cancelled task carries an exit code wherever a container
+// ran" all the same, and this is where it lands, beside the log and the usage a decision would
+// have written had the task still been in flight; the decisions written after it keep them. A task
+// the evaluator stopped as superseded or sibling_failed while its run goes on is ended the same
+// way, in the pass that sends the stop, and its report comes to a task that is over: the evaluator
+// takes the code of it and a decision writes it, so what lands here is the log and the usage of a
+// report it took no code from, and the code of one that came after the run ended. Only on a row that
 // is stopped and has no code yet, so an ending is written once; only on the dispatch named by its
 // row and its key, as HeldBy compares them; and only from the runner the dispatch is bound to.
 // What the row already says of when it started and of its log is kept, and when it finished is

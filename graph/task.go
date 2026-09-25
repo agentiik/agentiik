@@ -14,15 +14,17 @@ import (
 // Nothing in a Plan has happened yet. It is a decision, and a decision that has not
 // happened yet can be recomputed: calling Next twice with the same moment returns the
 // same Plan, because a task it named is still pending until a driver reports the dispatch
-// and a task it stopped is still in flight until one reports the stop. A controller that
+// and a task a run's ending stopped is still in flight until one reports the stop. A task
+// stopped as superseded or sibling_failed while the run goes on is the exception: it ends in
+// the pass that names its stop, and a second call does not name it again. A controller that
 // dies between deciding and dispatching therefore loses nothing but the work of deciding.
 //
 // What Next does move is the state, which is where the progress of a run lives: a step
 // that skipped and a step that ended are settled there, once, and a second call at the
 // same moment finds them settled and decides the same way.
 
-// Plan is what should happen next: the tasks that have become ready, the tasks in flight
-// that should be stopped, and the moment to ask again.
+// Plan is what should happen next: the tasks that have become ready, the tasks that should
+// be stopped, and the moment to ask again.
 //
 // Wake is zero when nothing waits on the clock. It is not zero when something does, and
 // two things do: a retry backoff, which places an attempt at a moment in the future, and
@@ -135,7 +137,7 @@ const (
 	StopSuperseded StopReason = iota
 
 	// StopSiblingFailed: fail_fast, where the first shard to fail stops the shards
-	// still running beside it.
+	// still running beside it, and names the ones not started yet, which never start.
 	StopSiblingFailed
 
 	// StopDeadline: the deadline set by the root timeout of the entry point passed,
