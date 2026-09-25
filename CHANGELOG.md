@@ -167,8 +167,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A pull that happened reports at least 1 in `image_pull_ms`, since 0 says the host already held the image.
 - The terminal `driver.Event` of a container that ran carries its exit code and span, so a container stopped at its deadline or cancelled tells the code its stop left (137 or 143), which the record of its key keeps, and one whose outputs were refused tells 121.
 - Where the daemon cannot give a container's span after its exit, the span runs from the dispatch to the moment the exit was read, rather than reading as a container that never started.
-- `Policy.RequireDigest`, a floor no line of `runner.toml` lifts: a task whose image is not `name@sha256` is refused with `driver.ErrImageNotByDigest` on the platform's account before anything is asked of the host, and a step that is not a script step, whose image carries no `/agk/brick.yaml`, is refused rather than run as the image's own account. `agk run --local` and `agk brick test` lift it.
-- The pull is bounded by the task's deadline. A deadline that passes during it ends the task `timed_out` with no container, and the log says why.
+- `Policy.RequireDigest`, a floor no line of `runner.toml` lifts: a task whose image is not `name@sha256` is refused with `driver.ErrImageNotByDigest` on the platform's account before anything is asked of the host. `agk run --local` and `agk brick test` lift it.
+- Under the same floor, a step that is not a script step and whose image carries no `/agk/brick.yaml` is refused rather than run as the image's own account.
+- The pull and the manifest read are bounded by the task's deadline. A deadline that passes during them ends the task `timed_out` with no container, or `cancelled` where a stop landed first, and the log says why and how long the pull ran.
+- `Docker.Recorded` answers as `Hold` would and writes nothing down.
 - A pull a registry refused for want of credentials says so, and names v0.8.0's namespace credentials. `docker.IsPullDenied` reads the ways the daemon passes such a refusal on, and not its own 403.
 - A die event the watch had no room for arms the inspect, so the exit is read in seconds rather than at the deadline as `timed_out`.
 
@@ -192,7 +194,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` takes work: it gets its bus credential from the API, publishes kept results, and takes from its pool only when it has room, as many tasks as `AGK_RUNNER_CONCURRENCY` less those it holds, each written down, redeemed, acknowledged, assembled, run and reported in the page's order. A task on a label the runner does not claim, or refused with 403, is put back held off for a second. `runner.Agent` takes the driver's `Endings`.
 - A redemption or fetch with no answer is tried again, from 1 s doubling to 30 s, until the deadline, then reported `timed_out` with no container ran; a 422, an unusable 200, a fetch that is not what was named, or a message no runner can run (`runner.ErrNotRunnable`) is reported `failed` with no container ran.
 - A task's `running` and `publishing` are published from a goroutine of their own, dropped rather than holding up the driver.
-- A message whose image is not `name@sha256` is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
+- A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 
 ### Artifacts
 
@@ -343,6 +345,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 - The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
 - `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
+- The fake daemon refuses a pull with a registry's 401 under `PullAnswers401`, pulls slowly under `SlowPull` and answers a create late under `SlowCreate`, which the deadline-bounded pull is held to.
+- A real-daemon test pulls an image by digest through the driver under the digest floor and holds `image_pull_ms` to the pull.
 - The fake daemon answers a second network of a name already taken with 409, removes a network by its name, refuses to remove one a running container is on with 403, and dates each network, which `Daemon.Backdate` moves back.
 - The real-daemon tests hold `network: internal` to what the kernel does: the container is on its task's network and no other with no default route, two tasks at once cannot reach each other, the runner host is not reachable through the gateway, and a name outside the host is not resolved while the container's own is.
 - A CI job builds the runner's image for both architectures, arm64 under QEMU, and runs `version` and `serve` in each as the Compose sample runs it, refused at the floor. On a remapped daemon, `serve` runs past the floor on the image's file capabilities alone, and the same image without them is refused naming them.
