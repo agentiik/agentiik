@@ -29,8 +29,9 @@ type Granted struct {
 	ExpiresAt time.Time
 
 	// Rewrite are the digests of input envelopes whose objects a sweep had claimed when the
-	// grant counted its reference onto them. The reference is safe, and the bytes may be what
-	// the sweep is about to delete, so the caller writes them again.
+	// grant counted its reference onto them, or which had no row until it did. The reference is
+	// safe, and the bytes may be what the sweep is about to delete or has deleted, so the caller
+	// writes them again.
 	Rewrite []string
 }
 
@@ -180,11 +181,14 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 	// issued a grant again counts again and the two agree however many a row holds.
 	granted := Granted{Task: task, Clear: clear, ExpiresAt: until}
 	for _, in := range scope.Inputs {
-		again, _, err := raise(ctx, w.tx, namespace, "sha256:"+in.Digest, in.Size, envelopeMediaType)
+		// A row this call created is written again too: the caller put the envelope before
+		// this, and where the store said it held the bytes, a sweep may have collected the
+		// object whole since, row and bytes, which leaves nothing here to tell it by.
+		again, created, err := raise(ctx, w.tx, namespace, "sha256:"+in.Digest, in.Size, envelopeMediaType)
 		if err != nil {
 			return Granted{}, err
 		}
-		if again {
+		if again || created {
 			granted.Rewrite = append(granted.Rewrite, in.Digest)
 		}
 	}
@@ -349,13 +353,17 @@ func (w *Wide) mayTake(ctx context.Context, runner, namespace string) error {
 
 // inputsOf reads the input envelopes every grant of a run's tasks counted, one entry for each, as
 // IssueGrant raised them.
+//
+// An input with no size is one a grant issued before inputs were counted names, and nothing raised
+// it: lowering it would take a count another run holds, and leave that run's envelope to be
+// collected under it.
 func (w *Wide) inputsOf(ctx context.Context, namespace string, run agk.RunID) ([]EnvelopeRef, error) {
 	rows, err := w.tx.Query(ctx, `
 		select t.step, i->>'port', i->>'digest'
 		from tasks t
 		join task_grants g on g.namespace = t.namespace and g.task_id = t.id,
 		lateral jsonb_array_elements(coalesce(g.scope->'inputs', '[]'::jsonb)) as i
-		where t.namespace = $1 and t.run_id = $2`, namespace, string(run))
+		where t.namespace = $1 and t.run_id = $2 and i ? 'size'`, namespace, string(run))
 	if err != nil {
 		return nil, fmt.Errorf("db: the input envelopes of run %s could not be read: %w", run, err)
 	}

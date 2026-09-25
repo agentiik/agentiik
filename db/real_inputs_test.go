@@ -241,3 +241,48 @@ func TestAStepsInputIsReadForTheDispatchAskedAbout(t *testing.T) {
 		}
 	}
 }
+
+// An object with no row until the grant counted it may be one a sweep collected whole after the
+// caller found the store holding it, so the grant cannot vouch for its bytes and says to write
+// them again.
+func TestAGrantOntoAnObjectWithNoRowIsToldToWriteItAgain(t *testing.T) {
+	pool, super := opened(t)
+	d := digestOf("a")
+	granted := handedTask(t, pool, super, "01M2T8AAAAAAAAAAAAAAAAAAAA", 1, 0, GrantInput{Port: "in", Digest: d, Items: 1, Size: 16})
+	if len(granted.Rewrite) != 1 || granted.Rewrite[0] != d {
+		t.Errorf("a grant onto an object with no row was told to write %v again", granted.Rewrite)
+	}
+}
+
+// A grant issued before inputs were counted raised nothing, so the purge lowers nothing for it:
+// the object it names may be another run's envelope, still kept.
+func TestThePurgeLowersNoInputAGrantNeverCounted(t *testing.T) {
+	pool, super := opened(t)
+	d := digestOf("b")
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	for _, stmt := range []string{
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+		 values ('finance', 'sha256:` + d + `', 16, 'application/json', 1)`,
+		`insert into tasks (namespace, id, run_id, step, attempt, state)
+		 values ('finance', '01M2T9AAAAAAAAAAAAAAAAAAAA', '` + financeRun + `', 'render', 1, 'succeeded')`,
+		`insert into task_grants (namespace, task_id, hash, expires_at, scope)
+		 values ('finance', '01M2T9AAAAAAAAAAAAAAAAAAAA', '` + digestOf("c") + `', now(),
+		         '{"inputs": [{"port": "in", "digest": "` + d + `", "items": 1}]}')`,
+		`update runs set started_at = now(), finished_at = now(), expires_at = now() - interval '1 minute'
+		 where namespace = 'finance' and id = '` + financeRun + `'`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("seeding: %s", err)
+		}
+	}
+	if purged, err := pool.PurgeEnvelopes(t.Context(), 0); err != nil || purged != 1 {
+		t.Fatalf("the envelope purge took %d runs: %v", purged, err)
+	}
+	if got := refsOf(t, pool, "finance", d); got != 1 || collectableNow(t, pool, "finance", d) {
+		t.Errorf("an object another run holds is counted %d times after purging a grant that never counted it", got)
+	}
+}

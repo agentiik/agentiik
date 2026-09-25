@@ -610,8 +610,9 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 	if err != nil {
 		return Dispatch{}, err
 	}
-	// And again for any input a sweep had claimed while the grant was counting it: the count
-	// keeps any sweep away from it now, and the bytes may be what that one is about to delete.
+	// And again for any input a sweep had claimed while the grant was counting it, or had
+	// collected whole since put found it in the store: the count keeps any sweep away from it
+	// now, and the bytes may be what that one is about to delete or has deleted.
 	for _, digest := range rewrite {
 		for port, ref := range d.Inputs {
 			if ref.Digest != digest {
