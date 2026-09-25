@@ -135,6 +135,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Taken.AgainAfter` puts a message back held off for a while, so a runner that would be refused it again does not take it straight back.
 - `bus.Route` chooses a task's pool from the pools it is given, and `bus.Publish` takes the pool rather than reading one off a `pool=` label, which `bus.PoolOf` did.
 - A task message leaves out a resource nothing decided, where it wrote `"cpu": ""`, `"memory": ""` and `"pids": 0`, which the wire refuses.
+- A bus address that is `nats://` or `ws://` to anything but a loopback address is refused before it is dialled, with `bus.ErrPlaintext`, and a connection in plaintext takes no server the bus gossips.
 
 ### Driver
 
@@ -206,6 +207,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 - `serve` hears stops on `agentiik.stops` over its own connection before it takes anything, and a subscription refused or not confirmed ends it. A stop for a key it holds, or that an earlier agent took, is handed to the driver with its reason; one for any other key is passed over. `runner.Stops` asks the driver once per holding of a key between the bus and the heartbeat's cancel, so a repeat sends no second `SIGTERM` and does not rewrite the reason, and asks again only where the driver failed. `Stops.Hear` may be called on a replacement connection before the old one closes, and a stop heard on both is sent once.
 - `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. A dispatch carried again after the agent restarted goes on from where the API says its log stands, and reports it `truncated`. The key's record keeps the log the result reported, so a report made from it says the same.
+- A bus credential naming a bus in plaintext across a network is refused, rather than asked for again for ever. `serve` and `join` refuse a `DOCKER_HOST` that is not a local unix socket, naming it, on the same start as the other settings.
 
 ### Artifacts
 
@@ -214,6 +216,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
 - `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
+- `artifact/granted` refuses an upload policy or a presigned GET in plain `http` to anything but a loopback address, before any container runs, repeating no signature.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
@@ -328,6 +331,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 - `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
+- Every connection the programs open holds TLS 1.2 as its floor and speaks 1.3 where the other end does: PostgreSQL through `db.Open` and `db.Connect`, the bus, a runner's calls to the API and its objects, and `agk`. `internal/tlsfloor` writes the floor once.
 
 ### Command line
 
