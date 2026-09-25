@@ -2,7 +2,9 @@ package schema
 
 import (
 	"encoding/json"
+	"io/fs"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -306,5 +308,58 @@ func TestCompileAtRefusesAPointerThatIsNotOne(t *testing.T) {
 	c := NewCompiler(nil)
 	if _, err := c.CompileAt([]byte(`{}`), "/spec/definitions/order"); err == nil {
 		t.Fatal("a pointer written without its leading # was accepted")
+	}
+}
+
+// opening counts how often each file of a tree is opened.
+type opening struct {
+	fstest.MapFS
+	mu     sync.Mutex
+	opened map[string]int
+}
+
+func (o *opening) Open(name string) (fs.File, error) {
+	o.mu.Lock()
+	o.opened[name]++
+	o.mu.Unlock()
+	return o.MapFS.Open(name)
+}
+
+// ReadFile is counted too, since fs.ReadFile takes it over Open where a tree has it.
+func (o *opening) ReadFile(name string) ([]byte, error) {
+	o.mu.Lock()
+	o.opened[name]++
+	o.mu.Unlock()
+	return o.MapFS.ReadFile(name)
+}
+
+// A file of the tree is read and parsed once for every document a Compiler compiles
+// against it, however many name it: a declaration is compiled one input at a time at
+// every start of a run, and forty inputs naming a one megabyte schema otherwise held
+// 665 MiB for one request. Each document still compiles on its own.
+func TestAFileNamedByManyDocumentsIsReadOnce(t *testing.T) {
+	fsys := &opening{MapFS: tree(), opened: map[string]int{}}
+	c := NewCompiler(fsys)
+	for range 20 {
+		s, err := c.Compile([]byte(`{ "$ref": "./schemas/customer.json" }`))
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		if err := s.Validate(decode(t, `[{"id": "A-1", "amount": -1}]`)); err == nil {
+			t.Fatal("a document compiled against a file read before it refuses nothing")
+		}
+	}
+	for range 3 {
+		if _, err := c.Compile([]byte(`{ "$ref": "./schemas/broken.json" }`)); err == nil {
+			t.Fatal("a file that is not JSON compiled")
+		}
+	}
+	for name, n := range fsys.opened {
+		if n != 1 {
+			t.Errorf("%s was opened %d times", name, n)
+		}
+	}
+	if len(fsys.opened) != 3 {
+		t.Errorf("the files opened are %v", fsys.opened)
 	}
 }

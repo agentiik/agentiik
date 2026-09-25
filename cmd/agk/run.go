@@ -16,7 +16,6 @@ import (
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
 	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/graph"
-	"github.com/agentiik/agentiik/schema"
 )
 
 // agk run --local: "Runs the whole workflow against the local Docker daemon, with no
@@ -129,17 +128,12 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	// 2. The inputs, through package schema: a $ref resolves inside the tree, required and
 	// default are applied, and an undeclared input is refused, all of it before a run
 	// exists, which is what graph.Options.Inputs expects.
-	declared, err := declaredInputs(wf, tree)
-	if err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
 	supplied, err := suppliedInputs(inputs, e.paths(inputFiles), e.path(*document))
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
-	bound, err := schema.Bind(declared, supplied)
+	bound, err := bindInputs(wf, tree, supplied)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused

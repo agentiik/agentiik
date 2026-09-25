@@ -186,9 +186,10 @@
 //	1  graph.Load(os.DirFS(tree), entry, nil), then graph.Check. The nil remote map
 //	   refuses a workflow: include naming the repository and the ref it wanted, because
 //	   resolving one is reaching another repository and there is no server here.
-//	2  schema.NewCompiler(os.DirFS(tree)), Compile per declared input, schema.Bind. A $ref
-//	   resolves inside the tree and is refused when it leaves it, and required and default
-//	   are applied before a run exists, which is what graph.Options.Inputs expects.
+//	2  graph.Workflow.DeclaredInputs(os.DirFS(tree)), then schema.Bind, as the API binds a
+//	   server run's. A $ref resolves inside the tree and is refused when it leaves it, and
+//	   required and default are applied before a run exists, which is what
+//	   graph.Options.Inputs expects.
 //	3  the secrets check, before a daemon is touched.
 //	4  Open: dial, negotiate, read the floor, say what is given up.
 //	5  Resolve: graph.Images, one driver.Manifest per image, graph.Build. Build holds

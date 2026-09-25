@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/agentiik/agentiik/graph"
@@ -18,36 +17,18 @@ import (
 // What this file does is read the command line. What a value has to look like, whether a run
 // can start without one, what stands in when it is absent and what happens to a name the
 // workflow never declared are all package schema's, applied before a run exists, which is
-// what graph.Options.Inputs says it expects.
+// what graph.Options.Inputs says it expects. The declaration is compiled by
+// graph.Workflow.DeclaredInputs, which the API compiles it with too.
 
-// declaredInputs compiles the schema of every declared input against the tree.
-//
-// The compiler is given the tree rather than a directory, so a { $ref: "./schemas/order.json" }
-// resolves inside the commit it travelled with and a reference that leaves it is refused. On a
-// laptop the commit is the working tree, which is the whole of what a local run means by
-// pinned.
-//
-// An input with no schema is accepted as it comes, which is what a workflow says when the
-// shape of a value is not its business.
-func declaredInputs(wf *graph.Workflow, fsys fs.FS) (map[string]schema.Input, error) {
-	if wf == nil {
-		return nil, fmt.Errorf("there is no workflow to read the inputs of")
+// bindInputs binds what a local run was given against the workflow's declaration, compiled against
+// the tree: the same two calls the API binds a server run's inputs with, so that one set of inputs
+// is one set of values wherever it runs.
+func bindInputs(wf *graph.Workflow, tree fs.FS, supplied map[string]any) (map[string]any, error) {
+	declared, err := wf.DeclaredInputs(tree)
+	if err != nil {
+		return nil, err
 	}
-	compiler := schema.NewCompiler(fsys)
-	out := make(map[string]schema.Input, len(wf.Inputs))
-	for _, name := range slices.Sorted(maps.Keys(wf.Inputs)) {
-		in := wf.Inputs[name]
-		declared := schema.Input{Required: in.Required, Default: in.Default}
-		if len(in.Schema) > 0 && !isNull(in.Schema) {
-			compiled, err := compiler.Compile(in.Schema)
-			if err != nil {
-				return nil, fmt.Errorf("the workflow input %s: %w", name, err)
-			}
-			declared.Schema = compiled
-		}
-		out[name] = declared
-	}
-	return out, nil
+	return schema.Bind(declared, supplied)
 }
 
 // suppliedInputs reads the values the command line supplied.
@@ -116,7 +97,3 @@ func valueOf(s string) any {
 	}
 	return trimmed
 }
-
-// isNull says whether a schema document is the JSON null, which the reader writes for a key
-// that was present and empty. Compiling it would refuse a workflow the language accepts.
-func isNull(doc []byte) bool { return strings.TrimSpace(string(doc)) == "null" }
