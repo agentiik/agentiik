@@ -321,10 +321,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			decision.Outputs = digestsOf(outputs)
 		}
 	}
-	// A pass that decided nothing writes nothing. The evaluator counts decisions, so a
+	// A pass that decided nothing writes no decision. The evaluator counts decisions, so a
 	// sequence that has not moved is the honest statement that this pass was a no-op:
 	// asking again at the same instant is idempotent by design, and the commonest case is
-	// a sweep reaching a run that is simply waiting.
+	// a sweep reaching a run that is simply waiting. The most such a pass writes is the
+	// clock, where the one it read is spent, which rewake below is for.
 	saved := e.Seq
 	var held []agk.TaskID
 	if state.Seq != saved {

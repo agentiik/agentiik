@@ -272,7 +272,9 @@ type Decision struct {
 	StartedAt  time.Time
 	FinishedAt time.Time
 
-	// WakeAt is Plan.Wake, and the zero time is "nothing waits on the clock".
+	// WakeAt is when the run is next due: Plan.Wake for a pass, and the moment of the result
+	// for a decision recording one, which the pass after it is due at. The zero time is
+	// "nothing waits on the clock".
 	WakeAt time.Time
 
 	// ExpiresAt is when this run's envelopes and logs may be purged, set when it finishes
