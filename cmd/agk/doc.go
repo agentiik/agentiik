@@ -100,9 +100,11 @@
 //	                 working directory layout, the store over a directory, and the four
 //	                 small things driver asks for
 //	internal/draw    the resolved workflow as DOT and as Mermaid, pure and golden-tested
-//	internal/diff    what "the same envelopes" means, in one place, because agk brick
-//	                 test and the milestone proof both rest on it
 //	internal/helper  where the static helper is carried and laid down
+//
+// What "the same envelopes" means is in one place, because agk brick test and the milestone
+// proof both rest on it: the module's internal/diff rather than one under cmd/agk/internal, so
+// that the end-to-end tests under e2e can compare a server run's envelopes by the same rule.
 //
 // # Layout
 //

@@ -360,6 +360,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The fake daemon answers a second network of a name already taken with 409, removes a network by its name, refuses to remove one a running container is on with 403, and dates each network, which `Daemon.Backdate` moves back.
 - The real-daemon tests hold `network: internal` to what the kernel does: the container is on its task's network and no other with no default route, two tasks at once cannot reach each other, the runner host is not reachable through the gateway, and a name outside the host is not resolved while the container's own is.
 - A CI job builds the runner's image for both architectures, arm64 under QEMU, and runs `version` and `serve` in each as the Compose sample runs it, refused at the floor. On a remapped daemon, `serve` runs past the floor on the image's file capabilities alone, and the same image without them is refused naming them.
+- `e2e` stands up a test installation from this checkout in a CI job of its own: PostgreSQL migrated by `agentiik-api migrate`, NATS on what `bus-init` wrote, the API behind TLS and the controller, a registry, and two runners in the runner image, each on a `docker:dind` daemon of its own. A one-step workflow runs to `succeeded` on it, and each runner holds `AGK_API`, its `runner.env` and its key and nothing of the installation's, and reaches objects only through presigned URLs and the signed upload policy. It skips unless `AGENTIIK_E2E=1`.
+- `cmd/agk/internal/diff` is now `internal/diff`, so that the end-to-end tests to come can compare envelopes by the rule `agk brick test` and the milestone proof use.
 
 ## v0.1.2, 2026-09-13
 
