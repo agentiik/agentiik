@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -190,24 +189,8 @@ func roundTrip(s *graph.State) (*graph.State, error) {
 		return nil, fmt.Errorf("controller: the state could not be written down: %w", err)
 	}
 	var out graph.State
-	if err := decode(b, &out); err != nil {
+	if err := json.Unmarshal(b, &out); err != nil {
 		return nil, fmt.Errorf("controller: the state could not be read back: %w", err)
 	}
 	return &out, nil
-}
-
-// decode reads a stored document with every number a json.Number, which is what a number is in
-// the state the run started from: graph.Parse reads the vars that way, and agk.Decode every
-// envelope. Decoded as a float64 instead, vars.n + 1 has no overload on any pass after the first,
-// and a run that agk run --local finishes fails on a server.
-func decode(b []byte, v any) error {
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.UseNumber()
-	if err := d.Decode(v); err != nil {
-		return err
-	}
-	if d.More() {
-		return errors.New("the document is followed by more than it holds")
-	}
-	return nil
 }
