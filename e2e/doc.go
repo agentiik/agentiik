@@ -25,7 +25,7 @@
 //	AGENTIIK_E2E=1 go test ./e2e -count=1 -v -timeout 25m
 //
 // It pulls postgres:17-alpine, nats:2-alpine, registry:2, docker:29-dind and alpine:3.21 the first
-// time, builds the four programs and the runner image, and takes a few minutes. It starts two
+// time, builds the programs and the runner image, and takes a few minutes. It starts two
 // Docker daemons, which is heavy for a laptop: the job is what runs it on every push.
 //
 // Linux alone, because the daemons resolve every bind against the host they run on. Each runner's
@@ -58,4 +58,18 @@
 // at rest or repository, and reaches objects only through presigned URLs and the signed upload
 // policy. That is the first half of the fact v0.2.0 holds; the test's comment says how each part
 // is read.
+//
+// # What the other two hold
+//
+// A runner killed mid-step: its agent is sent SIGKILL while its daemon runs the middle step of
+// three, and the daemon is left up. The dispatch is declared lost three heartbeat intervals after
+// the runner last spoke of it, the key is requeued under a new task_id that the other runner
+// redeems and runs, and the run succeeds with nobody touching it. The tasks table is read as the
+// database's superuser, since no route answers every dispatch of a key, and each daemon's events
+// say which containers it created, since a runner removes each once its task has ended.
+//
+// One workflow run locally and on a server: v0.1.0's milestone fixture, its images pushed to the
+// registry, run with agk run --local on this machine's daemon and again on the installation with
+// the same inputs and the same secret, and every declared output compared through internal/diff
+// under diff.Default.
 package e2e
