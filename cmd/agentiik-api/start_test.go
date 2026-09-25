@@ -248,6 +248,96 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 	}
 }
 
+// The control plane's bus credential expires under a serving API, and the bus refuses its
+// connection from then on. A runner is still given its own bus credential, which the account seed
+// signs, and takes from its pool's consumer, which was made ready when the pool was created; the
+// pool default, which the installation is migrated with, has had its consumer since the API
+// started. Before, every runner lost the bus within the hour of that expiry.
+func TestARunnerKeepsTheBusOnceTheControlPlanesCredentialHasExpired(t *testing.T) {
+	database := freshDatabase(t)
+	var out bytes.Buffer
+	if err := migrate(t.Context(), database, &out); err != nil {
+		t.Fatalf("migrating failed: %s\n%s", err, out.String())
+	}
+	dir := filepath.Join(t.TempDir(), "bus")
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, &stderr); code != exitStopped {
+		t.Fatalf("bus-init exited %d: %s", code, stderr.String())
+	}
+	natsURL := natsFrom(t, dir)
+	s := servingSettings(t, database.Application, dir, natsURL)
+
+	// A control plane credential minted under the installation's account as bus-credential
+	// mints one, lasting seconds rather than ninety days.
+	issuer, err := bus.NewIssuer(string(s.AccountSeed), natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := issuer.ForControlPlane("agentiik-api", time.Now().Add(4*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Bus.JWT, s.Bus.Seed, s.Bus.Expires = short.JWT, config.Secret(short.Seed), short.ExpiresAt
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, s, ln, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	c := client{t: t, base: "http://" + ln.Addr().String(), served: served}
+
+	// The pool and the machine, while the credential is good.
+	if code, answer := c.do("POST", "/api/v1/runner-pools", theToken, aPool()); code != http.StatusCreated {
+		t.Fatalf("the operator's pool answered %d: %v", code, answer)
+	}
+	code, answer := c.do("POST", "/api/v1/runner-pools/dmz/join-tokens", theToken, api.Issue{Labels: []string{"zone=dmz"}})
+	if code != http.StatusCreated {
+		t.Fatalf("the operator's join token answered %d: %v", code, answer)
+	}
+	joinToken, _ := answer["join_token"].(map[string]any)["token"].(string)
+	code, answer = c.do("POST", "/api/v1/runners", "", aMachine(joinToken))
+	if code != http.StatusCreated {
+		t.Fatalf("joining answered %d: %v", code, answer)
+	}
+	credential, _ := answer["credential"].(string)
+	if time.Now().After(short.ExpiresAt) {
+		t.Fatal("the control plane's credential expired before the pool and its runner were made")
+	}
+
+	time.Sleep(time.Until(short.ExpiresAt) + 1500*time.Millisecond)
+	code, answer = c.do("POST", "/api/v1/bus/token", credential, nil)
+	if code != http.StatusOK {
+		t.Fatalf("with the control plane's credential expired, the bus credential answered %d: %v", code, answer)
+	}
+	jwt, _ := answer["jwt"].(string)
+	seed, _ := answer["seed"].(string)
+	b, err := bus.OpenRunner(bus.Options{URL: natsURL, Credentials: &bus.Credentials{JWT: jwt, Seed: seed}})
+	if err != nil {
+		t.Fatalf("the server refused the runner's bus credential: %s", err)
+	}
+	defer b.Close()
+	if _, err := b.Take(t.Context(), "dmz", 1, 200*time.Millisecond); err != nil {
+		t.Errorf("the runner could not take from its pool: %s", err)
+	}
+
+	// A runner of the pool default, minted as the API mints one, finds its consumer there.
+	other, err := issuer.ForRunner("runner-default-01", "default", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := bus.OpenRunner(bus.Options{URL: natsURL, Credentials: &other})
+	if err != nil {
+		t.Fatalf("the server refused a runner of the pool default: %s", err)
+	}
+	defer d.Close()
+	if _, err := d.Take(t.Context(), "default", 1, 200*time.Millisecond); err != nil {
+		t.Errorf("a runner of the pool default could not take from it: %s", err)
+	}
+}
+
 // Every route built so far is served, and each stands behind the guard its constructor gave it: an
 // installation that left one constructor out would answer a runner, a pool or an object with the
 // mux's 404, which a test of the routes alone would never see.
@@ -286,6 +376,7 @@ func TestServeRegistersEveryRouteBuiltSoFar(t *testing.T) {
 		"GET /api/v1/runs",
 		"GET /api/v1/runs/{run}",
 		"GET /api/v1/runs/{run}/outputs/{name}",
+		"GET /api/v1/runs/{run}/steps/{step}/logs",
 		"POST /api/v1/runs/{run}/cancel",
 		"GET /api/v1/artifacts/{uri}",
 		"GET /api/v1/{namespace}/runs",

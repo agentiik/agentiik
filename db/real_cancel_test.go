@@ -236,3 +236,95 @@ func TestCancellingTheTasksOfARunLeavesWhatEndedAsItEnded(t *testing.T) {
 		}
 	}
 }
+
+// A run's ending ends every task of it still in flight, whatever the verdict: timed_out for a run
+// past its deadline, and cancelled for every other, a run that succeeded or failed with a step a
+// merge: first superseded still running included. What it answers is the ones a runner had
+// redeemed, to be stopped, and the code a stopped container exits with still lands on its row. A
+// run that has not ended ends nothing.
+func TestARunsEndingEndsItsTasksStillInFlightWhateverItsVerdict(t *testing.T) {
+	normalize := agk.NewTaskID(theRun, "normalize", 1, agk.Shard{})
+	invoice := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	archive := agk.NewTaskID(theRun, "archive", 1, agk.Shard{})
+	for _, c := range []struct {
+		run  agk.RunState
+		want agk.TaskState
+	}{
+		{agk.Succeeded, agk.TaskCancelled},
+		{agk.Failed, agk.TaskCancelled},
+		{agk.Cancelled, agk.TaskCancelled},
+		{agk.TimedOut, agk.TaskTimedOut},
+		{agk.Running, agk.TaskRunning},
+	} {
+		t.Run(c.run.String(), func(t *testing.T) {
+			pool, _ := created(t)
+			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+				return ns.CreateRun(ctx, aRun())
+			}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			code := 0
+			decidedAs(t, pool, c.run, now,
+				TaskRow{ID: normalize, Step: "normalize", Attempt: 1, State: agk.TaskSucceeded, ExitCode: &code, StartedAt: now, FinishedAt: now},
+				TaskRow{ID: invoice, Step: "invoice", Attempt: 1, State: agk.TaskRunning, Runner: "runner-1", DispatchedAt: now, StartedAt: now},
+				TaskRow{ID: archive, Step: "archive", Attempt: 1, State: agk.TaskPending},
+			)
+
+			later := now.Add(time.Minute)
+			var held []agk.TaskID
+			var stopped bool
+			err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+				var err error
+				if held, err = w.EndTasks(ctx, "finance", theRun, later); err != nil {
+					return err
+				}
+				row, err := w.TaskRow(ctx, "finance", invoice)
+				if err != nil {
+					return err
+				}
+				stopped, err = w.StopCode(ctx, "finance", invoice, row, "runner-1", 143, now)
+				return err
+			})
+			if !c.run.Terminal() {
+				if err == nil {
+					t.Error("the tasks of a run still running were ended under it")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(held) != 1 || held[0] != invoice {
+					t.Errorf("ending the tasks of a %s run answered %v as held by a runner, and only %s was", c.run, held, invoice)
+				}
+				if !stopped {
+					t.Errorf("the code of the container a %s run stopped found no row to land on", c.run)
+				}
+			}
+
+			var d RunDetail
+			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+				var err error
+				d, err = ns.RunDetail(ctx, theRun)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(d.Tasks) != 3 {
+				t.Fatalf("the run has %d tasks", len(d.Tasks))
+			}
+			want := map[agk.TaskID]agk.TaskState{normalize: agk.TaskSucceeded, invoice: c.want, archive: c.want}
+			if !c.run.Terminal() {
+				want[archive] = agk.TaskPending
+			}
+			for _, task := range d.Tasks {
+				if task.State != want[task.Task] {
+					t.Errorf("in a %s run %s reads %s, want %s", c.run, task.Task, task.State, want[task.Task])
+				}
+				if task.Task == invoice && c.run.Terminal() && (task.ExitCode == nil || *task.ExitCode != 143 || !task.FinishedAt.Equal(later)) {
+					t.Errorf("in a %s run the stopped task reads exit %v, finished at %s", c.run, task.ExitCode, task.FinishedAt)
+				}
+			}
+		})
+	}
+}

@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/db"
 )
 
 // The credential a runner uses to reach the task bus.
@@ -29,10 +31,33 @@ type BusIssuer interface {
 //
 // Separate from BusIssuer because they are different objects: one holds the account key and the
 // other holds a connection. A runner cannot create its own consumer, which is deliberate, so
-// something on this side has to, and the moment a runner asks for a credential is the moment it is
-// about to need one.
+// something on this side has to. It does so when the pool is created and for every pool when the
+// API starts, and not when a runner asks for a credential: the connection it goes through holds
+// the control plane's credential, and a route that needed it would be refused from the moment that
+// credential expires, although what it mints is signed with the account seed and still good.
 type BusConsumers interface {
 	Consumer(ctx context.Context, pool string) error
+}
+
+// ReadyQueues makes sure every pool of the installation has its consumer, which is what the API
+// does as it starts. The pool default, which the installation is migrated with and no request
+// creates, is among them. A consumer already there keeps the messages it holds, and takes this
+// version's settings where an earlier one made it.
+func ReadyQueues(ctx context.Context, pool *db.Pool, consumers BusConsumers) error {
+	var pools []db.RunnerPool
+	if err := pool.Installation(ctx, db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		pools, err = w.RunnerPools(ctx)
+		return err
+	}); err != nil {
+		return fmt.Errorf("api: the runner pools could not be read: %w", err)
+	}
+	for _, p := range pools {
+		if err := consumers.Consumer(ctx, p.Name); err != nil {
+			return fmt.Errorf("api: the queue of the runner pool %s could not be made ready: %w", p.Name, err)
+		}
+	}
+	return nil
 }
 
 // BusLife is how long a bus credential is minted for.
@@ -79,10 +104,9 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 
 	// A revoked runner is in its grace, since it would not have been opened after it. It is
 	// minted what the grace allows, "narrowed to publishing results and hearing stops, no
-	// pull", and nothing past the grace's end, when its results stop being taken. Its pool
-	// has nothing it may take, so no consumer is made ready for it. A draining runner is
-	// minted what it always was: it stops taking work because the heartbeat told it to, and
-	// a redemption would refuse it anyway.
+	// pull", and nothing past the grace's end, when its results stop being taken. A draining
+	// runner is minted what it always was: it stops taking work because the heartbeat told it
+	// to, and a redemption would refuse it anyway.
 	if runner.State == "revoked" {
 		if runner.ResultsAcceptedUntil.Before(until) {
 			until = runner.ResultsAcceptedUntil
@@ -98,14 +122,8 @@ func (s *RunnerAPI) busToken(w http.ResponseWriter, r *http.Request, runner Runn
 
 	// The pool comes from the runner the credential opened, never from the request. A
 	// machine that could name its own pool could take another pool's work, which is the
-	// same defect as a self-asserted label and reaches further.
-	if s.consumers != nil {
-		if err := s.consumers.Consumer(r.Context(), runner.Pool); err != nil {
-			fail(w, http.StatusInternalServerError, "the queue for that pool could not be made ready")
-			return
-		}
-	}
-
+	// same defect as a self-asserted label and reaches further. Its consumer is not made
+	// ready here: that was done when the pool was created, and again when the API started.
 	credentials, err := s.issuer.ForRunner(runner.ID, runner.Pool, until)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the bus credential could not be minted")

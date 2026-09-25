@@ -917,24 +917,42 @@ func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID,
 	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
 }
 
-// TimeOutTasks moves to timed_out every task of a run that is not over, for a run whose deadline
-// has passed, and answers the keys of those a runner had redeemed.
+// EndTasks ends every task of a run that has ended and is not over itself, with the ending the
+// run's own ending names, and answers the keys of those a runner had redeemed. It is called in the
+// transaction that writes the run's ending, after it, and refuses a run that has not ended.
 //
-// "Once it passes, the tasks still running are stopped and the run ends there." It is
-// CancelTasks for the other way a run ends under its tasks, and for the same reasons: a message
+// A run that reached its deadline writes its tasks timed_out: "once it passes, the tasks still
+// running are stopped and the run ends there." Every other ending writes them cancelled, and not
+// only a cancellation's. A run that succeeded or failed has ended every step, and a step ends once
+// every shard of it has, except the one a merge: first superseded: that step is cancelled the
+// moment the barrier lifts on another edge, while its tasks are still in flight and only asked to
+// stop. Their runners' endings would then reach a run with nothing left to learn, and the rows
+// would read dispatched or running for ever. "cancelled: Stopped because the run was cancelled by
+// a principal, by a concurrency group, by a merge: first or by fail_fast" is the ending for them.
+//
+// It is CancelTasks for every way a run ends under its tasks, and for the same reasons: a message
 // still on the queue would otherwise redeem its grant for a run that has ended, the run's tasks
 // would count against max_concurrent_tasks for good, and the row is what names a runner's
 // dispatch the document does not. It is also what the heartbeat answers cancel from, so that a
-// runner that missed the deadline's stop on agentiik.stops hears it at its next heartbeat rather
-// than running the container to its own deadline.
-func (w *Wide) TimeOutTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
-	return w.endTasks(ctx, namespace, run, agk.TaskTimedOut, at)
+// runner that missed the stop on agentiik.stops hears it at its next heartbeat rather than running
+// the container to its own deadline.
+func (w *Wide) EndTasks(ctx context.Context, namespace string, run agk.RunID, at time.Time) ([]agk.TaskID, error) {
+	state, _, err := w.stateOf(ctx, namespace, run)
+	switch {
+	case err != nil:
+		return nil, err
+	case !state.Terminal():
+		return nil, fmt.Errorf("db: run %s is %s, and only a run that has ended ends its tasks under them", run, state)
+	case state == agk.TimedOut:
+		return w.endTasks(ctx, namespace, run, agk.TaskTimedOut, at)
+	}
+	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
 }
 
 // StopCode writes onto one dispatch that a run's ending stopped the exit code its container
 // exited with, as its runner reported it, and answers whether a row took it.
 //
-// CancelTasks and TimeOutTasks end a run's tasks in the pass that ends the run, before any
+// CancelTasks and EndTasks end a run's tasks in the pass that ends the run, before any
 // container has exited, so the rows they end carry no code; the runner's report comes later, to a
 // run with nothing left to decide. "A timed_out or cancelled task carries an exit code wherever a
 // container ran" all the same, and this is where it lands. Only on a row that is stopped and has no

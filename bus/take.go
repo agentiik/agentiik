@@ -236,7 +236,7 @@ func (b *Bus) Take(ctx context.Context, pool string, batch int, wait time.Durati
 	}
 	consumer, err := b.js.Consumer(ctx, Stream, Durable(pool))
 	if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
-		return nil, fmt.Errorf("bus: pool %s has no consumer to take work from: the control plane creates it when a runner of the pool asks for its bus credential, and a runner creates none", pool)
+		return nil, fmt.Errorf("bus: pool %s has no consumer to take work from: the API creates it when the pool is created and again as it starts, and a runner creates none", pool)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("bus: the consumer of pool %s could not be reached: %w", pool, err)

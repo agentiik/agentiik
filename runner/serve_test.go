@@ -208,6 +208,11 @@ func anInstallationServing(t *testing.T) *served {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// And its queue, which the API makes ready as the pool is created, and never when a runner
+	// asks for its bus credential.
+	if err := control.Consumer(ctx, in.poolName); err != nil {
+		t.Fatal(err)
+	}
 	return in
 }
 

@@ -269,6 +269,9 @@ func poolOf(p db.RunnerPool) Pool {
 	}
 }
 
+// errNoQueue is a pool whose consumer the bus could not create, which is not created either.
+var errNoQueue = errors.New("api: the pool's queue could not be made ready")
+
 func (s *RunnerAPI) createPool(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var ask RunnerPool
 	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
@@ -293,6 +296,16 @@ func (s *RunnerAPI) createPool(w http.ResponseWriter, r *http.Request, who Princ
 		}); err != nil {
 			return err
 		}
+		// Its consumer is made ready before the pool is, in the transaction that creates
+		// it, so that a pool never exists with nowhere for its runners to pull from. A
+		// consumer made for a pool whose creation then failed is harmless: nothing is
+		// published on a pool that does not exist, and a pool created later under that
+		// name finds it ready.
+		if s.consumers != nil {
+			if err := s.consumers.Consumer(ctx, p.Name); err != nil {
+				return fmt.Errorf("%w: %w", errNoQueue, err)
+			}
+		}
 		var err error
 		created, err = wide.RunnerPoolNamed(ctx, p.Name)
 		return err
@@ -300,6 +313,9 @@ func (s *RunnerAPI) createPool(w http.ResponseWriter, r *http.Request, who Princ
 	switch {
 	case errors.Is(err, db.ErrRunnerPoolExists):
 		fail(w, http.StatusConflict, "a runner pool of that name exists already, and a pool's name is its only identity")
+		return
+	case errors.Is(err, errNoQueue):
+		fail(w, http.StatusServiceUnavailable, "the runner pool was not created, because the bus could not make its queue ready: the control plane's bus credential may have expired, or the bus may be out of reach")
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the runner pool could not be created")

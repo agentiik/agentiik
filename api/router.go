@@ -461,6 +461,16 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		}
 		return rt.auth.Allow(ctx, who, g.reveals, over)
 	})))
+	asked := r
+	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
+		// The credential first, since a token revoked or a session ended while its holder's
+		// grants remain is access lost too, then the permission.
+		again, err := rt.identify(asked.WithContext(ctx))
+		if err != nil || again != who {
+			return false, err
+		}
+		return rt.auth.Allow(ctx, who, g.permission, target)
+	}))
 	h(w, r, who, target)
 }
 
@@ -521,3 +531,21 @@ func refuse(w http.ResponseWriter, status int, message string) {
 	// that is plain.
 	fmt.Fprintf(w, "{\"error\":%q}\n", message)
 }
+
+// Still answers, for the route serving r, whether its caller still holds what the route was
+// authorised by: the request's credential identified again as the same principal, and the
+// authorizer asked again about the same permission and the same target.
+//
+// A request is authorised once, when it arrives, and deleting a grant "revokes one grant, from the
+// next request". A route whose answer goes on for as long as its caller reads, a log stream, is one
+// request that may never end, so it asks this as it goes and stops once the answer is no. A request
+// the router did not serve is answered no.
+func Still(r *http.Request) func(context.Context) (bool, error) {
+	if still, ok := r.Context().Value(stillKey{}).(func(context.Context) (bool, error)); ok {
+		return still
+	}
+	return func(context.Context) (bool, error) { return false, nil }
+}
+
+// stillKey is where the router leaves the question Still asks.
+type stillKey struct{}
