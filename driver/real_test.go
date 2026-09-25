@@ -2,7 +2,9 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -46,8 +48,13 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 }
 
 // realDriverWith opens a driver under a policy of the test's own, or skips.
+//
+// The images these tests run are the ones this machine holds under their tags, built here
+// or pulled by hand, so the digest floor is lifted as agk run --local lifts it. Only
+// TestARealPullByDigestRunsWhatTheDigestNames holds a real daemon to it.
 func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, string) {
 	t.Helper()
+	policy.RequireDigest = DigestLifted
 	socket, ok := dockertest.Socket()
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")
@@ -395,5 +402,109 @@ seccomp_profile = "`+profile+`"
 	}
 	if strings.Contains(got, "mkdir: allowed") {
 		t.Errorf("mkdir succeeded, so the container did not run under the profile the file names")
+	}
+}
+
+// TestARealPullByDigestRunsWhatTheDigestNames holds a real daemon and a real registry to the
+// digest floor: the image is pulled by the digest its registry serves it under, which the
+// registry answers even where the daemon holds it already, a script step naming that
+// digest runs under the floor a runner holds, and the tag it was pinned from is refused
+// before anything is created.
+func TestARealPullByDigestRunsWhatTheDigestNames(t *testing.T) {
+	d, image := realDriver(t)
+	d.cfg.Policy.RequireDigest = DigestRequired
+
+	held, err := d.cli.ImageInspect(t.Context(), image)
+	if err != nil {
+		t.Fatalf("inspecting %s: %s", image, err)
+	}
+	pinned := held.RegistryDigests(image)
+	if len(pinned) == 0 {
+		dockertest.Unavailable(t, "%s is held under no digest of its registry, so there is nothing to pull it by", image)
+	}
+	if err := d.cli.ImagePull(t.Context(), pinned[0], "", nil); err != nil {
+		dockertest.Unavailable(t, "the registry behind %s could not be pulled from: %v", pinned[0], err)
+	}
+
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "pinned", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "pinned",
+		Attempt:   1,
+		Image:     pinned[0],
+		Script:    []string{"true"},
+		Network:   graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running %s under the digest floor: %s", pinned[0], err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+
+	task.ID = agk.NewTaskID("01JMZ8V1P9C4", "tagged", 1, agk.Shard{})
+	task.Step = "tagged"
+	task.Image = image
+	if _, err := d.Run(t.Context(), task); !errors.Is(err, ErrImageNotByDigest) {
+		t.Errorf("%s, a tag, was run under the digest floor, or refused for another reason: %v", image, err)
+	}
+}
+
+// pulledByTheDriver is an image no other test runs, so that this machine holds it only where
+// a test left it, and removing it takes nothing from anybody. It is small and has a shell.
+const pulledByTheDriver = "busybox:1.36.1"
+
+// TestARealPullByDigestIsTheDriversOwnAndMeasured holds the driver's own pull to a real
+// registry: an image the daemon does not hold, named by the digest its registry serves it
+// under, is pulled by Run under the digest floor, and the pull is measured in image_pull_ms
+// rather than reported as an image the host already held.
+func TestARealPullByDigestIsTheDriversOwnAndMeasured(t *testing.T) {
+	d, _ := realDriver(t)
+	d.cfg.Policy.RequireDigest = DigestRequired
+	observed := &recorder{}
+	d.cfg.Observer = observed
+
+	served, err := d.cli.DistributionInspect(t.Context(), pulledByTheDriver, "")
+	if err != nil {
+		dockertest.Unavailable(t, "the registry behind %s could not be asked what it serves: %v", pulledByTheDriver, err)
+	}
+	ref := "busybox@" + served.Descriptor.Digest
+	remove := func() { exec.Command("docker", "image", "rm", ref).Run() }
+	remove()
+	t.Cleanup(remove)
+	if _, err := d.cli.ImageInspect(t.Context(), ref); err == nil {
+		dockertest.Unavailable(t, "%s is still held once removed, so the driver would not pull it", ref)
+	}
+
+	task := graph.Task{
+		ID:        agk.NewTaskID("01JMZ8V1P9C4", "pulled", 1, agk.Shard{}),
+		Run:       "01JMZ8V1P9C4",
+		Namespace: "finance",
+		Step:      "pulled",
+		Attempt:   1,
+		Image:     ref,
+		Script:    []string{"true"},
+		Network:   graph.NetworkNone,
+	}
+	result, err := d.Run(t.Context(), task)
+	if err != nil {
+		if docker.IsPullDenied(err) || strings.Contains(err.Error(), "toomanyrequests") {
+			dockertest.Unavailable(t, "the registry would not serve %s: %v", ref, err)
+		}
+		t.Fatalf("running %s, which the daemon did not hold, under the digest floor: %s", ref, err)
+	}
+	if result.State != agk.TaskSucceeded {
+		t.Errorf("the state is %s with exit code %d", result.State, result.ExitCode)
+	}
+	observed.mu.Lock()
+	defer observed.mu.Unlock()
+	var pulled int64
+	for _, e := range observed.es {
+		pulled = max(pulled, e.Usage.ImagePullMS)
+	}
+	if pulled <= 0 {
+		t.Errorf("image_pull_ms is %d for an image the driver pulled, which reads as an image the host already held", pulled)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -773,6 +774,76 @@ func (h *countingHolder) Hold(id agk.TaskID) error {
 type progressFunc func(context.Context, bus.TaskProgress) error
 
 func (f progressFunc) Progress(ctx context.Context, p bus.TaskProgress) error { return f(ctx, p) }
+
+// "A message whose image is not name@sha256 is reported as no container ran, on the platform's
+// account, then acknowledged, since no runner of any pool could ever run it", before anything is
+// written down and before any redemption.
+func TestATaskWhoseImageIsATagIsReportedUnredeemedAndAcknowledged(t *testing.T) {
+	// An answer that ends the message at once, so that a redemption, which must not happen,
+	// shows in the count rather than in a test that waits for a deadline.
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	m, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+
+	l.carryOne(t)
+
+	results := l.bus.all()
+	if len(results) != 1 || results[0].State != agk.TaskFailed || !results[0].StartedAt.IsZero() || results[0].ExitCode != nil || results[0].TaskID != m.TaskID {
+		t.Fatalf("the results reported are %+v, want one failed that reached no container", results)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting+unacknowledged != 0 {
+		t.Errorf("the message is still on the queue once it was reported: %d waiting and %d unacknowledged", waiting, unacknowledged)
+	}
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("the grant of a task naming a tag was redeemed %d times", n)
+	}
+	if held := l.loop.Held(); len(held) != 0 {
+		t.Errorf("the loop names %v for a task it reported", held)
+	}
+	if err := l.loop.Holder.Recorded(agk.TaskID(m.IdempotencyKey)); err != nil {
+		t.Errorf("the key of a task naming a tag is still held: %s", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(l.root, driver.KeysDir)); err == nil && len(entries) != 0 {
+		t.Errorf("the key of a task naming a tag was written down: %s holds %d entries", driver.KeysDir, len(entries))
+	}
+	if n := l.containersOf(m.IdempotencyKey); n != 0 {
+		t.Errorf("%d containers were created for a task naming a tag", n)
+	}
+}
+
+// "A key this host already ended is answered from the record", and the image is held to a digest
+// only "of the rest": a requeue whose message names a tag, from a control plane older than the
+// digest floor or one that went wrong, is answered with the ending the host recorded rather than
+// reported as having reached no container, since the container it names already ran.
+func TestARequeueNamingATagIsAnsweredFromTheRecordFirst(t *testing.T) {
+	var answers sync.Map
+	api := anAPIAnswering(t, func(_ int, taskID string) (int, any) {
+		r, _ := answers.Load(taskID)
+		return http.StatusOK, r
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	first, r := l.task(t, nil)
+	answers.Store(first.TaskID, r)
+	l.carryOne(t)
+	if results := l.bus.all(); len(results) != 1 || results[0].State != agk.TaskSucceeded {
+		t.Fatalf("the first dispatch was reported %+v", results)
+	}
+
+	requeue, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+	l.carryOne(t)
+
+	if ended := l.queue.all(); len(ended) != 1 || ended[0].TaskID != requeue.TaskID || ended[0].State != agk.TaskSucceeded {
+		t.Errorf("the requeue was answered from the record with %+v, want its recorded success", ended)
+	}
+	if results := l.bus.all(); len(results) != 1 {
+		t.Errorf("the requeue was also reported, as %+v, where the record answers it", results[1:])
+	}
+	if n := l.api.redemptions(requeue.TaskID); n != 0 {
+		t.Errorf("the requeue's grant was redeemed %d times", n)
+	}
+}
 
 // "Take nothing new; finish what is held." While the heartbeat orders a drain the loop takes no
 // message, which stays on the queue for another runner, and once the order is lifted it takes

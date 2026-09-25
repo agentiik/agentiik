@@ -8,6 +8,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - One active controller, elected by a PostgreSQL advisory lock. Every write carries a fencing counter, so a partitioned former holder is refused.
 - Woken by `NOTIFY` when the API writes a run, and sweeping on an interval anyway.
+- The sweep keeps its own interval, which a notification does not reset, so a busy installation still sweeps on time.
 - Decides through the v0.1.0 evaluator rather than a scheduler of its own. The run stores the evaluator's state, so failover is a resume, and each write is refused if the row moved since it was read.
 - Envelopes are lifted out of that state into the object store and replaced by their digests.
 - A task is published after its row commits and stamped once published; the sweep resends one whose message never went.
@@ -52,6 +53,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Resources are capped to the pool's cpu, memory and pids ceilings on the task message, and an ask left out takes the ceiling.
 - A `timed_out` or `cancelled` task keeps its container's exit code on its row, 137 or 143 for a stop, including one its run's ending stopped, whose runner reports after the run ended. A lost task, an ending no container reached and a stop reported with no code have none; `graph.Result.NoExitCode` tells that from 0.
 - A run that succeeds or fails with a task a `merge: first` superseded still in flight writes it `cancelled` in the pass that ends the run, so it frees its slot, is named in the heartbeat's `cancel` and takes its exit code when its runner reports, where it read in flight for good. A redeemed one the document never saw dispatched is sent the `superseded` stop. `db.Wide.EndTasks` ends a run's tasks with the ending its own ending names, and replaces `TimeOutTasks`.
+- A task stopped as `superseded` or `sibling_failed` while its run goes on is written `cancelled` in the pass that sends the stop, so the heartbeat's `cancel` repeats it to a runner that missed it, a `fail_fast` step is judged at once, and the slot is free for that very pass, `db.Wide.Slots` leaving out the keys it ends. The runner's later report adds the exit code, the log and the usage, and nothing else, and later decisions keep them, a log's cut included.
 
 ### State
 
@@ -88,7 +90,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `artifacts.fetches_held_until` holds each fetch of a budget being served until an instant, so a transfer that does not complete never spends one, and one whose API died gives it back when its hold lapses. `db.NS.Fetched` gives way to `Reserve`, `Delivered` and `Release`.
 - `runners` keeps who drained and who revoked a runner and when, until the audit log does, and the end of a revocation's grace. `Wide.Drain` and `Wide.Revoke` take who, why and when, and the grace for a revocation, and answer the runner; a drain of a revoked runner is `db.ErrRunnerRevoked`; `Wide.Authenticate` and `Wide.Beat` take a revoked runner until its grace ends, `Wide.Rotate` refuses one in its grace with `db.ErrRunnerRevoked`, and a redemption binding a runner that is not ready is `db.ErrRunnerNotTaking`. Migration `0025_revocation.sql`.
 - A redemption that would bind is `db.ErrPoolRefusesNamespace` where the runner's pool does not accept the task's namespace, and `db.ErrRunnerNarrowed` where the runner's own namespaces leave it out.
-- A `timed_out` or `cancelled` row of `tasks` may carry an exit code, and a lost one still may not. `Wide.StopCode` writes one, once, on a row a run's ending stopped, from the runner bound to it. Migration `0027_stopped_exit_codes.sql`.
+- A `timed_out` or `cancelled` row of `tasks` may carry an exit code, and a lost one still may not. `Wide.StopReport` writes one, once, with the report's log and usage, on a row the controller stopped, from the runner bound to it. Migration `0027_stopped_exit_codes.sql`.
 - `NS.Runs` and `RunQuery.Workflow` are gone: one namespace's runs are listed by `Wide.Runs` over the workflows the authorizer allowed, as every namespace's are.
 - An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 
@@ -168,6 +170,12 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The terminal `driver.Event` of a container that ran carries its exit code and span, so a container stopped at its deadline or cancelled tells the code its stop left (137 or 143), which the record of its key keeps, and one whose outputs were refused tells 121.
 - Where the daemon cannot give a container's span after its exit, the span runs from the dispatch to the moment the exit was read, rather than reading as a container that never started.
 - `Docker.Dispatched` lists the keys the record holds as taken and never ended, newest first. A taken key is written beside where its ending goes, as `<key>.taken`, and taken away when the ending is written, when `Release` lets the key go, or when `Run` returns without an ending, so the listing reads no ending.
+- `Policy.RequireDigest`, a floor no line of `runner.toml` lifts: a task whose image is not `name@sha256` is refused with `driver.ErrImageNotByDigest` on the platform's account before anything is asked of the host. `agk run --local` and `agk brick test` lift it.
+- Under the same floor, a step that is not a script step and whose image carries no `/agk/brick.yaml` is refused rather than run as the image's own account.
+- The pull and the manifest read are bounded by the task's deadline. A deadline that passes during them ends the task `timed_out` with no container, or `cancelled` where a stop landed first, and the log says why and how long the pull ran.
+- `Docker.Recorded` answers as `Hold` would and writes nothing down.
+- A pull a registry refused for want of credentials says so, and names v0.8.0's namespace credentials. `docker.IsPullDenied` reads the ways the daemon passes such a refusal on, and not its own 403.
+- A die event the watch had no room for arms the inspect, so the exit is read in seconds rather than at the deadline as `timed_out`.
 
 ### Runner
 
@@ -190,6 +198,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redemption or fetch with no answer is tried again, from 1 s doubling to 30 s, until the deadline, then reported `timed_out` with no container ran; a 422, an unusable 200, a fetch that is not what was named, or a message no runner can run (`runner.ErrNotRunnable`) is reported `failed` with no container ran.
 - A task's `running` and `publishing` are published from a goroutine of their own, dropped rather than holding up the driver.
 - `serve` posts a heartbeat every 10 s naming every key it answers for (written down, redeemed again, running, or with a result still to publish), and for `bus.AckWait` after a start the keys an earlier agent took and never ended. It says `READY=1` once the first is answered, stops each key the answer cancels, takes nothing new and reports `draining` while told to drain, saying why, says a clock more than a second off the installation's, and exits 3 saying to join again on a 401. A key off the wire's grammar is left out and said, rather than having the whole heartbeat refused.
+- A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 
 ### Artifacts
 
@@ -340,6 +349,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The pool listing's order by name is held through the API with a pool created last whose name sorts first.
 - The fake daemon's registry answers 403 for a repository it holds nothing of, the common case of an image never pushed, and 401 with `RegistryAnswers401`, as quay.io does. `Pin` and `agk push` are held to both, and `Pin` to a registry answering another digest than the one it was asked about.
 - `dockertest.TagMoves` moves a tag once it has been inspected, and `agk push` is held to reading each manifest out of the digest it resolved rather than the tag.
+- The fake daemon refuses a pull with a registry's 401 under `PullAnswers401`, pulls slowly under `SlowPull` and answers a create late under `SlowCreate`, which the deadline-bounded pull is held to.
+- A real-daemon test pulls an image by digest through the driver under the digest floor and holds `image_pull_ms` to the pull.
 - The fake daemon answers a second network of a name already taken with 409, removes a network by its name, refuses to remove one a running container is on with 403, and dates each network, which `Daemon.Backdate` moves back.
 - The real-daemon tests hold `network: internal` to what the kernel does: the container is on its task's network and no other with no default route, two tasks at once cannot reach each other, the runner host is not reachable through the gateway, and a name outside the host is not resolved while the container's own is.
 - A CI job builds the runner's image for both architectures, arm64 under QEMU, and runs `version` and `serve` in each as the Compose sample runs it, refused at the floor. On a remapped daemon, `serve` runs past the floor on the image's file capabilities alone, and the same image without them is refused naming them.

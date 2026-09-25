@@ -120,6 +120,13 @@ func (h *held) stopping(state agk.TaskState) *watch {
 	return h.watch
 }
 
+// stoppedAs answers with what a stop that landed made of the task, and whether one did.
+func (h *held) stoppedAs() (agk.TaskState, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state, h.stopped
+}
+
 // watching answers with the watch of this task's container, or nothing where there is no
 // container yet. It is a method rather than a field read because the event goroutine
 // reads it while the goroutine running the task is still writing it.
@@ -298,6 +305,31 @@ func (d *Docker) dispatch(e docker.Event) {
 // and each remove it, and the one that removed it first would take it away under the other.
 // The first delivery is the one that reports.
 var ErrTaskInFlight = errors.New("the task is already in flight on this runner, and a second delivery of it is refused rather than run beside the first")
+
+// Recorded answers as Hold would, and writes nothing down: a *Completed for a key this host
+// has carried to an ending, ErrTaskInFlight for one it has in flight, and nil for any other.
+//
+// It is for a message the record has to answer before anything is written down, which is
+// the order the page gives a runner: a key this host ended or still carries is answered from
+// the record, and only "of the rest, before anything is written down", a message whose image
+// is not name@sha256 is reported as having reached no container. Held first, such a message
+// would leave the key on disk as taken for a task this host was never going to run.
+func (d *Docker) Recorded(id agk.TaskID) error {
+	d.keys.mu.Lock()
+	e, found, err := d.keys.read(id)
+	d.keys.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if found && e.State.Terminal() {
+		return &Completed{Ending: e}
+	}
+	if d.lookup(id) != nil {
+		_, step, _, _, _ := agk.ParseTaskID(string(id))
+		return fault(step, ErrTaskInFlight, ChargePlatform, "task %s", id)
+	}
+	return nil
+}
 
 // register records a task as being run, and answers with what to call when it is not.
 //

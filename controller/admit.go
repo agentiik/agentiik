@@ -87,14 +87,18 @@ func (co *Core) admitted(ctx context.Context, e db.Evaluation, g *graph.Graph) (
 // makes the next pass hand it out again, and the run stays actionable because its message never
 // went. So a namespace at its ceiling slows down rather than failing, which is what a quota is
 // for: "a fan-out of ten thousand items cannot starve everyone else".
-func (co *Core) withinTheQuota(ctx context.Context, namespace string, start []graph.Task) ([]graph.Task, error) {
+//
+// The keys stopped are those this pass ended as their stop went out, whose rows still read in
+// flight because the decision that ends them is not written yet. They hold no slot: counted, a
+// slot a stop freed would wait for the next sweep, where the pass that freed it can use it.
+func (co *Core) withinTheQuota(ctx context.Context, namespace string, start []graph.Task, stopped []agk.TaskID) ([]graph.Task, error) {
 	if len(start) == 0 {
 		return start, nil
 	}
 	var free int
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
-		free, err = w.Slots(ctx, namespace)
+		free, err = w.Slots(ctx, namespace, stopped...)
 		return err
 	}); err != nil {
 		return nil, err
