@@ -183,7 +183,13 @@ func (c *Counter) Add(n float64, values ...string) {
 		panic(fmt.Sprintf("metrics: %s only goes up, and was given %v", c.name, n))
 	}
 	c.mu.Lock()
-	k, folded := c.r.slot(c.name, c.labels, values, len(c.series), func(k string) bool { _, ok := c.series[k]; return ok })
+	held := len(c.series)
+	if c == c.r.folded {
+		// The count of folds is bounded by the families, and is never folded itself: a
+		// fold of it would be one more fold to count, and so on for ever.
+		held = 0
+	}
+	k, folded := c.r.slot(c.name, c.labels, values, held, func(k string) bool { _, ok := c.series[k]; return ok })
 	c.series[k] += n
 	c.mu.Unlock()
 	if folded {

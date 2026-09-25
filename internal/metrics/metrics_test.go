@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // written is what r answers a scrape with.
@@ -164,5 +165,53 @@ func TestOnlyTheTokenReadsTheMetrics(t *testing.T) {
 				t.Errorf("the scrape was answered as %q", got)
 			}
 		}
+	}
+}
+
+// The count of folds is never folded itself, however small the limit: folding it would be one more
+// fold to count, for ever.
+func TestTheCountOfFoldsIsNeverFolded(t *testing.T) {
+	r := NewRegistry()
+	r.Limit = 1
+	for _, name := range []string{"agentiik_a_total", "agentiik_b_total", "agentiik_c_total"} {
+		c := r.Counter(name, "A family.", "pool")
+		c.Inc("one")
+		c.Inc("two")
+	}
+	got := written(t, r)
+	for _, name := range []string{"agentiik_a_total", "agentiik_b_total", "agentiik_c_total"} {
+		if line := `agentiik_metrics_folded_total{metric="` + name + `"} 1`; !strings.Contains(got, line+"\n") {
+			t.Errorf("the registry wrote no line %s:\n%s", line, got)
+		}
+	}
+}
+
+// The gauges of a scrape are read under one deadline, inside the time the scraper says it waits,
+// however many of them hang: the counters are answered on time and the hung gauges left out.
+func TestAScrapeAnswersWithinTheTimeItsScraperWaits(t *testing.T) {
+	r := NewRegistry()
+	r.Counter("agentiik_tasks_lost_total", "Lost.", "pool").Inc("default")
+	hang := func(ctx context.Context, _ *Gauges) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r.Gauges(hang, Desc{Name: "agentiik_queue_depth", Help: "Depth.", Labels: []string{"pool"}})
+	r.Gauges(hang, Desc{Name: "agentiik_runner_slots", Help: "Slots.", Labels: []string{"pool"}})
+	h := Handler(r, sha256.Sum256([]byte("s3cret")))
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	req.Header.Set("X-Prometheus-Scrape-Timeout-Seconds", "2")
+	rec := httptest.NewRecorder()
+	began := time.Now()
+	h.ServeHTTP(rec, req)
+	if took := time.Since(began); took > 1500*time.Millisecond {
+		t.Errorf("a scrape its scraper waits 2s for took %s", took)
+	}
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `agentiik_tasks_lost_total{pool="default"} 1`) {
+		t.Errorf("the scrape was answered %d:\n%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "agentiik_queue_depth") {
+		t.Errorf("a gauge that hung was answered:\n%s", rec.Body)
 	}
 }

@@ -2,10 +2,13 @@ package metrics
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Path is where the metrics are answered, the path every scraper asks by default.
@@ -20,8 +23,11 @@ const Path = "/metrics"
 // so the file the program reads it from is worth nothing to somebody who reads it, and in constant
 // time besides.
 //
-// The answer is written whole before any of it is sent, so that a scrape cut short by a gauge that
-// took too long is a failed scrape rather than half an answer the scraper would store.
+// The answer is written whole before any of it is sent, so that a scrape cut short is a failed scrape
+// rather than half an answer the scraper would store. So the gauges are read under one deadline for
+// the whole scrape, inside the time the scraper waits, which Prometheus sends as
+// X-Prometheus-Scrape-Timeout-Seconds: a gauge still reading then is left out, and the counters are
+// answered on time without it.
 func Handler(r *Registry, hash [sha256.Size]byte) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != Path {
@@ -40,8 +46,10 @@ func Handler(r *Registry, hash [sha256.Size]byte) http.Handler {
 			http.Error(w, "the metrics are read with the token whose hash AGK_METRICS_TOKEN_FILE holds", http.StatusUnauthorized)
 			return
 		}
+		ctx, cancel := context.WithTimeout(req.Context(), readBound(req.Header.Get("X-Prometheus-Scrape-Timeout-Seconds")))
+		defer cancel()
 		var body bytes.Buffer
-		if err := r.WriteTo(req.Context(), &body); err != nil {
+		if err := r.WriteTo(ctx, &body); err != nil {
 			http.Error(w, "the metrics could not be written", http.StatusInternalServerError)
 			return
 		}
@@ -52,4 +60,19 @@ func Handler(r *Registry, hash [sha256.Size]byte) http.Handler {
 		}
 		w.Write(body.Bytes())
 	})
+}
+
+// DefaultReadBound is how long the gauges of one scrape may take to read where the scraper does not
+// say how long it waits: well inside the ten seconds Prometheus waits by default.
+const DefaultReadBound = 4 * time.Second
+
+// readBound is how long the gauges of a scrape may take: a second less than the scraper says it
+// waits, left for writing the answer and carrying it back, and never more than DefaultReadBound
+// allows a scraper that says nothing.
+func readBound(header string) time.Duration {
+	seconds, err := strconv.ParseFloat(header, 64)
+	if err != nil || seconds <= 0 {
+		return DefaultReadBound
+	}
+	return max(time.Duration(seconds*float64(time.Second))-time.Second, 100*time.Millisecond)
 }

@@ -41,11 +41,6 @@ import (
 // waits for a concurrency group take.
 var durationBuckets = []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, 10800, 43200, 86400}
 
-// scrapeBound is the longest a scrape's reads of the database and the bus may take, well inside the
-// ten seconds a Prometheus scrape waits by default, so that a slow database fails a scrape rather
-// than piling scrapes up behind it.
-const scrapeBound = 5 * time.Second
-
 // counted is the controller's metrics: what the core tells, as counters and histograms, and what
 // is read at a scrape, as gauges.
 type counted struct {
@@ -164,8 +159,6 @@ func (c *counted) readQueues(b *bus.Bus) func(context.Context, *metrics.Gauges) 
 		if l == nil {
 			return nil
 		}
-		ctx, cancel := context.WithTimeout(ctx, scrapeBound)
-		defer cancel()
 		var pools []db.RunnerPool
 		if err := l.ctl.Fenced(ctx, l.term, func(ctx context.Context, w *db.Wide) error {
 			var err error
@@ -198,8 +191,6 @@ func (c *counted) readRunners(ctx context.Context, g *metrics.Gauges) error {
 	if l == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, scrapeBound)
-	defer cancel()
 	var occupancy []db.Occupancy
 	if err := l.ctl.Fenced(ctx, l.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
