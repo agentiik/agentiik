@@ -32,11 +32,12 @@ type playing struct {
 	mu      sync.Mutex
 	stopped map[agk.TaskID]chan struct{}
 	asked   map[agk.TaskID]int
+	ran     map[stoptest.Task]bool
 	waited  bool
 }
 
 func newPlaying(h stoptest.History, missed, refused int) *playing {
-	return &playing{h: h, missed: missed, refused: refused, stopped: map[agk.TaskID]chan struct{}{}, asked: map[agk.TaskID]int{}}
+	return &playing{h: h, missed: missed, refused: refused, stopped: map[agk.TaskID]chan struct{}{}, asked: map[agk.TaskID]int{}, ran: map[stoptest.Task]bool{}}
 }
 
 func (p *playing) stop(id agk.TaskID) chan struct{} {
@@ -51,6 +52,9 @@ func (p *playing) stop(id agk.TaskID) chan struct{} {
 func (p *playing) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	started := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	task := stoptest.Task{Step: t.Step, Shard: t.Shard.Index}
+	p.mu.Lock()
+	p.ran[task] = true
+	p.mu.Unlock()
 	if task == p.h.Late {
 		// A driver that is never asked to stop it reports it all the same, so that the
 		// run ends and says what it made of it rather than hanging.
@@ -98,7 +102,8 @@ func (p *playing) Stop(ctx context.Context, s graph.Stop) error {
 func TestALocalRunEndsAStoppedShardAsAServerDoes(t *testing.T) {
 	for _, h := range stoptest.Histories {
 		t.Run(h.Name, func(t *testing.T) {
-			s := session(t, newPlaying(h, 0, 0))
+			p := newPlaying(h, 0, 0)
+			s := session(t, p)
 			out, err := s.Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs})
 			if err != nil {
 				t.Fatal(err)
@@ -115,10 +120,13 @@ func TestALocalRunEndsAStoppedShardAsAServerDoes(t *testing.T) {
 					t.Errorf("%s shard %d never ran", task.Step, task.Shard)
 					continue
 				}
-				// Every container here started, and the start is the driver's, which reaches
-				// a stopped shard only through the report the evaluator takes its code from.
-				if sh.Task != want.State || sh.ExitCode != want.ExitCode || sh.NoExitCode || sh.StartedAt.IsZero() {
-					t.Errorf("%s shard %d ended %s, exit %d, no exit code %t, started at %s, want %s, exit %d", task.Step, task.Shard, sh.Task, sh.ExitCode, sh.NoExitCode, sh.StartedAt, want.State, want.ExitCode)
+				// Every container here that ran started, and the start is the driver's, which
+				// reaches a stopped shard only through the report the evaluator takes its code
+				// from. One that never started has neither a start nor a code, and the driver
+				// was never asked to run it.
+				ran := !want.NeverStarted
+				if sh.Task != want.State || sh.ExitCode != want.ExitCode || sh.NoExitCode == ran || sh.StartedAt.IsZero() == ran || p.ran[task] != ran {
+					t.Errorf("%s shard %d ended %s, exit %d, no exit code %t, started at %s, run by the driver %t, want %s, exit %d, run %t", task.Step, task.Shard, sh.Task, sh.ExitCode, sh.NoExitCode, sh.StartedAt, p.ran[task], want.State, want.ExitCode, ran)
 				}
 			}
 			for step, want := range h.Steps {
@@ -148,9 +156,13 @@ func TestAStopIsSentAgainUntilItsTaskComesBack(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The late shard of archive, the one that was started: the other was never
+			// handed out, and its one stop is not sent again.
 			var archive agk.TaskID
 			for id := range p.asked {
-				archive = id
+				if _, step, _, shard, err := agk.ParseTaskID(string(id)); err == nil && (stoptest.Task{Step: step, Shard: shard.Index}) == h.Late {
+					archive = id
+				}
 			}
 			if p.waited || p.asked[archive] < 2 {
 				t.Errorf("the driver was asked to stop %s %d times, and it came back on its own %t", archive, p.asked[archive], p.waited)
@@ -171,7 +183,7 @@ func TestAStoppedTaskIsNotNarratedRunningAgain(t *testing.T) {
 	p.observe = func(id agk.TaskID) { s.observations <- driver.Event{Task: id, State: agk.TaskRunning} }
 	var archive []agk.TaskState
 	if _, err := s.Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs, Events: func(e Event) {
-		if e.Step == "archive" && e.Attempt > 0 {
+		if e.Step == h.Late.Step && e.Shard.Index == h.Late.Shard && e.Attempt > 0 {
 			archive = append(archive, e.State)
 		}
 	}}); err != nil {

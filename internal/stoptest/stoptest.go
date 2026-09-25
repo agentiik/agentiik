@@ -18,6 +18,10 @@ type Task struct {
 type Ending struct {
 	State    agk.TaskState
 	ExitCode int
+
+	// NeverStarted says no container ran it: nobody handed it out before its stop, so it
+	// has no exit code and no start, whatever ExitCode says.
+	NeverStarted bool
 }
 
 // History is one run: the workflow, what its tasks do, and what it ends as.
@@ -30,7 +34,8 @@ type History struct {
 	Inputs   map[string]any
 
 	// Exits is the code each task's container exits with, and a task it does not name exits 0.
-	// A task exits as soon as it is started, except Late.
+	// A task exits as soon as it is started, except Late, and one whose Ending is NeverStarted
+	// is never started.
 	Exits map[Task]int
 
 	// Late exits in the moment before the stop reaches it: its report comes after the stop
@@ -72,9 +77,9 @@ steps:
 		Exits:  map[Task]int{{"invoice", 1}: 7},
 		Late:   Task{"invoice", 2},
 		Want: map[Task]Ending{
-			{"invoice", 1}: {agk.TaskFailed, 7},
-			{"invoice", 2}: {agk.TaskCancelled, 0},
-			{"archive", 0}: {agk.TaskSucceeded, 0},
+			{"invoice", 1}: {State: agk.TaskFailed, ExitCode: 7},
+			{"invoice", 2}: {State: agk.TaskCancelled},
+			{"archive", 0}: {State: agk.TaskSucceeded},
 		},
 		Steps: map[agk.Step]agk.Verdict{"invoice": agk.VerdictFailed, "archive": agk.VerdictSucceeded},
 		Run:   agk.Failed,
@@ -98,6 +103,7 @@ steps:
     image: alpine:3.21
     inputs:
       orders: ${{ workflow.inputs.orders }}
+    strategy: { fan_out: item, max_parallel: 1 }
     script: [ "true" ]
     outputs: [ok]
   pick:
@@ -110,11 +116,14 @@ steps:
     outputs: [ok]
 `,
 		Inputs: orders,
-		Late:   Task{"archive", 0},
+		// archive goes one order at a time, so the barrier lifts with its first shard
+		// running and its second not handed out yet, which never starts.
+		Late: Task{"archive", 1},
 		Want: map[Task]Ending{
-			{"normalize", 0}: {agk.TaskSucceeded, 0},
-			{"archive", 0}:   {agk.TaskCancelled, 0},
-			{"pick", 0}:      {agk.TaskSucceeded, 0},
+			{"normalize", 0}: {State: agk.TaskSucceeded},
+			{"archive", 1}:   {State: agk.TaskCancelled},
+			{"archive", 2}:   {State: agk.TaskCancelled, NeverStarted: true},
+			{"pick", 0}:      {State: agk.TaskSucceeded},
 		},
 		Steps: map[agk.Step]agk.Verdict{"normalize": agk.VerdictSucceeded, "archive": agk.VerdictCancelled, "pick": agk.VerdictSucceeded},
 		Run:   agk.Succeeded,
