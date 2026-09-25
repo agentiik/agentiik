@@ -458,7 +458,7 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // evaluator on its next pass, so a decision that still has the dispatch in flight is behind rather
 // than right, and writing it over the loss would erase the one record that the runner went quiet.
 // An ending is different. It came back from the runner, so the dispatch was not lost after all,
-// and it is written. Except the one the controller writes itself as it stops a task superseded or
+// and it is written. Except the one the evaluator decides itself as it stops a task superseded or
 // sibling_failed while the run goes on, cancelled with nothing its runner said: the runner said
 // nothing, which is the loss, and the loss is kept, as CancelTasks and EndTasks keep one, so that it
 // is heard and a lost dispatch is never named in the heartbeat's cancel.
@@ -980,11 +980,13 @@ type Stopped struct {
 //
 // CancelTasks and EndTasks end a run's tasks in the pass that ends the run, before any container
 // has exited, so the rows they end carry no code; the runner's report comes later, to a run with
-// nothing left to decide. A task stopped as superseded or sibling_failed while its run goes on is
-// ended the same way, in the pass that sends the stop, and its report comes to a task that is
-// over. "A timed_out or cancelled task carries an exit code wherever a container ran" all the
-// same, and this is where it lands, beside the log and the usage a decision would have written
-// had the task still been in flight; the decisions written after it keep them. Only on a row that
+// nothing left to decide. "A timed_out or cancelled task carries an exit code wherever a container
+// ran" all the same, and this is where it lands, beside the log and the usage a decision would
+// have written had the task still been in flight; the decisions written after it keep them. A task
+// the evaluator stopped as superseded or sibling_failed while its run goes on is ended the same
+// way, in the pass that sends the stop, and its report comes to a task that is over: the evaluator
+// takes the code of it and a decision writes it, so what lands here is the log and the usage of a
+// report it took no code from, and the code of one that came after the run ended. Only on a row that
 // is stopped and has no code yet, so an ending is written once; only on the dispatch named by its
 // row and its key, as HeldBy compares them; and only from the runner the dispatch is bound to.
 // What the row already says of when it started and of its log is kept, and when it finished is

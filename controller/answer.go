@@ -231,6 +231,13 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		return err
 	}
 	before, _ := shardOf(ev.State(), step, shard)
+	if before.Stopped && bind {
+		// The evaluator ended this shard as its stop went out, and takes from a report of it
+		// only how the container the stop reached exited. An answer that binds its runner here
+		// names no such container, since nobody held the dispatch: it either never reached one
+		// or comes from a host's record of another dispatch of the key.
+		return nil
+	}
 	if err := ev.Record(a.Result, now); err != nil {
 		return fmt.Errorf("controller: the result of %s could not be recorded: %w", a.Result.Task, err)
 	}
@@ -252,11 +259,12 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 
 	// "A result for an attempt that is over changes nothing", and the evaluator says so by
 	// not counting a decision. There is then nothing to decide, and writing the decision anyway
-	// would be refused for taking the run from a sequence to the same sequence. What such a
-	// result may still say is how a container the controller stopped exited, where its log went
-	// and what it cost: a task stopped as superseded or sibling_failed was ended when the stop
-	// went out, while the run went on, and its runner's report comes to a task that is over, as
-	// one a run's ending stopped does.
+	// would be refused for taking the run from a sequence to the same sequence. A task the
+	// evaluator stopped as superseded or sibling_failed ended when the stop went out, while the
+	// run went on, and its runner's report comes to a task that is over: the evaluator takes the
+	// exit code from it, once, and counts that, so the decision below writes the code and stamp
+	// the log and the usage. What a report it took nothing from may still say is where the log
+	// went and what it cost, as the report of a task a run's ending stopped does.
 	if state.Seq == e.Seq {
 		return co.stopReport(ctx, e.Namespace, a, bind)
 	}

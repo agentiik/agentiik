@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,11 +12,13 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/stoptest"
 )
 
 // A stop a rule of the language sends while the run goes on, superseded or sibling_failed, ends its
 // task as it goes out, so that the heartbeat's cancel repeats it to a runner that never heard it on
-// agentiik.stops, which keeps nothing.
+// agentiik.stops, which keeps nothing. The evaluator decides it, and the controller writes what
+// the evaluator decided.
 
 // failingFastWorkflow fans invoice out with fail_fast beside archive, which keeps the run going
 // once invoice has failed.
@@ -301,5 +304,205 @@ func TestTheSlotAStopFreesIsFreeInThePassThatStopsIt(t *testing.T) {
 	slices.Sort(went)
 	if !slices.Equal(went, []agk.Step{"pick", "vault"}) {
 		t.Errorf("with archive stopped and normalize over, the pass that stopped archive published %v of pick and vault", went)
+	}
+}
+
+// A server playing a history ends every task, step and run as agk run --local does playing the
+// same one, the task that exited 0 just before its stop reached it included: it reads cancelled
+// with its exit code. Each task is answered as soon as the history lets it, and the late one as
+// soon as its stop has gone out, while the run is still going.
+func TestAServerEndsAStoppedShardAsALocalRunDoes(t *testing.T) {
+	for _, h := range stoptest.Histories {
+		t.Run(h.Name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, h.Workflow)
+			inputs, err := json.Marshal(h.Inputs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var steps []agk.Step
+			for step := range h.Steps {
+				steps = append(steps, step)
+			}
+			slices.Sort(steps)
+			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+				return ns.CreateRun(ctx, db.NewRun{
+					ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+					Trigger: agk.TriggerManual, TriggeredBy: "alice", Inputs: inputs, Steps: steps,
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+
+			var waiting []graph.Task
+			var late *graph.Task
+			stopped := false
+			for range 20 {
+				for _, d := range q.dispatched() {
+					if err := core.redeem(t, d, theRunner); err != nil {
+						t.Fatal(err)
+					}
+					if (stoptest.Task{Step: d.Task.Step, Shard: d.Task.Shard.Index}) == h.Late {
+						late = &d.Task
+						continue
+					}
+					waiting = append(waiting, d.Task)
+				}
+				for _, s := range q.stops() {
+					stopped = stopped || (late != nil && s.Task == late.ID)
+				}
+				now := core.now()
+				switch {
+				case stopped && late != nil:
+					core.answer(t, succeeded(t, *late, now))
+					late = nil
+				case len(waiting) > 0:
+					task := waiting[0]
+					waiting = waiting[1:]
+					if code := h.Exits[stoptest.Task{Step: task.Step, Shard: task.Shard.Index}]; code != 0 {
+						core.answer(t, failed(task, code, now))
+					} else {
+						core.answer(t, succeeded(t, task, now))
+					}
+				}
+				clock.advance(time.Second)
+			}
+			if late != nil {
+				t.Errorf("%s shard %d was never stopped", h.Late.Step, h.Late.Shard)
+			}
+
+			conn := dbtest.Superuser(t, super)
+			for task, want := range h.Want {
+				var state string
+				var code *int
+				if err := conn.QueryRow(t.Context(),
+					`select state, exit_code from tasks where run_id = $1 and step = $2 and coalesce(shard_index, 0) = $3`,
+					string(decidedRun), string(task.Step), task.Shard).Scan(&state, &code); err != nil {
+					t.Fatalf("%s shard %d: %s", task.Step, task.Shard, err)
+				}
+				if state != want.State.String() || code == nil || *code != want.ExitCode {
+					t.Errorf("%s shard %d ended %s, exit %v, want %s, exit %d", task.Step, task.Shard, state, code, want.State, want.ExitCode)
+				}
+			}
+			for step, want := range h.Steps {
+				var verdict string
+				if err := conn.QueryRow(t.Context(),
+					`select state::text from steps where run_id = $1 and step = $2`, string(decidedRun), string(step)).Scan(&verdict); err != nil {
+					t.Fatal(err)
+				}
+				if verdict != want.String() {
+					t.Errorf("%s is %s, want %s", step, verdict, want)
+				}
+			}
+			if got := stateOf(t, core); got != h.Run {
+				t.Errorf("the run is %s, want %s", got, h.Run)
+			}
+		})
+	}
+}
+
+// A host that ended archive on a dispatch the heartbeat then declared lost answers archive's
+// requeue from its record once merge: first has stopped the requeue, which nobody redeemed. The
+// record says how another dispatch's container exited, and the requeue's row, which no container
+// ran, takes no code from it and binds nobody.
+func TestAStoppedRequeueAnsweredFromARecordTakesNoCode(t *testing.T) {
+	core, q, pool, super := decidingOn(t, strings.Replace(supersedingWorkflow,
+		"  archive:\n", "  archive:\n    retry: { max: 1, on: [lost] }\n", 1))
+	createRunOf(t, pool, "normalize", "archive", "pick")
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var fast, slow Dispatch
+	for _, d := range q.dispatched() {
+		switch d.Task.Step {
+		case "normalize":
+			fast = d
+		case "archive":
+			slow = d
+		}
+	}
+	if err := core.redeem(t, slow, "runner-1"); err != nil {
+		t.Fatal(err)
+	}
+	core.silence(t)
+	again := q.dispatched()
+	if len(again) != 1 || again[0].Task.ID != slow.Task.ID || again[0].Row == slow.Row {
+		t.Fatalf("after the loss the controller dispatched %+v, want archive again", again)
+	}
+	requeued := again[0]
+
+	core.answer(t, succeeded(t, fast.Task, core.now()))
+	if stops := q.stops(); !slices.Contains(stops, graph.Stop{Task: slow.Task.ID, Reason: graph.StopSuperseded}) {
+		t.Fatalf("the pass that lifted the barrier stopped %+v", stops)
+	}
+
+	recorded := core.fromTheRecord(t, succeeded(t, requeued.Task, core.now()), requeued.Row, "runner-1")
+	if err := core.Answer(t.Context(), recorded); err != nil {
+		t.Fatalf("the recorded ending answered %s", err)
+	}
+	if state, runner, code := rowOf(t, super, requeued.Row); state != "cancelled" || runner != nil || code != nil {
+		t.Errorf("the stopped requeue reads %s, bound to %v, exit %v, after a record of another dispatch", state, runner, code)
+	}
+}
+
+// The stop that judges a fail_fast step goes out even where the pass then refuses the step behind
+// it a pool and asks the evaluator again: the evaluator names such a stop once, in the pass that
+// ends its task, and a pass that dropped it would leave the shard running with nobody told.
+func TestAStopIsSentThoughThePassRefusesTheNextStepAPool(t *testing.T) {
+	core, q, pool, _ := decidingOn(t, failingFastWorkflow+`  ship:
+    image: `+theImage+`
+    runs_on: [gpu=a100]
+    needs:
+      - { step: invoice, port: ok, as: orders }
+    when: [always]
+    outputs: [ok]
+`)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice",
+			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}, {"customer_id": "C-1043"}]}`),
+			Steps:  []agk.Step{"invoice", "archive", "ship"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var first, second Dispatch
+	for _, d := range q.dispatched() {
+		switch {
+		case d.Task.Step == "archive":
+		case d.Task.Shard.Index == 1:
+			first = d
+		default:
+			second = d
+		}
+	}
+	if err := core.redeem(t, second, theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	core.answer(t, failed(first.Task, 7, core.now()))
+	if stops := q.stops(); !slices.Contains(stops, graph.Stop{Task: second.Task.ID, Reason: graph.StopSiblingFailed}) {
+		t.Errorf("the pass that judged invoice and refused ship a pool stopped %+v, and the second shard was running", stops)
+	}
+	var verdict string
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		d, err := ns.RunDetail(ctx, decidedRun)
+		for _, s := range d.Steps {
+			if s.Step == "ship" {
+				verdict = s.Verdict.String()
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if verdict != "failed" {
+		t.Errorf("ship is %q, and no pool carries gpu=a100", verdict)
 	}
 }
