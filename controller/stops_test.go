@@ -337,6 +337,30 @@ func TestAServerEndsAStoppedShardAsALocalRunDoes(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			conn := dbtest.Superuser(t, super)
+			ended := func(when string, task stoptest.Task, want stoptest.Ending) {
+				t.Helper()
+				var state string
+				var code *int
+				var dispatched, published *time.Time
+				if err := conn.QueryRow(t.Context(),
+					`select state, exit_code, dispatched_at, published_at from tasks
+					 where run_id = $1 and step = $2 and coalesce(shard_index, 0) = $3`,
+					string(decidedRun), string(task.Step), task.Shard).Scan(&state, &code, &dispatched, &published); err != nil {
+					t.Fatalf("%s shard %d: %s", task.Step, task.Shard, err)
+				}
+				if want.NeverStarted {
+					// Nobody handed it out, so it went nowhere and has no code.
+					if state != want.State.String() || code != nil || dispatched != nil || published != nil {
+						t.Errorf("%s, %s shard %d reads %s, exit %s, dispatched at %s, published at %s, want %s and never handed out", when, task.Step, task.Shard, state, shownOf(code), shownOf(dispatched), shownOf(published), want.State)
+					}
+					return
+				}
+				if state != want.State.String() || code == nil || *code != want.ExitCode {
+					t.Errorf("%s, %s shard %d reads %s, exit %s, want %s, exit %d", when, task.Step, task.Shard, state, shownOf(code), want.State, want.ExitCode)
+				}
+			}
+
 			var waiting []graph.Task
 			var late *graph.Task
 			stopped := false
@@ -357,6 +381,17 @@ func TestAServerEndsAStoppedShardAsALocalRunDoes(t *testing.T) {
 				now := core.now()
 				switch {
 				case stopped && late != nil:
+					// A task never started ends in the pass that stops the late one, while
+					// the run goes on, and not only once the run's ending ends what is left.
+					for task, want := range h.Want {
+						if !want.NeverStarted {
+							continue
+						}
+						if got := stateOf(t, core); got != agk.Running {
+							t.Errorf("the run is %s as the stop goes out, and %s shard %d never started", got, task.Step, task.Shard)
+						}
+						ended("as the stop goes out", task, want)
+					}
 					core.answer(t, succeeded(t, *late, now))
 					late = nil
 				case len(waiting) > 0:
@@ -374,18 +409,8 @@ func TestAServerEndsAStoppedShardAsALocalRunDoes(t *testing.T) {
 				t.Errorf("%s shard %d was never stopped", h.Late.Step, h.Late.Shard)
 			}
 
-			conn := dbtest.Superuser(t, super)
 			for task, want := range h.Want {
-				var state string
-				var code *int
-				if err := conn.QueryRow(t.Context(),
-					`select state, exit_code from tasks where run_id = $1 and step = $2 and coalesce(shard_index, 0) = $3`,
-					string(decidedRun), string(task.Step), task.Shard).Scan(&state, &code); err != nil {
-					t.Fatalf("%s shard %d: %s", task.Step, task.Shard, err)
-				}
-				if state != want.State.String() || code == nil || *code != want.ExitCode {
-					t.Errorf("%s shard %d ended %s, exit %s, want %s, exit %d", task.Step, task.Shard, state, shownOf(code), want.State, want.ExitCode)
-				}
+				ended("once the run is over", task, want)
 			}
 			for step, want := range h.Steps {
 				var verdict string
@@ -514,4 +539,70 @@ func shownOf[T any](v *T) string {
 		return "null"
 	}
 	return fmt.Sprint(*v)
+}
+
+// A step a merge: first cancelled ends the shards nobody had handed out in the pass that lifts the
+// barrier, so a run still going on the step behind it holds no task whose message never went, the
+// one thing inside its clock a sweep comes round for. Left pending, every sweep would decide the
+// run again and write the decision it had already written. The workflow is given a root timeout
+// so that the run has a clock at all: one with nothing on it is a run a sweep always decides.
+func TestASweepLeavesARunWhoseMergeFirstEndedTheShardsNotStarted(t *testing.T) {
+	h := stoptest.Histories[slices.IndexFunc(stoptest.Histories, func(h stoptest.History) bool { return h.Name == "merge first" })]
+	core, q, pool, super := decidingOn(t, bounded(h.Workflow))
+	inputs, err := json.Marshal(h.Inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice", Inputs: inputs,
+			Steps: []agk.Step{"archive", "normalize", "pick"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range q.dispatched() {
+		if d.Task.Step == "normalize" {
+			core.answer(t, succeeded(t, d.Task, core.now()))
+		}
+	}
+	if went := q.taken(); len(went) != 1 || went[0].Step != "pick" {
+		t.Fatalf("the pass that lifted the barrier published %v, want pick", went)
+	}
+	if got := stateOf(t, core); got != agk.Running {
+		t.Fatalf("the run is %s, and pick is in flight", got)
+	}
+
+	conn := dbtest.Superuser(t, super)
+	seqOf := func() (seq int64) {
+		t.Helper()
+		if err := conn.QueryRow(t.Context(), `select seq from runs where id = $1`, string(decidedRun)).Scan(&seq); err != nil {
+			t.Fatal(err)
+		}
+		return seq
+	}
+	var pending int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from tasks where run_id = $1 and state in ('pending', 'dispatched') and published_at is null`,
+		string(decidedRun)).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Errorf("the run holds %d tasks whose messages never went, and archive is over", pending)
+	}
+
+	was := seqOf()
+	for range 3 {
+		clock.advance(10 * time.Second)
+		if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if now := seqOf(); now != was {
+		t.Errorf("three sweeps took the run from decision %d to %d, and nothing had happened to it", was, now)
+	}
 }

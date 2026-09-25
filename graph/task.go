@@ -133,7 +133,8 @@ type StopReason int
 
 const (
 	// StopSuperseded: a merge: first lifted the barrier on another edge, and no
-	// other consumer needs what this task would publish.
+	// other consumer needs what this task would publish. It names the tasks of the
+	// cancelled step not started yet too, which never start.
 	StopSuperseded StopReason = iota
 
 	// StopSiblingFailed: fail_fast, where the first shard to fail stops the shards

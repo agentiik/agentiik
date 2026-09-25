@@ -265,3 +265,88 @@ func TestFailFastCallsOffASiblingsNextAttempt(t *testing.T) {
 		t.Errorf("invoice is %s once its first shard failed for good", invoice.Verdict)
 	}
 }
+
+// supersedingSlowly is merge: first over quick and slow, where slow fans out over two orders one
+// at a time, so that when quick lifts the barrier slow has a shard running and one nobody has
+// handed out yet.
+const supersedingSlowly = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: whichever, namespace: finance }
+steps:
+  quick:
+    image: ` + image + `
+    outputs: [ok]
+  slow:
+    image: ` + image + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    strategy: { fan_out: item, max_parallel: 1 }
+    outputs: [ok]
+  whichever:
+    image: ` + image + `
+    needs:
+      - { step: quick, port: ok, as: orders }
+      - { step: slow,  port: ok, as: orders }
+    merge: first
+    outputs: [ok]
+`
+
+// A step a merge: first cancels will never hand out the shards it has not started, and they end
+// cancelled in the pass that cancels it, with the one in flight, each named a stop in case a
+// server published it without recording the dispatch. Left pending, they would read as work
+// still to come for the rest of the run.
+func TestAMergeFirstEndsTheShardsNotStartedOfTheStepItCancels(t *testing.T) {
+	e := started(t, supersedingSlowly, twoOrders)
+	plan := next(t, e, runAt)
+	running := taskOf(t, plan, "slow")
+	record(t, e, Result{Task: running.ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+
+	plan = next(t, e, runAt.Add(2*time.Minute))
+	slow := e.State().Steps["slow"]
+	if slow.Verdict != agk.VerdictCancelled || len(slow.Shards) != 2 {
+		t.Fatalf("slow is %s with %d shards, and quick lifted the barrier with slow halfway", slow.Verdict, len(slow.Shards))
+	}
+	var want []Stop
+	for _, sh := range slow.Shards {
+		if sh.Task != agk.TaskCancelled || !sh.Stopped || !sh.NoExitCode || !sh.FinishedAt.Equal(runAt.Add(2*time.Minute)) {
+			t.Errorf("shard %d of slow is %s, stopped %t, no exit code %t, finished at %s, as the barrier lifts", sh.Shard.Index, sh.Task, sh.Stopped, sh.NoExitCode, sh.FinishedAt)
+		}
+		want = append(want, Stop{Task: e.taskID("slow", sh), Reason: StopSuperseded})
+	}
+	if sh := slow.Shards[1]; !sh.DispatchedAt.IsZero() || !sh.StartedAt.IsZero() {
+		t.Errorf("the shard of slow nobody handed out was dispatched at %s and started at %s", sh.DispatchedAt, sh.StartedAt)
+	}
+	if !slices.Equal(plan.Stop, want) {
+		t.Errorf("the pass that lifted the barrier stops %+v, want %+v", plan.Stop, want)
+	}
+	if again := next(t, e, runAt.Add(3*time.Minute)); len(again.Stop) != 0 || slices.ContainsFunc(again.Start, func(t Task) bool { return t.Step == "slow" }) {
+		t.Errorf("a second pass stops %+v and starts %s, and slow is over", again.Stop, starts(again))
+	}
+}
+
+// A shard of the cancelled step waiting out a backoff has another attempt coming, and a merge:
+// first calls that attempt off too, so that nothing waits on the clock for a step that is over.
+func TestAMergeFirstCallsOffTheNextAttemptOfTheStepItCancels(t *testing.T) {
+	e := started(t, replace(supersedingSlowly, "    strategy: { fan_out: item, max_parallel: 1 }\n",
+		"    retry: { max: 2, on: [failed], backoff: { type: exponential, base: 30m, max: 60m } }\n"), twoOrders)
+	plan := next(t, e, runAt)
+	record(t, e, Result{Task: taskOf(t, plan, "slow").ID, State: agk.TaskFailed, ExitCode: 1, StartedAt: runAt, FinishedAt: runAt}, runAt)
+	if sh := e.State().Steps["slow"].Shards[0]; sh.NextAttemptAt.IsZero() {
+		t.Fatal("slow has no attempt coming, so this is not the case under test")
+	}
+	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+
+	plan = next(t, e, runAt.Add(2*time.Minute))
+	sh := e.State().Steps["slow"].Shards[0]
+	if sh.Task != agk.TaskCancelled || sh.Attempt != 2 || !sh.NextAttemptAt.IsZero() {
+		t.Errorf("slow's shard is %s on attempt %d with an attempt at %s", sh.Task, sh.Attempt, sh.NextAttemptAt)
+	}
+	if !slices.Contains(plan.Stop, Stop{Task: e.taskID("slow", sh), Reason: StopSuperseded}) {
+		t.Errorf("the pass that lifted the barrier stops %+v, and slow's second attempt is called off", plan.Stop)
+	}
+	if !plan.Wake.IsZero() {
+		t.Errorf("the pass wakes at %s, and nothing waits on the clock", plan.Wake)
+	}
+}

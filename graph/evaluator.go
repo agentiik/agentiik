@@ -321,9 +321,10 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				// The file asked for a requeue and the installation's bound
 				// refused it. Nothing in the file explains a step failing on a
 				// loss it said to requeue, so the step says why. Only a step
-				// still running fails on it: one a merge: first cancelled can
-				// still hear of a task handed out before its dispatch was
-				// recorded, and it keeps the reason that fixed its verdict.
+				// still running fails on it: one a merge: first cancelled keeps
+				// the reason that fixed its verdict, whatever is reported of a
+				// shard of it that a document decided before its shards were
+				// ended still holds pending.
 				if ss.Verdict == agk.VerdictRunning {
 					ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
 				}
@@ -676,10 +677,10 @@ func (e *Evaluator) dispatch(plan *Plan, now time.Time) (bool, error) {
 	return broke, nil
 }
 
-// stops names the tasks in flight that a rule of the language calls off while the run goes
-// on, ends each one it names, and says whether it ended any. There are two such rules here,
-// merge: first and fail_fast, and the run's own deadline and cancellation are answered before
-// any of this is reached.
+// stops names the tasks that a rule of the language calls off while the run goes on, in
+// flight or not handed out yet, ends each one it names, and says whether it ended any.
+// There are two such rules here, merge: first and fail_fast, and the run's own deadline and
+// cancellation are answered before any of this is reached.
 //
 // "The task ends: cancelled", says the table of stops, and it ends as the stop goes out
 // rather than when its driver reports. The step is judged then: fail_fast frees the runners
@@ -706,9 +707,16 @@ func (e *Evaluator) stops(plan *Plan, now time.Time) bool {
 		ss := e.s.Steps[name]
 		st, known := e.g.Step(name)
 
+		// A step a merge: first cancelled has its shards in flight stopped, and the ones
+		// nobody has handed out yet end with them, a retry waiting out its backoff
+		// included, as fail_fast's do below. The step will never hand them out, and a shard
+		// left pending in a step that is over reads as work still to come for the rest of
+		// the run: on a server its row is a task never published, which is what a sweep
+		// comes round for, on every pass. Each is named a stop for the reason fail_fast's
+		// are.
 		if ss.Verdict == agk.VerdictCancelled {
 			for i, sh := range ss.Shards {
-				if holdsARunner(sh) {
+				if !sh.Task.Terminal() {
 					end(name, ss, i, StopSuperseded)
 				}
 			}
