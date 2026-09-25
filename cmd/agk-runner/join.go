@@ -59,7 +59,8 @@ func join(ctx context.Context, e env, args []string) int {
 		Replace: *replace,
 		Owner:   owner,
 		EnvPath: e.EnvFile, KeyPath: e.KeyFile, MemInfo: e.MemInfo,
-		Socket: socket,
+		CredentialPath: e.CredentialFile,
+		Socket:         socket,
 	})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
