@@ -484,8 +484,8 @@ func TestStandardOutputIsNotCountedAgainstTheCaps(t *testing.T) {
 }
 
 // Standard output is bounded on its own terms: no more of it than an envelope may hold, which
-// is all of it that could ever be a result. A line of the driver's says where it stopped, and
-// the log is not truncated for it, since standard error is still whole.
+// is all of it that could ever be a result. A line of the driver's on standard output says
+// where it stopped, and the log is not truncated for it, since standard error is still whole.
 func TestStandardOutputIsWrittenInUpToWhatAnEnvelopeMayHold(t *testing.T) {
 	var sink bytes.Buffer
 	l := newLog(&sink, nil, logClock(), 0, 0, 8)
@@ -504,7 +504,7 @@ func TestStandardOutputIsWrittenInUpToWhatAnEnvelopeMayHold(t *testing.T) {
 	if lines[0].Stream != Stdout || lines[0].Text != "abcdefgh" {
 		t.Errorf("standard output came out as %q, want the eight bytes an envelope may hold", lines[0].Text)
 	}
-	if lines[1].Stream != Stderr || !strings.HasPrefix(lines[1].Text, notePrefix) || !strings.Contains(lines[1].Text, "8 bytes") {
+	if lines[1].Stream != Stdout || !strings.HasPrefix(lines[1].Text, notePrefix) || !strings.Contains(lines[1].Text, "8 bytes") {
 		t.Errorf("the line saying where standard output stopped is %+v", lines[1])
 	}
 	if lines[2].Text != "still here" {
@@ -537,11 +537,11 @@ func TestStandardOutputIsHeldToTheLineCapOnItsOwn(t *testing.T) {
 			logged = append(logged, line.Text)
 		}
 	}
-	if len(out) != 3 {
-		t.Errorf("wrote %d lines of standard output, want the three the cap allows", len(out))
+	if len(out) != 4 || out[0] != "" || !strings.HasPrefix(out[3], notePrefix) || !strings.Contains(out[3], "3 lines") {
+		t.Errorf("standard output came out as %q, want the three lines the cap allows and the line saying where it stopped", out)
 	}
-	if len(logged) != 3 || !strings.Contains(logged[0], "3 lines") || logged[1] != "one" || logged[2] != "two" {
-		t.Errorf("standard error came out as %q, want the line saying where standard output stopped and the two written", logged)
+	if strings.Join(logged, "|") != "one|two" {
+		t.Errorf("standard error came out as %q, want the two written", logged)
 	}
 	if ref.Truncated {
 		t.Errorf("the log is reported truncated, and standard error is whole")
@@ -620,9 +620,10 @@ func TestANearCapEnvelopeOnStandardOutputLeavesAShortLogWhole(t *testing.T) {
 	}
 }
 
-// The line saying where standard output stopped is outside the caps on standard error. Counted,
-// it would take the last line standard error had room for and cut the log there, dropping the
-// line after it, which is the one that most often says why the container exited.
+// The line saying where standard output stopped is on standard output, outside the caps on
+// standard error and never shipped. On standard error it would take the last line there was room
+// for and cut the log there, dropping the line after it, which is the one that most often says
+// why the container exited, and a runner would ship it past the caps the API holds a log to.
 func TestTheLineSayingStandardOutputStoppedTakesNothingFromStandardError(t *testing.T) {
 	var sink bytes.Buffer
 	l := newLog(&sink, nil, logClock(), 0, 3, 100)
@@ -637,12 +638,14 @@ func TestTheLineSayingStandardOutputStoppedTakesNothingFromStandardError(t *test
 
 	var logged []string
 	for _, line := range logLines(t, &sink) {
-		if line.Stream == Stderr && !strings.HasPrefix(line.Text, notePrefix) {
+		if line.Stream == Stderr {
 			logged = append(logged, line.Text)
 		}
 	}
+	// Three lines and no fourth: a runner ships every line of standard error, and the API
+	// holds a log to the same cap.
 	if strings.Join(logged, "|") != "a|b|the reason it exited" {
-		t.Errorf("standard error came out as %q, and it is three lines within a cap of three", logged)
+		t.Errorf("standard error came out as %q, and the container wrote three lines within a cap of three", logged)
 	}
 	if ref.Truncated {
 		t.Errorf("the log is reported truncated, and standard error is whole")
