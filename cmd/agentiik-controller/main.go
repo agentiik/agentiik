@@ -179,6 +179,17 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		log.Warn("a message was taken off the queue without being handled", "subject", subject, "error", err)
 	}
 
+	// The metrics are answered from before the lock is held, so that a standby says it stands by
+	// and a scraper can tell a standby from a controller that is not there.
+	counts := newCounted(b, log)
+	if c.Metrics.Listen != "" {
+		stop, err := counts.serveMetrics(work, c.Metrics, log)
+		if err != nil {
+			return ended(err)
+		}
+		defer stop()
+	}
+
 	versions, err := version.New(pool, version.Options{})
 	if err != nil {
 		return err
@@ -200,7 +211,10 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
 		log.Info("leading", "name", name, "term", term.Token)
-		return lead(ctx, ctl, term, queue, options(c, queue, versions), export, log)
+		defer counts.lead(ctl, term)()
+		o := options(c, queue, versions)
+		o.Observer = counts
+		return lead(ctx, ctl, term, queue, o, export, log)
 	})
 	return ended(err)
 }
