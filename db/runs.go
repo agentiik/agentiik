@@ -194,6 +194,11 @@ type Evaluation struct {
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
 
+	// Version names the row as it was read: the transaction that last wrote it, which any write
+	// of it moves, a decision's, a loss's clock or a cancellation request alike. Rewake is held to
+	// it.
+	Version string
+
 	// CancelRequestedAt is when somebody asked through the API for this run to be cancelled, and
 	// zero while nobody has. The request is the API's to write and the cancellation is the
 	// controller's to carry out, so a run holding one is a run the next pass ends.
@@ -216,10 +221,10 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
-		        cancel_requested_at
+		        cancel_requested_at, xmin::text
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake, &cancel)
+			&inputs, &trigger, &wake, &cancel, &e.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -432,16 +437,19 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	return w.emit(ctx, d.Namespace, d.Run, before, d.State, startedBy)
 }
 
-// Rewake sets the moment a run is due again, where the run is still at the sequence seq and
-// holds another. The zero time is "nothing waits on the clock".
+// Rewake sets the moment a run is due again, where nothing has written the run since it was read
+// at version. The zero time is "nothing waits on the clock".
 //
-// It is for a pass that decided nothing: its clock is all it has to write, and a run that moved
-// since it was read has been given its clock by the decision that moved it.
-func (w *Wide) Rewake(ctx context.Context, namespace string, run agk.RunID, seq int, wake time.Time) error {
+// It is for a pass that decided nothing: its clock is all it has to write. A run written since it
+// was read has been given its clock by whatever wrote it: a decision, or a loss the heartbeat
+// declared or a runner reported, which writes the clock and not the sequence. Written over, that
+// loss would never be heard, and a run waiting on the task it lost would wait for ever. Not the
+// clock the pass read either, since a loss may set the very moment a result set before it.
+func (w *Wide) Rewake(ctx context.Context, namespace string, run agk.RunID, version string, wake time.Time) error {
 	if _, err := w.tx.Exec(ctx,
 		`update runs set wake_at = $4
-		 where namespace = $1 and id = $2 and seq = $3 and wake_at is distinct from $4`,
-		namespace, string(run), seq, nilIfZero(wake)); err != nil {
+		 where namespace = $1 and id = $2 and xmin::text = $3 and wake_at is distinct from $4`,
+		namespace, string(run), version, nilIfZero(wake)); err != nil {
 		return fmt.Errorf("db: the clock of run %s could not be set: %w", run, err)
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,5 +272,56 @@ func TestALossOfAStoppedTaskIsNotHeardOnEverySweep(t *testing.T) {
 	core.answer(t, succeeded(t, archive.Task, core.now()))
 	if got := stateOf(t, core); got != agk.Failed {
 		t.Errorf("the run is %s once archive succeeded beside a failed invoice", got)
+	}
+}
+
+// A pass that decides nothing puts back the clock it read, and a loss can land while it decides:
+// the heartbeat's sweep and the results are taken on two loops. The loss moves the clock and not
+// the sequence, so the pass leaves the clock the loss set, and the next sweep hears the loss. Put
+// back, the run held a lost task that nothing would ever hear of.
+func TestALossDeclaredWhileAPassDecidesNothingIsHeard(t *testing.T) {
+	core, q, pool, super := decidingOn(t, strings.Replace(fanningWorkflow, "strategy: { fan_out: item }", "strategy: { fan_out: item }\n    retry: { max: 1, on: [lost] }", 1))
+	joinedAsTheRunner(t, super)
+	createFannedRun(t, pool, "invoice", "archive")
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	shards := q.dispatched()
+	if len(shards) != 2 {
+		t.Fatalf("the first pass dispatched %d tasks, want both shards of invoice", len(shards))
+	}
+	for _, d := range shards {
+		if err := core.redeem(t, d, theRunner); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	conn := dbtest.Superuser(t, super)
+	core.versions = &hooked{Versions: core.versions, before: func(call int) error {
+		// The pass after the answer, which the first shard's result makes nothing runnable
+		// for, reads the run before the second shard's runner is declared lost.
+		if call != 2 {
+			return nil
+		}
+		_, err := conn.Exec(t.Context(), `
+			with gone as (
+			  update tasks set state = 'lost', finished_at = $2 where id = $1 returning run_id
+			)
+			update runs set wake_at = $2 where id = (select run_id from gone)`,
+			shards[1].Row, core.now())
+		return err
+	}}
+	core.answer(t, succeeded(t, shards[0].Task, core.now()))
+	if got := q.dispatched(); len(got) != 0 {
+		t.Fatalf("the pass the loss landed in sent out %+v", got)
+	}
+
+	clock.advance(10 * time.Second)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	again := q.dispatched()
+	if len(again) != 1 || again[0].Task.ID != shards[1].Task.ID || again[0].Row == shards[1].Row {
+		t.Errorf("the sweep after the loss sent out %+v, want %s requeued under a new task_id", again, shards[1].Task.ID)
 	}
 }

@@ -440,14 +440,14 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 // the run due at the moment it arrived, so that the next sweep comes for it, and a pass that
 // then finds nothing to decide, a loss of a task already over or a result that makes nothing
 // runnable, would otherwise leave it due, and every later sweep would decide it again. The clock
-// is written only where it differs, and only on the sequence the pass read, so that a decision
-// written since keeps its own. PostgreSQL keeps a moment to the microsecond, which is what the
-// two are compared at.
+// is written only where it differs, and only over the row as the pass read it, so that a decision
+// written since keeps its clock, and so does a loss declared since. PostgreSQL keeps a moment to
+// the microsecond, which is what the two are compared at.
 func rewake(ctx context.Context, w *db.Wide, e db.Evaluation, wake time.Time) error {
 	if e.WakeAt.Equal(wake.Truncate(time.Microsecond)) {
 		return nil
 	}
-	return w.Rewake(ctx, e.Namespace, e.Run, e.Seq, wake)
+	return w.Rewake(ctx, e.Namespace, e.Run, e.Version, wake)
 }
 
 // keysOf is the key of each task a plan stops.
