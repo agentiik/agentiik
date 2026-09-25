@@ -322,10 +322,9 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				// refused it. Nothing in the file explains a step failing on a
 				// loss it said to requeue, so the step says why. Only a step
 				// still running fails on it: one a merge: first cancelled keeps
-				// the reason that fixed its verdict. Its shards all ended in the
-				// pass that cancelled it, but a document decided before they did
-				// may still hold one pending, and a loss of it is heard before the
-				// next pass ends it.
+				// the reason that fixed its verdict, whatever is reported of a
+				// shard of it that a document decided before its shards were
+				// ended still holds pending.
 				if ss.Verdict == agk.VerdictRunning {
 					ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
 				}

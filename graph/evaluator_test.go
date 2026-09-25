@@ -877,9 +877,9 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 // A step a merge: first cancelled keeps the reason that cancelled it. Its task handed out
 // before its dispatch was recorded ended cancelled as the barrier lifted, still pending in the
 // state, and a loss heard of it afterwards adds nothing. A document decided before the
-// evaluator ended such a shard still holds it pending, and a loss past max_requeues heard there,
-// before the next pass, fails nothing either: the verdict is already cancelled, and a reason
-// saying the step fails would contradict it.
+// evaluator ended such shards still holds it pending, and a loss past max_requeues reported of
+// it there fails nothing either: the verdict is already cancelled, and a reason saying the step
+// fails would contradict it.
 func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		e := started(t, `
