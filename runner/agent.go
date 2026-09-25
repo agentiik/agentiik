@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,13 @@ type Agent struct {
 //
 // A heartbeat answered 401 ends the agent with an error saying to join again: the credential opens
 // nothing, and an agent asking again for ever would only ask again.
+//
+// A drain order has it take nothing new, and a message taken as the order came is put back before
+// it is redeemed. What it holds is carried to its result, and a drained runner then stays up, idle
+// and reporting draining, until the order is lifted or it is revoked. A revoked one returns
+// ErrRevoked once it holds nothing and every result it kept is published, and one whose grace
+// ends first is answered 401 at its next heartbeat, which ends it saying to join again: the grace
+// is the most it is given, and not something it waits out.
 func Serve(ctx context.Context, a Agent) error {
 	switch {
 	case a.Driver == nil:
@@ -161,7 +169,7 @@ func Serve(ctx context.Context, a Agent) error {
 	if a.Key != nil {
 		rotator := NewRotator(a.Client, a.Config.Runner, a.Key, a.CredentialFile, a.Held)
 		rotator.Log = say
-		rotator.Revoked = func() bool { return !beat.Drain().ResultsAcceptedUntil.IsZero() }
+		rotator.Revoked = beat.Revoked
 		var rotating sync.WaitGroup
 		defer rotating.Wait()
 		defer stop(nil)
@@ -253,7 +261,7 @@ func Serve(ctx context.Context, a Agent) error {
 
 // parts are the agent's loop, heartbeat and stops, bound to each other: the heartbeat names what the
 // loop holds and every result kept, the loop takes nothing while the heartbeat's last answer orders
-// a drain, and a key the heartbeat's answer cancels is stopped through the same Stops as one heard
+// a drain and ends once a revoked runner has answered for what it held, and a key the heartbeat's answer cancels is stopped through the same Stops as one heard
 // on the bus, which stops what the loop and the earlier agent hold. The loop's bus and progress are
 // given once the bus is open.
 func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat, *Stops) {
@@ -288,6 +296,8 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		Stopper: stops, Log: say, Every: a.every,
 	}
 	loop.Draining = func() bool { return beat.Drain().Ordered }
+	loop.Revoked = beat.Revoked
+	loop.HeldBefore = func(key string) bool { return slices.Contains(earlier, agk.TaskID(key)) }
 	loop.LetGo = stops.Forget
 	return loop, beat, stops
 }

@@ -169,6 +169,13 @@ func (h *Heartbeat) Drain() Drain {
 	return h.drain
 }
 
+// Revoked answers whether the last answer said this runner is revoked, which is a drain with the
+// end of a grace.
+func (h *Heartbeat) Revoked() bool {
+	d := h.Drain()
+	return d.Ordered && !d.ResultsAcceptedUntil.IsZero()
+}
+
 // First sends heartbeats until one is answered, which is when the agent counts as started: a
 // runner whose API refuses it is not one to count as started.
 //
