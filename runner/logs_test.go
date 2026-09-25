@@ -343,18 +343,23 @@ func TestAClosingChunkNeverAnsweredIsGivenUpAndTheLogReportedTruncated(t *testin
 	if log == nil || log.Lines != 2 || !log.Truncated || log.URI != "agk://log/"+string(storeRun)+"/"+string(storeRun)+"%2Finvoice%2F1" {
 		t.Errorf("the result's log is %+v, and the API last said it holds two lines", log)
 	}
-	var closing []LogShipment
+	// The last line goes in chunk 2, the closing chunk where the close was ordered before the
+	// shipment's next tick, and otherwise an ordinary chunk the tick sent first: a chunk on
+	// its way is shipped again as it was until it is answered, so then no closing chunk ever
+	// goes. Either way that one chunk is shipped again and again, never answered, and given
+	// up on at the close's bound, and nothing is shipped after it.
+	var last []LogShipment
 	for _, c := range logs.all() {
-		if c.Final {
-			closing = append(closing, c)
+		if c.Seq >= 2 {
+			last = append(last, c)
 		}
 	}
-	if len(closing) < 2 {
-		t.Fatalf("the closing chunk was shipped %d times, and it got no answer", len(closing))
+	if len(last) < 2 {
+		t.Fatalf("the chunk carrying the last line was shipped %d times, and it got no answer", len(last))
 	}
-	for _, c := range closing {
-		if c.Seq != 2 || c.FirstLine != 3 || len(c.Lines) != 1 {
-			t.Errorf("the closing chunk was shipped as chunk %d from line %d with %d lines", c.Seq, c.FirstLine, len(c.Lines))
+	for _, c := range last {
+		if c.Seq != 2 || c.FirstLine != 3 || len(c.Lines) != 1 || c.Final != last[0].Final {
+			t.Errorf("the chunk carrying the last line was shipped as chunk %d from line %d with %d lines, final %v, and first as final %v", c.Seq, c.FirstLine, len(c.Lines), c.Final, last[0].Final)
 		}
 	}
 }
