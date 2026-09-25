@@ -93,6 +93,38 @@ func TestNextAtTheSameMomentDecidesTheSameThing(t *testing.T) {
 	}
 }
 
+// A controller sweeps a run waiting on its tasks every few seconds, and writes a decision
+// wherever the sequence moved. A pass with nothing new is no decision, however many there are,
+// and the first pass after something new is one at once.
+func TestAPassThatChangesNothingIsNoDecision(t *testing.T) {
+	e := started(t, twoSteps, Options{})
+	plan := next(t, e, runAt)
+	if e.State().Seq != 1 {
+		t.Fatalf("the pass that started the run counted %d decisions, want one", e.State().Seq)
+	}
+	record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	decided := e.State().Seq
+
+	for i := 1; i <= 4; i++ {
+		at := runAt.Add(time.Duration(i) * 10 * time.Second)
+		if again := next(t, e, at); len(again.Start) != 0 || len(again.Stop) != 0 || !again.Wake.IsZero() {
+			t.Errorf("pass %d over a run waiting on its task planned %+v", i, again)
+		}
+		if e.State().Seq != decided {
+			t.Fatalf("pass %d over a run nothing changed took the sequence from %d to %d", i, decided, e.State().Seq)
+		}
+	}
+
+	record(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), runAt.Add(time.Minute))
+	heard := e.State().Seq
+	if plan = next(t, e, runAt.Add(time.Minute)); len(plan.Start) != 1 || plan.Start[0].Step != "archive" {
+		t.Fatalf("the pass after the result starts %s, want archive", starts(plan))
+	}
+	if e.State().Seq != heard+1 {
+		t.Errorf("the pass that started archive counted %d decisions, want one", e.State().Seq-heard)
+	}
+}
+
 // "A step whose if condition is false moves to skipped and publishes empty envelopes on
 // all its ports. Downstream steps decide their own fate through when."
 func TestAFalseConditionSkipsTheStepAndStillPublishes(t *testing.T) {
