@@ -350,11 +350,12 @@ func (r *Rotator) revoked(ctx context.Context) bool {
 // and only then has the client carry it.
 //
 // In that order because the API stops taking the old credential the first time it sees the new
-// one. A new credential carried and not kept would be lost with the agent, which would come back
-// holding one the API no longer takes; one kept and not carried is never used, and the old one it
-// was answered for goes on working until its own rotate_by, so the next rotation is asked with it
-// and the credential nobody used is dropped. The file is created before the API is asked anything,
-// so that a directory the agent cannot write in costs no rotation.
+// one, so a new credential carried and not kept would be lost with the agent, which would come back
+// holding one the API no longer takes. One that never reached the disk is never carried either: the
+// old one goes on working until its own rotate_by, and the next rotation, asked with it, drops the
+// credential nobody used. One that reached the disk is always carried, since a restart starts from
+// it. The file is created before the API is asked anything, so that a directory the agent cannot
+// write in costs no rotation.
 func (r *Rotator) Rotate(ctx context.Context) error {
 	file, err := stage(r.Path, nil)
 	if err != nil {

@@ -110,8 +110,8 @@ func TestOpeningTheBusAsksAgainOnlyWhileTheAPIDoesNotAnswer(t *testing.T) {
 // watched is a connection whose takes and closing a test reads.
 type watched struct {
 	busConn
-	takes  atomic.Int32
-	closed atomic.Bool
+	takes, reports atomic.Int32
+	closed         atomic.Bool
 }
 
 func (w *watched) Take(ctx context.Context, pool string, batch int, wait time.Duration) ([]bus.Taken, error) {
@@ -123,9 +123,7 @@ func (w *watched) Take(ctx context.Context, pool string, batch int, wait time.Du
 }
 
 func (w *watched) Report(ctx context.Context, r bus.TaskResult) error {
-	if w.closed.Load() {
-		return errors.New("reported on a closed connection")
-	}
+	w.reports.Add(1)
 	return nil
 }
 
@@ -157,8 +155,8 @@ func TestAReplacedConnectionIsClosedOnceNothingItHandedOverCanNeedIt(t *testing.
 				t.Fatal(err)
 			}
 			tb.replace(next, start.Add(time.Hour))
-			if err := tb.Report(t.Context(), bus.TaskResult{}); err != nil || old.takes.Load() != 1 {
-				t.Fatalf("after the replacement, a report answered %v", err)
+			if err := tb.Report(t.Context(), bus.TaskResult{}); err != nil || old.reports.Load() != 0 || next.reports.Load() != 1 {
+				t.Fatalf("after the replacement, a report answered %v and went %d times to the old connection and %d to the new", err, old.reports.Load(), next.reports.Load())
 			}
 			tb.Take(t.Context(), "dmz", 1, time.Hour)
 			if old.takes.Load() != 1 || next.takes.Load() != 1 {

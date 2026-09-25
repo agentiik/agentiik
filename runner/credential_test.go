@@ -2,10 +2,14 @@ package runner
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -66,6 +70,23 @@ func TestTheKeyIsReadAsJoinWroteItAndOneThatIsGoneIsANewRunner(t *testing.T) {
 		}
 	}
 
+	// A key of another kind is one no renewal is signed with.
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(ecdsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "ecdsa.key")
+	if err := os.WriteFile(other, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadKey(other); !errors.Is(err, ErrKeyGone) || !strings.Contains(err.Error(), "not an Ed25519 key") {
+		t.Errorf("an ECDSA key was answered %v", err)
+	}
+
 	// Readable by others is a host to set right, and not a new runner.
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
@@ -112,25 +133,26 @@ func TestServePrefersTheCredentialItRenewedToAndRefusesAnotherRunners(t *testing
 		t.Errorf("a thirty-day window is renewed at %s, want %s, two thirds of the way", got, want)
 	}
 
-	for name, fix := range map[string]func(){
-		"another runner's": func() {
-			os.WriteFile(path, []byte(heldText("runner-lan-01", renewed, at, by)), 0o600)
-		},
-		"readable by others": func() {
-			os.WriteFile(path, []byte(heldText("runner-dmz-02", renewed, at, by)), 0o600)
-			os.Chmod(path, 0o644)
-		},
-		"not a credential": func() {
-			os.Remove(path)
-			os.WriteFile(path, []byte(heldText("runner-dmz-02", "agkjoin_Xy9QkZ3v0bq8LrT2mN5pW7sD1fG4hJ6kA9cE0uI3oY2", at, by)), 0o600)
-		},
-		"a window that ends before it starts": func() {
-			os.WriteFile(path, []byte(heldText("runner-dmz-02", renewed, by, at)), 0o600)
-		},
+	for _, row := range []struct {
+		name, text string
+		mode       os.FileMode
+		says       string
+	}{
+		{"another runner's", heldText("runner-lan-01", renewed, at, by), 0o600, "holds the credential of runner"},
+		{"readable by others", heldText("runner-dmz-02", renewed, at, by), 0o644, "chmod 600"},
+		{"not a credential", heldText("runner-dmz-02", "agkjoin_Xy9QkZ3v0bq8LrT2mN5pW7sD1fG4hJ6kA9cE0uI3oY2", at, by), 0o600, "is not a runner credential"},
+		{"a window that ends before it starts", heldText("runner-dmz-02", renewed, by, at), 0o600, "the second after the first"},
 	} {
-		fix()
-		if held, err := ReadHeld(path, c); err == nil || strings.Contains(err.Error(), renewed) {
-			t.Errorf("a renewed credential file %s was answered %+v, %v", name, held, err)
+		os.Remove(path)
+		if err := os.WriteFile(path, []byte(row.text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, row.mode); err != nil {
+			t.Fatal(err)
+		}
+		held, err := ReadHeld(path, c)
+		if err == nil || !strings.Contains(err.Error(), row.says) || strings.Contains(err.Error(), renewed) {
+			t.Errorf("a renewed credential file %s was answered %+v, %v", row.name, held, err)
 		}
 	}
 }
@@ -317,6 +339,33 @@ func TestNoCredentialIsAskedForWhereItCannotBeKept(t *testing.T) {
 	}
 	if r.Client.Credential() != credential {
 		t.Error("the credential carried changed")
+	}
+}
+
+// A credential answered that could not be put in place is never carried: the agent would come back
+// holding one the API no longer takes.
+func TestACredentialThatCouldNotBePutInPlaceIsNeverCarried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes in a directory whatever its mode")
+	}
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	var dir string
+	api := aRotatingAPI(t, func(n int, w http.ResponseWriter) {
+		// The file was staged before the API was asked, and the directory closes meanwhile.
+		os.Chmod(dir, 0o500)
+		renews(time.Now().Add(time.Hour))(n, w)
+	})
+	r := aRotator(t, api.srv.URL, key)
+	dir = filepath.Dir(r.Path)
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if err := r.Rotate(t.Context()); err == nil {
+		t.Fatal("a rotation whose credential could not be put in place answered no error")
+	}
+	if r.Client.Credential() != credential || r.Held().Credential != credential {
+		t.Error("a credential that could not be put in place is carried")
+	}
+	if _, err := os.Lstat(r.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something is at %s: %v", r.Path, err)
 	}
 }
 
@@ -567,10 +616,10 @@ func TestTheAgentRenewsBeforeRotateByAndKeepsWorkingPastIt(t *testing.T) {
 		t.Errorf("the credential kept is accepted until %s, and the first renewed to until %s: %v", now.RotateBy, first.RotateBy, err)
 	}
 	logged.Lock()
-	renewals, busRenewals := strings.Count(log.String(), "credential was renewed"), strings.Count(log.String(), "bus credential could not be renewed")
+	renewals, busFailures := strings.Count(log.String(), "credential was renewed"), strings.Count(log.String(), "bus credential could not be renewed")
 	logged.Unlock()
-	if renewals < 2 || busRenewals != 0 {
-		t.Errorf("the credential was renewed %d times, and a bus credential failed to renew %d times", renewals, busRenewals)
+	if renewals < 2 || busFailures != 0 {
+		t.Errorf("the credential was renewed %d times, and a bus credential failed to renew %d times", renewals, busFailures)
 	}
 	// Each bus credential lasts no longer than the runner credential it was asked with, a few
 	// seconds, and the bus the test runs on does not hold a runner to its credential's expiry,
