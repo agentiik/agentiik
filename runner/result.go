@@ -264,8 +264,10 @@ type endingReader interface {
 //
 // Recovered, a result says what EndingOf says of a requeue answered from the record, and of the log,
 // which was being closed when the agent stopped, only what can be said without its closing chunk's
-// answer: where it is, the lines the record counts, and truncated, since what the store holds of it
-// is not known to be whole. The record is then given the same log, so that a requeue of the key
+// answer: where it is, truncated, since what the store holds of it is not known to be whole, and
+// no lines. The wire's lines are what the API holds, and the record counts something else at every
+// point but the last: the driver's own lines until the carrier clears them, none while the close is
+// waited for. Zero never claims a line the store cannot show. The record is then given the same log, so that a requeue of the key
 // answered from it later says what this result said.
 //
 // A record that could not be read leaves the dispatch owed, for the agent after this one, and the
@@ -288,16 +290,14 @@ func (c *Carrier) Recover() error {
 			continue
 		}
 		r, err := EndingOf(bus.TaskMessage{TaskID: o.TaskID, IdempotencyKey: o.IdempotencyKey}, c.Runner, e)
-		// A log where the record names one, or where a container started and the record's was
-		// cleared while it was being closed; none for a task that never reached a container,
-		// which opened none.
+		// A log wherever the record names one, a pull that ended the task included, since the
+		// driver writes there why no container ran, and wherever a container started, whose log
+		// the carrier cleared from the record while it was being closed. An ending that names
+		// neither is one the driver opened no log for.
 		if err == nil && c.Logs != nil && (e.Log != nil || !e.StartedAt.IsZero()) {
 			var uri agk.LogURI
 			if uri, err = agk.NewLogURI(key); err == nil {
 				r.Log = &bus.Log{URI: uri.String(), Truncated: true}
-				if e.Log != nil {
-					r.Log.Lines = e.Log.Lines
-				}
 			}
 		}
 		if err != nil {

@@ -593,13 +593,13 @@ func snapshot(t *testing.T, root string) string {
 }
 
 // An agent that stops at any moment of a task's ending leaves its key named to the agent that comes
-// back, and a result that agent publishes. Before the ending is written, the record names the key as
-// taken and nothing is owed. Once it is written, whether the log is still counted as the driver
+// back, and a result that agent publishes. Before the ending is written, the record names the key
+// as taken and nothing is owed. Once it is written, whether the log is still counted as the driver
 // counted it, is being closed, or is closed and its result not yet kept, the restarted agent keeps
 // the result from the record under the dispatch's own task_id, names its key from its first
 // heartbeat and publishes it: what the container left, and the log where it is, truncated since its
-// closing chunk's answer went with the agent. The record is then given the same log, so a requeue
-// answered from it says the same.
+// closing chunk's answer went with the agent, counting no line the store may not hold. The record
+// is then given the same log, so a requeue answered from it says the same.
 func TestAnAgentStoppedAnywhereInATasksEndingLeavesItsKeyNamedAndItsResultToPublish(t *testing.T) {
 	c := carrier(t, func(ctr dockertest.Container) (int, error) {
 		fmt.Fprintln(ctr.Stderr, "reading 412 invoices")
@@ -671,8 +671,8 @@ func TestAnAgentStoppedAnywhereInATasksEndingLeavesItsKeyNamedAndItsResultToPubl
 				t.Errorf("the result recovered names %s and %s, and the task left %s and %s",
 					mustJSON(t, r.Outputs), mustJSON(t, r.Artifacts), mustJSON(t, first.Outputs), mustJSON(t, first.Artifacts))
 			}
-			if r.Log == nil || r.Log.URI != first.Log.URI || !r.Log.Truncated {
-				t.Errorf("the result recovered says of its log %+v, want it at %s and truncated", r.Log, first.Log.URI)
+			if r.Log == nil || r.Log.URI != first.Log.URI || !r.Log.Truncated || r.Log.Lines != 0 {
+				t.Errorf("the result recovered says of its log %+v, want it at %s, truncated and counting no line", r.Log, first.Log.URI)
 			}
 			recorded, ended, err := d.Ended(key)
 			if err != nil || !ended || recorded.Log == nil {
@@ -702,10 +702,10 @@ func (d *endedAs) Logged(_ agk.TaskID, l *driver.EndedLog) error {
 	return nil
 }
 
-// A task that never reached a container opened no log, and the result a restart keeps for it
-// addresses none and gives the record none, as a requeue answered from the record addresses none. A
-// container that started has a log, which the record's may have been cleared of while it was being
-// closed, and that one is addressed, truncated.
+// A result a restart keeps addresses a log wherever the record names one, a pull that ended the task
+// included, and wherever a container started, whose log the record was cleared of while it was being
+// closed: truncated, and counting no line the store may not hold. An ending that names neither had
+// no log opened, and its result addresses none and gives the record none.
 func TestARecoveredResultAddressesALogOnlyWhereAContainerStarted(t *testing.T) {
 	m := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
 	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
@@ -714,7 +714,8 @@ func TestARecoveredResultAddressesALogOnlyWhereAContainerStarted(t *testing.T) {
 		e      driver.Ending
 		logged bool
 	}{
-		"timed out pulling": {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskTimedOut, At: started}, false},
+		"no log opened":     {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskFailed, At: started}, false},
+		"timed out pulling": {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskTimedOut, Log: &driver.EndedLog{Lines: 1}, At: started}, true},
 		"closing":           {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskSucceeded, ExitCode: &code, StartedAt: started, FinishedAt: started.Add(time.Second), Outputs: []driver.EndedPort{}, At: started}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -741,7 +742,7 @@ func TestARecoveredResultAddressesALogOnlyWhereAContainerStarted(t *testing.T) {
 			if has := got[0].Log != nil; has != tc.logged {
 				t.Errorf("the result recovered says of its log %+v", got[0].Log)
 			}
-			if tc.logged && !got[0].Log.Truncated {
+			if tc.logged && (!got[0].Log.Truncated || got[0].Log.Lines != 0) {
 				t.Errorf("a log whose close went with the agent is reported %+v", got[0].Log)
 			}
 			if wrote := len(d.logged) > 0; wrote != tc.logged {
