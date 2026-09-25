@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/secret"
@@ -259,4 +260,42 @@ func configured(t *testing.T) *environment {
 	env.write(t, config.MasterKeyFile, string(master.Write()))
 	env.write(t, config.OperatorTokenFile, theHash+"\n")
 	return env
+}
+
+// audit-verify reads an export and nothing else, says how far it holds, and fails on a break.
+func TestAuditVerifyChecksAnExport(t *testing.T) {
+	dir := t.TempDir()
+	var lines []string
+	prev := audit.Genesis
+	for i := range 3 {
+		e := audit.Entry{
+			Seq: int64(i + 1), At: time.Date(2026, 9, 25, 10, 0, i, 0, time.UTC), Actor: "operator",
+			Action: audit.RunCancel, Namespace: "finance", Target: "run", Result: audit.Done, Detail: "{}", PrevHash: prev,
+		}
+		e.Hash = e.Sum()
+		prev = e.Hash
+		line, err := e.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(line))
+	}
+	whole := filepath.Join(dir, "whole.ndjson")
+	edited := filepath.Join(dir, "edited.ndjson")
+	os.WriteFile(whole, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	os.WriteFile(edited, []byte(strings.Replace(strings.Join(lines, "\n"), `"operator"`, `"somebody"`, 1)), 0o600)
+
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), []string{"audit-verify", whole}, empty, &stdout, &stderr); code != exitStopped || !strings.Contains(stdout.String(), "entries 1 to 3 hold") {
+		t.Fatalf("a whole export exited %d: %s%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	if code := run(t.Context(), []string{"audit-verify", edited}, empty, &stdout, &stderr); code != exitFailed || !strings.Contains(stderr.String(), "breaks at entry 1") {
+		t.Fatalf("an edited export exited %d: %s%s", code, stdout.String(), stderr.String())
+	}
+	for _, args := range [][]string{{"audit-verify"}, {"audit-verify", ""}, {"audit-verify", whole, edited}} {
+		if code := run(t.Context(), args, empty, &stdout, &stderr); code != exitUsage {
+			t.Errorf("%q exited %d", args, code)
+		}
+	}
 }

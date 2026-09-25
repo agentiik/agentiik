@@ -98,7 +98,8 @@ func shape(t *testing.T, conn *pgx.Conn, role string) []string {
 
 // provisioned is the shape Provision promises, written out: a login that bypasses nothing and
 // creates nothing, is a member of nothing and connects without a limit or an expiry, read and
-// write on every table the migrations created, and read on the migration record.
+// write on every table the migrations created but the audit log's, which it appends to and reads,
+// and read on the migration record.
 //
 // The tables the migrations created are the ones owned by whoever recorded them, which is how
 // this tells them from a table somebody else put in the schema.
@@ -126,7 +127,14 @@ func provisioned(t *testing.T, conn *pgx.Conn) []string {
 		if table == "schema_migrations" {
 			continue
 		}
-		for _, privilege := range []string{"delete", "insert", "select", "update"} {
+		privileges := []string{"delete", "insert", "select", "update"}
+		switch table {
+		case "audit_log":
+			privileges = []string{"insert", "select"}
+		case "audit_head":
+			privileges = []string{"select"}
+		}
+		for _, privilege := range privileges {
 			want = append(want, "table "+table+" "+privilege)
 		}
 	}

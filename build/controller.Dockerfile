@@ -1,5 +1,6 @@
 # The controller's image, ghcr.io/agentiik/controller: the static binary the release ships beside
-# it, the certificates it verifies the database and the bus with, and nothing else.
+# it, the certificates it verifies the database, the bus and the audit log's sink with, and nothing
+# else.
 #
 # It is built from that binary rather than compiling one of its own, so that the image and the
 # binary are one file and not two builds that could differ. The build context holds the binary for

@@ -249,6 +249,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	installation := map[string]bool{
 		"namespaces": true, "runners": true, "controller_term": true, "join_tokens": true,
 		"runner_pools": true,
+		// The audit log is one chain across the installation, holding the acts of every
+		// namespace and of the installation itself, and the export reads it whole.
+		"audit_log": true, "audit_head": true, "audit_export": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
@@ -297,10 +300,10 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 // declared: a new escape is a line somebody adds here, not a habit that spreads.
 func TestEveryEscapeIsNamed(t *testing.T) {
 	declared := map[string]bool{}
-	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, SchemaUpgrade} {
+	for _, r := range []Reason{ControllerSweep, Purge, Collect, RunnerInventory, Heartbeat, Redemption, LogShipment, RunRoute, RunListing, AuditLog, SchemaUpgrade} {
 		declared[string(r)] = true
 	}
-	if len(declared) != 10 {
+	if len(declared) != 11 {
 		t.Fatalf("two reasons share a string: %v", declared)
 	}
 
@@ -323,7 +326,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"ControllerSweep": true, "Purge": true, "Collect": true,
-		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "SchemaUpgrade": true}
+		"RunnerInventory": true, "Heartbeat": true, "Redemption": true, "LogShipment": true, "RunRoute": true, "RunListing": true, "AuditLog": true, "SchemaUpgrade": true}
 	for u := range used {
 		if !names[u] {
 			t.Errorf("Installation is called with %s, which is not a declared Reason: an escape from the namespace has to be one of the named few", u)
