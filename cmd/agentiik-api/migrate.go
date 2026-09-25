@@ -7,7 +7,6 @@ import (
 
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
-	"github.com/jackc/pgx/v5"
 )
 
 // migrateVerb is agentiik-api migrate.
@@ -32,7 +31,7 @@ func migrateVerb(ctx context.Context, lookup config.Lookup, stdout, stderr io.Wr
 // release that carries it: an installation upgrading runs the new release's migrate, then its
 // serve. Running it twice applies nothing the second time and leaves the role as the first left it.
 func migrate(ctx context.Context, c config.Migration, stdout io.Writer) error {
-	conn, err := pgx.Connect(ctx, c.Admin.ConnString())
+	conn, err := db.Connect(ctx, c.Admin.ConnString())
 	if err != nil {
 		return fmt.Errorf("the database %s names could not be reached: %w", config.MigrateDatabaseURL, err)
 	}

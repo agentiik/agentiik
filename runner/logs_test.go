@@ -343,18 +343,23 @@ func TestAClosingChunkNeverAnsweredIsGivenUpAndTheLogReportedTruncated(t *testin
 	if log == nil || log.Lines != 2 || !log.Truncated || log.URI != "agk://log/"+string(storeRun)+"/"+string(storeRun)+"%2Finvoice%2F1" {
 		t.Errorf("the result's log is %+v, and the API last said it holds two lines", log)
 	}
-	var closing []LogShipment
+	// The last line goes in chunk 2, the closing chunk where the close was ordered before the
+	// shipment's next tick, and otherwise an ordinary chunk the tick sent first: a chunk on
+	// its way is shipped again as it was until it is answered, so then no closing chunk ever
+	// goes. Either way that one chunk is shipped again and again, never answered, and given
+	// up on at the close's bound, and nothing is shipped after it.
+	var last []LogShipment
 	for _, c := range logs.all() {
-		if c.Final {
-			closing = append(closing, c)
+		if c.Seq >= 2 {
+			last = append(last, c)
 		}
 	}
-	if len(closing) < 2 {
-		t.Fatalf("the closing chunk was shipped %d times, and it got no answer", len(closing))
+	if len(last) < 2 {
+		t.Fatalf("the chunk carrying the last line was shipped %d times, and it got no answer", len(last))
 	}
-	for _, c := range closing {
-		if c.Seq != 2 || c.FirstLine != 3 || len(c.Lines) != 1 {
-			t.Errorf("the closing chunk was shipped as chunk %d from line %d with %d lines", c.Seq, c.FirstLine, len(c.Lines))
+	for _, c := range last {
+		if c.Seq != 2 || c.FirstLine != 3 || len(c.Lines) != 1 || c.Final != last[0].Final {
+			t.Errorf("the chunk carrying the last line was shipped as chunk %d from line %d with %d lines, final %v, and first as final %v", c.Seq, c.FirstLine, len(c.Lines), c.Final, last[0].Final)
 		}
 	}
 }
@@ -402,8 +407,7 @@ func TestALogTheAPICutIsShippedNoFurtherAndReportedTruncated(t *testing.T) {
 }
 
 // A log the driver cut is reported truncated, although the API held every line it was shipped: the
-// runner's caps count what the container wrote on both streams, and the line saying so is shipped,
-// but the API has no other way to learn it.
+// line saying so is shipped, but the API has no other way to learn it.
 func TestALogTheRunnersCapCutIsReportedTruncated(t *testing.T) {
 	c := carrierWith(t, func(c dockertest.Container) (int, error) {
 		for i := range 5 {
@@ -414,6 +418,47 @@ func TestALogTheRunnersCapCutIsReportedTruncated(t *testing.T) {
 	_, r := c.carry(t, nil)
 	if r.Log == nil || !r.Log.Truncated || r.Log.Lines != 4 {
 		t.Errorf("a log cut at three lines, the line saying so a fourth, is reported %+v", r.Log)
+	}
+}
+
+// An envelope on standard output a hundred bytes short of what an envelope may hold, which is also
+// the byte cap, beside a log of three lines: the API holds the three whole, and the result does not
+// report the log truncated. Standard output belongs to the result and is never shipped, and it no
+// longer uses up the cap the driver holds standard error to.
+func TestANearCapEnvelopeOnStandardOutputLeavesTheShippedLogWhole(t *testing.T) {
+	in := aLogAPI(t)
+	limit := agk.DefaultLimits().EnvelopeMaxBytes
+	head, tail := `{"items":[{"id":"one","files":[],"data":{"padding":"`, `"}}]}`
+	envelope := head + strings.Repeat("x", int(limit)-100-len(head)-len(tail)) + tail
+	said := []string{
+		"reading 412 invoices from the ledger export of September",
+		"charged 412 invoices against the billing account of finance",
+		"wrote the envelope of 412 items on standard output, as the shorthand has it",
+	}
+	c, m, a := in.carrying(t, func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stderr, said[0])
+		// In pieces of 32 KiB, which is the most the daemon puts in one frame.
+		for rest := envelope; rest != ""; {
+			n := min(len(rest), 32<<10)
+			io.WriteString(c.Stdout, rest[:n])
+			rest = rest[n:]
+		}
+		fmt.Fprintln(c.Stderr, said[1])
+		fmt.Fprintln(c.Stderr, said[2])
+		return 0, nil
+	}, nil)
+	if err := c.carrier.Carry(t.Context(), m, a); err != nil {
+		t.Fatal(err)
+	}
+
+	l, lines := in.logged(t, m.TaskID)
+	// The driver's own last word follows the container's.
+	if len(lines) != len(said)+1 || !slices.Equal(lines[:len(said)], said) || l.Truncated {
+		t.Errorf("the API holds %q, truncated=%v, and the container wrote %q on standard error", lines, l.Truncated, said)
+	}
+	r := c.bus.all()[0]
+	if r.Log == nil || r.Log.Truncated || r.Log.Lines != len(said)+1 {
+		t.Errorf("the result's log is %+v, and the API holds %d lines of a log nothing cut", r.Log, len(lines))
 	}
 }
 

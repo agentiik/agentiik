@@ -1,12 +1,16 @@
 package driver
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 const shardedTask = agk.TaskID("01JMZ8V1P9C4/invoice/2/3/8")
@@ -234,5 +238,291 @@ func TestARemovalThatFailsSaysWhereAndStillTakesTheSecretsAway(t *testing.T) {
 	}
 	if _, err := os.Stat(w.Secrets); !os.IsNotExist(err) {
 		t.Errorf("the secrets directory survived a working directory that could not be removed: %v", err)
+	}
+}
+
+// A task's directory goes with its container and the run, step and attempt directories above
+// it stay, one set per step ever run on the host, on the work root and on the secrets tmpfs.
+// The sweep is what takes them away, and the directories it sweeps under stay.
+func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	for _, id := range []agk.TaskID{shardedTask, "01JMZ8V1P9C4/invoice/1", "01JMZ8V1P9C5/pay/1"} {
+		w, err := newWorkdir(root, id, shm)
+		if err != nil {
+			t.Fatalf("newWorkdir: %s", err)
+		}
+		if err := w.remove(); err != nil {
+			t.Fatalf("removing %s: %s", id, err)
+		}
+	}
+	if left := dirsUnder(t, root); len(left) == 0 {
+		t.Fatalf("the tasks left nothing on the work root to sweep, which is not what this is about")
+	}
+	record(t, root, "01JMZ8V1P9C4", "01JMZ8V1P9C5")
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	if left := tasksUnder(t, root); len(left) > 0 {
+		t.Errorf("the work root still holds %v after the sweep", left)
+	}
+	if left := dirsUnder(t, filepath.Join(shm, secretsBase)); len(left) > 0 {
+		t.Errorf("the secrets directory still holds %v after the sweep", left)
+	}
+	for _, dir := range []string{root, filepath.Join(shm, secretsBase)} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away with what was under it: %v", dir, err)
+		}
+	}
+}
+
+// Emptied a moment ago is the parent the next shard or attempt of the same step names next,
+// and on Docker Desktop a path removed and created again is refused as a bind source for about
+// a second after. The bound is what leaves it alone.
+func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, shardedTask, shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	if err := w.remove(); err != nil {
+		t.Fatal(err)
+	}
+	record(t, root, "01JMZ8V1P9C4")
+
+	sweep(root, shm, time.Now().Add(-emptyKept))
+
+	for _, dir := range []string{filepath.Dir(w.Root), filepath.Dir(w.Secrets)} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away, and it went empty within the last %s: %v", dir, emptyKept, err)
+		}
+	}
+}
+
+// Old enough and not the sweep's: the record and the trees under the work root, a directory
+// somebody else put there, a run the record knows nothing of, a task's directory that could
+// not be removed, and whatever is below a task's own directory. A work root is a directory
+// somebody chose, the root of a filesystem mounted for it holding an empty lost+found, and
+// the sweep takes only runs the record has and only what holds nothing.
+func TestASweepTakesOnlyEmptyDirectoriesATaskCouldHaveLeft(t *testing.T) {
+	root := t.TempDir()
+	record(t, root, "01JMZ8V1P9C4", "01JMZ8V1P9C6")
+	stay := []string{
+		filepath.Join(root, KeysDir, "01JMZ8V1P9C4", "invoice"),
+		filepath.Join(root, "lost+found"),
+		filepath.Join(root, "cache", "v1", "2"),
+		filepath.Join(root, "01JMZ8V1P9C7", "invoice", "1"),
+		filepath.Join(root, "not a run", "invoice", "1"),
+		filepath.Join(root, "01JMZ8V1P9C4", "not a step"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "02"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "2", "3-8", "out", "files"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "1", "in"),
+	}
+	for _, dir := range stay {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	residue := filepath.Join(root, "01JMZ8V1P9C6", "pay", "1", "params.json")
+	if err := os.MkdirAll(filepath.Dir(residue), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(residue, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep(root, "", time.Now().Add(time.Minute))
+
+	for _, path := range append(stay, residue) {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was taken away: %v", path, err)
+		}
+	}
+}
+
+// A task given no secret has an empty secrets directory for as long as it runs, so emptiness
+// does not tell a parent from a running task there. Its working directory, on the work root,
+// does.
+func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, "01JMZ8V1P9C4/invoice/1", shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	defer w.remove()
+	record(t, root, "01JMZ8V1P9C4")
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	for _, dir := range []string{w.Root, w.In, w.Secrets} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away from a task that is still running: %v", dir, err)
+		}
+	}
+}
+
+// The race the lock is for. MkdirAll finds a parent and then creates the directory below it,
+// and a sweep that removed the parent between the two would refuse a sibling's task. Siblings
+// of one step are created and removed over and over while a sweep that takes anything empty
+// runs beside them, under the lock ended runs it under, and not one of them is refused.
+func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	d := &Docker{cfg: Config{WorkRoot: root, Policy: Policy{SecretsDir: shm}}, keys: &keys{root: root}}
+	record(t, root, "01JMZ8V1P9C4")
+
+	done := make(chan struct{})
+	swept := make(chan int)
+	go func() {
+		n := 0
+		defer func() { swept <- n }()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			d.keys.mu.Lock()
+			sweep(root, shm, time.Now().Add(time.Hour))
+			d.keys.mu.Unlock()
+			n++
+		}
+	}()
+
+	const shards, rounds = 8, 150
+	var wg sync.WaitGroup
+	refused := make(chan error, shards*rounds)
+	for i := range shards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := agk.NewTaskID("01JMZ8V1P9C4", "invoice", 1, agk.Shard{Index: i + 1, Of: shards})
+			for range rounds {
+				w, err := d.freshWorkdir(id)
+				if err != nil {
+					refused <- err
+					continue
+				}
+				w.remove()
+			}
+		}()
+	}
+	wg.Wait()
+	close(done)
+	if n := <-swept; n == 0 {
+		t.Fatalf("the sweep never ran beside the tasks, so nothing was tested")
+	}
+	close(refused)
+	if n := len(refused); n > 0 {
+		t.Errorf("%d of %d tasks were refused their working directory while a sweep ran beside them, the first with: %s", n, shards*rounds, <-refused)
+	}
+}
+
+// A secrets directory somebody else made, or opened to others, is one a link could be swapped
+// into between the walk and the removal, so the sweep leaves it alone, as ownedDir refuses a
+// task's directory there.
+func TestASweepLeavesASecretsDirectoryThatIsNoLongerTheRunnersAlone(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, shardedTask, shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	if err := w.remove(); err != nil {
+		t.Fatal(err)
+	}
+	record(t, root, "01JMZ8V1P9C4")
+	base := filepath.Join(shm, secretsBase)
+	if err := os.Chmod(base, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	if _, err := os.Stat(filepath.Dir(w.Secrets)); err != nil {
+		t.Errorf("the sweep walked a secrets directory open to every account on the host: %v", err)
+	}
+	if left := tasksUnder(t, root); len(left) > 0 {
+		t.Errorf("the work root still holds %v, and it is the runner's own", left)
+	}
+}
+
+// record writes down under the work root that the record has the given runs.
+func record(t *testing.T, root string, runs ...string) {
+	t.Helper()
+	for _, run := range runs {
+		if err := os.MkdirAll(filepath.Join(root, KeysDir, run), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// tasksUnder is dirsUnder less the record, which the sweep is not about.
+func tasksUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	for _, path := range dirsUnder(t, dir) {
+		if !strings.HasPrefix(path, filepath.Join(dir, KeysDir)) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// dirsUnder names every directory below dir, so that a failure says what was left.
+func dirsUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && path != dir {
+			out = append(out, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// The sweep runs where the record is pruned, when an ending is written, the first one a driver
+// writes included, and what an earlier run left an hour and more ago goes. The task that just
+// ended still has its directory at that moment, which goes with its container after.
+func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
+
+	skeleton := filepath.Join(r.work, "01JMZ8V1P9C3", "invoice", "1")
+	if err := os.MkdirAll(skeleton, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The record's directory of the run with nothing left in it, as a key forgotten on the
+	// way out of a task that never reached its container leaves it, or a week of silence.
+	// The prune that comes first leaves it while the run is still on the work root.
+	record(t, r.work, "01JMZ8V1P9C3")
+	long := time.Now().Add(-emptyKept - time.Minute)
+	for dir := skeleton; dir != r.work; dir = filepath.Dir(dir) {
+		if err := os.Chtimes(dir, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task := stepTask(ref, "fetch")
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("running the task: %s", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(r.work, "01JMZ8V1P9C3")); !os.IsNotExist(err) {
+		t.Errorf("the run an earlier run left empty %s ago is still on the work root: %v", emptyKept+time.Minute, err)
+	}
+	w, err := workdirFor(r.work, task.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.Root); !os.IsNotExist(err) {
+		t.Errorf("the task's own directory is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(w.Root)); err != nil {
+		t.Errorf("the step of the task that just ended was swept with it: %v", err)
 	}
 }

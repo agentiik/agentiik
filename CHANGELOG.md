@@ -73,7 +73,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `secret_values` also refuses a delete, a truncate, a row inserted holding a value, a row moved to another name and a forgotten value filled again at its own version, so a row kept from before a rotation never comes back in its place.
 - A workflow, step, port or secret name is stored as the `identifier` domain. `0001` had called the domain `name`, so its columns got PostgreSQL's own `name` type, which checked nothing and cut a name at 63 bytes; one of up to 255 characters is now kept whole, and a longer one or one off the grammar is refused.
 - `Wide.Redeemable` makes every check `Wide.Redeem` makes and writes nothing, so a redemption can be checked before it is answered and bound once it is.
-- `db.NewRun.Inputs` is the JSON object a run was started with, written down as it arrived rather than decoded and encoded again.
+- `db.NewRun.Inputs` is the JSON object of a run's inputs as the API bound them, defaults included.
 - `db.RunRoute` is an eighth reason to step past the namespace: a route naming a run and nothing it is of finds which namespace and workflow the run is of, and nothing else.
 - `runs.cancel_requested_at` is when a run was first asked to cancel: the API writes it and the controller reads it, and asking again keeps the first moment. Migration `0018_cancel_requested.sql`.
 - A `cancelled` run may finish without having started, as one cancelled from `queued` does. Any other run that has finished has started. Migration `0018_cancel_requested.sql`.
@@ -137,6 +137,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Taken.AgainAfter` puts a message back held off for a while, so a runner that would be refused it again does not take it straight back.
 - `bus.Route` chooses a task's pool from the pools it is given, and `bus.Publish` takes the pool rather than reading one off a `pool=` label, which `bus.PoolOf` did.
 - A task message leaves out a resource nothing decided, where it wrote `"cpu": ""`, `"memory": ""` and `"pids": 0`, which the wire refuses.
+- A bus address that is `nats://` or `ws://` to anything but a loopback address is refused before it is dialled, with `bus.ErrPlaintext`, and a connection in plaintext takes no server the bus gossips.
 
 ### Driver
 
@@ -183,6 +184,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Stop` of a container this process did not start waits out the grace on a context of its own, so a caller that gives up sooner no longer takes the `SIGKILL` with it.
 - A stop the daemon refuses for a container the driver watches is sent again, from 1 s doubling to 10 s, until the daemon takes it or the task has its answer, where it was only logged.
 - `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
+- A task's log caps (`log_max_bytes`, `log_max_lines`) count standard error alone, so an envelope on standard output no longer cuts a short log and reports it truncated. Standard output is still written into the log, up to `envelope_max_bytes` and as many lines as the cap, counted apart, and a line of the driver's on standard output says where it stopped.
+- The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
 
 ### Runner
 
@@ -208,6 +211,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 - `serve` hears stops on `agentiik.stops` over its own connection before it takes anything, and a subscription refused or not confirmed ends it. A stop for a key it holds, or that an earlier agent took, is handed to the driver with its reason; one for any other key is passed over. `runner.Stops` asks the driver once per holding of a key between the bus and the heartbeat's cancel, so a repeat sends no second `SIGTERM` and does not rewrite the reason, and asks again only where the driver failed. `Stops.Hear` may be called on a replacement connection before the old one closes, and a stop heard on both is sent once.
 - `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. A dispatch carried again after the agent restarted goes on from where the API says its log stands, and reports it `truncated`. The key's record keeps the log the result reported, so a report made from it says the same.
+- A bus credential naming a bus in plaintext across a network is refused, rather than asked for again for ever.
+- `serve` and `join` refuse a `DOCKER_HOST` that is not a local unix socket, naming it, on the same start as the other settings.
 
 ### Artifacts
 
@@ -216,6 +221,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A post carries its `Content-Length` whenever the reader can say how long it is, as the file an artifact is staged in and the bytes of an envelope both can, since MinIO refuses a form sent chunked before it reads the policy. A reader of no known length, a pipe among them, still goes out chunked, which the built-in store takes.
 - Tests hold that a policy posted to no host is refused when the task's objects are built, that a post is stored at a `201` and at no other answer, `200` and `204` included, and that `Has` answers a cancelled context.
 - `artifact.Store.Describe` answers the entry `Put` would for the same bytes, `artifact_max_bytes` refusal included, and writes nothing. `brick.Spill` takes a `brick.Putter`, which the store is.
+- `artifact/granted` refuses an upload policy or a presigned GET in plain `http` to anything but a loopback address, before any container runs, repeating no signature.
 - `driver.LoadPolicy` reads every host setting of `/etc/agentiik/runner.toml`, strictly: a key it does not read or spelled in another case, a wrong type, or a value outside its setting is refused, naming the line where it has one. `nproc` follows `pids_limit` unless written.
 - `driver.ParseUsernsFloor` is removed; `driver.LoadPolicy` reads `require_userns_remap` with the rest of the file.
 - `Policy.Seccomp` is the profile's JSON, which the Engine API takes, rather than a path the daemon cannot decode. `seccomp_profile` names the file it is read from.
@@ -278,7 +284,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A declaration's `declared_at` is the stored time, in UTC, in the answer to its `PUT` as in every read.
 - A request body is read a token at a time, into what its route keeps, and every collection is counted as it is read. Reading one costs at most two and a half times its route's cap, where a 16 MiB push of empty tree entries cost 295 MiB and 8 MiB of inputs written `[{},{},...]` 508 MiB.
 - Each route has a cap of its own: 64 KiB for a pool, a join token, a join, a redemption and a bus credential, 1 MiB for a heartbeat, and 4 MiB, one envelope, for starting a run. A body past its cap, or a list past its count, is refused with 413: 1,024 labels or namespaces, 4,096 keys in a heartbeat, 4,096 includes or manifests in a push.
-- A run's inputs are counted, at most 100,000 values, and written down as they were sent rather than decoded. A number no 64-bit float holds is refused.
+- A run's inputs are counted, at most 100,000 values, before anything decodes them. A number no 64-bit float holds is refused.
 - A field, a tree file, an include or a manifest written twice is refused, and so are a field named in another case and text that is not UTF-8.
 - A body is held as it arrives, not as it declares: a push declared and never sent holds 4 KiB rather than 16 MiB. A body sent in chunks costs what one declaring its length does, where it cost up to five times its cap.
 - A number in a run's inputs that a 64-bit float holds only as zero, or that reaches more than 340 digits from the point, is refused with 400. PostgreSQL writes a number back at the scale it was sent with, so `0e-16383` was read back as 16 KB at every decision, and `1e-16384` was a 500.
@@ -300,6 +306,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/{ns}/runs` and `GET /api/v1/{ns}/runs/{run}` ask about each run's workflow, not the namespace: a deny of `run:read` on one workflow hides its runs, and `run:read` on one workflow reads them. A namespace the caller holds nothing in lists nothing, where it was a 404. `api.OnRun` and `api.Across` take a `{namespace}` in their pattern, and `api.AcrossHandler` is handed it as `within`.
 - `POST /api/v1/bus/token` only mints, so runners keep the bus once the control plane's credential has expired, where every one lost it within the hour. A pool's consumer is made ready as the pool is created, which is refused with 503 and creates nothing where the bus refuses it, and for every pool as `agentiik-api` starts, `default` included (`api.ReadyQueues`).
 - `GET /api/v1/runs/{id}` writes each port a step published as `digest`, `size` and `items`, with `purged_at` only once purged, where it wrote Go's field names and a zero time.
+- Starting a run binds its inputs against the version's declaration, with the `graph.Workflow.DeclaredInputs` and `schema.Bind` a local run uses, and records what was bound, defaults included. An input missing, refused by its schema or not declared is 422 with `error`, `input` and `rule`. A `$ref` is read from the version's tree in the object store and held to its digest. A push whose input schemas cannot be compiled against its tree is refused with 422. The inputs, defaults included, are held to the 100,000 values and 4 MiB the inputs sent are (413). A version's declaration is compiled once, starts arriving meanwhile waiting on that one compile, and kept for its later starts.
+- A workflow's input declaration compiles at most 128 KiB of schema, a file counted once for each input that names it (`graph.InputSchemasMaxBytes`), in `agk validate`, `agk push`, `agk run --local` and the API alike: compile time grows with the square of a schema's subschemas. `schema.Compiler` reads and parses each file of the tree once.
 - A manual trigger, a cancellation, a secret written or removed, a runner pool created, a join token issued, and a runner drained or revoked are recorded in the audit log in the transaction of the act, which fails with it. A secret's value and a join token are never recorded.
 - `agentiik-api` asks PostgreSQL to probe its sessions as the controller does (`db.WithKeepalives`), so one cut off while it holds the audit log's head frees it within half a minute rather than two hours.
 
@@ -332,6 +340,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 - `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
+- Every connection the programs open holds TLS 1.2 as its floor and speaks 1.3 where the other end does: PostgreSQL through `db.Open` and `db.Connect`, the bus, a runner's calls to the API and its objects, and `agk`. `internal/tlsfloor` writes the floor once.
+- A request from `agk` or a runner to `localhost` in any case, `0.0.0.0` or `::` goes through no `HTTP_PROXY`, as one to `127.0.0.1` already did, so nothing let through as crossing no network crosses it to a proxy.
 - `AGK_AUDIT_EXPORT_URL` and `AGK_AUDIT_EXPORT_TOKEN_FILE` name the audit log's sink and its bearer credential, for the controller alone. Without them the controller starts and warns that the log goes nowhere.
 
 ### Command line
@@ -344,7 +354,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk run --local` ends a task stopped as `superseded` or `sibling_failed` `cancelled` as the stop goes out, as a server does, since `graph.Next` now decides it for both: a `fail_fast` sibling that exits 0 just before the stop reads `cancelled` with its code rather than `succeeded`. A stop is sent again on every pass until its task comes back.
 - A `fail_fast` step hands out no further shard once one has failed for good, locally and on a server: its shards not yet started, a retry waiting out its backoff included, end `cancelled`, so a staged rollout stops at the first broken region.
 - A step a `merge: first` cancels ends its shards not yet started `cancelled`, a retry waiting out its backoff included, locally and on a server, where they stayed `pending` for good and a run with a root `timeout` was decided again on every sweep. One published whose dispatch was never recorded is stopped then too, rather than when the run ends.
-- `agk run --namespace` starts a run of a pushed commit on an installation, its inputs bound against the commit's declaration, and follows it to its end in a local run's narration, report and exit codes. `-o json` writes its output envelopes. An interrupt stops following and leaves the run going. A local run's flags are refused on it, and the other way round.
+- `agk run --namespace` starts a run of a pushed commit on an installation, its inputs sent as given for the installation to bind, and follows it to its end in a local run's narration, report and exit codes. `-o json` writes its output envelopes. An interrupt stops following and leaves the run going. A local run's flags are refused on it, and the other way round.
 - `agk logs` follows the logs of a run's steps, or of those named, history then live. A stream cut off, or silent past three keep-alives, is asked again from its last event, and nothing is printed twice.
 - `agk status` shows how a run on an installation stands: its state, each step's verdict with its envelope digests, its inputs and outputs, and what failed. `-o json` writes the API's answer as given.
 - `agk push`, `run`, `logs` and `status` refuse an installation address that would carry `AGENTIIK_TOKEN` in plaintext: `https`, or `http` to a loopback address.

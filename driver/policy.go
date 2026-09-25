@@ -231,9 +231,10 @@ type Policy struct {
 	// its own and names it with secrets_dir.
 	SecretsDir string
 
-	// LogMaxBytes and LogMaxLines cap the collected standard error. A log is a
-	// diagnostic and not a payload: the cap keeps one runaway task from filling the
-	// store, and the truncation marker says what was dropped. Zero is no cap.
+	// LogMaxBytes and LogMaxLines cap the collected standard error, and standard error
+	// alone: standard output belongs to the result, which has limits of its own. A log
+	// is a diagnostic and not a payload: the cap keeps one runaway task from filling
+	// the store, and the truncation marker says what was dropped. Zero is no cap.
 	LogMaxBytes int64
 	LogMaxLines int
 

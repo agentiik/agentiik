@@ -16,7 +16,7 @@ import (
 
 // quiet is the log of a task nobody is keeping one for, which is what these rules need:
 // they are about signals and exits, and the lines are read elsewhere.
-func quiet() *taskLog { return newLog(nil, newMasker(), nil, 0, 0) }
+func quiet() *taskLog { return newLog(nil, newMasker(), nil, 0, 0, 0) }
 
 // tarOf writes one file the way a container archive carries it.
 func tarOf(t *testing.T, content string) []byte {

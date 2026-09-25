@@ -55,7 +55,7 @@ func validate(ctx context.Context, e Env, args []string) int {
 	// The inputs are the boundary a trigger fills, and a schema that does not compile is
 	// a workflow whose first run cannot start. It is compiled here so that validate and
 	// run cannot disagree about it.
-	if _, err := declaredInputs(wf, tree); err != nil {
+	if _, err := wf.DeclaredInputs(tree); err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}

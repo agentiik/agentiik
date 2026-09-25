@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentiik/agentiik/internal/tlsfloor"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -28,7 +29,11 @@ type Pool struct {
 // thing being tested is what happens when somebody does not. Refusing at startup is the
 // only moment this can be caught before it matters.
 func Open(ctx context.Context, url string) (*Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	config, err := poolConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("db: the database at that address could not be reached: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("db: the database at that address could not be reached: %w", err)
 	}
@@ -37,6 +42,45 @@ func Open(ctx context.Context, url string) (*Pool, error) {
 		return nil, err
 	}
 	return &Pool{pool: pool}, nil
+}
+
+// poolConfig is a pool's configuration as pgx reads the URL, held to the TLS floor.
+func poolConfig(url string) (*pgxpool.Config, error) {
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	floor(config.ConnConfig)
+	return config, nil
+}
+
+// Connect opens one connection, held to the TLS floor as a pool is, for the one caller that needs
+// a connection and not a pool: migrating, which runs as the role that may change the schema.
+func Connect(ctx context.Context, url string) (*pgx.Conn, error) {
+	config, err := connConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.ConnectConfig(ctx, config)
+}
+
+// connConfig is one connection's configuration as pgx reads the URL, held to the TLS floor.
+func connConfig(url string) (*pgx.ConnConfig, error) {
+	config, err := pgx.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	floor(config)
+	return config, nil
+}
+
+// floor raises every TLS configuration pgx built from the URL's sslmode to the floor, the
+// fallbacks' included: pgx builds each with no MinVersion of its own.
+func floor(c *pgx.ConnConfig) {
+	tlsfloor.Floor(c.TLSConfig)
+	for _, fallback := range c.Fallbacks {
+		tlsfloor.Floor(fallback.TLSConfig)
+	}
 }
 
 // checkTheRoleCannotBypass refuses a role that walks through the policies.

@@ -112,7 +112,7 @@ func TestTheExitNoteCarriesTheCode(t *testing.T) {
 // charging a code to the runtime is saying so where a person will read it.
 func TestReadingAnExitCodeWritesTheLineThatChargesIt(t *testing.T) {
 	var sink bytes.Buffer
-	l := newLog(&sink, nil, logClock(), 0, 0)
+	l := newLog(&sink, nil, logClock(), 0, 0, 0)
 
 	if got := readExit(l, 137); got != agk.TaskFailed {
 		t.Errorf("exit 137 is %s, want %s", got, agk.TaskFailed)

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -126,6 +128,15 @@ func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 		}
 	}
 	return w, nil
+}
+
+// freshWorkdir is newWorkdir under the record's lock, which is the lock sweep takes empty
+// run, step and attempt directories away under: the parents a task's directory is created
+// in are the parents a sweep may be removing, and sweep says what goes wrong between the two.
+func (d *Docker) freshWorkdir(id agk.TaskID) (*workdir, error) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	return newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
 }
 
 // workdirFor names the directory of one task without creating or removing anything.
@@ -299,4 +310,147 @@ func (w *workdir) remove() error {
 		}
 	}
 	return errors.Join(left...)
+}
+
+// emptyKept is how long a run, step or attempt directory a task left empty stays before a
+// sweep takes it away.
+//
+// A task's own directory goes with its container, and the directories above it are shared
+// with every other task of its run, its step and its attempt, so they are not the task's to
+// take. What removes them is a sweep, hourly beside the record's prune, of the ones that have
+// held nothing for this long. Not at once, when a task ends and leaves its parents empty,
+// because the next shard or the next attempt of the same step names the same parents a
+// moment later: on Docker Desktop, whose file sharing is where agk run --local binds from, a
+// directory removed and created again at one path is refused as a bind source ("error while
+// creating mount source path ... no such file or directory") or served as it was before,
+// for about a second after, and a fan-out whose shards run one at a time would have every
+// shard after the first fail on it. An hour is far longer than that and far shorter than
+// anything a host is worse for: what is left is one directory per step run in the last two.
+const emptyKept = time.Hour
+
+// sweep takes away the run, step and attempt directories on the work root, and on the secrets
+// directory where it is apart from it, that tasks left empty before cutoff.
+//
+// It is called with the record's lock held, which is the lock a task's working directory is
+// created under, and that is what makes it safe. MkdirAll finds a parent there and then
+// creates the directory below it, two calls with nothing between them, and a parent removed
+// in between refuses the second, which would refuse the task on the account of a runner
+// that was only tidying up. Under the one lock, a parent is either removed before a sibling
+// looks for it, and created again, or found and filled before anything tries to remove it.
+//
+// Only what taskPath could have spelled is looked at, a run, then a step, an attempt and a
+// shard, and never anything below a task's own directory: the work root holds the record
+// and the trees beside the tasks, and a work root is a directory somebody chose. A run is
+// one the record under the work root has a directory for, since a name that is merely
+// valid as a run identifier is nearly any name: an empty lost+found at the root of a
+// filesystem mounted for the work root is one, and the runner may remove it. A runner writes
+// every key there, as taken, before its task's directory is created; agk run --local holds
+// nothing and writes a key as it ends, and clears what is left when its session closes. The
+// record's prune keeps a run's directory for as long as the run is on the work root.
+// A directory is taken away with os.Remove, which refuses one that holds anything, so a
+// task's directory that could not be removed stays to be found. It is judged by the moment
+// it last changed as the walk found it, before a child the same sweep took away changed it
+// again, so that a run whose last step went empty an hour ago goes in the same sweep as
+// the step.
+//
+// A secrets directory stays while the task directory of the same name is on the work root.
+// Every task has one, and it is empty for a task given no secret, so emptiness alone does
+// not tell a parent from a task that is still running; the working directory, which is
+// never empty while its task runs, does.
+//
+// The secrets directory is swept only while it is still this runner's alone, as ownedDir
+// leaves it. It sits on a filesystem every account on the host can write to, and one that
+// somebody else made or opened could have a link swapped in under a path the walk found,
+// between the walk and the removal, which would take away an empty directory of that
+// name wherever the link points. A task is refused its directory there by ownedDir, and
+// the sweep leaves it alone for the same reason.
+func sweep(root, secretsDir string, cutoff time.Time) {
+	if root == "" {
+		return
+	}
+	sweepTree(root, root, cutoff, nil)
+	base := filepath.Join(secretsDir, secretsBase)
+	if secretsDir != "" && stillOwned(base) {
+		sweepTree(root, base, cutoff, func(rel string) bool {
+			_, err := os.Lstat(filepath.Join(root, rel))
+			return !errors.Is(err, fs.ErrNotExist)
+		})
+	}
+}
+
+// stillOwned says whether a directory is as ownedDir leaves it: a directory and not a link,
+// belonging to this process's account where the platform says, and closed to every other.
+func stillOwned(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	uid, ok := ownerOf(info)
+	return !ok || uid == os.Geteuid()
+}
+
+// sweepTree is sweep over the tree under top, whose runs are the ones the record under root
+// has. held says a directory is to stay whatever it holds.
+func sweepTree(root, top string, cutoff time.Time, held func(rel string) bool) {
+	type empty struct{ path, rel string }
+	var found []empty
+	filepath.WalkDir(top, func(path string, d fs.DirEntry, err error) error {
+		if path == top {
+			return err
+		}
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(top, path)
+		parts := strings.Split(rel, string(filepath.Separator))
+		if !taskShaped(parts) || len(parts) == 1 && !recorded(root, parts[0]) {
+			return filepath.SkipDir
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
+			found = append(found, empty{path, rel})
+		}
+		if len(parts) == 4 {
+			// A shard's own directory: what is below it is the task's.
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	// Deepest first, so that a step goes after the attempts that emptied it.
+	for i := len(found) - 1; i >= 0; i-- {
+		if held != nil && held(found[i].rel) {
+			continue
+		}
+		os.Remove(found[i].path)
+	}
+}
+
+// recorded says whether the record under the work root has a directory for a run.
+func recorded(root, run string) bool {
+	info, err := os.Lstat(filepath.Join(root, KeysDir, run))
+	return err == nil && info.IsDir()
+}
+
+// taskShaped says whether a path relative to a tree is one taskPath spells or a parent of
+// one: a run, then a step, an attempt and a shard written index-of.
+func taskShaped(parts []string) bool {
+	if len(parts) == 0 || len(parts) > 4 || strings.HasPrefix(parts[0], ".") || agk.RunID(parts[0]).Validate() != nil {
+		return false
+	}
+	if len(parts) >= 2 && agk.Step(parts[1]).Validate() != nil {
+		return false
+	}
+	id := strings.Join(parts[:min(len(parts), 3)], "/")
+	if len(parts) == 4 {
+		index, of, ok := strings.Cut(parts[3], "-")
+		if !ok {
+			return false
+		}
+		id += "/" + index + "/" + of
+	}
+	if len(parts) >= 3 {
+		if _, _, _, _, err := agk.ParseTaskID(id); err != nil {
+			return false
+		}
+	}
+	return true
 }
