@@ -15,9 +15,9 @@ import (
 )
 
 // serve is the agent. Everything it refuses, it refuses before any call to the API, in this order:
-// the account it runs as, its settings and the host's policy, then the daemon, whose floors the
-// driver reads when it is opened. Only a start that passes all of them asks the API anything, and it
-// says it is ready once the API has answered its first heartbeat.
+// the account it runs as, its settings and the host's policy, its key and credential, then the
+// daemon, whose floors the driver reads when it is opened. Only a start that passes all of them asks
+// the API anything, and it says it is ready once the API has answered its first heartbeat.
 func serve(ctx context.Context, e env, args []string) int {
 	log := logger(e.Err)
 	if len(args) > 0 {
@@ -39,6 +39,24 @@ func serve(ctx context.Context, e env, args []string) int {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
 		}
+		return exitRefused
+	}
+
+	// The key and the credential are read with the settings, before the daemon: a host whose
+	// key is gone can never renew its credential, and is a new runner that joins again rather
+	// than one to start and let run into its rotate_by. The credential is the one the agent
+	// renewed to where it has, which runner.env, read-only to the agent, cannot hold.
+	key, err := runner.LoadKey(e.KeyFile)
+	var held runner.Held
+	if err == nil {
+		held, err = runner.ReadHeld(e.CredentialFile, cfg)
+	}
+	switch {
+	case errors.Is(err, runner.ErrKeyGone):
+		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
+		return exitJoinAgain
+	case err != nil:
+		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitRefused
 	}
 
@@ -93,7 +111,7 @@ func serve(ctx context.Context, e env, args []string) int {
 		log(err.Error())
 	}
 
-	client, err := runner.NewClient(cfg.API, cfg.Credential, nil)
+	client, err := runner.NewClient(cfg.API, held.Credential, nil)
 	if err != nil {
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitRefused
@@ -103,9 +121,10 @@ func serve(ctx context.Context, e env, args []string) int {
 	err = runner.Serve(ctx, runner.Agent{
 		Config: cfg, Driver: d, Client: client, Endings: endings, Log: log,
 		Ready: func() error { return runner.Notify(notify, runner.Ready) },
+		Key:   key, Held: held, CredentialFile: e.CredentialFile,
 	})
 	switch {
-	case errors.Is(err, runner.ErrCredentialRefused):
+	case errors.Is(err, runner.ErrCredentialRefused), errors.Is(err, runner.ErrKeyGone):
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitJoinAgain
 	case err != nil:
