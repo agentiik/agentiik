@@ -388,10 +388,12 @@ func (r *Results) write(name string, b []byte) error {
 }
 
 // forget takes away a result the bus has taken, unless a later one of the same dispatch replaced it
-// meanwhile, which is still to go out.
+// meanwhile, which is still to go out. The dispatch is owed nothing either way, which a result that
+// could not be written down left it owed: kept owed, a restart would publish it again from the record.
 func (r *Results) forget(res bus.TaskResult) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.unowe(res.TaskID)
 	if had, ok := r.kept[res.TaskID]; !ok || !reflect.DeepEqual(had, res) {
 		return
 	}

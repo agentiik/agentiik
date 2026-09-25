@@ -363,3 +363,34 @@ func TestADispatchIsOwedItsResultUntilTheResultIsKept(t *testing.T) {
 		t.Errorf("the results hold %v, want %v", names, want)
 	}
 }
+
+// A result the bus took owes its dispatch nothing, even where it could not be written down first:
+// an entry left owed would have a restart publish the task again from the record.
+func TestAResultTheBusTookIsOwedNothingWhereItCouldNotBeWrittenDown(t *testing.T) {
+	root := t.TempDir()
+	results, err := OpenResults(root, "runner-dmz-02", &published{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
+	if _, err := results.owe(m, "runner-dmz-02"); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the result goes, which no rename replaces.
+	in := filepath.Join(root, ResultsDir, m.TaskID+".json")
+	if err := os.MkdirAll(filepath.Join(in, "full"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = results.Report(t.Context(), ending(m.TaskID, m.IdempotencyKey))
+	os.RemoveAll(in)
+	if err != nil {
+		t.Fatalf("a result the bus took answered %v", err)
+	}
+	if owed := results.Owed(); len(owed) != 0 {
+		t.Errorf("a result the bus took left %+v owed", owed)
+	}
+	again, _ := OpenResults(root, "runner-dmz-02", &published{})
+	if owed := again.Owed(); len(owed) != 0 {
+		t.Errorf("a restart finds %+v owed for a result the bus took", owed)
+	}
+}
