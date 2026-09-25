@@ -95,8 +95,9 @@ func ran(task graph.Task, state agk.TaskState, code int, d time.Duration, now ti
 
 // The history: normalize is dispatched, lost on the runner that took it and requeued, fails after
 // 30 seconds and is retried, and succeeds after 90; archive then runs for 5 and the run ends 17
-// minutes and 31 seconds after it was created, the silence included. Each is told once, in that order, and a result delivered again, a
-// sweep that finds nothing and a loss already heard tell nothing more.
+// minutes and 31 seconds after it was created, the silence included. Each is told once, in that
+// order, and a result delivered again, a sweep that finds nothing and a loss already heard tell
+// nothing more.
 func TestWhatTheControllerDecidesIsToldOnceItIsWritten(t *testing.T) {
 	core, q, h := counting(t)
 	ctx := t.Context()
