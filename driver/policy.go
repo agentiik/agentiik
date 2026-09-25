@@ -117,6 +117,37 @@ const (
 // Lifted says whether the refusal has been lifted.
 func (s SecretsFloor) Lifted() bool { return s == SecretsTmpfsLifted }
 
+// DigestFloor says whether a task's image is held to what a server runs: an image named by
+// digest, and for a step that is not a script step, one carrying /agk/brick.yaml.
+//
+// A server runs only name@sha256, which agk push records in place of every tag, because "a
+// tag is a mutable pointer, and a commit must determine what ran": a tag resolves to
+// whatever this host last pulled under it. And a server holds a brick to its manifest,
+// because the manifest is what declares the account the container runs as: an image with
+// none would run as its own, root included, and before publication checks manifests the
+// runner is the last gate. agk run --local is held to neither, since an image built on the
+// machine and never pushed has only a tag, and it validates each brick's manifest itself
+// before anything runs.
+//
+// It is an enumeration for the reason the other floors are one, and like the seccomp floor
+// no line of runner.toml lifts it: a runner is a server, and the callers that are not
+// runners lift it.
+type DigestFloor int
+
+const (
+	// DigestRequired refuses a task whose image is not name@sha256, and a non-script
+	// step whose image carries no manifest. It is the zero value, so a Policy{} is a
+	// runner's.
+	DigestRequired DigestFloor = iota
+
+	// DigestLifted runs a tag as the daemon resolves it, and an image with no manifest
+	// as the account the image declares.
+	DigestLifted
+)
+
+// Lifted says whether the refusal has been lifted.
+func (f DigestFloor) Lifted() bool { return f == DigestLifted }
+
 // Ulimit is one soft and hard pair, as the daemon's Ulimits carry them.
 type Ulimit struct {
 	Soft int64
@@ -150,6 +181,10 @@ type Policy struct {
 	// RequireSecretsTmpfs holds SecretsDir to a tmpfs mounted noexec,nosuid,nodev,
 	// and no key of the file sets it either.
 	RequireSecretsTmpfs SecretsFloor
+
+	// RequireDigest holds a task's image to name@sha256, and a brick's image to its
+	// manifest, and no key of the file sets it either.
+	RequireDigest DigestFloor
 
 	// StopGrace is the t of the daemon's own stop, the wait between SIGTERM and
 	// SIGKILL. The escalation belongs to the daemon rather than to a timer here, so
@@ -250,6 +285,7 @@ func DefaultPolicy() Policy {
 		RequireUsernsRemap:  RemapRequired,
 		RequireSeccomp:      SeccompRequired,
 		RequireSecretsTmpfs: SecretsTmpfsRequired,
+		RequireDigest:       DigestRequired,
 
 		// The daemon's own default for POST /containers/{id}/stop. Taking a
 		// different number here would make the driver's grace and the grace of a

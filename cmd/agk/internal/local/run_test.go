@@ -680,7 +680,7 @@ func TestTheStateLeftBehindIsOneASecondProcessCouldResumeFrom(t *testing.T) {
 		t.Fatalf("the state does not read back: %s", err)
 	}
 	if state.Seq == 0 {
-		t.Errorf("the state counts no decisions, and every Next and every Record is one")
+		t.Errorf("the state counts no decisions, and the pass that starts a run is one")
 	}
 	// "Failover is a state resume and never a rebuild": the file on disk is a state the
 	// evaluator takes back. Resuming is not claimed at v0.1.0, and the file being one a

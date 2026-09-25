@@ -901,3 +901,191 @@ func TestACompletedWrittenAsALiteralIsTheRefusalItHolds(t *testing.T) {
 		}
 	}
 }
+
+// A restarted runner names in its heartbeat what an earlier process held when it stopped, and
+// Dispatched is where it reads that from: every key taken and never ended, the most recently
+// taken first. A key that ended is the record's answer to its requeue and held by nothing, and a
+// key let go of was never this host's to answer for, so neither is listed.
+func TestDispatchedListsTheKeysTakenAndNeverEndedNewestFirst(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	var clock sync.Mutex
+	at := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	r = reopen(t, r, func(c *Config) {
+		c.Now = func() time.Time {
+			clock.Lock()
+			defer clock.Unlock()
+			at = at.Add(time.Second)
+			return at
+		}
+	})
+
+	older, newer := stepTask(ref, "older"), stepTask(ref, "newer")
+	ended, letGo := stepTask(ref, "ended"), stepTask(ref, "let-go")
+	for _, task := range []graph.Task{older, newer, ended, letGo} {
+		if err := r.Hold(task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Run(t.Context(), ended); err != nil {
+		t.Fatal(err)
+	}
+	r.Release(letGo.ID)
+	if taken, err := r.keys.takenPath(ended.ID); err != nil {
+		t.Fatal(err)
+	} else if _, err := os.Stat(taken); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the key's ending was written and it is still written down as taken: %v", err)
+	}
+
+	// What the next process on this host reads.
+	got, err := reopen(t, r, nil).Dispatched()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []agk.TaskID{newer.ID, older.ID}; !slices.Equal(got, want) {
+		t.Errorf("the record lists %v as taken and never ended, want %v", got, want)
+	}
+}
+
+// A key let go of is forgotten on disk as well as in memory, and an ending is not: the ending is
+// what refuses the key's next delivery.
+func TestReleaseForgetsATakenKeyAndNeverAnEnding(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	task := oneTask(ref)
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.keys.takenPath(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("Hold wrote nothing down: %s", err)
+	}
+	r.Release(task.ID)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a key let go of is still written down as taken: %v", err)
+	}
+
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	r.Release(task.ID)
+	var completed *Completed
+	if err := r.Hold(task.ID); !errors.As(err, &completed) {
+		t.Errorf("a key that ended and was then released is held again: %v", err)
+	}
+}
+
+// An entry that does not read, sits where another key's entry would or stands beside the key's
+// ending lists nothing, rather than refusing the rest, and a work root with no record yet lists
+// nothing and no error.
+func TestDispatchedPassesOverWhatDoesNotRead(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	if got, err := r.Dispatched(); err != nil || len(got) != 0 {
+		t.Fatalf("a host that took nothing lists %v, %v", got, err)
+	}
+
+	task := oneTask(ref)
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.keys.takenPath(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.WriteFile(filepath.Join(dir, "broken"+takenExt), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "elsewhere"+takenExt), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A key that ended, whose writer stopped before taking its taken entry away.
+	ended := stepTask(ref, "ended")
+	if _, err := r.Run(t.Context(), ended); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := r.keys.takenPath(ended.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = []byte(strings.Replace(string(b), string(task.ID), string(ended.ID), 1))
+	if err := os.WriteFile(stale, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Dispatched()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []agk.TaskID{task.ID}; !slices.Equal(got, want) {
+		t.Errorf("the record lists %v, want %v alone", got, want)
+	}
+}
+
+// A Run that returns with no ending written forgets the key it carried, since what it created is
+// gone and a restarted runner naming the key would keep its dispatch from being declared lost for
+// nothing: a pull the daemon refused, and a Run whose caller gave up while the brick ran. A second
+// delivery refused while the first runs forgets nothing of the first's.
+func TestARunThatWritesNoEndingForgetsTheKeyItTook(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		close(running)
+		<-c.Signalled()
+		return 0, nil
+	})
+
+	unpulled := stepTask("ghcr.io/agentiik/nowhere@"+imageDigest, "unpulled")
+	if err := r.Hold(unpulled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(t.Context(), unpulled); err == nil {
+		t.Fatal("a task whose image the daemon does not have ran")
+	}
+
+	stopped := stepTask(ref, "stopped")
+	if err := r.Hold(stopped.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan error, 1)
+	go func() {
+		_, err := r.Run(ctx, stopped)
+		ran <- err
+	}()
+	<-running
+	if _, err := r.Run(t.Context(), stopped); !errors.Is(err, ErrTaskInFlight) {
+		t.Errorf("a second delivery of a key in flight answered %v", err)
+	}
+	if got, err := r.Dispatched(); err != nil || !slices.Equal(got, []agk.TaskID{stopped.ID}) {
+		t.Errorf("while the brick runs the record lists %v, %v, want %s", got, err, stopped.ID)
+	}
+	cancel()
+	select {
+	case err := <-ran:
+		if e, found, _ := r.keys.read(stopped.ID); found && e.State.Terminal() {
+			t.Fatalf("the Run whose caller gave up wrote the ending %s, answering %v, and this test is of one that writes none", e.State, err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the Run whose caller gave up never came back")
+	}
+
+	if got, err := reopen(t, r, nil).Dispatched(); err != nil || len(got) != 0 {
+		t.Errorf("after two Runs that wrote no ending the record lists %v, %v, want nothing", got, err)
+	}
+}

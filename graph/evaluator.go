@@ -1,8 +1,10 @@
 package graph
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -30,6 +32,12 @@ import (
 // second call finds the same shards waiting to be handed out and the same containers
 // waiting to be stopped. What the first call settled, a step that skipped or a step that
 // ended, the second call finds already settled and settles again the same way.
+//
+// One kind of stop is settled by the call that names it. A task stopped as superseded or
+// sibling_failed while the run goes on ends cancelled in the pass that names its stop, as
+// the table of stops says it ends, so the second call finds it over and names it no more.
+// A caller that drops a Plan without acting on its stops has dropped those for good, and a
+// caller that calls Next again within one pass keeps the stops of every Plan it was given.
 //
 // Four readings the documentation does not state are taken in this file, each recorded
 // again beside the rule that applies it: what a port the inputs keyword feeds carries and
@@ -196,6 +204,17 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 		return e.stopEverything(StopDeadline), nil
 	}
 
+	// A pass counts as a decision only where it changed the state. The sequence is what a
+	// caller persisting the state writes down, and a caller that asks again with nothing new,
+	// as a controller's sweep does of a run waiting on its tasks, would otherwise write the
+	// same document at a new number on every pass, and read the number that moved as a
+	// decision to act on. The state is compared as it is persisted, so that a pass counts
+	// exactly when what a second process would resume from is not what it was.
+	before, err := json.Marshal(e.s)
+	if err != nil {
+		return Plan{}, fmt.Errorf("graph: the state could not be read before the pass: %w", err)
+	}
+
 	// Deciding is a pass over the graph in an order no edge points backwards through,
 	// so that a step publishing in this pass is already published when the step below
 	// it reads its barrier.
@@ -203,7 +222,13 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 	// It is taken again when building a task failed, because a shard that failed that
 	// way ends its step, and a run whose last step ended inside dispatch would be left
 	// at running with nothing in the plan to bring anybody back.
+	//
+	// And again when a stop ended a task, because ending one may end its step, and what
+	// follows the step may then start or be stopped in turn. The stops of every round are
+	// kept, since the task a round ended is one no later round names. Each round that goes
+	// round again has ended a task for good, so there are no more rounds than tasks.
 	var plan Plan
+	var stops []Stop
 	for {
 		for _, name := range e.g.Order() {
 			if err := e.advance(name, now); err != nil {
@@ -215,18 +240,29 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 		if err != nil {
 			return Plan{}, err
 		}
-		if !broke {
+		if broke {
+			continue
+		}
+		ended := e.stops(&plan, now)
+		stops = append(stops, plan.Stop...)
+		if !ended {
 			break
 		}
 	}
-	e.stops(&plan)
+	plan.Stop = stops
 	plan.Wake = e.wake(now)
 
 	e.s.Run.State = runVerdict(e.s, e.tolerates)
 	if e.s.Run.State.Terminal() && e.s.Run.FinishedAt.IsZero() {
 		e.s.Run.FinishedAt = now
 	}
-	e.s.Seq++
+	after, err := json.Marshal(e.s)
+	if err != nil {
+		return Plan{}, fmt.Errorf("graph: the state could not be read after the pass: %w", err)
+	}
+	if !bytes.Equal(before, after) {
+		e.s.Seq++
+	}
 	return plan, nil
 }
 
@@ -258,7 +294,11 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	}
 
 	sh := ss.Shards[at]
-	if sh.Attempt != attempt || sh.Task.Terminal() {
+	if sh.Attempt != attempt {
+		return nil
+	}
+	if sh.Task.Terminal() {
+		e.stoppedExit(name, at, r)
 		return nil
 	}
 	if r.State.Terminal() && r.Requeue != sh.Requeue {
@@ -300,9 +340,10 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 				// The file asked for a requeue and the installation's bound
 				// refused it. Nothing in the file explains a step failing on a
 				// loss it said to requeue, so the step says why. Only a step
-				// still running fails on it: one a merge: first cancelled can
-				// still lose a task in flight, since a stop is a request, and
-				// it keeps the reason that fixed its verdict.
+				// still running fails on it: one a merge: first cancelled keeps
+				// the reason that fixed its verdict, whatever is reported of a
+				// shard of it that a document decided before its shards were
+				// ended still holds pending.
 				if ss.Verdict == agk.VerdictRunning {
 					ss.Reason = fmt.Sprintf("%s was lost on dispatch %d of its key, and max_requeues hands one key out again after a loss at most %d times: the loss stands, and the step fails on the infrastructure's account rather than the brick's", e.taskID(name, sh), sh.Requeue+1, e.maxRequeues)
 				}
@@ -332,6 +373,38 @@ func (e *Evaluator) Record(r Result, now time.Time) error {
 	e.s.Steps[name] = ss
 	e.s.Seq++
 	return nil
+}
+
+// stoppedExit takes from the report of a shard the evaluator stopped how its container
+// exited, and nothing else.
+//
+// The shard ended cancelled when its stop went out, and its step was judged then, so what
+// the container did afterwards, or in the moment before the stop reached it, decides
+// nothing: a sibling that exited 0 just before fail_fast stopped it stays cancelled and
+// publishes nothing. But "a timed_out or cancelled task carries an exit code wherever a
+// container ran", 143 where it obeyed SIGTERM and 0 where it finished first, and that is
+// what a person reading the run is owed. So the code is kept, once, from an ending of the
+// dispatch the shard is on that reached a container and reported one. A loss reports no
+// outcome, and an ending with no start never reached a container, so neither has a code
+// to give.
+func (e *Evaluator) stoppedExit(name agk.Step, at int, r Result) {
+	ss := e.s.Steps[name]
+	sh := ss.Shards[at]
+	switch {
+	case !sh.Stopped || !sh.NoExitCode:
+		return
+	case !r.State.Terminal() || r.State == agk.TaskLost || r.Requeue != sh.Requeue:
+		return
+	case r.NoExitCode || r.StartedAt.IsZero():
+		return
+	}
+	sh.ExitCode, sh.NoExitCode = r.ExitCode, false
+	if sh.StartedAt.IsZero() {
+		sh.StartedAt = r.StartedAt.UTC()
+	}
+	ss.Shards[at] = sh
+	e.s.Steps[name] = ss
+	e.s.Seq++
 }
 
 // Cancel ends the run the way a principal holding workflow:run or a concurrency group
@@ -623,18 +696,47 @@ func (e *Evaluator) dispatch(plan *Plan, now time.Time) (bool, error) {
 	return broke, nil
 }
 
-// stops names the tasks in flight that a rule of the language calls off. There are three
-// here and a fourth, the run's own deadline and cancellation, is answered before any of
-// this is reached.
-func (e *Evaluator) stops(plan *Plan) {
+// stops names the tasks that a rule of the language calls off while the run goes on, in
+// flight or not handed out yet, ends each one it names, and says whether it ended any.
+// There are two such rules here, merge: first and fail_fast, and the run's own deadline and
+// cancellation are answered before any of this is reached.
+//
+// "The task ends: cancelled", says the table of stops, and it ends as the stop goes out
+// rather than when its driver reports. The step is judged then: fail_fast frees the runners
+// "at once" and fails the step on the shard that failed, rather than waiting on containers
+// that are being called off, and a shard that exited 0 in the moment before the stop reached
+// it does not publish into a step that was already over. It is decided here, where agk run
+// --local and a server both read it, so the two give one answer; a server that waited for
+// the report as a local run once did would also be waiting on a bus that may lose the stop.
+// What the report still adds, how the container exited, is stoppedExit's.
+func (e *Evaluator) stops(plan *Plan, now time.Time) bool {
+	ended := false
+	end := func(name agk.Step, ss StepState, i int, reason StopReason) {
+		sh := ss.Shards[i]
+		plan.Stop = append(plan.Stop, Stop{Task: e.taskID(name, sh), Reason: reason})
+		sh.Task, sh.ExitCode, sh.NoExitCode, sh.Stopped = agk.TaskCancelled, 0, true, true
+		sh.Ports = nil
+		sh.NextAttemptAt = time.Time{}
+		sh.FinishedAt = now
+		ss.Shards[i] = sh
+		e.s.Steps[name] = ss
+		ended = true
+	}
 	for _, name := range e.g.Order() {
 		ss := e.s.Steps[name]
 		st, known := e.g.Step(name)
 
+		// A step a merge: first cancelled has its shards in flight stopped, and the ones
+		// nobody has handed out yet end with them, a retry waiting out its backoff
+		// included, as fail_fast's do below. The step will never hand them out, and a shard
+		// left pending in a step that is over reads as work still to come for the rest of
+		// the run: on a server its row is a task never published, which is what a sweep
+		// comes round for, on every pass. Each is named a stop for the reason fail_fast's
+		// are.
 		if ss.Verdict == agk.VerdictCancelled {
-			for _, sh := range ss.Shards {
-				if holdsARunner(sh) {
-					plan.Stop = append(plan.Stop, Stop{Task: e.taskID(name, sh), Reason: StopSuperseded})
+			for i, sh := range ss.Shards {
+				if !sh.Task.Terminal() {
+					end(name, ss, i, StopSuperseded)
 				}
 			}
 			continue
@@ -642,6 +744,15 @@ func (e *Evaluator) stops(plan *Plan) {
 
 		// "fail_fast: the first shard to fail stops the shards still running beside
 		// it." A shard with another attempt coming has not failed yet.
+		//
+		// The shards nobody has handed out yet end with them, a reading the documentation
+		// takes in its staged rollout, where max_parallel: 1 and fail_fast "stops it at the
+		// first broken region": a region after the broken one never starts. Handing them out
+		// would start containers only to stop them on the next pass, and under max_parallel
+		// the slot a stopped sibling frees would take the next one while the sibling is still
+		// in its grace. Each is named a stop all the same, since a server may have published
+		// one whose dispatch it never recorded, and a stop for a task nobody holds is the
+		// ordinary consequence of at-least-once delivery.
 		if ss.Verdict != agk.VerdictRunning || !known || !failFast(st) {
 			continue
 		}
@@ -652,12 +763,13 @@ func (e *Evaluator) stops(plan *Plan) {
 			if shardVerdict(sh.Task, sh.ExitCode) != agk.VerdictFailed {
 				continue
 			}
-			for _, sibling := range siblingsInFlight(ss, sh.Shard) {
-				plan.Stop = append(plan.Stop, Stop{Task: e.taskID(name, sibling), Reason: StopSiblingFailed})
+			for _, i := range siblingsLeft(ss, sh.Shard) {
+				end(name, ss, i, StopSiblingFailed)
 			}
 			break
 		}
 	}
+	return ended
 }
 
 // stopEverything names every task still in flight, for a run that has ended under it.

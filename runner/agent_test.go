@@ -8,8 +8,15 @@ import (
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
-// agent is an Agent on a fake daemon that remaps, whose Ready counts how often it was said.
+// agent is an Agent on a fake daemon that remaps, whose Ready counts how often it was said, and
+// whose API answers every heartbeat and nothing else.
 func agent(t *testing.T, readies *int) Agent {
+	t.Helper()
+	return agentOf(t, readies, newBeats(t, answered).srv.URL, t.TempDir())
+}
+
+// agentOf is an agent whose API is at url, serving under the work root root.
+func agentOf(t *testing.T, readies *int, url, root string) Agent {
 	t.Helper()
 	daemon, err := dockertest.NewDaemon(dockertest.WithUsernsRemap(165536, 165536))
 	if err != nil {
@@ -21,7 +28,7 @@ func agent(t *testing.T, readies *int) Agent {
 	endings := &Endings{}
 	d, err := driver.New(driver.Config{
 		Socket:   daemon.Socket(),
-		WorkRoot: t.TempDir(),
+		WorkRoot: root,
 		Policy:   driver.Policy{SecretsDir: "/run/agentiik/secrets"},
 		Observer: endings,
 		Host:     installed{},
@@ -30,11 +37,14 @@ func agent(t *testing.T, readies *int) Agent {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	client, err := NewClient("http://127.0.0.1:1", credential, nil)
+	client, err := NewClient(url, credential, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Agent{Driver: d, Client: client, Endings: endings, Ready: func() error { *readies++; return nil }}
+	return Agent{
+		Config: Config{Runner: "runner-dmz-02", Pool: "dmz", Concurrency: 2, WorkDir: root},
+		Driver: d, Client: client, Endings: endings, Ready: func() error { *readies++; return nil },
+	}
 }
 
 // installed answers as the host of an agent installed as the page says.

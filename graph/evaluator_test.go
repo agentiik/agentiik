@@ -93,6 +93,38 @@ func TestNextAtTheSameMomentDecidesTheSameThing(t *testing.T) {
 	}
 }
 
+// A controller sweeps a run waiting on its tasks every few seconds, and writes a decision
+// wherever the sequence moved. A pass with nothing new is no decision, however many there are,
+// and the first pass after something new is one at once.
+func TestAPassThatChangesNothingIsNoDecision(t *testing.T) {
+	e := started(t, twoSteps, Options{})
+	plan := next(t, e, runAt)
+	if e.State().Seq != 1 {
+		t.Fatalf("the pass that started the run counted %d decisions, want one", e.State().Seq)
+	}
+	record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	decided := e.State().Seq
+
+	for i := 1; i <= 4; i++ {
+		at := runAt.Add(time.Duration(i) * 10 * time.Second)
+		if again := next(t, e, at); len(again.Start) != 0 || len(again.Stop) != 0 || !again.Wake.IsZero() {
+			t.Errorf("pass %d over a run waiting on its task planned %+v", i, again)
+		}
+		if e.State().Seq != decided {
+			t.Fatalf("pass %d over a run nothing changed took the sequence from %d to %d", i, decided, e.State().Seq)
+		}
+	}
+
+	record(t, e, succeeded(plan.Start[0], ports("ok", item("a1"))), runAt.Add(time.Minute))
+	heard := e.State().Seq
+	if plan = next(t, e, runAt.Add(time.Minute)); len(plan.Start) != 1 || plan.Start[0].Step != "archive" {
+		t.Fatalf("the pass after the result starts %s, want archive", starts(plan))
+	}
+	if e.State().Seq != heard+1 {
+		t.Errorf("the pass that started archive counted %d decisions, want one", e.State().Seq-heard)
+	}
+}
+
 // "A step whose if condition is false moves to skipped and publishes empty envelopes on
 // all its ports. Downstream steps decide their own fate through when."
 func TestAFalseConditionSkipsTheStepAndStillPublishes(t *testing.T) {
@@ -874,12 +906,15 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	}
 }
 
-// A step a merge: first cancelled keeps the reason that cancelled it. The stop is only a
-// request, so its task in flight can still be lost, and a loss past max_requeues there
-// fails nothing: the verdict is already cancelled, and a reason saying the step fails
-// would contradict it.
+// A step a merge: first cancelled keeps the reason that cancelled it. Its task handed out
+// before its dispatch was recorded ended cancelled as the barrier lifted, still pending in the
+// state, and a loss heard of it afterwards adds nothing. A document decided before the
+// evaluator ended such shards still holds it pending, and a loss past max_requeues reported of
+// it there fails nothing either: the verdict is already cancelled, and a reason saying the step
+// fails would contradict it.
 func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
-	e := started(t, `
+	for _, pending := range []bool{false, true} {
+		e := started(t, `
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: whichever, namespace: finance }
@@ -900,24 +935,29 @@ steps:
     outputs: [ok]
 `, Options{MaxRequeues: new(0)})
 
-	plan := next(t, e, runAt)
-	slow := taskOf(t, plan, "slow")
-	record(t, e, Result{Task: slow.ID, State: agk.TaskRunning}, runAt)
-	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
-	next(t, e, runAt.Add(2*time.Minute))
-	cancelled := e.State().Steps["slow"]
-	if cancelled.Verdict != agk.VerdictCancelled {
-		t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
-	}
+		plan := next(t, e, runAt)
+		slow := taskOf(t, plan, "slow")
+		record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+		next(t, e, runAt.Add(2*time.Minute))
+		cancelled := e.State().Steps["slow"]
+		if cancelled.Verdict != agk.VerdictCancelled {
+			t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
+		}
+		want := agk.TaskCancelled
+		if pending {
+			cancelled.Shards[0] = ShardState{Shard: cancelled.Shards[0].Shard, Attempt: 1}
+			want = agk.TaskLost
+		}
 
-	record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
-	next(t, e, runAt.Add(3*time.Minute))
-	st := e.State().Steps["slow"]
-	if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
-		t.Errorf("slow is %s because %q after its task was lost, and it was cancelled because %q", st.Verdict, st.Reason, cancelled.Reason)
-	}
-	if sh := st.Shards[0]; sh.Task != agk.TaskLost {
-		t.Errorf("the shard of slow is %s, and the loss is recorded where it happened", sh.Task)
+		record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
+		next(t, e, runAt.Add(3*time.Minute))
+		st := e.State().Steps["slow"]
+		if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
+			t.Errorf("pending %t: slow is %s because %q after its task was lost, and it was cancelled because %q", pending, st.Verdict, st.Reason, cancelled.Reason)
+		}
+		if sh := st.Shards[0]; sh.Task != want {
+			t.Errorf("pending %t: the shard of slow is %s, want %s", pending, sh.Task, want)
+		}
 	}
 }
 

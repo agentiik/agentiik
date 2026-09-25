@@ -95,8 +95,18 @@ func poolOf(namespace string, t graph.Task, pools []db.RunnerPool) (db.RunnerPoo
 // take a decision per slice, each writing every task of the run again. Each round ends at least one
 // step for good, since 125 is retried by no policy and requeued only after a loss, so there are at
 // most as many rounds as steps.
+//
+// The plan answered carries the stops of every round. The evaluator names a stop sent while the
+// run goes on only in the pass that ends its task, so a round that dropped them would leave a
+// fail_fast sibling or a superseded task running with nobody told.
 func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
+	var stops []graph.Stop
 	for {
+		for _, s := range plan.Stop {
+			if !slices.Contains(stops, s) {
+				stops = append(stops, s)
+			}
+		}
 		refused := map[agk.Step]string{}
 		for _, t := range plan.Start {
 			if _, err := poolOf(namespace, t, pools); err != nil {
@@ -104,6 +114,7 @@ func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool
 			}
 		}
 		if len(refused) == 0 {
+			plan.Stop = stops
 			return plan, nil
 		}
 		state := ev.State()

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -773,3 +774,148 @@ func (h *countingHolder) Hold(id agk.TaskID) error {
 type progressFunc func(context.Context, bus.TaskProgress) error
 
 func (f progressFunc) Progress(ctx context.Context, p bus.TaskProgress) error { return f(ctx, p) }
+
+// "A message whose image is not name@sha256 is reported as no container ran, on the platform's
+// account, then acknowledged, since no runner of any pool could ever run it", before anything is
+// written down and before any redemption.
+func TestATaskWhoseImageIsATagIsReportedUnredeemedAndAcknowledged(t *testing.T) {
+	// An answer that ends the message at once, so that a redemption, which must not happen,
+	// shows in the count rather than in a test that waits for a deadline.
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	m, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+
+	l.carryOne(t)
+
+	results := l.bus.all()
+	if len(results) != 1 || results[0].State != agk.TaskFailed || !results[0].StartedAt.IsZero() || results[0].ExitCode != nil || results[0].TaskID != m.TaskID {
+		t.Fatalf("the results reported are %+v, want one failed that reached no container", results)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting+unacknowledged != 0 {
+		t.Errorf("the message is still on the queue once it was reported: %d waiting and %d unacknowledged", waiting, unacknowledged)
+	}
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("the grant of a task naming a tag was redeemed %d times", n)
+	}
+	if held := l.loop.Held(); len(held) != 0 {
+		t.Errorf("the loop names %v for a task it reported", held)
+	}
+	if err := l.loop.Holder.Recorded(agk.TaskID(m.IdempotencyKey)); err != nil {
+		t.Errorf("the key of a task naming a tag is still held: %s", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(l.root, driver.KeysDir)); err == nil && len(entries) != 0 {
+		t.Errorf("the key of a task naming a tag was written down: %s holds %d entries", driver.KeysDir, len(entries))
+	}
+	if n := l.containersOf(m.IdempotencyKey); n != 0 {
+		t.Errorf("%d containers were created for a task naming a tag", n)
+	}
+}
+
+// "A key this host already ended is answered from the record", and the image is held to a digest
+// only "of the rest": a requeue whose message names a tag, from a control plane older than the
+// digest floor or one that went wrong, is answered with the ending the host recorded rather than
+// reported as having reached no container, since the container it names already ran.
+func TestARequeueNamingATagIsAnsweredFromTheRecordFirst(t *testing.T) {
+	var answers sync.Map
+	api := anAPIAnswering(t, func(_ int, taskID string) (int, any) {
+		r, _ := answers.Load(taskID)
+		return http.StatusOK, r
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	first, r := l.task(t, nil)
+	answers.Store(first.TaskID, r)
+	l.carryOne(t)
+	if results := l.bus.all(); len(results) != 1 || results[0].State != agk.TaskSucceeded {
+		t.Fatalf("the first dispatch was reported %+v", results)
+	}
+
+	requeue, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+	l.carryOne(t)
+
+	if ended := l.queue.all(); len(ended) != 1 || ended[0].TaskID != requeue.TaskID || ended[0].State != agk.TaskSucceeded {
+		t.Errorf("the requeue was answered from the record with %+v, want its recorded success", ended)
+	}
+	if results := l.bus.all(); len(results) != 1 {
+		t.Errorf("the requeue was also reported, as %+v, where the record answers it", results[1:])
+	}
+	if n := l.api.redemptions(requeue.TaskID); n != 0 {
+		t.Errorf("the requeue's grant was redeemed %d times", n)
+	}
+}
+
+// "Take nothing new; finish what is held." While the heartbeat orders a drain the loop takes no
+// message, which stays on the queue for another runner, and once the order is lifted it takes
+// again.
+func TestADrainingRunnerTakesNothingUntilTheOrderIsLifted(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	var draining atomic.Bool
+	draining.Store(true)
+	l.loop.Draining = draining.Load
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.loop.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	m, _ := l.task(t, nil)
+	time.Sleep(time.Second)
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("a draining runner redeemed a task %d times", n)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting != 1 || unacknowledged != 0 {
+		t.Errorf("a draining runner left %d waiting and %d handed out, want the one message waiting", waiting, unacknowledged)
+	}
+
+	draining.Store(false)
+	eventually(t, "the task redeemed once the drain was lifted", func() bool { return l.api.redemptions(m.TaskID) > 0 })
+}
+
+// A drain ordered while the host is full is obeyed when a slot frees: the loop was waiting for room
+// when the order came, and takes nothing with the room it then gets.
+func TestADrainOrderedWhileTheHostIsFullIsObeyedWhenASlotFrees(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	api := anAPIAnswering(t, func(n int, _ string) (int, any) {
+		if n == 1 {
+			<-release
+		}
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Concurrency = 1
+	var draining atomic.Bool
+	l.loop.Draining = draining.Load
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.loop.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	first, _ := l.task(t, nil)
+	eventually(t, "the first task's redemption under way", func() bool { return l.api.redemptions(first.TaskID) > 0 })
+	draining.Store(true)
+	second, _ := l.task(t, func(m *bus.TaskMessage) {
+		m.Step = "invoice-2"
+		m.IdempotencyKey = string(storeRun) + "/" + m.Step + "/1"
+	})
+	unblock()
+	time.Sleep(time.Second)
+	if n := l.api.redemptions(second.TaskID); n != 0 {
+		t.Errorf("a runner told to drain while full redeemed a task %d times once a slot freed", n)
+	}
+}

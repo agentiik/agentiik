@@ -46,9 +46,17 @@
 // # Where the evaluator stops and the driver begins
 //
 // The evaluator stops at a decision and the driver begins at a container. A Plan is the
-// decision: the tasks that have become ready, the tasks in flight that should be
-// stopped, and the moment to ask again. Nothing in a Plan has happened yet, and calling
+// decision: the tasks that have become ready, the tasks that should be stopped, and the
+// moment to ask again. Nothing in a Plan has happened yet, and calling
 // Next twice with the same now returns the same Plan.
+//
+// With one exception, which is a rule of the language and so is decided here rather than by
+// whoever reads the Plan. A task stopped as superseded or sibling_failed while the run goes
+// on ends cancelled in the pass that names its stop, as the table of stops says it ends, and
+// its step is judged then; the second call finds it over and does not name it again. What
+// its driver reports afterwards adds how the container exited and nothing else. agk run
+// --local and the controller both read that from this package, which is what makes them
+// give one shard state for one history rather than one each.
 //
 // A Task is one shard of one attempt of one step, carrying everything a driver needs and
 // nothing it has to look up. Task.Inputs is exactly the argument brick.WriteInputs
@@ -108,7 +116,7 @@
 //
 // # Where the documentation is silent
 //
-// Fourteen readings are taken here, each recorded beside the rule that applies it rather
+// Fifteen readings are taken here, each recorded beside the rule that applies it rather
 // than only in this list, because otherwise whoever writes the driver, or the next reader
 // of a workflow file, settles them again and differently.
 //
@@ -164,6 +172,13 @@
 // run.attempt is 1. A replay is a new run and nothing moves out of a terminal run state,
 // so a run has one attempt; the attempt a container is on is the task's, which
 // AGK_ATTEMPT carries.
+//
+// What fail_fast does to the shards nobody has handed out yet. They never start: they end
+// cancelled with the ones in flight, a retry waiting out its backoff included, which is the
+// staged rollout the documentation describes, where fail_fast "stops it at the first broken
+// region". Its paragraph on fan-out names only "the shards still running". A step a merge:
+// first cancelled ends its own the same way, since a cancelled step hands nothing out and a
+// shard left pending in it would read as work still to come.
 //
 // What becomes of a step that broke a rule of the language after the run had started: a
 // zip on envelopes of differing lengths, a batch too large to travel, a condition that

@@ -281,8 +281,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
 	// decision is written rather than after, so that the row says what was handed out. A task
 	// held back is not refused: it stays pending in the evaluator's state, which is what
-	// makes the next pass hand it out again.
-	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start)
+	// makes the next pass hand it out again. A task this pass stops holds no slot, though its
+	// row reads in flight until the decision is written: the evaluator ended one stopped as
+	// superseded or sibling_failed as it named the stop, so the decision writes its row
+	// cancelled and the heartbeat repeats the stop to a runner that missed it on
+	// agentiik.stops, and a run whose ending stops the rest starts nothing.
+	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start, keysOf(plan.Stop))
 	if err != nil {
 		return err
 	}
@@ -317,10 +321,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			decision.Outputs = digestsOf(outputs)
 		}
 	}
-	// A pass that decided nothing writes nothing. The evaluator counts decisions, so a
+	// A pass that decided nothing writes no decision. The evaluator counts decisions, so a
 	// sequence that has not moved is the honest statement that this pass was a no-op:
 	// asking again at the same instant is idempotent by design, and the commonest case is
-	// a sweep reaching a run that is simply waiting.
+	// a sweep reaching a run that is simply waiting. The most such a pass writes is the
+	// clock, where the one it read is spent, which rewake below is for.
 	saved := e.Seq
 	var held []agk.TaskID
 	if state.Seq != saved {
@@ -336,9 +341,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			// leaves its tasks as they were, and a row left in flight would redeem, hold a
 			// slot of max_concurrent_tasks for good, and keep the stop out of the
 			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
-			// hears it again. A run that reached its deadline is the obvious case, and one
-			// that succeeded or failed with a step a merge: first superseded still in flight
-			// is the other.
+			// hears it again. A run that reached its deadline is the obvious case. One that
+			// succeeded or failed has ended every task its document holds, since the
+			// evaluator ends a merge: first's as the barrier lifts, handed out or not, in
+			// whichever pass first reads the cancelled step; ending them here is kept so
+			// that no row of an ended run is left in flight whatever the document says.
 			var err error
 			held, err = w.EndTasks(ctx, e.Namespace, run, now)
 			return err
@@ -360,7 +367,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// message that arrives twice carries a key a runner has already seen.
 	sent := co.hand(ctx, e.Namespace, run, plan)
 	if len(sent) == 0 {
-		return nil
+		if saved != e.Seq {
+			return nil
+		}
+		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			return rewake(ctx, w, e, plan.Wake)
+		})
 	}
 
 	// And the dispatch is recorded once the message has gone, not when the task was
@@ -386,8 +398,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
 		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-			_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
-			return err
+			if _, err := w.Published(ctx, e.Namespace, sent, co.now().UTC()); err != nil || saved != e.Seq {
+				return err
+			}
+			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
 	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
@@ -420,12 +434,40 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	})
 }
 
+// rewake puts on a run the clock a pass that decided nothing found, where it is not the one the
+// run holds.
+//
+// Such a pass writes no decision, but the clock it read may be spent: a loss or a result sets
+// the run due at the moment it arrived, so that the next sweep comes for it, and a pass that
+// then finds nothing to decide, a loss of a task already over or a result that makes nothing
+// runnable, would otherwise leave it due, and every later sweep would decide it again. The clock
+// is written only where it differs, and only over the row as the pass read it, so that a decision
+// written since keeps its clock, and so does a loss declared since. PostgreSQL keeps a moment to
+// the microsecond, which is what the two are compared at.
+func rewake(ctx context.Context, w *db.Wide, e db.Evaluation, wake time.Time) error {
+	if e.WakeAt.Equal(wake.Truncate(time.Microsecond)) {
+		return nil
+	}
+	return w.Rewake(ctx, e.Namespace, e.Run, e.Version, wake)
+}
+
+// keysOf is the key of each task a plan stops.
+func keysOf(stops []graph.Stop) []agk.TaskID {
+	out := make([]agk.TaskID, 0, len(stops))
+	for _, s := range stops {
+		out = append(out, s.Task)
+	}
+	return out
+}
+
 // stopOf is the stop a run's ending sends to a runner still holding one of its tasks, as the
 // documentation's table of stops names it: deadline for a run past its root timeout, cancelled
 // for a run called off, and superseded for a run that succeeded or failed. Such a run has ended
-// every step, and the only one whose tasks can still be in flight is a step a merge: first
-// cancelled when its barrier lifted on another edge, which is what superseded says. It is never
-// sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
+// every step, and the only step that ends while tasks of it may still be in flight is one a
+// merge: first cancelled when its barrier lifted on another edge, which is what superseded says.
+// The evaluator ends every task of that step as the barrier lifts, handed out or not, so this is
+// for a row the document does not describe, kept so that one is stopped for the right reason. It
+// is never sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
 func stopOf(run agk.RunState) graph.StopReason {
 	switch run {
 	case agk.TimedOut:

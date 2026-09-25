@@ -476,7 +476,8 @@ func (f *follower) expired(ctx context.Context) bool {
 //
 //   - never redeemed, it ran nowhere and nothing ships, and the same holds of one never redeemed
 //     and still pending in a step that is over, which nothing will hand out now: a shard a
-//     merge: first left behind when its step was cancelled stays pending in a run that goes on;
+//     merge: first left behind when its step was cancelled stayed pending in a run that went on,
+//     in a document decided before the evaluator ended such shards;
 //   - succeeded or failed, its runner closes the log before it reports, so a log still open is
 //     one nobody will close, as for an ending a host re-reported from the record of an earlier
 //     dispatch of the key;
