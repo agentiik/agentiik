@@ -124,7 +124,7 @@ func serve(ctx context.Context, e env, args []string) int {
 		Key:   key, Held: held, CredentialFile: e.CredentialFile,
 	})
 	switch {
-	case errors.Is(err, runner.ErrCredentialRefused), errors.Is(err, runner.ErrKeyGone):
+	case errors.Is(err, runner.ErrCredentialRefused), errors.Is(err, runner.ErrKeyGone), errors.Is(err, runner.ErrRevoked):
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitJoinAgain
 	case err != nil:

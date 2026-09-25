@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -19,10 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
 	"github.com/agentiik/agentiik/runner"
+	"github.com/nats-io/nkeys"
 )
 
 // credential is a runner credential written the way token.New writes one.
@@ -48,12 +51,17 @@ func (o *output) String() string {
 
 // host is one runner host as serve finds it: a joined runner.env, a runner.toml or none, a daemon,
 // a service manager listening, and an API that counts what reaches it. The API answers a heartbeat
-// with beat, 200 where it is zero, and nothing else it is asked.
+// with beat, 200 where it is zero, a bus credential with busToken where it is set, and nothing else
+// it is asked.
 type host struct {
 	e        env
 	out, err *output
 	requests atomic.Int32
 	beat     atomic.Int32
+	// revoked has the heartbeat's answer say the runner is revoked, its grace ending in an hour.
+	revoked atomic.Bool
+	// busToken answers POST /api/v1/bus/token. It is set before serve runs.
+	busToken http.HandlerFunc
 	// bearers is every credential a heartbeat carried.
 	bearers sync.Map
 	notify  *net.UnixConn
@@ -65,6 +73,10 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 	h := &host{out: &output{}, err: &output{}}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.requests.Add(1)
+		if r.URL.Path == "/api/v1/bus/token" && h.busToken != nil {
+			h.busToken(w, r)
+			return
+		}
 		if r.URL.Path != "/api/v1/runners/heartbeat" {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -75,7 +87,13 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"received_at":%q,"drain":false,"cancel":[]}`, time.Now().UTC().Format(time.RFC3339Nano))
+		now := time.Now().UTC()
+		if h.revoked.Load() {
+			fmt.Fprintf(w, `{"received_at":%q,"drain":true,"reason":"host decommissioned","results_accepted_until":%q,"cancel":[]}`,
+				now.Format(time.RFC3339Nano), now.Add(time.Hour).Format(time.RFC3339Nano))
+			return
+		}
+		fmt.Fprintf(w, `{"received_at":%q,"drain":false,"cancel":[]}`, now.Format(time.RFC3339Nano))
 	}))
 	t.Cleanup(api.Close)
 
@@ -345,6 +363,55 @@ func TestACredentialRefusedAtTheHeartbeatEndsTheStartSayingToJoinAgain(t *testin
 	}
 	if !strings.Contains(h.err.String(), "this runner's credential was refused: join it again with agk-runner join --replace") {
 		t.Errorf("the refusal does not say to join again:\n%s", h.err)
+	}
+}
+
+// A revoked runner holding nothing has nothing left to do in its grace: it ends with the status
+// the unit's RestartPreventExitStatus= names, so that Restart=always does not bring back a runner
+// that would only take nothing until its grace ends and every call is refused.
+func TestARevokedRunnerHoldingNothingExitsWithTheStatusSystemdDoesNotRestart(t *testing.T) {
+	url := os.Getenv("AGENTIIK_TEST_BUS_URL")
+	if url == "" {
+		t.Skip("no NATS on this machine: set AGENTIIK_TEST_BUS_URL")
+	}
+	account, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := account.Seed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := bus.NewIssuer(string(seed), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.revoked.Store(true)
+	h.busToken = func(w http.ResponseWriter, r *http.Request) {
+		// What the API mints a revoked runner: results and stops, and no pull.
+		c, err := issuer.ForRevokedRunner("runner-dmz-02", time.Now().Add(time.Hour))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"kind": c.Kind, "url": c.URL, "jwt": c.JWT, "seed": c.Seed,
+			"stream": bus.Stream, "consumer": bus.Durable("dmz"), "expires_at": c.ExpiresAt.Format(time.RFC3339Nano),
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if code := run(ctx, h.e, []string{"serve"}); code != exitJoinAgain {
+		t.Errorf("a revoked runner holding nothing exited %d, want %d:\n%s", code, exitJoinAgain, h.err)
+	}
+	if ctx.Err() != nil {
+		t.Error("serve ended only as the test gave up on it")
+	}
+	if !strings.Contains(h.err.String(), "this runner is revoked, and has answered for every task it held") {
+		t.Errorf("the agent does not say why it ended:\n%s", h.err)
 	}
 }
 
