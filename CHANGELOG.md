@@ -319,7 +319,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
 - `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
-- `agk run --local` ends a task stopped as `superseded` or `sibling_failed` `cancelled` as the stop goes out, as a server does, since `graph.Next` now decides it for both: a `fail_fast` sibling that exits 0 just before the stop reads `cancelled` with its code rather than `succeeded`. A stop the driver refuses is sent again on the next pass.
+- `agk run --local` ends a task stopped as `superseded` or `sibling_failed` `cancelled` as the stop goes out, as a server does, since `graph.Next` now decides it for both: a `fail_fast` sibling that exits 0 just before the stop reads `cancelled` with its code rather than `succeeded`. A stop is sent again on every pass until its task comes back.
+- A `fail_fast` step hands out no further shard once one has failed for good, locally and on a server: its shards not yet started, a retry waiting out its backoff included, end `cancelled`, so a staged rollout stops at the first broken region.
 
 ### Tests
 
