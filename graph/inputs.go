@@ -10,6 +10,18 @@ import (
 	"github.com/agentiik/agentiik/schema"
 )
 
+// InputSchemasMaxBytes is how much schema a workflow's declared inputs may compile, in all:
+// each input's own schema, and each file it reaches, counted once for every input that reaches
+// it.
+//
+// A declaration is compiled wherever a run's inputs are bound, which on an installation is at a
+// push and at the start of a run, on behalf of whoever holds workflow:write or workflow:run. The
+// JSON Schema library's compile time grows with the square of a schema's subschemas: 410 KiB of
+// properties compiled in 0.45 s and 2.6 MiB in 63 s, and one file named by forty inputs is
+// compiled forty times. At 512 KiB the densest declaration compiles in about a second, and an
+// input schema that describes what a person types or a trigger sends is kilobytes.
+const InputSchemasMaxBytes = 512 << 10
+
 // DeclaredInputs compiles the schema of every input the workflow declares against the tree of
 // the commit it came from, into what schema.Bind binds a run's inputs against.
 //
@@ -28,7 +40,7 @@ func (wf *Workflow) DeclaredInputs(tree fs.FS) (map[string]schema.Input, error) 
 	if wf == nil {
 		return nil, fmt.Errorf("there is no workflow to read the inputs of")
 	}
-	compiler := schema.NewCompiler(tree)
+	compiler := schema.NewCompilerWithin(tree, InputSchemasMaxBytes)
 	out := make(map[string]schema.Input, len(wf.Inputs))
 	for _, name := range slices.Sorted(maps.Keys(wf.Inputs)) {
 		in := wf.Inputs[name]
