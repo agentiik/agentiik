@@ -206,8 +206,8 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		// carries no code for: "a timed_out or cancelled task carries an exit code wherever a
 		// container ran". That includes a container that exited on its own as the run
 		// ended, whose runner reports it failed or succeeded: the row keeps the ending the
-		// run wrote, and takes the code.
-		return co.stopCode(ctx, e.Namespace, a, bind)
+		// run wrote, and takes the code, the log and the usage.
+		return co.stopReport(ctx, e.Namespace, a, bind)
 	}
 	if a.Result.State == agk.TaskLost {
 		return co.lose(ctx, run, a)
@@ -251,10 +251,14 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	stamp(tasks, a)
 
 	// "A result for an attempt that is over changes nothing", and the evaluator says so by
-	// not counting a decision. There is then nothing to write, and writing it anyway would
-	// be refused for taking the run from a sequence to the same sequence.
+	// not counting a decision. There is then nothing to decide, and writing the decision anyway
+	// would be refused for taking the run from a sequence to the same sequence. What such a
+	// result may still say is how a container the controller stopped exited, where its log went
+	// and what it cost: a task stopped as superseded or sibling_failed was ended when the stop
+	// went out, while the run went on, and its runner's report comes to a task that is over, as
+	// one a run's ending stopped does.
 	if state.Seq == e.Seq {
-		return nil
+		return co.stopReport(ctx, e.Namespace, a, bind)
 	}
 
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
@@ -352,20 +356,30 @@ func unreached(a Answer) bool {
 		a.Result.ExitCode == 0 && len(a.Outputs) == 0
 }
 
-// stopCode writes onto the row of a dispatch a run's ending stopped the exit code its container
-// exited with, where the answer comes from the runner bound to it and reports one.
+// stopReport writes onto the row of a dispatch the controller stopped, by a run's ending or by a
+// stop sent while the run went on, what its runner reported of it: the exit code its container
+// exited with, where one did, and where its log went and what it cost, which a decision would
+// have written had the task still been in flight.
 //
 // A runner bound by this very answer is not one: an ending that never reached a container has no
 // code, and a host answering from its record answers a requeue, not a container the run stopped.
-// Nor is a loss, which reports no outcome. Which row takes the code is Wide.StopCode's to say: one
-// the run's ending stopped, and only once.
-func (co *Core) stopCode(ctx context.Context, namespace string, a Answer, bind bool) error {
+// Nor is a loss, which reports no outcome. Which row takes the report is Wide.StopReport's to say:
+// one the controller stopped, and only once.
+func (co *Core) stopReport(ctx context.Context, namespace string, a Answer, bind bool) error {
 	r := a.Result
-	if bind || r.State == agk.TaskLost || r.StartedAt.IsZero() || r.NoExitCode {
+	if bind || r.State == agk.TaskLost {
+		return nil
+	}
+	report := db.Stopped{Log: a.Log, LogLines: a.LogLines, LogCut: a.LogCut, Usage: a.Usage}
+	if !r.StartedAt.IsZero() && !r.NoExitCode {
+		code := r.ExitCode
+		report.ExitCode, report.StartedAt = &code, r.StartedAt
+	}
+	if report.ExitCode == nil && report.Log == (agk.LogURI{}) && report.LogLines == 0 && !report.LogCut && len(report.Usage) == 0 {
 		return nil
 	}
 	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-		_, err := w.StopCode(ctx, namespace, r.Task, a.Row, a.Runner, r.ExitCode, r.StartedAt)
+		_, err := w.StopReport(ctx, namespace, r.Task, a.Row, a.Runner, report)
 		return err
 	})
 }
