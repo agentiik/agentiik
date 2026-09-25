@@ -1,0 +1,46 @@
+# The end-to-end tests, on the test installation package e2e stands up: PostgreSQL, the bus, the
+# API and the controller built from this checkout, a registry, and two runners each on a Docker
+# daemon of its own. A job of its own, apart from test.yml, because it starts privileged
+# containers and takes minutes, and because the tests to come here wait on heartbeats measured in
+# tens of seconds.
+name: e2e
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A push that lands while the previous one is still being tested makes that one's answer moot.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The version go.mod requires, pinned to the minor for the reason test.yml gives.
+          go-version: '1.27'
+
+      # Pulled before the test, so that a registry being slow is a step that says so rather than
+      # a wait inside the test that times out.
+      - name: images
+        run: |
+          for image in postgres:17-alpine nats:2-alpine registry:2 docker:29-dind alpine:3.21; do
+            docker pull --quiet "$image"
+          done
+
+      - name: e2e
+        run: go test ./e2e -count=1 -v -timeout 25m
+        env:
+          AGENTIIK_E2E: '1'
