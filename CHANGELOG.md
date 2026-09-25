@@ -213,6 +213,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. A dispatch carried again after the agent restarted goes on from where the API says its log stands, and reports it `truncated`. The key's record keeps the log the result reported, so a report made from it says the same.
 - A bus credential naming a bus in plaintext across a network is refused, rather than asked for again for ever.
 - `serve` and `join` refuse a `DOCKER_HOST` that is not a local unix socket, naming it, on the same start as the other settings.
+- `serve` renews its runner credential at two thirds of its window through `POST /api/v1/runners/rotate`, signed with `/var/lib/agentiik/runner.key`, and at its first start for the one `join` wrote. The new credential is kept in `/var/lib/agentiik/credential` (0600) before any call carries it, and `serve` prefers that file to `runner.env`. A renewal refused `401`, or `403` with no revocation heard within two heartbeats, exits 3, and so does a key that is gone, before any call.
+- `serve` renews its bus credential at three quarters of its life on a second connection, heard on for stops before anything moves onto it. The connection it replaces stays open for `bus.AckWait` past its last take, and no longer than its credential, so nothing taken on it loses its acknowledgement.
+- `join` takes `/var/lib/agentiik/credential` away, and tells a host whose `runner.env` remains without its key that it is a new runner.
 
 ### Artifacts
 
