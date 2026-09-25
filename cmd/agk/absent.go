@@ -27,9 +27,9 @@ import (
 // can read aloud is a sentence that reads as a broken binary, at the moment somebody is
 // already stuck, so each verb writes its own.
 //
-// arrives is separate for the same reason: six of these wait on the API and brick init waits
-// on a release of agentiik/bricks, and one template saying "it arrives with the API" for all
-// seven was telling the seventh to wait for the wrong thing.
+// arrives is separate for the same reason: four of these wait on the API's principals and brick
+// init waits on a release of agentiik/bricks, and one template saying "it arrives with the API"
+// for all five was telling the fifth to wait for the wrong thing.
 func absent(name, missing, arrives string) func(context.Context, Env, []string) int {
 	return func(_ context.Context, e Env, _ []string) int {
 		fmt.Fprintf(e.Err, "%s: refused: %s. %s, and this binary is the local half of the command line: agk validate, agk graph, agk run --local and agk brick test need nothing but a file and a daemon\n", name, missing, arrives)
@@ -37,6 +37,6 @@ func absent(name, missing, arrives string) func(context.Context, Env, []string) 
 	}
 }
 
-// withTheAPI is what the six verbs that reach an installation wait for, in one place because
-// it is one sentence said six times.
+// withTheAPI is what the four verbs that wait on an installation's principals wait for, in one
+// place because it is one sentence said four times.
 const withTheAPI = "It arrives with the API"

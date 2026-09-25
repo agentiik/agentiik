@@ -317,6 +317,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk push` resolves every tag, a script step's base image included, to the digest its registry serves, and reads each manifest out of it. An image never pushed is refused naming it. `agk run --local` still takes tags.
 - `agk push` says so when the commit was pushed before with another digest for a tag, which every run keeps, and that a new commit takes the one the tag names now. An answer it cannot read is exit 4, since the version was recorded.
 - `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
+- `agk run --namespace` starts a run of a pushed commit on an installation, its inputs bound against the commit's declaration, and follows it to its end in a local run's narration and report, exiting 0, 3 or 4 as a local run does. `-o json` writes its output envelopes. An interrupt stops following and leaves the run going. A local run's flags are refused on it, and the other way round.
+- `agk logs` follows the logs of a run's steps, or of those named, history then live. A stream cut off, or silent past three keep-alives, is asked again from its last event, and nothing is printed twice.
+- `agk status` shows how a run on an installation stands: its state, each step's verdict with its envelope digests, its inputs and outputs, and what failed. `-o json` writes the API's answer as given.
+- `agk push`, `run`, `logs` and `status` refuse an installation address that would carry `AGENTIIK_TOKEN` in plaintext: `https`, or `http` to a loopback address.
 
 ### Tests
 
