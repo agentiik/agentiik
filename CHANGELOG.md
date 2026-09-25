@@ -177,6 +177,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Recorded` answers as `Hold` would and writes nothing down.
 - A pull a registry refused for want of credentials says so, and names v0.8.0's namespace credentials. `docker.IsPullDenied` reads the ways the daemon passes such a refusal on, and not its own 403.
 - A die event the watch had no room for arms the inspect, so the exit is read in seconds rather than at the deadline as `timed_out`.
+- `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
 
 ### Runner
 
@@ -200,7 +201,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task's `running` and `publishing` are published from a goroutine of their own, dropped rather than holding up the driver.
 - `serve` posts a heartbeat every 10 s naming every key it answers for (written down, redeemed again, running, or with a result still to publish), and for `bus.AckWait` after a start the keys an earlier agent took and never ended. It says `READY=1` once the first is answered, stops each key the answer cancels, takes nothing new and reports `draining` while told to drain, saying why, says a clock more than a second off the installation's, and exits 3 saying to join again on a 401. A key off the wire's grammar is left out and said, rather than having the whole heartbeat refused.
 - A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
-- `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. An agent restarted under a running container goes on from where the API says the log stands.
+- `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. An agent restarted under a running container goes on from where the API says the log stands, and reports it `truncated`. The key's record keeps the log the result reported, so a report made from it says the same.
 
 ### Artifacts
 
