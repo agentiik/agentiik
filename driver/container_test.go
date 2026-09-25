@@ -342,7 +342,7 @@ func stringsOf(t *testing.T, v any) string {
 }
 
 // A cpu the grammar reads and no host has is counted as the most there is, never as a number below
-// zero, which every caller capping with it would read as no limit at all.
+// zero, which a runner counting it against its capacity would read as room given back.
 func TestACPUNoHostHasIsCountedAsTheMostThereIs(t *testing.T) {
 	_, nanos, err := Declared("invoice", "", "10000000000")
 	if err != nil {
@@ -350,8 +350,5 @@ func TestACPUNoHostHasIsCountedAsTheMostThereIs(t *testing.T) {
 	}
 	if nanos != math.MaxInt64 {
 		t.Errorf("ten billion cores are %d billionths of a core", nanos)
-	}
-	if got := capped(nanos, 2e9); got != 2e9 {
-		t.Errorf("capped at two cores, ten billion are %d billionths", got)
 	}
 }

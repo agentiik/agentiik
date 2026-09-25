@@ -16,7 +16,7 @@ import (
 // still holds no capability at all, since nothing a workflow or a manifest writes asks for one. Read
 // inside the container, from /proc/self, which is what the process is actually held to rather than
 // what the driver sent.
-func TestRunnerTomlUlimitsAndAllowedCapabilitiesReachTheContainer(t *testing.T) {
+func TestRunnerTomlUlimitsReachTheContainerAndAllowedCapabilitiesGrantNone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runner.toml")
 	text := `allow_cap_add = ["NET_BIND_SERVICE"]
 

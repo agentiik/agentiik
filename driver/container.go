@@ -314,8 +314,8 @@ func nanoCPUsOf(cores float64) int64 {
 	// every time the nearest float64 falls below the number that was written.
 	//
 	// And held to the largest count there is: past it, converting the product is left to the
-	// platform, which answers the smallest negative number on amd64, and a count below zero
-	// would read as no limit at all to every caller that caps with it.
+	// platform, which answers the smallest negative number on amd64, and a runner counting what
+	// a task declares against its capacity would read a count below zero as room given back.
 	if cores >= math.MaxInt64/1e9 {
 		return math.MaxInt64
 	}

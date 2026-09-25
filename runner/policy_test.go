@@ -34,6 +34,18 @@ func runUntil(t *testing.T, l *Loop, wait time.Duration, done func() bool) {
 	}
 }
 
+// writingHolder is the host's record, counting the keys written down: one released afterwards
+// leaves nothing to find, and "before anything is written down" is the order being held.
+type writingHolder struct {
+	Holder
+	written atomic.Int32
+}
+
+func (h *writingHolder) Hold(id agk.TaskID) error {
+	h.written.Add(1)
+	return h.Holder.Hold(id)
+}
+
 // "AGK_RUNNER_NAMESPACES narrows one host": a task of a namespace it leaves out starts no container
 // there, redeems nothing there, and is taken by the pool's other runner, which runs it.
 func TestATaskOfANamespaceThisHostLeavesOutIsRunByThePoolsOtherRunner(t *testing.T) {
@@ -42,6 +54,8 @@ func TestATaskOfANamespaceThisHostLeavesOutIsRunByThePoolsOtherRunner(t *testing
 	pool := aPoolOnTheBus(t, 30*time.Second)
 	narrowed := aLoop(t, carrier(t, nil), pool, api)
 	narrowed.loop.Namespaces = []string{"ops", "team-ops"}
+	holder := &writingHolder{Holder: narrowed.loop.Holder}
+	narrowed.loop.Holder = holder
 	var putBack atomic.Int32
 	narrowed.loop.Log = func(s string) {
 		if strings.Contains(s, "takes no work of namespace finance") {
@@ -76,8 +90,8 @@ func TestATaskOfANamespaceThisHostLeavesOutIsRunByThePoolsOtherRunner(t *testing
 	if results := narrowed.bus.all(); len(results) != 0 {
 		t.Errorf("the runner that put the task back reported %+v", results)
 	}
-	if err := narrowed.loop.Holder.Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
-		t.Errorf("the narrowed host wrote the key down: %s", err)
+	if n := holder.written.Load(); n != 0 {
+		t.Errorf("the narrowed host wrote a key down %d times", n)
 	}
 }
 
@@ -113,6 +127,8 @@ func TestATaskLargerThanTheHostIsPutBackUnredeemed(t *testing.T) {
 	})
 	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
 	l.loop.Capacity = Room{Memory: 1 << 30, NanoCPUs: 8e9}
+	holder := &writingHolder{Holder: l.loop.Holder}
+	l.loop.Holder = holder
 	m, _ := l.task(t, func(m *bus.TaskMessage) { m.Resources.Memory = "2Gi" })
 
 	l.carryOne(t)
@@ -130,8 +146,8 @@ func TestATaskLargerThanTheHostIsPutBackUnredeemed(t *testing.T) {
 	if held := l.loop.Held(); len(held) != 0 {
 		t.Errorf("the loop names %v for a task it put back", held)
 	}
-	if err := l.loop.Holder.Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
-		t.Errorf("the key was written down for a task put back: %s", err)
+	if n := holder.written.Load(); n != 0 {
+		t.Errorf("the key was written down %d times for a task put back", n)
 	}
 }
 
