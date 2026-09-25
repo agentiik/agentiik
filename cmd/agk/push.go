@@ -660,7 +660,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("Content-Type", "application/json")
 
-	answer, err := (&http.Client{Timeout: 2 * time.Minute}).Do(r)
+	answer, err := client(2 * time.Minute).Do(r)
 	if err != nil {
 		return api.Pushed{}, fmt.Errorf("%s could not be reached: %w", url, err)
 	}
@@ -673,13 +673,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 		return pushed, nil
 	}
 
-	var said struct {
-		Error string `json:"error"`
-	}
-	json.NewDecoder(answer.Body).Decode(&said)
-	if said.Error == "" {
-		said.Error = answer.Status
-	}
+	said := refusedBy(answer)
 	switch answer.StatusCode {
 	case http.StatusUnauthorized:
 		return api.Pushed{}, fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
@@ -689,7 +683,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 		// guessing.
 		return api.Pushed{}, fmt.Errorf("no such namespace or workflow, or not yours")
 	}
-	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.Error)
+	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.said)
 }
 
 // commitOf is the commit a push names, as the whole hash git holds it under.

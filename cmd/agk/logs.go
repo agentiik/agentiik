@@ -37,10 +37,13 @@ import (
 // that died without saying so, which a proxy or a laptop changing networks leaves behind, and
 // asked again the same way.
 //
-// Asking again waits longer each time, and a stream that could not be reopened after
-// logGiveUpAfter attempts in a row is given up on, with exit 4: whatever the log still holds is
-// the installation's to say, and nothing here can. A refusal, a run or a step that is not there
-// or a credential not accepted, is not asked again.
+// Asking again waits longer each time, until an event arrives. A stream that could not be
+// reopened after logGiveUpAfter attempts in a row, each answered by nothing or by a failure that
+// may pass, is given up on, with exit 4: whatever the log still holds is the installation's to
+// say, and nothing here can. A stream that opened is never counted towards that, even one cut
+// again before it said anything, since a step waiting on another sends nothing but keep-alives
+// and a proxy that cuts connections after thirty seconds would otherwise end a healthy follow. A
+// refusal, a run or a step that is not there or a credential not accepted, is not asked again.
 //
 // # What goes where
 //
@@ -103,10 +106,8 @@ func logs(ctx context.Context, e Env, args []string) int {
 		})
 	}
 	wg.Wait()
-	if ctx.Err() != nil {
-		// An interrupt is how a person stops following, and it is what they asked for.
-		return exitSucceeded
-	}
+	// An interrupt is how a person stops following, and a stream it stopped leaves with 0; one
+	// already refused or given up on by then still says so.
 	worst := exitSucceeded
 	for _, c := range codes {
 		// No outcome outweighs a refusal, which outweighs a log followed to its end: the
@@ -163,7 +164,7 @@ func (s *stepLog) follow(ctx context.Context) int {
 	s.labels, s.printed, s.ended = map[string]string{}, map[string]int{}, map[string]bool{}
 	wait, failed := logRetryFirst, 0
 	for {
-		over, heard, err := s.once(ctx)
+		over, opened, heard, err := s.once(ctx)
 		switch {
 		case over:
 			return exitSucceeded
@@ -174,11 +175,14 @@ func (s *stepLog) follow(ctx context.Context) int {
 			return exitRefused
 		}
 		if heard {
-			wait, failed = logRetryFirst, 0
+			wait = logRetryFirst
+		}
+		if opened {
+			failed = 0
 		}
 		failed++
 		if failed > logGiveUpAfter {
-			fmt.Fprintf(s.errs, "%s: %s, and the log was asked for %d times in a row with nothing heard: whatever it still holds is at %s, and agk logs %s %s asks again\n",
+			fmt.Fprintf(s.errs, "%s: %s, and the log was asked for %d times in a row without the installation opening it: whatever it still holds is at %s, and agk logs %s %s asks again\n",
 				s.step, err, logGiveUpAfter, s.at.base, s.run, s.step)
 			return exitNoOutcome
 		}
@@ -209,13 +213,14 @@ func (s *stepLog) refusedWith(err error) string {
 }
 
 // once reads the stream from where it stands until it ends or is cut off, and answers whether the
-// step's log is over, whether any event arrived, and why it stopped where it is not over.
-func (s *stepLog) once(ctx context.Context) (bool, bool, error) {
+// step's log is over, whether the stream opened, whether any event arrived, and why it stopped
+// where it is not over.
+func (s *stepLog) once(ctx context.Context) (bool, bool, bool, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	req, err := s.at.request(ctx, http.MethodGet, fmt.Sprintf("/api/v1/runs/%s/steps/%s/logs", url.PathEscape(s.run), url.PathEscape(s.step)), nil)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	if s.last != "" {
@@ -233,16 +238,16 @@ func (s *stepLog) once(ctx context.Context) (bool, bool, error) {
 	quiet := fmt.Errorf("%w: nothing was heard for %s", errCutOff, logSilence)
 
 	// No timeout on the client: a stream lasts as long as its step.
-	answer, err := http.DefaultClient.Do(req)
+	answer, err := client(0).Do(req)
 	if err != nil {
 		if hushed.Load() {
-			return false, false, quiet
+			return false, false, false, quiet
 		}
-		return false, false, fmt.Errorf("%w at %s: %v", errUnreachable, s.at.base, err)
+		return false, false, false, fmt.Errorf("%w at %s: %v", errUnreachable, s.at.base, err)
 	}
 	defer answer.Body.Close()
 	if answer.StatusCode != http.StatusOK {
-		return false, false, refusedBy(answer)
+		return false, false, false, refusedBy(answer)
 	}
 
 	heard := false
@@ -263,17 +268,17 @@ func (s *stepLog) once(ctx context.Context) (bool, bool, error) {
 		}
 		heard = true
 		if s.take(ev) {
-			return true, heard, nil
+			return true, true, heard, nil
 		}
 		ev = sseEvent{}
 	}
 	switch {
 	case hushed.Load():
-		return false, heard, quiet
+		return false, true, heard, quiet
 	case read.Err() != nil:
-		return false, heard, fmt.Errorf("%w: %v", errCutOff, read.Err())
+		return false, true, heard, fmt.Errorf("%w: %v", errCutOff, read.Err())
 	}
-	return false, heard, errCutOff
+	return false, true, heard, errCutOff
 }
 
 // sseEvent is one server-sent event as it is read, field by field.

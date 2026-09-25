@@ -192,7 +192,7 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 	if err != nil {
 		return "", err
 	}
-	answer, err := (&http.Client{Timeout: answerTimeout}).Do(req)
+	answer, err := client(answerTimeout).Do(req)
 	if err != nil {
 		// Sent and never answered is a run that may exist, which nothing here can tell.
 		return "", fmt.Errorf("%w at %s: %v, and whether a run was started cannot be said", errUnreachable, at.base, err)
@@ -200,6 +200,12 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 	defer answer.Body.Close()
 	if answer.StatusCode != http.StatusAccepted {
 		r := refusedBy(answer)
+		if passing(r) {
+			// A gateway that timed out in front of an API that had already written the run
+			// answers this too, so it is no outcome rather than a refusal: a person told that
+			// nothing ran would start a second run.
+			return "", fmt.Errorf("%w: %s answered %s, and whether a run was started cannot be said: agk status reads runs by identifier, and GET /api/v1/%s/runs lists them", errUnreachable, at.base, r.said, namespace)
+		}
 		switch r.status {
 		case http.StatusUnauthorized:
 			return "", fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
@@ -232,19 +238,21 @@ type following struct {
 	n   *narration
 
 	verdicts map[agk.Step]agk.Verdict
-	tasks    map[shardKey]taskSaid
+	tasks    map[dispatchKey]agk.TaskState
 }
 
-// shardKey is one shard of one step, which is what a narration line is about, whichever attempt
-// or dispatch of it is current.
+// shardKey is one shard of one step, whichever attempt or dispatch of it is current.
 type shardKey struct {
 	step  agk.Step
 	index int
 }
 
-type taskSaid struct {
-	attempt int
-	state   agk.TaskState
+// dispatchKey is one row of the tasks table: a shard's attempt, and which dispatch of that attempt
+// it is, since a loss hands the same key out again under a new row. The API names no row, so the
+// dispatch is counted: the rows of one attempt come in the order they were made.
+type dispatchKey struct {
+	shardKey
+	attempt, dispatch int
 }
 
 // follow reads the run until it ends, narrating what changed between two readings, and answers
@@ -308,7 +316,7 @@ func (f *following) detached() {
 // where a reading caught it.
 func (f *following) narrate(d db.RunDetail) bool {
 	if f.verdicts == nil {
-		f.verdicts, f.tasks = map[agk.Step]agk.Verdict{}, map[shardKey]taskSaid{}
+		f.verdicts, f.tasks = map[agk.Step]agk.Verdict{}, map[dispatchKey]agk.TaskState{}
 	}
 	for _, s := range d.Steps {
 		f.n.width = max(f.n.width, len(s.Step))
@@ -328,31 +336,25 @@ func (f *following) narrate(d db.RunDetail) bool {
 	for _, s := range d.Steps {
 		verdicts[s.Step] = s.Verdict
 	}
-	// The current dispatch of each shard is its last row: the tasks come ordered by step,
-	// attempt, shard and requeue.
-	current := map[shardKey]db.TaskSummary{}
+	// Every row, and not only the current dispatch of each shard: a dispatch lost and requeued,
+	// or an attempt failed and retried, between two readings is still news, and it is only
+	// ever a row the current one has replaced. The tasks come ordered by step, attempt, shard
+	// and requeue, which is what counting the dispatches of an attempt rests on.
+	var events []local.Event
+	made := map[dispatchKey]int{}
 	for _, t := range d.Tasks {
-		k := shardKey{step: t.Step}
+		k := dispatchKey{shardKey: shardKey{step: t.Step}, attempt: t.Attempt}
 		if t.Shard != nil {
 			k.index = t.Shard.Index
 			shards[t.Step] = max(shards[t.Step], t.Shard.Of)
 		}
-		current[k] = t
-	}
-
-	var events []local.Event
-	for _, k := range slices.SortedFunc(maps.Keys(current), func(a, b shardKey) int {
-		if a.step != b.step {
-			return strings.Compare(string(a.step), string(b.step))
-		}
-		return a.index - b.index
-	}) {
-		t := current[k]
+		k.dispatch = made[k]
+		made[dispatchKey{shardKey: k.shardKey, attempt: k.attempt}]++
 		said, seen := f.tasks[k]
-		if seen && said.attempt == t.Attempt && said.state == t.State {
+		if seen && said == t.State {
 			continue
 		}
-		f.tasks[k] = taskSaid{attempt: t.Attempt, state: t.State}
+		f.tasks[k] = t.State
 		// A shard only just planned is not news, as in a local run.
 		if t.State == agk.TaskPending && !seen {
 			continue
@@ -527,7 +529,7 @@ func outputsOf(ctx context.Context, at remote, d db.RunDetail) (map[string]agk.E
 		if err != nil {
 			return nil, err
 		}
-		answer, err := (&http.Client{Timeout: answerTimeout}).Do(req)
+		answer, err := client(answerTimeout).Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("%w at %s: %v", errUnreachable, at.base, err)
 		}

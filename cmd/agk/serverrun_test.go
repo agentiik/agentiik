@@ -401,13 +401,97 @@ func TestAnAddressThatWouldCarryTheCredentialInPlaintextIsRefused(t *testing.T) 
 			t.Errorf("%v against plain http answered %d: %s", args, code, errs)
 		}
 	}
-	for _, where := range []string{"https://me:secret@agentiik.example.com", "agentiik.example.com", "https://agentiik.example.com/?x=1"} {
+	for _, where := range []string{
+		"https://me:secret@agentiik.example.com", "agentiik.example.com", "https://agentiik.example.com/?x=1",
+		"me:secret@agentiik.example.com", "ftp://me:secret@agentiik.example.com", "https://me:secret@agentiik.example.com:port",
+	} {
 		code, _, errs := against(t.Context(), dir, where, "status", aRun)
 		if code != exitUsage {
 			t.Errorf("%s answered %d: %s", where, code, errs)
 		}
 		if strings.Contains(errs, "secret") {
 			t.Errorf("the refusal repeats a password: %s", errs)
+		}
+	}
+}
+
+// No request carrying the credential follows a redirect: Go's client would carry Authorization on
+// to the same host whatever the scheme, so an https address redirected to http would send the
+// token in clear, and a 307 would send a run's inputs after it.
+func TestARedirectIsNeverFollowedWithTheCredential(t *testing.T) {
+	dir := repository(t)
+	var elsewhere sync.Mutex
+	reached := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Lock()
+		reached++
+		elsewhere.Unlock()
+		// Refused, so that a redirect followed fails at once rather than streaming nothing.
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(target.Close)
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+r.URL.Path, status)
+		}))
+		t.Cleanup(redirecting.Close)
+		quickly(t)
+		for _, args := range [][]string{{"status", aRun}, {"run", "--namespace", "finance"}, {"push", "--namespace", "finance"}, {"logs", aRun, "normalize"}} {
+			code, _, errs := against(t.Context(), dir, redirecting.URL, args...)
+			if code == exitSucceeded || !strings.Contains(errs, "a redirect") {
+				t.Errorf("%v redirected with %d answered %d: %s", args, status, code, errs)
+			}
+		}
+	}
+	elsewhere.Lock()
+	defer elsewhere.Unlock()
+	if reached != 0 {
+		t.Errorf("a redirect was followed %d times", reached)
+	}
+}
+
+// A gateway that timed out in front of an API that may already have written the run is no
+// outcome, never a refusal: a person told that nothing ran would start a second run.
+func TestAFailureThatMayPassWhileStartingIsNoOutcome(t *testing.T) {
+	dir := repository(t)
+	s := &standIn{start: http.StatusGatewayTimeout}
+	url := installationAt(t, s)
+
+	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitNoOutcome {
+		t.Fatalf("a 504 answering the start answered %d: %s", code, errs)
+	}
+	if !strings.Contains(errs, "whether a run was started cannot be said") {
+		t.Errorf("the 504 is said as %s", errs)
+	}
+}
+
+// A dispatch lost and requeued, and an attempt failed and retried, between two readings are
+// still narrated: they are rows the current one replaced, and news all the same.
+func TestWhatHappenedBetweenTwoReadingsIsNarrated(t *testing.T) {
+	dir := repository(t)
+	requeued := aTask(agk.TaskRunning, nil)
+	lost := aTask(agk.TaskLost, nil)
+	failed := aTask(agk.TaskFailed, new(3))
+	retried := aTask(agk.TaskRunning, nil)
+	retried.Attempt = 2
+	succeeded := retried
+	succeeded.State, succeeded.ExitCode, succeeded.FinishedAt = agk.TaskSucceeded, new(0), runStart.Add(1400*time.Millisecond)
+	s := &standIn{readings: []db.RunDetail{
+		runReading(agk.Running, agk.VerdictRunning, aTask(agk.TaskRunning, nil)),
+		runReading(agk.Running, agk.VerdictRunning, lost, requeued),
+		runReading(agk.Running, agk.VerdictRunning, lost, failed, retried),
+		runReading(agk.Succeeded, agk.VerdictSucceeded, lost, failed, succeeded),
+	}}
+	url := installationAt(t, s)
+
+	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitSucceeded {
+		t.Fatalf("agk run answered %d: %s", code, errs)
+	}
+	for _, want := range []string{"normalize  | lost", "normalize  | failed, exit code 3"} {
+		if strings.Count(errs, want) != 1 {
+			t.Errorf("the narration does not say %q once:\n%s", want, errs)
 		}
 	}
 }

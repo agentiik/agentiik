@@ -65,7 +65,16 @@ func reach(e Env, server string) (remote, bool) {
 func checkAddress(where string) error {
 	u, err := url.Parse(where)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		return fmt.Errorf("%q is not an installation's address: write it https://agentiik.example.com", where)
+		shown := fmt.Sprintf("%q", where)
+		switch {
+		case err == nil && u.User != nil:
+			shown = fmt.Sprintf("%q", u.Redacted())
+		case err != nil && strings.Contains(where, "@"):
+			shown = "the address given"
+		case err == nil && u.Host == "" && strings.Contains(where, "@"):
+			shown = "the address given"
+		}
+		return fmt.Errorf("%s is not an installation's address: write it https://agentiik.example.com", shown)
 	}
 	if u.User != nil {
 		return errors.New("the installation's address carries a user, and the credential is AGENTIIK_TOKEN's alone: write it without one")
@@ -108,6 +117,23 @@ func (r remote) request(ctx context.Context, method, path string, body io.Reader
 // the connection and never answered is not waited on for ever.
 const answerTimeout = time.Minute
 
+// client is how every request to an installation is sent, with the timeout given, none for a
+// stream, which lasts as long as its step.
+//
+// It follows no redirect. Go's client carries Authorization on to a redirect whose host is the
+// same, whatever its scheme, so an https address answered with a redirect to http on the same
+// host, which a proxy misreading X-Forwarded-Proto gives, would send the token across the network
+// in clear, and a 307 would send a run's inputs and a push's tree after it. An installation's
+// address is the one it is configured with, and a redirect is answered as the refusal it is.
+func client(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 // errUnreachable is an installation that did not answer at all, which is no outcome rather than
 // a refusal: nothing it said can be read as a verdict.
 var errUnreachable = errors.New("the installation could not be reached")
@@ -132,7 +158,7 @@ func (r remote) getJSON(ctx context.Context, path string, out any) error {
 // do sends one request and decodes an answer of the status expected into out, where out is not
 // nil. Any other status is a *refused, and no answer at all is errUnreachable.
 func (r remote) do(req *http.Request, want int, out any) error {
-	answer, err := (&http.Client{Timeout: answerTimeout}).Do(req)
+	answer, err := client(answerTimeout).Do(req)
 	if err != nil {
 		return fmt.Errorf("%w at %s: %v", errUnreachable, r.base, err)
 	}
@@ -158,6 +184,9 @@ func refusedBy(answer *http.Response) *refused {
 	json.NewDecoder(io.LimitReader(answer.Body, 64<<10)).Decode(&said)
 	if said.Error == "" {
 		said.Error = answer.Status
+	}
+	if answer.StatusCode >= 300 && answer.StatusCode < 400 {
+		said.Error = fmt.Sprintf("the installation answered %s, a redirect, and a request carrying the credential follows none: give --server or %s the address the installation is served at", answer.Status, serverVariable)
 	}
 	return &refused{status: answer.StatusCode, said: said.Error}
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -237,5 +239,52 @@ func TestEveryStepOfARunIsFollowedWhenNoneIsNamed(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("agk logs wrote\n%s\nwithout %q", out, want)
 		}
+	}
+}
+
+// A stream that opens and is cut before it says anything, as a step waiting on another is behind a
+// proxy that ends connections after thirty seconds, is followed for as long as it keeps opening:
+// only an installation that does not open it is counted towards giving up.
+func TestAStreamThatKeepsOpeningIsNeverGivenUpOn(t *testing.T) {
+	var script []func(http.ResponseWriter, *http.Request)
+	for range 3 * logGiveUpAfter {
+		script = append(script, streaming(": keep-alive\n\n"))
+	}
+	script = append(script, streaming(dispatchEvent(firstDispatch, 1), lineEvent(firstDispatch, 1, 1, "at last"), endOf(firstDispatch, 1, false), stepOver))
+	s := &streamStandIn{scripts: map[string][]func(http.ResponseWriter, *http.Request){"normalize": script}}
+	code, out, errs := followLogs(t, s, aRun, "normalize")
+	if code != exitSucceeded {
+		t.Fatalf("a stream cut while it waited answered %d: %s", code, errs)
+	}
+	if out != "normalize | at last\n" {
+		t.Errorf("agk logs wrote %s", out)
+	}
+}
+
+// A step refused before an interrupt stays refused: the interrupt ends the following of the
+// others, and the exit code still says one was never read.
+func TestAnInterruptKeepsARefusalAlreadySaid(t *testing.T) {
+	s := &streamStandIn{scripts: map[string][]func(http.ResponseWriter, *http.Request){
+		"normalize": {func(w http.ResponseWriter, r *http.Request) {
+			streaming(dispatchEvent(firstDispatch, 1))(w, r)
+			<-r.Context().Done()
+		}},
+	}, resumed: map[string][]string{}}
+	srv := httptest.NewServer(http.HandlerFunc(s.serve))
+	t.Cleanup(srv.Close)
+	quickly(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	errs := &written{}
+	go func() {
+		for !strings.Contains(errs.String(), "typo:") {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	code := run(ctx, Env{Out: io.Discard, Err: errs, Dir: t.TempDir(), Getenv: func(k string) string {
+		return map[string]string{tokenVariable: "the-token", serverVariable: srv.URL}[k]
+	}}, []string{"logs", aRun, "typo", "normalize"})
+	if code != exitRefused {
+		t.Errorf("an interrupt after a refusal answered %d: %s", code, errs)
 	}
 }
