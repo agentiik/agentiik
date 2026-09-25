@@ -227,11 +227,12 @@ func TestOnlyTheClassicStoreSaysAnImageWasNeverPushed(t *testing.T) {
 	}
 }
 
-// TestAPullARegistryRefusedIsToldApartFromOneThatFailed holds IsPullDenied to what Docker
-// 29.8 answered for an anonymous pull of a private or missing repository on four registries,
-// to a refusal that arrives inside the progress stream, and to failures that are not a
-// registry refusing anybody.
+// TestAPullARegistryRefusedIsToldApartFromOneThatFailed holds IsPullDenied to the refusals
+// its comment lists, to one that arrives inside the progress stream, and to failures that
+// are not a registry refusing anybody: the daemon's own 403, and an image whose name happens
+// to hold one of the words.
 func TestAPullARegistryRefusedIsToldApartFromOneThatFailed(t *testing.T) {
+	const hex = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	for _, c := range []struct {
 		name   string
 		err    error
@@ -240,12 +241,20 @@ func TestAPullARegistryRefusedIsToldApartFromOneThatFailed(t *testing.T) {
 		{"Docker Hub", &docker.Error{Status: 404, Message: "pull access denied for acme/private, repository does not exist or may require 'docker login'"}, true},
 		{"ghcr.io", &docker.Error{Status: 500, Message: "error from registry: denied\ndenied"}, true},
 		{"GitLab", &docker.Error{Status: 403, Message: "error from registry: access forbidden"}, true},
-		{"quay.io", &docker.Error{Status: 500, Message: `unknown: failed to resolve reference "quay.io/acme/private@sha256:00": unexpected status from HEAD request to https://quay.io/v2/acme/private/manifests/sha256:00: 401 Unauthorized`}, true},
+		{"quay.io", &docker.Error{Status: 500, Message: `unknown: failed to resolve reference "quay.io/acme/private` + hex + `": unexpected status from HEAD request to https://quay.io/v2/acme/private/manifests/sha256:00: 401 Unauthorized`}, true},
+		{"a 403 from a registry", &docker.Error{Status: 500, Message: `unknown: failed to resolve reference "registry.example/acme/private` + hex + `": unexpected status from HEAD request to https://registry.example/v2/acme/private/manifests/sha256:00: 403 Forbidden`}, true},
+		{"ECR", &docker.Error{Status: 500, Message: "Head \"https://123456789012.dkr.ecr.eu-west-3.amazonaws.com/v2/acme/private/manifests/sha256:00\": no basic auth credentials"}, true},
+		{"Artifact Registry", &docker.Error{Status: 500, Message: "Head \"https://europe-docker.pkg.dev/v2/acme/images/private/manifests/sha256:00\": denied: Unauthenticated request. Unauthenticated requests do not have permission \"artifactregistry.repositories.downloadArtifacts\""}, true},
 		{"a 401 with no words", &docker.Error{Status: 401}, true},
-		{"in the stream", errors.New("pulling ghcr.io/acme/private@sha256:00: unauthorized: authentication required"), true},
+		{"in the stream", errors.New("pulling ghcr.io/acme/private" + hex + ": unauthorized: authentication required"), true},
 		{"a disk", &docker.Error{Status: 500, Message: "failed to register layer: open /var/lib/docker/tmp: permission denied"}, false},
-		{"a manifest not found", &docker.Error{Status: 404, Message: `failed to resolve reference "mcr.microsoft.com/acme/x@sha256:00": not found`}, false},
-		{"a layer cut short", errors.New("pulling ghcr.io/acme/brick@sha256:00: failed to register layer: unexpected EOF"), false},
+		{"a disk, mid-sentence", &docker.Error{Status: 500, Message: "failed to register layer: permission denied: /var/lib/docker/tmp"}, false},
+		{"a manifest not found", &docker.Error{Status: 404, Message: `failed to resolve reference "mcr.microsoft.com/acme/x` + hex + `": not found`}, false},
+		{"a layer cut short", errors.New("pulling ghcr.io/acme/brick" + hex + ": failed to register layer: unexpected EOF"), false},
+		{"a layer cut short, of an image named for the word", errors.New("pulling ghcr.io/acme/unauthorized-api" + hex + ": failed to register layer: unexpected EOF"), false},
+		{"a tag named for the word", &docker.Error{Status: 500, Message: `failed to resolve reference "ghcr.io/acme/brick:denied` + hex + `": connection reset by peer`}, false},
+		{"an authorization plugin", &docker.Error{Status: 403, Message: "authorization denied by plugin opa-docker-authz: request rejected by administrative policy"}, false},
+		{"a proxy in front of the socket", &docker.Error{Status: 403, Message: "<html><body><h1>403 Forbidden</h1>\nRequest forbidden by administrative rules.\n</body></html>"}, false},
 		{"nothing", nil, false},
 	} {
 		if got := docker.IsPullDenied(c.err); got != c.denied {

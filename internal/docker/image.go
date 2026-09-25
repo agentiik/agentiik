@@ -75,39 +75,66 @@ func (c *Client) ImagePull(ctx context.Context, ref, auth string, onProgress fun
 // IsPullDenied says a pull failed because the registry would not serve the image to
 // whoever asked, which for a pull with no credentials is a registry that wants some.
 //
-// The status alone cannot say so. The daemon passes a registry's refusal on in four shapes,
-// which Docker 29.8 answered for an anonymous pull of a private or missing repository:
+// The status alone cannot say so. The daemon passes a registry's refusal on in these shapes,
+// the first four of which Docker 29.8 answered for an anonymous pull of a private or missing
+// repository, and the last three the containerd store's 403 and those registries' own
+// refusals of a pull with no credentials:
 //
-//	Docker Hub   404  pull access denied for <repository>, repository does not exist or may require 'docker login'
-//	ghcr.io      500  error from registry: denied
-//	GitLab       403  error from registry: access forbidden
-//	quay.io      500  ... unexpected status from HEAD request to https://quay.io/v2/...: 401 Unauthorized
+//	Docker Hub         404  pull access denied for <repository>, repository does not exist or may require 'docker login'
+//	ghcr.io            500  error from registry: denied
+//	GitLab             403  error from registry: access forbidden
+//	quay.io            500  ... unexpected status from HEAD request to https://quay.io/v2/...: 401 Unauthorized
+//	a 403 elsewhere    500  ... unexpected status from HEAD request to https://...: 403 Forbidden
+//	ECR                500  ... no basic auth credentials
+//	Artifact Registry  500  ... denied: Unauthenticated request ...
 //
 // and a refusal that comes after the 200 arrives in the progress stream, with no status at
-// all. So a 401 or a 403 is one, and so is any refusal whose message says a registry denied
-// access. Docker Hub's sentence also covers a repository that does not exist, since a
+// all. So a 401 is one, and so is a refusal whose message says a registry denied access. A
+// 403 alone is not: the daemon answers one of its own where an authorization plugin, or a
+// proxy in front of its socket, refuses the pull, and that is not a registry wanting
+// credentials. Docker Hub's sentence also covers a repository that does not exist, since a
 // registry will not say to somebody with no credentials whether a private one does.
+//
+// Every phrase read holds a space or ends in a colon, which a repository's name cannot, so
+// the name the message repeats is never read as the registry's words: an image called
+// unauthorized-api whose layer was cut short is not a registry refusing anybody.
 func IsPullDenied(err error) bool {
-	if IsDenied(err) {
-		return true
-	}
 	if err == nil {
 		return false
 	}
+	if status(err) == 401 {
+		return true
+	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unexpected status from") &&
+		(strings.Contains(message, "401 unauthorized") || strings.Contains(message, "403 forbidden")) {
+		return true
+	}
 	for _, said := range []string{
 		"pull access denied",
 		"error from registry: denied",
 		"access forbidden",
-		"denied: requested access",
-		"unauthorized",
+		"unauthorized:",
 		"authentication required",
+		"no basic auth credentials",
 	} {
 		if strings.Contains(message, said) {
 			return true
 		}
 	}
-	return false
+	// A registry's DENIED error reads "denied: " and the registry's own words, at the
+	// start of the message or after the daemon's "...: ". Anywhere else it is a sentence
+	// that happens to end a clause with the word, "permission denied: " among them.
+	for rest := message; ; {
+		i := strings.Index(rest, "denied: ")
+		if i < 0 {
+			return false
+		}
+		if before := rest[:i]; before == "" || strings.HasSuffix(before, ": ") || strings.HasSuffix(before, "\n") {
+			return true
+		}
+		rest = rest[i+len("denied: "):]
+	}
 }
 
 // failure is what a progress message says went wrong, or nothing where it reports
