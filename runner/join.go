@@ -43,6 +43,10 @@ type Joining struct {
 	// EnvPath, KeyPath and MemInfo are runner.env, the key and /proc/meminfo.
 	EnvPath, KeyPath, MemInfo string
 
+	// CredentialPath is where serve keeps the credential it renewed to, which join takes away.
+	// Empty is none.
+	CredentialPath string
+
 	// Socket is the daemon's, where empty is the one docker finds itself.
 	Socket string
 
@@ -174,6 +178,14 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 	}
 	if err := envFile.write(text); err != nil {
 		return Joined{}, spent(err)
+	}
+	// A credential serve renewed to belongs to the identity this join replaces, or to one long
+	// gone, and serve prefers it to runner.env, so it goes whatever runner it names. Before the
+	// key, whose directory it shares, so that the new key is never in place beside it.
+	if j.CredentialPath != "" {
+		if err := os.Remove(j.CredentialPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return Joined{}, spent(fmt.Errorf("runner: %s, which holds the credential an earlier runner of this host renewed to, cannot be taken away: %s", j.CredentialPath, reasonOf(err)))
+		}
 	}
 	// The key first, so that a runner.env is never in place without the key it was joined
 	// with. A replaced runner.env goes before either, since the two renames are not one: a
@@ -344,10 +356,13 @@ func (j Joining) unjoined(identity bool) error {
 	if j.Replace {
 		return nil
 	}
+	_, err := os.Lstat(j.KeyPath)
 	if identity {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("runner: %s holds a runner's identity and %s, the key it joined with, is gone, so this host cannot be that runner again: a host whose key is gone is a new runner.%s", j.EnvPath, j.KeyPath, again)
+		}
 		return fmt.Errorf("runner: this host has already joined, since %s holds a runner's identity.%s", j.EnvPath, again)
 	}
-	_, err := os.Lstat(j.KeyPath)
 	switch {
 	case err == nil:
 		return fmt.Errorf("runner: this host has already joined, since %s is there.%s", j.KeyPath, again)
