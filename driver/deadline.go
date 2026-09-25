@@ -388,8 +388,9 @@ func (p *pastDeadline) Unwrap() error { return p.err }
 // because the reason is the task's own clock and not a failure of anything: the step's
 // retry reads it as a timeout, as it would a container stopped at the same moment, and a
 // retry that finds the image already pulled starts at once. The log says why, since a
-// person reading a timed_out step with no container would otherwise look for one, and the
-// usage says how long the pull ran, although a result that ran no container carries none.
+// person reading a timed_out step with no container would otherwise look for one, and how
+// long the pull ran, since a result that ran no container carries no usage: the observer's
+// Event has it as well, for a caller that is not a runner.
 func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadline) (graph.Result, error) {
 	sink, closeSink, err := d.openLog(ctx, t)
 	if err != nil {
@@ -406,9 +407,17 @@ func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadl
 		log.note("the task was stopped while its image %s was being pulled, so no container was created for it", p.ref)
 	}
 	if state == agk.TaskTimedOut {
-		log.note("the step's deadline passed while its image %s was being pulled, so no container was created for it: %v", p.ref, p.err)
+		log.note("the step's deadline passed while its image %s was being pulled, %s, so no container was created for it: %v", p.ref, pullRan(p.pulled), p.err)
 	}
 	ref, _ := log.finish()
 	d.observe(ctx, Event{Task: t.ID, State: state, Log: ref, Usage: Usage{ImagePullMS: p.pulled}})
 	return graph.Result{Task: t.ID, State: state}, nil
+}
+
+// pullRan says how long a pull the deadline cut short had run, for the log of its ending.
+func pullRan(ms int64) string {
+	if ms == 0 {
+		return "before the pull had begun"
+	}
+	return fmt.Sprintf("after %d ms of pulling", ms)
 }

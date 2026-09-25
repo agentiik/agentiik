@@ -106,6 +106,11 @@ func IsPullDenied(err error) bool {
 		return true
 	}
 	message := strings.ToLower(err.Error())
+	// A proxy between the daemon and the registry that wants credentials of its own is
+	// the host's to configure, and namespace credentials would not satisfy it.
+	if strings.Contains(message, "proxy authentication required") {
+		return false
+	}
 	if strings.Contains(message, "unexpected status from") &&
 		(strings.Contains(message, "401 unauthorized") || strings.Contains(message, "403 forbidden")) {
 		return true

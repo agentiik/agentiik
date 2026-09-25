@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -425,6 +426,10 @@ func TestAPullPastTheDeadlineEndsTimedOutWithNoContainer(t *testing.T) {
 	}
 	if log := logs.String(); !strings.Contains(log, "deadline passed while its image") {
 		t.Errorf("the log says %q, and not why no container ran", log)
+	} else if said := fmt.Sprintf("after %d ms of pulling", ended.Usage.ImagePullMS); !strings.Contains(log, said) {
+		// A runner's result carries no usage where no container ran, so the log is the
+		// one place a server keeps how long the pull ran.
+		t.Errorf("the log says %q, and not %q", log, said)
 	}
 
 	var completed *Completed

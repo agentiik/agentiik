@@ -229,8 +229,8 @@ func TestOnlyTheClassicStoreSaysAnImageWasNeverPushed(t *testing.T) {
 
 // TestAPullARegistryRefusedIsToldApartFromOneThatFailed holds IsPullDenied to the refusals
 // its comment lists, to one that arrives inside the progress stream, and to failures that
-// are not a registry refusing anybody: the daemon's own 403, and an image whose name happens
-// to hold one of the words.
+// are not a registry refusing anybody: the daemon's own 403, a proxy's 407, and an image
+// whose name happens to hold one of the words.
 func TestAPullARegistryRefusedIsToldApartFromOneThatFailed(t *testing.T) {
 	const hex = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	for _, c := range []struct {
@@ -255,6 +255,7 @@ func TestAPullARegistryRefusedIsToldApartFromOneThatFailed(t *testing.T) {
 		{"a tag named for the word", &docker.Error{Status: 500, Message: `failed to resolve reference "ghcr.io/acme/brick:denied` + hex + `": connection reset by peer`}, false},
 		{"an authorization plugin", &docker.Error{Status: 403, Message: "authorization denied by plugin opa-docker-authz: request rejected by administrative policy"}, false},
 		{"a proxy in front of the socket", &docker.Error{Status: 403, Message: "<html><body><h1>403 Forbidden</h1>\nRequest forbidden by administrative rules.\n</body></html>"}, false},
+		{"a proxy on the way to the registry", &docker.Error{Status: 500, Message: `Get "https://ghcr.io/v2/": Proxy Authentication Required`}, false},
 		{"nothing", nil, false},
 	} {
 		if got := docker.IsPullDenied(c.err); got != c.denied {
