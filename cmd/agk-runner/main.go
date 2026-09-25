@@ -25,9 +25,10 @@ const (
 	// own code.
 	exitUsage = 2
 	// exitJoinAgain: the API refused the runner's credential, revoked past its grace, rotated
-	// past or never issued, and nothing the agent can do changes that. The unit lists it in
-	// RestartPreventExitStatus=, so that Restart=always does not bring back every few seconds
-	// an agent whose one heartbeat is refused, which is a retry loop run by systemd instead.
+	// past or never issued, and nothing the agent can do changes that. The unit the page gives
+	// lists it in RestartPreventExitStatus=, so that Restart=always does not bring back every
+	// few seconds an agent whose one heartbeat is refused, which is a retry loop run by systemd
+	// instead.
 	exitJoinAgain = 3
 )
 
