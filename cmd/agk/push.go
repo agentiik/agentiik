@@ -77,19 +77,11 @@ func push(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintln(e.Err, "--namespace is required: a workflow belongs to exactly one namespace")
 		return exitUsage
 	}
-	where := *server
-	if where == "" {
-		where = e.Getenv(serverVariable)
-	}
-	if where == "" {
-		fmt.Fprintf(e.Err, "no installation to push to: pass --server or set %s\n", serverVariable)
+	at, ok := reach(e, *server)
+	if !ok {
 		return exitUsage
 	}
-	token := e.Getenv(tokenVariable)
-	if token == "" {
-		fmt.Fprintf(e.Err, "no credential: set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
-		return exitUsage
-	}
+	where, token := at.base, at.token
 
 	path, err := entryOf(e, *entry)
 	if err != nil {
@@ -668,7 +660,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set("Content-Type", "application/json")
 
-	answer, err := (&http.Client{Timeout: 2 * time.Minute}).Do(r)
+	answer, err := client(2 * time.Minute).Do(r)
 	if err != nil {
 		return api.Pushed{}, fmt.Errorf("%s could not be reached: %w", url, err)
 	}
@@ -681,13 +673,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 		return pushed, nil
 	}
 
-	var said struct {
-		Error string `json:"error"`
-	}
-	json.NewDecoder(answer.Body).Decode(&said)
-	if said.Error == "" {
-		said.Error = answer.Status
-	}
+	said := refusedBy(answer)
 	switch answer.StatusCode {
 	case http.StatusUnauthorized:
 		return api.Pushed{}, fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
@@ -697,7 +683,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 		// guessing.
 		return api.Pushed{}, fmt.Errorf("no such namespace or workflow, or not yours")
 	}
-	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.Error)
+	return api.Pushed{}, fmt.Errorf("the installation refused the version: %s", said.said)
 }
 
 // commitOf is the commit a push names, as the whole hash git holds it under.

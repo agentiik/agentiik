@@ -59,16 +59,18 @@ func TestTheTableCarriesTheRunCommandWhereTheDocumentationWritesIt(t *testing.T)
 	}
 }
 
-func TestARunWithoutLocalIsRefusedAndSaysWhatIsMissing(t *testing.T) {
+// A run is local or on an installation, and one naming neither is a command line missing the flag
+// that says which, as a push missing its namespace is.
+func TestARunNamingNeitherKindIsACommandLineError(t *testing.T) {
 	code, out, errs := runner(t, t.TempDir(), "run")
-	if code != exitRefused {
-		t.Errorf("the exit code is %d, want %d: the command line was right and what is missing is on the other side of it", code, exitRefused)
+	if code != exitUsage {
+		t.Errorf("the exit code is %d, want %d: the command line does not say where to run", code, exitUsage)
 	}
 	if out != "" {
 		t.Errorf("a refusal reached standard output: %q", out)
 	}
-	if !strings.Contains(errs, "--local") {
-		t.Errorf("the refusal is %q, and it has to name the flag that runs something", errs)
+	if !strings.Contains(errs, "--local") || !strings.Contains(errs, "--namespace") {
+		t.Errorf("the refusal is %q, and it has to name both flags that run something", errs)
 	}
 }
 

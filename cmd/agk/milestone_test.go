@@ -12,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/cmd/agk/internal/diff"
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
 	"github.com/agentiik/agentiik/driver"
+	"github.com/agentiik/agentiik/internal/diff"
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
@@ -26,7 +26,7 @@ import (
 // It is a test and not a claim, so nothing here is faked. The workflow under
 // testdata/milestone is run by the command line itself, run(ctx, Env, args), against the
 // Docker daemon of this machine, twice, on one committed inputs file, and the envelopes the
-// two runs handed back are compared member by member through cmd/agk/internal/diff. The
+// two runs handed back are compared member by member through internal/diff. The
 // three bricks it runs are built here from plain Dockerfiles under testdata/milestone/bricks,
 // which is the image a laptop meets: nothing was pushed anywhere and nothing is pulled but
 // the base image. The helper mounted at /agk/bin/agk is built here too, for the architecture
