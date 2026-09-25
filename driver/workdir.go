@@ -343,9 +343,11 @@ const emptyKept = time.Hour
 // and the trees beside the tasks, and a work root is a directory somebody chose. A run is
 // one the record under the work root has a directory for, since a name that is merely
 // valid as a run identifier is nearly any name: an empty lost+found at the root of a
-// filesystem mounted for the work root is one, and the runner may remove it. Every key a
-// runner holds is written there before its directory is created, and the record keeps a
-// run for a week, far past the hour its skeleton waits. A directory is taken away with os.Remove, which refuses one that holds anything, so a
+// filesystem mounted for the work root is one, and the runner may remove it. A runner writes
+// every key there, as taken, before its task's directory is created; agk run --local holds
+// nothing and writes a key as it ends, and clears what is left when its session closes. The
+// record's prune keeps a run's directory for as long as the run is on the work root.
+// A directory is taken away with os.Remove, which refuses one that holds anything, so a
 // task's directory that could not be removed stays to be found. It is judged by the moment
 // it last changed as the walk found it, before a child the same sweep took away changed it
 // again, so that a run whose last step went empty an hour ago goes in the same sweep as

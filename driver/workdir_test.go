@@ -486,8 +486,8 @@ func dirsUnder(t *testing.T, dir string) []string {
 }
 
 // The sweep runs where the record is pruned, when an ending is written, the first one a driver
-// writes included: what an earlier run left an hour and more ago goes, and the parents of the
-// task that just ended, empty a moment ago, stay for the next attempt to find.
+// writes included, and what an earlier run left an hour and more ago goes. The task that just
+// ended still has its directory at that moment, which goes with its container after.
 func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
@@ -496,14 +496,10 @@ func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
 	if err := os.MkdirAll(skeleton, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// The key the earlier task was held under, still within the week the record keeps it.
-	entry := filepath.Join(r.work, KeysDir, "01JMZ8V1P9C3", "invoice", "1.json")
-	if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(entry, []byte(`{"idempotency_key":"01JMZ8V1P9C3/invoice/1"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// The record's directory of the run with nothing left in it, as a key forgotten on the
+	// way out of a task that never reached its container leaves it, or a week of silence.
+	// The prune that comes first leaves it while the run is still on the work root.
+	record(t, r.work, "01JMZ8V1P9C3")
 	long := time.Now().Add(-emptyKept - time.Minute)
 	for dir := skeleton; dir != r.work; dir = filepath.Dir(dir) {
 		if err := os.Chtimes(dir, long, long); err != nil {
@@ -527,6 +523,6 @@ func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
 		t.Errorf("the task's own directory is still there: %v", err)
 	}
 	if _, err := os.Stat(filepath.Dir(w.Root)); err != nil {
-		t.Errorf("the step of the task that just ended was swept, and the next attempt names it next: %v", err)
+		t.Errorf("the step of the task that just ended was swept with it: %v", err)
 	}
 }

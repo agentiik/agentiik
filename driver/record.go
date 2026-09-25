@@ -369,8 +369,16 @@ func (k *keys) prune(now time.Time) {
 		return nil
 	})
 	// Deepest first, and os.Remove rather than os.RemoveAll: a directory still holding a key
-	// stays.
+	// stays. So does a run's own while the work root still has the run's directories, since
+	// the record's runs are the ones sweep takes away, and a key forgotten on the way out of
+	// a task that never reached its container, or a week of silence, would otherwise leave
+	// them on the host for good.
 	for i := len(dirs) - 1; i >= 0; i-- {
+		if filepath.Dir(dirs[i]) == top {
+			if _, err := os.Lstat(filepath.Join(k.root, filepath.Base(dirs[i]))); err == nil {
+				continue
+			}
+		}
 		os.Remove(dirs[i])
 	}
 	k.pruned = now
