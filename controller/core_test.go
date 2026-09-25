@@ -346,6 +346,29 @@ func TestAServerRunEvaluatesTheWorkflowsVars(t *testing.T) {
 	}
 }
 
+// A number among the vars is the same number on every pass. The first pass reads the vars off the
+// graph, where a number is a json.Number as agk run --local keeps it throughout; every later pass
+// reads them out of the stored document, which decoded a number as a float64, so vars.n + 1 had
+// no overload there and archive, decided on the second pass, failed with 120.
+func TestANumberAmongTheVarsIsAnIntegerOnALaterPass(t *testing.T) {
+	document := strings.Replace(theWorkflow, "steps:\n", "vars:\n  n: 3\nsteps:\n", 1)
+	document = strings.Replace(document, "      - { step: normalize, port: ok, as: orders }\n", "      - { step: normalize, port: ok, as: orders }\n    if: ${{ vars.n + 1 == 4 }}\n", 1)
+	core, q, pool, _ := decidingOn(t, document)
+	createRun(t, pool)
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.taken()
+	if len(first) != 1 || first[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v, want normalize", first)
+	}
+	core.answer(t, succeeded(t, first[0], core.now()))
+	if second := q.taken(); len(second) != 1 || second[0].Step != "archive" {
+		t.Fatalf("the second pass published %+v, want archive, whose if reads vars.n + 1 as the integer 4", second)
+	}
+}
+
 // row is the task_id of the latest dispatch of a key, which is the one the runner answering it
 // in these tests took.
 func (co *Core) row(t *testing.T, key agk.TaskID) string {

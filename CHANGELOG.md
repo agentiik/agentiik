@@ -55,6 +55,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task stopped as `superseded` or `sibling_failed` while its run goes on is written `cancelled` in the pass that sends the stop, as the evaluator decides, so the heartbeat's `cancel` repeats it to a runner that missed it, a `fail_fast` step is judged at once, and the slot is free for that very pass, `db.Wide.Slots` leaving out the keys it ends. The runner's later report adds the exit code, the log and the usage, and nothing else, and later decisions keep them, a log's cut included.
 - A pass that changes nothing counts no decision and writes none, and a run decided with nothing on the clock is no longer swept: a result or a loss makes it due at once, and a pass that then finds nothing to decide puts its clock back. A loss of a task the evaluator already stopped wakes nothing. Such runs were decided and rewritten on every sweep.
 - A run on a server starts with the workflow's `vars`, as `agk run --local` does. A step reading `${{ vars.<name> }}` could not be built there, and failed with 120.
+- A stored run is read back with its numbers as `json.Number`, as the state it started from holds them, so `vars.n + 1` is an integer on every pass and not a double with no overload after the first.
 
 ### State
 

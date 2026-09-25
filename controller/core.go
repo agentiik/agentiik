@@ -505,7 +505,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	}
 
 	var doc Document
-	if err := json.Unmarshal(e.Document, &doc); err != nil {
+	if err := decode(e.Document, &doc); err != nil {
 		return nil, fmt.Errorf("controller: the document of run %s could not be read: %w", e.Run, err)
 	}
 	state, err := Rehydrate(ctx, doc, e.Namespace, co.objects, co.limits)
