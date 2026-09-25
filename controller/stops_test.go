@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -383,7 +384,7 @@ func TestAServerEndsAStoppedShardAsALocalRunDoes(t *testing.T) {
 					t.Fatalf("%s shard %d: %s", task.Step, task.Shard, err)
 				}
 				if state != want.State.String() || code == nil || *code != want.ExitCode {
-					t.Errorf("%s shard %d ended %s, exit %v, want %s, exit %d", task.Step, task.Shard, state, code, want.State, want.ExitCode)
+					t.Errorf("%s shard %d ended %s, exit %s, want %s, exit %d", task.Step, task.Shard, state, shownOf(code), want.State, want.ExitCode)
 				}
 			}
 			for step, want := range h.Steps {
@@ -443,7 +444,7 @@ func TestAStoppedRequeueAnsweredFromARecordTakesNoCode(t *testing.T) {
 		t.Fatalf("the recorded ending answered %s", err)
 	}
 	if state, runner, code := rowOf(t, super, requeued.Row); state != "cancelled" || runner != nil || code != nil {
-		t.Errorf("the stopped requeue reads %s, bound to %v, exit %v, after a record of another dispatch", state, runner, code)
+		t.Errorf("the stopped requeue reads %s, bound to %s, exit %s, after a record of another dispatch", state, shownOf(runner), shownOf(code))
 	}
 }
 
@@ -505,4 +506,12 @@ func TestAStopIsSentThoughThePassRefusesTheNextStepAPool(t *testing.T) {
 	if verdict != "failed" {
 		t.Errorf("ship is %q, and no pool carries gpu=a100", verdict)
 	}
+}
+
+// shownOf is what a column that may be null holds, for a failure to say.
+func shownOf[T any](v *T) string {
+	if v == nil {
+		return "null"
+	}
+	return fmt.Sprint(*v)
 }

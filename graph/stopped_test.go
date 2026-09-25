@@ -156,7 +156,7 @@ func TestTheReportOfAStoppedShardAddsItsExitCodeAndNothingElse(t *testing.T) {
 // never started a container, one that reported no code, and the ending of another dispatch.
 func TestAReportOfAStoppedShardWithNoContainerAddsNothing(t *testing.T) {
 	for name, r := range map[string]Result{
-		"lost":         {State: agk.TaskLost, FinishedAt: runAt},
+		"lost":         {State: agk.TaskLost, ExitCode: 143, StartedAt: runAt, FinishedAt: runAt},
 		"never ran":    {State: agk.TaskFailed, ExitCode: 125, FinishedAt: runAt},
 		"no exit code": {State: agk.TaskCancelled, NoExitCode: true, StartedAt: runAt, FinishedAt: runAt},
 		"requeued":     {State: agk.TaskCancelled, ExitCode: 143, Requeue: 1, StartedAt: runAt, FinishedAt: runAt},

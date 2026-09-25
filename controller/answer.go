@@ -263,7 +263,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	// evaluator stopped as superseded or sibling_failed ended when the stop went out, while the
 	// run went on, and its runner's report comes to a task that is over: the evaluator takes the
 	// exit code from it, once, and counts that, so the decision below writes the code and stamp
-	// the log and the usage. What a report it took nothing from may still say is where the log
+	// puts the log and the usage beside it. What a report it took nothing from may still say is where the log
 	// went and what it cost, as the report of a task a run's ending stopped does.
 	if state.Seq == e.Seq {
 		return co.stopReport(ctx, e.Namespace, a, bind)

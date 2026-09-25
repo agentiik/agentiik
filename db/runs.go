@@ -935,7 +935,8 @@ func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID,
 // only a cancellation's. A run that succeeded or failed has ended every step, and a step ends once
 // every shard of it has, except the one a merge: first superseded: that step is cancelled the
 // moment the barrier lifts on another edge, while its tasks are still in flight and only asked to
-// stop. The controller ends each one it knows was dispatched as its stop goes out, but a dispatch
+// stop. The evaluator ends each one it knows was dispatched, cancelled, as its stop goes out, and
+// the controller writes that, but a dispatch
 // whose publication it never saw acknowledged is pending in its document and may have been
 // redeemed all the same. Its runner's ending would then reach a run with nothing left to learn,
 // and the row would read dispatched or running for ever. "cancelled: Stopped because the run was
@@ -961,8 +962,9 @@ func (w *Wide) EndTasks(ctx context.Context, namespace string, run agk.RunID, at
 	return w.endTasks(ctx, namespace, run, agk.TaskCancelled, at)
 }
 
-// Stopped is what a runner reports of a dispatch the controller stopped: what the evaluator no
-// longer hears, since the task was over before the report came.
+// Stopped is what a runner reports of a dispatch the controller stopped that the evaluator does not
+// take: all of it for a task a run's ending stopped, and all but the exit code for one stopped
+// while the run went on, since the task was over before the report came.
 type Stopped struct {
 	// ExitCode is the code the container exited with, and nil where no container reported one.
 	ExitCode  *int

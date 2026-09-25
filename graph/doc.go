@@ -46,8 +46,8 @@
 // # Where the evaluator stops and the driver begins
 //
 // The evaluator stops at a decision and the driver begins at a container. A Plan is the
-// decision: the tasks that have become ready, the tasks in flight that should be
-// stopped, and the moment to ask again. Nothing in a Plan has happened yet, and calling
+// decision: the tasks that have become ready, the tasks that should be stopped, and the
+// moment to ask again. Nothing in a Plan has happened yet, and calling
 // Next twice with the same now returns the same Plan.
 //
 // With one exception, which is a rule of the language and so is decided here rather than by
@@ -116,7 +116,7 @@
 //
 // # Where the documentation is silent
 //
-// Fourteen readings are taken here, each recorded beside the rule that applies it rather
+// Fifteen readings are taken here, each recorded beside the rule that applies it rather
 // than only in this list, because otherwise whoever writes the driver, or the next reader
 // of a workflow file, settles them again and differently.
 //
@@ -172,6 +172,11 @@
 // run.attempt is 1. A replay is a new run and nothing moves out of a terminal run state,
 // so a run has one attempt; the attempt a container is on is the task's, which
 // AGK_ATTEMPT carries.
+//
+// What fail_fast does to the shards nobody has handed out yet. They never start: they end
+// cancelled with the ones in flight, a retry waiting out its backoff included, which is the
+// staged rollout the documentation describes, where fail_fast "stops it at the first broken
+// region". Its paragraph on fan-out names only "the shards still running".
 //
 // What becomes of a step that broke a rule of the language after the run had started: a
 // zip on envelopes of differing lengths, a batch too large to travel, a condition that

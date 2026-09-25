@@ -115,8 +115,10 @@ func TestALocalRunEndsAStoppedShardAsAServerDoes(t *testing.T) {
 					t.Errorf("%s shard %d never ran", task.Step, task.Shard)
 					continue
 				}
-				if sh.Task != want.State || sh.ExitCode != want.ExitCode || sh.NoExitCode {
-					t.Errorf("%s shard %d ended %s, exit %d, no exit code %t, want %s, exit %d", task.Step, task.Shard, sh.Task, sh.ExitCode, sh.NoExitCode, want.State, want.ExitCode)
+				// Every container here started, and the start is the driver's, which reaches
+				// a stopped shard only through the report the evaluator takes its code from.
+				if sh.Task != want.State || sh.ExitCode != want.ExitCode || sh.NoExitCode || sh.StartedAt.IsZero() {
+					t.Errorf("%s shard %d ended %s, exit %d, no exit code %t, started at %s, want %s, exit %d", task.Step, task.Shard, sh.Task, sh.ExitCode, sh.NoExitCode, sh.StartedAt, want.State, want.ExitCode)
 				}
 			}
 			for step, want := range h.Steps {
