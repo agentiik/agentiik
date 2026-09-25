@@ -28,6 +28,7 @@ import (
 	"io/fs"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -49,13 +50,38 @@ const treeBase = "agk://repo/"
 // Compiler compiles the JSON Schema documents a workflow writes, resolving every
 // reference against one repository tree.
 //
-// A Compiler is safe for concurrent use: it holds the tree and nothing else, and each
-// Compile builds its own evaluator. Compiling is not on the hot path of a run, it
-// happens once per input when a run starts, so a cache shared between calls would buy
-// little and would have to carry the duplicate-$id question that comes with compiling
-// two documents against one resource set.
+// A Compiler is safe for concurrent use, and each Compile builds its own evaluator, so
+// that no compiled resource is shared between two documents and the duplicate-$id
+// question that comes with compiling two documents against one resource set never
+// arises.
+//
+// What it does share is the files of the tree, read and parsed once for the Compiler's
+// life. A declaration is compiled one input at a time, at every start of a run on an
+// installation, and twenty inputs naming one schema file would otherwise read and parse
+// it twenty times: a megabyte schema named by forty inputs held 665 MiB for one request.
+// A parsed file is only read by what compiles against it, and a file is the same bytes
+// for as long as the tree is, which is the life of the Compiler.
+//
+// Parsing once is not compiling once: each document still compiles every file it
+// reaches, and compiling costs more than the bytes, since the library's time grows faster
+// than the square of a document's subschemas. So a Compiler may be given a weight it compiles
+// no more than, every document and every file each document reaches counted each time,
+// which is what NewCompilerWithin is for.
 type Compiler struct {
 	fsys fs.FS
+
+	mu      sync.Mutex
+	parsed  map[string]parsed
+	most    int64
+	reached int64
+}
+
+// parsed is one file of the tree as the loader first answered it, its failure included,
+// so that a file that could not be read is not asked for again by the next input.
+type parsed struct {
+	doc  any
+	size int64
+	err  error
 }
 
 // NewCompiler returns a Compiler that resolves references against fsys, the repository
@@ -66,7 +92,26 @@ type Compiler struct {
 // the file the reference names, and resolving it anywhere else is the network access
 // this package exists to rule out.
 func NewCompiler(fsys fs.FS) *Compiler {
-	return &Compiler{fsys: fsys}
+	return &Compiler{fsys: fsys, parsed: map[string]parsed{}}
+}
+
+// NewCompilerWithin returns a Compiler that refuses to compile more than most bytes of
+// schema in all, over every call: each document compiled, and each file a document
+// reaches, counted once for every document that reaches it.
+func NewCompilerWithin(fsys fs.FS, most int64) *Compiler {
+	c := NewCompiler(fsys)
+	c.most = most
+	return c
+}
+
+// charge counts n more bytes compiled, and refuses them past the Compiler's weight.
+// Called with mu held.
+func (c *Compiler) charge(n int64) error {
+	if c.most > 0 && c.reached+n > c.most {
+		return fmt.Errorf("the schemas compiled here reach past the %d bytes they may weigh in all, counting a file once for each document that reaches it", c.most)
+	}
+	c.reached += n
+	return nil
 }
 
 // Compile compiles one JSON Schema 2020-12 document, given as the JSON encoding of the
@@ -103,6 +148,13 @@ func (c *Compiler) CompileAt(document []byte, pointer string) (*Schema, error) {
 // compile is the one compilation path: the document is the resource, and the fragment
 // says which part of it is the schema.
 func (c *Compiler) compile(doc []byte, fragment string) (*Schema, error) {
+	c.mu.Lock()
+	err := c.charge(int64(len(doc)))
+	c.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("schema is not compiled: %w", err)
+	}
+
 	// UseNumber throughout, so that a large integer bound written in a schema is the
 	// number the author wrote and not the nearest float64 to it.
 	v, err := jsonschema.UnmarshalJSON(bytes.NewReader(doc))
@@ -115,7 +167,7 @@ func (c *Compiler) compile(doc []byte, fragment string) (*Schema, error) {
 	// says 2020-12 and a document that changes meaning when a dependency is upgraded is
 	// a version that no longer describes what ran.
 	jc.DefaultDraft(jsonschema.Draft2020)
-	jc.UseLoader(&treeLoader{fsys: c.fsys})
+	jc.UseLoader(&treeLoader{fsys: c.fsys, c: c})
 	if err := jc.AddResource(treeBase, v); err != nil {
 		return nil, fmt.Errorf("schema could not be read: %w", err)
 	}
@@ -192,6 +244,7 @@ func leaves(u jsonschema.OutputUnit, into []string) []string {
 // at compile time, so no run can be started by a schema fetched from somewhere.
 type treeLoader struct {
 	fsys fs.FS
+	c    *Compiler
 }
 
 func (l *treeLoader) Load(raw string) (any, error) {
@@ -217,9 +270,25 @@ func (l *treeLoader) Load(raw string) (any, error) {
 	if l.fsys == nil {
 		return nil, fmt.Errorf("reference to %q cannot be resolved: the run has no repository tree", name)
 	}
-	b, err := fs.ReadFile(l.fsys, name)
-	if err != nil {
-		return nil, fmt.Errorf("reference to %q is not in the repository tree: %w", name, err)
+	// Held for the whole read, so that two inputs naming one file at once read it once.
+	l.c.mu.Lock()
+	defer l.c.mu.Unlock()
+	p, held := l.c.parsed[name]
+	if !held {
+		b, err := fs.ReadFile(l.fsys, name)
+		if err != nil {
+			p.err = fmt.Errorf("reference to %q is not in the repository tree: %w", name, err)
+		} else {
+			p.size = int64(len(b))
+			p.doc, p.err = jsonschema.UnmarshalJSON(bytes.NewReader(b))
+		}
+		l.c.parsed[name] = p
 	}
-	return jsonschema.UnmarshalJSON(bytes.NewReader(b))
+	if p.err != nil {
+		return nil, p.err
+	}
+	if err := l.c.charge(p.size); err != nil {
+		return nil, fmt.Errorf("reference to %q: %w", name, err)
+	}
+	return p.doc, nil
 }

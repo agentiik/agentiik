@@ -314,6 +314,12 @@ func (w *Wide) Version(ctx context.Context, namespace, workflow, commit string) 
 	return readVersion(ctx, w.tx, namespace, workflow, commit)
 }
 
+// Tree reads the tree of one version and nothing else, for a namespaced caller: the API
+// starting a run, whose inputs are bound against schemas that may name files of it.
+func (n *NS) Tree(ctx context.Context, workflow, commit string) ([]TreeFile, error) {
+	return readTree(ctx, n.tx, n.namespace, workflow, commit)
+}
+
 // Tree reads the tree of one version and nothing else, for a redemption.
 //
 // Through the installation door because a runner works for several namespaces and learns which

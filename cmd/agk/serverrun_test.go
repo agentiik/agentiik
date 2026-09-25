@@ -52,6 +52,7 @@ type standIn struct {
 	cancels  int
 	outputs  map[string]string
 	start    int
+	refusal  string
 }
 
 func (s *standIn) serve(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +69,10 @@ func (s *standIn) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&s.started)
 		if s.start != 0 {
 			w.WriteHeader(s.start)
-			w.Write([]byte(`{"error":"the installation said no"}`))
+			if s.refusal == "" {
+				s.refusal = `{"error":"the installation said no"}`
+			}
+			w.Write([]byte(s.refusal))
 			return
 		}
 		w.Header().Set("Location", "/api/v1/finance/runs/"+aRun)
@@ -171,8 +175,8 @@ func aTask(state agk.TaskState, code *int) db.TaskSummary {
 	return t
 }
 
-// A run on an installation is of a commit and of the inputs as schema binds them, and it is
-// followed to its end in the words of a local run.
+// A run on an installation is of a commit and of the inputs as they were given, which the
+// installation binds, and it is followed to its end in the words of a local run.
 func TestARunOnAnInstallationIsStartedAndFollowedToItsEnd(t *testing.T) {
 	dir := repository(t)
 	write(t, dir, "agentiik.yaml", inputsWorkflow)
@@ -198,12 +202,9 @@ func TestARunOnAnInstallationIsStartedAndFollowedToItsEnd(t *testing.T) {
 	if s.started["commit"] != sha {
 		t.Errorf("the run was asked for commit %v, and HEAD is %s", s.started["commit"], sha)
 	}
-	inputs, _ := s.started["inputs"].(map[string]any)
-	if inputs["cycle"] != "2026-01" {
-		t.Errorf("the declared default was not applied before the run was asked for: %v", s.started["inputs"])
-	}
-	if orders, _ := inputs["orders"].([]any); len(orders) != 1 {
-		t.Errorf("the inputs asked for are %v", s.started["inputs"])
+	// As given, the default left to the installation, which binds every client's inputs alike.
+	if inputs, _ := json.Marshal(s.started["inputs"]); string(inputs) != `{"orders":[{"ref":"A-1"}]}` {
+		t.Errorf("the inputs asked for are %s", inputs)
 	}
 	for _, want := range []string{
 		"run " + aRun + " of finance/monthly-invoicing@" + short(sha) + " started at " + url,
@@ -225,13 +226,18 @@ func TestARunOnAnInstallationIsStartedAndFollowedToItsEnd(t *testing.T) {
 	}
 }
 
-// An input the declaration refuses is refused here, before any run exists, as a local run refuses
-// it: the API writes a run's inputs as they arrive.
-func TestAnInputTheDeclarationRefusesStartsNoRun(t *testing.T) {
+// An input the declaration refuses is refused by the installation, which binds it, and said in
+// the sentence a local run says it in, with the exit code of a refusal.
+func TestAnInputTheInstallationRefusesIsSaidAsALocalRunSaysIt(t *testing.T) {
 	dir := repository(t)
 	write(t, dir, "agentiik.yaml", inputsWorkflow)
 	commitAll(t, dir, "inputs")
-	s := &standIn{readings: []db.RunDetail{runReading(agk.Queued, agk.VerdictPending)}}
+	said := "input orders: required: no value supplied and the input declares no default; run refused"
+	s := &standIn{
+		start:    http.StatusUnprocessableEntity,
+		refusal:  `{"error":"` + said + `","input":"orders","rule":"required"}`,
+		readings: []db.RunDetail{runReading(agk.Queued, agk.VerdictPending)},
+	}
 	url := installationAt(t, s)
 
 	code, out, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
@@ -240,11 +246,11 @@ func TestAnInputTheDeclarationRefusesStartsNoRun(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.started != nil {
-		t.Errorf("a run was asked for with %v", s.started)
+	if s.started == nil {
+		t.Errorf("no run was asked for, and binding is the installation's")
 	}
-	if !strings.Contains(errs, "orders") {
-		t.Errorf("the refusal does not name the input: %s", errs)
+	if strings.TrimSpace(errs) != said {
+		t.Errorf("the refusal reads %q, and a local run says %q", errs, said)
 	}
 }
 

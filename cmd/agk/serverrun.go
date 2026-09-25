@@ -19,7 +19,6 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
 	"github.com/agentiik/agentiik/db"
-	"github.com/agentiik/agentiik/schema"
 )
 
 // agk run on an installation: the workflow a pushed commit holds, started there and followed
@@ -39,11 +38,11 @@ import (
 // installation as a version it does not have. --ref, a ref the installation resolves, arrives
 // with git hosting.
 //
-// The inputs are bound here, through package schema against the declared inputs the commit holds,
-// as a local run binds them: "already held to their declared schemas with required and default
-// applied" is what a run's inputs are when they are written, and the API writes them as they
-// arrive. So the workflow is read out of the commit, and never off the working copy, which may
-// hold another.
+// The inputs are sent as they were given, and the installation binds them against the declaration
+// the version was pushed with, by the same package schema a local run binds them with: every
+// client starts a run through that one route, and a refusal there is the same sentence a local run
+// prints, answered 422. The workflow is still read out of the commit, and never off the working
+// copy, which may hold another, since the run is asked for by the name it gives.
 //
 // # Following it
 //
@@ -83,7 +82,7 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 	}
 
 	// 1. The commit, and the workflow it holds, read out of git's objects as agk push reads
-	// them, so that the inputs are bound against the declaration that version was pushed with.
+	// them, so that the run is asked for by the name that version was pushed under.
 	path, err := entryOf(e, o.entry)
 	if err != nil {
 		refusal(e.Err, err)
@@ -122,18 +121,8 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 		return exitRefused
 	}
 
-	// 2. The inputs, exactly as a local run binds them.
-	declared, err := declaredInputs(wf, tree)
-	if err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
+	// 2. The inputs, read as a local run reads them and bound by the installation.
 	supplied, err := suppliedInputs(o.inputs, e.paths(o.inputFiles), e.path(o.document))
-	if err != nil {
-		refusal(e.Err, err)
-		return exitRefused
-	}
-	bound, err := schema.Bind(declared, supplied)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -141,7 +130,7 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 
 	// 3. The run.
 	workflow := string(wf.Metadata.Name)
-	run, err := start(ctx, at, o.namespace, workflow, sha, bound)
+	run, err := start(ctx, at, o.namespace, workflow, sha, supplied)
 	switch {
 	case errors.Is(err, errUnreachable):
 		fmt.Fprintf(e.Err, "%s\n", err)
@@ -213,6 +202,9 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 		case http.StatusNotFound:
 			// The same answer an inaccessible workflow gets, and a commit never pushed.
 			return "", fmt.Errorf("%s/%s@%s is not there, or not yours: a server runs a commit agk push registered, so push it first", namespace, workflow, short(sha))
+		case http.StatusUnprocessableEntity:
+			// An input the declaration refuses, in the sentence a local run prints for it.
+			return "", errors.New(r.said)
 		}
 		return "", fmt.Errorf("the installation refused the run: %s", r.said)
 	}
