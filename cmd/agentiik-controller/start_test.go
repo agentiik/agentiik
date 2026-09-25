@@ -75,6 +75,10 @@ func TestMain(m *testing.M) {
 // instanceConfig is what a test hands a process of its own.
 type instanceConfig struct {
 	Database, Bus, JWT, Seed, Objects string
+
+	// MetricsListen and MetricsTokenHash are where the metrics are answered and to whom, and
+	// empty for an instance that answers none.
+	MetricsListen, MetricsTokenHash string
 }
 
 // instance is the controller, as main runs it once the configuration is read: started the one way
@@ -92,6 +96,7 @@ func instance(raw string) int {
 			Objects:     s.Objects,
 			MaxRequeues: graph.DefaultMaxRequeues,
 			TaskCeiling: config.DefaultTaskCeiling,
+			Metrics:     config.Metrics{Listen: s.MetricsListen, TokenHash: s.MetricsTokenHash},
 		}, os.Stderr)
 	})
 }
@@ -559,7 +564,7 @@ func TestATermEndsAtTheFirstAnswerTheFenceRefuses(t *testing.T) {
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
 	o := options(c, queue, versionsOf(t, pool))
 	ended := make(chan error, 1)
-	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, logger(&log)) }()
+	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, logger(&log)) }()
 
 	// Once results are being taken, and the sweep a term begins with has had time to pass.
 	js := b.streams(t)
@@ -698,17 +703,17 @@ func TestTheServerProbesTheControllersConnections(t *testing.T) {
 		{dbtest.Application(super), "10"},
 		{dbtest.Application(super) + "?application_name=agentiik-controller&tcp_keepalives_idle=42", "42"},
 	} {
-		conn, err := pgx.Connect(t.Context(), withKeepalives(c.url))
+		conn, err := pgx.Connect(t.Context(), db.WithKeepalives(c.url))
 		if err != nil {
 			t.Fatal(err)
 		}
 		settings := map[string]string{}
-		for _, k := range keepalives {
+		for _, k := range db.Keepalives {
 			var v string
-			if err := conn.QueryRow(t.Context(), "select current_setting($1)", k.name).Scan(&v); err != nil {
+			if err := conn.QueryRow(t.Context(), "select current_setting($1)", k.Name).Scan(&v); err != nil {
 				t.Fatal(err)
 			}
-			settings[k.name] = v
+			settings[k.Name] = v
 		}
 		conn.Close(context.WithoutCancel(t.Context()))
 		if settings["tcp_keepalives_idle"] != c.idle || settings["tcp_keepalives_interval"] != "5" || settings["tcp_keepalives_count"] != "3" {

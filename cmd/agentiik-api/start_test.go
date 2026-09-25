@@ -30,12 +30,14 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest/dbname"
 	"github.com/agentiik/agentiik/secret"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
@@ -910,5 +912,39 @@ func TestStoppedWhileStartingTheAPIExitsZero(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := start(ctx, s, &stderr); code != exitStopped {
 		t.Errorf("stopped while it was reaching its database, the API exited %d: %s", code, stderr.String())
+	}
+}
+
+// The API asks the server to probe its sessions, so that one cut off while it holds the head of the
+// audit log's chain is dropped within half a minute rather than holding every audited act for two
+// hours.
+func TestTheServerProbesTheAPIsConnections(t *testing.T) {
+	database := freshDatabase(t)
+	if err := migrate(t.Context(), database, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "bus")
+	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	in, err := open(t.Context(), servingSettings(t, database.Application, dir, natsFrom(t, dir)), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.close()
+	err = in.pool.Session(t.Context(), func(ctx context.Context, conn *pgxpool.Conn) error {
+		for _, k := range db.Keepalives {
+			var v string
+			if err := conn.QueryRow(ctx, "select current_setting($1)", k.Name).Scan(&v); err != nil {
+				return err
+			}
+			if v != k.Value {
+				t.Errorf("an API session asks the server for %s = %s", k.Name, v)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

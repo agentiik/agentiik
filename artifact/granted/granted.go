@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/internal/tlsfloor"
 )
 
 // Objects is the store as one task sees it: Open reads what its redemption named, Put writes under
@@ -77,6 +78,14 @@ func New(o Options) (*Objects, error) {
 	}
 	if u, err := url.Parse(o.Uploads.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return nil, fmt.Errorf("granted: the upload policy is posted to %q, which is not an HTTP URL", o.Uploads.URL)
+	} else if plaintext(u) {
+		return nil, fmt.Errorf("granted: the upload policy is posted to %q, which is plain http to an address that is not this machine: %s", o.Uploads.URL, acrossTheNetwork)
+	}
+	// A presigned GET is not repeated, since its signature is the whole of its authorisation.
+	for key, raw := range o.Get {
+		if u, err := url.Parse(raw); err == nil && plaintext(u) {
+			return nil, fmt.Errorf("granted: object %s is read through plain http to an address that is not this machine: %s", key, acrossTheNetwork)
+		}
 	}
 	// key and file are the two parts the runner writes itself, and a policy carrying either
 	// would post a form naming it twice, with the store left to choose which one it meant.
@@ -88,7 +97,7 @@ func New(o Options) (*Objects, error) {
 
 	client := o.Client
 	if client == nil {
-		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}}
 	}
@@ -96,6 +105,16 @@ func New(o Options) (*Objects, error) {
 	policy.Fields = maps.Clone(o.Uploads.Fields)
 	return &Objects{get: maps.Clone(o.Get), policy: policy, client: client}, nil
 }
+
+// transport is what a client made here goes through: one pool of connections for every task, held
+// to the TLS floor.
+var transport = tlsfloor.Transport()
+
+// acrossTheNetwork is why a presigned URL in plain http is refused.
+const acrossTheNetwork = "an object crosses the network over https alone, and plain http is taken for a loopback address, which crosses none"
+
+// plaintext says whether a URL would carry an object in plaintext across a network.
+func plaintext(u *url.URL) bool { return u.Scheme != "https" && !tlsfloor.Loopback(u.Hostname()) }
 
 // Has answers false, for every key and with no request.
 //

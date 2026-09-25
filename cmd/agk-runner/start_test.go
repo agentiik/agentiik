@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -50,7 +54,9 @@ type host struct {
 	out, err *output
 	requests atomic.Int32
 	beat     atomic.Int32
-	notify   *net.UnixConn
+	// bearers is every credential a heartbeat carried.
+	bearers sync.Map
+	notify  *net.UnixConn
 }
 
 // newHost lays a host out around a daemon. policy is the text of runner.toml, and "" is no file.
@@ -63,6 +69,7 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
+		h.bearers.Store(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), true)
 		if status := int(h.beat.Load()); status != 0 {
 			w.WriteHeader(status)
 			return
@@ -83,6 +90,11 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		"",
 	}, "\n")
 	if err := os.WriteFile(envFile, []byte(joined), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The key join wrote beside it, which serve reads before the daemon.
+	keyFile := filepath.Join(dir, "runner.key")
+	if err := os.WriteFile(keyFile, aHostKey(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	policyFile := filepath.Join(dir, "runner.toml")
@@ -109,11 +121,28 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		Geteuid:    func() int { return 1000 },
 		EnvFile:    envFile,
 		PolicyFile: policyFile,
+		KeyFile:    keyFile,
+		// Where serve keeps a renewed credential, and nothing there.
+		CredentialFile: filepath.Join(dir, "credential"),
 		// Where the image installs the helper, and nothing there until a test puts one.
 		HelperFile: filepath.Join(dir, "agk-helper"),
 		Host:       installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoExec: true, NoSUID: true, NoDev: true}},
 	}
 	return h
+}
+
+// aHostKey is a private key as join writes one.
+func aHostKey(t *testing.T) []byte {
+	t.Helper()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
 // installed is the machine an agent installed as the page says finds, whoever runs the test:
@@ -316,6 +345,59 @@ func TestACredentialRefusedAtTheHeartbeatEndsTheStartSayingToJoinAgain(t *testin
 	}
 	if !strings.Contains(h.err.String(), "this runner's credential was refused: join it again with agk-runner join --replace") {
 		t.Errorf("the refusal does not say to join again:\n%s", h.err)
+	}
+}
+
+// "A host whose key is gone is a new runner": it can never renew its credential, so it is told to
+// join again before it asks the API anything, with the status that keeps systemd from starting it
+// again.
+func TestAHostWhoseKeyIsGoneIsToldToJoinAgainBeforeAnyRequest(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	if err := os.Remove(h.e.KeyFile); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if code := run(ctx, h.e, []string{"serve"}); code != exitJoinAgain {
+		t.Errorf("serve whose key is gone exited %d, want %d:\n%s", code, exitJoinAgain, h.err)
+	}
+	if n := h.requests.Load(); n != 0 {
+		t.Errorf("%d requests reached the API", n)
+	}
+	for _, want := range []string{h.e.KeyFile, "a host whose key is gone is a new runner", "agk-runner join --replace"} {
+		if !strings.Contains(h.err.String(), want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, h.err)
+		}
+	}
+}
+
+// The credential the agent renewed to is the one it carries, since runner.env, read-only to it,
+// still holds the one join wrote, which the API stopped taking once the renewed one was used. One
+// left by another runner refuses the start.
+func TestServeCarriesTheCredentialItRenewedTo(t *testing.T) {
+	const renewed = "agkrunner_Rn3wEdQkZ3v0bq8LrT2mN5pW7sD1fG4hJ6kA9cE0uI3o"
+	at := time.Now().UTC()
+	write := func(h *host, runnerID string) {
+		text := fmt.Sprintf(`{"runner":%q,"credential":%q,"rotated_at":%q,"rotate_by":%q}`+"\n",
+			runnerID, renewed, at.Format(time.RFC3339Nano), at.Add(720*time.Hour).Format(time.RFC3339Nano))
+		if err := os.WriteFile(h.e.CredentialFile, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	write(h, "runner-dmz-02")
+	h.serving(t)
+	var carried []string
+	h.bearers.Range(func(k, _ any) bool { carried = append(carried, k.(string)); return true })
+	if len(carried) != 1 || carried[0] != renewed {
+		t.Errorf("the heartbeats carried %d credentials, want the renewed one alone", len(carried))
+	}
+
+	h = newHost(t, daemon(t, true), secretsTmpfs)
+	write(h, "runner-lan-01")
+	if said := h.refused(t); !strings.Contains(said, h.e.CredentialFile) || strings.Contains(said, renewed) {
+		t.Errorf("a renewed credential of another runner was refused saying:\n%s", said)
 	}
 }
 
@@ -620,5 +702,21 @@ func TestAWorkRootMountedNoexecBindsNoHelper(t *testing.T) {
 	}
 	if !strings.Contains(h.err.String(), "is on a filesystem mounted noexec") {
 		t.Errorf("the agent's log does not say why script steps have no helper:\n%s", h.err)
+	}
+}
+
+// A daemon anywhere but on a local socket refuses the start, naming DOCKER_HOST and not
+// repeating the address, before anything reaches the API.
+func TestADaemonAcrossTheNetworkRefusesTheStartNamingDockerHost(t *testing.T) {
+	for _, address := range []string{"tcp://docker.example.com:2375", "tcp://admin:s3cr3t@10.0.0.7:2376", "ssh://admin@docker.example.com"} {
+		h := newHost(t, daemon(t, true), "")
+		h.set("DOCKER_HOST", address)
+		said := h.refused(t)
+		if !strings.Contains(said, "DOCKER_HOST names a daemon at") || !strings.Contains(said, "local unix socket alone") {
+			t.Errorf("a daemon at %s refused the start saying:\n%s", address, said)
+		}
+		if strings.Contains(said, "s3cr3t") || strings.Contains(said, "example.com") {
+			t.Errorf("the refusal repeats the address:\n%s", said)
+		}
 	}
 }

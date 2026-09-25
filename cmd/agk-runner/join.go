@@ -52,14 +52,19 @@ func join(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 
-	socket, _ := e.Lookup("DOCKER_HOST")
+	socket, err := dockerHost(e)
+	if err != nil {
+		fmt.Fprintln(e.Err, "agk-runner join: "+err.Error())
+		return exitRefused
+	}
 	joined, err := runner.Join(ctx, runner.Joining{
 		API: *api, Token: runner.Secret(*tokenFlag), Labels: *labels,
 		Lookup:  e.Lookup,
 		Replace: *replace,
 		Owner:   owner,
 		EnvPath: e.EnvFile, KeyPath: e.KeyFile, MemInfo: e.MemInfo,
-		Socket: socket,
+		CredentialPath: e.CredentialFile,
+		Socket:         socket,
 	})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {

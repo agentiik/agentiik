@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentiik/agentiik/internal/tlsfloor"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -169,6 +170,9 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 	if o.URL == "" {
 		return nil, nil, errors.New("bus: no bus address")
 	}
+	if err := CheckURL(o.URL); err != nil {
+		return nil, nil, err
+	}
 	options := []nats.Option{
 		nats.Name(o.Name),
 		nats.MaxReconnects(-1),
@@ -190,6 +194,17 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 	}
 	if inbox != "" {
 		options = append(options, nats.CustomInboxPrefix(inbox))
+	}
+	// The floor, on the configuration nats.go uses for a tls:// or wss:// server and for a
+	// server that insists on TLS. Not for a ws:// server on this machine, which nats.go would
+	// take a configuration as an order to speak TLS to. A loopback address reached in
+	// plaintext takes no server another one gossips, which could be anywhere and would be
+	// reached in plaintext too.
+	if !plainWebsocket(o.URL) {
+		options = append(options, func(n *nats.Options) error { n.TLSConfig = tlsfloor.Config(); return nil })
+	}
+	if !secure(o.URL) {
+		options = append(options, nats.IgnoreDiscoveredServers())
 	}
 	conn, err := nats.Connect(o.URL, options...)
 	if err != nil {

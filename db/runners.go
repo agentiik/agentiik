@@ -271,8 +271,8 @@ type Runner struct {
 	State       string `json:"state"`
 	DrainReason string `json:"drain_reason,omitempty"`
 
-	// Who ordered a drain and a revocation, and when, which the row keeps until the audit log
-	// records both.
+	// Who ordered a drain and a revocation, and when, which the row keeps for the inventory
+	// beside the audit log's record of each order.
 	DrainedBy string    `json:"drained_by,omitempty"`
 	DrainedAt time.Time `json:"drained_at,omitzero"`
 	RevokedBy string    `json:"revoked_by,omitempty"`
@@ -637,8 +637,8 @@ var ErrRunnerRevoked = errors.New("db: that runner is revoked")
 // now stands.
 //
 // "Results are accepted as usual; the runner takes nothing new but stays up." Who ordered it, when
-// and why are written on the row, where they are kept until the audit log records the order, and
-// the reason is what the heartbeat hands the runner for its own log. A runner already draining is
+// and why are written on the row, which the inventory answers, the audit log recording the order
+// beside it, and the reason is what the heartbeat hands the runner for its own log. A runner already draining is
 // answered as it stands, since the first order is the one it is obeying and a second would change
 // nothing it does. A revoked one is refused with ErrRunnerRevoked, because a drain is less than it
 // was already told and answering it would read as though the revocation had been lifted, and one

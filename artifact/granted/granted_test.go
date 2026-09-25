@@ -627,3 +627,39 @@ func TestNewRefusesAPolicyNothingCouldBePostedWith(t *testing.T) {
 		t.Errorf("a policy with a URL and a key prefix was refused: %s", err)
 	}
 }
+
+// An object crosses the network over https alone. Plain http is taken for a loopback address,
+// which crosses none, and refused anywhere else before any container runs, for the policy an
+// output is posted with and for every URL an input is read through, whose signature is not
+// repeated in the refusal.
+func TestNewRefusesAnObjectInPlaintextAcrossTheNetwork(t *testing.T) {
+	prefix := artifact.Prefix("finance")
+	key := prefix + strings.Repeat("a", 64)
+	for _, c := range []struct {
+		name    string
+		options granted.Options
+	}{
+		{"a policy posted in plain http", granted.Options{Uploads: artifact.Policy{URL: "http://agentiik.example.com/objects/finance", KeyPrefix: prefix}}},
+		{"a policy posted in plain http to an address", granted.Options{Uploads: artifact.Policy{URL: "http://10.0.0.7:8080/objects/finance", KeyPrefix: prefix}}},
+		{"an input read in plain http", granted.Options{
+			Uploads: artifact.Policy{URL: "https://agentiik.example.com/objects/finance", KeyPrefix: prefix},
+			Get:     map[string]string{key: "http://agentiik.example.com/objects/" + key + "?sig=s3cr3t"},
+		}},
+	} {
+		_, err := granted.New(c.options)
+		if err == nil || !strings.Contains(err.Error(), "https alone") {
+			t.Errorf("%s was answered %v", c.name, err)
+		} else if strings.Contains(err.Error(), "s3cr3t") {
+			t.Errorf("%s was refused repeating its signature: %v", c.name, err)
+		}
+	}
+	for _, where := range []string{"http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080", "https://agentiik.example.com"} {
+		o := granted.Options{
+			Uploads: artifact.Policy{URL: where + "/objects/finance", KeyPrefix: prefix},
+			Get:     map[string]string{key: where + "/objects/" + key},
+		}
+		if _, err := granted.New(o); err != nil {
+			t.Errorf("objects at %s were refused: %v", where, err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,9 +41,20 @@ type Agent struct {
 	// saying why is read where a timeout is not.
 	Ready func() error
 
+	// Key is the host's private key, and Held the credential Client carries and its window,
+	// which the agent renews ahead of its rotate_by with the key and keeps in CredentialFile.
+	// A nil Key renews nothing, which is a test's.
+	Key            ed25519.PrivateKey
+	Held           Held
+	CredentialFile string
+
 	// every is the heartbeat's interval and earlierFor how long an earlier agent's keys are
 	// named, zero being HeartbeatInterval and bus.AckWait, which a test shortens.
 	every, earlierFor time.Duration
+
+	// wait is how long one take waits for work, zero being the loop's own, which a test whose
+	// bus credentials last seconds shortens.
+	wait time.Duration
 }
 
 // Serve runs the agent until its context ends.
@@ -55,7 +67,8 @@ type Agent struct {
 // longer than the three intervals that have it declared lost. Then it asks the API for its bus
 // credential, listens for stops on it, publishes the kept results, and takes work until it is
 // stopped, heartbeating every interval throughout, and returns once every task it holds has been
-// answered or given up with it.
+// answered or given up with it. The runner credential is renewed at two thirds of its window and
+// the bus credential at three quarters of its life, both while the work goes on.
 //
 // Ready comes before the bus credential and not after it. The heartbeat is where the API says it
 // accepts this runner, and the credential is asked for with the same one; a bus not reachable yet is
@@ -142,7 +155,26 @@ func Serve(ctx context.Context, a Agent) error {
 		}
 	}()
 
-	b, err := OpenBus(ctx, a.Client, a.Config, say)
+	// The runner credential is renewed from the start, the one join wrote at once, since the
+	// agent was never told its window. A renewal refused for good ends the agent as a refused
+	// heartbeat does.
+	if a.Key != nil {
+		rotator := NewRotator(a.Client, a.Config.Runner, a.Key, a.CredentialFile, a.Held)
+		rotator.Log = say
+		rotator.Revoked = func() bool { return !beat.Drain().ResultsAcceptedUntil.IsZero() }
+		var rotating sync.WaitGroup
+		defer rotating.Wait()
+		defer stop(nil)
+		rotating.Add(1)
+		go func() {
+			defer rotating.Done()
+			if err := rotator.Run(ctx); err != nil {
+				stop(err)
+			}
+		}()
+	}
+
+	b, expires, err := OpenBus(ctx, a.Client, a.Config, say)
 	switch {
 	case errors.Is(err, ErrCredentialRefused):
 		return fmt.Errorf("runner: %s: %w", joinAgain, err)
@@ -151,8 +183,6 @@ func Serve(ctx context.Context, a Agent) error {
 	case b == nil:
 		return refused(ctx)
 	}
-	defer b.Close()
-	later.attach(b)
 
 	// Stops are listened for before anything is taken, since a task taken first could be
 	// stopped in the moment before anybody was listening, and for as long as Serve runs rather
@@ -164,8 +194,38 @@ func Serve(ctx context.Context, a Agent) error {
 	hearing, endHearing := context.WithCancel(context.WithoutCancel(ctx))
 	defer endHearing()
 	if err := stops.Hear(hearing, b); err != nil {
+		b.Close()
 		return err
 	}
+
+	// Everything that takes, publishes and says goes through tb, which replaces the connection
+	// ahead of its credential's expiry, the replacement heard from for stops before anything
+	// moves onto it. It is renewed for as long as Serve runs, as the heartbeat goes on, since
+	// the results of the wind-down are published on it.
+	tb := newTaskBus(b, expires, func(ctx context.Context) (busConn, time.Time, error) {
+		b, expires, err := dialBus(ctx, a.Client, a.Config)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if err := stops.Hear(hearing, b); err != nil {
+			b.Close()
+			return nil, time.Time{}, err
+		}
+		return b, expires, nil
+	}, say)
+	defer tb.Close()
+	later.attach(tb)
+	keepCtx, endKeep := context.WithCancel(context.WithoutCancel(ctx))
+	var keeping sync.WaitGroup
+	defer keeping.Wait()
+	defer endKeep()
+	keeping.Add(1)
+	go func() {
+		defer keeping.Done()
+		if err := tb.Keep(keepCtx); err != nil {
+			stop(err)
+		}
+	}()
 
 	// A result an earlier agent kept is published before anything new is taken, and one the bus
 	// does not take now goes out with the loop's later flushes.
@@ -173,7 +233,7 @@ func Serve(ctx context.Context, a Agent) error {
 		say(err.Error())
 	}
 
-	progress := NewProgress(a.Config.Runner, b, say)
+	progress := NewProgress(a.Config.Runner, tb, say)
 	a.Endings.Next = progress
 	var publishing sync.WaitGroup
 	defer publishing.Wait()
@@ -184,7 +244,7 @@ func Serve(ctx context.Context, a Agent) error {
 		progress.Run(ctx)
 	}()
 
-	loop.Queue, loop.Progress = b, progress
+	loop.Queue, loop.Progress = tb, progress
 	if err := loop.Run(ctx); err != nil {
 		return err
 	}
@@ -208,6 +268,7 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		},
 		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
 		Log:      say,
+		Wait:     a.wait,
 	}
 	// A result kept is of a task that has ended, so there is nothing of it to stop.
 	stops := &Stops{

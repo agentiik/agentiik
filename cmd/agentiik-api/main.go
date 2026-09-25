@@ -57,7 +57,7 @@ func signalled() (context.Context, context.CancelFunc) {
 // reads the environment, and is os.LookupEnv where nil.
 func run(ctx context.Context, args []string, lookup config.Lookup, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "%s: no verb, and it is told which of its four jobs to do\n", program)
+		fmt.Fprintf(stderr, "%s: no verb, and it is told which of its five jobs to do\n", program)
 		usage(stderr)
 		return exitUsage
 	}
@@ -85,6 +85,13 @@ func run(ctx context.Context, args []string, lookup config.Lookup, stdout, stder
 			return inDirectory[verb](rest[0], time.Now(), stdout, stderr)
 		}
 		fmt.Fprintf(stderr, "%s %s: it takes one argument, the directory holding the installation's bus identity, and was given %q\n", program, verb, rest)
+		usage(stderr)
+		return exitUsage
+	case "audit-verify":
+		if len(rest) == 1 && rest[0] != "" {
+			return auditVerify(rest[0], stdout, stderr)
+		}
+		fmt.Fprintf(stderr, "%s %s: it takes one argument, the file an export of the audit log was written to, and was given %q\n", program, verb, rest)
 		usage(stderr)
 		return exitUsage
 	default:
@@ -116,6 +123,7 @@ func usage(w io.Writer) {
   %[1]s migrate               apply the migrations, and create the role the API and the controller connect as
   %[1]s bus-init DIR          create the installation's NATS operator and accounts in DIR
   %[1]s bus-credential DIR    mint the control plane a new bus credential under the account in DIR
+  %[1]s audit-verify FILE     verify the chain of an audit log export, as its receiver wrote it down
 
 serve and migrate read their settings from AGK_* environment variables, as
 https://agentiik.github.io/docs/#configuration lists them. --version and --help take nothing else.

@@ -9,12 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/bus/control"
 	"github.com/agentiik/agentiik/controller"
@@ -62,49 +62,6 @@ func signalled() (context.Context, context.CancelFunc) {
 		stop()
 	}()
 	return ctx, stop
-}
-
-// keepalives are the settings every connection of the controller asks its server for, as run-time
-// parameters of the session, unless the URL sets them itself.
-//
-// The lock is held by a session, and PostgreSQL releases it when it notices the session is gone.
-// A controller that died or was cut off without a reset leaves nothing on the wire to notice, and
-// the server's own default is the operating system's, which on Linux probes an idle connection
-// after two hours. For all that time no standby could take over, and every run would wait. With
-// these the server probes a silent session after ten seconds and drops it after three unanswered
-// probes five seconds apart, so a standby takes over within half a minute.
-var keepalives = []struct{ name, value string }{
-	{"tcp_keepalives_idle", "10"},
-	{"tcp_keepalives_interval", "5"},
-	{"tcp_keepalives_count", "3"},
-}
-
-// withKeepalives adds the keepalives to a PostgreSQL URL that does not already set them.
-//
-// Added to the text rather than through net/url, which drops a parameter holding a ; without a
-// word and would lose a setting the operator wrote. pgx takes a parameter it has no use for as a
-// run-time parameter of the session, which is how these reach the server.
-func withKeepalives(conn string) string {
-	_, query, _ := strings.Cut(conn, "?")
-	set := map[string]bool{}
-	for pair := range strings.SplitSeq(query, "&") {
-		key, _, _ := strings.Cut(pair, "=")
-		set[strings.TrimSpace(key)] = true
-	}
-	separator := "&"
-	switch {
-	case !strings.Contains(conn, "?"):
-		separator = "?"
-	case strings.HasSuffix(conn, "?") || strings.HasSuffix(conn, "&"):
-		separator = ""
-	}
-	for _, k := range keepalives {
-		if !set[k.name] {
-			conn += separator + k.name + "=" + k.value
-			separator = "&"
-		}
-	}
-	return conn
 }
 
 // run is the whole program: the arguments, the configuration, and the exit code. lookup reads the
@@ -212,7 +169,7 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		return err
 	}
 
-	pool, err := db.Open(work, withKeepalives(c.Database.ConnString()))
+	pool, err := db.Open(work, db.WithKeepalives(c.Database.ConnString()))
 	if err != nil {
 		return ended(err)
 	}
@@ -231,6 +188,17 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		log.Warn("a message was taken off the queue without being handled", "subject", subject, "error", err)
 	}
 
+	// The metrics are answered from before the lock is held, so that a standby says it stands by
+	// and a scraper can tell a standby from a controller that is not there.
+	counts := newCounted(b, log)
+	if c.Metrics.Listen != "" {
+		stop, err := counts.serveMetrics(work, c.Metrics, log)
+		if err != nil {
+			return ended(err)
+		}
+		defer stop()
+	}
+
 	versions, err := version.New(pool, version.Options{})
 	if err != nil {
 		return err
@@ -247,28 +215,32 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		log.Warn("the controller met trouble with a run", "run", run, "error", err)
 	}
 	queue := control.New(b)
+	export := exporter(c.AuditExport, pool.AuditTrail(), log)
 
 	o := options(c, queue, versions)
-	exporter, err := tracer(c, name, log)
+	traces, err := tracer(c, name, log)
 	if err != nil {
 		return err
 	}
-	if exporter != nil {
+	if traces != nil {
 		// Whatever is still queued is sent on the way out, once the lock is already released,
 		// for five seconds at most: what the program sends on the way out is bounded, so that
 		// a supervisor's stop is not spent waiting on a collector, and what is left is dropped.
 		defer func() {
 			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			exporter.Close(flush)
+			traces.Close(flush)
 		}()
-		o.Tracer = exporter
+		o.Tracer = traces
 	}
 
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
 		log.Info("leading", "name", name, "term", term.Token)
-		return lead(ctx, ctl, term, queue, o, log)
+		defer counts.lead(ctl, term)()
+		o := o
+		o.Observer = counts
+		return lead(ctx, ctl, term, queue, o, export, log)
 	})
 	return ended(err)
 }
@@ -319,8 +291,26 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 	}
 }
 
+// exporter is what sends the audit log outside the installation, or nil where the configuration
+// names no sink, which is said at every start: the log is kept in the database either way, and
+// an installation whose own host may be unreadable after an incident has no other copy of it.
+func exporter(sink config.AuditExport, trail db.AuditTrail, log *slog.Logger) *audit.Exporter {
+	if sink.URL == "" {
+		log.Warn("the audit log is exported nowhere, and is kept only in the installation's own database: name a sink outside it in " + config.AuditExportURL)
+		return nil
+	}
+	return &audit.Exporter{
+		Source: trail, URL: sink.URL, Token: string(sink.Token),
+		Trouble: func(err error) {
+			log.Warn("the audit log could not be exported, and is tried again", "error", err)
+		},
+	}
+}
+
 // lead is one term: watching and sweeping on one side, taking results and progress back on the
-// other, until the fence refuses a write, either of them fails, or ctx is done.
+// other, until the fence refuses a write, either of them fails, or ctx is done. The audit log is
+// exported beside them for as long as the term lasts, by the one controller that leads, so that two
+// never race each other to the sink; a sink that fails ends nothing, and is tried again.
 //
 // Each goes through the core of the term, and neither ends it for a run or a result it could not
 // handle. Watch returns whatever the function it calls returns, so a notification about one run
@@ -328,7 +318,7 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 // the same run, would end the term, and the program with it, over one run; a sweep reports such a
 // run and moves on, and a notification is only a shortcut to what a sweep finds. So both are
 // reported and left to the next sweep, and only the fence ends the term.
-func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, log *slog.Logger) error {
+func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
 		return err
@@ -337,6 +327,20 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	done := make(chan error, 2)
+
+	if export != nil {
+		exported := make(chan struct{})
+		go func() {
+			defer close(exported)
+			export.Run(ctx)
+		}()
+		// Deferred after the cancel above, so it runs first: the term's context is cancelled,
+		// then the export is waited for, and a term never ends with its export still sending.
+		defer func() {
+			cancel(nil)
+			<-exported
+		}()
+	}
 
 	go func() {
 		done <- ctl.Watch(ctx, func(ctx context.Context, w controller.Wake) error {
