@@ -149,14 +149,10 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 type installation struct {
 	router *api.Router
 	close  func()
-}
 
-// applicationDatabase is the address the API connects to its database at, asking the server to
-// probe the session, as db.Keepalives says why: an act holds the head of the audit log's chain from
-// its append to its commit, and an API cut off in between would otherwise hold every other act of
-// the installation for the two hours the operating system waits.
-func applicationDatabase(c config.API) string {
-	return db.WithKeepalives(c.Database.ConnString())
+	// pool is the database the routes are served on, kept for a test to ask what its sessions
+	// are.
+	pool *db.Pool
 }
 
 // open connects to what the API stands on and builds every route on it.
@@ -170,7 +166,11 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		return nil, err
 	}
 
-	pool, err := db.Open(ctx, applicationDatabase(s.API))
+	// The server probes the API's sessions, as db.Keepalives says why: an act holds the head of the
+	// audit log's chain from its append to its commit, and an API cut off in between would
+	// otherwise hold every other act of the installation for the two hours the operating system
+	// waits.
+	pool, err := db.Open(ctx, db.WithKeepalives(s.Database.ConnString()))
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		closeAll()
 		return nil, err
 	}
-	return &installation{router: router, close: closeAll}, nil
+	return &installation{router: router, close: closeAll, pool: pool}, nil
 }
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,

@@ -131,6 +131,22 @@ create trigger audit_log_is_never_changed before update or delete on audit_log
 create trigger audit_log_is_never_truncated before truncate on audit_log
   for each statement execute function audit_log_is_kept();
 
+-- The head only moves forward, one entry at a time, for the role that migrated as well, which owns
+-- it: a head taken back would have the next append collide with an entry already written.
+create function audit_head_only_moves_forward() returns trigger
+  language plpgsql
+  as $$
+begin
+  if new.seq <> old.seq + 1 then
+    raise exception 'the audit log''s head is at entry % and only an append moves it, to entry %', old.seq, old.seq + 1;
+  end if;
+  return new;
+end
+$$;
+
+create trigger audit_head_only_moves_forward before update on audit_head
+  for each row execute function audit_head_only_moves_forward();
+
 create trigger audit_head_is_never_removed before delete on audit_head
   for each row execute function audit_log_is_kept();
 

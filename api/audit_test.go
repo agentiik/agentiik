@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
@@ -130,7 +131,11 @@ func TestASecretWriteIsRecordedWithoutItsValue(t *testing.T) {
 // installation, and an order given again is recorded as having changed nothing. The join token is
 // recorded by its identifier and never by itself.
 func TestRunnerPolicyAndOrdersAreRecorded(t *testing.T) {
-	h, pool := withRunners(t)
+	ro, _ := withGrace(t, 30*24*time.Hour, 10*time.Minute)
+	h, pool := ro.handler, ro.pool
+	// A clock finer than PostgreSQL's, as a real one is, so that an order is told apart from an
+	// earlier one by the moment PostgreSQL kept and not by the one the API read.
+	*ro.clock = ro.clock.Add(123 * time.Nanosecond)
 	if w, _ := call(t, h, "POST", "/api/v1/runner-pools", "admin", api.RunnerPool{Pool: api.Pool{
 		Name: "gpu", Labels: []string{"gpu=a100"}, Namespaces: []string{"finance"}, Ceilings: &api.Ceilings{CPU: "8"},
 	}}); w.Code != http.StatusCreated {
@@ -142,8 +147,9 @@ func TestRunnerPolicyAndOrdersAreRecorded(t *testing.T) {
 	}
 	token := issued["join_token"].(map[string]any)
 
-	runner, _ := joined(t, h, pool)
+	runner, _ := ro.joinedAs(t, host(1))
 	for _, verb := range []string{"drain", "drain", "revoke", "revoke"} {
+		*ro.clock = ro.clock.Add(time.Minute)
 		if w, _ := call(t, h, "POST", "/api/v1/runners/"+runner+"/"+verb, "admin", api.Order{Reason: "retired"}); w.Code != http.StatusOK {
 			t.Fatalf("%s answered %d: %s", verb, w.Code, w.Body)
 		}
@@ -207,6 +213,67 @@ func TestAnActThatCannotBeRecordedIsNotDone(t *testing.T) {
 		}
 		if w := sent(t, rt, "GET", "/api/v1/finance/secrets/billing", "alice", ""); w.Code != http.StatusNotFound {
 			t.Fatalf("a secret write that could not be recorded left a declaration: %d", w.Code)
+		}
+	})
+	t.Run("a manual trigger", func(t *testing.T) {
+		o := withOneRun(t)
+		refuseAppends(t, o.super)
+		w, _ := call(t, o.servedTo(t, everything{who: "admin"}), "POST", "/api/v1/finance/workflows/monthly-invoicing/runs", "admin",
+			api.Start{Commit: aCommit, Inputs: map[string]any{"orders": []any{}}})
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("a run whose trigger could not be recorded answered %d", w.Code)
+		}
+		var runs int
+		if err := dbtest.Superuser(t, o.super).QueryRow(t.Context(), `select count(*) from runs`).Scan(&runs); err != nil || runs != 1 {
+			t.Fatalf("a run whose trigger could not be recorded left %d runs: %v", runs, err)
+		}
+	})
+	t.Run("a secret removal", func(t *testing.T) {
+		pool, super := dbtest.Open(t)
+		if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
+			t.Fatal(err)
+		}
+		rt := router(t, everything{who: "alice"})
+		if _, err := api.NewDeclarations(rt, api.DeclarationOptions{Pool: pool, Values: &sealing{}}); err != nil {
+			t.Fatal(err)
+		}
+		if w := sent(t, rt, "PUT", "/api/v1/finance/secrets/billing", "alice", `{"provider":"builtin","value":"x"}`); w.Code != http.StatusCreated {
+			t.Fatalf("writing the secret answered %d", w.Code)
+		}
+		refuseAppends(t, super)
+		if w := sent(t, rt, "DELETE", "/api/v1/finance/secrets/billing", "alice", ""); w.Code != http.StatusInternalServerError {
+			t.Fatalf("a removal that could not be recorded answered %d", w.Code)
+		}
+		if w := sent(t, rt, "GET", "/api/v1/finance/secrets/billing", "alice", ""); w.Code != http.StatusOK {
+			t.Fatalf("a removal that could not be recorded removed the declaration: %d", w.Code)
+		}
+	})
+	t.Run("a pool created and a token issued", func(t *testing.T) {
+		h, _, super := runnersOn(t, everything{who: "admin"})
+		refuseAppends(t, super)
+		if w, _ := call(t, h, "POST", "/api/v1/runner-pools", "admin", api.RunnerPool{Pool: api.Pool{
+			Name: "gpu", Labels: []string{"gpu=a100"}, Namespaces: []string{"finance"}, Ceilings: &api.Ceilings{CPU: "8"},
+		}}); w.Code != http.StatusInternalServerError {
+			t.Fatalf("a pool whose creation could not be recorded answered %d", w.Code)
+		}
+		if w, _ := call(t, h, "POST", "/api/v1/runner-pools/dmz/join-tokens", "admin", api.Issue{}); w.Code != http.StatusInternalServerError {
+			t.Fatalf("a token whose issue could not be recorded answered %d", w.Code)
+		}
+		var pools, tokens int
+		conn := dbtest.Superuser(t, super)
+		if err := conn.QueryRow(t.Context(), `select (select count(*) from runner_pools where name = 'gpu'), (select count(*) from join_tokens)`).Scan(&pools, &tokens); err != nil || pools != 0 || tokens != 0 {
+			t.Fatalf("acts that could not be recorded left %d pools and %d tokens: %v", pools, tokens, err)
+		}
+	})
+	t.Run("a drain", func(t *testing.T) {
+		h, pool, super := runnersOn(t, everything{who: "admin"})
+		runner, _ := joined(t, h, pool)
+		refuseAppends(t, super)
+		if w, _ := call(t, h, "POST", "/api/v1/runners/"+runner+"/drain", "admin", api.Order{Reason: "retired"}); w.Code != http.StatusInternalServerError {
+			t.Fatalf("a drain that could not be recorded answered %d", w.Code)
+		}
+		if held := inventoried(t, h, runner); held["state"] != "ready" {
+			t.Fatalf("a drain that could not be recorded left the runner %v", held["state"])
 		}
 	})
 	t.Run("a revocation", func(t *testing.T) {

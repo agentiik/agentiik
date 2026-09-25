@@ -134,8 +134,10 @@ func TestNoRoleChangesOrRemovesAnEntry(t *testing.T) {
 		`delete from audit_log`,
 		`truncate audit_log`,
 		`delete from audit_head`,
+		`update audit_head set seq = 0`,
+		`update audit_head set seq = seq + 5`,
 	} {
-		if _, err := super.Exec(t.Context(), stmt); err == nil || !strings.Contains(err.Error(), "append-only") {
+		if _, err := super.Exec(t.Context(), stmt); err == nil || !strings.Contains(err.Error(), "append") {
 			t.Errorf("the owner ran %q and was answered %v", stmt, err)
 		}
 	}

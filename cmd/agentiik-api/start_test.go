@@ -37,6 +37,7 @@ import (
 	"github.com/agentiik/agentiik/secret"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
@@ -922,18 +923,28 @@ func TestTheServerProbesTheAPIsConnections(t *testing.T) {
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	conn, err := pgx.Connect(t.Context(), applicationDatabase(config.API{Database: database.Application}))
+	dir := filepath.Join(t.TempDir(), "bus")
+	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	in, err := open(t.Context(), servingSettings(t, database.Application, dir, natsFrom(t, dir)), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close(context.WithoutCancel(t.Context()))
-	for _, k := range db.Keepalives {
-		var v string
-		if err := conn.QueryRow(t.Context(), "select current_setting($1)", k.Name).Scan(&v); err != nil {
-			t.Fatal(err)
+	defer in.close()
+	err = in.pool.Session(t.Context(), func(ctx context.Context, conn *pgxpool.Conn) error {
+		for _, k := range db.Keepalives {
+			var v string
+			if err := conn.QueryRow(ctx, "select current_setting($1)", k.Name).Scan(&v); err != nil {
+				return err
+			}
+			if v != k.Value {
+				t.Errorf("an API session asks the server for %s = %s", k.Name, v)
+			}
 		}
-		if v != k.Value {
-			t.Errorf("an API session asks the server for %s = %s", k.Name, v)
-		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
