@@ -323,6 +323,29 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 	}
 }
 
+// A run on a server evaluates the workflow's vars as agk run --local does. The controller started
+// every run with none, so a step reading ${{ vars.x }} could not be built and failed with 120 on a
+// server while the same workflow succeeded locally, which the conformance test of package e2e
+// found running v0.1.0's milestone fixture.
+func TestAServerRunEvaluatesTheWorkflowsVars(t *testing.T) {
+	document := strings.Replace(theWorkflow, "steps:\n", "vars:\n  customer: { customer_id: C-1042 }\nsteps:\n", 1)
+	document = strings.Replace(document, "orders: ${{ workflow.inputs.orders }}", "orders: ${{ vars.customer }}", 1)
+	core, q, pool, _ := decidingOn(t, document)
+	createRun(t, pool)
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 || taken[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v, want normalize fed from the workflow's vars", taken)
+	}
+	fed := taken[0].Inputs["orders"]
+	if len(fed.Items) != 1 || fed.Items[0].Data["customer_id"] != "C-1042" {
+		t.Errorf("normalize is fed %+v, want the one item vars.customer is", fed)
+	}
+}
+
 // row is the task_id of the latest dispatch of a key, which is the one the runner answering it
 // in these tests took.
 func (co *Core) row(t *testing.T, key agk.TaskID) string {

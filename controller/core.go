@@ -494,10 +494,14 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		// Nothing has decided this run, so it starts here. Admission, which is what
 		// queued is waiting on, is the concurrency group's and arrives with it; until
 		// then a run starts the moment the controller reaches it.
+		//
+		// The vars are the workflow's own, as agk run --local starts a run with them:
+		// there are no namespace variables to merge in yet. The state keeps them, so a
+		// resumed run reads the vars it started with and not the version's again.
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Limits: co.limits, MaxRequeues: new(co.requeues)}, now)
+		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues)}, now)
 	}
 
 	var doc Document

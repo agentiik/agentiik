@@ -833,7 +833,7 @@ func (in *Installation) Wait(run string, within time.Duration) Run {
 }
 
 // reasons reads the reason the controller's evaluation of run records for each step, as the
-// superuser. A reading that fails is itself the reason given, since it only ever explains a
+// superuser, out of the document it keeps the evaluator's state in. A reading that fails is itself the reason given, since it only ever explains a
 // failure and never makes one.
 func (in *Installation) reasons(run string) map[string]string {
 	out := map[string]string{}
@@ -844,7 +844,7 @@ func (in *Installation) reasons(run string) map[string]string {
 	defer conn.Close(context.WithoutCancel(in.ctx))
 	rows, err := conn.Query(in.ctx, `
 		select s.key, s.value->>'reason'
-		from runs r, jsonb_each(coalesce(r.evaluation->'steps', '{}'::jsonb)) s
+		from runs r, jsonb_each(coalesce(r.evaluation->'state'->'steps', '{}'::jsonb)) s
 		where r.namespace = $1 and r.id = $2 and s.value->>'reason' is not null`, Namespace, run)
 	if err != nil {
 		return map[string]string{"": err.Error()}
