@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/agentiik/agentiik/internal/tlsfloor"
 )
 
 // An installation, as the command line reaches it: where it is, the credential every request
@@ -127,12 +129,16 @@ const answerTimeout = time.Minute
 // address is the one it is configured with, and a redirect is answered as the refusal it is.
 func client(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 }
+
+// transport is what every request to an installation goes through, held to the TLS floor.
+var transport = tlsfloor.Transport()
 
 // errUnreachable is an installation that did not answer at all, which is no outcome rather than
 // a refusal: nothing it said can be read as a verdict.
