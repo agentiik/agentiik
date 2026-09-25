@@ -215,7 +215,11 @@ func (d *Docker) resolve(ctx context.Context, t graph.Task, bounded bool) (resol
 	defer cancel()
 	image, err := resolveImage(pulling, d.cli, d.cache, t, "", nil)
 	if charge, _ := Charged(err); err != nil && charge == ChargePlatform && ctx.Err() == nil && errors.Is(pulling.Err(), context.DeadlineExceeded) {
-		return resolved{}, &pastDeadline{deadline: t.Deadline, ref: image.Ref, pulled: image.PullMillis, err: err}
+		late := &pastDeadline{deadline: t.Deadline, ref: image.Ref, pulled: image.PullMillis, err: err}
+		if h := d.lookup(t.ID); h != nil {
+			late.stopped, late.stop = h.stoppedAs()
+		}
+		return resolved{}, late
 	}
 	return image, err
 }

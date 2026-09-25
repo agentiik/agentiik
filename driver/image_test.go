@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -539,6 +540,40 @@ func TestAStopDuringThePullIsNotReadAsATimeout(t *testing.T) {
 	if n := len(r.daemon.Created()); n != 0 {
 		t.Errorf("%d containers were created for a task called off during its pull", n)
 	}
+}
+
+// A stop that lands after the deadline cut the pull came second: the task ended timed_out,
+// which is what the step's retry on timeout reads, and a stop landing while that ending is
+// being written does not turn it into cancelled.
+func TestAStopAfterTheDeadlineCutThePullIsNotReadAsCancelled(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	images := map[string]dockertest.Image{ref: {Digest: imageDigest, Manifest: []byte(goodManifest), Remote: true, Layers: 4}}
+	r := newRunner(t, images, nil, dockertest.SlowPull(300*time.Millisecond))
+
+	task := oneTask(ref)
+	task.Deadline = time.Now().Add(200 * time.Millisecond)
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatalf("holding the task: %s", err)
+	}
+	// The ending's log is the first thing opened once the pull is cut, so a stop sent from
+	// there lands after the deadline and before the ending is told.
+	r.cfg.Logs = stopOnOpen{func() { r.Stop(context.Background(), graph.Stop{Task: task.ID, Reason: graph.StopCancelled}) }}
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil {
+		t.Fatalf("running: %s", err)
+	}
+	if result.State != agk.TaskTimedOut {
+		t.Errorf("the state is %s, and the deadline cut the pull before the stop landed", result.State)
+	}
+}
+
+// stopOnOpen is a log sink that sends a stop the moment a task's log is opened.
+type stopOnOpen struct{ stop func() }
+
+func (s stopOnOpen) OpenLog(context.Context, agk.TaskID) (io.WriteCloser, error) {
+	s.stop()
+	return nopCloser{io.Discard}, nil
 }
 
 // A manifest read the deadline cut short is the clock's doing and not the brick's: the task

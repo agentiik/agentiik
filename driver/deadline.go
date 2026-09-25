@@ -366,6 +366,12 @@ type pastDeadline struct {
 
 	// err is what the resolution answered once its context was done.
 	err error
+
+	// stopped is what a stop that had landed by the moment the pull came back made of the
+	// task, and stop says one had. It is read then and not once the ending is written,
+	// because a stop that lands after the deadline cut the pull came second.
+	stopped agk.TaskState
+	stop    bool
 }
 
 func (p *pastDeadline) Error() string {
@@ -392,14 +398,12 @@ func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadl
 	defer closeSink()
 	log := newLog(sink, newMasker(), d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
 	state := agk.TaskTimedOut
-	if h := d.lookup(t.ID); h != nil {
+	if p.stop {
 		// A stop that landed during the pull found no container to signal and was
 		// recorded, and the work was called off before its deadline came: that is
 		// what the task ended as, and a cancelled step is not retried as a timeout.
-		if stopped, ok := h.stoppedAs(); ok {
-			state = stopped
-			log.note("the task was stopped while its image %s was being pulled, so no container was created for it", p.ref)
-		}
+		state = p.stopped
+		log.note("the task was stopped while its image %s was being pulled, so no container was created for it", p.ref)
 	}
 	if state == agk.TaskTimedOut {
 		log.note("the step's deadline passed while its image %s was being pulled, so no container was created for it: %v", p.ref, p.err)
