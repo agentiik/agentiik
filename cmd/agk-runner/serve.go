@@ -71,6 +71,7 @@ func serve(ctx context.Context, e env, args []string) int {
 		WorkRoot: cfg.WorkDir,
 		Policy:   policy,
 		Observer: endings,
+		Logs:     runner.TaskLogs{},
 		Announce: log,
 		Host:     e.Host,
 	})
