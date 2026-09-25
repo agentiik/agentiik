@@ -41,8 +41,10 @@ const heartbeatPath = "/api/v1/runners/heartbeat"
 // a slow network.
 const clockSkew = time.Second
 
-// beatMaxTasks is how many keys one heartbeat names, which is what the API takes in one.
-const beatMaxTasks = MaxConcurrency
+// beatMaxTasks is how many keys one heartbeat names, "at most 4,096" as the page says and as the
+// API takes in one: a heartbeat naming more is refused whole. A test holds it at no fewer than
+// MaxConcurrency, so that a host holding as many tasks as it may never has one left out.
+const beatMaxTasks = 4096
 
 // keyForm is the wire's idempotencyKey, copied from wire.schema.json and held to it by a test. The
 // API refuses a whole heartbeat naming one key off it, so a key off it is left out rather than
@@ -174,6 +176,10 @@ func (h *Heartbeat) Drain() Drain {
 // earlier agent held are declared lost three intervals after its last heartbeat. Any other refusal
 // is the same on every try and ends the start: a 401 says the credential opens nothing, a 403 that
 // it is another runner's than the one runner.env names. A context that ends answers nil.
+//
+// Under systemd a start that waits here longer than the unit's start timeout is timed out and
+// restarted, and that is accepted: an API that does not answer hears no heartbeat either way, so
+// the restart loses nothing, and until it answers the runner is not one to count as started.
 func (h *Heartbeat) First(ctx context.Context) error {
 	wait := retryFirst
 	for {
@@ -234,10 +240,10 @@ func (h *Heartbeat) Beat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, h.every())
 	defer cancel()
 
-	now := h.now()
+	sent := h.now()
 	h.mu.Lock()
 	if h.first.IsZero() {
-		h.first = now
+		h.first = sent
 	}
 	state := "ready"
 	if h.drain.Ordered {
@@ -246,10 +252,7 @@ func (h *Heartbeat) Beat(ctx context.Context) error {
 		state = "draining"
 	}
 	h.mu.Unlock()
-	named := h.tasks(now)
-	// sent_at is read once the keys are gathered, which can wait on a result being written
-	// down, so that the time that took is not read as the clock's.
-	sent := h.now()
+	named := h.tasks(sent)
 
 	var a beatAnswer
 	err := h.Client.Do(ctx, http.MethodPost, heartbeatPath, beatRequest{
@@ -376,8 +379,11 @@ func (h *Heartbeat) ordered(a beatAnswer) {
 	was := h.drain
 	h.drain = d
 	h.mu.Unlock()
+	// Said again where the order changes while it stands, a drain followed by a revocation
+	// above all, whose reason and grace are what the host's journal is read for.
+	changed := d.Reason != was.Reason || !d.ResultsAcceptedUntil.Equal(was.ResultsAcceptedUntil)
 	switch {
-	case d.Ordered && !was.Ordered:
+	case d.Ordered && (!was.Ordered || changed):
 		s := "the API orders this runner to drain: it is to take nothing new and finish what it holds"
 		if d.Reason != "" {
 			s += ", because " + d.Reason

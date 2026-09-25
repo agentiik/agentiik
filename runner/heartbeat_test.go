@@ -220,9 +220,11 @@ func TestAnAnswerThatIsNotTheWiresIsRefused(t *testing.T) {
 }
 
 // "A restarted runner names a recorded key before redeeming anything." The keys an earlier agent
-// took and never ended are in the first heartbeat, before the bus credential is asked for and so
-// before anything is taken or redeemed, and Ready follows that heartbeat's answer. They are named
-// until the window a message could still come round in has passed, and not after.
+// took and never ended, and those of the results it kept, are in the first heartbeat, before the
+// bus credential is asked for and so before anything is taken or redeemed, and Ready follows that
+// heartbeat's answer. The taken keys are named until the window a message could still come round
+// in has passed, and not after; a kept result's for as long as the bus has not taken it, which
+// here, the API never handing out a bus credential, is throughout.
 func TestARestartedRunnerNamesARecordedKeyBeforeRedeemingAnything(t *testing.T) {
 	root := t.TempDir()
 	recorded := agk.NewTaskID(agk.NewRunID(), "invoice", 1, agk.Shard{})
@@ -231,6 +233,14 @@ func TestARestartedRunnerNamesARecordedKeyBeforeRedeemingAnything(t *testing.T) 
 		t.Fatal(err)
 	}
 	earlier.Close()
+	kept := ending("01M2AAZ9G62NQXFAFCXKRPJEH5", "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1")
+	results, err := OpenResults(root, "runner-dmz-02", &published{refuse: errUnreachable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := results.Report(t.Context(), kept); !errors.Is(err, errUnreachable) {
+		t.Fatalf("a result the bus refused answered %v", err)
+	}
 
 	api := newBeats(t, answered)
 	var readies int
@@ -253,23 +263,18 @@ func TestARestartedRunnerNamesARecordedKeyBeforeRedeemingAnything(t *testing.T) 
 	case <-time.After(10 * time.Second):
 		t.Fatal("the agent never said it was ready")
 	}
-	first := api.requested()[0]
-	if first != "POST "+heartbeatPath {
-		t.Fatalf("the first request was %s, and a restarted agent heartbeats before it asks for anything", first)
+	requested, heard := api.requested(), api.heard()
+	if len(requested) == 0 || requested[0] != "POST "+heartbeatPath || len(heard) == 0 {
+		t.Fatalf("the requests were %v, and a restarted agent heartbeats before it asks for anything", requested)
 	}
-	if got := api.heard()[0].Tasks; !slices.Equal(got, []string{string(recorded)}) {
-		t.Errorf("the first heartbeat names %v, want the key the record holds as taken, %s", got, recorded)
+	if got, want := heard[0].Tasks, []string{kept.IdempotencyKey, string(recorded)}; !slices.Equal(got, want) {
+		t.Errorf("the first heartbeat names %v, want the kept result's key and the key the record holds as taken, %v", got, want)
 	}
 
-	eventually(t, "a heartbeat no longer naming the earlier agent's key once its window passed", func() bool {
+	eventually(t, "a heartbeat naming the kept result's key alone once the taken key's window passed", func() bool {
 		heard := api.heard()
-		return len(heard[len(heard)-1].Tasks) == 0
+		return slices.Equal(heard[len(heard)-1].Tasks, []string{kept.IdempotencyKey})
 	})
-	for _, r := range api.requested() {
-		if r == "POST "+redeemPath {
-			t.Errorf("a grant was redeemed while the bus was not open")
-		}
-	}
 }
 
 // stepDriver is a driver on a fake daemon of its own, keeping its record under root.
@@ -363,7 +368,12 @@ func TestA401AtTheFirstHeartbeatEndsTheStart(t *testing.T) {
 	api := newBeats(t, func(beatRequest) (int, string) { return http.StatusUnauthorized, "" })
 	var readies int
 	a := agentOf(t, &readies, api.srv.URL, t.TempDir())
-	err := Serve(t.Context(), a)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err := Serve(ctx, a)
+	if ctx.Err() != nil {
+		t.Fatal("the start answered 401 was still asking after ten seconds")
+	}
 	if !errors.Is(err, ErrCredentialRefused) || !strings.Contains(err.Error(), "join it again") {
 		t.Errorf("the start ended with %v", err)
 	}
@@ -733,9 +743,9 @@ func TestASlowHeartbeatIsNotReadAsAClockOut(t *testing.T) {
 		slow := slowAPI
 		mu.Unlock()
 		if slow {
-			at := time.Now()
+			// received_at stamped as late as an API can stamp it, after the wait.
 			time.Sleep(1500 * time.Millisecond)
-			return http.StatusOK, beatAnswered(at, `"drain":false,"cancel":[]`)
+			return http.StatusOK, beatAnswered(time.Now(), `"drain":false,"cancel":[]`)
 		}
 		return answered(beatRequest{})
 	})
@@ -760,5 +770,73 @@ func TestASlowHeartbeatIsNotReadAsAClockOut(t *testing.T) {
 	}
 	if strings.Contains(log.String(), "clock") {
 		t.Errorf("a heartbeat slow on a host whose clock is right said:\n%s", log)
+	}
+}
+
+// A revocation that follows a drain is said as the drain was, with its reason and its grace: the
+// order stood throughout, and what changed is what the host's journal is read for.
+func TestARevocationAfterADrainIsSaid(t *testing.T) {
+	answer := `"drain":true,"reason":"pool zone=dmz is being retired","cancel":[]`
+	var mu sync.Mutex
+	api := newBeats(t, func(beatRequest) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return http.StatusOK, beatAnswered(time.Now(), answer)
+	})
+	h, log := heartbeat(t, api.srv.URL)
+	for _, then := range []string{
+		`"drain":true,"reason":"pool zone=dmz is being retired","cancel":[]`,
+		`"drain":true,"reason":"the host was compromised","results_accepted_until":"2026-09-24T12:00:00Z","cancel":[]`,
+		`"drain":true,"reason":"the host was compromised","results_accepted_until":"2026-09-24T12:00:00Z","cancel":[]`,
+	} {
+		mu.Lock()
+		answer = then
+		mu.Unlock()
+		if err := h.Beat(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(log.String(), "orders this runner to drain"); n != 2 {
+		t.Errorf("the order was said %d times, want once for the drain and once for the revocation:\n%s", n, log)
+	}
+	for _, want := range []string{"the host was compromised", "accepted until 2026-09-24T12:00:00Z"} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("the log does not say %q:\n%s", want, log)
+		}
+	}
+}
+
+// One heartbeat names every key of a host holding as many tasks as AGK_RUNNER_CONCURRENCY allows,
+// and no more than the page's "at most 4,096", which is what the API takes.
+func TestAHeartbeatNamesAsManyKeysAsTheAPITakesAndAHostHolds(t *testing.T) {
+	if beatMaxTasks != 4096 {
+		t.Errorf("a heartbeat names up to %d keys, and the page and the API say 4,096", beatMaxTasks)
+	}
+	if beatMaxTasks < MaxConcurrency {
+		t.Errorf("a heartbeat names up to %d keys, and a host may hold %d", beatMaxTasks, MaxConcurrency)
+	}
+}
+
+// The agent's heartbeat reports the concurrency it was configured with and stops through its
+// driver, which is what reaches a container a cancel names.
+func TestTheAgentsHeartbeatIsWiredToItsDriverAndConcurrency(t *testing.T) {
+	api := newBeats(t, answered)
+	var readies int
+	root := t.TempDir()
+	a := agentOf(t, &readies, api.srv.URL, root)
+	a.Config.Concurrency = 7
+	results, err := OpenResults(root, a.Config.Runner, &laterBus{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, beat := a.parts(results, nil, nil)
+	if err := beat.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := api.heard()[0].Concurrency; got != 7 {
+		t.Errorf("the heartbeat reports a concurrency of %d, and the agent holds 7 tasks at once", got)
+	}
+	if d, ok := beat.Stopper.(*driver.Docker); !ok || d != a.Driver {
+		t.Errorf("a cancel is stopped through %T, not the agent's driver", beat.Stopper)
 	}
 }

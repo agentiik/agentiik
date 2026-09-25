@@ -19,9 +19,9 @@ const Ready = "READY=1"
 // The unit is Type=notify, so systemd counts the agent as started only when it hears READY=1, and
 // a unit that never hears it is timed out and restarted. That is the point of it: a runner that
 // refused its daemon, could not read its settings or was refused by the API is a failed start in
-// systemctl status rather than an active service taking no work. It is the protocol of sd_notify(3), one datagram on a
-// unix socket, written here with the standard library because a libsystemd binding would be cgo,
-// and the agent is a static binary.
+// systemctl status rather than an active service taking no work. It is the protocol of
+// sd_notify(3), one datagram on a unix socket, written here with the standard library because a
+// libsystemd binding would be cgo, and the agent is a static binary.
 //
 // A socket name beginning with @ is in the abstract namespace, which is Linux's and which systemd
 // uses where it can. A vsock: address, which systemd 254 added for virtual machines, is refused
