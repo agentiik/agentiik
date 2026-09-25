@@ -874,13 +874,15 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	}
 }
 
-// A step a merge: first cancelled keeps the reason that cancelled it. Its task in flight
-// ended cancelled as the stop went out, but one handed out before its dispatch was recorded
-// is still pending in the state and can be lost all the same, and a loss past max_requeues
-// there fails nothing: the verdict is already cancelled, and a reason saying the step fails
-// would contradict it.
+// A step a merge: first cancelled keeps the reason that cancelled it. Its task handed out
+// before its dispatch was recorded ended cancelled as the barrier lifted, still pending in the
+// state, and a loss heard of it afterwards adds nothing. A document decided before the
+// evaluator ended such a shard still holds it pending, and a loss past max_requeues heard there,
+// before the next pass, fails nothing either: the verdict is already cancelled, and a reason
+// saying the step fails would contradict it.
 func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
-	e := started(t, `
+	for _, pending := range []bool{false, true} {
+		e := started(t, `
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata: { name: whichever, namespace: finance }
@@ -901,23 +903,29 @@ steps:
     outputs: [ok]
 `, Options{MaxRequeues: new(0)})
 
-	plan := next(t, e, runAt)
-	slow := taskOf(t, plan, "slow")
-	record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
-	next(t, e, runAt.Add(2*time.Minute))
-	cancelled := e.State().Steps["slow"]
-	if cancelled.Verdict != agk.VerdictCancelled {
-		t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
-	}
+		plan := next(t, e, runAt)
+		slow := taskOf(t, plan, "slow")
+		record(t, e, succeeded(taskOf(t, plan, "quick"), ports("ok", item("a1"))), runAt.Add(time.Minute))
+		next(t, e, runAt.Add(2*time.Minute))
+		cancelled := e.State().Steps["slow"]
+		if cancelled.Verdict != agk.VerdictCancelled {
+			t.Fatalf("slow is %s, want cancelled: its edge was abandoned and no other consumer needs it", cancelled.Verdict)
+		}
+		want := agk.TaskCancelled
+		if pending {
+			cancelled.Shards[0] = ShardState{Shard: cancelled.Shards[0].Shard, Attempt: 1}
+			want = agk.TaskLost
+		}
 
-	record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
-	next(t, e, runAt.Add(3*time.Minute))
-	st := e.State().Steps["slow"]
-	if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
-		t.Errorf("slow is %s because %q after its task was lost, and it was cancelled because %q", st.Verdict, st.Reason, cancelled.Reason)
-	}
-	if sh := st.Shards[0]; sh.Task != agk.TaskLost {
-		t.Errorf("the shard of slow is %s, and the loss is recorded where it happened", sh.Task)
+		record(t, e, Result{Task: slow.ID, State: agk.TaskLost, FinishedAt: runAt.Add(3 * time.Minute)}, runAt.Add(3*time.Minute))
+		next(t, e, runAt.Add(3*time.Minute))
+		st := e.State().Steps["slow"]
+		if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
+			t.Errorf("pending %t: slow is %s because %q after its task was lost, and it was cancelled because %q", pending, st.Verdict, st.Reason, cancelled.Reason)
+		}
+		if sh := st.Shards[0]; sh.Task != want {
+			t.Errorf("pending %t: the shard of slow is %s, want %s", pending, sh.Task, want)
+		}
 	}
 }
 
