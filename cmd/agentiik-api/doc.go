@@ -6,6 +6,7 @@
 //	agentiik-api migrate               apply the migrations and create the application role
 //	agentiik-api bus-init DIR          create the installation's NATS operator and accounts
 //	agentiik-api bus-credential DIR    mint the control plane a new bus credential
+//	agentiik-api audit-verify FILE     verify an export of the audit log
 //
 // Every rule it follows is somebody else's. Package api authorises and answers, package secret
 // seals and reads values, package artifact signs and keeps objects, package bus mints credentials
@@ -62,6 +63,14 @@
 // the controller read it at their next start. Both refuse a DIR its group or anybody else may write
 // to. They take the directory as their one argument rather than from the environment, since they
 // are run once by a person, and print the paths to name in the settings.
+//
+// # audit-verify
+//
+// It checks the chain of an export of the audit log, as whatever received it outside the
+// installation wrote it down, one entry per line, some perhaps twice. It reads that file and nothing
+// else, no setting and no database, since it is run away from the installation and most of all when
+// the installation's own host is in question. It prints how far the chain holds, or where it breaks
+// and exits 1.
 //
 // # Exit codes
 //

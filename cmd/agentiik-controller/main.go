@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/bus/control"
 	"github.com/agentiik/agentiik/controller"
@@ -238,11 +239,12 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		log.Warn("the controller met trouble with a run", "run", run, "error", err)
 	}
 	queue := control.New(b)
+	export := exporter(c.AuditExport, pool.AuditTrail(), log)
 
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
 		log.Info("leading", "name", name, "term", term.Token)
-		return lead(ctx, ctl, term, queue, options(c, queue, versions), log)
+		return lead(ctx, ctl, term, queue, options(c, queue, versions), export, log)
 	})
 	return ended(err)
 }
@@ -272,8 +274,26 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 	}
 }
 
+// exporter is what sends the audit log outside the installation, or nil where the configuration
+// names no sink, which is said at every start: the log is kept in the database either way, and
+// an installation whose own host may be unreadable after an incident has no other copy of it.
+func exporter(sink config.AuditExport, trail db.AuditTrail, log *slog.Logger) *audit.Exporter {
+	if sink.URL == "" {
+		log.Warn("the audit log is exported nowhere, and is kept only in the installation's own database: name a sink outside it in " + config.AuditExportURL)
+		return nil
+	}
+	return &audit.Exporter{
+		Source: trail, URL: sink.URL, Token: string(sink.Token),
+		Trouble: func(err error) {
+			log.Warn("the audit log could not be exported, and is tried again", "error", err)
+		},
+	}
+}
+
 // lead is one term: watching and sweeping on one side, taking results and progress back on the
-// other, until the fence refuses a write, either of them fails, or ctx is done.
+// other, until the fence refuses a write, either of them fails, or ctx is done. The audit log is
+// exported beside them for as long as the term lasts, by the one controller that leads, so that two
+// never race each other to the sink; a sink that fails ends nothing, and is tried again.
 //
 // Each goes through the core of the term, and neither ends it for a run or a result it could not
 // handle. Watch returns whatever the function it calls returns, so a notification about one run
@@ -281,7 +301,7 @@ func options(c config.Controller, q controller.Queue, v controller.Versions) con
 // the same run, would end the term, and the program with it, over one run; a sweep reports such a
 // run and moves on, and a notification is only a shortcut to what a sweep finds. So both are
 // reported and left to the next sweep, and only the fence ends the term.
-func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, log *slog.Logger) error {
+func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
 		return err
@@ -290,6 +310,20 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	done := make(chan error, 2)
+
+	if export != nil {
+		exported := make(chan struct{})
+		go func() {
+			defer close(exported)
+			export.Run(ctx)
+		}()
+		// Deferred after the cancel above, so it runs first: the term's context is cancelled,
+		// then the export is waited for, and a term never ends with its export still sending.
+		defer func() {
+			cancel(nil)
+			<-exported
+		}()
+	}
 
 	go func() {
 		done <- ctl.Watch(ctx, func(ctx context.Context, w controller.Wake) error {

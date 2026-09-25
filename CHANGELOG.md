@@ -55,6 +55,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task stopped as `superseded` or `sibling_failed` while its run goes on is written `cancelled` in the pass that sends the stop, as the evaluator decides, so the heartbeat's `cancel` repeats it to a runner that missed it, a `fail_fast` step is judged at once, and the slot is free for that very pass, `db.Wide.Slots` leaving out the keys it ends. The runner's later report adds the exit code, the log and the usage, and nothing else, and later decisions keep them, a log's cut included.
 - A pass that changes nothing counts no decision and writes none, and a run decided with nothing on the clock is no longer swept: a result or a loss makes it due at once, and a pass that then finds nothing to decide puts its clock back. A loss of a task the evaluator already stopped wakes nothing. Such runs were decided and rewritten on every sweep.
 - A run on a server starts with the workflow's `vars`, as `agk run --local` does, and reads them off the version on every pass, so a number among them is an int each time rather than a double after the first. A step reading `${{ vars.<name> }}` could not be built there, and failed with 120.
+- The leading controller exports the audit log to the https sink `AGK_AUDIT_EXPORT_URL` names, as newline-delimited JSON, at least once, and nothing past a break. `agentiik-api audit-verify FILE` checks an export as its receiver wrote it.
 
 ### State
 
@@ -95,6 +96,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `NS.Runs` and `RunQuery.Workflow` are gone: one namespace's runs are listed by `Wide.Runs` over the workflows the authorizer allowed, as every namespace's are.
 - An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 - `db.Wide.Actionable` reads a run as never decided by `seq = 0` rather than by a null `wake_at`. A loss, reported or written over by a decision, sets `wake_at` to its moment rather than null, and `db.Wide.Rewake` puts back a run's clock only over the row as `db.Evaluation.Version` read it.
+- The audit log, append-only and chained: migration `0030_audit_log.sql` numbers, dates and hashes each entry after the head of the chain under a row lock, so acts committing at once take turns and never fork it. The application may only insert and read; triggers refuse an update, a delete or a truncate to every role. `NS.Audit` and `Wide.Audit` append in the act's transaction, and `Wide.VerifyAuditLog` checks the chain against its head.
 
 ### Bus
 
@@ -298,6 +300,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/{ns}/runs` and `GET /api/v1/{ns}/runs/{run}` ask about each run's workflow, not the namespace: a deny of `run:read` on one workflow hides its runs, and `run:read` on one workflow reads them. A namespace the caller holds nothing in lists nothing, where it was a 404. `api.OnRun` and `api.Across` take a `{namespace}` in their pattern, and `api.AcrossHandler` is handed it as `within`.
 - `POST /api/v1/bus/token` only mints, so runners keep the bus once the control plane's credential has expired, where every one lost it within the hour. A pool's consumer is made ready as the pool is created, which is refused with 503 and creates nothing where the bus refuses it, and for every pool as `agentiik-api` starts, `default` included (`api.ReadyQueues`).
 - `GET /api/v1/runs/{id}` writes each port a step published as `digest`, `size` and `items`, with `purged_at` only once purged, where it wrote Go's field names and a zero time.
+- A manual trigger, a cancellation, a secret written or removed, a runner pool created, a join token issued, and a runner drained or revoked are recorded in the audit log in the transaction of the act, which fails with it. A secret's value and a join token are never recorded.
 
 ### Secrets
 
@@ -328,6 +331,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 - `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
+- `AGK_AUDIT_EXPORT_URL` and `AGK_AUDIT_EXPORT_TOKEN_FILE` name the audit log's sink and its bearer credential, for the controller alone. Without them the controller starts and warns that the log goes nowhere.
 
 ### Command line
 

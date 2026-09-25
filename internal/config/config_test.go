@@ -804,7 +804,7 @@ func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 // are asked for too, and only to be refused.
 func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 	neverAsked := map[string][]string{
-		theAPI.name: {config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile},
+		theAPI.name: {config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile, config.AuditExportURL, config.AuditExportTokenFile},
 		theController.name: {
 			config.PublicURL, config.PresignKeyFile, config.BusAccountSeedFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.JoinRotation, config.RevocationGrace,
@@ -814,7 +814,7 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile, config.ObjectsDir,
 			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.MaxRequeues, config.TaskCeiling,
-			config.JoinRotation, config.RevocationGrace,
+			config.JoinRotation, config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
 		},
 	}
 	i := anInstallation(t)
