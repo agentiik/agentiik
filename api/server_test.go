@@ -39,6 +39,9 @@ kind: Workflow
 metadata: { name: monthly-invoicing, namespace: finance }
 inputs:
   orders: { schema: { type: array } }
+  cycle: { schema: { type: string } }
+  edges: {}
+  n: {}
 outputs:
   invoices: { from: { step: archive, port: ok } }
 steps:
@@ -223,9 +226,9 @@ func TestAVersionIsPushedAndARunIsStarted(t *testing.T) {
 	}
 }
 
-// The inputs of a run are written down as they were sent, counted and never decoded, and inputs
-// holding more values than an envelope carries items are refused with 413 before any run exists.
-func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
+// The inputs of a run are counted and written down as they were bound, and inputs holding more
+// values than an envelope carries items are refused with 413 before any run exists.
+func TestTheInputsOfARunAreCountedAndWrittenDownAsBound(t *testing.T) {
 	h, _, super := serving(t)
 	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
 		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
@@ -268,10 +271,10 @@ func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
 }
 
 // A number in the inputs is one a 64-bit float holds, written no further from the point than a
-// float reaches, because PostgreSQL keeps a number at the scale it was written with and writes it
-// back in full at every read of the run. Each number at the edge starts a run and is read back no
-// more than 340 bytes longer than it was sent; each past it is a 400 in front of whoever sent it,
-// where it was a 500, or a run whose eight bytes of 1e-16383 were read back as 16 KB each time.
+// float reaches. Each number at the edge starts a run and is read back no more than 340 bytes
+// longer than it was sent, now that the inputs are written as bound; each past it is a 400 in
+// front of whoever sent it, where it was a 500, or a run whose eight bytes of 1e-16383 were read
+// back as 16 KB each time when the inputs were written as sent.
 func TestNoNumberInTheInputsIsReadBackFarLongerThanItWasSent(t *testing.T) {
 	h, _, super := serving(t)
 	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {

@@ -14,11 +14,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"testing/fstest"
 	"time"
 	"unicode/utf8"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/version"
 )
@@ -37,6 +39,9 @@ type Server struct {
 	urls     artifact.Presigner
 	limits   agk.Limits
 	now      func() time.Time
+
+	// declared are the compiled input declarations of the versions runs were started of.
+	declared *declarations
 
 	// logs tells the step log streams this server answers that their log moved on, streaming is
 	// how they spend their time, and stopping ends them.
@@ -102,7 +107,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		o.Limits = agk.DefaultLimits()
 	}
 	s := &Server{
-		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
+		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now, declared: &declarations{},
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 	}
 	rt.ServeRuns(runsIn{o.Pool})
@@ -415,7 +420,15 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
 	// push rather than discovered by the first run of it. That includes a tag no digest was
 	// resolved for, which is a push from an agk that resolves none.
-	if _, err := version.Build(v); err != nil {
+	g, err := version.Build(v)
+	if err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// And so is a declaration no run of it could be bound against: an input's schema that does
+	// not compile, or names a file the commit does not carry. Every run of the version is bound
+	// against it, so a version that holds one is a version nothing can start.
+	if _, err := g.Workflow().DeclaredInputs(pushedTree(p.Tree)); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -497,6 +510,16 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		recorded = map[string]string{}
 	}
 	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
+}
+
+// pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
+// against.
+func pushedTree(files map[string]PushFile) fstest.MapFS {
+	tree := make(fstest.MapFS, len(files))
+	for p, f := range files {
+		tree[p] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
+	}
+	return tree
 }
 
 // checkTree refuses a tree that could not be laid out under /agk/repo, and answers its paths in
@@ -721,12 +744,13 @@ type Start struct {
 	Inputs map[string]any `json:"inputs,omitempty"`
 }
 
-// starting is a Start as the API reads one, with its inputs kept as the JSON they were written in.
+// starting is a Start as the API reads one, with its inputs kept as the JSON they were written in
+// until they are bound.
 //
-// Kept rather than decoded, because the API does nothing with them but write them down, and what
-// decoding a document costs is set by how many values it holds rather than by its bytes: three
-// bytes of {} are a map, and 8 MiB of inputs written [{},{},...] was 508 MiB once decoded. So
-// they are counted, held to inputsMaxValues, and written to the run as they came.
+// Counted before anything decodes them, because what decoding a document costs is set by how many
+// values it holds rather than by its bytes: three bytes of {} are a map, and 8 MiB of inputs
+// written [{},{},...] was 508 MiB once decoded. So they are held to inputsMaxValues as they are
+// read, and only then decoded to be bound against the version's declaration.
 type starting struct {
 	commit string
 	inputs jsontext.Value
@@ -796,18 +820,31 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		return
 	}
 
+	inputs, ok := s.bindInputs(w, r.Context(), over, start.commit, g, start.inputs)
+	if !ok {
+		return
+	}
+
 	run := agk.NewRunID()
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CreateRun(ctx, db.NewRun{
 			ID: run, Workflow: over.Workflow, Commit: start.commit,
 			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: json.RawMessage(start.inputs), Steps: g.Steps(),
+			Inputs: inputs, Steps: g.Steps(),
 		}); err != nil {
 			return err
 		}
 		// In the same transaction, because PostgreSQL delivers the notification only
 		// when it commits: the row and the wake-up are one fact rather than two.
-		return ns.NotifyRun(ctx, run)
+		if err := ns.NotifyRun(ctx, run); err != nil {
+			return err
+		}
+		// And the manual trigger is recorded in it too, last, so that a run never starts
+		// unrecorded and the chain's lock is held for no longer than the commit.
+		return ns.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunTrigger, Target: string(run), Result: audit.Done,
+			Detail: map[string]any{"workflow": over.Workflow, "commit": start.commit},
+		})
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the run could not be created")
@@ -881,9 +918,9 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 // principal asking twice, or asking about a run that finished while they were asking, has got
 // what they wanted either way", as controller.Cancel puts it.
 //
-// Nothing is written to the audit log yet, since there is none: "manual trigger, approval,
-// cancellation" are recorded there once #160 builds it, in the transaction that writes the
-// request.
+// The request is recorded in the audit log in the transaction that writes it, a request about a
+// run that has ended as well, whose entry says it changed nothing: who asked is part of what
+// happened either way.
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	// Nothing to say beyond which run, which the path names, so no body is the ordinary
 	// request. One carrying a field nobody knows, a reason for one, is refused rather than
@@ -895,15 +932,28 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 
 	// The run the router found, in the namespace and of the workflow it authorised.
 	run := agk.RunID(r.PathValue("run"))
-	var state agk.RunState
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		var err error
-		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil || state.Terminal() {
+		state, first, err := ns.RequestCancel(ctx, run, s.now())
+		if err != nil {
 			return err
 		}
-		// In the same transaction, for the reason starting a run gives: the request and the
-		// wake-up are one fact rather than two.
-		return ns.NotifyRun(ctx, run)
+		if !state.Terminal() {
+			// In the same transaction, for the reason starting a run gives: the request and
+			// the wake-up are one fact rather than two.
+			if err := ns.NotifyRun(ctx, run); err != nil {
+				return err
+			}
+		}
+		// Only the first request changes anything: the moment is the first one's, and a run
+		// that has ended stays ended.
+		result := audit.Unchanged
+		if first {
+			result = audit.Done
+		}
+		return ns.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunCancel, Target: string(run), Result: result,
+			Detail: map[string]any{"workflow": over.Workflow},
+		})
 	})
 	if errors.Is(err, db.ErrNoRun) {
 		// Found by the router a moment ago and not there now, as a run is once its workflow

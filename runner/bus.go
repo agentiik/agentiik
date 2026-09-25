@@ -51,6 +51,11 @@ func (c *Client) BusCredentials(ctx context.Context, pool string) (bus.Credentia
 		return bus.Credentials{}, fmt.Errorf("runner: POST %s: the bus credential is of the kind %q, and this runner speaks %s", busTokenPath, t.Kind, bus.Kind)
 	case t.URL == "" || t.JWT == "" || t.Seed == "":
 		return bus.Credentials{}, fmt.Errorf("runner: POST %s: the bus credential names no bus, or nothing to present to it", busTokenPath)
+	case bus.CheckURL(t.URL) != nil:
+		// Refused here rather than when the connection is opened, which would be taken for
+		// a bus not reached yet and asked again for ever: the API answers the same address
+		// every time.
+		return bus.Credentials{}, fmt.Errorf("runner: POST %s: %w", busTokenPath, bus.CheckURL(t.URL))
 	case t.Stream != bus.Stream:
 		return bus.Credentials{}, fmt.Errorf("runner: POST %s: the bus credential is for the stream %q, and a runner takes work from %s", busTokenPath, t.Stream, bus.Stream)
 	case t.Consumer != bus.Durable(pool):

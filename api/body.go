@@ -460,6 +460,11 @@ func (b *body) written(from int64) []byte {
 // decodes the inputs can hold is taken, and none is read back more than 340 bytes longer than it
 // was sent, which is 34 MB for all the values a run's inputs may hold: about what storing every
 // number as a 64-bit float cost when encoding/json wrote them, 5e-324 being read back in 326.
+//
+// A run's inputs are now bound before they are written, and written as encoding/json writes a
+// 64-bit float, so what the database holds of them is no longer the number as it was sent. The
+// rule stays as the route's documented answer: a number past it is refused with 400 before the
+// inputs are decoded, as it was, and whether it should go is the documentation's to say.
 const numberMaxDigits = 340
 
 // skim reads one value and everything in it, counting each against b.values.

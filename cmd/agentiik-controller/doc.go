@@ -21,10 +21,19 @@
 //
 // Only its environment, read by config.ReadController: the database it connects to as the
 // application role, the bus and the control plane's credential, the object-store directory,
-// AGK_MAX_REQUEUES and AGK_TASK_CEILING. It takes no argument, since a flag would be a second way
+// AGK_MAX_REQUEUES, AGK_TASK_CEILING, and the sink the audit log is exported to, which is the one
+// setting it starts without, saying so. It takes no argument, since a flag would be a second way
 // to say what the environment says and a Compose file, a systemd unit and a container platform all
 // set an environment the same way. A setting that refuses the start is named, with every other one
 // that does, and nothing is opened.
+//
+// # Exporting the audit log
+//
+// "It is exported continuously outside the installation, since the incident's own host may be
+// unreadable." The controller that leads sends every entry to the https sink AGK_AUDIT_EXPORT_URL
+// names, as package audit's Exporter does, for as long as its term lasts: one controller at a time,
+// so that two never race to the sink, and a standby that takes over carries on from the cursor in
+// the database. A sink that fails ends nothing; it is said, and tried again.
 //
 // # Leading, and standing by
 //

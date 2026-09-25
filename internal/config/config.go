@@ -75,6 +75,8 @@ const (
 	JoinRotation                = "AGK_JOIN_ROTATION"
 	RevocationGrace             = "AGK_REVOCATION_GRACE"
 	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE"
+	AuditExportURL              = "AGK_AUDIT_EXPORT_URL"
+	AuditExportTokenFile        = "AGK_AUDIT_EXPORT_TOKEN_FILE"
 )
 
 // secretFiles are the variables that name a secret's file. The same name without _FILE is the
@@ -82,7 +84,7 @@ const (
 // whether or not it reads the file.
 var secretFiles = []string{
 	DatabasePasswordFile, MigrateDatabasePasswordFile, BusCredentialsFile, BusAccountSeedFile,
-	PresignKeyFile, MasterKeyFile, OperatorTokenFile,
+	PresignKeyFile, MasterKeyFile, OperatorTokenFile, AuditExportTokenFile,
 }
 
 // libpqSecrets are the variables pgx takes a secret from wherever the URL gives none, as libpq
@@ -271,6 +273,17 @@ type Controller struct {
 	Objects     string
 	MaxRequeues int
 	TaskCeiling time.Duration
+
+	// AuditExport is where the controller sends the audit log, and has no URL where the
+	// installation exports it nowhere.
+	AuditExport AuditExport
+}
+
+// AuditExport is the sink the audit log is exported to: an https URL the entries are POSTed to, and
+// the bearer credential it is sent with, where it wants one.
+type AuditExport struct {
+	URL   string
+	Token Secret
 }
 
 // Migration is what agentiik-api migrate reads.
@@ -324,6 +337,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which the controller reads envelopes from and writes every task's inputs to")
 	c.MaxRequeues = r.maxRequeues()
 	c.TaskCeiling = r.taskCeiling()
+	c.AuditExport = r.auditExport()
 	return c, r.err()
 }
 
@@ -928,4 +942,37 @@ func userinfo(raw string) (string, bool) {
 		return "", false
 	}
 	return rest[:at], true
+}
+
+// auditExport reads where the audit log is exported, which only the controller does.
+//
+// Optional, because an installation may be started before anywhere outside it exists to receive
+// the log: the log is kept in the database either way, and the controller warns at every start that
+// it goes nowhere else. Where it is set it is an https URL with a host, since the export crosses the
+// network to reach somewhere outside the installation, and carries no user, whose password would be
+// a secret written as a value: the sink's credential is a file AGK_AUDIT_EXPORT_TOKEN_FILE names.
+// A sink behind a private authority is trusted through SSL_CERT_FILE, which Go reads on Linux.
+func (r *reader) auditExport() AuditExport {
+	v, set := r.value(AuditExportURL)
+	if !set {
+		if _, token := r.value(AuditExportTokenFile); token {
+			r.refuse(AuditExportTokenFile, "is set and "+AuditExportURL+" is not, and a credential for a sink nobody named is a setting somebody meant to finish")
+		}
+		return AuditExport{}
+	}
+	if _, has := userinfo(v); has {
+		r.refuse(AuditExportURL, "carries a user, and the sink's credential is a file "+AuditExportTokenFile+" names, never part of a value")
+		return AuditExport{}
+	}
+	u, err := url.Parse(v)
+	switch {
+	case err != nil:
+		r.refuse(AuditExportURL, "is not a URL"+unparsed)
+		return AuditExport{}
+	case u.Scheme != "https" || u.Host == "":
+		r.refuse(AuditExportURL, "is not an https URL with a host, such as https://siem.example.com/agentiik, and the audit log never leaves the installation in plaintext")
+		return AuditExport{}
+	}
+	token := strings.TrimSpace(string(r.optionalFile(AuditExportTokenFile)))
+	return AuditExport{URL: v, Token: Secret(token)}
 }

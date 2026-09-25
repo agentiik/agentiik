@@ -69,6 +69,8 @@ func TestABusCredentialIsTakenOnlyForThePoolThisRunnerJoined(t *testing.T) {
 		{"kind", "sqs-role", "this runner speaks " + bus.Kind},
 		{"stream", "AGENTIIK_OTHER", "a runner takes work from " + bus.Stream},
 		{"seed", "", "nothing to present"},
+		{"url", "nats://nats.example.com:4222", "never reached in plaintext across a network"},
+		{"url", "ws://10.0.0.7:8080", "never reached in plaintext across a network"},
 		{"expires_at", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano), "before it arrived"},
 	} {
 		t.Run(row.field, func(t *testing.T) {

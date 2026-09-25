@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -307,8 +308,15 @@ func (s *RunnerAPI) createPool(w http.ResponseWriter, r *http.Request, who Princ
 			}
 		}
 		var err error
-		created, err = wide.RunnerPoolNamed(ctx, p.Name)
-		return err
+		if created, err = wide.RunnerPoolNamed(ctx, p.Name); err != nil {
+			return err
+		}
+		// A runner policy change, recorded with the pool as it was created: the namespaces
+		// it accepts, its ceilings and its tier.
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunnerPoolCreate, Target: p.Name, Result: audit.Done,
+			Detail: map[string]any{"pool": poolOf(created)},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrRunnerPoolExists):
@@ -411,8 +419,17 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 		if issued, err = wide.IssueJoinToken(ctx, pool, ask.Labels, string(who), now, now.Add(life)); err != nil {
 			return err
 		}
-		from, err = wide.RunnerPoolNamed(ctx, pool)
-		return err
+		if from, err = wide.RunnerPoolNamed(ctx, pool); err != nil {
+			return err
+		}
+		// Recorded by its identifier, and never by the token, which is shown once, here.
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.JoinTokenIssue, Target: issued.ID, Result: audit.Done,
+			Detail: map[string]any{
+				"pool": issued.Pool, "labels": orEmpty(issued.Labels),
+				"expires_at": issued.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoRunnerPool):

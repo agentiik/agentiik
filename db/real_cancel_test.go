@@ -37,7 +37,7 @@ func askToCancel(t *testing.T, pool *Pool, namespace string, run agk.RunID, at t
 	var state agk.RunState
 	err := pool.In(t.Context(), namespace, func(ctx context.Context, ns *NS) error {
 		var err error
-		state, err = ns.RequestCancel(ctx, run, at)
+		state, _, err = ns.RequestCancel(ctx, run, at)
 		return err
 	})
 	return state, err

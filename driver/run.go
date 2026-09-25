@@ -180,7 +180,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			"%s carries no %s, so nothing declares the account its container would run as: an image becomes a brick by carrying one, and a step that runs an image with none is a script step", image.Ref, brick.ManifestPath)
 	}
 
-	w, err := newWorkdir(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
+	w, err := d.freshWorkdir(t.ID)
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -269,7 +269,7 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 		return graph.Result{}, err
 	}
 	defer closeSink()
-	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines, d.limits().EnvelopeMaxBytes)
 
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskDispatched, Container: container})
 
@@ -627,7 +627,7 @@ func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store
 		return graph.Result{}, exited(t.ID, err)
 	}
 	defer closeSink()
-	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines, d.limits().EnvelopeMaxBytes)
 
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskDispatched, Container: container})
 

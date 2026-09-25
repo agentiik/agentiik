@@ -24,6 +24,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -969,18 +970,25 @@ func orderOf(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 // inventory lists it.
 //
 // "Drain sets the state to draining and answers drain: true at the heartbeat. Results are accepted
-// as usual; the runner takes nothing new but stays up." Who ordered it is recorded on the runner
-// until the audit log records it, and a runner already draining is answered as it stands.
+// as usual; the runner takes nothing new but stays up." Who ordered it is kept on the runner, for
+// the inventory, and recorded in the audit log in the same transaction. A runner already draining
+// is answered as it stands, and the order is recorded as having changed nothing.
 func (s *RunnerAPI) drain(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	runner, why, ok := orderOf(w, r)
 	if !ok {
 		return
 	}
 	var drained db.Runner
+	at := s.now()
 	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		drained, err = wide.Drain(ctx, runner, string(who), why, s.now())
-		return err
+		if drained, err = wide.Drain(ctx, runner, string(who), why, at); err != nil {
+			return err
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunnerDrain, Target: runner, Result: ordered(drained.DrainedAt, at),
+			Detail: map[string]any{"reason": why},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoRunner):
@@ -1011,10 +1019,19 @@ func (s *RunnerAPI) revoke(w http.ResponseWriter, r *http.Request, who Principal
 		return
 	}
 	var revoked db.Runner
+	at := s.now()
 	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		revoked, err = wide.Revoke(ctx, runner, string(who), why, s.now(), s.grace)
-		return err
+		if revoked, err = wide.Revoke(ctx, runner, string(who), why, at, s.grace); err != nil {
+			return err
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunnerRevoke, Target: runner, Result: ordered(revoked.RevokedAt, at),
+			Detail: map[string]any{
+				"reason":                 why,
+				"results_accepted_until": revoked.ResultsAcceptedUntil.UTC().Format(time.RFC3339Nano),
+			},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoRunner):
@@ -1025,6 +1042,16 @@ func (s *RunnerAPI) revoke(w http.ResponseWriter, r *http.Request, who Principal
 		return
 	}
 	write(w, http.StatusOK, revoked)
+}
+
+// ordered is whether an order given at at is the one the runner now carries, given at recorded,
+// which is when the order it carries was given: done if so, and unchanged where an earlier order
+// stands. PostgreSQL keeps a moment to the microsecond.
+func ordered(recorded, at time.Time) string {
+	if recorded.Equal(at.Truncate(time.Microsecond)) {
+		return audit.Done
+	}
+	return audit.Unchanged
 }
 
 // refuseRevokedRotation answers a rotation by a runner that is revoked and still in its grace.

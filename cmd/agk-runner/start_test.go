@@ -704,3 +704,19 @@ func TestAWorkRootMountedNoexecBindsNoHelper(t *testing.T) {
 		t.Errorf("the agent's log does not say why script steps have no helper:\n%s", h.err)
 	}
 }
+
+// A daemon anywhere but on a local socket refuses the start, naming DOCKER_HOST and not
+// repeating the address, before anything reaches the API.
+func TestADaemonAcrossTheNetworkRefusesTheStartNamingDockerHost(t *testing.T) {
+	for _, address := range []string{"tcp://docker.example.com:2375", "tcp://admin:s3cr3t@10.0.0.7:2376", "ssh://admin@docker.example.com"} {
+		h := newHost(t, daemon(t, true), "")
+		h.set("DOCKER_HOST", address)
+		said := h.refused(t)
+		if !strings.Contains(said, "DOCKER_HOST names a daemon at") || !strings.Contains(said, "local unix socket alone") {
+			t.Errorf("a daemon at %s refused the start saying:\n%s", address, said)
+		}
+		if strings.Contains(said, "s3cr3t") || strings.Contains(said, "example.com") {
+			t.Errorf("the refusal repeats the address:\n%s", said)
+		}
+	}
+}

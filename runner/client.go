@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/agentiik/agentiik/internal/tlsfloor"
 )
 
 // Client is how the agent reaches the API: one base URL, one runner credential at a time, and JSON
@@ -109,7 +111,7 @@ func NewClient(api string, credential Secret, client *http.Client) (*Client, err
 // Authorization at all. It follows no redirect either, since that body is the token.
 func newClient(api string, credential Secret, client *http.Client) *Client {
 	if client == nil {
-		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}}
 	}
@@ -131,6 +133,9 @@ func (c *Client) use(credential Secret) {
 	defer c.mu.Unlock()
 	c.credential = credential
 }
+
+// transport is what a client made here goes through, held to the TLS floor.
+var transport = tlsfloor.Transport()
 
 // Do sends one request and reads its answer.
 //

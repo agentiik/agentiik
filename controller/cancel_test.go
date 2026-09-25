@@ -40,7 +40,7 @@ steps:
 func askedToCancel(t *testing.T, pool *db.Pool, co *Core, run agk.RunID) {
 	t.Helper()
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-		_, err := ns.RequestCancel(ctx, run, co.now())
+		_, _, err := ns.RequestCancel(ctx, run, co.now())
 		return err
 	}); err != nil {
 		t.Fatal(err)

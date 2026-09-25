@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -411,8 +412,8 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 	}
 
 	// The value is written in the declaration's own transaction, so that a store refusing it
-	// leaves the declaration as it was. Each write also belongs in the audit log as a secret
-	// write; there is no audit log yet, and the task that builds it names this event.
+	// leaves the declaration as it was, and so is the secret write the audit log records: what
+	// was declared and whether a value was written, and never the value.
 	declared := db.Declaration{
 		Name: name, Provider: d.Provider, Path: d.Path,
 		DeclaredBy: string(who), DeclaredAt: s.now(),
@@ -425,11 +426,19 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 		}
 		switch {
 		case value != nil:
-			return s.values.Write(ctx, ns, name, value)
+			err = s.values.Write(ctx, ns, name, value)
 		case d.Provider != ProviderBuiltin:
-			return s.values.Forget(ctx, ns, name)
+			err = s.values.Forget(ctx, ns, name)
 		}
-		return nil
+		if err != nil {
+			return err
+		}
+		return ns.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.SecretWrite, Target: name, Result: audit.Done,
+			Detail: map[string]any{
+				"provider": d.Provider, "path": d.Path, "created": created, "value_written": value != nil,
+			},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
@@ -450,13 +459,16 @@ func (s *DeclarationAPI) declare(w http.ResponseWriter, r *http.Request, who Pri
 	write(w, http.StatusOK, answered(declared))
 }
 
-func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, _ Principal, over Target) {
+func (s *DeclarationAPI) undeclare(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := r.PathValue("name")
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.Undeclare(ctx, name); err != nil {
 			return err
 		}
-		return s.values.Forget(ctx, ns, name)
+		if err := s.values.Forget(ctx, ns, name); err != nil {
+			return err
+		}
+		return ns.Audit(ctx, audit.Record{Actor: string(who), Action: audit.SecretDelete, Target: name, Result: audit.Done})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoDeclaration):

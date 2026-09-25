@@ -54,7 +54,8 @@ const provisionLock int64 = 0x6d696772617465
 //
 // The role is LOGIN NOSUPERUSER NOBYPASSRLS, and creates no database, no role and no replication
 // slot. It may connect to this database, use the schema, read and write every table the
-// migrations created, and read schema_migrations, which a binary reads to refuse to start
+// migrations created but the audit log's, which it may only append to and read, as appendOnly
+// says, and read schema_migrations, which a binary reads to refuse to start
 // against a database ahead of it, and which a role that could write to would have the next
 // upgrade apply a migration again or skip one. Before any of that is granted, in the same
 // transaction, the role is taken out of every role it is a member of and loses what it holds on
@@ -351,10 +352,31 @@ func privileges(ctx context.Context, tx pgx.Tx, role string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(tables) > 0 {
-		out = append(out, "grant select, insert, update, delete on "+relations(tables)+" to "+name)
+	var written []string
+	for _, table := range tables {
+		if privilege, kept := appendOnly[table]; kept {
+			out = append(out, "grant "+privilege+" on "+relations([]string{table})+" to "+name)
+			continue
+		}
+		written = append(written, table)
+	}
+	if len(written) > 0 {
+		out = append(out, "grant select, insert, update, delete on "+relations(written)+" to "+name)
 	}
 	return append(out, "grant select on public.schema_migrations to "+name), nil
+}
+
+// appendOnly are the tables the application is granted less on than read and write, and what it is
+// granted on each.
+//
+// The audit log is appended to and read, and never changed or removed, so the application may insert
+// and select and nothing more: its triggers refuse the rest to every role as well, and this is the
+// lock a role that could switch a trigger off would still meet. The head of its chain is moved by
+// the function that appends, which runs as the role that migrated, and the application only reads
+// it, so that nothing but an append moves it.
+var appendOnly = map[string]string{
+	"audit_log":  "select, insert",
+	"audit_head": "select",
 }
 
 // relations is a list of relations of schema public, each quoted, as GRANT and REVOKE take it.

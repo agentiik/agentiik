@@ -137,7 +137,7 @@ func push(ctx context.Context, e Env, args []string) int {
 		refusal(e.Err, err)
 		return exitRefused
 	}
-	if _, err := declaredInputs(wf, tree); err != nil {
+	if _, err := wf.DeclaredInputs(tree); err != nil {
 		refusal(e.Err, err)
 		return exitRefused
 	}
