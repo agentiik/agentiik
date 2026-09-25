@@ -18,10 +18,11 @@
 //
 // # Running it
 //
-// On Linux, with a Docker daemon that may run privileged containers, as the e2e job of
+// On Linux, with a Docker daemon that may run privileged containers (every container is started
+// in the host's user namespace, so a remapped daemon runs them too), as the e2e job of
 // .github/workflows/e2e.yml does:
 //
-//	AGENTIIK_E2E=1 go test ./e2e -count=1 -v -timeout 20m
+//	AGENTIIK_E2E=1 go test ./e2e -count=1 -v -timeout 25m
 //
 // It pulls postgres:17-alpine, nats:2-alpine, registry:2, docker:29-dind and alpine:3.21 the first
 // time, builds the four programs and the runner image, and takes a few minutes. It starts two
@@ -54,6 +55,7 @@
 //
 // A one-step workflow pushed and started with the operator token runs to succeeded, and each runner
 // holds AGK_API, its runner.env and its key, and no database URL, store credential, bus credential
-// at rest or repository, and reaches objects only through presigned URLs. That is the first half of
-// the fact v0.2.0 holds; the test's comment says how each part is read.
+// at rest or repository, and reaches objects only through presigned URLs and the signed upload
+// policy. That is the first half of the fact v0.2.0 holds; the test's comment says how each part
+// is read.
 package e2e

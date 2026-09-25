@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -36,10 +37,10 @@ import (
 // and a developer running go test ./... did not ask for.
 const Variable = "AGENTIIK_E2E"
 
-// The images the installation is made of besides what it builds, each named where the
-// documentation names it and pinned to what the tests already pull. docker:29-dind is the
-// major the rest of the project runs, the first whose bridge keeps the host out of an internal
-// network being 28.
+// The images the installation is made of besides what it builds. PostgreSQL and NATS are the
+// images the page's Compose sample names, and alpine:3.21 the one the other tests pull.
+// docker:29-dind is the major the rest of the project runs, the first whose bridge keeps the
+// host out of an internal network being 28.
 const (
 	postgresImage = "postgres:17-alpine"
 	natsImage     = "nats:2-alpine"
@@ -100,8 +101,6 @@ type Installation struct {
 
 	// logs are what a failed test prints, in the order they were started.
 	logs []logSource
-
-	adminURL string
 }
 
 // heldValue is one value that must be nowhere in a runner's reach, and what it is.
@@ -138,9 +137,6 @@ func Stand(t testing.TB) *Installation {
 	if in.root, err = os.MkdirTemp("", in.id+"-"); err != nil {
 		t.Fatal(err)
 	}
-	// Opened to everybody, since the agents read their runner.toml through it as 65532.
-	// What is private inside is made private file by file.
-	os.Chmod(in.root, 0o755)
 	in.undo(func() { in.removeRoot() })
 	if in.module, err = moduleRoot(); err != nil {
 		t.Fatal(err)
@@ -216,7 +212,7 @@ func tail(s string, max int) string {
 func (in *Installation) removeRoot() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if _, err := docker(ctx, "run", "--rm", "--network", "none", "-v", in.root+":/root-of-the-test", alpineImage,
+	if _, err := docker(ctx, "run", "--rm", "--network", "none", "--userns", "host", "-v", in.root+":/root-of-the-test", alpineImage,
 		"sh", "-c", "rm -rf /root-of-the-test/* /root-of-the-test/.[!.]*"); err != nil {
 		in.t.Logf("the test's directory %s could not be emptied: %s", in.root, err)
 	}
@@ -328,7 +324,6 @@ func (in *Installation) database(ctx context.Context) databases {
 		defer conn.Close(context.WithoutCancel(ctx))
 		return conn.Ping(ctx)
 	})
-	in.adminURL = d.admin
 
 	out, err := in.program(ctx, "agentiik-api", []string{"migrate"}, map[string]string{
 		config.MigrateDatabaseURL:   d.admin,
@@ -512,7 +507,7 @@ func (in *Installation) start(name string, args []string, env map[string]string)
 		return string(b)
 	})
 	in.undo(func() {
-		cmd.Process.Signal(os.Interrupt)
+		cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-exited:
 		case <-time.After(40 * time.Second):

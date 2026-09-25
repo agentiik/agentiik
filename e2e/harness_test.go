@@ -87,13 +87,14 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 		t.Errorf("the output counted is %+v, and the brick publishes one item counting three orders, with its report", counted)
 	}
 
-	// Every request a runner made: runner routes, and objects through presigned URLs, both ways.
+	// Every request a runner made: runner routes, and objects through presigned URLs and the
+	// signed upload policy, both ways.
 	broken, objects := outsideTheOperator(in.Requests.All())
 	for _, b := range broken {
 		t.Error(b)
 	}
 	if objects.Reads == 0 || objects.Writes == 0 {
-		t.Errorf("the runners read %d objects and wrote %d, and a task fetches its input and stores its output through presigned URLs", objects.Reads, objects.Writes)
+		t.Errorf("the runners read %d objects and wrote %d, and a task fetches its input through a presigned URL and stores its output through the signed upload policy", objects.Reads, objects.Writes)
 	}
 
 	// What each runner holds at rest, once the task's own directory is gone. A task's
@@ -186,8 +187,9 @@ func aRunnerAtRest() Holdings {
 			"/var/lib/agentiik/work/.keys/01JM.ok": []byte(`{"state":"succeeded"}`),
 		},
 		Directories: []string{"/etc/agentiik", "/var/lib/agentiik", "/var/lib/agentiik/work"},
-		Env:         []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-		Added:       []string{"/run", "/run/agentiik", "/var/run"},
+		// A host setting in the environment, as the page's Compose sample sets it.
+		Env:   []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "AGK_RUNNER_CONCURRENCY=4"},
+		Added: []string{"/run", "/run/agentiik", "/var/run"},
 		Mounts: []Mount{
 			{Type: "bind", Source: "/tmp/agk-e2e-1/runner-a/etc", Destination: "/etc/agentiik"},
 			{Type: "volume", Source: "/var/lib/docker/volumes/agk-e2e-1-lib-a/_data", Destination: "/var/lib/agentiik"},
@@ -242,7 +244,8 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		{"a user seed", func(h *Holdings) {
 			h.Files["/var/lib/agentiik/bus.seed"] = []byte("SUAMLK2ZNL35WSMW37E7UD4VZ7ELPKW7DHC3BWBSD2GCZ7IUQQXZIORRBU")
 		}, "an NKey seed"},
-		{"a setting in the environment", func(h *Holdings) { h.Env = append(h.Env, "AGK_RUNNER_CREDENTIAL=agkrunner_abc") }, "the agent's environment sets AGK_RUNNER_CREDENTIAL"},
+		{"the credential in the environment", func(h *Holdings) { h.Env = append(h.Env, "AGK_RUNNER_CREDENTIAL=agkrunner_abc") }, "the agent's environment sets AGK_RUNNER_CREDENTIAL"},
+		{"an installation setting in the environment", func(h *Holdings) { h.Env = append(h.Env, "AGK_BUS_URL=tls://127.0.0.1:4222") }, "sets AGK_BUS_URL, which is not a runner's setting"},
 		{"the database URL in the environment", func(h *Holdings) {
 			h.Env = append(h.Env, "DB=postgres://agentiik@/agentiik?host=/tmp/agk-e2e-1/postgres")
 		}, "the agent's environment holds the database URL"},

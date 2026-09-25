@@ -27,8 +27,8 @@ import (
 // A private authority rather than plaintext, because internal/config refuses a bus reached at
 // nats:// and an API whose public URL is http, and the runners hold both to the same rule. Every
 // program trusts it the way an installation with a private authority does: the API and the
-// controller through SSL_CERT_FILE, and each runner through the bundle mounted over its image's
-// own, as build/runner.Dockerfile says a private authority is given.
+// controller through SSL_CERT_FILE, and each runner through the authority mounted over the
+// bundle its image carries at /etc/ssl/certs/ca-certificates.crt, where Go looks first on Linux.
 type authority struct {
 	pool *x509.CertPool
 	leaf tls.Certificate
@@ -123,7 +123,8 @@ func (a authority) clientConfig() *tls.Config {
 // Every profile terminates TLS in front of the API, and the API listens in plain HTTP behind it,
 // which is what internal/config.DefaultListen says. Here the terminator is the test's own, because
 // that is where it can see every request a runner makes and hold what it sees to the closing
-// fact: a runner reaches the API on the runner routes, and objects through presigned URLs alone.
+// fact: a runner reaches the API on the runner routes, and objects through presigned URLs and
+// the signed upload policy alone.
 func (in *Installation) terminate(ca authority, upstream string) string {
 	target, err := url.Parse(upstream)
 	if err != nil {

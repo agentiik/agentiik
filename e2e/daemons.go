@@ -95,11 +95,11 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 		in.t.Fatal(err)
 	}
 	// /var/lib/agentiik is the agent's, as the page has it, and a volume is root's when made.
-	if _, err := docker(ctx, "run", "--rm", "--network", "none", "-v", lib+":"+libPath, alpineImage, "chown", agentUser+":"+agentUser, libPath); err != nil {
+	if _, err := docker(ctx, "run", "--rm", "--network", "none", "--userns", "host", "-v", lib+":"+libPath, alpineImage, "chown", agentUser+":"+agentUser, libPath); err != nil {
 		in.t.Fatal(err)
 	}
 
-	in.container(ctx, r.Daemon, "run", "-d", "--name", r.Daemon, "--label", in.label(),
+	in.container(ctx, r.Daemon, "run", "-d", "--name", r.Daemon, "--label", in.label(), "--userns", "host",
 		"--privileged", "--network", in.network,
 		"-v", socket+":"+daemonSocketDir,
 		"-v", lib+":"+libPath,
@@ -122,7 +122,7 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 
 	// join runs as root in the image, as the page runs it, and gives the key and runner.env
 	// to the agent's account.
-	joining := append([]string{"run", "--rm", "--user", "0:0"}, shared...)
+	joining := append([]string{"run", "--rm", "--user", "0:0", "--userns", "host"}, shared...)
 	joining = append(joining, in.runnerIm, "join", "--api", in.PublicURL, "--token", token, "--labels", Label)
 	said, err := docker(ctx, joining...)
 	if err != nil {
@@ -134,7 +134,7 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 
 	// serve as the page's Compose sample runs it: as agentiik, in the group that owns the
 	// socket, holding the three capabilities and no other.
-	serving := append([]string{"run", "-d", "--name", r.Agent, "--label", in.label(),
+	serving := append([]string{"run", "-d", "--name", r.Agent, "--label", in.label(), "--userns", "host",
 		"--user", agentUser + ":" + agentUser, "--group-add", socketGroup,
 		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE",
 		"-v", secrets + ":" + secretsPath}, shared...)
@@ -377,8 +377,14 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 	}
 	for _, v := range h.Env {
 		name, _, _ := strings.Cut(v, "=")
-		if strings.HasPrefix(name, "AGK_") {
-			broken = append(broken, fmt.Sprintf("the agent's environment sets %s, and its settings are in runner.env, which it reads itself", name))
+		// A host setting may be in the environment, as the page's Compose sample sets the
+		// labels and the concurrency; the credential never is, and nothing else of AGK_ is a
+		// runner's.
+		switch {
+		case name == "AGK_RUNNER_CREDENTIAL":
+			broken = append(broken, "the agent's environment sets AGK_RUNNER_CREDENTIAL, and a credential is read from runner.env alone, never inherited by what the agent starts")
+		case strings.HasPrefix(name, "AGK_") && !runnerEnvKeys[name]:
+			broken = append(broken, fmt.Sprintf("the agent's environment sets %s, which is not a runner's setting", name))
 		}
 		broken = append(broken, heldIn("the agent's environment", v, held)...)
 	}
