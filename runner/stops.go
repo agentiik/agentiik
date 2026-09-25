@@ -67,8 +67,10 @@ func (s *Stops) heard(ctx context.Context, st graph.Stop) {
 		return
 	}
 	// Carried through past the agent's own stop, since a container the control plane asked to
-	// stop is to be stopped whether or not this agent is winding down, and bounded as one
-	// heartbeat's cancel is, after which the next heartbeat names the key again.
+	// stop is to be stopped whether or not this agent is winding down. The bound is the
+	// heartbeat's interval, after which the next heartbeat names the key again, and it bounds
+	// the driver's lookup of the container by its label: the daemon's stop itself runs on a
+	// context the driver gives it, which the grace bounds.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), HeartbeatInterval)
 	s.going.Add(1)
 	go func() {
@@ -88,13 +90,23 @@ func (s *Stops) Stop(ctx context.Context, st graph.Stop) error {
 	return s.send(ctx, st)
 }
 
+// Forget lets go of the stop sent for key, which the loop says once it no longer holds the key. The
+// driver forgets that stop with the key, so a later holding of it, the same message come round
+// again, is one a stop is sent for.
+func (s *Stops) Forget(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.stopped, agk.TaskID(key))
+}
+
 // Wait returns once every stop heard on the bus has been sent or given up.
 func (s *Stops) Wait() { s.going.Wait() }
 
 // send asks the driver, and lets go of the key where the driver could not stop it, so that the
 // next stop for it, the heartbeat's above all, is sent rather than passed over. The driver answers
-// an error only for a container it found by its label; one it watches is handed the stop at once,
-// and the driver sends it again itself for as long as the daemon refuses it.
+// an error only where it had to ask the daemon, for a container it found or looked for by its
+// label; one it watches is handed the stop at once, and the driver sends it again itself for as
+// long as the daemon refuses it.
 func (s *Stops) send(ctx context.Context, st graph.Stop) error {
 	err := s.Stopper.Stop(ctx, st)
 	if err != nil {

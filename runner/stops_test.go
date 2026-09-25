@@ -483,32 +483,60 @@ func TestTheAgentHearsStopsOnItsBus(t *testing.T) {
 }
 
 // A key let go of, its redemption refused and its message put back, is forgotten with the stop sent
-// for it, since the driver forgets that stop with the key: a stop for the key once it is held here
-// again is sent.
+// for it, since the driver forgets that stop with the key: once the message comes round and the key
+// is held here again, a stop for it is sent.
 func TestAKeyHeldAgainIsStoppedAgain(t *testing.T) {
 	const key = "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"
-	var mu sync.Mutex
-	held := []string{key}
 	told := &stops{}
-	s := &Stops{Stopper: told, Holding: func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(held) }}
+	s := &Stops{Stopper: told, Holding: func() []string { return []string{key} }}
 	stop := graph.Stop{Task: key, Reason: graph.StopCancelled}
 
 	if err := s.Stop(t.Context(), stop); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	held = nil
-	mu.Unlock()
-	if err := s.Stop(t.Context(), stop); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	held = []string{key}
-	mu.Unlock()
+	s.Forget(key)
 	if err := s.Stop(t.Context(), stop); err != nil {
 		t.Fatal(err)
 	}
 	if got := told.stopped(); len(got) != 2 {
 		t.Errorf("the driver was told %v, want the stop of the key held and the stop of the key held again", got)
+	}
+}
+
+// The agent's Stops stop the keys its loop holds and those an earlier agent on the host took and
+// never ended, whose containers may still be running, and forget a stop sent for a key the loop
+// lets go of.
+func TestTheAgentsStopsCoverItsLoopAndTheEarlierAgent(t *testing.T) {
+	const earlier, taken = "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1", "01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/1"
+	var readies int
+	root := t.TempDir()
+	a := agentOf(t, &readies, "http://127.0.0.1:1", root)
+	results, err := OpenResults(root, a.Config.Runner, &laterBus{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop, _, s := a.parts(results, []agk.TaskID{earlier}, nil)
+	told := &stops{}
+	s.Stopper = told
+
+	if err := s.Stop(t.Context(), graph.Stop{Task: earlier, Reason: graph.StopDeadline}); err != nil {
+		t.Fatal(err)
+	}
+	loop.holding(taken)
+	if err := s.Stop(t.Context(), graph.Stop{Task: taken, Reason: graph.StopCancelled}); err != nil {
+		t.Fatal(err)
+	}
+	loop.letGo(taken)
+	loop.holding(taken)
+	if err := s.Stop(t.Context(), graph.Stop{Task: taken, Reason: graph.StopCancelled}); err != nil {
+		t.Fatal(err)
+	}
+	want := []graph.Stop{
+		{Task: earlier, Reason: graph.StopDeadline},
+		{Task: taken, Reason: graph.StopCancelled},
+		{Task: taken, Reason: graph.StopCancelled},
+	}
+	if got := told.stopped(); !slices.Equal(got, want) {
+		t.Errorf("the driver was told %v, want %v", got, want)
 	}
 }

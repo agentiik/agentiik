@@ -158,8 +158,9 @@ func Serve(ctx context.Context, a Agent) error {
 	// stopped in the moment before anybody was listening, and for as long as Serve runs rather
 	// than as long as its context, since the loop answers for what it holds after a stop and a
 	// container still running then is still one to stop. The subscription ends as the bus is
-	// closed. One refused ends the agent: a runner that cannot hear stops would run every stopped
-	// container to its deadline, and the heartbeat's cancel only catches what it misses.
+	// closed. A subscription refused, or one the bus does not confirm, ends the agent before it
+	// has taken anything, to be started again: a runner that cannot hear stops would run every
+	// stopped container to its deadline, and the heartbeat's cancel only catches what it misses.
 	hearing, endHearing := context.WithCancel(context.WithoutCancel(ctx))
 	defer endHearing()
 	if err := stops.Hear(hearing, b); err != nil {
@@ -226,6 +227,7 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		Stopper: stops, Log: say, Every: a.every,
 	}
 	loop.Draining = func() bool { return beat.Drain().Ordered }
+	loop.LetGo = stops.Forget
 	return loop, beat, stops
 }
 
