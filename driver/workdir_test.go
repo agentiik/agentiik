@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 const shardedTask = agk.TaskID("01JMZ8V1P9C4/invoice/2/3/8")
@@ -423,4 +424,42 @@ func dirsUnder(t *testing.T, dir string) []string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// The sweep runs where the record is pruned, when an ending is written, the first one a driver
+// writes included: what an earlier run left an hour and more ago goes, and the parents of the
+// task that just ended, empty a moment ago, stay for the next attempt to find.
+func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
+
+	skeleton := filepath.Join(r.work, "01JMZ8V1P9C3", "invoice", "1")
+	if err := os.MkdirAll(skeleton, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	long := time.Now().Add(-emptyKept - time.Minute)
+	for dir := skeleton; dir != r.work; dir = filepath.Dir(dir) {
+		if err := os.Chtimes(dir, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task := stepTask(ref, "fetch")
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("running the task: %s", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(r.work, "01JMZ8V1P9C3")); !os.IsNotExist(err) {
+		t.Errorf("the run an earlier run left empty %s ago is still on the work root: %v", emptyKept+time.Minute, err)
+	}
+	w, err := workdirFor(r.work, task.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.Root); !os.IsNotExist(err) {
+		t.Errorf("the task's own directory is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(w.Root)); err != nil {
+		t.Errorf("the step of the task that just ended was swept, and the next attempt names it next: %v", err)
+	}
 }

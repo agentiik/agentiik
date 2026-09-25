@@ -625,6 +625,8 @@ func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
 	}
 	if now.Sub(d.keys.pruned) >= pruneEvery {
 		d.keys.prune(now)
+		// The same lock and the same hour: sweep says why each.
+		sweep(d.cfg.WorkRoot, d.cfg.Policy.SecretsDir, now.Add(-emptyKept))
 	}
 	return r, err
 }
