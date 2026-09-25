@@ -722,3 +722,43 @@ func TestTheAgentsLoopDrainsOnTheHeartbeatsOrder(t *testing.T) {
 		t.Error("the loop still drains after an answer lifted the order")
 	}
 }
+
+// A heartbeat that is slow, gathering its keys or waiting on the API, is not a clock out: the
+// time it took is transit, and received_at still falls between sending and hearing the answer.
+func TestASlowHeartbeatIsNotReadAsAClockOut(t *testing.T) {
+	var slowAPI bool
+	var mu sync.Mutex
+	api := newBeats(t, func(beatRequest) (int, string) {
+		mu.Lock()
+		slow := slowAPI
+		mu.Unlock()
+		if slow {
+			at := time.Now()
+			time.Sleep(1500 * time.Millisecond)
+			return http.StatusOK, beatAnswered(at, `"drain":false,"cancel":[]`)
+		}
+		return answered(beatRequest{})
+	})
+	h, log := heartbeat(t, api.srv.URL)
+	h.Holding = func() []string {
+		mu.Lock()
+		slow := !slowAPI
+		mu.Unlock()
+		if slow {
+			time.Sleep(1500 * time.Millisecond)
+		}
+		return nil
+	}
+	if err := h.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	slowAPI = true
+	mu.Unlock()
+	if err := h.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(log.String(), "clock") {
+		t.Errorf("a heartbeat slow on a host whose clock is right said:\n%s", log)
+	}
+}

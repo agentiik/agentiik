@@ -234,10 +234,10 @@ func (h *Heartbeat) Beat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, h.every())
 	defer cancel()
 
-	sent := h.now()
+	now := h.now()
 	h.mu.Lock()
 	if h.first.IsZero() {
-		h.first = sent
+		h.first = now
 	}
 	state := "ready"
 	if h.drain.Ordered {
@@ -246,7 +246,10 @@ func (h *Heartbeat) Beat(ctx context.Context) error {
 		state = "draining"
 	}
 	h.mu.Unlock()
-	named := h.tasks(sent)
+	named := h.tasks(now)
+	// sent_at is read once the keys are gathered, which can wait on a result being written
+	// down, so that the time that took is not read as the clock's.
+	sent := h.now()
 
 	var a beatAnswer
 	err := h.Client.Do(ctx, http.MethodPost, heartbeatPath, beatRequest{
@@ -264,10 +267,11 @@ func (h *Heartbeat) Beat(ctx context.Context) error {
 		return fmt.Errorf("runner: POST %s: the answer carries no cancel, which the wire's always does", heartbeatPath)
 	}
 
+	arrived := h.now()
 	h.mu.Lock()
 	h.answered = sent
 	h.mu.Unlock()
-	h.clock(sent, received)
+	h.clock(sent, received, arrived)
 	h.ordered(a)
 	h.cancel(ctx, named, *a.Cancel)
 	return nil
@@ -338,18 +342,22 @@ func (h *Heartbeat) tasks(now time.Time) []string {
 
 // clock says, once each time it happens, that this host's clock and the installation's are more
 // than clockSkew apart, and that they are no longer.
-func (h *Heartbeat) clock(sent, received time.Time) {
-	skew := sent.Sub(received)
-	drifted := skew > clockSkew || skew < -clockSkew
+//
+// The request's own transit is not drift: on clocks that agree, received_at falls between sent_at
+// and the answer's arrival however slow the API was. So the host is ahead by what sent_at is past
+// received_at, and behind by what received_at is past the arrival, and by nothing else.
+func (h *Heartbeat) clock(sent, received, arrived time.Time) {
+	ahead, behind := sent.Sub(received), received.Sub(arrived)
+	drifted := ahead > clockSkew || behind > clockSkew
 	h.mu.Lock()
 	was := h.drifted
 	h.drifted = drifted
 	h.mu.Unlock()
 	switch {
-	case drifted && !was && skew > 0:
-		h.say(fmt.Sprintf("this host's clock is %s ahead of the installation's, by the heartbeat's sent_at and received_at: a deadline is an instant the installation wrote, so a container here is stopped that much early. Correct the host's clock", skew.Round(time.Millisecond)))
+	case drifted && !was && ahead > clockSkew:
+		h.say(fmt.Sprintf("this host's clock is %s ahead of the installation's, by the heartbeat's sent_at and received_at: a deadline is an instant the installation wrote, so a container here is stopped that much early. Correct the host's clock", ahead.Round(time.Millisecond)))
 	case drifted && !was:
-		h.say(fmt.Sprintf("this host's clock is %s behind the installation's, by the heartbeat's sent_at and received_at: a deadline is an instant the installation wrote, so a container here is stopped that much late. Correct the host's clock", (-skew).Round(time.Millisecond)))
+		h.say(fmt.Sprintf("this host's clock is %s behind the installation's, by the heartbeat's sent_at and received_at: a deadline is an instant the installation wrote, so a container here is stopped that much late. Correct the host's clock", behind.Round(time.Millisecond)))
 	case !drifted && was:
 		h.say("this host's clock is back within a second of the installation's")
 	}
