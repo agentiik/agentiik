@@ -78,9 +78,10 @@ type Carrier struct {
 	// Results is where the result goes, kept under the work root until the bus has taken it.
 	Results *Results
 
-	// Logs is where each task's log is shipped, which is Client, and the driver is opened with
-	// TaskLogs to write it there. Nil is a driver given nowhere to write a log, whose results
-	// address none: a log written nowhere is not one to point at.
+	// Logs is where each task's log is shipped, which is Client. It goes with a driver opened with
+	// TaskLogs, which refuses a task its carrier ships no log for, and nil with a driver given
+	// nowhere to write a log, whose results address none: a log written nowhere is not one to
+	// point at.
 	Logs LogShipper
 
 	// Log is where the agent writes a line.

@@ -461,7 +461,11 @@ func (s *shipment) answered(c *LogShipment, a LogShipped, err error) int {
 		s.refused = true
 		s.sent = nil
 		s.pending = nil
-		s.say(fmt.Sprintf("runner: the log of task %s is shipped no further, since chunk %d was refused: %s", s.key, c.Seq, err))
+		what := fmt.Sprintf("chunk %d", c.Seq)
+		if c.Seq == probeSeq {
+			what = "asking where it stands"
+		}
+		s.say(fmt.Sprintf("runner: the log of task %s is shipped no further, since %s was refused: %s", s.key, what, err))
 		return shipNoMore
 	}
 
@@ -524,8 +528,9 @@ func (s *shipment) giveUp() time.Time {
 // finish ships the closing chunk, once the container has exited and the task ended, and answers
 // with the log the result reports: the API's last answer, truncated where the driver cut the log,
 // where the API did, where this delivery went on with a log past lines it did not ship, or where
-// the closing chunk was never answered and the store holds less than the container wrote. It answers nil for a log that was never opened, since the task reached
-// nothing that writes one, and for one the API never answered, since there is no address to copy.
+// the closing chunk was never answered and the store holds less than the container wrote. It
+// answers nil for a log that was never opened, since the task reached nothing that writes one, and
+// for one the API never answered, since there is no address to copy.
 func (s *shipment) finish(cutByDriver bool) *bus.Log {
 	if s == nil {
 		return nil

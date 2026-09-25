@@ -832,3 +832,38 @@ func TestAClosedLogIsAnsweredAgainAsItWasClosed(t *testing.T) {
 		t.Errorf("a log closed once was shipped %d times", n)
 	}
 }
+
+// An answer is taken as the API's only where it addresses the log of the chunk's key and says where
+// the log goes on; anything else answered 200 is an error of no class, which ships the chunk again.
+func TestAnAnswerThatIsNotTheAPIsForThisLogIsNotTaken(t *testing.T) {
+	other, err := agk.NewLogURI(agk.TaskID(string(storeRun) + "/invoice/2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := agk.NewLogURI(agk.TaskID(aKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, answer := range map[string]string{
+		"another task's log": fmt.Sprintf(`{"uri":%q,"accepted":1,"next_seq":2,"lines":1,"truncated":false}`, other),
+		"no log":             `{"uri":"agk://run/01JMZ8V1P9C4/invoice/out","accepted":1,"next_seq":2,"lines":1,"truncated":false}`,
+		"nowhere to go on":   fmt.Sprintf(`{"uri":%q,"accepted":1,"next_seq":0,"lines":1,"truncated":false}`, own),
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, answer)
+			}))
+			t.Cleanup(srv.Close)
+			client, err := NewClient(srv.URL, credential, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.ShipLog(t.Context(), "agkgrant_01JMZ8V1PC7K3M0QY4B8ZR6TDN_Zm9vYmFyYmF6cXV4MTIzNA",
+				LogShipment{IdempotencyKey: aKey, Seq: 1, FirstLine: 1, Lines: []LogLine{{At: time.Now(), Text: "one"}}})
+			var refusal *APIError
+			if err == nil || errors.As(err, &refusal) {
+				t.Errorf("the answer %s was taken as %v", answer, err)
+			}
+		})
+	}
+}
