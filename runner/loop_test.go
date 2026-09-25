@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -801,8 +802,11 @@ func TestATaskWhoseImageIsATagIsReportedUnredeemedAndAcknowledged(t *testing.T) 
 	if held := l.loop.Held(); len(held) != 0 {
 		t.Errorf("the loop names %v for a task it reported", held)
 	}
-	if err := l.loop.Holder.Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
-		t.Errorf("the key of a task naming a tag was written down: %s", err)
+	if err := l.loop.Holder.Recorded(agk.TaskID(m.IdempotencyKey)); err != nil {
+		t.Errorf("the key of a task naming a tag is still held: %s", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(l.root, driver.KeysDir)); err == nil && len(entries) != 0 {
+		t.Errorf("the key of a task naming a tag was written down: %s holds %d entries", driver.KeysDir, len(entries))
 	}
 	if n := l.containersOf(m.IdempotencyKey); n != 0 {
 		t.Errorf("%d containers were created for a task naming a tag", n)
