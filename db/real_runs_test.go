@@ -372,6 +372,54 @@ func TestARequeueIsARowOfItsOwnUnderTheSameKey(t *testing.T) {
 	}
 }
 
+// A run decided with nothing on the clock waits on its tasks in flight, and is not what a sweep
+// comes round for, however often it does: it has been decided, which a run with no clock at all
+// had once read as not. What it waits for makes it due again: a loss, reported or declared.
+func TestADecidedRunWithNothingOnTheClockIsNotSwept(t *testing.T) {
+	pool, _ := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	key := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	var row string
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		if err := w.SaveDecision(ctx, Decision{
+			Namespace: "finance", Run: theRun, Was: 0, Seq: 1,
+			Document: json.RawMessage(`{"version":1}`), State: agk.Running, StartedAt: now,
+			Tasks: []TaskRow{{ID: key, Step: "invoice", State: agk.TaskDispatched, Attempt: 1, Runner: "runner-1", DispatchedAt: now}},
+		}); err != nil {
+			return err
+		}
+		var err error
+		if row, err = w.TaskRow(ctx, "finance", key); err != nil {
+			return err
+		}
+		_, err = w.Published(ctx, "finance", []agk.TaskID{key}, now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Duration{0, 10 * time.Second, time.Hour, 24 * time.Hour} {
+		if swept(t, pool, now.Add(at)) {
+			t.Fatalf("a run decided with nothing on the clock and its one task handed out was swept %s later", at)
+		}
+	}
+
+	later := now.Add(time.Minute)
+	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+		_, err := w.Lose(ctx, "finance", key, row, "runner-1", later)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !swept(t, pool, later) {
+		t.Error("a run whose runner reported its task lost is not swept, and nothing else hears of the loss")
+	}
+}
+
 // The sweep finds what a notification would have found, and the three cases it exists for.
 func TestTheSweepFindsWhatANotificationWouldHave(t *testing.T) {
 	pool, super := created(t)

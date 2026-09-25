@@ -321,10 +321,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			decision.Outputs = digestsOf(outputs)
 		}
 	}
-	// A pass that decided nothing writes nothing. The evaluator counts decisions, so a
+	// A pass that decided nothing writes no decision. The evaluator counts decisions, so a
 	// sequence that has not moved is the honest statement that this pass was a no-op:
 	// asking again at the same instant is idempotent by design, and the commonest case is
-	// a sweep reaching a run that is simply waiting.
+	// a sweep reaching a run that is simply waiting. The most such a pass writes is the
+	// clock, where the one it read is spent, which rewake below is for.
 	saved := e.Seq
 	var held []agk.TaskID
 	if state.Seq != saved {
@@ -366,7 +367,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// message that arrives twice carries a key a runner has already seen.
 	sent := co.hand(ctx, e.Namespace, run, plan)
 	if len(sent) == 0 {
-		return nil
+		if saved != e.Seq {
+			return nil
+		}
+		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			return rewake(ctx, w, e, plan.Wake)
+		})
 	}
 
 	// And the dispatch is recorded once the message has gone, not when the task was
@@ -392,8 +398,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
 		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-			_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
-			return err
+			if _, err := w.Published(ctx, e.Namespace, sent, co.now().UTC()); err != nil || saved != e.Seq {
+				return err
+			}
+			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
 	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
@@ -424,6 +432,23 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
 	})
+}
+
+// rewake puts on a run the clock a pass that decided nothing found, where it is not the one the
+// run holds.
+//
+// Such a pass writes no decision, but the clock it read may be spent: a loss or a result sets
+// the run due at the moment it arrived, so that the next sweep comes for it, and a pass that
+// then finds nothing to decide, a loss of a task already over or a result that makes nothing
+// runnable, would otherwise leave it due, and every later sweep would decide it again. The clock
+// is written only where it differs, and only over the row as the pass read it, so that a decision
+// written since keeps its clock, and so does a loss declared since. PostgreSQL keeps a moment to
+// the microsecond, which is what the two are compared at.
+func rewake(ctx context.Context, w *db.Wide, e db.Evaluation, wake time.Time) error {
+	if e.WakeAt.Equal(wake.Truncate(time.Microsecond)) {
+		return nil
+	}
+	return w.Rewake(ctx, e.Namespace, e.Run, e.Version, wake)
 }
 
 // keysOf is the key of each task a plan stops.

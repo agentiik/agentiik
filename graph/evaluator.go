@@ -1,8 +1,10 @@
 package graph
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -202,6 +204,17 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 		return e.stopEverything(StopDeadline), nil
 	}
 
+	// A pass counts as a decision only where it changed the state. The sequence is what a
+	// caller persisting the state writes down, and a caller that asks again with nothing new,
+	// as a controller's sweep does of a run waiting on its tasks, would otherwise write the
+	// same document at a new number on every pass, and read the number that moved as a
+	// decision to act on. The state is compared as it is persisted, so that a pass counts
+	// exactly when what a second process would resume from is not what it was.
+	before, err := json.Marshal(e.s)
+	if err != nil {
+		return Plan{}, fmt.Errorf("graph: the state could not be read before the pass: %w", err)
+	}
+
 	// Deciding is a pass over the graph in an order no edge points backwards through,
 	// so that a step publishing in this pass is already published when the step below
 	// it reads its barrier.
@@ -243,7 +256,13 @@ func (e *Evaluator) Next(now time.Time) (Plan, error) {
 	if e.s.Run.State.Terminal() && e.s.Run.FinishedAt.IsZero() {
 		e.s.Run.FinishedAt = now
 	}
-	e.s.Seq++
+	after, err := json.Marshal(e.s)
+	if err != nil {
+		return Plan{}, fmt.Errorf("graph: the state could not be read after the pass: %w", err)
+	}
+	if !bytes.Equal(before, after) {
+		e.s.Seq++
+	}
 	return plan, nil
 }
 

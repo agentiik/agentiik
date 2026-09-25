@@ -277,7 +277,13 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 			State:      state.Run.State,
 			StartedAt:  state.Run.StartedAt,
 			FinishedAt: state.Run.FinishedAt,
-			Steps:      steps, Tasks: tasks,
+			// Due at once, for the pass below. A result is what makes a step downstream
+			// of it runnable, and the evaluator says so only when it is asked, so a
+			// controller that stops between this write and that pass leaves the run for
+			// the sweep rather than waiting on tasks that will never be handed out. The
+			// pass puts back the clock it finds.
+			WakeAt: now,
+			Steps:  steps, Tasks: tasks,
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
 		}); err != nil || !bind {

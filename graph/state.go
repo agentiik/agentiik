@@ -49,6 +49,8 @@ type State struct {
 	// Seq counts the decisions taken against this state. It is what a caller
 	// persisting the state writes beside it to tell a stale copy from a current
 	// one, and what makes two writers of one run detectable rather than silent.
+	// A call that leaves the state as it was is no decision and does not move it,
+	// so a caller has nothing to write when it has not moved.
 	Seq int `json:"seq"`
 }
 

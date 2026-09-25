@@ -32,6 +32,7 @@ import (
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
+	"github.com/agentiik/agentiik/internal/dbtest/dbname"
 	"github.com/agentiik/agentiik/secret"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
@@ -413,10 +414,7 @@ func freshDatabase(t *testing.T) config.Migration {
 	}
 	defer conn.Close(ctx)
 
-	name := "agk_api_" + strings.ToLower(strings.NewReplacer("/", "_", " ", "_", "-", "_").Replace(t.Name()))
-	if len(name) > 60 {
-		name = name[:60]
-	}
+	name := dbname.Of(t)
 	for _, stmt := range []string{
 		`drop database if exists ` + name + ` with (force)`,
 		`drop role if exists ` + name,
