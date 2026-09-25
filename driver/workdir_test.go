@@ -1,10 +1,13 @@
 package driver
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -235,4 +238,189 @@ func TestARemovalThatFailsSaysWhereAndStillTakesTheSecretsAway(t *testing.T) {
 	if _, err := os.Stat(w.Secrets); !os.IsNotExist(err) {
 		t.Errorf("the secrets directory survived a working directory that could not be removed: %v", err)
 	}
+}
+
+// A task's directory goes with its container and the run, step and attempt directories above
+// it stay, one set per step ever run on the host, on the work root and on the secrets tmpfs.
+// The sweep is what takes them away, and the directories it sweeps under stay.
+func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	for _, id := range []agk.TaskID{shardedTask, "01JMZ8V1P9C4/invoice/1", "01JMZ8V1P9C5/pay/1"} {
+		w, err := newWorkdir(root, id, shm)
+		if err != nil {
+			t.Fatalf("newWorkdir: %s", err)
+		}
+		if err := w.remove(); err != nil {
+			t.Fatalf("removing %s: %s", id, err)
+		}
+	}
+	if left := dirsUnder(t, root); len(left) == 0 {
+		t.Fatalf("the tasks left nothing on the work root to sweep, which is not what this is about")
+	}
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	if left := dirsUnder(t, root); len(left) > 0 {
+		t.Errorf("the work root still holds %v after the sweep", left)
+	}
+	if left := dirsUnder(t, filepath.Join(shm, secretsBase)); len(left) > 0 {
+		t.Errorf("the secrets directory still holds %v after the sweep", left)
+	}
+	for _, dir := range []string{root, filepath.Join(shm, secretsBase)} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away with what was under it: %v", dir, err)
+		}
+	}
+}
+
+// Emptied a moment ago is the parent the next shard or attempt of the same step names next,
+// and on Docker Desktop a path removed and created again is refused as a bind source for about
+// a second after. The bound is what leaves it alone.
+func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, shardedTask, shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	if err := w.remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep(root, shm, time.Now().Add(-emptyKept))
+
+	for _, dir := range []string{filepath.Dir(w.Root), filepath.Dir(w.Secrets)} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away, and it went empty within the last %s: %v", dir, emptyKept, err)
+		}
+	}
+}
+
+// Old enough and not the sweep's: the record and the trees under the work root, a directory
+// somebody else put there, a task's directory that could not be removed, and whatever is
+// below a task's own directory. A work root is a directory somebody chose, and the sweep
+// takes only what taskPath could have spelled and only what holds nothing.
+func TestASweepTakesOnlyEmptyDirectoriesATaskCouldHaveLeft(t *testing.T) {
+	root := t.TempDir()
+	stay := []string{
+		filepath.Join(root, KeysDir, "01JMZ8V1P9C4", "invoice"),
+		filepath.Join(root, "not a run", "invoice", "1"),
+		filepath.Join(root, "01JMZ8V1P9C4", "not a step"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "02"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "2", "3-8", "out", "files"),
+		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "1", "in"),
+	}
+	for _, dir := range stay {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	residue := filepath.Join(root, "01JMZ8V1P9C6", "pay", "1", "params.json")
+	if err := os.MkdirAll(filepath.Dir(residue), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(residue, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep(root, "", time.Now().Add(time.Minute))
+
+	for _, path := range append(stay, residue) {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was taken away: %v", path, err)
+		}
+	}
+}
+
+// A task given no secret has an empty secrets directory for as long as it runs, so emptiness
+// does not tell a parent from a running task there. Its working directory, on the work root,
+// does.
+func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, "01JMZ8V1P9C4/invoice/1", shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	defer w.remove()
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	for _, dir := range []string{w.Root, w.In, w.Secrets} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was taken away from a task that is still running: %v", dir, err)
+		}
+	}
+}
+
+// The race the lock is for. MkdirAll finds a parent and then creates the directory below it,
+// and a sweep that removed the parent between the two would refuse a sibling's task. Siblings
+// of one step are created and removed over and over while a sweep that takes anything empty
+// runs beside them, under the lock ended runs it under, and not one of them is refused.
+func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	d := &Docker{cfg: Config{WorkRoot: root, Policy: Policy{SecretsDir: shm}}, keys: &keys{root: root}}
+
+	done := make(chan struct{})
+	swept := make(chan int)
+	go func() {
+		n := 0
+		defer func() { swept <- n }()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			d.keys.mu.Lock()
+			sweep(root, shm, time.Now().Add(time.Hour))
+			d.keys.mu.Unlock()
+			n++
+		}
+	}()
+
+	const shards, rounds = 8, 150
+	var wg sync.WaitGroup
+	refused := make(chan error, shards*rounds)
+	for i := range shards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := agk.NewTaskID("01JMZ8V1P9C4", "invoice", 1, agk.Shard{Index: i + 1, Of: shards})
+			for range rounds {
+				w, err := d.freshWorkdir(id)
+				if err != nil {
+					refused <- err
+					continue
+				}
+				w.remove()
+			}
+		}()
+	}
+	wg.Wait()
+	close(done)
+	if n := <-swept; n == 0 {
+		t.Fatalf("the sweep never ran beside the tasks, so nothing was tested")
+	}
+	close(refused)
+	if n := len(refused); n > 0 {
+		t.Errorf("%d of %d tasks were refused their working directory while a sweep ran beside them, the first with: %s", n, shards*rounds, <-refused)
+	}
+}
+
+// dirsUnder names every directory below dir, so that a failure says what was left.
+func dirsUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && path != dir {
+			out = append(out, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
