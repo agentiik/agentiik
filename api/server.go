@@ -904,19 +904,22 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 
 	// The run the router found, in the namespace and of the workflow it authorised.
 	run := agk.RunID(r.PathValue("run"))
-	var state agk.RunState
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
-		var err error
-		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil {
+		state, first, err := ns.RequestCancel(ctx, run, s.now())
+		if err != nil {
 			return err
 		}
-		result := audit.Unchanged
 		if !state.Terminal() {
 			// In the same transaction, for the reason starting a run gives: the request and
 			// the wake-up are one fact rather than two.
 			if err := ns.NotifyRun(ctx, run); err != nil {
 				return err
 			}
+		}
+		// Only the first request changes anything: the moment is the first one's, and a run
+		// that has ended stays ended.
+		result := audit.Unchanged
+		if first {
 			result = audit.Done
 		}
 		return ns.Audit(ctx, audit.Record{

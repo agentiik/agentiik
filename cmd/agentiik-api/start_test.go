@@ -30,6 +30,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest/dbname"
@@ -910,5 +911,29 @@ func TestStoppedWhileStartingTheAPIExitsZero(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := start(ctx, s, &stderr); code != exitStopped {
 		t.Errorf("stopped while it was reaching its database, the API exited %d: %s", code, stderr.String())
+	}
+}
+
+// The API asks the server to probe its sessions, so that one cut off while it holds the head of the
+// audit log's chain is dropped within half a minute rather than holding every audited act for two
+// hours.
+func TestTheServerProbesTheAPIsConnections(t *testing.T) {
+	database := freshDatabase(t)
+	if err := migrate(t.Context(), database, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(t.Context(), applicationDatabase(config.API{Database: database.Application}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(t.Context()))
+	for _, k := range db.Keepalives {
+		var v string
+		if err := conn.QueryRow(t.Context(), "select current_setting($1)", k.Name).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		if v != k.Value {
+			t.Errorf("an API session asks the server for %s = %s", k.Name, v)
+		}
 	}
 }

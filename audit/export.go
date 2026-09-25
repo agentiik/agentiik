@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -77,6 +78,12 @@ type Exporter struct {
 	// Trouble is told each time an export fails, and is not given the sink's answer, which could
 	// be anything the sink chose to say.
 	Trouble func(err error)
+
+	// made is the client built where Client is nil, once, so that every request goes over the
+	// connections one transport keeps rather than leaving a transport and its connection behind
+	// at each.
+	made sync.Once
+	own  *http.Client
 }
 
 // ErrNotAccepted is a sink that answered, and did not answer 2xx.
@@ -186,17 +193,25 @@ func (x *Exporter) send(ctx context.Context, entries []Entry) error {
 	return nil
 }
 
+// idleFor is how long a connection to the sink is kept between two exports, longer than Every so
+// that a busy export reuses one, and bounded so that a quiet one holds nothing open for good.
+const idleFor = 90 * time.Second
+
 func (x *Exporter) client() *http.Client {
 	if x.Client != nil {
 		return x.Client
 	}
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy:           http.ProxyFromEnvironment,
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	x.made.Do(func() {
+		x.own = &http.Client{
+			Transport: &http.Transport{
+				Proxy:           http.ProxyFromEnvironment,
+				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+				IdleConnTimeout: idleFor,
+			},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	})
+	return x.own
 }
 
 // Verified is what VerifyExport found: the entries it verified, from First to Last.

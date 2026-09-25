@@ -96,7 +96,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `NS.Runs` and `RunQuery.Workflow` are gone: one namespace's runs are listed by `Wide.Runs` over the workflows the authorizer allowed, as every namespace's are.
 - An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 - `db.Wide.Actionable` reads a run as never decided by `seq = 0` rather than by a null `wake_at`. A loss, reported or written over by a decision, sets `wake_at` to its moment rather than null, and `db.Wide.Rewake` puts back a run's clock only over the row as `db.Evaluation.Version` read it.
-- The audit log, append-only and chained: migration `0030_audit_log.sql` numbers, dates and hashes each entry after the head of the chain under a row lock, so acts committing at once take turns and never fork it. The application may only insert and read; triggers refuse an update, a delete or a truncate to every role. `NS.Audit` and `Wide.Audit` append in the act's transaction, and `Wide.VerifyAuditLog` checks the chain against its head.
+- The audit log, append-only and chained: migration `0030_audit_log.sql` numbers, dates and hashes each entry after the head of the chain under a row lock, so acts committing at once take turns and never fork it. The application may only insert and read; triggers refuse an update, a delete or a truncate to every role. `NS.Audit` and `Wide.Audit` append in the act's transaction, and `Wide.VerifyAuditLog` checks the chain against its head. `NS.RequestCancel` also answers whether the request was the first.
 
 ### Bus
 
@@ -301,6 +301,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/bus/token` only mints, so runners keep the bus once the control plane's credential has expired, where every one lost it within the hour. A pool's consumer is made ready as the pool is created, which is refused with 503 and creates nothing where the bus refuses it, and for every pool as `agentiik-api` starts, `default` included (`api.ReadyQueues`).
 - `GET /api/v1/runs/{id}` writes each port a step published as `digest`, `size` and `items`, with `purged_at` only once purged, where it wrote Go's field names and a zero time.
 - A manual trigger, a cancellation, a secret written or removed, a runner pool created, a join token issued, and a runner drained or revoked are recorded in the audit log in the transaction of the act, which fails with it. A secret's value and a join token are never recorded.
+- `agentiik-api` asks PostgreSQL to probe its sessions as the controller does (`db.WithKeepalives`), so one cut off while it holds the audit log's head frees it within half a minute rather than two hours.
 
 ### Secrets
 

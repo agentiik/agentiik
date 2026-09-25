@@ -147,3 +147,26 @@ create table audit_export (
 );
 
 insert into audit_export (through, hash) values (0, decode(repeat('00', 32), 'hex'));
+
+-- The cursor is kept, and moves only forward, whoever writes it: a cursor removed would stop the
+-- export for good, and one moved back would send again what the sink holds. One moved forward past
+-- what was sent is not refused here, since the row cannot tell, and a receiver sees it as a gap.
+create function audit_export_only_moves_forward() returns trigger
+  language plpgsql
+  as $$
+begin
+  if new.through < old.through then
+    raise exception 'the audit log was exported through entry %, and the cursor never goes back to %', old.through, new.through;
+  end if;
+  return new;
+end
+$$;
+
+create trigger audit_export_only_moves_forward before update on audit_export
+  for each row execute function audit_export_only_moves_forward();
+
+create trigger audit_export_is_never_removed before delete on audit_export
+  for each row execute function audit_log_is_kept();
+
+create trigger audit_export_is_never_truncated before truncate on audit_export
+  for each statement execute function audit_log_is_kept();

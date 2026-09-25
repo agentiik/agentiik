@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -239,8 +241,7 @@ func TestTheExportFollowsNoRedirect(t *testing.T) {
 	defer elsewhere.Close()
 	l.append("alice")
 	x := &Exporter{Source: l, URL: elsewhere.URL}
-	x.Client = x.client()
-	x.Client.Transport = elsewhere.Client().Transport
+	x.client().Transport.(*http.Transport).TLSClientConfig.RootCAs = trusted(elsewhere)
 	if _, err := x.Once(t.Context()); !errors.Is(err, ErrNotAccepted) {
 		t.Fatalf("a redirect answered %v", err)
 	}
@@ -289,5 +290,41 @@ func TestAnExportIsVerifiedAsAReceiverWroteIt(t *testing.T) {
 		if !errors.As(err, &broke) {
 			t.Errorf("an export with %s verifies as %+v, %v", name, v, err)
 		}
+	}
+}
+
+// trusted is the authority a test server's certificate is signed by.
+func trusted(s *httptest.Server) *x509.CertPool {
+	return s.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+}
+
+// The export's own client is made once, and every request goes over the one connection it keeps,
+// rather than each leaving a transport and an open connection behind.
+func TestTheExportKeepsOneConnectionToTheSink(t *testing.T) {
+	l := &log{}
+	var mu sync.Mutex
+	opened := 0
+	sink := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	sink.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			opened++
+			mu.Unlock()
+		}
+	}
+	sink.StartTLS()
+	defer sink.Close()
+	x := &Exporter{Source: l, URL: sink.URL, Batch: 1}
+	x.client().Transport.(*http.Transport).TLSClientConfig.RootCAs = trusted(sink)
+	for i := range 20 {
+		l.append(fmt.Sprintf("principal-%d", i))
+		if sent, err := x.Once(t.Context()); err != nil || sent != 1 {
+			t.Fatalf("export %d sent %d: %v", i, sent, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if opened != 1 {
+		t.Fatalf("twenty exports opened %d connections to the sink", opened)
 	}
 }

@@ -151,6 +151,14 @@ type installation struct {
 	close  func()
 }
 
+// applicationDatabase is the address the API connects to its database at, asking the server to
+// probe the session, as db.Keepalives says why: an act holds the head of the audit log's chain from
+// its append to its commit, and an API cut off in between would otherwise hold every other act of
+// the installation for the two hours the operating system waits.
+func applicationDatabase(c config.API) string {
+	return db.WithKeepalives(c.Database.ConnString())
+}
+
 // open connects to what the API stands on and builds every route on it.
 func open(ctx context.Context, s settings, log *slog.Logger) (*installation, error) {
 	operator, err := newOperator(s.OperatorToken)
@@ -162,7 +170,7 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		return nil, err
 	}
 
-	pool, err := db.Open(ctx, s.Database.ConnString())
+	pool, err := db.Open(ctx, applicationDatabase(s.API))
 	if err != nil {
 		return nil, err
 	}

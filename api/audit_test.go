@@ -51,13 +51,16 @@ func refuseAppends(t *testing.T, super string) {
 	}
 }
 
-// A run started by hand and asked to cancel twice, once while it runs and once after it ended, is
-// three entries in its namespace, each naming who asked and the run.
+// A run started by hand and asked to cancel three times, twice while it runs and once after it
+// ended, is four entries in its namespace, each naming who asked and the run, and only the first
+// request changed anything.
 func TestARunStartedAndCancelledIsRecorded(t *testing.T) {
 	o := withOneRun(t)
 	h := o.servedTo(t, everything{who: "admin"})
-	if w, _ := call(t, h, "POST", o.cancel(), "admin", nil); w.Code != http.StatusAccepted {
-		t.Fatalf("cancelling answered %d: %s", w.Code, w.Body)
+	for range 2 {
+		if w, _ := call(t, h, "POST", o.cancel(), "admin", nil); w.Code != http.StatusAccepted {
+			t.Fatalf("cancelling answered %d: %s", w.Code, w.Body)
+		}
 	}
 	if _, err := dbtest.Superuser(t, o.super).Exec(t.Context(), `update runs set state = 'cancelled', finished_at = now() where id = $1`, o.run); err != nil {
 		t.Fatal(err)
@@ -67,11 +70,11 @@ func TestARunStartedAndCancelledIsRecorded(t *testing.T) {
 	}
 
 	got := audited(t, o.pool)
-	if len(got) != 3 {
-		t.Fatalf("a run started and cancelled twice made %d entries", len(got))
+	if len(got) != 4 {
+		t.Fatalf("a run started and cancelled three times made %d entries", len(got))
 	}
 	for i, want := range []struct{ action, result string }{
-		{audit.RunTrigger, audit.Done}, {audit.RunCancel, audit.Done}, {audit.RunCancel, audit.Unchanged},
+		{audit.RunTrigger, audit.Done}, {audit.RunCancel, audit.Done}, {audit.RunCancel, audit.Unchanged}, {audit.RunCancel, audit.Unchanged},
 	} {
 		e := got[i]
 		if e.Action != want.action || e.Result != want.result || e.Actor != "admin" || e.Namespace != "finance" || e.Target != o.run {

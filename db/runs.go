@@ -97,7 +97,8 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	return nil
 }
 
-// RequestCancel records that a run is to be cancelled, and answers the state it is in.
+// RequestCancel records that a run is to be cancelled, and answers the state it is in and whether
+// this was the first request, which the audit log records as the one that changed something.
 //
 // It asks and decides nothing. Ending a run and stopping what it holds is one decision, and it is
 // the controller's, which reads the request on its next pass: the API writes down the moment it
@@ -107,34 +108,37 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 // moment.
 //
 // An identifier outside the alphabet runs are minted in is no run, as it is for Locate.
-func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, error) {
+func (n *NS) RequestCancel(ctx context.Context, run agk.RunID, at time.Time) (agk.RunState, bool, error) {
 	if !minted(run) {
-		return 0, fmt.Errorf("%w: %q", ErrNoRun, run)
+		return 0, false, fmt.Errorf("%w: %q", ErrNoRun, run)
 	}
 	var state string
+	first := true
 	err := n.tx.QueryRow(ctx,
-		`update runs set cancel_requested_at = coalesce(cancel_requested_at, $3)
+		`update runs set cancel_requested_at = $3
 		 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')
+		   and cancel_requested_at is null
 		 returning state`,
 		n.namespace, string(run), at).Scan(&state)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Over, or never there. A run that has ended stays ended, so the state read here
-		// is the one the update was refused for.
+		// Asked already, over, or never there. The first moment stays, a run that has ended
+		// stays ended, and the state read here is the one the update was refused for.
+		first = false
 		err = n.tx.QueryRow(ctx,
 			`select state from runs where namespace = $1 and id = $2`,
 			n.namespace, string(run)).Scan(&state)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("%w: %s", ErrNoRun, run)
+		return 0, false, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("db: run %s could not be asked to cancel: %w", run, err)
+		return 0, false, fmt.Errorf("db: run %s could not be asked to cancel: %w", run, err)
 	}
 	var s agk.RunState
 	if err := s.UnmarshalText([]byte(state)); err != nil {
-		return 0, fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
+		return 0, false, fmt.Errorf("db: run %s is in state %q: %w", run, state, err)
 	}
-	return s, nil
+	return s, first, nil
 }
 
 // Locate says which namespace and workflow a run is of, from its identifier alone.

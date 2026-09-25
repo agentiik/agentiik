@@ -267,4 +267,18 @@ func TestTheExportCursorOnlyMovesForward(t *testing.T) {
 	if seq, hash, err := trail.Exported(t.Context()); err != nil || seq != 5 || !bytes.Equal(hash, five) {
 		t.Fatalf("the cursor went back to %d: %v", seq, err)
 	}
+	// Whoever writes it: the application's role may update the cursor, and still cannot take it
+	// back or remove it.
+	for _, stmt := range []string{`update audit_export set through = 1`, `delete from audit_export`} {
+		err := pool.Installation(t.Context(), AuditLog, func(ctx context.Context, w *Wide) error {
+			_, err := w.tx.Exec(ctx, stmt)
+			return err
+		})
+		if err == nil {
+			t.Errorf("the application ran %q", stmt)
+		}
+	}
+	if seq, _, err := trail.Exported(t.Context()); err != nil || seq != 5 {
+		t.Fatalf("the cursor is at %d: %v", seq, err)
+	}
 }
