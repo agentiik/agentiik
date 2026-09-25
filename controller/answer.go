@@ -307,7 +307,11 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 
 	// And round again, because a result is the only thing that makes a step downstream of it
 	// runnable: "The controller consumes it, writes the new state, evaluates the graph again
-	// and publishes whatever has just become runnable."
+	// and publishes whatever has just become runnable." A result that ended the run leaves that
+	// pass nothing to decide and nothing to trace, so the trace goes from here.
+	if state.Run.State.Terminal() {
+		co.traced(ctx, e.Namespace, run)
+	}
 	return co.Decide(ctx, run)
 }
 

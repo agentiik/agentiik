@@ -119,5 +119,6 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	// that never arrives costs a container that runs to its deadline and is then stopped
 	// anyway, which is why this is reported rather than retried.
 	co.hand(ctx, e.Namespace, run, plan)
+	co.traced(ctx, e.Namespace, run)
 	return nil
 }
