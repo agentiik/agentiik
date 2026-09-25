@@ -330,12 +330,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk run --local` reports a container that exited 0 and whose outputs were refused with exit code 121 beside the refusal, rather than as 120 with no exit code.
 - `agk run --local` ends a task stopped as `superseded` or `sibling_failed` `cancelled` as the stop goes out, as a server does, since `graph.Next` now decides it for both: a `fail_fast` sibling that exits 0 just before the stop reads `cancelled` with its code rather than `succeeded`. A stop is sent again on every pass until its task comes back.
 - A `fail_fast` step hands out no further shard once one has failed for good, locally and on a server: its shards not yet started, a retry waiting out its backoff included, end `cancelled`, so a staged rollout stops at the first broken region.
+- A step a `merge: first` cancels ends its shards not yet started `cancelled`, a retry waiting out its backoff included, locally and on a server, where they stayed `pending` for good and a sweep decided the run again on every pass.
 
 ### Tests
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
 - `driver` has a boundary test, like `graph`.
-- `internal/stoptest` holds a `fail_fast` and a `merge: first` history that `agk run --local` and the controller both play, and both must end every task, step and run the same way.
+- `internal/stoptest` holds a `fail_fast` and a `merge: first` history that `agk run --local` and the controller both play, and both must end every task, step and run the same way. The `merge: first` one cancels a step with a shard not yet started, which neither may start.
 - `agk-runner` has a boundary test over its linked closure (no database, controller, API, secret store or server configuration) and over its symbols, so nothing in it can open an inbound port. A static test holds it to a static ELF for `linux/amd64` and `linux/arm64`.
 - `bus` has a boundary test: no controller, database, API or secret store. `bus/control` runs on a NATS server of its own, since `bus` empties the shared one before each test.
 - `bus/control` expects at the controller every result of the corpus its schema accepts, so a fixture `bus` lists as outgrown needs no second list.
