@@ -310,6 +310,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A workflow's input declaration compiles at most 128 KiB of schema, a file counted once for each input that names it (`graph.InputSchemasMaxBytes`), in `agk validate`, `agk push`, `agk run --local` and the API alike: compile time grows with the square of a schema's subschemas. `schema.Compiler` reads and parses each file of the tree once.
 - A manual trigger, a cancellation, a secret written or removed, a runner pool created, a join token issued, and a runner drained or revoked are recorded in the audit log in the transaction of the act, which fails with it. A secret's value and a join token are never recorded.
 - `agentiik-api` asks PostgreSQL to probe its sessions as the controller does (`db.WithKeepalives`), so one cut off while it holds the audit log's head frees it within half a minute rather than two hours.
+- `agentiik-api`, `agentiik-controller` and `agk-runner` put SIGINT and SIGTERM back to their default before a stop is seen under way, and raise again a second one that arrived before, so a second signal is never lost (`internal/stopsignal`).
 
 ### Secrets
 

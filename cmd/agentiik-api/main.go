@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"runtime/debug"
-	"syscall"
 	"time"
 
 	"github.com/agentiik/agentiik/internal/config"
+	"github.com/agentiik/agentiik/internal/stopsignal"
 )
 
 // The exit codes, which doc.go sets out.
@@ -29,28 +28,16 @@ func main() {
 	}))
 }
 
-// untilSignalled runs fn with a context signalled makes, and answers its exit code. It is the one
+// untilSignalled runs fn with a context stopsignal makes, and answers its exit code. It is the one
 // way the program is started, which a test starts it through too.
+//
+// The context is done at the first SIGINT or SIGTERM, which is a stop asked for: the requests
+// being answered are finished before the program ends. A second one ends a process whose way out
+// is taking too long.
 func untilSignalled(fn func(context.Context) int) int {
-	ctx, stop := signalled()
+	ctx, stop := stopsignal.Context()
 	defer stop()
 	return fn(ctx)
-}
-
-// signalled is done at the first SIGINT or SIGTERM: a person's interrupt, and what systemd and
-// docker stop send before they kill. Either is a stop asked for, and the requests being answered
-// are finished before the program ends.
-//
-// Only the first is taken. The signals go back to their default once it has arrived, so that a
-// second one ends a process whose way out is taking too long, as a person pressing Ctrl-C twice
-// means it to.
-func signalled() (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
-	return ctx, stop
 }
 
 // run is the whole program: the verb, its arguments, the configuration, and the exit code. lookup
