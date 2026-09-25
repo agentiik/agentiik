@@ -185,8 +185,15 @@ type shipment struct {
 	cut bool
 	// closed is the closing chunk answered, and refused a refusal no chunk can get past.
 	closed, refused bool
-	opened, sealed  bool
-	giveUpAt        time.Time
+	// resumed is a log this delivery went on with past lines it did not ship: what the container
+	// wrote while no agent read it is not in the store, or, where the driver read the log back
+	// from the daemon, is there twice.
+	resumed bool
+	// ended is what finish answered, which it answers again.
+	ended          *bus.Log
+	finished       bool
+	opened, sealed bool
+	giveUpAt       time.Time
 
 	closing, quit       chan struct{}
 	done                chan struct{}
@@ -476,7 +483,9 @@ func (s *shipment) answered(c *LogShipment, a LogShipped, err error) int {
 		return shipNext
 	}
 	// Kept nowhere: past a gap, or asked where the log stands. The lines of this chunk go
-	// where the API says the log goes on, unless the cap has already ended it.
+	// where the API says the log goes on, unless the cap has already ended it, and the log
+	// is reported truncated, since what lies between is not what the container wrote.
+	s.resumed = true
 	s.seq, s.line, s.sent = a.NextSeq, a.Lines+1, nil
 	lines := c.Lines
 	if s.cut {
@@ -514,8 +523,8 @@ func (s *shipment) giveUp() time.Time {
 
 // finish ships the closing chunk, once the container has exited and the task ended, and answers
 // with the log the result reports: the API's last answer, truncated where the driver cut the log,
-// where the API did, or where the closing chunk was never answered and the store holds less than
-// the container wrote. It answers nil for a log that was never opened, since the task reached
+// where the API did, where this delivery went on with a log past lines it did not ship, or where
+// the closing chunk was never answered and the store holds less than the container wrote. It answers nil for a log that was never opened, since the task reached
 // nothing that writes one, and for one the API never answered, since there is no address to copy.
 func (s *shipment) finish(cutByDriver bool) *bus.Log {
 	if s == nil {
@@ -544,13 +553,17 @@ func (s *shipment) finish(cutByDriver bool) *bus.Log {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.finished {
+		return s.ended
+	}
+	s.finished = true
 	if !s.closed {
 		s.say(fmt.Sprintf("runner: the log of task %s was not closed, so its result reports it truncated at the lines the API holds", s.key))
 	}
-	if s.answer == nil {
-		return nil
+	if s.answer != nil {
+		s.ended = &bus.Log{URI: s.answer.URI, Lines: s.answer.Lines, Truncated: s.answer.Truncated || cutByDriver || s.resumed || !s.closed}
 	}
-	return &bus.Log{URI: s.answer.URI, Lines: s.answer.Lines, Truncated: s.answer.Truncated || cutByDriver || !s.closed}
+	return s.ended
 }
 
 // abandon stops shipping, whatever is on its way, and waits for the shipping to stop. It is what a

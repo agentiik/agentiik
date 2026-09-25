@@ -751,7 +751,84 @@ func TestARestartedAgentGoesOnWithTheLogAnEarlierOneBegan(t *testing.T) {
 	if !slices.Equal(lines, []string{"before the restart", "still before it", "after the restart"}) || l.FinalSeq == 0 {
 		t.Errorf("the log stands at %+v holding %q", l, lines)
 	}
-	if log == nil || log.Lines != 3 || log.Truncated {
+	// Truncated, since what the container wrote while no agent read it is not there.
+	if log == nil || log.Lines != 3 || !log.Truncated {
 		t.Errorf("the result's log is %+v", log)
+	}
+}
+
+// A later report of a key made from the host's record says of its log what the first report said:
+// the API's answer, and nothing while the close is waited for, never the driver's own count, which
+// takes in standard output and the lines the API dropped.
+func TestTheRecordOfAKeySaysOfItsLogWhatItsResultSaid(t *testing.T) {
+	c := carrier(t, func(c dockertest.Container) (int, error) {
+		fmt.Fprintln(c.Stdout, `{"items":[]}`)
+		fmt.Fprintln(c.Stdout, "a second line on standard output")
+		fmt.Fprintln(c.Stderr, "one line on standard error")
+		return 0, nil
+	})
+	var closing atomic.Bool
+	c.logs.refuse = func(_ int, s LogShipment) error {
+		if s.Final && !closing.Load() {
+			return unavailable()
+		}
+		return nil
+	}
+	c.carrier.closeWithin = 10 * time.Second
+	d := c.carrier.Driver.(*driver.Docker)
+	recorded := func(key string) *driver.EndedLog {
+		t.Helper()
+		var completed *driver.Completed
+		if err := d.Hold(agk.TaskID(key)); !errors.As(err, &completed) {
+			t.Fatalf("the record does not hold the ending of %s: %v", key, err)
+		}
+		return completed.Ending.Log
+	}
+
+	m, r := c.store.taskFor(t, nil, map[string]file{"agentiik.yaml": {"version: 1\n", "0644"}}, nil)
+	a, err := Assemble(t.Context(), m, r, Assembly{WorkRoot: c.root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	carried := make(chan error, 1)
+	go func() { carried <- c.carrier.Carry(t.Context(), m, a) }()
+	eventually(t, "the closing chunk being shipped", func() bool {
+		return slices.ContainsFunc(c.logs.all(), func(s LogShipment) bool { return s.Final })
+	})
+	if l := recorded(m.IdempotencyKey); l != nil {
+		t.Errorf("while the close is waited for, the record says the log is %+v", l)
+	}
+	closing.Store(true)
+	if err := <-carried; err != nil {
+		t.Fatal(err)
+	}
+
+	got := c.bus.all()[0].Log
+	l := recorded(m.IdempotencyKey)
+	if got == nil || l == nil || l.URI.String() != got.URI || l.Lines != got.Lines || l.Truncated != got.Truncated {
+		t.Fatalf("the result says the log is %+v and the record %+v", got, l)
+	}
+	if l.Lines != 2 {
+		t.Errorf("the record counts %d lines, and the API holds the one on standard error and the driver's note", l.Lines)
+	}
+	again, err := EndingOf(m, "runner-dmz-02", driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskSucceeded, Log: l})
+	if err != nil || mustJSON(t, again.Log) != mustJSON(t, got) {
+		t.Errorf("a report from the record says the log is %s, and the result said %s", mustJSON(t, again.Log), mustJSON(t, got))
+	}
+}
+
+// The close is answered once: a carrier that falls back on another result after the close reports
+// the log the close answered, the driver's cut included, and ships nothing more.
+func TestAClosedLogIsAnsweredAgainAsItWasClosed(t *testing.T) {
+	logs := &fakeLogs{}
+	s := aShipment(t, logs, time.Second)
+	writes(t, s, driver.Stderr, "one")
+	s.Close()
+	first := s.finish(true)
+	if again := s.finish(false); first == nil || !first.Truncated || mustJSON(t, again) != mustJSON(t, first) {
+		t.Errorf("the log was answered %s, then %s", mustJSON(t, first), mustJSON(t, again))
+	}
+	if n := len(logs.all()); n != 1 {
+		t.Errorf("a log closed once was shipped %d times", n)
 	}
 }
