@@ -135,15 +135,20 @@ func Serve(ctx context.Context, a Agent) error {
 		}
 	}
 
-	// Each wait below is preceded by a stop, so that a return that is not the context ending,
-	// a bus refused or a loop that could not start, ends what it waits on first.
+	// Each wait below is preceded by what ends what it waits on, so that a return that is not
+	// the context ending, a bus refused or a loop that could not start, does not wait for ever.
+	// The heartbeat goes on past a stop, until Serve returns: the loop answers for every task
+	// it holds before it does, and a result kept or a key redeemed again while it winds down
+	// is still this host's to name, which a heartbeat that ended with the stop would leave
+	// unnamed for the wind-down and the restart together.
+	beatCtx, endBeat := context.WithCancel(context.WithoutCancel(ctx))
 	var beating sync.WaitGroup
 	defer beating.Wait()
-	defer stop(nil)
+	defer endBeat()
 	beating.Add(1)
 	go func() {
 		defer beating.Done()
-		if err := beat.Run(ctx); err != nil {
+		if err := beat.Run(beatCtx); err != nil {
 			stop(err)
 		}
 	}()

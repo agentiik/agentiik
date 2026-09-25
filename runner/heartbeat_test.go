@@ -622,8 +622,18 @@ func TestARedeemedTaskStaysAliveWhileTheAgentRunsAndIsLostThirtySecondsAfterItSt
 		t.Errorf("the task reads %q while its runner heartbeats", got)
 	}
 
+	// A daemon slow to remove the container keeps the agent winding down, and the task is still
+	// named while it does: the heartbeat ends when the agent returns, not when it is told to stop.
+	c.daemon.Handle("DELETE", "/containers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Second)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	told := in.now()
 	stop()
 	last := in.heardAt(t, m.TaskID)
+	if !last.After(told.Add(500 * time.Millisecond)) {
+		t.Errorf("the last heartbeat naming the task was at %s, and the agent told to stop at %s wound down for a second after", last, told)
+	}
 	if lost := in.swept(t, last.Add(db.LostAfter-time.Second)); lost != 0 {
 		t.Errorf("the sweep declared %d tasks lost within 30 seconds of the last heartbeat", lost)
 	}
@@ -632,5 +642,45 @@ func TestARedeemedTaskStaysAliveWhileTheAgentRunsAndIsLostThirtySecondsAfterItSt
 	}
 	if got := in.state(t, m.TaskID); got != "lost "+in.runner {
 		t.Errorf("the task reads %q once its runner went silent", got)
+	}
+}
+
+// A key off the wire's grammar is left out and said once, rather than sent: the API refuses a
+// heartbeat naming one whole, and every task on the host would go lost with it.
+func TestAKeyOffTheWiresGrammarIsLeftOutAndSaidOnce(t *testing.T) {
+	const good, lowercase = "01JMZ8V1P9C4XQ7K2N4D6F8H0A/normalize/1", "01jmz8v1p9c4xq7k2n4d6f8h0a/normalize/1"
+	api := newBeats(t, answered)
+	h, log := heartbeat(t, api.srv.URL, good, lowercase, "01JMZ8V1P9C4XQ7K2N4D6F8H0A/fan/1/5/4")
+	for range 2 {
+		if err := h.Beat(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := api.heard()[1].Tasks; !slices.Equal(got, []string{good}) {
+		t.Errorf("the heartbeat named %v, want %s alone", got, good)
+	}
+	if n := strings.Count(log.String(), "is not named in the heartbeat"); n != 2 {
+		t.Errorf("the keys left out were said %d times, want once each:\n%s", n, log)
+	}
+}
+
+// keyForm is the wire's idempotency key, character for character.
+func TestTheKeysAHeartbeatNamesAreTheWiresIdempotencyKeys(t *testing.T) {
+	doc, err := fixtures.Wire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			IdempotencyKey struct {
+				Pattern string `json:"pattern"`
+			} `json:"idempotencyKey"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(doc, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if keyForm.String() != schema.Defs.IdempotencyKey.Pattern {
+		t.Errorf("keyForm is %s and the wire writes %s", keyForm, schema.Defs.IdempotencyKey.Pattern)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"sync"
 	"time"
@@ -42,6 +43,12 @@ const clockSkew = time.Second
 
 // beatMaxTasks is how many keys one heartbeat names, which is what the API takes in one.
 const beatMaxTasks = MaxConcurrency
+
+// keyForm is the wire's idempotencyKey, copied from wire.schema.json and held to it by a test. The
+// API refuses a whole heartbeat naming one key off it, so a key off it is left out rather than
+// sent: one key the runner took and could not name is one task the sweep may declare lost, and a
+// heartbeat refused is every task on the host.
+var keyForm = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]+/[A-Za-z0-9][A-Za-z0-9_-]*/[1-9][0-9]*(?:/[1-9][0-9]*/[1-9][0-9]*)?$`)
 
 // beatRequest is runnerHeartbeat.request.
 type beatRequest struct {
@@ -124,6 +131,7 @@ type Heartbeat struct {
 	drain    Drain
 	drifted  bool
 	cut      bool
+	unnamed  map[string]bool
 	stopping sync.WaitGroup
 }
 
@@ -271,9 +279,13 @@ func (h *Heartbeat) tasks(now time.Time) []string {
 	named := []string{}
 	seen := map[string]bool{}
 	cut := false
+	var off []string
 	add := func(key string) {
 		switch {
 		case seen[key]:
+		case !keyForm.MatchString(key) || agk.TaskID(key).Validate() != nil:
+			seen[key] = true
+			off = append(off, key)
 		case len(named) == beatMaxTasks:
 			cut = true
 		default:
@@ -302,7 +314,20 @@ func (h *Heartbeat) tasks(now time.Time) []string {
 	h.mu.Lock()
 	said := h.cut
 	h.cut = cut
+	var fresh []string
+	for _, key := range off {
+		if !h.unnamed[key] {
+			fresh = append(fresh, key)
+		}
+	}
+	h.unnamed = map[string]bool{}
+	for _, key := range off {
+		h.unnamed[key] = true
+	}
 	h.mu.Unlock()
+	for _, key := range fresh {
+		h.say(fmt.Sprintf("the key %.100q is not named in the heartbeat, since it is not an idempotency key as the wire writes one and the API would refuse the heartbeat whole", key))
+	}
 	if cut && !said {
 		// The ones held come first, and of the earlier agent's the newest, so what is left
 		// out is what an earlier agent took longest ago.
