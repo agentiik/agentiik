@@ -39,11 +39,11 @@ type Server struct {
 	limits   agk.Limits
 	now      func() time.Time
 
-	// logs tells the step log streams this server answers that their log moved on, streaming is
-	// how they spend their time, and stopping ends them.
 	// declared are the compiled input declarations of the versions runs were started of.
 	declared *declarations
 
+	// logs tells the step log streams this server answers that their log moved on, streaming is
+	// how they spend their time, and stopping ends them.
 	logs      *logWatch
 	streaming streamTiming
 	stopping  <-chan struct{}

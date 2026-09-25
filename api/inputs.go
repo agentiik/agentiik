@@ -49,8 +49,15 @@ func (s *Server) bindInputs(w http.ResponseWriter, ctx context.Context, over Tar
 	}
 
 	key := over.Namespace + "/" + over.Workflow + "@" + commit
-	declared, held := s.declared.get(key)
+	declared, held, done := s.declared.claim(ctx, key)
+	if !held && done == nil {
+		// Asked for by a caller that went away while another start compiled the declaration.
+		fail(w, http.StatusServiceUnavailable, "the version's declaration was being compiled when the request ended")
+		return nil, false
+	}
 	if !held {
+		compiled := false
+		defer func() { done(declared, compiled) }()
 		tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: over.Namespace, workflow: over.Workflow, commit: commit}
 		var err error
 		declared, err = g.Workflow().DeclaredInputs(tree)
@@ -72,7 +79,7 @@ func (s *Server) bindInputs(w http.ResponseWriter, ctx context.Context, over Tar
 			fail(w, http.StatusUnprocessableEntity, err.Error())
 			return nil, false
 		}
-		s.declared.put(key, declared)
+		compiled = true
 	}
 
 	bound, err := schema.Bind(declared, supplied)
@@ -126,35 +133,67 @@ func values(v any) int {
 // declarations are the compiled declarations of the versions runs were started of lately.
 //
 // A version is a commit and never changes, so its declaration compiles to the same thing every
-// time, and compiling one can cost a second (graph.InputSchemasMaxBytes says why): kept, a
-// thousand starts of one version compile it once. Bounded like the graphs version.Store keeps,
-// and fewer, since a compiled schema weighs more than the document it came from.
+// time, and compiling one can take a third of a second (graph.InputSchemasMaxBytes says why):
+// kept, a thousand starts of one version compile it once, and starts that arrive together while
+// it compiles wait for that one compile rather than each running their own. Bounded like the
+// graphs version.Store keeps, and fewer, since a compiled declaration at its bound holds about
+// 10 MiB.
 type declarations struct {
-	mu    sync.Mutex
-	held  map[string]map[string]schema.Input
-	order []string
+	mu        sync.Mutex
+	held      map[string]map[string]schema.Input
+	order     []string
+	compiling map[string]chan struct{}
 }
 
 // declarationsKept is how many compiled declarations stay held.
-const declarationsKept = 64
+const declarationsKept = 16
 
-func (d *declarations) get(key string) (map[string]schema.Input, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	declared, held := d.held[key]
-	return declared, held
+// claim answers the declaration of key where one is held. Otherwise it answers done, and the
+// caller compiles and then calls done with what it compiled and whether it did, which keeps it
+// and lets the starts waiting on it go on. A caller whose context ends while another compiles is
+// answered neither.
+func (d *declarations) claim(ctx context.Context, key string) (map[string]schema.Input, bool, func(map[string]schema.Input, bool)) {
+	for {
+		d.mu.Lock()
+		if declared, held := d.held[key]; held {
+			d.mu.Unlock()
+			return declared, true, nil
+		}
+		wait, busy := d.compiling[key]
+		if !busy {
+			if d.compiling == nil {
+				d.compiling = map[string]chan struct{}{}
+			}
+			finished := make(chan struct{})
+			d.compiling[key] = finished
+			d.mu.Unlock()
+			return nil, false, func(declared map[string]schema.Input, compiled bool) {
+				d.mu.Lock()
+				defer d.mu.Unlock()
+				delete(d.compiling, key)
+				close(finished)
+				if compiled {
+					d.keep(key, declared)
+				}
+			}
+		}
+		d.mu.Unlock()
+		// A compile that failed keeps nothing, and the next to ask compiles again: a store that
+		// did not answer may answer now.
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, false, nil
+		}
+	}
 }
 
-// put keeps one, dropping the oldest past declarationsKept. A compiled schema is only read once
+// keep holds one, dropping the oldest past declarationsKept. A compiled schema is only read once
 // compiled, and schema.Bind copies a default before handing it on, so every start may share it.
-func (d *declarations) put(key string, declared map[string]schema.Input) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// Called with mu held.
+func (d *declarations) keep(key string, declared map[string]schema.Input) {
 	if d.held == nil {
 		d.held = map[string]map[string]schema.Input{}
-	}
-	if _, held := d.held[key]; held {
-		return
 	}
 	d.held[key] = declared
 	d.order = append(d.order, key)

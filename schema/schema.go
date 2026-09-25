@@ -63,8 +63,8 @@ const treeBase = "agk://repo/"
 // for as long as the tree is, which is the life of the Compiler.
 //
 // Parsing once is not compiling once: each document still compiles every file it
-// reaches, and compiling costs more than the bytes, since the library's time grows with
-// the square of a document's subschemas. So a Compiler may be given a weight it compiles
+// reaches, and compiling costs more than the bytes, since the library's time grows faster
+// than the square of a document's subschemas. So a Compiler may be given a weight it compiles
 // no more than, every document and every file each document reaches counted each time,
 // which is what NewCompilerWithin is for.
 type Compiler struct {

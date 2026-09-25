@@ -249,8 +249,8 @@ func TestAReferenceIntoTheTreeIsReadFromTheStoreAndHeldToItsDigest(t *testing.T)
 	}
 }
 
-// A version's declaration is compiled once, at the first start of it that succeeds, and every start
-// after, all at once included, binds against what that one compiled: it can cost a second, and a
+// A version's declaration is compiled once, and every start of it binds against what that one
+// compiled, those arriving while it compiles included: it can take a third of a second, and a
 // version never changes.
 func TestADeclarationIsCompiledOnceForEveryStartOfItsVersion(t *testing.T) {
 	store := &unanswering{Objects: artifact.Dir(t.TempDir())}
@@ -259,11 +259,8 @@ func TestADeclarationIsCompiledOnceForEveryStartOfItsVersion(t *testing.T) {
 		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
 	}
 	start := `{"commit":"` + aCommit + `","inputs":{"orders":[{"id":"A-1"}]}}`
-	if w := sent(t, h, "POST", startAt, "alice", start); w.Code != http.StatusAccepted {
-		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
-	}
 	var wg sync.WaitGroup
-	for range 8 {
+	for range 9 {
 		wg.Go(func() {
 			if w := sent(t, h, "POST", startAt, "alice", start); w.Code != http.StatusAccepted {
 				t.Errorf("starting a run answered %d: %s", w.Code, w.Body)
@@ -275,7 +272,7 @@ func TestADeclarationIsCompiledOnceForEveryStartOfItsVersion(t *testing.T) {
 	}
 	wg.Wait()
 	if store.opened != 1 {
-		t.Errorf("the schema's object was opened %d times for 17 starts of one version", store.opened)
+		t.Errorf("the schema's object was opened %d times for 18 starts of one version", store.opened)
 	}
 	if n := runsHeld(t, super); n != 9 {
 		t.Errorf("%d runs exist, and nine starts were accepted", n)

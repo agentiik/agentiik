@@ -15,12 +15,12 @@ import (
 // it.
 //
 // A declaration is compiled wherever a run's inputs are bound, which on an installation is at a
-// push and at the start of a run, on behalf of whoever holds workflow:write or workflow:run. The
-// JSON Schema library's compile time grows with the square of a schema's subschemas: 410 KiB of
-// properties compiled in 0.45 s and 2.6 MiB in 63 s, and one file named by forty inputs is
-// compiled forty times. At 512 KiB the densest declaration compiles in about a second, and an
-// input schema that describes what a person types or a trigger sends is kilobytes.
-const InputSchemasMaxBytes = 512 << 10
+// push and at the first start of a version, on behalf of whoever holds workflow:write or
+// workflow:run. The JSON Schema library's compile time grows faster than the square of a
+// schema's subschemas: an object of bare properties took 0.1 s at 64 KiB, 0.33 s at 128 KiB,
+// 2.5 s at 256 KiB and 12 s at 512 KiB, holding about 10 MiB at 128. So the bound is 128 KiB, and
+// an input schema that describes what a person types or a trigger sends is kilobytes.
+const InputSchemasMaxBytes = 128 << 10
 
 // DeclaredInputs compiles the schema of every input the workflow declares against the tree of
 // the commit it came from, into what schema.Bind binds a run's inputs against.
