@@ -258,10 +258,11 @@ func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
 	if left := dirsUnder(t, root); len(left) == 0 {
 		t.Fatalf("the tasks left nothing on the work root to sweep, which is not what this is about")
 	}
+	record(t, root, "01JMZ8V1P9C4", "01JMZ8V1P9C5")
 
 	sweep(root, shm, time.Now().Add(time.Minute))
 
-	if left := dirsUnder(t, root); len(left) > 0 {
+	if left := tasksUnder(t, root); len(left) > 0 {
 		t.Errorf("the work root still holds %v after the sweep", left)
 	}
 	if left := dirsUnder(t, filepath.Join(shm, secretsBase)); len(left) > 0 {
@@ -286,6 +287,7 @@ func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
 	if err := w.remove(); err != nil {
 		t.Fatal(err)
 	}
+	record(t, root, "01JMZ8V1P9C4")
 
 	sweep(root, shm, time.Now().Add(-emptyKept))
 
@@ -297,13 +299,18 @@ func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
 }
 
 // Old enough and not the sweep's: the record and the trees under the work root, a directory
-// somebody else put there, a task's directory that could not be removed, and whatever is
-// below a task's own directory. A work root is a directory somebody chose, and the sweep
-// takes only what taskPath could have spelled and only what holds nothing.
+// somebody else put there, a run the record knows nothing of, a task's directory that could
+// not be removed, and whatever is below a task's own directory. A work root is a directory
+// somebody chose, the root of a filesystem mounted for it holding an empty lost+found, and
+// the sweep takes only runs the record has and only what holds nothing.
 func TestASweepTakesOnlyEmptyDirectoriesATaskCouldHaveLeft(t *testing.T) {
 	root := t.TempDir()
+	record(t, root, "01JMZ8V1P9C4", "01JMZ8V1P9C6")
 	stay := []string{
 		filepath.Join(root, KeysDir, "01JMZ8V1P9C4", "invoice"),
+		filepath.Join(root, "lost+found"),
+		filepath.Join(root, "cache", "v1", "2"),
+		filepath.Join(root, "01JMZ8V1P9C7", "invoice", "1"),
 		filepath.Join(root, "not a run", "invoice", "1"),
 		filepath.Join(root, "01JMZ8V1P9C4", "not a step"),
 		filepath.Join(root, "01JMZ8V1P9C4", "invoice", "02"),
@@ -342,6 +349,7 @@ func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	defer w.remove()
+	record(t, root, "01JMZ8V1P9C4")
 
 	sweep(root, shm, time.Now().Add(time.Minute))
 
@@ -359,6 +367,7 @@ func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
 func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
 	root, shm := t.TempDir(), t.TempDir()
 	d := &Docker{cfg: Config{WorkRoot: root, Policy: Policy{SecretsDir: shm}}, keys: &keys{root: root}}
+	record(t, root, "01JMZ8V1P9C4")
 
 	done := make(chan struct{})
 	swept := make(chan int)
@@ -407,6 +416,56 @@ func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
 	}
 }
 
+// A secrets directory somebody else made, or opened to others, is one a link could be swapped
+// into between the walk and the removal, so the sweep leaves it alone, as ownedDir refuses a
+// task's directory there.
+func TestASweepLeavesASecretsDirectoryThatIsNoLongerTheRunnersAlone(t *testing.T) {
+	root, shm := t.TempDir(), t.TempDir()
+	w, err := newWorkdir(root, shardedTask, shm)
+	if err != nil {
+		t.Fatalf("newWorkdir: %s", err)
+	}
+	if err := w.remove(); err != nil {
+		t.Fatal(err)
+	}
+	record(t, root, "01JMZ8V1P9C4")
+	base := filepath.Join(shm, secretsBase)
+	if err := os.Chmod(base, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep(root, shm, time.Now().Add(time.Minute))
+
+	if _, err := os.Stat(filepath.Dir(w.Secrets)); err != nil {
+		t.Errorf("the sweep walked a secrets directory open to every account on the host: %v", err)
+	}
+	if left := tasksUnder(t, root); len(left) > 0 {
+		t.Errorf("the work root still holds %v, and it is the runner's own", left)
+	}
+}
+
+// record writes down under the work root that the record has the given runs.
+func record(t *testing.T, root string, runs ...string) {
+	t.Helper()
+	for _, run := range runs {
+		if err := os.MkdirAll(filepath.Join(root, KeysDir, run), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// tasksUnder is dirsUnder less the record, which the sweep is not about.
+func tasksUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	for _, path := range dirsUnder(t, dir) {
+		if !strings.HasPrefix(path, filepath.Join(dir, KeysDir)) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 // dirsUnder names every directory below dir, so that a failure says what was left.
 func dirsUnder(t *testing.T, dir string) []string {
 	t.Helper()
@@ -435,6 +494,14 @@ func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
 
 	skeleton := filepath.Join(r.work, "01JMZ8V1P9C3", "invoice", "1")
 	if err := os.MkdirAll(skeleton, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The key the earlier task was held under, still within the week the record keeps it.
+	entry := filepath.Join(r.work, KeysDir, "01JMZ8V1P9C3", "invoice", "1.json")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte(`{"idempotency_key":"01JMZ8V1P9C3/invoice/1"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	long := time.Now().Add(-emptyKept - time.Minute)

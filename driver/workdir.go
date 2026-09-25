@@ -340,8 +340,12 @@ const emptyKept = time.Hour
 //
 // Only what taskPath could have spelled is looked at, a run, then a step, an attempt and a
 // shard, and never anything below a task's own directory: the work root holds the record
-// and the trees beside the tasks, and a work root is a directory somebody chose. A
-// directory is taken away with os.Remove, which refuses one that holds anything, so a
+// and the trees beside the tasks, and a work root is a directory somebody chose. A run is
+// one the record under the work root has a directory for, since a name that is merely
+// valid as a run identifier is nearly any name: an empty lost+found at the root of a
+// filesystem mounted for the work root is one, and the runner may remove it. Every key a
+// runner holds is written there before its directory is created, and the record keeps a
+// run for a week, far past the hour its skeleton waits. A directory is taken away with os.Remove, which refuses one that holds anything, so a
 // task's directory that could not be removed stays to be found. It is judged by the moment
 // it last changed as the walk found it, before a child the same sweep took away changed it
 // again, so that a run whose last step went empty an hour ago goes in the same sweep as
@@ -351,21 +355,41 @@ const emptyKept = time.Hour
 // Every task has one, and it is empty for a task given no secret, so emptiness alone does
 // not tell a parent from a task that is still running; the working directory, which is
 // never empty while its task runs, does.
+//
+// The secrets directory is swept only while it is still this runner's alone, as ownedDir
+// leaves it. It sits on a filesystem every account on the host can write to, and one that
+// somebody else made or opened could have a link swapped in under a path the walk found,
+// between the walk and the removal, which would take away an empty directory of that
+// name wherever the link points. A task is refused its directory there by ownedDir, and
+// the sweep leaves it alone for the same reason.
 func sweep(root, secretsDir string, cutoff time.Time) {
 	if root == "" {
 		return
 	}
-	sweepTree(root, cutoff, nil)
-	if secretsDir != "" {
-		sweepTree(filepath.Join(secretsDir, secretsBase), cutoff, func(rel string) bool {
+	sweepTree(root, root, cutoff, nil)
+	base := filepath.Join(secretsDir, secretsBase)
+	if secretsDir != "" && stillOwned(base) {
+		sweepTree(root, base, cutoff, func(rel string) bool {
 			_, err := os.Lstat(filepath.Join(root, rel))
 			return !errors.Is(err, fs.ErrNotExist)
 		})
 	}
 }
 
-// sweepTree is sweep over one tree. held says a directory is to stay whatever it holds.
-func sweepTree(top string, cutoff time.Time, held func(rel string) bool) {
+// stillOwned says whether a directory is as ownedDir leaves it: a directory and not a link,
+// belonging to this process's account where the platform says, and closed to every other.
+func stillOwned(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	uid, ok := ownerOf(info)
+	return !ok || uid == os.Geteuid()
+}
+
+// sweepTree is sweep over the tree under top, whose runs are the ones the record under root
+// has. held says a directory is to stay whatever it holds.
+func sweepTree(root, top string, cutoff time.Time, held func(rel string) bool) {
 	type empty struct{ path, rel string }
 	var found []empty
 	filepath.WalkDir(top, func(path string, d fs.DirEntry, err error) error {
@@ -377,7 +401,7 @@ func sweepTree(top string, cutoff time.Time, held func(rel string) bool) {
 		}
 		rel, _ := filepath.Rel(top, path)
 		parts := strings.Split(rel, string(filepath.Separator))
-		if !taskShaped(parts) {
+		if !taskShaped(parts) || len(parts) == 1 && !recorded(root, parts[0]) {
 			return filepath.SkipDir
 		}
 		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
@@ -396,6 +420,12 @@ func sweepTree(top string, cutoff time.Time, held func(rel string) bool) {
 		}
 		os.Remove(found[i].path)
 	}
+}
+
+// recorded says whether the record under the work root has a directory for a run.
+func recorded(root, run string) bool {
+	info, err := os.Lstat(filepath.Join(root, KeysDir, run))
+	return err == nil && info.IsDir()
 }
 
 // taskShaped says whether a path relative to a tree is one taskPath spells or a parent of
