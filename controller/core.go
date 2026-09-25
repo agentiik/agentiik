@@ -366,7 +366,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// message that arrives twice carries a key a runner has already seen.
 	sent := co.hand(ctx, e.Namespace, run, plan)
 	if len(sent) == 0 {
-		return nil
+		if saved != e.Seq {
+			return nil
+		}
+		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			return rewake(ctx, w, e, plan.Wake)
+		})
 	}
 
 	// And the dispatch is recorded once the message has gone, not when the task was
@@ -392,8 +397,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
 		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-			_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
-			return err
+			if _, err := w.Published(ctx, e.Namespace, sent, co.now().UTC()); err != nil || saved != e.Seq {
+				return err
+			}
+			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
 	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
@@ -424,6 +431,23 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
 	})
+}
+
+// rewake puts on a run the clock a pass that decided nothing found, where it is not the one the
+// run holds.
+//
+// Such a pass writes no decision, but the clock it read may be spent: a loss or a result sets
+// the run due at the moment it arrived, so that the next sweep comes for it, and a pass that
+// then finds nothing to decide, a loss of a task already over or a result that makes nothing
+// runnable, would otherwise leave it due, and every later sweep would decide it again. The clock
+// is written only where it differs, and only on the sequence the pass read, so that a decision
+// written since keeps its own. PostgreSQL keeps a moment to the microsecond, which is what the
+// two are compared at.
+func rewake(ctx context.Context, w *db.Wide, e db.Evaluation, wake time.Time) error {
+	if e.WakeAt.Equal(wake.Truncate(time.Microsecond)) {
+		return nil
+	}
+	return w.Rewake(ctx, e.Namespace, e.Run, e.Seq, wake)
 }
 
 // keysOf is the key of each task a plan stops.
