@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -168,6 +169,19 @@ func TestTheVersionIsTheReleaseWithoutItsV(t *testing.T) {
 	} {
 		if got := versionOf(recorded); got != want {
 			t.Errorf("%q is version %q, want %q", recorded, got, want)
+		}
+	}
+}
+
+// A client made here reaches the API over TLS 1.2 at least, the join's included.
+func TestTheClientHoldsTheTLSFloor(t *testing.T) {
+	for which, c := range map[string]*Client{
+		"a runner's": func() *Client { c, _ := NewClient("https://agentiik.example.com", credential, nil); return c }(),
+		"the join's": newClient("https://agentiik.example.com", "", nil),
+	} {
+		transport, ok := c.http.Transport.(*http.Transport)
+		if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion != tls.VersionTLS12 {
+			t.Errorf("%s client does not hold the floor", which)
 		}
 	}
 }

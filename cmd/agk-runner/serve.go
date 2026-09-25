@@ -33,9 +33,10 @@ func serve(ctx context.Context, e env, args []string) int {
 
 	cfg, err := runner.ReadConfig(e.Lookup, e.EnvFile)
 	policy, perr := loadPolicy(e.PolicyFile, log)
-	// Both are reported on the one start, so that an operator fixing a unit is told
+	socket, derr := dockerHost(e)
+	// All are reported on the one start, so that an operator fixing a unit is told
 	// everything that is wrong with it rather than one thing per restart.
-	if err := errors.Join(err, perr); err != nil {
+	if err := errors.Join(err, perr, derr); err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
 		}
@@ -64,7 +65,6 @@ func serve(ctx context.Context, e env, args []string) int {
 
 	// Limits is left at its zero value, which is agk's own size rules: no installation setting
 	// changes them, and the controller holds a task's envelopes to the same ones.
-	socket, _ := e.Lookup("DOCKER_HOST")
 	endings := &runner.Endings{}
 	d, err := openDriver(ctx, driver.Config{
 		Socket:   socket,
