@@ -104,6 +104,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	}); err != nil {
 		return err
 	}
+	co.tell(runEnded(nil, e.Namespace, e.Workflow, e.State, state, e.CreatedAt))
 
 	// And they say more about what a runner holds. A pass that published a task and died
 	// before recording the dispatch left it pending in the document, where the evaluator
