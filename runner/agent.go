@@ -126,6 +126,11 @@ func Serve(ctx context.Context, a Agent) error {
 	}
 
 	loop, beat, stops := a.parts(results, earlier, say)
+	// A result an earlier agent owed and never kept is kept now, from the record, for the first
+	// heartbeat to name its key and the first flush to publish it.
+	if err := loop.Carrier.Recover(); err != nil {
+		say(err.Error())
+	}
 	defer stops.Wait()
 	defer beat.Wait()
 	if err := beat.First(ctx); err != nil || ctx.Err() != nil {

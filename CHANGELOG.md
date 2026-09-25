@@ -189,6 +189,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
 - A task's log caps (`log_max_bytes`, `log_max_lines`) count standard error alone, so an envelope on standard output no longer cuts a short log and reports it truncated. Standard output is still written into the log, up to `envelope_max_bytes` and as many lines as the cap, counted apart, and a line of the driver's on standard output says where it stopped.
 - The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
+- `Docker.Ended` answers the ending the record holds of a key, and takes nothing.
 
 ### Runner
 
@@ -219,6 +220,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `serve` renews its runner credential at two thirds of its window through `POST /api/v1/runners/rotate`, signed with `/var/lib/agentiik/runner.key`, and at its first start for the one `join` wrote. The new credential is kept in `/var/lib/agentiik/credential` (0600) before any call carries it, and `serve` prefers that file to `runner.env`. A renewal refused `401`, or `403` with no revocation heard within two heartbeats, exits 3, and so does a key that is gone, before any call.
 - `serve` renews its bus credential at three quarters of its life on a second connection, heard on for stops before anything moves onto it. The connection it replaces stays open for `bus.AckWait` past its last take, and no longer than its credential, so nothing taken on it loses its acknowledgement.
 - `join` takes `/var/lib/agentiik/credential` away, and tells a host whose `runner.env` remains without its key that it is a new runner.
+- A task's dispatch is written down under `<work root>/.results` as owed its result from before it runs until the result is kept. An agent that stops once the key's ending is written and before its result is kept no longer leaves the key named nowhere: the agent that comes back keeps the result from the record under that `task_id`, names the key from its first heartbeat and publishes it, its log reported `truncated`.
 
 ### Artifacts
 
