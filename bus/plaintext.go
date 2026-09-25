@@ -17,8 +17,7 @@ var ErrPlaintext = errors.New("bus: the bus is never reached in plaintext across
 //
 // "No plaintext path anywhere, including between the control plane and the bus." Every server of
 // the address is tls:// or wss://, or nats:// or ws:// to a loopback address alone, which crosses
-// no network: that is how the tests reach the server they run beside, and how agk reaches an
-// installation on its own machine. The control plane's configuration is stricter still and takes
+// no network: that is how the tests reach the server they run beside. The control plane's configuration is stricter still and takes
 // no loopback exception, and this is the check a runner holds the address the API hands it to, and
 // the one every connection holds itself to whoever opened it.
 //
@@ -48,4 +47,15 @@ func secure(servers string) bool {
 		}
 	}
 	return true
+}
+
+// plainWebsocket says whether an address that passed CheckURL names a ws:// server, which is on
+// this machine and spoken to in plaintext.
+func plainWebsocket(servers string) bool {
+	for _, server := range strings.Split(servers, ",") {
+		if u, err := url.Parse(strings.TrimSpace(server)); err == nil && u.Scheme == "ws" {
+			return true
+		}
+	}
+	return false
 }

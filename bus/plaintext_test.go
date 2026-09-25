@@ -61,7 +61,9 @@ func TestABusIsNeverDialledInPlaintextAcrossANetwork(t *testing.T) {
 	}
 }
 
-// A bus that speaks nothing newer than TLS 1.1 is refused at the handshake.
+// A bus that speaks nothing newer than TLS 1.1 is refused at the handshake. nats.go refuses one on
+// its own too, so this holds the behaviour rather than proving the floor, which
+// TestABusConnectionHoldsTheTLSFloor does.
 func TestABusOfTLS11IsRefused(t *testing.T) {
 	ln := natsServer(t, `{"server_id":"old","version":"2.10.0","proto":1,"max_payload":1048576,"tls_required":true}`,
 		&tls.Config{Certificates: []tls.Certificate{certificate(t)}, MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11})
@@ -161,5 +163,40 @@ func TestABusConnectionHoldsTheTLSFloor(t *testing.T) {
 	defer b.Close()
 	if c := b.conn.Opts.TLSConfig; c == nil || c.MinVersion != tls.VersionTLS12 {
 		t.Fatal("the connection's TLS configuration does not hold the floor")
+	}
+}
+
+// A websocket on this machine is spoken to in plaintext, as its address says, rather than in a
+// TLS its server does not speak.
+func TestAPlaintextWebsocketOnThisMachineIsSpokenToInPlaintext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	first := make(chan byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		b := make([]byte, 1)
+		if _, err := conn.Read(b); err == nil {
+			first <- b[0]
+		}
+	}()
+	go func() {
+		if b, err := OpenRunner(Options{URL: "ws://" + ln.Addr().String()}); err == nil {
+			b.Close()
+		}
+	}()
+	select {
+	case b := <-first:
+		if b != 'G' {
+			t.Fatalf("a ws:// connection began with 0x%02x, where a plaintext upgrade begins with GET", b)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("nothing reached the websocket")
 	}
 }

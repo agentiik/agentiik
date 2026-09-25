@@ -196,9 +196,13 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 		options = append(options, nats.CustomInboxPrefix(inbox))
 	}
 	// The floor, on the configuration nats.go uses for a tls:// or wss:// server and for a
-	// server that insists on TLS. A loopback address reached in plaintext takes no server
-	// another one gossips, which could be anywhere and would be reached in plaintext too.
-	options = append(options, func(n *nats.Options) error { n.TLSConfig = tlsfloor.Config(); return nil })
+	// server that insists on TLS. Not for a ws:// server on this machine, which nats.go would
+	// take a configuration as an order to speak TLS to. A loopback address reached in
+	// plaintext takes no server another one gossips, which could be anywhere and would be
+	// reached in plaintext too.
+	if !plainWebsocket(o.URL) {
+		options = append(options, func(n *nats.Options) error { n.TLSConfig = tlsfloor.Config(); return nil })
+	}
 	if !secure(o.URL) {
 		options = append(options, nats.IgnoreDiscoveredServers())
 	}
