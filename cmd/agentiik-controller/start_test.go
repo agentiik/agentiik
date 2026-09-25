@@ -26,6 +26,7 @@ import (
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/stopsignal"
 	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
@@ -63,7 +64,7 @@ func TestMain(m *testing.M) {
 		os.Exit(instance(raw))
 	}
 	if os.Getenv(slowStopVariable) != "" {
-		ctx, _ := signalled()
+		ctx, _ := stopsignal.Context()
 		fmt.Println("waiting")
 		<-ctx.Done()
 		fmt.Println("stopping")
@@ -75,6 +76,10 @@ func TestMain(m *testing.M) {
 // instanceConfig is what a test hands a process of its own.
 type instanceConfig struct {
 	Database, Bus, JWT, Seed, Objects string
+
+	// MetricsListen and MetricsTokenHash are where the metrics are answered and to whom, and
+	// empty for an instance that answers none.
+	MetricsListen, MetricsTokenHash string
 }
 
 // instance is the controller, as main runs it once the configuration is read: started the one way
@@ -92,6 +97,7 @@ func instance(raw string) int {
 			Objects:     s.Objects,
 			MaxRequeues: graph.DefaultMaxRequeues,
 			TaskCeiling: config.DefaultTaskCeiling,
+			Metrics:     config.Metrics{Listen: s.MetricsListen, TokenHash: s.MetricsTokenHash},
 		}, os.Stderr)
 	})
 }

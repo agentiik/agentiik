@@ -132,8 +132,9 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 // PurgeEnvelopes drops the envelopes of runs whose retention has run out.
 //
 // A run's envelopes are what its decision document references, published and per shard alike,
-// because both are objects the controller put in the store and an object nothing counts is an
-// object the collector never sees. What goes is the count on them, which is what eventually
+// and what each of its tasks was handed on its input ports, once per grant, because all of them
+// are objects the controller put in the store and an object nothing counts is an object the
+// collector never sees. What goes is the count on them, which is what eventually
 // lets the bytes be collected. What stays is the record: the digests in steps.ports are the
 // record of what was published, and the chapter keeps only digests and URIs in the database
 // anyway. The stamp is what keeps a sweep from taking the same run for ever.
@@ -179,6 +180,11 @@ func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 			if err != nil {
 				return err
 			}
+			handed, err := w.inputsOf(ctx, d.namespace, d.run)
+			if err != nil {
+				return err
+			}
+			held = append(held, handed...)
 			for _, e := range held {
 				if err := lower(ctx, w.tx, d.namespace, "sha256:"+e.Digest, ""); err != nil {
 					return err

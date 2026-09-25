@@ -269,6 +269,18 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 		return co.stopReport(ctx, e.Namespace, a, bind)
 	}
 
+	// What this answer tells once it is written: the ending, where it is one a container ran to
+	// and not the exit code of a shard the evaluator had already stopped, a retry the ending was
+	// granted, and the run's verdict where the ending decided it.
+	var news told
+	if r := a.Result; !before.Task.Terminal() && !r.StartedAt.IsZero() && !r.FinishedAt.IsZero() {
+		brick, version := brickOf(g, step)
+		ran := max(r.FinishedAt.Sub(r.StartedAt), 0)
+		news = append(news, func(o Observer) { o.Ended(brick, version, r.State, ran) })
+	}
+	news = retried(news, g, map[shardKey]int{{step, shard}: before.Attempt}, state)
+	news = runEnded(news, e.Namespace, e.Workflow, e.State, state, e.CreatedAt)
+
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
@@ -304,6 +316,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 	}); err != nil {
 		return err
 	}
+	co.tell(news)
 
 	// And round again, because a result is the only thing that makes a step downstream of it
 	// runnable: "The controller consumes it, writes the new state, evaluates the graph again

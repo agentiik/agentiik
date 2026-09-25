@@ -66,6 +66,8 @@ var runnerMayImport = map[string]bool{
 	"internal/ulid":   true,
 	// The credential grammar, which says what kind a credential is without printing it.
 	"internal/token": true,
+	// How the agent is asked to stop, which it shares with the API and the controller.
+	"internal/stopsignal": true,
 	// The TLS floor every connection holds, and which address may go without TLS.
 	"internal/tlsfloor": true,
 	// The runner's half of the task bus, whose task message is what a runner takes and

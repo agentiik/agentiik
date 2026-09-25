@@ -101,6 +101,10 @@ type TaskSummary struct {
 
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
+
+	// Inputs are the envelopes the task was handed on its input ports, by digest as a step's
+	// ports are, from the grant it was dispatched with. A task never dispatched has none.
+	Inputs map[agk.Port]Envelope `json:"inputs,omitempty"`
 }
 
 // RunDetail is a run and what became of every part of it.
@@ -239,11 +243,18 @@ func (n *NS) steps(ctx context.Context, run agk.RunID) ([]StepSummary, error) {
 }
 
 func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
+	// The inputs of the grant issued last, since every grant of one row names what the one
+	// dispatch it was prepared for was handed.
 	rows, err := n.tx.Query(ctx, `
-		select idempotency_key, step, state, attempt, shard_index, shard_of,
-		       runner, exit_code, started_at, finished_at
-		from tasks where namespace = $1 and run_id = $2
-		order by step, attempt, shard_index nulls first, requeue`,
+		select t.idempotency_key, t.step, t.state, t.attempt, t.shard_index, t.shard_of,
+		       t.runner, t.exit_code, t.started_at, t.finished_at,
+		       (select g.scope->'inputs' from task_grants g
+		        where g.namespace = t.namespace and g.task_id = t.id
+		        order by g.created_at desc limit 1),
+		       s.envelopes_purged_at
+		from tasks t join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
+		where t.namespace = $1 and t.run_id = $2
+		order by t.step, t.attempt, t.shard_index nulls first, t.requeue`,
 		n.namespace, string(run))
 	if err != nil {
 		return nil, fmt.Errorf("db: the tasks of run %s could not be read: %w", run, err)
@@ -256,10 +267,14 @@ func (n *NS) tasks(ctx context.Context, run agk.RunID) ([]TaskSummary, error) {
 		var state string
 		var index, of *int
 		var runner *string
-		var started, finished *time.Time
+		var started, finished, purged *time.Time
+		var handed []byte
 		if err := rows.Scan(&t.Task, &t.Step, &state, &t.Attempt, &index, &of,
-			&runner, &t.ExitCode, &started, &finished); err != nil {
+			&runner, &t.ExitCode, &started, &finished, &handed, &purged); err != nil {
 			return nil, err
+		}
+		if t.Inputs, err = inputsHanded(handed, purged); err != nil {
+			return nil, fmt.Errorf("db: the inputs of task %s could not be read: %w", t.Task, err)
 		}
 		if err := t.State.UnmarshalText([]byte(state)); err != nil {
 			return nil, err
@@ -429,4 +444,103 @@ func (n *NS) Output(ctx context.Context, run agk.RunID, name string) (Output, er
 		return Output{}, fmt.Errorf("db: the output %s of run %s is a view of %s/%s, which published nothing", name, run, of.Step, of.Port)
 	}
 	return Output{Step: of.Step, Port: of.Port, Envelope: e}, nil
+}
+
+// inputsHanded reads the inputs a grant's scope names, as the envelopes a run detail shows.
+func inputsHanded(raw []byte, purged *time.Time) (map[agk.Port]Envelope, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var inputs []GrantInput
+	if err := json.Unmarshal(raw, &inputs); err != nil {
+		return nil, err
+	}
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	out := make(map[agk.Port]Envelope, len(inputs))
+	for _, in := range inputs {
+		e := Envelope{Digest: in.Digest, Size: in.Size, Items: in.Items}
+		if purged != nil {
+			e.PurgedAt = *purged
+		}
+		out[in.Port] = e
+	}
+	return out, nil
+}
+
+// ErrNoEnvelope is no envelope where one was asked for: a port the step has not published, or
+// one no dispatch of the step was handed, or no dispatch of that attempt and shard.
+var ErrNoEnvelope = errors.New("db: no envelope there")
+
+// StepOutput reads the envelope a step published on one port.
+func (n *NS) StepOutput(ctx context.Context, run agk.RunID, step agk.Step, port agk.Port) (Envelope, error) {
+	if err := n.stepExists(ctx, run, step); err != nil {
+		return Envelope{}, err
+	}
+	ports, err := n.PublishedPorts(ctx, run, step)
+	if err != nil {
+		return Envelope{}, err
+	}
+	e, published := ports[port]
+	if !published {
+		return Envelope{}, fmt.Errorf("%w: %s of step %s of run %s is not published", ErrNoEnvelope, port, step, run)
+	}
+	return e, nil
+}
+
+// StepInput reads the envelope one dispatch of a step was handed on one input port: the one of
+// the attempt given, or of the last attempt dispatched where attempt is zero, and of the shard
+// whose index is given, or of the step's one task where the step was not fanned out and shard
+// is zero. Of a key requeued after a loss, the last dispatch, which was handed what the first
+// was.
+func (n *NS) StepInput(ctx context.Context, run agk.RunID, step agk.Step, attempt, shard int, port agk.Port) (Envelope, error) {
+	if err := n.stepExists(ctx, run, step); err != nil {
+		return Envelope{}, err
+	}
+	var raw []byte
+	var purged *time.Time
+	err := n.tx.QueryRow(ctx, `
+		select g.scope->'inputs', s.envelopes_purged_at
+		from tasks t
+		join task_grants g on g.namespace = t.namespace and g.task_id = t.id
+		join steps s on s.namespace = t.namespace and s.run_id = t.run_id and s.step = t.step
+		where t.namespace = $1 and t.run_id = $2 and t.step = $3
+		  and ($4 = 0 or t.attempt = $4)
+		  and ($5 = 0 and t.shard_index is null or t.shard_index = $5)
+		order by t.attempt desc, t.requeue desc, g.created_at desc
+		limit 1`, n.namespace, string(run), string(step), attempt, shard).Scan(&raw, &purged)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Envelope{}, fmt.Errorf("%w: no dispatch of step %s of run %s at attempt %d and shard %d", ErrNoEnvelope, step, run, attempt, shard)
+	}
+	if err != nil {
+		return Envelope{}, fmt.Errorf("db: the inputs of step %s of run %s could not be read: %w", step, run, err)
+	}
+	inputs, err := inputsHanded(raw, purged)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("db: the inputs of step %s of run %s could not be read: %w", step, run, err)
+	}
+	e, handed := inputs[port]
+	if !handed {
+		return Envelope{}, fmt.Errorf("%w: step %s of run %s was handed nothing on %s", ErrNoEnvelope, step, run, port)
+	}
+	return e, nil
+}
+
+// stepExists tells a run that is not there from a step it does not have.
+func (n *NS) stepExists(ctx context.Context, run agk.RunID, step agk.Step) error {
+	var runs, steps bool
+	err := n.tx.QueryRow(ctx, `
+		select exists (select 1 from runs where namespace = $1 and id = $2),
+		       exists (select 1 from steps where namespace = $1 and run_id = $2 and step = $3)`,
+		n.namespace, string(run), string(step)).Scan(&runs, &steps)
+	switch {
+	case err != nil:
+		return fmt.Errorf("db: run %s could not be read: %w", run, err)
+	case !runs:
+		return fmt.Errorf("%w: %s", ErrNoRun, run)
+	case !steps:
+		return fmt.Errorf("%w: %s", ErrNoStep, step)
+	}
+	return nil
 }

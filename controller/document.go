@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -166,6 +167,16 @@ func put(ctx context.Context, namespace string, objects artifact.Objects, e agk.
 		return EnvelopeRef{}, err
 	}
 	return EnvelopeRef{Digest: digest, Size: size}, nil
+}
+
+// putAgain writes one whatever the store says it holds, since what it holds may be what a sweep
+// that claimed it is about to delete.
+func putAgain(ctx context.Context, namespace string, objects artifact.Objects, digest string, e agk.Envelope) error {
+	var b bytes.Buffer
+	if _, err := e.Encode(&b); err != nil {
+		return err
+	}
+	return objects.Put(ctx, artifact.Key(namespace, digest), &b)
 }
 
 // get reads one back, and refuses bytes that are not the bytes the digest names.

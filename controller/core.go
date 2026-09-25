@@ -46,6 +46,8 @@ type Core struct {
 	ceiling  time.Duration
 	requeues int
 	now      func() time.Time
+	tracer   Tracer
+	observer Observer
 }
 
 // Options are what a Core is given. Everything in it is somebody else's work: the bus, the
@@ -103,6 +105,15 @@ type Options struct {
 	// which is a host lost as far as it can tell, one only cut off included, and one cut
 	// costs its key one requeue however the host comes back.
 	MaxRequeues *int
+
+	// Tracer is where the trace of a run goes once the run has ended. Nil is no tracing, and
+	// then nothing is read or built for it: an installation that configured no collector pays
+	// nothing for one.
+	Tracer Tracer
+
+	// Observer is told what was dispatched, retried, lost and ended, once it is written down.
+	// Nil counts nothing.
+	Observer Observer
 }
 
 // NewCore builds the deciding half of a controller, for the term it holds.
@@ -138,6 +149,7 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
 		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
+		observer: o.Observer, tracer: o.Tracer,
 	}, nil
 }
 
@@ -252,6 +264,8 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	if err != nil {
 		return err
 	}
+	attempts := attemptsOf(ev.State())
+	var news told
 
 	// The losses the sweep declared are heard here, before anything is decided. "Three
 	// missed intervals move a task to lost", and that is written beside the task state where
@@ -259,10 +273,15 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// and deciding is this loop's. A loss already heard, or one of a dispatch requeued past,
 	// is not news, and the evaluator says so by not counting a decision.
 	for _, l := range losses {
+		was := ev.State().Seq
 		if err := ev.Record(graph.Result{
 			Task: l.Task, State: agk.TaskLost, Requeue: l.Requeue, FinishedAt: l.At,
 		}, now); err != nil {
 			return fmt.Errorf("controller: the loss of %s could not be recorded: %w", l.Task, err)
+		}
+		if ev.State().Seq != was {
+			pool := l.Pool
+			news = append(news, func(o Observer) { o.Lost(pool) })
 		}
 	}
 
@@ -326,6 +345,8 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// asking again at the same instant is idempotent by design, and the commonest case is
 	// a sweep reaching a run that is simply waiting. The most such a pass writes is the
 	// clock, where the one it read is spent, which rewake below is for.
+	news = retried(news, g, attempts, state)
+	news = runEnded(news, e.Namespace, e.Workflow, e.State, state, e.CreatedAt)
 	saved := e.Seq
 	var held []agk.TaskID
 	if state.Seq != saved {
@@ -353,6 +374,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return err
 		}
 		saved = state.Seq
+		co.tell(news)
 	}
 	// And the rows name what a runner holds that the document may not, as they do for a
 	// cancellation: a pass that published a task and died before recording the dispatch.
@@ -365,7 +387,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// Committed. Only now does anything leave this process, and everything that does is
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
-	sent := co.hand(ctx, e.Namespace, run, plan)
+	sent, sentTo := co.hand(ctx, e.Namespace, run, plan)
+	if saved != e.Seq && state.Run.State.Terminal() {
+		// The pass that ended the run, and its trace goes once the stops have.
+		co.traced(ctx, e.Namespace, run)
+	}
 	if len(sent) == 0 {
 		if saved != e.Seq {
 			return nil
@@ -384,14 +410,20 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// one it plans again on the next pass, so a message that never went is republished by
 	// the thing that decided it rather than by a second mechanism that would have to
 	// rebuild a task message from rows.
+	var dispatched told
 	for _, t := range plan.Start {
 		if !contains(sent, t.ID) {
 			continue
 		}
+		was := ev.State().Seq
 		if err := ev.Record(graph.Result{
 			Task: t.ID, State: agk.TaskDispatched, DispatchedAt: now,
 		}, now); err != nil {
 			return fmt.Errorf("controller: the dispatch of %s could not be recorded: %w", t.ID, err)
+		}
+		if ev.State().Seq != was {
+			pool := sentTo[t.ID]
+			dispatched = append(dispatched, func(o Observer) { o.Dispatched(pool) })
 		}
 	}
 	if state.Seq == saved {
@@ -404,17 +436,17 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
-	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
+	elided, err := Elide(ctx, state, e.Namespace, co.objects)
 	if err != nil {
 		return err
 	}
-	encoded, err = json.Marshal(dispatched)
+	encoded, err = json.Marshal(elided)
 	if err != nil {
 		return fmt.Errorf("controller: the document of run %s could not be written: %w", run, err)
 	}
 	steps, tasks = project(state)
 	stampDeadlines(tasks, plan)
-	return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		if err := w.SaveDecision(ctx, db.Decision{
 			Namespace: e.Namespace, Run: run,
 			Was: saved, Seq: state.Seq,
@@ -424,14 +456,18 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			FinishedAt: state.Run.FinishedAt,
 			WakeAt:     plan.Wake,
 			Steps:      steps, Tasks: tasks,
-			Envelopes: referencesOf(dispatched),
+			Envelopes: referencesOf(elided),
 			Artifacts: artifactsOf(g, state),
 		}); err != nil {
 			return err
 		}
 		_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	co.tell(dispatched)
+	return nil
 }
 
 // rewake puts on a run the clock a pass that decided nothing found, where it is not the one the
@@ -526,14 +562,15 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	return ev, nil
 }
 
-// hand publishes what was planned, asks for what should stop, and answers what actually went.
+// hand publishes what was planned, asks for what should stop, and answers what actually went and
+// the pool each of those went to.
 //
 // A failure here is not a failure of the decision: the decision is committed, and what is left
 // is a courier's job. So it is reported, the pass is not unwound, and what did not go stays
 // pending in the state, which is what makes the next pass send it again. That includes a task
 // its pool refuses here, which the pass refused none of when it read the pools: the next pass
 // reads them again and ends the step.
-func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) []agk.TaskID {
+func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan graph.Plan) ([]agk.TaskID, map[agk.TaskID]string) {
 	for _, s := range plan.Stop {
 		if err := co.queue.Stop(ctx, s); err != nil {
 			co.controller.report(run, fmt.Errorf("stopping %s: %w", s.Task, err))
@@ -541,6 +578,7 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 	}
 
 	var sent []agk.TaskID
+	pools := map[agk.TaskID]string{}
 	for _, t := range plan.Start {
 		d, err := co.dispatchOf(ctx, namespace, t)
 		if err != nil {
@@ -552,8 +590,9 @@ func (co *Core) hand(ctx context.Context, namespace string, run agk.RunID, plan 
 			continue
 		}
 		sent = append(sent, t.ID)
+		pools[t.ID] = d.Pool
 	}
-	return sent
+	return sent, pools
 }
 
 // dispatchOf turns a task the evaluator decided into everything that leaves this process.
@@ -583,9 +622,10 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 		if err != nil {
 			return Dispatch{}, fmt.Errorf("the input on %s could not be written: %w", port, err)
 		}
-		d.Inputs[port] = InputRef{Digest: ref.Digest, Items: e.Meta.Count}
+		d.Inputs[port] = InputRef{Digest: ref.Digest, Items: e.Meta.Count, Size: ref.Size}
 	}
 
+	var rewrite []string
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		// The pool's policy before the grant, so that a task no runner may be handed is
 		// given no credential either, and read in the transaction that issues it.
@@ -603,11 +643,25 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 		if err != nil {
 			return err
 		}
-		d.Grant = granted.Clear
+		d.Grant, rewrite = granted.Clear, granted.Rewrite
 		return nil
 	})
 	if err != nil {
 		return Dispatch{}, err
+	}
+	// And again for any input a sweep had claimed while the grant was counting it, or had
+	// collected whole since put found it in the store: the count keeps any sweep away from it
+	// now, and the bytes may be what that one is about to delete or has deleted.
+	for _, digest := range rewrite {
+		for port, ref := range d.Inputs {
+			if ref.Digest != digest {
+				continue
+			}
+			if err := putAgain(ctx, namespace, co.objects, digest, t.Inputs[port]); err != nil {
+				return Dispatch{}, fmt.Errorf("the input on %s could not be written again: %w", port, err)
+			}
+			break
+		}
 	}
 	return d, nil
 }
@@ -633,7 +687,7 @@ func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
 	for _, port := range ports {
 		ref := inputs[port]
 		scope.Inputs = append(scope.Inputs, db.GrantInput{
-			Port: port, Digest: ref.Digest, Items: ref.Items,
+			Port: port, Digest: ref.Digest, Items: ref.Items, Size: ref.Size,
 		})
 	}
 	// Each with the mount the evaluator resolved from the manifest, which is the one the task
