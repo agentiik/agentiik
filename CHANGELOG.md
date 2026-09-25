@@ -181,6 +181,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Stop` of a container this process did not start waits out the grace on a context of its own, so a caller that gives up sooner no longer takes the `SIGKILL` with it.
 - A stop the daemon refuses for a container the driver watches is sent again, from 1 s doubling to 10 s, until the daemon takes it or the task has its answer, where it was only logged.
 - `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
+- A task's log caps (`log_max_bytes`, `log_max_lines`) count standard error alone, so an envelope on standard output no longer cuts a short log and reports it truncated. Standard output is still written into the log, up to `envelope_max_bytes` and as many lines as the cap, counted apart, and a line of the driver's on standard output says where it stopped.
+- The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
 
 ### Runner
 
