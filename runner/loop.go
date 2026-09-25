@@ -302,8 +302,8 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 	// After the record, which answers a key this host ended or still has in flight whatever it
-	// claims now, and before anything is redeemed. What Hold wrote down is let go of, and the
-	// record keeps the key only as taken, which refuses nothing when the message comes round.
+	// claims now, and before anything is redeemed. What Hold wrote down is let go of and
+	// forgotten, and nothing refuses the key when the message comes round.
 	if missing := uncovered(m.RunsOn, l.Labels); len(missing) > 0 {
 		l.Holder.Release(id)
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since it runs on %s and this runner does not claim it", m.TaskID, m.IdempotencyKey, strings.Join(missing, ", ")))

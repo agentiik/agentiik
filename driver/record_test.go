@@ -933,6 +933,11 @@ func TestDispatchedListsTheKeysTakenAndNeverEndedNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Release(letGo.ID)
+	if taken, err := r.keys.takenPath(ended.ID); err != nil {
+		t.Fatal(err)
+	} else if _, err := os.Stat(taken); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the key's ending was written and it is still written down as taken: %v", err)
+	}
 
 	// What the next process on this host reads.
 	got, err := reopen(t, r, nil).Dispatched()
@@ -955,7 +960,7 @@ func TestReleaseForgetsATakenKeyAndNeverAnEnding(t *testing.T) {
 	if err := r.Hold(task.ID); err != nil {
 		t.Fatal(err)
 	}
-	path, err := r.keys.path(task.ID)
+	path, err := r.keys.takenPath(task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -977,8 +982,9 @@ func TestReleaseForgetsATakenKeyAndNeverAnEnding(t *testing.T) {
 	}
 }
 
-// An entry that does not read, or that sits where another key's entry would, lists nothing rather
-// than refusing the rest, and a work root with no record yet lists nothing and no error.
+// An entry that does not read, sits where another key's entry would or stands beside the key's
+// ending lists nothing, rather than refusing the rest, and a work root with no record yet lists
+// nothing and no error.
 func TestDispatchedPassesOverWhatDoesNotRead(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
@@ -992,7 +998,7 @@ func TestDispatchedPassesOverWhatDoesNotRead(t *testing.T) {
 	if err := r.Hold(task.ID); err != nil {
 		t.Fatal(err)
 	}
-	path, err := r.keys.path(task.ID)
+	path, err := r.keys.takenPath(task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1001,10 +1007,24 @@ func TestDispatchedPassesOverWhatDoesNotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Dir(path)
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "broken"+takenExt), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "elsewhere.json"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "elsewhere"+takenExt), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A key that ended, whose writer stopped before taking its taken entry away.
+	ended := stepTask(ref, "ended")
+	if _, err := r.Run(t.Context(), ended); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := r.keys.takenPath(ended.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = []byte(strings.Replace(string(b), string(task.ID), string(ended.ID), 1))
+	if err := os.WriteFile(stale, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := r.Dispatched()
