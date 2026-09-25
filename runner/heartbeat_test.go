@@ -684,3 +684,41 @@ func TestTheKeysAHeartbeatNamesAreTheWiresIdempotencyKeys(t *testing.T) {
 		t.Errorf("keyForm is %s and the wire writes %s", keyForm, schema.Defs.IdempotencyKey.Pattern)
 	}
 }
+
+// The agent's loop takes nothing while the heartbeat's last answer orders a drain, and takes again
+// once an answer lifts it.
+func TestTheAgentsLoopDrainsOnTheHeartbeatsOrder(t *testing.T) {
+	drain := true
+	var mu sync.Mutex
+	api := newBeats(t, func(beatRequest) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return http.StatusOK, beatAnswered(time.Now(), fmt.Sprintf(`"drain":%t,"cancel":[]`, drain))
+	})
+	var readies int
+	root := t.TempDir()
+	a := agentOf(t, &readies, api.srv.URL, root)
+	results, err := OpenResults(root, a.Config.Runner, &laterBus{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop, beat := a.parts(results, nil, nil)
+	if loop.Draining() {
+		t.Error("the loop drains before any heartbeat was answered")
+	}
+	if err := beat.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !loop.Draining() {
+		t.Error("the loop takes work after the heartbeat's answer ordered a drain")
+	}
+	mu.Lock()
+	drain = false
+	mu.Unlock()
+	if err := beat.Beat(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if loop.Draining() {
+		t.Error("the loop still drains after an answer lifted the order")
+	}
+}

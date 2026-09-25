@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/driver"
 )
@@ -107,24 +108,7 @@ func Serve(ctx context.Context, a Agent) error {
 		say(err.Error() + ": the keys an earlier agent held are not named, and the sweep declares lost those still bound to this runner")
 	}
 
-	loop := &Loop{
-		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
-		Redeemer: a.Client, Holder: a.Driver,
-		Carrier: &Carrier{
-			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
-			// The driver is given nowhere to write a task's log yet, so a result addresses
-			// none.
-			Logs: false, Log: say,
-		},
-		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
-		Log:      say,
-	}
-	beat := &Heartbeat{
-		Client: a.Client, Runner: a.Config.Runner, Concurrency: a.Config.Concurrency,
-		Holding: func() []string { return append(loop.Held(), results.Keys()...) },
-		Earlier: earlier, EarlierFor: a.earlierFor,
-		Stopper: a.Driver, Log: say, Every: a.every,
-	}
+	loop, beat := a.parts(results, earlier, say)
 	defer beat.Wait()
 	if err := beat.First(ctx); err != nil || ctx.Err() != nil {
 		return err
@@ -187,6 +171,32 @@ func Serve(ctx context.Context, a Agent) error {
 		return err
 	}
 	return refused(ctx)
+}
+
+// parts are the agent's loop and heartbeat, bound to each other: the heartbeat names what the loop
+// holds and every result kept, and the loop takes nothing while the heartbeat's last answer orders
+// a drain. The loop's bus and progress are given once the bus is open.
+func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat) {
+	loop := &Loop{
+		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
+		Redeemer: a.Client, Holder: a.Driver,
+		Carrier: &Carrier{
+			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
+			// The driver is given nowhere to write a task's log yet, so a result addresses
+			// none.
+			Logs: false, Log: say,
+		},
+		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
+		Log:      say,
+	}
+	beat := &Heartbeat{
+		Client: a.Client, Runner: a.Config.Runner, Concurrency: a.Config.Concurrency,
+		Holding: func() []string { return append(loop.Held(), results.Keys()...) },
+		Earlier: earlier, EarlierFor: a.earlierFor,
+		Stopper: a.Driver, Log: say, Every: a.every,
+	}
+	loop.Draining = func() bool { return beat.Drain().Ordered }
+	return loop, beat
 }
 
 // refused is the heartbeat's refusal where that is what ended the agent, and nil where its own

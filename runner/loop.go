@@ -86,6 +86,12 @@ type Loop struct {
 	// Log is where the agent writes a line.
 	Log func(string)
 
+	// Draining answers whether the last heartbeat ordered this runner to drain, "take nothing
+	// new; finish what is held". Nil is never. While it answers true the loop takes nothing, and
+	// what it already holds runs on to its answer; a message a take in flight hands it meanwhile
+	// is refused at the redemption with 403 and put back, as the table says.
+	Draining func() bool
+
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
 	// an answer that may change, and how long a message put back is held back and the loop takes
 	// nothing more. Zero is takeWait and retryFirst.
@@ -204,6 +210,14 @@ func (l *Loop) Run(ctx context.Context) error {
 		// refused the same way.
 		if d := l.quietFor(); d > 0 && !sleep(ctx, d) {
 			return nil
+		}
+		// Asked again after the pause a put back is held for, since the next heartbeat may
+		// lift the order.
+		if l.Draining != nil && l.Draining() {
+			if !sleep(ctx, l.retryFirst()) {
+				return nil
+			}
+			continue
 		}
 		select {
 		case slots <- struct{}{}:

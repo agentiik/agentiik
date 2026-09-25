@@ -773,3 +773,37 @@ func (h *countingHolder) Hold(id agk.TaskID) error {
 type progressFunc func(context.Context, bus.TaskProgress) error
 
 func (f progressFunc) Progress(ctx context.Context, p bus.TaskProgress) error { return f(ctx, p) }
+
+// "Take nothing new; finish what is held." While the heartbeat orders a drain the loop takes no
+// message, which stays on the queue for another runner, and once the order is lifted it takes
+// again.
+func TestADrainingRunnerTakesNothingUntilTheOrderIsLifted(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	var draining atomic.Bool
+	draining.Store(true)
+	l.loop.Draining = draining.Load
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.loop.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	m, _ := l.task(t, nil)
+	time.Sleep(time.Second)
+	if n := l.api.redemptions(m.TaskID); n != 0 {
+		t.Errorf("a draining runner redeemed a task %d times", n)
+	}
+	if waiting, unacknowledged := l.pool.outstanding(t); waiting != 1 || unacknowledged != 0 {
+		t.Errorf("a draining runner left %d waiting and %d handed out, want the one message waiting", waiting, unacknowledged)
+	}
+
+	draining.Store(false)
+	eventually(t, "the task redeemed once the drain was lifted", func() bool { return l.api.redemptions(m.TaskID) > 0 })
+}
