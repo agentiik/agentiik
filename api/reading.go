@@ -161,25 +161,136 @@ func (s *Server) output(w http.ResponseWriter, r *http.Request, who Principal, o
 		fail(w, http.StatusInternalServerError, "the output could not be read")
 		return
 	}
-	if !out.Envelope.PurgedAt.IsZero() {
-		// 410 rather than 404, as an artifact past its retention answers: the output existed
+	s.envelope(w, r, over.Namespace, "the output "+name, out.Envelope)
+}
+
+// envelope answers one envelope as it was published or handed: read back from the store and held
+// to its digest before a byte of it is answered, as everything read back by a digest is. what
+// names it for a refusal.
+func (s *Server) envelope(w http.ResponseWriter, r *http.Request, namespace, what string, held db.Envelope) {
+	if !held.PurgedAt.IsZero() {
+		// 410 rather than 404, as an artifact past its retention answers: the envelope existed
 		// and is finished, and the run still shows its digest.
-		fail(w, http.StatusGone, fmt.Sprintf("the envelope of %s was purged at %s with the run's other envelopes, past the retention its workflow declared, and its digest is all that is kept", name, out.Envelope.PurgedAt.UTC().Format(time.RFC3339)))
+		fail(w, http.StatusGone, fmt.Sprintf("the envelope of %s was purged at %s with the run's other envelopes, past the retention its workflow declared, and its digest is all that is kept", what, held.PurgedAt.UTC().Format(time.RFC3339)))
 		return
 	}
 	if s.objects == nil {
 		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an envelope is read from nowhere else")
 		return
 	}
-	e, err := artifact.GetEnvelope(r.Context(), s.objects, over.Namespace, out.Envelope.Digest, s.limits)
+	e, err := artifact.GetEnvelope(r.Context(), s.objects, namespace, held.Digest, s.limits)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, "the output's envelope could not be read")
+		fail(w, http.StatusInternalServerError, fmt.Sprintf("the envelope of %s could not be read", what))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	e.Encode(w)
+}
+
+// stepOutput answers the envelope one step published on one port: what a downstream step was
+// handed, and what a workflow output is a view of. "Every step keeps its input and output
+// envelopes, readable as they are", and a step no workflow output names is read here or nowhere.
+//
+// Guarded by run:read_data, as a workflow output is: the run answers the digest to run:read, and
+// the contents are the payload viewer's.
+func (s *Server) stepOutput(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	run, step, port := agk.RunID(r.PathValue("run")), agk.Step(r.PathValue("step")), agk.Port(r.PathValue("port"))
+	if step.Validate() != nil {
+		fail(w, http.StatusNotFound, "the run has no step of that name")
+		return
+	}
+	if port.Validate() != nil {
+		fail(w, http.StatusNotFound, "the step has published nothing on a port of that name")
+		return
+	}
+	var held db.Envelope
+	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		held, err = ns.StepOutput(ctx, run, step, port)
+		return err
+	})
+	if !s.envelopeFound(w, err, "the step has published nothing on a port of that name: a step publishes every port once, when it ends") {
+		return
+	}
+	s.envelope(w, r, over.Namespace, fmt.Sprintf("%s on %s", step, port), held)
+}
+
+// stepInput answers the envelope one dispatch of a step was handed on one input port, which is
+// what its container read under /agk/in: the one of the attempt the query names, or of the last
+// attempt dispatched, and of the shard it names by index, which a step that was not fanned out has
+// none of. It is what the task's grant named, so what is answered is what the task was given and
+// not what the run would hand it now.
+//
+// Guarded by run:read_data for the reason stepOutput is.
+func (s *Server) stepInput(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
+	run, step, port := agk.RunID(r.PathValue("run")), agk.Step(r.PathValue("step")), agk.Port(r.PathValue("port"))
+	if step.Validate() != nil {
+		fail(w, http.StatusNotFound, "the run has no step of that name")
+		return
+	}
+	attempt, shard, err := dispatchQuery(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if port.Validate() != nil {
+		fail(w, http.StatusNotFound, "no dispatch of the step was handed anything on a port of that name")
+		return
+	}
+	var held db.Envelope
+	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		held, err = ns.StepInput(ctx, run, step, attempt, shard, port)
+		return err
+	})
+	if !s.envelopeFound(w, err, "no dispatch of the step was handed anything on that port at that attempt and shard: a step split into shards is asked about one of them, with shard, and a step is handed its inputs once it is dispatched") {
+		return
+	}
+	s.envelope(w, r, over.Namespace, fmt.Sprintf("%s on %s", step, port), held)
+}
+
+// dispatchQuery reads which dispatch of a step is asked about: attempt, counted from 1 as
+// AGK_ATTEMPT is, and shard, the index AGK_SHARD carries before its slash. Either left out is
+// zero, which is the last attempt and no shard.
+func dispatchQuery(r *http.Request) (attempt, shard int, err error) {
+	for _, c := range []struct {
+		name string
+		into *int
+	}{{"attempt", &attempt}, {"shard", &shard}} {
+		written := r.URL.Query().Get(c.name)
+		if written == "" {
+			continue
+		}
+		// Within what the columns hold, so that a number past them is the caller's mistake
+		// and not a query that could not be sent.
+		n, err := strconv.ParseInt(written, 10, 32)
+		if err != nil || n < 1 {
+			return 0, 0, fmt.Errorf("%s is %q, and it is a whole number from 1, as the run's tasks list it", c.name, written)
+		}
+		*c.into = int(n)
+	}
+	return attempt, shard, nil
+}
+
+// envelopeFound answers a lookup of a step's envelope that found nothing, and says whether it
+// found something.
+func (s *Server) envelopeFound(w http.ResponseWriter, err error, none string) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, db.ErrNoRun):
+		// Found by the router a moment ago and not there now.
+		fail(w, http.StatusNotFound, "no such thing, or not yours")
+	case errors.Is(err, db.ErrNoStep):
+		fail(w, http.StatusNotFound, "the run has no step of that name")
+	case errors.Is(err, db.ErrNoEnvelope):
+		fail(w, http.StatusNotFound, none)
+	default:
+		fail(w, http.StatusInternalServerError, "the envelope could not be read")
+	}
+	return false
 }
 
 // fetchSettling is how long recording the end of a transfer against a budget may take once the

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -248,8 +249,19 @@ func (g grants) envelopedAs(t *testing.T, step agk.Step, port agk.Port, content 
 }
 
 // granted issues the task's grant with the scope a controller wrote, and answers its clear value.
+//
+// An input is counted at the size of the object the store holds for it, which the controller knows
+// from writing it, and at a byte where the store holds none.
 func (g grants) granted(t *testing.T, scope db.GrantScope) string {
 	t.Helper()
+	scope.Inputs = slices.Clone(scope.Inputs)
+	for i, in := range scope.Inputs {
+		scope.Inputs[i].Size = 1
+		if rc, err := g.objects.Open(t.Context(), artifact.Key("finance", in.Digest)); err == nil {
+			scope.Inputs[i].Size, _ = io.Copy(io.Discard, rc)
+			rc.Close()
+		}
+	}
 	var granted db.Granted
 	if err := g.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
 		var err error

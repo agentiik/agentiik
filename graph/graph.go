@@ -248,6 +248,19 @@ func (g *Graph) published(name agk.Step) []agk.Port {
 // not a copy: a graph is a reading of a workflow and never a second one.
 func (g *Graph) Workflow() *Workflow { return g.wf }
 
+// Brick is the name and the version the manifest of a step's image declares, and false for a step
+// that runs no brick: a script step, whose image is a base image, or a call.
+//
+// The manifest's and not the image reference's, because a pushed version names its images by
+// digest, and a digest says which bytes ran but not which release of which brick they are.
+func (g *Graph) Brick(name agk.Step) (brick, version string, ok bool) {
+	m, ok := g.manifest(name)
+	if !ok {
+		return "", "", false
+	}
+	return m.Metadata.Name, m.Metadata.Version, true
+}
+
 // manifest is the brick manifest of a step, for the second reading of a parameter: the
 // one that happens when a task is built and every expression has a value. A step with no
 // manifest is a script step or a sub-workflow call, and there is nothing to read.

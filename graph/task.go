@@ -54,6 +54,13 @@ type Task struct {
 	// recognises it, which is what makes at-least-once delivery survivable.
 	ID agk.TaskID `json:"id"`
 
+	// Dispatch is the task_id of the dispatch a runner took, and empty where nothing was
+	// dispatched, as on a laptop. The evaluator never sets it: a control plane mints one per
+	// dispatch, and a requeue after loss keeps the key and takes a new one. The driver names the
+	// container's span by it, falling back to the key, so that each dispatch is a span of its own
+	// and agk run --local still has one to name.
+	Dispatch string `json:"dispatch,omitempty"`
+
 	Run       agk.RunID `json:"run"`
 	Workflow  string    `json:"workflow"`
 	Namespace string    `json:"namespace"`

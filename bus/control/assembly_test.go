@@ -188,8 +188,11 @@ func TestATaskReadBackByARunnerIsTheTaskTheControllerWrote(t *testing.T) {
 		if err != nil {
 			t.Fatalf("task %d does not read back: %s\n%s", i, err, body)
 		}
-		// The deadline is an instant, and the wire writes it in UTC.
+		// The deadline is an instant, and the wire writes it in UTC. The dispatch is the row
+		// the message went out as, which the controller holds beside the task and a runner
+		// reads into it.
 		want.Deadline = want.Deadline.UTC()
+		want.Dispatch = d.Row
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("task %d reads back changed:\n got %+v\nwant %+v\n%s", i, got, want, body)
 		}

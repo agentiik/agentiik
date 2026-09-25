@@ -45,6 +45,36 @@ func TestEnvironmentTable(t *testing.T) {
 	}
 }
 
+// "Context propagated into the container environment for bricks that use it": the run's trace, and
+// the span of the dispatch the runner took, which is the one the controller exports for it. Two
+// dispatches of one key are two spans, since a requeue after loss is a dispatch of its own.
+func TestEnvironmentCarriesTheTraceContextOfTheDispatch(t *testing.T) {
+	task := graph.Task{
+		ID: agk.NewTaskID("01M2Z8V1P9C4XQ7K2N4D6F8H0C", "normalize", 1, agk.Shard{}), Dispatch: "01M2Z8V1P9C4XQ7K2N4D6F8H0D",
+		Run: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", Step: "normalize", Attempt: 1,
+	}
+	got := envMap(t, environment(task, time.Time{}))[EnvTraceParent]
+	if want := agk.TraceParent(task.Run, task.Dispatch); got != want || got == "" {
+		t.Fatalf("%s is %q, want %q: the run's trace and the dispatch's span", EnvTraceParent, got, want)
+	}
+	task.Dispatch = "01M2Z8V1P9C4XQ7K2N4D6F8H0E"
+	if again := envMap(t, environment(task, time.Time{}))[EnvTraceParent]; again == got {
+		t.Errorf("a requeue of the key names the span of the dispatch it replaced, %s", got)
+	}
+}
+
+// On a laptop nothing is dispatched, and the key names the span: agk run --local is the same code
+// path, and a brick that traces still finds a parent.
+func TestEnvironmentOfALocalTaskNamesTheKeysSpan(t *testing.T) {
+	task := graph.Task{
+		ID:  agk.NewTaskID("01M2Z8V1P9C4XQ7K2N4D6F8H0C", "normalize", 1, agk.Shard{}),
+		Run: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", Step: "normalize", Attempt: 1,
+	}
+	if got, want := envMap(t, environment(task, time.Time{}))[EnvTraceParent], "00-65adc84f140f8df02002e0395b782fe8-1e176d343d62934f-01"; got != want {
+		t.Fatalf("%s is %q, want %q", EnvTraceParent, got, want)
+	}
+}
+
 // "AGK_SHARD: shard index and cardinality, for example 3/8. Absent when there is no
 // fan-out." Absent and not empty: a brick testing for the variable gets one answer.
 func TestEnvironmentWithoutAFanOut(t *testing.T) {
