@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
@@ -174,13 +176,20 @@ func TestAVersionWhoseInputsCannotBeBoundIsRefusedAtThePush(t *testing.T) {
 	}
 }
 
-// unanswering is an object store that stops answering Open once told to.
+// unanswering is an object store that stops answering Open once told to, and counts the objects
+// it was asked to open.
 type unanswering struct {
 	artifact.Objects
 	open bool
+
+	mu     sync.Mutex
+	opened int
 }
 
 func (f *unanswering) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	f.opened++
+	f.mu.Unlock()
 	if f.open {
 		return nil, errors.New("the store is not answering")
 	}
@@ -237,5 +246,68 @@ func TestAReferenceIntoTheTreeIsReadFromTheStoreAndHeldToItsDigest(t *testing.T)
 	}
 	if w := sent(t, rt, "POST", startAt, "alice", `{"commit":"`+anotherCommit+`","inputs":{"orders":[]}}`); w.Code != http.StatusAccepted {
 		t.Errorf("a declaration naming no file answered %d on an API with no object store: %s", w.Code, w.Body)
+	}
+}
+
+// A version's declaration is compiled once, at the first start of it that succeeds, and every start
+// after, all at once included, binds against what that one compiled: it can cost a second, and a
+// version never changes.
+func TestADeclarationIsCompiledOnceForEveryStartOfItsVersion(t *testing.T) {
+	store := &unanswering{Objects: artifact.Dir(t.TempDir())}
+	h, _, super := servingOn(t, store)
+	if w, _ := call(t, h, "PUT", pushTo, "alice", declaringPush(t, declaringWorkflow, map[string]string{"schemas/order.json": orderSchema})); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	start := `{"commit":"` + aCommit + `","inputs":{"orders":[{"id":"A-1"}]}}`
+	if w := sent(t, h, "POST", startAt, "alice", start); w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if w := sent(t, h, "POST", startAt, "alice", start); w.Code != http.StatusAccepted {
+				t.Errorf("starting a run answered %d: %s", w.Code, w.Body)
+			}
+			if w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[{}]}}`); w.Code != http.StatusUnprocessableEntity {
+				t.Errorf("an order with no id answered %d: %s", w.Code, w.Body)
+			}
+		})
+	}
+	wg.Wait()
+	if store.opened != 1 {
+		t.Errorf("the schema's object was opened %d times for 17 starts of one version", store.opened)
+	}
+	if n := runsHeld(t, super); n != 9 {
+		t.Errorf("%d runs exist, and nine starts were accepted", n)
+	}
+}
+
+// The defaults a workflow declares are held to the bounds the inputs a request sends are held to,
+// since the controller reads them at every decision exactly as it reads those.
+func TestTheInputsWithTheirDefaultsAreHeldToTheBoundsOfARunsInputs(t *testing.T) {
+	h, _, super := serving(t)
+	many := strings.TrimSuffix(strings.Repeat("0, ", agk.DefaultMaxItems/2), ", ")
+	long := strings.Repeat("x", 2<<20)
+	document := strings.Replace(declaringWorkflow, "  note: {}\n", "  note: {}\n  many: { default: ["+many+"] }\n  long: { default: \""+long+"\" }\n", 1)
+	if w, _ := call(t, h, "PUT", pushTo, "alice", declaringPush(t, document, map[string]string{"schemas/order.json": orderSchema})); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+
+	// Each alone is within the bounds, and so are the inputs sent.
+	if w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[]}}`); w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	values := strings.TrimSuffix(strings.Repeat(`{"id": 0}, `, agk.DefaultMaxItems/4), ", ")
+	for name, inputs := range map[string]string{
+		"more values than a run's inputs hold": `{"orders":[` + values + `]}`,
+		"more bytes than a run's inputs weigh": `{"orders":[],"note":"` + strings.Repeat("x", 3<<20) + `"}`,
+	} {
+		w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":`+inputs+`}`)
+		if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "defaults") {
+			t.Errorf("inputs whose defaults take them past %s answered %d: %.200s", name, w.Code, w.Body)
+		}
+	}
+	if n := runsHeld(t, super); n != 1 {
+		t.Errorf("%d runs exist, and one start was accepted", n)
 	}
 }

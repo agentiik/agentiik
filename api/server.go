@@ -41,6 +41,9 @@ type Server struct {
 
 	// logs tells the step log streams this server answers that their log moved on, streaming is
 	// how they spend their time, and stopping ends them.
+	// declared are the compiled input declarations of the versions runs were started of.
+	declared *declarations
+
 	logs      *logWatch
 	streaming streamTiming
 	stopping  <-chan struct{}
@@ -103,7 +106,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		o.Limits = agk.DefaultLimits()
 	}
 	s := &Server{
-		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now,
+		pool: o.Pool, versions: o.Versions, objects: o.Objects, urls: o.URLs, limits: o.Limits, now: o.Now, declared: &declarations{},
 		logs: &logWatch{pool: o.Pool, sweep: defaultStreamTiming.sweep}, streaming: defaultStreamTiming, stopping: o.Stopping, trouble: o.Trouble,
 	}
 	rt.ServeRuns(runsIn{o.Pool})

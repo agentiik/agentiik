@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"sync"
 	"testing/fstest"
 
 	"github.com/agentiik/agentiik/artifact"
@@ -46,22 +48,31 @@ func (s *Server) bindInputs(w http.ResponseWriter, ctx context.Context, over Tar
 		}
 	}
 
-	tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: over.Namespace, workflow: over.Workflow, commit: commit}
-	declared, err := g.Workflow().DeclaredInputs(tree)
-	switch {
-	case errors.Is(tree.trouble, errNoObjectStore):
-		fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there")
-		return nil, false
-	case tree.trouble != nil:
-		s.report(fmt.Errorf("the tree of %s/%s@%s could not be read to bind a run's inputs: %w", over.Namespace, over.Workflow, commit, tree.trouble))
-		fail(w, http.StatusInternalServerError, "the version's tree could not be read")
-		return nil, false
-	case err != nil:
-		// The version's own declaration, which a push refuses since this route binds against it,
-		// so only a version pushed before then can hold one. Nothing the request changes would
-		// start it.
-		fail(w, http.StatusUnprocessableEntity, err.Error())
-		return nil, false
+	key := over.Namespace + "/" + over.Workflow + "@" + commit
+	declared, held := s.declared.get(key)
+	if !held {
+		tree := &versionTree{ctx: ctx, pool: s.pool, objects: s.objects, namespace: over.Namespace, workflow: over.Workflow, commit: commit}
+		var err error
+		declared, err = g.Workflow().DeclaredInputs(tree)
+		switch {
+		case errors.Is(tree.trouble, errNoObjectStore):
+			fail(w, http.StatusServiceUnavailable, "this installation has no object store attached, and an input's schema names a file of the version's tree, which is kept there")
+			return nil, false
+		case tree.trouble != nil:
+			// A caller who went away is not trouble for whoever runs the installation.
+			if ctx.Err() == nil {
+				s.report(fmt.Errorf("the tree of %s/%s@%s could not be read to bind a run's inputs: %w", over.Namespace, over.Workflow, commit, tree.trouble))
+			}
+			fail(w, http.StatusInternalServerError, "the version's tree could not be read")
+			return nil, false
+		case err != nil:
+			// The version's own declaration, which a push refuses since this route binds against
+			// it, so only a version pushed before then can hold one. Nothing the request changes
+			// would start it.
+			fail(w, http.StatusUnprocessableEntity, err.Error())
+			return nil, false
+		}
+		s.declared.put(key, declared)
 	}
 
 	bound, err := schema.Bind(declared, supplied)
@@ -74,12 +85,83 @@ func (s *Server) bindInputs(w http.ResponseWriter, ctx context.Context, over Tar
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return nil, false
 	}
-	encoded, err := json.Marshal(bound)
-	if err != nil {
+	// Held to the bounds the inputs sent were held to, since the defaults the workflow declares
+	// are read by the controller at every decision it takes on the run exactly as they are.
+	if n := values(bound); n > inputsMaxValues {
+		fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the inputs, with the defaults the workflow declares, hold %d values, and a run's inputs hold at most %d, as many as one envelope may carry items: a run's data belongs in an artifact", n, inputsMaxValues))
+		return nil, false
+	}
+	// Without HTML escaping, which would write a < sent as one byte in six.
+	var encoded bytes.Buffer
+	e := json.NewEncoder(&encoded)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(bound); err != nil {
 		fail(w, http.StatusInternalServerError, "the inputs could not be written")
 		return nil, false
 	}
-	return encoded, true
+	if int64(encoded.Len()) > startMaxBytes {
+		fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the inputs, with the defaults the workflow declares, are written in %d bytes, and a run's inputs weigh at most %d, one envelope: a run's data belongs in an artifact", encoded.Len(), startMaxBytes))
+		return nil, false
+	}
+	return bytes.TrimSuffix(encoded.Bytes(), []byte("\n")), true
+}
+
+// values counts a decoded document as the body reader counts one: every object, array, string,
+// number, boolean and null, at any depth, and the document itself.
+func values(v any) int {
+	n := 1
+	switch v := v.(type) {
+	case map[string]any:
+		for _, e := range v {
+			n += values(e)
+		}
+	case []any:
+		for _, e := range v {
+			n += values(e)
+		}
+	}
+	return n
+}
+
+// declarations are the compiled declarations of the versions runs were started of lately.
+//
+// A version is a commit and never changes, so its declaration compiles to the same thing every
+// time, and compiling one can cost a second (graph.InputSchemasMaxBytes says why): kept, a
+// thousand starts of one version compile it once. Bounded like the graphs version.Store keeps,
+// and fewer, since a compiled schema weighs more than the document it came from.
+type declarations struct {
+	mu    sync.Mutex
+	held  map[string]map[string]schema.Input
+	order []string
+}
+
+// declarationsKept is how many compiled declarations stay held.
+const declarationsKept = 64
+
+func (d *declarations) get(key string) (map[string]schema.Input, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	declared, held := d.held[key]
+	return declared, held
+}
+
+// put keeps one, dropping the oldest past declarationsKept. A compiled schema is only read once
+// compiled, and schema.Bind copies a default before handing it on, so every start may share it.
+func (d *declarations) put(key string, declared map[string]schema.Input) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.held == nil {
+		d.held = map[string]map[string]schema.Input{}
+	}
+	if _, held := d.held[key]; held {
+		return
+	}
+	d.held[key] = declared
+	d.order = append(d.order, key)
+	for len(d.order) > declarationsKept {
+		delete(d.held, d.order[0])
+		d.order = d.order[1:]
+	}
 }
 
 // refuseInput answers the input a request gets wrong: 422, with the sentence agk run --local
