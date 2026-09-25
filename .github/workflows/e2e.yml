@@ -5,9 +5,11 @@
 # tens of seconds.
 name: e2e
 
+# On main and on pull requests rather than on every branch push, since a pull request's own push
+# would otherwise run the same minutes twice.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
