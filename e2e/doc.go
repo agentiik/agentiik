@@ -8,7 +8,8 @@
 //	                    test runs, which is the installation's public URL
 //	the controller      agentiik-controller, a process of this machine, sharing the API's object
 //	                    store directory, which no runner sees
-//	the registry        registry:2 on 127.0.0.1, holding the fixture bricks by digest
+//	the registry        registry:2 on the installation's network, holding the fixture bricks by
+//	                    digest
 //	runner a, runner b  each an agent in the runner image, joined with a join token of its own,
 //	                    driving a docker:dind daemon of its own
 //
@@ -28,9 +29,9 @@
 //
 // Linux alone, because the daemons resolve every bind against the host they run on. Each runner's
 // work root and secrets tmpfs are named volumes its agent and its daemon both mount at the same
-// paths, and the agents, the daemons and the registry share the host's network, so that 127.0.0.1
-// is the API, the bus and the registry to every one of them. A daemon in a virtual machine, which
-// is what Docker is on macOS, shares neither with the machine running the test.
+// paths, and the agents join the host's network, where 127.0.0.1 is the API's terminator and the
+// bus. A daemon in a virtual machine, which is what Docker is on macOS, shares neither with the
+// machine running the test.
 //
 // # What it gives up, and why
 //
@@ -43,8 +44,11 @@
 // machine: /etc/agentiik/runner.env, runner.toml and /var/lib/agentiik/runner.key are fixed paths,
 // and two agents on one filesystem would share them.
 //
-// The daemons make no bridge and write no firewall rule, since on the host's network the bridge
-// and the rules would be the host's. A brick runs on network: none, which needs neither.
+// The runners' daemons are on a network of the installation's own with the registry, which they
+// pull from by its name with --insecure-registry, since a registry with a certificate would be
+// one more authority for three daemons to trust. This machine's daemon does not resolve that name,
+// so a brick is built here and pushed by runner a's daemon, which then forgets it, and whichever
+// runner takes a task pulls the brick by digest.
 //
 // # What the smoke test holds
 //

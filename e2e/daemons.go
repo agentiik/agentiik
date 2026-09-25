@@ -74,10 +74,13 @@ type Runner struct {
 //
 // Each daemon is a docker:dind container of its own, so that runner b never sees runner a's
 // containers: on one daemon, b would adopt a's container by its label, and a test of two machines
-// would be a test of adoption. Both daemons and both agents join the host's network, where
-// 127.0.0.1 is the API, the bus and the registry alike, and a brick is on network: none whatever
-// the daemon's network is. So the daemon makes no bridge and writes no firewall rule, which on the
-// host's network would be the host's.
+// would be a test of adoption. The daemons are on the installation's network with the registry,
+// which they reach by its name. The agents join the host's network instead, where 127.0.0.1 is
+// the terminator in front of the API and the bus, and reach their daemon through its socket
+// alone.
+//
+// The daemons are not on the host's network, because a daemon started with no bridge removes the
+// interface docker0 wherever it runs, which on the host's network is the host daemon's own.
 func (in *Installation) runner(ctx context.Context, name, token string) *Runner {
 	r := &Runner{Name: name, Agent: in.id + "-runner-" + name, Daemon: in.id + "-daemon-" + name, in: in}
 	lib := in.volume(ctx, "lib-"+name)
@@ -92,20 +95,20 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 		in.t.Fatal(err)
 	}
 	// /var/lib/agentiik is the agent's, as the page has it, and a volume is root's when made.
-	if _, err := docker(ctx, "run", "--rm", "-v", lib+":"+libPath, alpineImage, "chown", agentUser+":"+agentUser, libPath); err != nil {
+	if _, err := docker(ctx, "run", "--rm", "--network", "none", "-v", lib+":"+libPath, alpineImage, "chown", agentUser+":"+agentUser, libPath); err != nil {
 		in.t.Fatal(err)
 	}
 
 	in.container(ctx, r.Daemon, "run", "-d", "--name", r.Daemon, "--label", in.label(),
-		"--privileged", "--network", "host",
+		"--privileged", "--network", in.network,
 		"-v", socket+":"+daemonSocketDir,
 		"-v", lib+":"+libPath,
 		"-v", secrets+":"+secretsPath,
 		dindImage,
 		"dockerd", "--host=unix://"+daemonSocketDir+"/docker.sock", "--group="+socketGroup,
-		"--bridge=none", "--iptables=false", "--ip6tables=false")
+		"--insecure-registry="+in.Registry)
 	eventually(in.t, 2*time.Minute, "runner "+name+"'s daemon answered", func() error {
-		_, err := docker(ctx, "exec", r.Daemon, "docker", "-H", "unix://"+daemonSocketDir+"/docker.sock", "version")
+		_, err := r.daemon(ctx, "version")
 		return err
 	})
 
@@ -138,6 +141,11 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 	serving = append(serving, in.runnerIm, "serve")
 	in.container(ctx, r.Agent, serving...)
 	return r
+}
+
+// daemon runs the docker command line against the runner's own daemon, inside its container.
+func (r *Runner) daemon(ctx context.Context, args ...string) (string, error) {
+	return docker(ctx, append([]string{"exec", r.Daemon, "docker", "-H", "unix://" + daemonSocketDir + "/docker.sock"}, args...)...)
 }
 
 // joinedAs reads the runner's identifier out of what join said.

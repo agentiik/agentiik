@@ -64,7 +64,8 @@ type Installation struct {
 	// front of it, which records every request it passes on.
 	PublicURL string
 
-	// Registry is the one address every daemon pulls from, 127.0.0.1 and a port.
+	// Registry is the one address every runner's daemon pulls from: the registry's name on
+	// the installation's network, and its port.
 	Registry string
 
 	// Runners are the two runners, joined and heartbeating.
@@ -81,6 +82,7 @@ type Installation struct {
 	token    string
 	client   *http.Client
 	runnerIm string
+	network  string
 
 	// held are the values no runner may hold, by what each is: the installation's own
 	// credentials and keys, which only the API and the controller are given.
@@ -191,7 +193,7 @@ func tail(s string, max int) string {
 func (in *Installation) removeRoot() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if _, err := docker(ctx, "run", "--rm", "-v", in.root+":/root-of-the-test", alpineImage,
+	if _, err := docker(ctx, "run", "--rm", "--network", "none", "-v", in.root+":/root-of-the-test", alpineImage,
 		"sh", "-c", "rm -rf /root-of-the-test/* /root-of-the-test/.[!.]*"); err != nil {
 		in.t.Logf("the test's directory %s could not be emptied: %s", in.root, err)
 	}

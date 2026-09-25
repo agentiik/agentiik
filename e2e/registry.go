@@ -1,27 +1,46 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// registry starts a registry:2 on 127.0.0.1, the one name this machine's daemon pushes to and
-// both runners' daemons pull from, since all three share the host's network. A registry on a
-// loopback address is one every daemon speaks plain HTTP to without being told, which spares the
-// daemons a certificate and a flag each.
+// registryPort is where registry:2 listens in its container.
+const registryPort = "5000"
+
+// registry makes the installation's network and starts a registry:2 on it, whose name is the one
+// every runner's daemon pulls from. The daemons resolve it through the network's own DNS and speak
+// plain HTTP to it because each is told to with --insecure-registry, which spares them a
+// certificate. Its port is published on 127.0.0.1 too, for this machine to see it answer.
 func (in *Installation) registry(ctx context.Context) {
-	port := freePort(in.t)
-	in.Registry = fmt.Sprintf("127.0.0.1:%d", port)
+	in.network = in.id
+	if _, err := docker(ctx, "network", "create", "--label", in.label(), in.network); err != nil {
+		in.t.Fatal(err)
+	}
+	in.undo(func() {
+		gone, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		docker(gone, "network", "rm", in.network)
+	})
+
 	name := in.id + "-registry"
-	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(), "--network", "host",
-		"-e", "REGISTRY_HTTP_ADDR="+in.Registry, registryImage)
+	in.Registry = name + ":" + registryPort
+	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(), "--network", in.network,
+		"-p", "127.0.0.1::"+registryPort, registryImage)
+	published, err := docker(ctx, "port", name, registryPort+"/tcp")
+	if err != nil {
+		in.t.Fatal(err)
+	}
+	published, _, _ = strings.Cut(published, "\n")
 	eventually(in.t, time.Minute, "the registry answered", func() error {
-		answer, err := http.Get("http://" + in.Registry + "/v2/")
+		answer, err := http.Get("http://" + published + "/v2/")
 		if err != nil {
 			return err
 		}
@@ -37,28 +56,52 @@ func (in *Installation) registry(ctx context.Context) {
 // reference it was tagged as and the digest the registry holds it under, name@sha256:<hex>, which
 // is what a version records and what a runner is handed.
 //
-// Built by this machine's daemon and pushed, as a brick author's machine does it: the runners'
-// daemons have never seen it, and pull it by its digest from the registry, which is the path a
-// server run takes.
+// Built by this machine's daemon, as a brick author's machine builds it, and pushed by runner a's,
+// which is a daemon that resolves the registry's name: this machine's does not. The digest is the
+// one the pushing daemon holds, as agk push resolves it. The image is then taken off that daemon,
+// so that neither runner holds it and the one that takes the task pulls it by that digest, which
+// is the path a server run takes.
 func (in *Installation) Brick(dir string) (tag, pinned string) {
 	in.t.Helper()
 	ctx := in.t.Context()
+	pusher := in.Runners[0]
+	local := "agk-e2e/" + dir + ":" + in.id
 	repository := in.Registry + "/agk-e2e/" + dir
 	tag = repository + ":" + in.id
 	// No provenance: an attestation would make what is pushed an index of two manifests, and a
 	// brick is one image.
-	if _, err := docker(ctx, "build", "--provenance=false", "-t", tag, filepath.Join(in.module, "e2e", "testdata", "bricks", dir)); err != nil {
+	if _, err := docker(ctx, "build", "--provenance=false", "-t", local, filepath.Join(in.module, "e2e", "testdata", "bricks", dir)); err != nil {
 		in.t.Fatal(err)
 	}
 	in.undo(func() {
 		gone, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		docker(gone, "image", "rm", "-f", tag)
+		docker(gone, "image", "rm", "-f", local)
 	})
-	if _, err := docker(ctx, "push", tag); err != nil {
+
+	save := exec.CommandContext(ctx, "docker", "save", local)
+	load := exec.CommandContext(ctx, "docker", "exec", "-i", pusher.Daemon, "docker", "-H", "unix://"+daemonSocketDir+"/docker.sock", "load")
+	pipe, err := save.StdoutPipe()
+	if err != nil {
 		in.t.Fatal(err)
 	}
-	out, err := docker(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", tag)
+	var saveErr, loadOut bytes.Buffer
+	save.Stderr = &saveErr
+	load.Stdin, load.Stdout, load.Stderr = pipe, &loadOut, &loadOut
+	if err := save.Start(); err != nil {
+		in.t.Fatal(err)
+	}
+	loadErr := load.Run()
+	if err := save.Wait(); err != nil || loadErr != nil {
+		in.t.Fatalf("%s could not be carried to runner %s's daemon: %v %v: %s%s", local, pusher.Name, err, loadErr, saveErr.String(), loadOut.String())
+	}
+
+	for _, args := range [][]string{{"tag", local, tag}, {"push", tag}} {
+		if _, err := pusher.daemon(ctx, args...); err != nil {
+			in.t.Fatal(err)
+		}
+	}
+	out, err := pusher.daemon(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", tag)
 	if err != nil {
 		in.t.Fatal(err)
 	}
@@ -67,11 +110,17 @@ func (in *Installation) Brick(dir string) (tag, pinned string) {
 		in.t.Fatalf("the digests of %s do not decode: %s: %s", tag, err, out)
 	}
 	for _, d := range digests {
-		if strings.HasPrefix(d, repository+"@sha256:") {
-			return tag, d
+		if !strings.HasPrefix(d, repository+"@sha256:") {
+			continue
 		}
+		// Taken back off the daemon that pushed it, so that whichever runner takes the task
+		// pulls it from the registry by its digest.
+		if _, err := pusher.daemon(ctx, "image", "rm", tag, local); err != nil {
+			in.t.Fatal(err)
+		}
+		return tag, d
 	}
-	in.t.Fatalf("%s was pushed, and this machine's daemon holds no digest for it under %s: %s", tag, repository, out)
+	in.t.Fatalf("%s was pushed, and the daemon that pushed it holds no digest for it under %s: %s", tag, repository, out)
 	return "", ""
 }
 
