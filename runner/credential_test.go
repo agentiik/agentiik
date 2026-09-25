@@ -368,6 +368,7 @@ func TestARefusedRenewalEndsAsItsAnswerSays(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			api := aRotatingAPI(t, refuses(row.status))
 			r := aRotator(t, api.srv.URL, key)
+			r.settle = 300 * time.Millisecond
 			r.Revoked = func() bool { return row.revoked }
 			err := r.Run(t.Context())
 			if !errors.Is(err, row.is) || (row.is == nil) != (err == nil) {
@@ -382,8 +383,18 @@ func TestARefusedRenewalEndsAsItsAnswerSays(t *testing.T) {
 		})
 	}
 
-	api := aRotatingAPI(t, refuses(http.StatusServiceUnavailable))
+	// Revoked a moment before the rotation, and heard of at the next heartbeat.
+	api := aRotatingAPI(t, refuses(http.StatusForbidden))
 	r := aRotator(t, api.srv.URL, key)
+	r.settle = 3 * time.Second
+	heard := time.Now().Add(1500 * time.Millisecond)
+	r.Revoked = func() bool { return time.Now().After(heard) }
+	if err := r.Run(t.Context()); err != nil {
+		t.Errorf("a rotation refused for a revocation the heartbeat had not said yet ended run with %v", err)
+	}
+
+	api = aRotatingAPI(t, refuses(http.StatusServiceUnavailable))
+	r = aRotator(t, api.srv.URL, key)
 	ctx, cancel := context.WithTimeout(t.Context(), 2500*time.Millisecond)
 	defer cancel()
 	if err := r.Run(ctx); err != nil {

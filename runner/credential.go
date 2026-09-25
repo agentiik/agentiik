@@ -242,6 +242,10 @@ type Rotator struct {
 	// time of day.
 	Now func() time.Time
 
+	// settle is how long a 403 is given for the heartbeat to say the runner is revoked, zero
+	// being two heartbeat intervals, which a test shortens.
+	settle time.Duration
+
 	mu   sync.Mutex
 	held Held
 }
@@ -296,8 +300,10 @@ func (r *Rotator) Run(ctx context.Context) error {
 			return nil
 		case errors.Is(err, ErrCredentialRefused):
 			return fmt.Errorf("runner: %s: %w", joinAgain, err)
-		case errors.Is(err, ErrForbidden) && r.Revoked != nil && r.Revoked():
+		case errors.Is(err, ErrForbidden) && r.revoked(ctx):
 			r.say("this runner is revoked, so its credential is not renewed, and it is accepted until the grace the heartbeat names ends")
+			return nil
+		case ctx.Err() != nil:
 			return nil
 		case errors.Is(err, ErrForbidden):
 			return fmt.Errorf("runner: the API did not take a renewal of this runner's credential signed with the host's key, which is then not the key runner %s joined with, and %w: %w", r.Runner, ErrKeyGone, err)
@@ -311,6 +317,32 @@ func (r *Rotator) Run(ctx context.Context) error {
 			return nil
 		}
 		wait = min(2*wait, retryMost)
+	}
+}
+
+// revoked answers whether a rotation refused 403 was refused for a revocation, rather than for a
+// signature the API does not take.
+//
+// The API refuses a revoked runner's rotation at once, and the agent learns of the revocation at
+// its next heartbeat, so a rotation made in between is refused before Revoked says so. The answer
+// is waited for, two heartbeat intervals at most, before the refusal is taken for a key that is not
+// the one the runner joined with: that ends the agent, and a revoked runner's grace is there for
+// the work it holds to be answered.
+func (r *Rotator) revoked(ctx context.Context) bool {
+	if r.Revoked == nil {
+		return false
+	}
+	settle := r.settle
+	if settle <= 0 {
+		settle = 2 * HeartbeatInterval
+	}
+	for until := r.now().Add(settle); ; {
+		if r.Revoked() {
+			return true
+		}
+		if !r.now().Before(until) || !sleep(ctx, min(retryFirst, until.Sub(r.now()))) {
+			return false
+		}
 	}
 }
 
@@ -363,7 +395,15 @@ func (r *Rotator) Rotate(ctx context.Context) error {
 		return err
 	}
 	if err := file.commit(true); err != nil {
-		return err
+		// A rename that happened before the directory could be synced has put the new
+		// credential in place, and a restart would start from it: from here on it is the
+		// one carried, or the next rotation, asked with the old one, would have the API drop
+		// the credential on the disk.
+		kept, rerr := ReadHeld(r.Path, Config{Runner: r.Runner})
+		if rerr != nil || kept.Credential != held.Credential {
+			return err
+		}
+		r.say(err.Error() + ", and the renewed credential is carried all the same, since it is in place")
 	}
 	r.Client.use(held.Credential)
 	r.mu.Lock()
