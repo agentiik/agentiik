@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -217,5 +219,54 @@ func TestAPassTheFenceRefusesTellsNothing(t *testing.T) {
 	}
 	if got := q.dispatched(); len(got) != 0 {
 		t.Errorf("a pass the fence refused dispatched %d tasks", len(got))
+	}
+}
+
+// A shard fail_fast stopped ended as its stop went out, and the report of how its container exited
+// is not an ending of its own: the container the stop cut short ran for no length worth a brick's
+// duration, and the failure that stopped it is the ending counted.
+func TestTheReportOfAShardAStopEndedIsNotAnEnding(t *testing.T) {
+	core, q, pool, super := decidingOn(t, failingFastWorkflow)
+	h := &heard{}
+	core.observer = h
+	joinedAsTheRunner(t, super)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice",
+			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}, {"customer_id": "C-1043"}]}`),
+			Steps:  []agk.Step{"invoice", "archive"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var first, second Dispatch
+	for _, d := range q.dispatched() {
+		switch {
+		case d.Task.Step == "archive":
+		case d.Task.Shard.Index == 1:
+			first = d
+		default:
+			second = d
+		}
+		if err := core.redeem(t, d, theRunner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.since()
+
+	core.answer(t, ran(first.Task, agk.TaskFailed, 7, 20*time.Second, core.now()))
+	if got, want := h.since(), []string{"ended invoice 1.0.0 failed 20s"}; !slices.Equal(got, want) {
+		t.Fatalf("the failure that stopped its sibling told %q, want %q", got, want)
+	}
+	late := ran(second.Task, agk.TaskCancelled, 143, 25*time.Second, core.now())
+	if err := core.Answer(t.Context(), Answer{Result: late, Row: second.Row, Runner: theRunner}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.since(); len(got) != 0 {
+		t.Errorf("the report of the stopped shard told %q", got)
 	}
 }
