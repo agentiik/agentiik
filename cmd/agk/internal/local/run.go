@@ -193,11 +193,14 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 	narrator := newNarrator(r.Graph, r.Events)
 	outstanding := 0
 
-	// unsent holds the stops the driver refused, until one is taken or the task comes back.
-	// The evaluator names a stop sent while the run goes on once, in the pass that ends its
-	// task, so a refused one would otherwise never be sent again and its container would run to
-	// its deadline: this is the loop's part of what the heartbeat's cancel is to a server.
-	unsent := map[agk.TaskID]graph.Stop{}
+	// stopping holds every stop sent for a task this loop started, until the task comes back,
+	// and each is sent again on every pass. The evaluator names a stop sent while the run goes
+	// on once, in the pass that ends its task, and one sent once can miss: the driver may refuse
+	// it, and it answers nil for a task whose container it has not reached yet, since the
+	// goroutine that runs it has only just started. Its container would then run to its end or
+	// its deadline. This is the loop's part of what the heartbeat's cancel is to a server.
+	started := map[agk.TaskID]bool{}
+	stopping := map[agk.TaskID]graph.Stop{}
 
 	// The interrupt is read once. After Cancel the channel stays closed, so a loop that
 	// kept reading it would spin instead of waiting for the containers it just called
@@ -221,22 +224,22 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 		}
 
 		// Every stop the plan names, in the order it named them, every time it
-		// appears, and then every one the driver refused before. Stop is idempotent by
-		// design and a stop for a task that already finished is the ordinary
-		// consequence of at-least-once delivery.
+		// appears, and then every one sent before for a task still out. Stop is
+		// idempotent by design and a stop for a task that already finished is the
+		// ordinary consequence of at-least-once delivery.
 		stops := slices.Clone(plan.Stop)
-		for _, task := range slices.Sorted(maps.Keys(unsent)) {
+		for _, task := range slices.Sorted(maps.Keys(stopping)) {
 			if !slices.ContainsFunc(stops, func(s graph.Stop) bool { return s.Task == task }) {
-				stops = append(stops, unsent[task])
+				stops = append(stops, stopping[task])
 			}
 		}
 		for _, stop := range stops {
+			if started[stop.Task] {
+				stopping[stop.Task] = stop
+			}
 			if err := s.tasks.Stop(taskCtx, stop); err != nil {
 				s.say("the stop of task " + string(stop.Task) + " was refused: " + err.Error())
-				unsent[stop.Task] = stop
-				continue
 			}
-			delete(unsent, stop.Task)
 		}
 
 		// The dispatch is recorded before the goroutine starts, which is the one rule
@@ -259,6 +262,7 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 				return nil, err
 			}
 			outstanding++
+			started[task.ID] = true
 			go func(t graph.Task) {
 				result, err := s.tasks.Run(taskCtx, t)
 				select {
@@ -300,7 +304,8 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 		select {
 		case done := <-results:
 			outstanding--
-			delete(unsent, done.task.ID)
+			delete(started, done.task.ID)
+			delete(stopping, done.task.ID)
 			if err := s.record(ev, done, refused); err != nil {
 				return nil, err
 			}

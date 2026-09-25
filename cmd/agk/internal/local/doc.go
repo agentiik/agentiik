@@ -52,11 +52,12 @@
 // Four: stops and the clock. Every graph.Stop a Plan names goes to driver.Stop in the
 // order the Plan named it, every time it appears, because Stop is idempotent by design and
 // a stop for a task that already finished is the ordinary consequence of at-least-once
-// delivery. A stop the driver refused is sent again on every pass until one is taken or
-// the task comes back, because the evaluator names a stop sent while the run goes on, as
+// delivery. A stop sent for a task this loop started is sent again on every pass until the
+// task comes back, because the evaluator names a stop sent while the run goes on, as
 // superseded or sibling_failed, once: it ends that task cancelled in the pass that names the
 // stop, exactly as it does for a server, and what the driver reports of it afterwards adds
-// its exit code and nothing else. Then the loop blocks on one of three things: a Result
+// its exit code and nothing else. Sent once, it could miss a container the driver has not
+// reached yet, which it answers with nil. Then the loop blocks on one of three things: a Result
 // coming back, the timer at plan.Wake, or the context being cancelled. Wake is a timer and
 // not a poll.
 //

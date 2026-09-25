@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/internal/stoptest"
 )
@@ -19,8 +20,14 @@ import (
 type playing struct {
 	h stoptest.History
 
-	// refusals is how many stops of each task the driver refuses before it takes one.
-	refusals int
+	// missed is how many stops of each task the driver answers and does not act on before it
+	// takes one, as a driver asked to stop a task whose container it has not reached yet, and
+	// refused how many it refuses outright.
+	missed, refused int
+
+	// observe, where it is set, is how the late task's container says it is running once
+	// its stop has been sent, before it exits.
+	observe func(agk.TaskID)
 
 	mu      sync.Mutex
 	stopped map[agk.TaskID]chan struct{}
@@ -28,8 +35,8 @@ type playing struct {
 	waited  bool
 }
 
-func newPlaying(h stoptest.History, refusals int) *playing {
-	return &playing{h: h, refusals: refusals, stopped: map[agk.TaskID]chan struct{}{}, asked: map[agk.TaskID]int{}}
+func newPlaying(h stoptest.History, missed, refused int) *playing {
+	return &playing{h: h, missed: missed, refused: refused, stopped: map[agk.TaskID]chan struct{}{}, asked: map[agk.TaskID]int{}}
 }
 
 func (p *playing) stop(id agk.TaskID) chan struct{} {
@@ -54,6 +61,9 @@ func (p *playing) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			p.waited = true
 			p.mu.Unlock()
 		}
+		if p.observe != nil {
+			p.observe(t.ID)
+		}
 	}
 	if code := p.h.Exits[task]; code != 0 {
 		return graph.Result{Task: t.ID, State: agk.TaskFailed, ExitCode: code, StartedAt: started, FinishedAt: started}, nil
@@ -68,7 +78,10 @@ func (p *playing) Stop(ctx context.Context, s graph.Stop) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.asked[s.Task]++
-	if p.asked[s.Task] <= p.refusals {
+	switch {
+	case p.asked[s.Task] <= p.missed:
+		return nil
+	case p.asked[s.Task] <= p.missed+p.refused:
 		return errors.New("the daemon did not answer")
 	}
 	select {
@@ -85,7 +98,7 @@ func (p *playing) Stop(ctx context.Context, s graph.Stop) error {
 func TestALocalRunEndsAStoppedShardAsAServerDoes(t *testing.T) {
 	for _, h := range stoptest.Histories {
 		t.Run(h.Name, func(t *testing.T) {
-			s := session(t, newPlaying(h, 0))
+			s := session(t, newPlaying(h, 0, 0))
 			out, err := s.Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs})
 			if err != nil {
 				t.Fatal(err)
@@ -118,24 +131,51 @@ func TestALocalRunEndsAStoppedShardAsAServerDoes(t *testing.T) {
 	}
 }
 
-// The evaluator names a stop sent while the run goes on once, so a stop the driver refused is the
-// loop's to send again, on the next pass, until one is taken. Here the pass that stops archive
-// starts pick, whose ending is that next pass.
-func TestAStopTheDriverRefusedIsSentAgain(t *testing.T) {
+// The evaluator names a stop sent while the run goes on once, so the loop sends it again on every
+// pass until its task comes back: the driver may have answered nil for a container it had not
+// reached yet, or refused the stop. Here the pass that stops archive starts pick, whose ending is
+// the next pass.
+func TestAStopIsSentAgainUntilItsTaskComesBack(t *testing.T) {
 	h := stoptest.Histories[slices.IndexFunc(stoptest.Histories, func(h stoptest.History) bool { return h.Name == "merge first" })]
-	p := newPlaying(h, 1)
-	out, err := session(t, p).Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs})
-	if err != nil {
+	for name, p := range map[string]*playing{
+		"missed":  newPlaying(h, 1, 0),
+		"refused": newPlaying(h, 0, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := session(t, p).Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var archive agk.TaskID
+			for id := range p.asked {
+				archive = id
+			}
+			if p.waited || p.asked[archive] < 2 {
+				t.Errorf("the driver was asked to stop %s %d times, and it came back on its own %t", archive, p.asked[archive], p.waited)
+			}
+			if out.Run.State != h.Run {
+				t.Errorf("the run is %s, want %s", out.Run.State, h.Run)
+			}
+		})
+	}
+}
+
+// The container of a task the evaluator stopped may say it is running after the stop went out.
+// The narration has already said cancelled, and does not say running after it.
+func TestAStoppedTaskIsNotNarratedRunningAgain(t *testing.T) {
+	h := stoptest.Histories[slices.IndexFunc(stoptest.Histories, func(h stoptest.History) bool { return h.Name == "merge first" })]
+	p := newPlaying(h, 0, 0)
+	s := session(t, p)
+	p.observe = func(id agk.TaskID) { s.observations <- driver.Event{Task: id, State: agk.TaskRunning} }
+	var archive []agk.TaskState
+	if _, err := s.Run(t.Context(), Request{Graph: built(t, h.Workflow), Tree: t.TempDir(), Inputs: h.Inputs, Events: func(e Event) {
+		if e.Step == "archive" && e.Attempt > 0 {
+			archive = append(archive, e.State)
+		}
+	}}); err != nil {
 		t.Fatal(err)
 	}
-	var archive agk.TaskID
-	for id := range p.asked {
-		archive = id
-	}
-	if p.waited || p.asked[archive] != 2 {
-		t.Errorf("the driver was asked to stop %s %d times, and it came back on its own %t", archive, p.asked[archive], p.waited)
-	}
-	if out.Run.State != h.Run {
-		t.Errorf("the run is %s, want %s", out.Run.State, h.Run)
+	if at := slices.Index(archive, agk.TaskCancelled); at < 0 || slices.Contains(archive[at:], agk.TaskRunning) {
+		t.Errorf("archive was narrated %v", archive)
 	}
 }
