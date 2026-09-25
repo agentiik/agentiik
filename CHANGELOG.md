@@ -207,7 +207,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A message whose image is not `name@sha256`, and whose key the record does not answer, is reported `failed` with no container ran and acknowledged, before its key is written down or its grant redeemed.
 - `serve` hears stops on `agentiik.stops` over its own connection before it takes anything, and a subscription refused or not confirmed ends it. A stop for a key it holds, or that an earlier agent took, is handed to the driver with its reason; one for any other key is passed over. `runner.Stops` asks the driver once per holding of a key between the bus and the heartbeat's cancel, so a repeat sends no second `SIGTERM` and does not rewrite the reason, and asks again only where the driver failed. `Stops.Hear` may be called on a replacement connection before the old one closes, and a stop heard on both is sent once.
 - `serve` ships each task's log to `POST /api/v1/tasks/logs` while its container runs (`runner.TaskLogs`): standard error only, as the driver masked it, a chunk a second or as soon as one is full (4,096 lines, 1 MiB), the grant in `Agentiik-Grant`, and a chunk with no answer shipped again as it was. The closing chunk goes before the result and is tried for 30 s; the result's `log` is the API's last answer, `truncated` where the API or the runner cut it or the close got no answer. A dispatch carried again after the agent restarted goes on from where the API says its log stands, and reports it `truncated`. The key's record keeps the log the result reported, so a report made from it says the same.
-- A bus credential naming a bus in plaintext across a network is refused, rather than asked for again for ever. `serve` and `join` refuse a `DOCKER_HOST` that is not a local unix socket, naming it, on the same start as the other settings.
+- A bus credential naming a bus in plaintext across a network is refused, rather than asked for again for ever.
+- `serve` and `join` refuse a `DOCKER_HOST` that is not a local unix socket, naming it, on the same start as the other settings.
 
 ### Artifacts
 
@@ -332,6 +333,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 - `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
 - Every connection the programs open holds TLS 1.2 as its floor and speaks 1.3 where the other end does: PostgreSQL through `db.Open` and `db.Connect`, the bus, a runner's calls to the API and its objects, and `agk`. `internal/tlsfloor` writes the floor once.
+- A request from `agk` or a runner to `localhost` in any case, `0.0.0.0` or `::` goes through no `HTTP_PROXY`, as one to `127.0.0.1` already did, so nothing let through as crossing no network crosses it to a proxy.
 
 ### Command line
 
