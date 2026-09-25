@@ -687,3 +687,66 @@ func TestAnAgentStoppedAnywhereInATasksEndingLeavesItsKeyNamedAndItsResultToPubl
 		})
 	}
 }
+
+// endedAs is a record holding one ending, for Recover to read.
+type endedAs struct {
+	refusing
+	e      driver.Ending
+	logged []*driver.EndedLog
+}
+
+func (d *endedAs) Ended(id agk.TaskID) (driver.Ending, bool, error) { return d.e, d.e.Key == id, nil }
+
+func (d *endedAs) Logged(_ agk.TaskID, l *driver.EndedLog) error {
+	d.logged = append(d.logged, l)
+	return nil
+}
+
+// A task that never reached a container opened no log, and the result a restart keeps for it
+// addresses none and gives the record none, as a requeue answered from the record addresses none. A
+// container that started has a log, which the record's may have been cleared of while it was being
+// closed, and that one is addressed, truncated.
+func TestARecoveredResultAddressesALogOnlyWhereAContainerStarted(t *testing.T) {
+	m := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
+	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	code := 0
+	for name, tc := range map[string]struct {
+		e      driver.Ending
+		logged bool
+	}{
+		"timed out pulling": {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskTimedOut, At: started}, false},
+		"closing":           {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskSucceeded, ExitCode: &code, StartedAt: started, FinishedAt: started.Add(time.Second), Outputs: []driver.EndedPort{}, At: started}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &published{}
+			results, err := OpenResults(t.TempDir(), "runner-dmz-02", b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := results.owe(m, "runner-dmz-02"); err != nil {
+				t.Fatal(err)
+			}
+			d := &endedAs{e: tc.e}
+			c := &Carrier{Runner: "runner-dmz-02", Driver: d, Results: results, Logs: &fakeLogs{}}
+			if err := c.Recover(); err != nil {
+				t.Fatal(err)
+			}
+			if err := results.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := b.all()
+			if len(got) != 1 {
+				t.Fatalf("%d results were published", len(got))
+			}
+			if has := got[0].Log != nil; has != tc.logged {
+				t.Errorf("the result recovered says of its log %+v", got[0].Log)
+			}
+			if tc.logged && !got[0].Log.Truncated {
+				t.Errorf("a log whose close went with the agent is reported %+v", got[0].Log)
+			}
+			if wrote := len(d.logged) > 0; wrote != tc.logged {
+				t.Errorf("the record was given %v", d.logged)
+			}
+		})
+	}
+}

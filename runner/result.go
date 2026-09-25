@@ -288,7 +288,10 @@ func (c *Carrier) Recover() error {
 			continue
 		}
 		r, err := EndingOf(bus.TaskMessage{TaskID: o.TaskID, IdempotencyKey: o.IdempotencyKey}, c.Runner, e)
-		if err == nil && c.Logs != nil {
+		// A log where the record names one, or where a container started and the record's was
+		// cleared while it was being closed; none for a task that never reached a container,
+		// which opened none.
+		if err == nil && c.Logs != nil && (e.Log != nil || !e.StartedAt.IsZero()) {
 			var uri agk.LogURI
 			if uri, err = agk.NewLogURI(key); err == nil {
 				r.Log = &bus.Log{URI: uri.String(), Truncated: true}
@@ -305,7 +308,7 @@ func (c *Carrier) Recover() error {
 		if err := c.Results.Keep(r); err != nil {
 			failed = append(failed, err)
 		}
-		if c.Logs != nil {
+		if r.Log != nil {
 			c.logged(key, r.Log)
 		}
 	}
