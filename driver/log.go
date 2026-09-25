@@ -122,37 +122,57 @@ const maxLineBytes = 64 << 10
 // match runs; a value split across two lines is not, which is what the documentation
 // already says of literal matching.
 //
+// The caps count standard error alone, the driver's own lines on it included. Standard
+// error is the log, and standard output belongs to the result, which has limits of its own:
+// counted together, an envelope written on standard output in the shorthand would use up
+// the cap and silence the one stream that is a log, and a whole log of a dozen lines would
+// be reported truncated. Standard output is still written in, so that a person reading the
+// log locally reads what the container said in the order it said it, and a runner ships
+// standard error alone. It is bounded on its own terms, since each of its lines costs the
+// sink what a line of standard error costs whatever it says: at most as many bytes as an
+// envelope may hold, which is all of it that could ever be a result, and at most as many
+// lines as the log may hold of standard error.
+//
 // It is guarded, because two goroutines reach it: the one demultiplexing the container's
 // streams, and the one that writes the driver's own lines about a deadline that fired or
 // an exit code charged to the runtime.
 type taskLog struct {
-	mu       sync.Mutex
-	w        io.Writer
-	mask     *masker
-	now      func() time.Time
-	maxBytes int64
-	maxLines int
-
+	mu        sync.Mutex
+	w         io.Writer
+	mask      *masker
+	now       func() time.Time
+	maxBytes  int64
+	maxLines  int
+	outBytes  int64
 	pending   [2][]byte
 	lines     int
-	written   int64
 	truncated bool
-	stopped   bool
 	sealed    bool
 	err       error
+
+	// stderr and stdout are what each stream has put in so far, counted apart.
+	stderr, stdout counted
+}
+
+// counted is what one stream has put in the log, and whether its bound has ended it there.
+type counted struct {
+	lines   int
+	bytes   int64
+	stopped bool
 }
 
 // newLog opens the log of one task over w, which is the sink the runner opened for it.
 //
 // A nil w is a task whose runner keeps no log: the lines are still counted and capped, so
 // that what the observer is told does not depend on whether anybody was listening.
-// maxBytes and maxLines of zero or less are caps deliberately turned off, which is the
-// reading agk already takes of a limit that is not positive.
-func newLog(w io.Writer, m *masker, now func() time.Time, maxBytes int64, maxLines int) *taskLog {
+// maxBytes and maxLines are the caps on standard error, and outBytes the most of standard
+// output written in, which is envelope_max_bytes. Any of them zero or less is turned off,
+// which is the reading agk already takes of a limit that is not positive.
+func newLog(w io.Writer, m *masker, now func() time.Time, maxBytes int64, maxLines int, outBytes int64) *taskLog {
 	if now == nil {
 		now = time.Now
 	}
-	return &taskLog{w: w, mask: m, now: now, maxBytes: maxBytes, maxLines: maxLines}
+	return &taskLog{w: w, mask: m, now: now, maxBytes: maxBytes, maxLines: maxLines, outBytes: outBytes}
 }
 
 // write takes what was read off one of the container's streams. It never returns an
@@ -283,35 +303,81 @@ func (l *taskLog) text(b []byte) string {
 	return string(bytes.TrimSuffix(l.mask.mask(b), []byte("\r")))
 }
 
-// emit writes one line, unless a cap has already ended the log.
+// emit writes one line, unless its stream's bound has already ended it.
 func (l *taskLog) emit(s Stream, text string) {
-	if l.stopped {
+	if s == Stdout {
+		l.emitOutput(text)
 		return
 	}
-	if l.maxLines > 0 && l.lines >= l.maxLines {
+	c := &l.stderr
+	if c.stopped {
+		return
+	}
+	if l.maxLines > 0 && c.lines >= l.maxLines {
 		l.stop("the log reached the %d lines the runner policy allows, and the rest of it was dropped", l.maxLines)
 		return
 	}
-	whole := true
-	if l.maxBytes > 0 {
-		room := l.maxBytes - l.written
-		if room <= 0 {
-			l.stop("the log reached the %d bytes the runner policy allows, and the rest of it was dropped", l.maxBytes)
-			return
-		}
-		if int64(len(text)) > room {
-			// The byte cap is counted in bytes, so the line is cut at the byte it
-			// falls on rather than dropped whole. It is cut back to a rune
-			// boundary, because half a character is not text.
-			text = cut(text, int(room))
-			whole = false
-		}
+	text, whole, room := fit(text, l.maxBytes, c.bytes)
+	if !room {
+		l.stop("the log reached the %d bytes the runner policy allows, and the rest of it was dropped", l.maxBytes)
+		return
 	}
 	l.put(Line{At: l.now().UTC(), Index: l.lines + 1, Stream: s, Text: text})
-	l.written += int64(len(text))
+	c.lines++
+	c.bytes += int64(len(text))
 	if !whole {
 		l.stop("the log reached the %d bytes the runner policy allows, and the rest of it was dropped", l.maxBytes)
 	}
+}
+
+// emitOutput writes one line of standard output, within the bounds of its own.
+//
+// Where a bound ends it, a line of the driver's says so on standard error, where the caps
+// count it as any other. The log is not truncated for it: standard error is still whole,
+// and what standard output said is read as the envelope from what was captured of it,
+// which the log never was.
+func (l *taskLog) emitOutput(text string) {
+	c := &l.stdout
+	if c.stopped {
+		return
+	}
+	if l.maxLines > 0 && c.lines >= l.maxLines {
+		c.stopped = true
+		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d lines the log holds of it, and the rest of it is left out of the log", l.maxLines))
+		return
+	}
+	text, whole, room := fit(text, l.outBytes, c.bytes)
+	if !room {
+		c.stopped = true
+		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes))
+		return
+	}
+	l.put(Line{At: l.now().UTC(), Index: l.lines + 1, Stream: Stdout, Text: text})
+	c.lines++
+	c.bytes += int64(len(text))
+	if !whole {
+		c.stopped = true
+		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes))
+	}
+}
+
+// fit is text within what is left of a bound of max bytes of which used are used: the whole
+// of it, or cut at the byte the bound falls on, and room says whether any was left at all.
+//
+// A line is cut rather than dropped whole, because what a container said up to there is still
+// what it said. It is cut back to a rune boundary, because half a character is not text.
+func fit(text string, max, used int64) (string, bool, bool) {
+	if max <= 0 {
+		return text, true, true
+	}
+	room := max - used
+	if room <= 0 {
+		return "", false, false
+	}
+	if int64(len(text)) > room {
+		return cut(text, int(room)), false, true
+	}
+	return text, true, true
 }
 
 // stop records a cap being reached and writes the marker, once.
@@ -319,10 +385,10 @@ func (l *taskLog) emit(s Stream, text string) {
 // The marker is a line of the log like any other and is counted as one, so that the
 // number the observer is given is the number of lines a reader of the sink will find.
 func (l *taskLog) stop(format string, args ...any) {
-	if l.stopped {
+	if l.stderr.stopped {
 		return
 	}
-	l.stopped = true
+	l.stderr.stopped = true
 	l.truncated = true
 	l.put(Line{At: l.now().UTC(), Index: l.lines + 1, Stream: Stderr, Text: notePrefix + fmt.Sprintf(format, args...)})
 }

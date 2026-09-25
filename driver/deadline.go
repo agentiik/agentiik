@@ -397,7 +397,7 @@ func (d *Docker) timedOutPulling(ctx context.Context, t graph.Task, p *pastDeadl
 		return graph.Result{}, err
 	}
 	defer closeSink()
-	log := newLog(sink, newMasker(), d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log := newLog(sink, newMasker(), d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines, d.limits().EnvelopeMaxBytes)
 	state := agk.TaskTimedOut
 	if p.stop {
 		// A stop that landed during the pull found no container to signal and was

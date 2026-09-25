@@ -269,7 +269,7 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 		return graph.Result{}, err
 	}
 	defer closeSink()
-	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines, d.limits().EnvelopeMaxBytes)
 
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskDispatched, Container: container})
 
@@ -626,7 +626,7 @@ func (d *Docker) settle(ctx context.Context, t graph.Task, store *artifact.Store
 		return graph.Result{}, exited(t.ID, err)
 	}
 	defer closeSink()
-	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines)
+	log := newLog(sink, mask, d.cfg.Now, d.cfg.Policy.LogMaxBytes, d.cfg.Policy.LogMaxLines, d.limits().EnvelopeMaxBytes)
 
 	d.observe(ctx, Event{Task: t.ID, State: agk.TaskDispatched, Container: container})
 
