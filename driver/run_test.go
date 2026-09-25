@@ -968,6 +968,56 @@ func TestStoppingATaskNobodyHoldsIsNotAnError(t *testing.T) {
 	}
 }
 
+// A stop for a container this process did not start, one a restarted runner's earlier agent left
+// running, is carried to its SIGKILL even where the caller gives up before the grace is out: the
+// daemon's stop answers only once the container has exited, and a heartbeat's stop is bounded by
+// its interval, which is the default grace.
+func TestAStopByTheLabelOutlastsACallerThatGaveUp(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	killed := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		close(running)
+		// SIGTERM is ignored, as a brick that does not handle it ignores it.
+		for signal := range c.Signalled() {
+			if signal == "SIGKILL" {
+				close(killed)
+				return 137, nil
+			}
+		}
+		return 0, nil
+	})
+	task := oneTask(ref)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Run(context.Background(), task)
+	}()
+	<-running
+
+	// Another process on the same daemon, holding nothing, as a restarted agent is.
+	policy := r.cfg.Policy
+	restarted, err := New(Config{Socket: r.daemon.Socket(), Policy: policy, WorkRoot: t.TempDir(), Host: holding(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if policy.StopGrace >= time.Second {
+		t.Fatalf("a grace of %s, and the caller below must give up before the daemon's one second", policy.StopGrace)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	restarted.Stop(ctx, graph.Stop{Task: task.ID, Reason: graph.StopCancelled})
+
+	select {
+	case <-killed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the container ignoring SIGTERM was never killed, since the stop went with the caller that gave up on it")
+	}
+	<-done
+}
+
 // A runner holds a key, redeems its grant and acknowledges its message before it calls Run, and
 // from the redemption on a cancel names the task and the controller sends its one stop. A stop
 // that lands in between, while the runner is still acknowledging, is kept: Run, when it comes,
