@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/version"
 )
@@ -807,7 +808,15 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		}
 		// In the same transaction, because PostgreSQL delivers the notification only
 		// when it commits: the row and the wake-up are one fact rather than two.
-		return ns.NotifyRun(ctx, run)
+		if err := ns.NotifyRun(ctx, run); err != nil {
+			return err
+		}
+		// And the manual trigger is recorded in it too, last, so that a run never starts
+		// unrecorded and the chain's lock is held for no longer than the commit.
+		return ns.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunTrigger, Target: string(run), Result: audit.Done,
+			Detail: map[string]any{"workflow": over.Workflow, "commit": start.commit},
+		})
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the run could not be created")
@@ -881,9 +890,9 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 // principal asking twice, or asking about a run that finished while they were asking, has got
 // what they wanted either way", as controller.Cancel puts it.
 //
-// Nothing is written to the audit log yet, since there is none: "manual trigger, approval,
-// cancellation" are recorded there once #160 builds it, in the transaction that writes the
-// request.
+// The request is recorded in the audit log in the transaction that writes it, a request about a
+// run that has ended as well, whose entry says it changed nothing: who asked is part of what
+// happened either way.
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	// Nothing to say beyond which run, which the path names, so no body is the ordinary
 	// request. One carrying a field nobody knows, a reason for one, is refused rather than
@@ -898,12 +907,22 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request, who Principal, o
 	var state agk.RunState
 	err := s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil || state.Terminal() {
+		if state, err = ns.RequestCancel(ctx, run, s.now()); err != nil {
 			return err
 		}
-		// In the same transaction, for the reason starting a run gives: the request and the
-		// wake-up are one fact rather than two.
-		return ns.NotifyRun(ctx, run)
+		result := audit.Unchanged
+		if !state.Terminal() {
+			// In the same transaction, for the reason starting a run gives: the request and
+			// the wake-up are one fact rather than two.
+			if err := ns.NotifyRun(ctx, run); err != nil {
+				return err
+			}
+			result = audit.Done
+		}
+		return ns.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.RunCancel, Target: string(run), Result: result,
+			Detail: map[string]any{"workflow": over.Workflow},
+		})
 	})
 	if errors.Is(err, db.ErrNoRun) {
 		// Found by the router a moment ago and not there now, as a run is once its workflow
