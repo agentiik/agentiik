@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -191,6 +193,12 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 	narrator := newNarrator(r.Graph, r.Events)
 	outstanding := 0
 
+	// unsent holds the stops the driver refused, until one is taken or the task comes back.
+	// The evaluator names a stop sent while the run goes on once, in the pass that ends its
+	// task, so a refused one would otherwise never be sent again and its container would run to
+	// its deadline: this is the loop's part of what the heartbeat's cancel is to a server.
+	unsent := map[agk.TaskID]graph.Stop{}
+
 	// The interrupt is read once. After Cancel the channel stays closed, so a loop that
 	// kept reading it would spin instead of waiting for the containers it just called
 	// off. A second interrupt is the command line's to act on, not this loop's.
@@ -213,12 +221,22 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 		}
 
 		// Every stop the plan names, in the order it named them, every time it
-		// appears. Stop is idempotent by design and a stop for a task that already
-		// finished is the ordinary consequence of at-least-once delivery.
-		for _, stop := range plan.Stop {
+		// appears, and then every one the driver refused before. Stop is idempotent by
+		// design and a stop for a task that already finished is the ordinary
+		// consequence of at-least-once delivery.
+		stops := slices.Clone(plan.Stop)
+		for _, task := range slices.Sorted(maps.Keys(unsent)) {
+			if !slices.ContainsFunc(stops, func(s graph.Stop) bool { return s.Task == task }) {
+				stops = append(stops, unsent[task])
+			}
+		}
+		for _, stop := range stops {
 			if err := s.tasks.Stop(taskCtx, stop); err != nil {
 				s.say("the stop of task " + string(stop.Task) + " was refused: " + err.Error())
+				unsent[stop.Task] = stop
+				continue
 			}
+			delete(unsent, stop.Task)
 		}
 
 		// The dispatch is recorded before the goroutine starts, which is the one rule
@@ -282,6 +300,7 @@ func (s *Session) loop(ctx context.Context, ev *graph.Evaluator, r Request) ([]F
 		select {
 		case done := <-results:
 			outstanding--
+			delete(unsent, done.task.ID)
 			if err := s.record(ev, done, refused); err != nil {
 				return nil, err
 			}
