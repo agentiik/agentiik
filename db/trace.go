@@ -49,6 +49,7 @@ type TracedDispatch struct {
 	ExitCode *int
 
 	DispatchedAt time.Time
+	PublishedAt  time.Time
 	StartedAt    time.Time
 	FinishedAt   time.Time
 }
@@ -78,7 +79,7 @@ func (w *Wide) Trace(ctx context.Context, namespace string, run agk.RunID) (RunT
 
 	rows, err := w.tx.Query(ctx,
 		`select id, idempotency_key, step, attempt, shard_index, shard_of, requeue, state,
-		        runner, exit_code, dispatched_at, started_at, finished_at
+		        runner, exit_code, dispatched_at, published_at, started_at, finished_at
 		 from tasks where namespace = $1 and run_id = $2
 		 order by step, attempt, shard_index nulls first, requeue`, namespace, string(run))
 	if err != nil {
@@ -90,9 +91,9 @@ func (w *Wide) Trace(ctx context.Context, namespace string, run agk.RunID) (RunT
 		var state string
 		var index, of *int
 		var runner *string
-		var dispatched, started, finished *time.Time
+		var dispatched, published, started, finished *time.Time
 		if err := rows.Scan(&d.ID, &d.Key, &d.Step, &d.Attempt, &index, &of, &d.Requeue, &state,
-			&runner, &d.ExitCode, &dispatched, &started, &finished); err != nil {
+			&runner, &d.ExitCode, &dispatched, &published, &started, &finished); err != nil {
 			return RunTrace{}, fmt.Errorf("db: the tasks of run %s could not be read: %w", run, err)
 		}
 		if err := d.State.UnmarshalText([]byte(state)); err != nil {
@@ -104,7 +105,8 @@ func (w *Wide) Trace(ctx context.Context, namespace string, run agk.RunID) (RunT
 		if runner != nil {
 			d.Runner = *runner
 		}
-		d.DispatchedAt, d.StartedAt, d.FinishedAt = instantOf(dispatched), instantOf(started), instantOf(finished)
+		d.DispatchedAt, d.PublishedAt = instantOf(dispatched), instantOf(published)
+		d.StartedAt, d.FinishedAt = instantOf(started), instantOf(finished)
 		r.Dispatches = append(r.Dispatches, d)
 	}
 	if err := rows.Err(); err != nil {

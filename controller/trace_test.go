@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -196,3 +197,42 @@ func TestACancelledRunExportsItsTrace(t *testing.T) {
 
 // The exporter is a Tracer, which is what the program hands the core.
 var _ Tracer = (*otlp.Exporter)(nil)
+
+// A pass that published a task and died before recording the dispatch leaves a row a runner may
+// redeem and run, and its container was told the row's span. A cancellation that then ends the
+// run without dispatching it again still exports that span, or the brick's spans would hang from a
+// parent nobody sent.
+func TestADispatchTakenBeforeItWasRecordedStillHasItsSpan(t *testing.T) {
+	core, _, pool, _ := deciding(t)
+	traces := &recorded{}
+	core.tracer = traces
+	createRun(t, pool)
+	ctx, cancel := context.WithCancel(t.Context())
+	died := &diesOnPublishing{cancel: cancel}
+	dead, err := NewCore(core.controller, core.term, Options{
+		Queue: died, Versions: core.versions, Objects: core.objects, Now: core.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dead.Decide(ctx, decidedRun); err == nil {
+		t.Fatal("a pass that died after publishing answered as if it had recorded the dispatch")
+	}
+	sent := died.dispatched()
+	if len(sent) != 1 {
+		t.Fatalf("the pass that died published %d tasks", len(sent))
+	}
+	if err := core.redeem(t, sent[0], theRunner); err != nil {
+		t.Fatal(err)
+	}
+	askedToCancel(t, pool, core, decidedRun)
+	if err := core.Wake(t.Context(), Wake{Run: decidedRun}); err != nil {
+		t.Fatal(err)
+	}
+
+	spans, _ := traces.exported()
+	_, tasks := traceOfDecidedRun(t, spans)
+	if _, ok := tasks[agk.TaskSpan(sent[0].Row)]; !ok || len(tasks) != 1 {
+		t.Fatalf("the trace holds %d task spans and none for dispatch %s, which %s redeemed and whose container was told its span", len(tasks), sent[0].Row, theRunner)
+	}
+}

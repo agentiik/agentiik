@@ -88,7 +88,12 @@ func (co *Core) traced(ctx context.Context, namespace string, run agk.RunID) {
 // includes the queue.
 //
 // A task that was never handed out has no span. It never reached a runner, no container was told
-// its trace, and a span of no duration at the moment the run ended would say that it ran.
+// its trace, and a span of no duration at the moment the run ended would say that it ran. Handed
+// out is more than a recorded dispatch, though: a pass that published a task and died before
+// recording it leaves a row a runner may have redeemed and run, whose container was told its span,
+// and which the next pass may end without dispatching, a cancellation among them. So a row a
+// runner holds, or that was published or started, has a span, beginning at the earliest of the
+// three moments the row holds, or at the run's start where it holds none.
 func spansOf(r db.RunTrace) []otlp.Span {
 	trace, root := r.Run.Trace()
 	start := r.StartedAt
@@ -114,12 +119,16 @@ func spansOf(r db.RunTrace) []otlp.Span {
 		Message: r.State.String(),
 	}}
 	for _, d := range r.Dispatches {
-		if d.DispatchedAt.IsZero() {
-			continue
+		began := earliest(d.DispatchedAt, d.PublishedAt, d.StartedAt)
+		if began.IsZero() {
+			if d.Runner == "" {
+				continue
+			}
+			began = start
 		}
 		finished := d.FinishedAt
-		if finished.IsZero() || finished.Before(d.DispatchedAt) {
-			finished = maxTime(d.DispatchedAt, end)
+		if finished.IsZero() || finished.Before(began) {
+			finished = maxTime(began, end)
 		}
 		attrs := []otlp.Attribute{
 			otlp.String(attrNamespace, r.Namespace),
@@ -141,12 +150,23 @@ func spansOf(r db.RunTrace) []otlp.Span {
 		}
 		spans = append(spans, otlp.Span{
 			Trace: trace, ID: agk.TaskSpan(d.ID), Parent: root, Name: string(d.Step),
-			Start: d.DispatchedAt, End: finished, Attributes: attrs,
+			Start: began, End: finished, Attributes: attrs,
 			Error:   d.State == agk.TaskFailed || d.State == agk.TaskTimedOut || d.State == agk.TaskLost,
 			Message: d.State.String(),
 		})
 	}
 	return spans
+}
+
+// earliest is the earliest of the moments that are set, and the zero time where none is.
+func earliest(ts ...time.Time) time.Time {
+	var out time.Time
+	for _, t := range ts {
+		if !t.IsZero() && (out.IsZero() || t.Before(out)) {
+			out = t
+		}
+	}
+	return out
 }
 
 func maxTime(a, b time.Time) time.Time {
