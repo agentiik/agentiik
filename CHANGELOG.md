@@ -334,6 +334,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Tests
 
 - The PostgreSQL and NATS tests run in CI. `internal/dbtest` gives each test its own database and role.
+- A test's database and role are named after the test and a digest of its package's directory, so two packages with a test of one name, or one package tested from two checkouts, no longer drop each other's database mid-migration.
 - `driver` has a boundary test, like `graph`.
 - `internal/stoptest` holds a `fail_fast` and a `merge: first` history that `agk run --local` and the controller both play, and both must end every task, step and run the same way.
 - `agk-runner` has a boundary test over its linked closure (no database, controller, API, secret store or server configuration) and over its symbols, so nothing in it can open an inbound port. A static test holds it to a static ELF for `linux/amd64` and `linux/arm64`.

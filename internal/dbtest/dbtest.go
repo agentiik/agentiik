@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest/dbname"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -68,10 +69,7 @@ func Migrated(t *testing.T) string {
 	}
 	defer conn.Close(ctx)
 
-	name := "agk_" + strings.ToLower(strings.NewReplacer("/", "_", " ", "_", "-", "_").Replace(t.Name()))
-	if len(name) > 60 {
-		name = name[:60]
-	}
+	name := dbname.Of(t)
 	// A role left by a run that never tidied up goes too, once the database that granted it
 	// something has, so that the role a test starts from is one it created.
 	for _, stmt := range []string{
