@@ -332,32 +332,40 @@ func (l *taskLog) emit(s Stream, text string) {
 
 // emitOutput writes one line of standard output, within the bounds of its own.
 //
-// Where a bound ends it, a line of the driver's says so on standard error, where the caps
-// count it as any other. The log is not truncated for it: standard error is still whole,
-// and what standard output said is read as the envelope from what was captured of it,
-// which the log never was.
+// Where a bound ends it, a line of the driver's says so on standard error, once, and the caps
+// do not count it: counted, it would take the last line standard error had room for, or cut
+// the log there, and the line after it is the one that most often says why the container
+// exited. The log is not truncated for it either: standard error is still whole, and what
+// standard output said is read as the envelope from what was captured of it, which the log
+// never was.
 func (l *taskLog) emitOutput(text string) {
 	c := &l.stdout
 	if c.stopped {
 		return
 	}
 	if l.maxLines > 0 && c.lines >= l.maxLines {
-		c.stopped = true
-		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d lines the log holds of it, and the rest of it is left out of the log", l.maxLines))
+		l.outputEnds("standard output reached the %d lines the log holds of it, and the rest of it is left out of the log", l.maxLines)
 		return
 	}
 	text, whole, room := fit(text, l.outBytes, c.bytes)
 	if !room {
-		c.stopped = true
-		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes))
+		l.outputEnds("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes)
 		return
 	}
 	l.put(Line{At: l.now().UTC(), Index: l.lines + 1, Stream: Stdout, Text: text})
 	c.lines++
 	c.bytes += int64(len(text))
 	if !whole {
-		c.stopped = true
-		l.emit(Stderr, notePrefix+fmt.Sprintf("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes))
+		l.outputEnds("standard output reached the %d bytes an envelope may hold, and the rest of it is left out of the log", l.outBytes)
+	}
+}
+
+// outputEnds ends standard output in the log and says so, outside the caps on standard error.
+// A log the caps have already ended says nothing more, the marker being its last line.
+func (l *taskLog) outputEnds(format string, args ...any) {
+	l.stdout.stopped = true
+	if !l.stderr.stopped {
+		l.put(Line{At: l.now().UTC(), Index: l.lines + 1, Stream: Stderr, Text: notePrefix + fmt.Sprintf(format, args...)})
 	}
 }
 

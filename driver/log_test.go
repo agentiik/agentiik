@@ -619,3 +619,32 @@ func TestANearCapEnvelopeOnStandardOutputLeavesAShortLogWhole(t *testing.T) {
 		t.Errorf("the log of three lines beside a %d byte envelope is reported truncated", len(envelope))
 	}
 }
+
+// The line saying where standard output stopped is outside the caps on standard error. Counted,
+// it would take the last line standard error had room for and cut the log there, dropping the
+// line after it, which is the one that most often says why the container exited.
+func TestTheLineSayingStandardOutputStoppedTakesNothingFromStandardError(t *testing.T) {
+	var sink bytes.Buffer
+	l := newLog(&sink, nil, logClock(), 0, 3, 100)
+
+	l.write(Stderr, []byte("a\nb\n"))
+	l.write(Stdout, []byte("1\n2\n3\n4\n"))
+	l.write(Stderr, []byte("the reason it exited\n"))
+	ref, err := l.finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logged []string
+	for _, line := range logLines(t, &sink) {
+		if line.Stream == Stderr && !strings.HasPrefix(line.Text, notePrefix) {
+			logged = append(logged, line.Text)
+		}
+	}
+	if strings.Join(logged, "|") != "a|b|the reason it exited" {
+		t.Errorf("standard error came out as %q, and it is three lines within a cap of three", logged)
+	}
+	if ref.Truncated {
+		t.Errorf("the log is reported truncated, and standard error is whole")
+	}
+}
