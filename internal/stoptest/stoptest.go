@@ -130,7 +130,8 @@ steps:
 	},
 }
 
-// orders is two, so that a fan-out over them has a shard to fail and one beside it.
+// orders is two, so that a fan-out over them has a shard to fail and one beside it, and one
+// handed out one at a time has a shard running and one not started yet.
 var orders = map[string]any{"orders": []any{
 	map[string]any{"customer_id": "C-1042"},
 	map[string]any{"customer_id": "C-1043"},

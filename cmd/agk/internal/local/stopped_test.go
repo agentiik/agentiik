@@ -167,6 +167,11 @@ func TestAStopIsSentAgainUntilItsTaskComesBack(t *testing.T) {
 			if p.waited || p.asked[archive] < 2 {
 				t.Errorf("the driver was asked to stop %s %d times, and it came back on its own %t", archive, p.asked[archive], p.waited)
 			}
+			for id, n := range p.asked {
+				if id != archive && n != 1 {
+					t.Errorf("the driver was asked to stop %s %d times, and it never ran it", id, n)
+				}
+			}
 			if out.Run.State != h.Run {
 				t.Errorf("the run is %s, want %s", out.Run.State, h.Run)
 			}
