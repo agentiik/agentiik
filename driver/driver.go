@@ -458,7 +458,13 @@ func (d *Docker) Stop(ctx context.Context, s graph.Stop) error {
 		// at-least-once delivery.
 		return nil
 	}
-	if err := d.cli.ContainerStop(ctx, found, grace); err != nil {
+	// On a context of its own, as sendStop's is and for its reason: the daemon answers a stop
+	// once the container has exited, which is the grace later for one that ignores SIGTERM, and
+	// a caller that gave up sooner, a heartbeat's stop bounded by its interval, would otherwise
+	// take the SIGKILL with it on a daemon that ends a stop whose client went away.
+	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace+killSlack)
+	defer cancel()
+	if err := d.cli.ContainerStop(stop, found, grace); err != nil {
 		if docker.IsNotFound(err) {
 			return nil
 		}

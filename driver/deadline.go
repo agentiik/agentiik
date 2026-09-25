@@ -20,6 +20,13 @@ import (
 // implementation of the rule, which is why it fires after the grace and not at it.
 const killSlack = 5 * time.Second
 
+// stopRetryFirst and stopRetryMost bound the wait before a stop the daemon refused is sent again,
+// doubling from the first to the most.
+const (
+	stopRetryFirst = time.Second
+	stopRetryMost  = 10 * time.Second
+)
+
 // sweepInterval is how often a container is inspected once it has been silent past its
 // deadline, its wait has ended with nothing, or an event about it was dropped.
 //
@@ -79,6 +86,11 @@ type watch struct {
 	// dropped says an event was dropped, which arms the sweep: the dropped one may be
 	// the die of a container whose wait never answers.
 	dropped chan struct{}
+
+	// over is closed once the Run that made the watch has its answer, which ends a stop
+	// still being sent again.
+	over     chan struct{}
+	overOnce sync.Once
 }
 
 // newWatch is the watch of one container.
@@ -94,8 +106,12 @@ func newWatch(cli *docker.Client, id string, step agk.Step, l *taskLog, deadline
 		deadline: deadline, grace: grace, now: now,
 		events:  make(chan docker.Event, 16),
 		dropped: make(chan struct{}, 1),
+		over:    make(chan struct{}),
 	}
 }
+
+// end says the Run that made the watch has its answer, and nothing is to be stopped any more.
+func (w *watch) end() { w.overOnce.Do(func() { close(w.over) }) }
 
 // event hands the watch one event from the daemon's stream, without ever blocking the
 // goroutine that follows it.
@@ -295,12 +311,29 @@ func (w *watch) finish(code int, oom bool, source string) exit {
 //
 // The stop is issued on a context that outlives the caller's, because a stop that is
 // cancelled half way is a container nobody is going to stop afterwards.
+//
+// One the daemon refuses is sent again, until the daemon takes it or the Run has its answer.
+// Stop answers nil for a container it hands a stop to here, and a runner asks the driver once
+// per key: a refusal only noted would be a container nobody stops again, running on to its
+// deadline, or for ever where the step has none.
 func (w *watch) sendStop(ctx context.Context) {
-	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.grace+killSlack)
+	ctx = context.WithoutCancel(ctx)
 	go func() {
-		defer cancel()
-		if err := w.cli.ContainerStop(stop, w.id, w.grace); err != nil && !docker.IsNotFound(err) {
-			w.log.note("the container could not be stopped: %v", err)
+		wait := stopRetryFirst
+		for {
+			stop, cancel := context.WithTimeout(ctx, w.grace+killSlack)
+			err := w.cli.ContainerStop(stop, w.id, w.grace)
+			cancel()
+			if err == nil || docker.IsNotFound(err) {
+				return
+			}
+			w.log.note("the container could not be stopped, and the stop is sent again in %s: %v", wait, err)
+			select {
+			case <-w.over:
+				return
+			case <-time.After(wait):
+			}
+			wait = min(2*wait, stopRetryMost)
 		}
 	}()
 }
