@@ -27,17 +27,19 @@ const drainGrace = 5 * time.Second
 
 // Run runs one task in one container and reports what became of it.
 //
-// The order is chosen so that the races cannot happen rather than so that they are
-// caught. Refuse what cannot run at all, and a key this host has already carried to an
-// ending. Resolve the image and read its manifest. Adopt by label or prepare and create.
-// Open the wait with condition=next-exit before the start, which is what makes the
+// The order is chosen so that the races cannot happen rather than so that they are caught.
+// Refuse what cannot run at all, an image not named by digest on a server among it, and a
+// key this host has already carried to an ending. Look for a container to adopt by label.
+// Resolve the image and read its manifest, bounded by the deadline where there is nothing
+// to adopt, and on a server refuse a brick that carries no manifest. Adopt, or prepare and
+// create. Open the wait with condition=next-exit before the start, which is what makes the
 // exit-during-attach race unrepresentable. Attach, start, write the envelope on standard
 // input from its own goroutine and half-close. Read the demultiplexed stream, keeping
-// standard output for the shorthand and passing standard error through the masker into
-// the log. Take the exit code from the wait that was already open, or from the event
-// stream where the wait missed it, or from an inspect under both. Collect and spill, hold
-// every envelope to the size rules, and only then upload the artifacts and write each
-// port's envelope to the store. Write the ending down under the work root. Then remove the
+// standard output for the shorthand and passing standard error through the masker into the
+// log. Take the exit code from the wait that was already open, or from the event stream
+// where the wait missed it, or from an inspect under both. Collect and spill, hold every
+// envelope to the size rules, and only then upload the artifacts and write each port's
+// envelope to the store. Write the ending down under the work root. Then remove the
 // container, the network and the working directory, in defers that run on every path.
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
