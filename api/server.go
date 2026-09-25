@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"testing/fstest"
 	"time"
 	"unicode/utf8"
 
@@ -415,7 +416,15 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
 	// push rather than discovered by the first run of it. That includes a tag no digest was
 	// resolved for, which is a push from an agk that resolves none.
-	if _, err := version.Build(v); err != nil {
+	g, err := version.Build(v)
+	if err != nil {
+		fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// And so is a declaration no run of it could be bound against: an input's schema that does
+	// not compile, or names a file the commit does not carry. Every run of the version is bound
+	// against it, so a version that holds one is a version nothing can start.
+	if _, err := g.Workflow().DeclaredInputs(pushedTree(p.Tree)); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -497,6 +506,16 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		recorded = map[string]string{}
 	}
 	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
+}
+
+// pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
+// against.
+func pushedTree(files map[string]PushFile) fstest.MapFS {
+	tree := make(fstest.MapFS, len(files))
+	for p, f := range files {
+		tree[p] = &fstest.MapFile{Data: f.Content, Mode: 0o444}
+	}
+	return tree
 }
 
 // checkTree refuses a tree that could not be laid out under /agk/repo, and answers its paths in
@@ -721,12 +740,13 @@ type Start struct {
 	Inputs map[string]any `json:"inputs,omitempty"`
 }
 
-// starting is a Start as the API reads one, with its inputs kept as the JSON they were written in.
+// starting is a Start as the API reads one, with its inputs kept as the JSON they were written in
+// until they are bound.
 //
-// Kept rather than decoded, because the API does nothing with them but write them down, and what
-// decoding a document costs is set by how many values it holds rather than by its bytes: three
-// bytes of {} are a map, and 8 MiB of inputs written [{},{},...] was 508 MiB once decoded. So
-// they are counted, held to inputsMaxValues, and written to the run as they came.
+// Counted before anything decodes them, because what decoding a document costs is set by how many
+// values it holds rather than by its bytes: three bytes of {} are a map, and 8 MiB of inputs
+// written [{},{},...] was 508 MiB once decoded. So they are held to inputsMaxValues as they are
+// read, and only then decoded to be bound against the version's declaration.
 type starting struct {
 	commit string
 	inputs jsontext.Value
@@ -796,12 +816,17 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 		return
 	}
 
+	inputs, ok := s.bindInputs(w, r.Context(), over, start.commit, g, start.inputs)
+	if !ok {
+		return
+	}
+
 	run := agk.NewRunID()
 	err = s.pool.In(r.Context(), over.Namespace, func(ctx context.Context, ns *db.NS) error {
 		if err := ns.CreateRun(ctx, db.NewRun{
 			ID: run, Workflow: over.Workflow, Commit: start.commit,
 			Trigger: agk.TriggerManual, TriggeredBy: string(who),
-			Inputs: json.RawMessage(start.inputs), Steps: g.Steps(),
+			Inputs: inputs, Steps: g.Steps(),
 		}); err != nil {
 			return err
 		}

@@ -39,6 +39,9 @@ kind: Workflow
 metadata: { name: monthly-invoicing, namespace: finance }
 inputs:
   orders: { schema: { type: array } }
+  cycle: { schema: { type: string } }
+  edges: {}
+  n: {}
 outputs:
   invoices: { from: { step: archive, port: ok } }
 steps:
@@ -223,9 +226,9 @@ func TestAVersionIsPushedAndARunIsStarted(t *testing.T) {
 	}
 }
 
-// The inputs of a run are written down as they were sent, counted and never decoded, and inputs
-// holding more values than an envelope carries items are refused with 413 before any run exists.
-func TestTheInputsOfARunAreCountedAndWrittenDownAsSent(t *testing.T) {
+// The inputs of a run are counted and written down as they were bound, and inputs holding more
+// values than an envelope carries items are refused with 413 before any run exists.
+func TestTheInputsOfARunAreCountedAndWrittenDownAsBound(t *testing.T) {
 	h, _, super := serving(t)
 	if w, _ := call(t, h, "PUT", "/api/v1/finance/workflows/monthly-invoicing/versions/"+aCommit, "alice", aPush(t)); w.Code != http.StatusOK {
 		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
