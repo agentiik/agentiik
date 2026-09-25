@@ -196,3 +196,25 @@ func TestJoinAsRootGivesItsFilesAwayRatherThanKeepingThemAsRoot(t *testing.T) {
 		t.Error("a join that could not give its files away reached the API or wrote something")
 	}
 }
+
+// Join reads the daemon over its local socket alone too, and names DOCKER_HOST before asking the
+// API anything.
+func TestJoinRefusesADaemonAcrossTheNetworkNamingDockerHost(t *testing.T) {
+	j := newJoiner(t, 1000, nil)
+	lookup := j.e.Lookup
+	j.e.Lookup = func(name string) (string, bool) {
+		if name == "DOCKER_HOST" {
+			return "tcp://docker.example.com:2375", true
+		}
+		return lookup(name)
+	}
+	if code := j.join(t); code != exitRefused {
+		t.Fatalf("join exited %d:\n%s", code, j.err)
+	}
+	if said := j.err.String(); !strings.Contains(said, "DOCKER_HOST names a daemon at tcp://") {
+		t.Errorf("the refusal does not name DOCKER_HOST:\n%s", said)
+	}
+	if n := j.joins.Load(); n != 0 || j.wrote() {
+		t.Errorf("join asked the API %d times, or wrote a file, before refusing", n)
+	}
+}
