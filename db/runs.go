@@ -935,11 +935,11 @@ func (w *Wide) CancelTasks(ctx context.Context, namespace string, run agk.RunID,
 // only a cancellation's. A run that succeeded or failed has ended every step, and a step ends once
 // every shard of it has, except the one a merge: first superseded: that step is cancelled the
 // moment the barrier lifts on another edge, while its tasks are still in flight and only asked to
-// stop. The evaluator ends each one it knows was dispatched, cancelled, as its stop goes out, and
-// the controller writes that, but a dispatch
-// whose publication it never saw acknowledged is pending in its document and may have been
-// redeemed all the same. Its runner's ending would then reach a run with nothing left to learn,
-// and the row would read dispatched or running for ever. "cancelled: Stopped because the run was
+// stop. The evaluator ends every one of them cancelled as the barrier lifts, handed out or not, and
+// the controller writes that, but a document decided before it did so holds a dispatch whose
+// publication it never saw acknowledged as pending, and it may have been redeemed all the same.
+// Its runner's ending would then reach a run with nothing left to learn, and the row would read
+// dispatched or running for ever. "cancelled: Stopped because the run was
 // cancelled by a principal, by a concurrency group, by a merge: first or by fail_fast" is the
 // ending for it.
 //

@@ -340,9 +340,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			// leaves its tasks as they were, and a row left in flight would redeem, hold a
 			// slot of max_concurrent_tasks for good, and keep the stop out of the
 			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
-			// hears it again. A run that reached its deadline is the obvious case, and one
-			// that succeeded or failed with a task a merge: first superseded still in flight,
-			// whose dispatch the document never saw recorded, is the other.
+			// hears it again. A run that reached its deadline is the obvious case. One that
+			// succeeded or failed has ended every task in its document, a merge: first's
+			// included, and leaves one in flight only where the document was decided before
+			// the evaluator ended the shards a merge: first left behind, handed out or not.
 			var err error
 			held, err = w.EndTasks(ctx, e.Namespace, run, now)
 			return err
@@ -437,10 +438,10 @@ func keysOf(stops []graph.Stop) []agk.TaskID {
 // documentation's table of stops names it: deadline for a run past its root timeout, cancelled
 // for a run called off, and superseded for a run that succeeded or failed. Such a run has ended
 // every step, and the only one whose tasks can still be in flight is a step a merge: first
-// cancelled when its barrier lifted on another edge, which is what superseded says: a task whose
-// dispatch the document never saw recorded, since the evaluator ends every one it did see when
-// its stop goes out. It is never sibling_failed, since a fail_fast step keeps running until every
-// shard of it has ended.
+// cancelled when its barrier lifted on another edge, which is what superseded says. The evaluator
+// ends every task of that step as the barrier lifts, handed out or not, so what is left is a task
+// of a document decided before it did, whose dispatch that document never saw recorded. It is
+// never sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
 func stopOf(run agk.RunState) graph.StopReason {
 	switch run {
 	case agk.TimedOut:
