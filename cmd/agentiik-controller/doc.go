@@ -21,10 +21,11 @@
 //
 // Only its environment, read by config.ReadController: the database it connects to as the
 // application role, the bus and the control plane's credential, the object-store directory,
-// AGK_MAX_REQUEUES and AGK_TASK_CEILING. It takes no argument, since a flag would be a second way
-// to say what the environment says and a Compose file, a systemd unit and a container platform all
-// set an environment the same way. A setting that refuses the start is named, with every other one
-// that does, and nothing is opened.
+// AGK_MAX_REQUEUES, AGK_TASK_CEILING, and AGK_OTLP_ENDPOINT, the OpenTelemetry collector every
+// ended run's trace is sent to, where one is named. It takes no argument, since a flag would be a
+// second way to say what the environment says and a Compose file, a systemd unit and a container
+// platform all set an environment the same way. A setting that refuses the start is named, with
+// every other one that does, and nothing is opened.
 //
 // # Leading, and standing by
 //

@@ -20,6 +20,7 @@ import (
 	"github.com/agentiik/agentiik/controller"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
+	"github.com/agentiik/agentiik/internal/otlp"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -164,6 +165,14 @@ func versionLine() string {
 	return line + ", " + info.GoVersion
 }
 
+// moduleVersion is the module's version as the build recorded it, as --version prints it.
+func moduleVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "(devel)"
+}
+
 // logger writes to w as text: a controller's standard error is read by journald, docker logs or a
 // person, and each of those reads text.
 func logger(w io.Writer) *slog.Logger {
@@ -239,12 +248,49 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 	}
 	queue := control.New(b)
 
+	o := options(c, queue, versions)
+	exporter, err := tracer(c, name, log)
+	if err != nil {
+		return err
+	}
+	if exporter != nil {
+		// Whatever is still queued is sent on the way out, for as long as a stop can wait
+		// without keeping the lock from a standby, and dropped past that.
+		defer func() {
+			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			exporter.Close(flush)
+		}()
+		o.Tracer = exporter
+	}
+
 	log.Info("standing by for the lock", "name", name)
 	err = ctl.Lead(work, func(ctx context.Context, term db.Term) error {
 		log.Info("leading", "name", name, "term", term.Token)
-		return lead(ctx, ctl, term, queue, options(c, queue, versions), log)
+		return lead(ctx, ctl, term, queue, o, log)
 	})
 	return ended(err)
+}
+
+// tracer is where every run's trace goes, where AGK_OTLP_ENDPOINT names a collector, and nil where
+// it names none: then nothing is built, queued or sent, and no core is handed anything to call.
+//
+// The resource names this program, its version and this instance, which is what a backend lists the
+// spans under and what tells two controllers' traces apart. A batch the collector refused, and spans
+// dropped for want of room, are said as warnings: the runs went on either way.
+func tracer(c config.Controller, name string, log *slog.Logger) (*otlp.Exporter, error) {
+	if c.OTLPEndpoint == "" {
+		return nil, nil
+	}
+	return otlp.New(otlp.Options{
+		Endpoint: c.OTLPEndpoint,
+		Resource: []otlp.Attribute{
+			otlp.String("service.name", program),
+			otlp.String("service.version", moduleVersion()),
+			otlp.String("service.instance.id", name),
+		},
+		Trouble: func(err error) { log.Warn("spans were not sent", "error", err) },
+	})
 }
 
 // instanceName is what an operator reads on the term, which is written with the holder's name so

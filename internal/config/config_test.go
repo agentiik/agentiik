@@ -100,6 +100,7 @@ func anInstallation(t *testing.T) *installation {
 		config.JoinRotation:                "240h",
 		config.RevocationGrace:             "90m",
 		config.OperatorTokenFile:           i.write(t, "operator.token", []byte(i.operatorToken+"\n")),
+		config.OTLPEndpoint:                "http://127.0.0.1:4318/",
 	}
 	i.secrets = append(i.secrets,
 		i.databasePassword, i.adminPassword, i.busJWT, i.busSeed, i.accountSeed,
@@ -126,7 +127,7 @@ func (i *installation) onlyWhatIsRequired() {
 	for _, name := range []string{
 		config.DatabasePasswordFile, config.MigrateDatabasePasswordFile, config.EnvPrefixes,
 		config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
-		config.RevocationGrace,
+		config.RevocationGrace, config.OTLPEndpoint,
 	} {
 		delete(i.env, name)
 	}
@@ -273,7 +274,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := config.Controller{Database: wantDatabase, Bus: wantBus, Objects: i.env[config.ObjectsDir], MaxRequeues: 1, TaskCeiling: 2 * time.Hour}
+	want := config.Controller{Database: wantDatabase, Bus: wantBus, Objects: i.env[config.ObjectsDir], MaxRequeues: 1, TaskCeiling: 2 * time.Hour, OTLPEndpoint: "http://127.0.0.1:4318"}
 	if controller != want {
 		t.Errorf("the controller reads %+v", controller)
 	}
@@ -315,6 +316,7 @@ func TestEverySettingLeftOutTakesItsDefault(t *testing.T) {
 		"the task ceiling, an hour":                   {controller.TaskCeiling, time.Hour},
 		"max_requeues, three":                         {controller.MaxRequeues, 3},
 		"max_requeues, the evaluator's own default":   {controller.MaxRequeues, graph.DefaultMaxRequeues},
+		"the collector, none, so nothing is traced":   {controller.OTLPEndpoint, ""},
 		"the database password, none":                 {string(api.Database.Password), ""},
 		"the admin's password, none":                  {string(migration.Admin.Password), ""},
 		"the application's password, none":            {string(migration.Application.Password), ""},
@@ -635,6 +637,47 @@ func TestEveryPathOverTLSIsAccepted(t *testing.T) {
 	}
 }
 
+// The collector is reached over https, or over http where it is on this machine, which is where
+// one usually is: a span names a namespace, a workflow and its steps, and nothing here crosses a
+// network in plaintext.
+func TestTheCollectorIsReachedOverHTTPSOrOnThisMachine(t *testing.T) {
+	for written, kept := range map[string]string{
+		"https://otel.example.com":         "https://otel.example.com",
+		"https://otel.example.com:4318/":   "https://otel.example.com:4318",
+		"https://example.com/otlp//":       "https://example.com/otlp",
+		"http://localhost:4318":            "http://localhost:4318",
+		"http://127.0.0.1:4318/":           "http://127.0.0.1:4318",
+		"http://[::1]:4318":                "http://[::1]:4318",
+		"http://127.0.0.2:4318/collector/": "http://127.0.0.2:4318/collector",
+	} {
+		i := anInstallation(t)
+		i.env[config.OTLPEndpoint] = written
+		c, err := config.ReadController(theController.environment(i))
+		if err != nil || c.OTLPEndpoint != kept {
+			t.Errorf("%s is kept as %q: %v", written, c.OTLPEndpoint, err)
+		}
+	}
+	for _, v := range []string{
+		"http://otel-collector:4318",
+		"http://10.0.0.7:4318",
+		"grpc://localhost:4317",
+		"localhost:4318",
+		"https://user:s3cr3t@otel.example.com",
+		"https://otel.example.com?token=s3cr3t",
+		"https://otel.example.com#",
+		"https:///v1",
+	} {
+		i := anInstallation(t)
+		i.env[config.OTLPEndpoint] = v
+		_, err := config.ReadController(theController.environment(i))
+		if names := refused(err); !slices.Equal(names, []string{config.OTLPEndpoint}) {
+			t.Errorf("%s was refused naming %v: %v", v, names, err)
+			continue
+		}
+		saysNothingOf(t, err, "s3cr3t")
+	}
+}
+
 // The public URL is kept with no slash at its end, however many it was written with, since every
 // URL minted on it adds a path beginning with one.
 func TestAPublicURLIsKeptWithNoSlashAtItsEnd(t *testing.T) {
@@ -804,7 +847,7 @@ func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 // are asked for too, and only to be refused.
 func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 	neverAsked := map[string][]string{
-		theAPI.name: {config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile},
+		theAPI.name: {config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile, config.OTLPEndpoint},
 		theController.name: {
 			config.PublicURL, config.PresignKeyFile, config.BusAccountSeedFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.JoinRotation, config.RevocationGrace,
@@ -814,7 +857,7 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile, config.ObjectsDir,
 			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.MaxRequeues, config.TaskCeiling,
-			config.JoinRotation, config.RevocationGrace,
+			config.JoinRotation, config.RevocationGrace, config.OTLPEndpoint,
 		},
 	}
 	i := anInstallation(t)

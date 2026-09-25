@@ -55,6 +55,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A task stopped as `superseded` or `sibling_failed` while its run goes on is written `cancelled` in the pass that sends the stop, as the evaluator decides, so the heartbeat's `cancel` repeats it to a runner that missed it, a `fail_fast` step is judged at once, and the slot is free for that very pass, `db.Wide.Slots` leaving out the keys it ends. The runner's later report adds the exit code, the log and the usage, and nothing else, and later decisions keep them, a log's cut included.
 - A pass that changes nothing counts no decision and writes none, and a run decided with nothing on the clock is no longer swept: a result or a loss makes it due at once, and a pass that then finds nothing to decide puts its clock back. A loss of a task the evaluator already stopped wakes nothing. Such runs were decided and rewritten on every sweep.
 - A run on a server starts with the workflow's `vars`, as `agk run --local` does, and reads them off the version on every pass, so a number among them is an int each time rather than a double after the first. A step reading `${{ vars.<name> }}` could not be built there, and failed with 120.
+- A run that ends is exported as one OpenTelemetry trace where `AGK_OTLP_ENDPOINT` names a collector: the run's span and one span per dispatch, a child of it named for its `task_id`, each carrying the namespace, read back from the rows and posted as OTLP/HTTP JSON by `internal/otlp`, written with the standard library. A collector that is down costs the spans and never a decision; with no endpoint nothing is read or built.
 
 ### State
 
@@ -183,6 +184,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
 - A task's log caps (`log_max_bytes`, `log_max_lines`) count standard error alone, so an envelope on standard output no longer cuts a short log and reports it truncated. Standard output is still written into the log, up to `envelope_max_bytes` and as many lines as the cap, counted apart, and a line of the driver's on standard output says where it stopped.
 - The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
+- A container is given `TRACEPARENT`: the run's trace and the span of its dispatch, `graph.Task.Dispatch` on a server and the key on a laptop. `agk.RunID.Trace` and `agk.TaskSpan` derive both from the identifiers, so the runner, the controller and `agk run --local` name the same trace without the wire carrying it.
 
 ### Runner
 
@@ -332,6 +334,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - No plaintext path is accepted: a database URL sets `sslmode` to `verify-full`, `verify-ca` or `require` unless every host is a local socket, `AGK_BUS_URL` is `tls://` or `wss://`, and `AGK_PUBLIC_URL` is `https`.
 - `AGK_TASK_CEILING` is read by the API as well as the controller, since the revocation grace defaults to it, so both are given the same value.
 - `AGK_OBJECTS_DIR` is refused unless the program can write in it, since both programs write objects there.
+- `AGK_OTLP_ENDPOINT`, read by the controller alone, is the collector traces are sent to: `https`, or `http` to a loopback address, with no user, query or fragment.
 
 ### Command line
 
