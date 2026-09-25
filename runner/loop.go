@@ -89,6 +89,12 @@ type Loop struct {
 	// Log is where the agent writes a line.
 	Log func(string)
 
+	// Draining answers whether the last heartbeat ordered this runner to drain, "take nothing
+	// new; finish what is held". Nil is never. While it answers true the loop takes nothing, and
+	// what it already holds runs on to its answer; a message a take in flight hands it meanwhile
+	// is refused at the redemption with 403 and put back, as the table says.
+	Draining func() bool
+
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
 	// an answer that may change, and how long a message put back is held back and the loop takes
 	// nothing more. Zero is takeWait and retryFirst.
@@ -223,6 +229,16 @@ func (l *Loop) Run(ctx context.Context) error {
 				break fill
 			}
 		}
+		// Once there is room and not before, since a host full when the order came waits
+		// here and would otherwise take the moment a slot freed. Asked again after the pause
+		// a put back is held for, since the next heartbeat may lift the order.
+		if l.Draining != nil && l.Draining() {
+			free(room)
+			if !sleep(ctx, l.retryFirst()) {
+				return nil
+			}
+			continue
+		}
 
 		taken, err := l.Queue.Take(ctx, l.Pool, room, wait)
 		if ctx.Err() != nil {
@@ -309,8 +325,8 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 	// After the record, which answers a key this host ended or still has in flight whatever it
-	// claims now, and before anything is redeemed. What Hold wrote down is let go of, and the
-	// record keeps the key only as taken, which refuses nothing when the message comes round.
+	// claims now, and before anything is redeemed. What Hold wrote down is let go of and
+	// forgotten, and nothing refuses the key when the message comes round.
 	if missing := uncovered(m.RunsOn, l.Labels); len(missing) > 0 {
 		l.Holder.Release(id)
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since it runs on %s and this runner does not claim it", m.TaskID, m.IdempotencyKey, strings.Join(missing, ", ")))

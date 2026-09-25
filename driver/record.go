@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -198,7 +200,30 @@ func (k *keys) path(id agk.TaskID) (string, error) {
 	return filepath.Join(k.root, KeysDir, rel) + ".json", nil
 }
 
-// read answers with what the record says about one key, and false where it says nothing.
+// takenExt is the extension of an entry saying a key was taken and nothing more, beside
+// where its ending goes.
+//
+// Apart from the ending, so that listing what this host took and never ended costs a
+// reading of the directories and of those entries alone, rather than of every ending kept
+// for a week, which on a busy host is tens of thousands of files read while a restarted
+// runner's first heartbeat waits.
+const takenExt = ".taken"
+
+// takenPath is where the entry saying one key was taken goes.
+func (k *keys) takenPath(id agk.TaskID) (string, error) {
+	path, err := k.path(id)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(path, ".json") + takenExt, nil
+}
+
+// read answers with what the record says about one key, and false where it says nothing:
+// its ending, or where it has none, that it was taken.
+//
+// An ending that does not read refuses the key, since it may be the ending of a key that
+// ran. An entry saying only that the key was taken is passed over where it does not read,
+// since it refuses nothing either way.
 func (k *keys) read(id agk.TaskID) (Ending, bool, error) {
 	path, err := k.path(id)
 	if err != nil {
@@ -206,7 +231,7 @@ func (k *keys) read(id agk.TaskID) (Ending, bool, error) {
 	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return Ending{}, false, nil
+		return k.taken(id)
 	}
 	if err != nil {
 		return Ending{}, false, fmt.Errorf("driver: task %s: the record of its key could not be read, and a key this host cannot say it has not completed is not started: %w", id, err)
@@ -221,7 +246,25 @@ func (k *keys) read(id agk.TaskID) (Ending, bool, error) {
 	return e, true, nil
 }
 
-// write replaces one key's entry, whole or not at all.
+// taken answers with the entry saying one key was taken, where there is one that reads.
+func (k *keys) taken(id agk.TaskID) (Ending, bool, error) {
+	path, err := k.takenPath(id)
+	if err != nil {
+		return Ending{}, false, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Ending{}, false, nil
+	}
+	var e Ending
+	if json.Unmarshal(b, &e) != nil || e.Key != id || e.State.Terminal() {
+		return Ending{}, false, nil
+	}
+	return e, true, nil
+}
+
+// write replaces one key's entry, whole or not at all: an ending where the key ended, which
+// then takes away the entry saying it was taken, and that entry otherwise.
 //
 // Whole, because the entry is read after the crash it is written for: a file renamed into
 // place is either the old entry or the new one, where a file written in place can be half
@@ -229,6 +272,9 @@ func (k *keys) read(id agk.TaskID) (Ending, bool, error) {
 // the entry was written for, and an entry a power cut took back is a brick run twice.
 func (k *keys) write(e Ending) error {
 	path, err := k.path(e.Key)
+	if !e.State.Terminal() {
+		path, err = k.takenPath(e.Key)
+	}
 	if err != nil {
 		return err
 	}
@@ -265,7 +311,32 @@ func (k *keys) write(e Ending) error {
 		d.Sync()
 		d.Close()
 	}
+	// Once the ending is in place and not before, so that no moment passes in which the
+	// record says nothing of a key that was taken. A failure leaves an entry Dispatched
+	// passes over, since it finds the ending beside it.
+	if e.State.Terminal() {
+		if taken, err := k.takenPath(e.Key); err == nil {
+			os.Remove(taken)
+		}
+	}
 	return nil
+}
+
+// forget takes away the entry saying one key was taken. An ending is kept, being what
+// refuses the key. A failure is not said: an entry left behind refuses nothing, and is only
+// listed by Dispatched until the prune takes it.
+func (k *keys) forget(id agk.TaskID) {
+	if path, err := k.takenPath(id); err == nil {
+		os.Remove(path)
+	}
+}
+
+// forgetTaken takes away the entry saying one key was taken, which is what a Run that wrote no
+// ending leaves on its way out.
+func (d *Docker) forgetTaken(id agk.TaskID) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	d.keys.forget(id)
 }
 
 // prune takes away every entry last written before the record's retention, and the
@@ -379,10 +450,82 @@ func (d *Docker) Hold(id agk.TaskID) error {
 		return fault(step, ErrTaskInFlight, ChargePlatform, "task %s", id)
 	}
 	if err := d.keys.write(Ending{Key: id, State: agk.TaskDispatched, At: d.now().UTC()}); err != nil {
-		d.Release(id)
+		d.release(id)
 		return err
 	}
 	return nil
+}
+
+// Dispatched are the keys the record says this host took and never carried to an ending,
+// the most recently taken first.
+//
+// A runner calls it as it starts, before it takes anything, and what it answers then is
+// what an earlier process on this host held when it stopped: written down by Hold and never
+// ended, since Release forgets a key let go of, a Run that returns without an ending
+// forgets the key it carried, and an ending replaces the entry. Some of those were
+// redeemed and are bound to this runner, their containers perhaps still running on the
+// daemon, and the controller counts a bound task as held only while its runner goes
+// on naming it. So the heartbeat names these from the first, for as long as the message of
+// one may still come round to be taken again here.
+//
+// An entry that does not read is passed over rather than refusing the rest, since this is a
+// list of what to name and one key left out of it is one task the sweep may declare lost,
+// which is what happens to all of them where nothing is listed.
+func (d *Docker) Dispatched() ([]agk.TaskID, error) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	if d.keys.root == "" {
+		return nil, errors.New("driver: no work root: the record of the keys this host has taken is kept under one")
+	}
+	type taken struct {
+		key agk.TaskID
+		at  time.Time
+	}
+	var found []taken
+	top := filepath.Join(d.keys.root, KeysDir)
+	err := filepath.WalkDir(top, func(path string, e fs.DirEntry, err error) error {
+		switch {
+		case errors.Is(err, fs.ErrNotExist) && path == top:
+			return fs.SkipAll
+		case err != nil:
+			return err
+		case !e.Type().IsRegular() || filepath.Ext(path) != takenExt:
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		var entry Ending
+		if json.Unmarshal(b, &entry) != nil || entry.State.Terminal() || entry.Key.Validate() != nil {
+			return nil
+		}
+		// Only an entry kept where its key's entry is kept, so that a file copied or
+		// renamed under the record does not name a key it is not the entry of.
+		if want, err := d.keys.takenPath(entry.Key); err != nil || want != path {
+			return nil
+		}
+		// An ending written after it, whose writer stopped before taking this away.
+		if ended, found, _ := d.keys.read(entry.Key); found && ended.State.Terminal() {
+			return nil
+		}
+		found = append(found, taken{entry.Key, entry.At})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("driver: the record of the keys this host has taken could not be read: %w", err)
+	}
+	slices.SortFunc(found, func(a, b taken) int {
+		if c := b.at.Compare(a.at); c != 0 {
+			return c
+		}
+		return strings.Compare(string(a.key), string(b.key))
+	})
+	keys := make([]agk.TaskID, len(found))
+	for i, f := range found {
+		keys[i] = f.key
+	}
+	return keys, nil
 }
 
 // refuseCompleted is the refusal Run makes of a key this host has already carried to an

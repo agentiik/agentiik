@@ -87,6 +87,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, fault(t.Step, ErrTaskInFlight, ChargePlatform, "task %s", t.ID)
 	}
 	defer done()
+	// A Run that returns with no ending written leaves nothing of the key on this host: what
+	// it created is removed on the way out, and nothing ran to an ending a second delivery
+	// would repeat. So the entry saying the key was taken is forgotten, after those removals
+	// and before the key is let go of in memory, and a restarted runner does not name for
+	// AckWait a key nothing here holds, which would keep its dispatch from being declared
+	// lost for that long. A Run that never returns, its process killed, leaves the entry for
+	// the restart to name.
+	defer d.forgetTaken(t.ID)
 
 	// A key this host has already carried to an ending is refused next, and after the
 	// registration rather than before it, so that what it tidies away is never a
