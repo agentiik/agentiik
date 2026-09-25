@@ -22,6 +22,10 @@ import (
 type Agent struct {
 	Config Config
 
+	// Capacity is what this host declares, which the loop puts back a task past, with what it
+	// already holds. Its zero value bounds nothing, which is a test's.
+	Capacity Room
+
 	// Driver is opened with Endings as its Observer and TaskLogs as its Logs, and Client is what
 	// each task's log is shipped through.
 	Driver *driver.Docker
@@ -259,6 +263,7 @@ func Serve(ctx context.Context, a Agent) error {
 func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat, *Stops) {
 	loop := &Loop{
 		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
+		Namespaces: a.Config.Namespaces, Capacity: a.Capacity,
 		Redeemer: a.Client, Holder: a.Driver,
 		Carrier: &Carrier{
 			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,

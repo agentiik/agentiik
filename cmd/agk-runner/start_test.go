@@ -122,6 +122,7 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		EnvFile:    envFile,
 		PolicyFile: policyFile,
 		KeyFile:    keyFile,
+		MemInfo:    filepath.Join("..", "..", "runner", "testdata", "meminfo"),
 		// Where serve keeps a renewed credential, and nothing there.
 		CredentialFile: filepath.Join(dir, "credential"),
 		// Where the image installs the helper, and nothing there until a test puts one.

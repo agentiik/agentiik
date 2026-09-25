@@ -27,6 +27,9 @@ import (
 //	the key could not be written down   AgainAfter, for another runner of the pool
 //	an image not named by digest        report that no container ran, then Refused, before
 //	                                    the key is written down or anything is redeemed
+//	a namespace AGK_RUNNER_NAMESPACES   AgainAfter, before the key is written down or anything
+//	leaves out, or more than the host   is redeemed
+//	has room for with what it holds
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
 //	200                                 Held, then assemble, run and report
 //	403                                 Release and AgainAfter, for another runner of the pool
@@ -71,6 +74,13 @@ type Loop struct {
 	// was published to is not for that reason a runner the task may run on.
 	Labels []string
 
+	// Namespaces are the namespaces this host takes work of, AGK_RUNNER_NAMESPACES, and nil is
+	// every namespace its pool accepts. Capacity is what this host declares, and a task that would
+	// take it past that with what the loop already holds is put back: "oversubscription is a
+	// choice, not an accident". A part of it at zero bounds nothing.
+	Namespaces []string
+	Capacity   Room
+
 	Queue    Queue
 	Redeemer Redeemer
 	Holder   Holder
@@ -111,6 +121,7 @@ type Loop struct {
 
 	mu    sync.Mutex
 	held  map[string]int
+	using Room
 	quiet time.Time
 }
 
@@ -330,6 +341,23 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		l.reportThenRefuse(ctx, t, unreached(m, l.Runner))
 		return
 	}
+
+	// Of the rest too, and read against the record for the same reason, so that a key this host
+	// has in flight is not put back for another runner the moment it comes round.
+	if !l.accepts(m.Namespace) {
+		if !l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+			l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since this host takes no work of namespace %s", m.TaskID, m.IdempotencyKey, m.Namespace))
+		}
+		return
+	}
+	need, fits, why := l.reserve(m)
+	if !fits {
+		if !l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+			l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool or a later take, since %s", m.TaskID, m.IdempotencyKey, why))
+		}
+		return
+	}
+	defer l.unreserve(need)
 
 	if l.answeredFromRecord(ctx, t, l.Holder.Hold(id)) {
 		return
