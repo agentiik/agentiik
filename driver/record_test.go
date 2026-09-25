@@ -1035,3 +1035,57 @@ func TestDispatchedPassesOverWhatDoesNotRead(t *testing.T) {
 		t.Errorf("the record lists %v, want %v alone", got, want)
 	}
 }
+
+// A Run that returns with no ending written forgets the key it carried, since what it created is
+// gone and a restarted runner naming the key would keep its dispatch from being declared lost for
+// nothing: a pull the daemon refused, and a Run whose caller gave up while the brick ran. A second
+// delivery refused while the first runs forgets nothing of the first's.
+func TestARunThatWritesNoEndingForgetsTheKeyItTook(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		close(running)
+		<-c.Signalled()
+		return 0, nil
+	})
+
+	unpulled := stepTask("ghcr.io/agentiik/nowhere@"+imageDigest, "unpulled")
+	if err := r.Hold(unpulled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(t.Context(), unpulled); err == nil {
+		t.Fatal("a task whose image the daemon does not have ran")
+	}
+
+	stopped := stepTask(ref, "stopped")
+	if err := r.Hold(stopped.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan error, 1)
+	go func() {
+		_, err := r.Run(ctx, stopped)
+		ran <- err
+	}()
+	<-running
+	if _, err := r.Run(t.Context(), stopped); !errors.Is(err, ErrTaskInFlight) {
+		t.Errorf("a second delivery of a key in flight answered %v", err)
+	}
+	if got, err := r.Dispatched(); err != nil || !slices.Equal(got, []agk.TaskID{stopped.ID}) {
+		t.Errorf("while the brick runs the record lists %v, %v, want %s", got, err, stopped.ID)
+	}
+	cancel()
+	select {
+	case err := <-ran:
+		if e, found, _ := r.keys.read(stopped.ID); found && e.State.Terminal() {
+			t.Fatalf("the Run whose caller gave up wrote the ending %s, answering %v, and this test is of one that writes none", e.State, err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the Run whose caller gave up never came back")
+	}
+
+	if got, err := reopen(t, r, nil).Dispatched(); err != nil || len(got) != 0 {
+		t.Errorf("after two Runs that wrote no ending the record lists %v, %v, want nothing", got, err)
+	}
+}

@@ -167,7 +167,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A pull that happened reports at least 1 in `image_pull_ms`, since 0 says the host already held the image.
 - The terminal `driver.Event` of a container that ran carries its exit code and span, so a container stopped at its deadline or cancelled tells the code its stop left (137 or 143), which the record of its key keeps, and one whose outputs were refused tells 121.
 - Where the daemon cannot give a container's span after its exit, the span runs from the dispatch to the moment the exit was read, rather than reading as a container that never started.
-- `Docker.Dispatched` lists the keys the record holds as taken and never ended, newest first. A taken key is written beside where its ending goes, as `<key>.taken`, and taken away when the ending is written or `Release` lets the key go, so the listing reads no ending.
+- `Docker.Dispatched` lists the keys the record holds as taken and never ended, newest first. A taken key is written beside where its ending goes, as `<key>.taken`, and taken away when the ending is written, when `Release` lets the key go, or when `Run` returns without an ending, so the listing reads no ending.
 
 ### Runner
 

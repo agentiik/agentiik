@@ -331,6 +331,14 @@ func (k *keys) forget(id agk.TaskID) {
 	}
 }
 
+// forgetTaken takes away the entry saying one key was taken, which is what a Run that wrote no
+// ending leaves on its way out.
+func (d *Docker) forgetTaken(id agk.TaskID) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	d.keys.forget(id)
+}
+
 // prune takes away every entry last written before the record's retention, and the
 // directories that leaves empty.
 //
@@ -453,9 +461,10 @@ func (d *Docker) Hold(id agk.TaskID) error {
 //
 // A runner calls it as it starts, before it takes anything, and what it answers then is
 // what an earlier process on this host held when it stopped: written down by Hold and never
-// ended, since Release forgets a key let go of and an ending replaces the entry. Some of
-// those were redeemed and are bound to this runner, their containers perhaps still running
-// on the daemon, and the controller counts a bound task as held only while its runner goes
+// ended, since Release forgets a key let go of, a Run that returns without an ending
+// forgets the key it carried, and an ending replaces the entry. Some of those were
+// redeemed and are bound to this runner, their containers perhaps still running on the
+// daemon, and the controller counts a bound task as held only while its runner goes
 // on naming it. So the heartbeat names these from the first, for as long as the message of
 // one may still come round to be taken again here.
 //
