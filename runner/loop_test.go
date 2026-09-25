@@ -808,3 +808,35 @@ func TestATaskWhoseImageIsATagIsReportedUnredeemedAndAcknowledged(t *testing.T) 
 		t.Errorf("%d containers were created for a task naming a tag", n)
 	}
 }
+
+// "A key this host already ended is answered from the record", and the image is held to a digest
+// only "of the rest": a requeue whose message names a tag, from a control plane older than the
+// digest floor or one that went wrong, is answered with the ending the host recorded rather than
+// reported as having reached no container, since the container it names already ran.
+func TestARequeueNamingATagIsAnsweredFromTheRecordFirst(t *testing.T) {
+	var answers sync.Map
+	api := anAPIAnswering(t, func(_ int, taskID string) (int, any) {
+		r, _ := answers.Load(taskID)
+		return http.StatusOK, r
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	first, r := l.task(t, nil)
+	answers.Store(first.TaskID, r)
+	l.carryOne(t)
+	if results := l.bus.all(); len(results) != 1 || results[0].State != agk.TaskSucceeded {
+		t.Fatalf("the first dispatch was reported %+v", results)
+	}
+
+	requeue, _ := l.task(t, func(m *bus.TaskMessage) { m.Image = "ghcr.io/acme/agk-invoice:1.4.0" })
+	l.carryOne(t)
+
+	if ended := l.queue.all(); len(ended) != 1 || ended[0].TaskID != requeue.TaskID || ended[0].State != agk.TaskSucceeded {
+		t.Errorf("the requeue was answered from the record with %+v, want its recorded success", ended)
+	}
+	if results := l.bus.all(); len(results) != 1 {
+		t.Errorf("the requeue was also reported, as %+v, where the record answers it", results[1:])
+	}
+	if n := l.api.redemptions(requeue.TaskID); n != 0 {
+		t.Errorf("the requeue's grant was redeemed %d times", n)
+	}
+}

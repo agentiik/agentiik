@@ -22,11 +22,11 @@ import (
 // answers package bus gives a runner, and which one is decided by the host's record of the key and
 // then by the redemption's answer, which NextAfter reads as the page's table does:
 //
-//	an image not named by digest        report that no container ran, then Refused, before
-//	                                    anything is written down or redeemed
 //	the record holds the key's ending   Bus.Ended, with that ending, and nothing redeemed
 //	the record holds the key in flight  nothing, and the message comes round after AckWait
 //	the key could not be written down   AgainAfter, for another runner of the pool
+//	an image not named by digest        Release, report that no container ran, then Refused,
+//	                                    before anything is redeemed
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
 //	200                                 Held, then assemble, run and report
 //	403                                 Release and AgainAfter, for another runner of the pool
@@ -287,18 +287,6 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 
-	// "A message whose image is not name@sha256 is reported as no container ran, on the
-	// platform's account, then acknowledged, since no runner of any pool could ever run it."
-	// Before anything is written down and before any redemption: redeeming would bind the
-	// task and read its secrets for a container that is never created, and put back, the
-	// message would go round the pool for ever. The driver refuses the same image under
-	// Policy.RequireDigest, which is the same rule where a message did not come from here.
-	if !agk.ImageByDigest(m.Image) {
-		l.say(fmt.Sprintf("task %s (%s) is reported as having reached no container, since it names the image %q, and a runner runs only an image named by digest", m.TaskID, m.IdempotencyKey, m.Image))
-		l.reportThenRefuse(ctx, t, unreached(m, l.Runner))
-		return
-	}
-
 	err := l.Holder.Hold(id)
 	var completed *driver.Completed
 	switch {
@@ -313,6 +301,20 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	case err != nil:
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back, since its key could not be written down: %s", m.TaskID, m.IdempotencyKey, err))
+		return
+	}
+	// "Of the rest", which the record did not answer: "a message whose image is not name@sha256
+	// is reported as no container ran, on the platform's account, then acknowledged, since no
+	// runner of any pool could ever run it." A key this host ended or has in flight is answered
+	// as the record says whatever its message names, since the message changes nothing of what
+	// already ran. Before any redemption: redeeming would bind the task and read its secrets
+	// for a container that is never created, and put back, the message would go round the pool
+	// for ever. What Hold wrote down is let go of, as it is for a label below. The driver
+	// refuses the same image under Policy.RequireDigest, where a message did not come from here.
+	if !agk.ImageByDigest(m.Image) {
+		l.Holder.Release(id)
+		l.say(fmt.Sprintf("task %s (%s) is reported as having reached no container, since it names the image %q, and a runner runs only an image named by digest", m.TaskID, m.IdempotencyKey, m.Image))
+		l.reportThenRefuse(ctx, t, unreached(m, l.Runner))
 		return
 	}
 	// After the record, which answers a key this host ended or still has in flight whatever it
