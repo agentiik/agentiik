@@ -107,7 +107,7 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 		dindImage,
 		"dockerd", "--host=unix://"+daemonSocketDir+"/docker.sock", "--group="+socketGroup,
 		"--insecure-registry="+in.Registry)
-	eventually(in.t, 2*time.Minute, "runner "+name+"'s daemon answered", func() error {
+	eventually(in.ctx, in.t, 2*time.Minute, "runner "+name+"'s daemon answered", func() error {
 		_, err := r.daemon(ctx, "version")
 		return err
 	})
@@ -194,6 +194,14 @@ type Holdings struct {
 
 	// Mounts are the sources mounted into the agent's container, each with where.
 	Mounts []Mount
+
+	// Added are the paths docker diff says were added to the agent's own filesystem, outside
+	// everything mounted into it: what the agent wrote anywhere but where it is given to.
+	Added []string
+
+	// Secrets are the files on the secrets tmpfs, where a value is written for the task that
+	// is given it and removed when that task ends.
+	Secrets []string
 }
 
 // Mount is one mount of the agent's container.
@@ -214,6 +222,26 @@ func (r *Runner) Holdings(ctx context.Context) (Holdings, error) {
 			return Holdings{}, fmt.Errorf("the archive of %s: %w", dir, err)
 		}
 	}
+	archive, err := dockerBytes(ctx, "cp", r.Agent+":"+secretsPath, "-")
+	if err != nil {
+		return Holdings{}, err
+	}
+	var secrets Holdings
+	if err := secrets.read(filepath.Dir(secretsPath), archive); err != nil {
+		return Holdings{}, fmt.Errorf("the archive of %s: %w", secretsPath, err)
+	}
+	h.Secrets = slices.Sorted(maps.Keys(secrets.Files))
+
+	diff, err := docker(ctx, "diff", r.Agent)
+	if err != nil {
+		return Holdings{}, err
+	}
+	for _, line := range strings.Split(diff, "\n") {
+		if path, added := strings.CutPrefix(line, "A "); added {
+			h.Added = append(h.Added, path)
+		}
+	}
+
 	var inspected []struct {
 		Config struct{ Env []string }
 		Mounts []Mount
@@ -353,6 +381,15 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 			broken = append(broken, fmt.Sprintf("the agent's environment sets %s, and its settings are in runner.env, which it reads itself", name))
 		}
 		broken = append(broken, heldIn("the agent's environment", v, held)...)
+	}
+	for _, path := range h.Added {
+		// The mount points themselves are made when the container is, and hold nothing.
+		if !agentMounts[path] && !slices.ContainsFunc(slices.Collect(maps.Keys(agentMounts)), func(m string) bool { return strings.HasPrefix(m, path+"/") }) {
+			broken = append(broken, fmt.Sprintf("%s was written in the agent's own filesystem, and it keeps nothing outside %s and %s", path, etcPath, libPath))
+		}
+	}
+	for _, path := range h.Secrets {
+		broken = append(broken, fmt.Sprintf("%s is still on the secrets tmpfs, and a value is removed when the task it was given to ends", path))
 	}
 	for _, m := range h.Mounts {
 		if !agentMounts[m.Destination] {

@@ -39,7 +39,7 @@ func (in *Installation) registry(ctx context.Context) {
 		in.t.Fatal(err)
 	}
 	published, _, _ = strings.Cut(published, "\n")
-	eventually(in.t, time.Minute, "the registry answered", func() error {
+	eventually(in.ctx, in.t, time.Minute, "the registry answered", func() error {
 		answer, err := http.Get("http://" + published + "/v2/")
 		if err != nil {
 			return err
@@ -63,7 +63,7 @@ func (in *Installation) registry(ctx context.Context) {
 // is the path a server run takes.
 func (in *Installation) Brick(dir string) (tag, pinned string) {
 	in.t.Helper()
-	ctx := in.t.Context()
+	ctx := in.ctx
 	pusher := in.Runners[0]
 	local := "agk-e2e/" + dir + ":" + in.id
 	repository := in.Registry + "/agk-e2e/" + dir
@@ -92,6 +92,11 @@ func (in *Installation) Brick(dir string) (tag, pinned string) {
 		in.t.Fatal(err)
 	}
 	loadErr := load.Run()
+	if loadErr != nil {
+		// A load that ended without reading the archive leaves save blocked on a full pipe,
+		// which only ends by being killed.
+		save.Process.Kill()
+	}
 	if err := save.Wait(); err != nil || loadErr != nil {
 		in.t.Fatalf("%s could not be carried to runner %s's daemon: %v %v: %s%s", local, pusher.Name, err, loadErr, saveErr.String(), loadOut.String())
 	}

@@ -84,6 +84,13 @@ type Installation struct {
 	runnerIm string
 	network  string
 
+	// ctx bounds everything the installation asks of a program or a daemon: done a margin
+	// before go test's own timeout, so that a call that hangs fails the test while there is
+	// still time to print the logs and take the installation down, which a test killed by the
+	// timeout never does.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// held are the values no runner may hold, by what each is: the installation's own
 	// credentials and keys, which only the API and the controller are given.
 	held []heldValue
@@ -124,6 +131,7 @@ func Stand(t testing.TB) *Installation {
 	}
 
 	in := &Installation{t: t, id: "agk-e2e-" + randomHex(4)}
+	in.ctx, in.cancel = boundedBy(t)
 	t.Cleanup(in.takeDown)
 
 	var err error
@@ -138,7 +146,7 @@ func Stand(t testing.TB) *Installation {
 		t.Fatal(err)
 	}
 
-	ctx := t.Context()
+	ctx := in.ctx
 	in.token = "agk_op_" + randomHex(24)
 	ca := in.certificates()
 	in.client = &http.Client{Timeout: time.Minute, Transport: &http.Transport{TLSClientConfig: ca.clientConfig()}}
@@ -177,6 +185,21 @@ func (in *Installation) takeDown() {
 	for i := len(in.teardown) - 1; i >= 0; i-- {
 		in.teardown[i]()
 	}
+	in.cancel()
+}
+
+// teardownMargin is how long before go test's timeout the installation stops waiting on anything,
+// which is the time taking it down has.
+const teardownMargin = 3 * time.Minute
+
+// boundedBy is t's context, done teardownMargin before t's deadline where it has one.
+func boundedBy(t testing.TB) (context.Context, context.CancelFunc) {
+	if d, ok := t.(interface{ Deadline() (time.Time, bool) }); ok {
+		if deadline, set := d.Deadline(); set {
+			return context.WithDeadline(t.Context(), deadline.Add(-teardownMargin))
+		}
+	}
+	return context.WithCancel(t.Context())
 }
 
 // tail is the last max bytes of s, since a log that ran to megabytes is read from its end.
@@ -270,13 +293,14 @@ type databases struct {
 func (in *Installation) database(ctx context.Context) databases {
 	socket := in.mkdir(0o755, "postgres")
 	name := in.id + "-postgres"
+	superuser := randomHex(16)
 	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(),
-		"-e", "POSTGRES_PASSWORD="+randomHex(16), "-e", "POSTGRES_DB=agentiik",
+		"-e", "POSTGRES_PASSWORD="+superuser, "-e", "POSTGRES_DB=agentiik",
 		"-v", socket+":/var/run/postgresql", postgresImage)
 
 	// The image starts a server of its own to create the database and stops it again, both on
 	// the same socket, so the socket answering says nothing until the image says it is done.
-	eventually(in.t, 2*time.Minute, "PostgreSQL finished creating its database", func() error {
+	eventually(in.ctx, in.t, 2*time.Minute, "PostgreSQL finished creating its database", func() error {
 		logs, err := dockerCombined(ctx, "logs", name)
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, logs)
@@ -287,11 +311,16 @@ func (in *Installation) database(ctx context.Context) databases {
 		return nil
 	})
 	d := databases{
-		admin:        "postgres://postgres@/agentiik?host=" + socket,
-		application:  "postgres://agentiik@/agentiik?host=" + socket,
-		passwordFile: in.secretFile("database-password", randomHex(24)),
+		admin:       "postgres://postgres@/agentiik?host=" + socket,
+		application: "postgres://agentiik@/agentiik?host=" + socket,
 	}
-	eventually(in.t, time.Minute, "PostgreSQL answered on its socket", func() error {
+	password := randomHex(24)
+	d.passwordFile = in.secretFile("database-password", password)
+	in.held = append(in.held,
+		heldValue{"the database superuser's password", superuser},
+		heldValue{"the application role's password", password},
+	)
+	eventually(in.ctx, in.t, time.Minute, "PostgreSQL answered on its socket", func() error {
 		conn, err := pgx.Connect(ctx, d.admin)
 		if err != nil {
 			return err
@@ -364,7 +393,7 @@ include %q
 	// A NATS server greets every connection with its INFO line, before any TLS, which is what
 	// says it is listening.
 	address := fmt.Sprintf("127.0.0.1:%d", port)
-	eventually(in.t, time.Minute, "the bus listened", func() error {
+	eventually(in.ctx, in.t, time.Minute, "the bus listened", func() error {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			return err
@@ -426,7 +455,7 @@ func (in *Installation) serve(ctx context.Context, ca authority, d databases, bu
 		apiEnv[k] = v
 	}
 	in.start("agentiik-api", []string{"serve"}, apiEnv)
-	eventually(in.t, time.Minute, "the API answered the operator", func() error {
+	eventually(in.ctx, in.t, time.Minute, "the API answered the operator", func() error {
 		code, body, err := in.call(ctx, "GET", "/api/v1/runner-pools", nil)
 		if err != nil {
 			return err
@@ -469,6 +498,7 @@ func (in *Installation) start(name string, args []string, env map[string]string)
 	cmd := exec.Command(filepath.Join(in.bin, name), args...)
 	cmd.Env = environment(env)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
+	tied(cmd)
 	if err := cmd.Start(); err != nil {
 		in.t.Fatalf("starting %s: %s", name, err)
 	}
@@ -524,7 +554,7 @@ func (in *Installation) call(ctx context.Context, method, path string, body any)
 // where into is not nil.
 func (in *Installation) Operator(method, path string, body any, want int, into any) {
 	in.t.Helper()
-	code, answer, err := in.call(in.t.Context(), method, path, body)
+	code, answer, err := in.call(in.ctx, method, path, body)
 	if err != nil {
 		in.t.Fatalf("%s %s: %s", method, path, err)
 	}
@@ -559,9 +589,9 @@ func (in *Installation) issue() string {
 
 // ready waits until the API has heard each runner's heartbeat say it is ready.
 func (in *Installation) ready() {
-	eventually(in.t, 2*time.Minute, "both runners reported ready", func() error {
+	eventually(in.ctx, in.t, 2*time.Minute, "both runners reported ready", func() error {
 		for _, r := range in.Runners {
-			if !r.running(in.t.Context()) {
+			if !r.running(in.ctx) {
 				return errStop(fmt.Errorf("runner %s's agent has exited", r.Name))
 			}
 		}
@@ -571,7 +601,7 @@ func (in *Installation) ready() {
 				ReportedState string `json:"reported_state"`
 			} `json:"runners"`
 		}
-		code, body, err := in.call(in.t.Context(), "GET", "/api/v1/runners", nil)
+		code, body, err := in.call(in.ctx, "GET", "/api/v1/runners", nil)
 		if err != nil {
 			return err
 		}
@@ -678,8 +708,8 @@ type stopped struct{ error }
 func errStop(err error) error { return stopped{err} }
 
 // eventually calls check until it answers nil, and fails t naming what it waited for and the
-// last answer where it has not by within.
-func eventually(t testing.TB, within time.Duration, what string, check func() error) {
+// last answer where it has not by within, or once ctx is done.
+func eventually(ctx context.Context, t testing.TB, within time.Duration, what string, check func() error) {
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for {
@@ -688,7 +718,7 @@ func eventually(t testing.TB, within time.Duration, what string, check func() er
 			return
 		}
 		var stop stopped
-		if errors.As(err, &stop) || time.Now().After(deadline) || t.Context().Err() != nil {
+		if errors.As(err, &stop) || time.Now().After(deadline) || ctx.Err() != nil {
 			t.Fatalf("waited %s until %s, and it never was: %s", within, what, err)
 		}
 		time.Sleep(time.Second)
@@ -755,8 +785,8 @@ type Run struct {
 func (in *Installation) Wait(run string, within time.Duration) Run {
 	in.t.Helper()
 	var ended Run
-	eventually(in.t, within, "run "+run+" ended", func() error {
-		code, body, err := in.call(in.t.Context(), "GET", "/api/v1/"+Namespace+"/runs/"+run, nil)
+	eventually(in.ctx, in.t, within, "run "+run+" ended", func() error {
+		code, body, err := in.call(in.ctx, "GET", "/api/v1/"+Namespace+"/runs/"+run, nil)
 		if err != nil {
 			return err
 		}
@@ -769,7 +799,7 @@ func (in *Installation) Wait(run string, within time.Duration) Run {
 		}
 		r.Answer = body
 		switch r.State {
-		case "succeeded", "failed", "cancelled":
+		case "succeeded", "failed", "cancelled", "timed_out":
 			ended = r
 			return nil
 		}

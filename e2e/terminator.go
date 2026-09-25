@@ -101,6 +101,7 @@ func (in *Installation) certificates() authority {
 			in.t.Fatal(err)
 		}
 	}
+	in.held = append(in.held, heldValue{"the private key of the bus and of the API's terminator", strings.TrimSpace(string(keyPEM))})
 
 	leaf, err := tls.X509KeyPair(leafPEM, keyPEM)
 	if err != nil {
@@ -196,15 +197,30 @@ func (r *Requests) All() []Request {
 // recording records each request next passes on, with the status it answered.
 func (r *Requests) recording(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		status := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(status, req)
+		// Recorded as it arrives, so that a request still being answered, or one whose answer
+		// was cut and ended the handler with a panic, is held to the rule all the same. Its
+		// status is filled in when the handler ends, however it ends, and a request never
+		// answered keeps none, which the rule refuses.
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		r.all = append(r.all, Request{
 			Method: req.Method, Path: req.URL.Path, Query: req.URL.Query(),
 			Caller: callerOf(req.Header.Get("Authorization"), r.operator),
-			Status: status.status,
 		})
+		at := len(r.all) - 1
+		r.mu.Unlock()
+		status := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		returned := false
+		defer func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			// A handler that returned having written nothing answered 200, as net/http
+			// answers for it; one that panicked first answered nothing.
+			if status.wrote || returned {
+				r.all[at].Status = status.status
+			}
+		}()
+		next.ServeHTTP(status, req)
+		returned = true
 	})
 }
 
@@ -231,14 +247,17 @@ type statusWriter struct {
 }
 
 func (s *statusWriter) WriteHeader(code int) {
-	if !s.wrote {
+	// An informational answer, such as 100 Continue, is followed by the one that counts.
+	if !s.wrote && code >= 200 {
 		s.status, s.wrote = code, true
 	}
 	s.ResponseWriter.WriteHeader(code)
 }
 
 func (s *statusWriter) Write(b []byte) (int, error) {
-	s.wrote = true
+	if !s.wrote {
+		s.status, s.wrote = http.StatusOK, true
+	}
 	return s.ResponseWriter.Write(b)
 }
 
@@ -290,6 +309,8 @@ func outsideTheOperator(requests []Request) ([]string, Objects) {
 			switch {
 			case r.Caller != CallerNobody:
 				broken = append(broken, fmt.Sprintf("%s carried a credential, and an object is reached through a presigned URL, which is its own authorisation", route))
+			case r.Status == 0:
+				broken = append(broken, fmt.Sprintf("%s was never answered, so nothing says the API took its signature", route))
 			case r.Status >= 300:
 				broken = append(broken, fmt.Sprintf("%s was answered %d, and every presigned URL a runner follows is one the API signed", route, r.Status))
 			case r.Method == http.MethodPost:

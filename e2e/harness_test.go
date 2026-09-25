@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"slices"
@@ -102,8 +103,8 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 	held := append(in.held, heldValue{"the workflow's repository", document})
 	for _, r := range in.Runners {
 		var last []string
-		eventually(t, 30*time.Second, "runner "+r.Name+" held its identity alone", func() error {
-			h, err := r.Holdings(t.Context())
+		eventually(in.ctx, t, 30*time.Second, "runner "+r.Name+" held its identity alone", func() error {
+			h, err := r.Holdings(in.ctx)
 			if err != nil {
 				return err
 			}
@@ -186,6 +187,7 @@ func aRunnerAtRest() Holdings {
 		},
 		Directories: []string{"/etc/agentiik", "/var/lib/agentiik", "/var/lib/agentiik/work"},
 		Env:         []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Added:       []string{"/run", "/run/agentiik", "/var/run"},
 		Mounts: []Mount{
 			{Type: "bind", Source: "/tmp/agk-e2e-1/runner-a/etc", Destination: "/etc/agentiik"},
 			{Type: "volume", Source: "/var/lib/docker/volumes/agk-e2e-1-lib-a/_data", Destination: "/var/lib/agentiik"},
@@ -247,6 +249,8 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		{"the object store mounted", func(h *Holdings) {
 			h.Mounts = append(h.Mounts, Mount{Type: "bind", Source: "/tmp/agk-e2e-1/objects", Destination: "/var/lib/agentiik/objects"})
 		}, "no runner sees"},
+		{"a file written outside the two directories", func(h *Holdings) { h.Added = append(h.Added, "/tmp/bus.creds") }, "written in the agent's own filesystem"},
+		{"a value left on the tmpfs", func(h *Holdings) { h.Secrets = append(h.Secrets, "/run/agentiik/secrets/t1/billing") }, "still on the secrets tmpfs"},
 		{"something else mounted", func(h *Holdings) {
 			h.Mounts = append(h.Mounts, Mount{Type: "bind", Source: "/home", Destination: "/home"})
 		}, "which the agent is not given"},
@@ -257,5 +261,37 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		if !slices.ContainsFunc(broken, func(b string) bool { return strings.Contains(b, c.says) }) {
 			t.Errorf("%s: broke %q, want one saying %q", c.name, broken, c.says)
 		}
+	}
+}
+
+func TestTheRecorderKeepsARequestWhoseAnswerWasCutAndTheStatusAfterAContinue(t *testing.T) {
+	r := &Requests{operator: "agk_op_the-token"}
+	handler := r.recording(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/objects/e2e/sha256/cut":
+			panic(http.ErrAbortHandler)
+		case "/objects/e2e":
+			w.WriteHeader(http.StatusContinue)
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	for _, path := range []string{"/objects/e2e/sha256/cut", "/objects/e2e", "/api/v1/runners/heartbeat"} {
+		func() {
+			defer func() { recover() }()
+			method := "GET"
+			if path != "/objects/e2e/sha256/cut" {
+				method = "POST"
+			}
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(method, path, nil))
+		}()
+	}
+	got := r.All()
+	if len(got) != 3 || got[0].Status != 0 || got[1].Status != http.StatusForbidden || got[2].Status != http.StatusOK {
+		t.Fatalf("the recorder kept %+v, want the cut request with no status, the upload as 403 and the empty answer as 200", got)
+	}
+	broken, _ := outsideTheOperator(got)
+	if !slices.ContainsFunc(broken, func(b string) bool { return strings.Contains(b, "never answered") }) ||
+		!slices.ContainsFunc(broken, func(b string) bool { return strings.Contains(b, "answered 403") }) {
+		t.Errorf("the cut read and the refused upload broke %q", broken)
 	}
 }
