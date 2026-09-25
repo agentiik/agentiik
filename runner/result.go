@@ -160,8 +160,16 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	case ended:
 		// The closing chunk goes before the result, "so a finished task's log is whole by the
 		// time its step is judged", and the result's log is what the API answered it.
+		//
+		// The record of the key says what the result says of the log, since a later report
+		// is made from it: nothing while the close is waited for, since what the driver
+		// counted is not what the store holds, and the API's answer once it is known.
 		r = resultOf(m, c.Runner, told)
-		r.Log = log.finish(told.Log.Truncated)
+		if log != nil {
+			c.logged(a.Task.ID, nil)
+			r.Log = log.finish(told.Log.Truncated)
+			c.logged(a.Task.ID, r.Log)
+		}
 	case err != nil && ctx.Err() != nil:
 		// The agent is stopping, and the task did not fail: nothing is said of it, the
 		// agent stops naming its key, and the heartbeat's sweep declares it lost, which is
@@ -187,6 +195,31 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		r.Log = log.finish(false)
 	}
 	return c.Results.Report(ctx, r)
+}
+
+// logRecorder is the host's record of the keys it ended, which is driver.Docker.
+type logRecorder interface {
+	Logged(id agk.TaskID, log *driver.EndedLog) error
+}
+
+// logged records what the result of a key says of its log in the host's record of its ending, where
+// the driver keeps one.
+func (c *Carrier) logged(id agk.TaskID, l *bus.Log) {
+	rec, ok := c.Driver.(logRecorder)
+	if !ok {
+		return
+	}
+	var ended *driver.EndedLog
+	if l != nil {
+		uri, err := agk.ParseLogURI(l.URI)
+		if err != nil {
+			return
+		}
+		ended = &driver.EndedLog{URI: uri, Lines: l.Lines, Truncated: l.Truncated}
+	}
+	if err := rec.Logged(id, ended); err != nil && c.Log != nil {
+		c.Log(err.Error() + ": a later report of the key from the record may not say of its log what its result said")
+	}
 }
 
 // resultOf is the result of dispatch m, from the ending the driver told of it.

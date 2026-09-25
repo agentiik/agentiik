@@ -393,6 +393,27 @@ func written(path string, d fs.DirEntry) (time.Time, bool) {
 	return info.ModTime(), true
 }
 
+// Logged replaces what the record of a key this host ended says of its log: nil, where nothing is
+// known of it, or what the runner learned once it was closed.
+//
+// The ending is written before the log is closed, since the record is what refuses a second run of
+// the key and it cannot wait on anything. A runner that ships the log somewhere else learns only
+// afterwards how many lines were kept there and whether they were cut, and a later report made
+// from the record has to say what the first report said.
+func (d *Docker) Logged(id agk.TaskID, log *EndedLog) error {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	e, found, err := d.keys.read(id)
+	if err != nil {
+		return err
+	}
+	if !found || !e.State.Terminal() {
+		return fmt.Errorf("driver: task %s: the record holds no ending of its key, so no log of one is recorded", id)
+	}
+	e.Log = log
+	return d.keys.write(e)
+}
+
 // Hold records that this host has taken a task, which is the first thing a runner does with
 // a message it took: before it redeems the grant, before it acknowledges the message, and
 // before it pulls or creates anything. Package bus says why the redemption comes before the
