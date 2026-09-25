@@ -249,3 +249,79 @@ func TestTheAgentsLoopIsNarrowedAndSizedAsTheHost(t *testing.T) {
 		t.Errorf("the capacity is written %q", got)
 	}
 }
+
+// A task too large for this host is held back from every runner without pausing this one, since the
+// next message on the queue may well fit: a task that fits, published once the large one was put
+// back, runs well within the hold-back.
+func TestATaskTooLargeDoesNotKeepTheHostFromTheNextOne(t *testing.T) {
+	var (
+		mu          sync.Mutex
+		redemptions = map[string]Redemption{}
+	)
+	api := anAPIAnswering(t, func(_ int, taskID string) (int, any) {
+		mu.Lock()
+		defer mu.Unlock()
+		return http.StatusOK, redemptions[taskID]
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Retry, l.loop.Wait = 3*time.Second, 100*time.Millisecond
+	l.loop.Capacity = Room{Memory: 1 << 30}
+	putBack := make(chan struct{}, 8)
+	l.loop.Log = func(s string) {
+		if strings.Contains(s, "more than this host declares at all") {
+			putBack <- struct{}{}
+		}
+		t.Log(s)
+	}
+	publish := func(step, memory string) {
+		m, r := l.task(t, func(m *bus.TaskMessage) {
+			m.Step = step
+			m.IdempotencyKey = string(storeRun) + "/" + m.Step + "/1"
+			m.Resources.Memory = memory
+		})
+		mu.Lock()
+		redemptions[m.TaskID] = r
+		mu.Unlock()
+	}
+	publish("large", "2Gi")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- l.loop.Run(ctx) }()
+	select {
+	case <-putBack:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the task too large was never put back")
+	}
+	// Past the take under way when it was put back, so that a loop that paused would be
+	// pausing by now.
+	time.Sleep(500 * time.Millisecond)
+	published := time.Now()
+	publish("small", "256Mi")
+	for deadline := time.Now().Add(10 * time.Second); len(l.bus.all()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	took := time.Since(published)
+	cancel()
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	if results := l.bus.all(); len(results) != 1 || !strings.Contains(results[0].IdempotencyKey, "/small/") {
+		t.Fatalf("the host reported %+v, want the task that fits", results)
+	}
+	if took > 2*time.Second {
+		t.Errorf("the task that fits ran %s after it was published, and the one too large is held back 3s", took)
+	}
+}
+
+// A cpu no host has is more than this host has, and never a count that lifts the bound.
+func TestACPUNoHostHasIsPutBack(t *testing.T) {
+	l := &Loop{Capacity: Room{NanoCPUs: 4e9}}
+	m := bus.TaskMessage{Step: "invoice", Resources: bus.Resources{CPU: "10000000000"}}
+	if _, fits, _ := l.reserve(m); fits {
+		t.Fatal("ten billion cores fit a host of four")
+	}
+	if _, fits, _ := l.reserve(bus.TaskMessage{Step: "invoice", Resources: bus.Resources{CPU: "4"}}); !fits {
+		t.Error("the refusal lifted or spent the bound")
+	}
+}

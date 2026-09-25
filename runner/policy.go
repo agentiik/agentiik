@@ -61,6 +61,10 @@ func (l *Loop) reserve(m bus.TaskMessage) (need Room, fits bool, why string) {
 	defer l.mu.Unlock()
 	over := func(want, using, capacity int64) bool { return capacity > 0 && want > capacity-using }
 	switch {
+	case need.Memory < 0 || need.NanoCPUs < 0:
+		// Nothing the grammar reads is below zero, and a count that was would lift the
+		// bound for every other task this host holds meanwhile.
+		return Room{}, false, fmt.Sprintf("it declares %s, which no host has", need)
 	case over(need.Memory, 0, l.Capacity.Memory), over(need.NanoCPUs, 0, l.Capacity.NanoCPUs):
 		return need, false, fmt.Sprintf("it declares %s, more than this host declares at all, %s", need, l.Capacity)
 	case over(need.Memory, l.using.Memory, l.Capacity.Memory), over(need.NanoCPUs, l.using.NanoCPUs, l.Capacity.NanoCPUs):

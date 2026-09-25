@@ -312,6 +312,13 @@ func nanoCPUsOf(cores float64) int64 {
 	// Rounded rather than truncated: 0.1 is not a binary fraction, and truncating
 	// the product would give a step a nanosecond less of a core than it asked for
 	// every time the nearest float64 falls below the number that was written.
+	//
+	// And held to the largest count there is: past it, converting the product is left to the
+	// platform, which answers the smallest negative number on amd64, and a count below zero
+	// would read as no limit at all to every caller that caps with it.
+	if cores >= math.MaxInt64/1e9 {
+		return math.MaxInt64
+	}
 	return int64(math.Round(cores * 1e9))
 }
 

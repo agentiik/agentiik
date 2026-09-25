@@ -111,8 +111,8 @@ type Loop struct {
 	LetGo func(key string)
 
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
-	// an answer that may change, and how long a message put back is held back and the loop takes
-	// nothing more. Zero is takeWait and retryFirst.
+	// an answer that may change, and how long a message put back is held back and, but for one
+	// put back for want of room, the loop takes nothing more. Zero is takeWait and retryFirst.
 	Wait  time.Duration
 	Retry time.Duration
 
@@ -342,19 +342,20 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 
-	// Of the rest too, and read against the record for the same reason, so that a key this host
-	// has in flight is not put back for another runner the moment it comes round.
+	// Of the rest too, after the record for the same reason: a key this host has in flight is
+	// neither put back for another runner the moment it comes round nor counted twice against
+	// the host's capacity. A task too large is held back from every runner and does not pause
+	// this one, since the next message on the queue may well fit.
+	if l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+		return
+	}
 	if !l.accepts(m.Namespace) {
-		if !l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
-			l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since this host takes no work of namespace %s", m.TaskID, m.IdempotencyKey, m.Namespace))
-		}
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since this host takes no work of namespace %s", m.TaskID, m.IdempotencyKey, m.Namespace))
 		return
 	}
 	need, fits, why := l.reserve(m)
 	if !fits {
-		if !l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
-			l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool or a later take, since %s", m.TaskID, m.IdempotencyKey, why))
-		}
+		l.holdBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool or a later take, since %s", m.TaskID, m.IdempotencyKey, why))
 		return
 	}
 	defer l.unreserve(need)
@@ -447,13 +448,19 @@ func uncovered(runsOn, claimed []string) []string {
 // spin through its queue, writing keys down and redeeming grants as fast as the API answers. Held
 // back and paused, a runner refused everything asks for at most its free slots every Retry.
 func (l *Loop) putBack(t bus.Taken, why string) {
+	l.holdBack(t, why)
+	l.mu.Lock()
+	l.quiet = l.now().Add(l.retryFirst())
+	l.mu.Unlock()
+}
+
+// holdBack puts a message back for another runner of the pool, held back a moment from every
+// runner, and leaves this loop taking.
+func (l *Loop) holdBack(t bus.Taken, why string) {
 	l.say(why)
 	if err := t.AgainAfter(l.retryFirst()); err != nil {
 		l.say(err.Error())
 	}
-	l.mu.Lock()
-	l.quiet = l.now().Add(l.retryFirst())
-	l.mu.Unlock()
 }
 
 // quietFor is how long the loop takes nothing more, after a message was put back.
