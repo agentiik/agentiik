@@ -77,19 +77,11 @@ func push(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintln(e.Err, "--namespace is required: a workflow belongs to exactly one namespace")
 		return exitUsage
 	}
-	where := *server
-	if where == "" {
-		where = e.Getenv(serverVariable)
-	}
-	if where == "" {
-		fmt.Fprintf(e.Err, "no installation to push to: pass --server or set %s\n", serverVariable)
+	at, ok := reach(e, *server)
+	if !ok {
 		return exitUsage
 	}
-	token := e.Getenv(tokenVariable)
-	if token == "" {
-		fmt.Fprintf(e.Err, "no credential: set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
-		return exitUsage
-	}
+	where, token := at.base, at.token
 
 	path, err := entryOf(e, *entry)
 	if err != nil {
