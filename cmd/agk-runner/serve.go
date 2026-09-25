@@ -34,9 +34,12 @@ func serve(ctx context.Context, e env, args []string) int {
 	cfg, err := runner.ReadConfig(e.Lookup, e.EnvFile)
 	policy, perr := loadPolicy(e.PolicyFile, log)
 	socket, derr := dockerHost(e)
+	// Measured as join measured what it declared, and refused as join refuses it: a runner that
+	// cannot say how much it has cannot put back what it has no room for.
+	capacity, merr := runner.HostRoom(e.MemInfo)
 	// All are reported on the one start, so that an operator fixing a unit is told
 	// everything that is wrong with it rather than one thing per restart.
-	if err := errors.Join(err, perr, derr); err != nil {
+	if err := errors.Join(err, perr, derr, merr); err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
 		}
@@ -119,7 +122,7 @@ func serve(ctx context.Context, e env, args []string) int {
 
 	notify, _ := e.Lookup(runner.NotifySocket)
 	err = runner.Serve(ctx, runner.Agent{
-		Config: cfg, Driver: d, Client: client, Endings: endings, Log: log,
+		Config: cfg, Capacity: capacity, Driver: d, Client: client, Endings: endings, Log: log,
 		Ready: func() error { return runner.Notify(notify, runner.Ready) },
 		Key:   key, Held: held, CredentialFile: e.CredentialFile,
 	})

@@ -23,6 +23,10 @@ import (
 type Agent struct {
 	Config Config
 
+	// Capacity is what this host declares, which the loop puts back a task past, with what it
+	// already holds. Its zero value bounds nothing, which is a test's.
+	Capacity Room
+
 	// Driver is opened with Endings as its Observer and TaskLogs as its Logs, and Client is what
 	// each task's log is shipped through.
 	Driver *driver.Docker
@@ -103,9 +107,9 @@ func Serve(ctx context.Context, a Agent) error {
 	if len(a.Config.Namespaces) > 0 {
 		namespaces = strings.Join(a.Config.Namespaces, ", ")
 	}
-	say(fmt.Sprintf("agk-runner %s serving as %s in pool %s: %d tasks at once under %s, labels %s, namespaces %s, the daemon speaking API %s",
+	say(fmt.Sprintf("agk-runner %s serving as %s in pool %s: %d tasks at once under %s, labels %s, namespaces %s, declaring %s, the daemon speaking API %s",
 		Version(), a.Config.Runner, a.Config.Pool, a.Config.Concurrency, a.Config.WorkDir,
-		strings.Join(a.Config.Labels, ","), namespaces, a.Driver.APIVersion()))
+		strings.Join(a.Config.Labels, ","), namespaces, a.Capacity, a.Driver.APIVersion()))
 
 	// A stop that arrived while the agent was starting is not followed by a ready it would
 	// contradict.
@@ -267,6 +271,7 @@ func Serve(ctx context.Context, a Agent) error {
 func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat, *Stops) {
 	loop := &Loop{
 		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
+		Namespaces: a.Config.Namespaces, Capacity: a.Capacity,
 		Redeemer: a.Client, Holder: a.Driver,
 		Carrier: &Carrier{
 			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,

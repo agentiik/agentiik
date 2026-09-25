@@ -2,6 +2,7 @@ package driver
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,4 +339,16 @@ func stringsOf(t *testing.T, v any) string {
 		out = append(out, s)
 	}
 	return strings.Join(out, " ")
+}
+
+// A cpu the grammar reads and no host has is counted as the most there is, never as a number below
+// zero, which a runner counting it against its capacity would read as room given back.
+func TestACPUNoHostHasIsCountedAsTheMostThereIs(t *testing.T) {
+	_, nanos, err := Declared("invoice", "", "10000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nanos != math.MaxInt64 {
+		t.Errorf("ten billion cores are %d billionths of a core", nanos)
+	}
 }

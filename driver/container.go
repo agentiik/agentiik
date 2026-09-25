@@ -189,6 +189,21 @@ func resources(t graph.Task, p Policy) (docker.Resources, error) {
 	return r, nil
 }
 
+// Declared is what a task's resources.memory and resources.cpu ask of a host, in the units the
+// daemon limits a container in, bytes and billionths of a core, read with the grammar the container
+// is created with. A runner counts it against the host's capacity before it holds the task, and a
+// part the task leaves out is zero; a value the grammar refuses is the fault the task fails with
+// once it runs.
+func Declared(step agk.Step, memory, cpu string) (bytes, nanos int64, err error) {
+	if bytes, err = memoryBytes(step, memory); err != nil {
+		return 0, 0, err
+	}
+	if nanos, err = nanoCPUs(step, cpu); err != nil {
+		return 0, 0, err
+	}
+	return bytes, nanos, nil
+}
+
 // capped applies a ceiling. A ceiling of zero is no ceiling, and a request of zero takes
 // the ceiling, which is how a policy that names a number governs a step that names none.
 func capped(want, ceiling int64) int64 {
@@ -297,6 +312,13 @@ func nanoCPUsOf(cores float64) int64 {
 	// Rounded rather than truncated: 0.1 is not a binary fraction, and truncating
 	// the product would give a step a nanosecond less of a core than it asked for
 	// every time the nearest float64 falls below the number that was written.
+	//
+	// And held to the largest count there is: past it, converting the product is left to the
+	// platform, which answers the smallest negative number on amd64, and a runner counting what
+	// a task declares against its capacity would read a count below zero as room given back.
+	if cores >= math.MaxInt64/1e9 {
+		return math.MaxInt64
+	}
 	return int64(math.Round(cores * 1e9))
 }
 
