@@ -9,18 +9,23 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentiik/agentiik/internal/tlsfloor"
 )
 
-// Client is how the agent reaches the API: one base URL, one runner credential, and JSON both
-// ways. Each route the agent calls is a file of this package over it, with types of its own held
-// to the wire, since a runner imports nothing of package api.
+// Client is how the agent reaches the API: one base URL, one runner credential at a time, and JSON
+// both ways. Each route the agent calls is a file of this package over it, with types of its own
+// held to the wire, since a runner imports nothing of package api.
 type Client struct {
-	base       string
+	base string
+	http *http.Client
+
+	// credential is replaced whole when the credential is rotated, and every call reads it
+	// once, as it sends.
+	mu         sync.Mutex
 	credential Secret
-	http       *http.Client
 }
 
 // The classes of answer a route file tells apart. Each is what the runner does next rather than
@@ -113,6 +118,22 @@ func newClient(api string, credential Secret, client *http.Client) *Client {
 	return &Client{base: strings.TrimRight(api, "/"), credential: credential, http: client}
 }
 
+// Credential is the runner credential every call now carries.
+func (c *Client) Credential() Secret {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.credential
+}
+
+// use makes every call from now on carry credential, all at once: the API stops taking the one it
+// replaces the first time it sees the new one, so a call that went on carrying the old one after
+// that would be refused.
+func (c *Client) use(credential Secret) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.credential = credential
+}
+
 // transport is what a client made here goes through, held to the TLS floor.
 var transport = tlsfloor.Transport()
 
@@ -130,6 +151,12 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 
 // do is Do with headers of the route's own beside the ones every call carries, which is how a
 // shipment carries its task's grant outside its body.
+//
+// A call refused 401 is sent once more where the credential was replaced while it was on its way.
+// The API stops taking a rotated credential the first time it sees the new one, so a call sent with
+// the old one a moment before another call carried the new one is refused for no fault of the
+// runner's, and a refusal is answered before anything is done, so sending it again does nothing
+// twice. A 401 to the credential still held is the runner's to act on.
 func (c *Client) do(ctx context.Context, method, path string, header http.Header, in, out any) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("runner: %s is not a path below the API", path)
@@ -140,20 +167,36 @@ func (c *Client) do(ctx context.Context, method, path string, header http.Header
 		defer cancel()
 	}
 
-	var body io.Reader
+	var body []byte
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return fmt.Errorf("runner: %s %s: the request could not be written: %w", method, path, err)
 		}
-		body = bytes.NewReader(b)
+		body = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+	sent := c.Credential()
+	err := c.send(ctx, method, path, header, body, in != nil, sent, out)
+	if errors.Is(err, ErrCredentialRefused) {
+		if now := c.Credential(); now != sent {
+			return c.send(ctx, method, path, header, body, in != nil, now, out)
+		}
+	}
+	return err
+}
+
+// send sends one request with credential and reads its answer.
+func (c *Client) send(ctx context.Context, method, path string, header http.Header, body []byte, hasBody bool, credential Secret, out any) error {
+	var r io.Reader
+	if hasBody {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, r)
 	if err != nil {
 		return fmt.Errorf("runner: %s %s: %w", method, path, err)
 	}
-	if c.credential != "" {
-		req.Header.Set("Authorization", "Bearer "+string(c.credential))
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+string(credential))
 	}
 	for name, values := range header {
 		for _, v := range values {
@@ -162,7 +205,7 @@ func (c *Client) do(ctx context.Context, method, path string, header http.Header
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "agk-runner/"+Version())
-	if in != nil {
+	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
 

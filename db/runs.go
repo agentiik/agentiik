@@ -206,6 +206,10 @@ type Evaluation struct {
 	// zero while nobody has. The request is the API's to write and the cancellation is the
 	// controller's to carry out, so a run holding one is a run the next pass ends.
 	CancelRequestedAt time.Time
+
+	// CreatedAt is when the run was created, by the database's clock: where its end-to-end
+	// latency runs from, a wait for its concurrency group included.
+	CreatedAt time.Time
 }
 
 // Run reads one run for deciding.
@@ -224,10 +228,10 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
-		        cancel_requested_at, xmin::text
+		        cancel_requested_at, xmin::text, created_at
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake, &cancel, &e.Version)
+			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -733,6 +737,10 @@ type Loss struct {
 	Task    agk.TaskID
 	Requeue int
 	At      time.Time
+
+	// Pool is the pool of the runner that held it, which is where the loss is charged: a loss
+	// is the infrastructure's, and the pool is the part of it an operator can look at.
+	Pool string
 }
 
 // Losses names the dispatches of one run that are lost and that nothing has requeued.
@@ -746,7 +754,9 @@ type Loss struct {
 // on every pass and changes nothing on any but the first.
 func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]Loss, error) {
 	rows, err := w.tx.Query(ctx, `
-		select t.idempotency_key, t.requeue, t.finished_at from tasks t
+		select t.idempotency_key, t.requeue, t.finished_at,
+		       coalesce((select r.pool from runners r where r.id = t.runner), '')
+		from tasks t
 		where t.namespace = $1 and t.run_id = $2 and t.state = 'lost'
 		  and not exists (select 1 from tasks later
 		                  where later.namespace = t.namespace
@@ -762,7 +772,7 @@ func (w *Wide) Losses(ctx context.Context, namespace string, run agk.RunID) ([]L
 	for rows.Next() {
 		var l Loss
 		var at *time.Time
-		if err := rows.Scan(&l.Task, &l.Requeue, &at); err != nil {
+		if err := rows.Scan(&l.Task, &l.Requeue, &at, &l.Pool); err != nil {
 			return nil, err
 		}
 		if at != nil {

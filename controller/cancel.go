@@ -104,6 +104,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	}); err != nil {
 		return err
 	}
+	co.tell(runEnded(nil, e.Namespace, e.Workflow, e.State, state, e.CreatedAt))
 
 	// And they say more about what a runner holds. A pass that published a task and died
 	// before recording the dispatch left it pending in the document, where the evaluator
@@ -119,5 +120,6 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 	// that never arrives costs a container that runs to its deadline and is then stopped
 	// anyway, which is why this is reported rather than retried.
 	co.hand(ctx, e.Namespace, run, plan)
+	co.traced(ctx, e.Namespace, run)
 	return nil
 }

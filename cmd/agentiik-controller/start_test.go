@@ -76,6 +76,10 @@ func TestMain(m *testing.M) {
 // instanceConfig is what a test hands a process of its own.
 type instanceConfig struct {
 	Database, Bus, JWT, Seed, Objects string
+
+	// MetricsListen and MetricsTokenHash are where the metrics are answered and to whom, and
+	// empty for an instance that answers none.
+	MetricsListen, MetricsTokenHash string
 }
 
 // instance is the controller, as main runs it once the configuration is read: started the one way
@@ -93,6 +97,7 @@ func instance(raw string) int {
 			Objects:     s.Objects,
 			MaxRequeues: graph.DefaultMaxRequeues,
 			TaskCeiling: config.DefaultTaskCeiling,
+			Metrics:     config.Metrics{Listen: s.MetricsListen, TokenHash: s.MetricsTokenHash},
 		}, os.Stderr)
 	})
 }

@@ -106,7 +106,9 @@ func aJoiningHost(t *testing.T, url string, token Secret) Joining {
 		EnvPath: filepath.Join(root, "etc", "runner.env"),
 		KeyPath: filepath.Join(root, "var", "runner.key"),
 		MemInfo: filepath.Join("testdata", "meminfo"),
-		Socket:  d.Socket(),
+		// Where serve keeps a renewed credential, beside the key.
+		CredentialPath: filepath.Join(root, "var", "credential"),
+		Socket:         d.Socket(),
 	}
 }
 
@@ -349,15 +351,17 @@ func TestAHostThatHasJoinedIsReplacedOnlyWhenAsked(t *testing.T) {
 	for _, gone := range []string{"", "runner.env", "runner.key"} {
 		// Either file alone is an identity: a key without runner.env is a host whose join
 		// failed after its key, and a runner.env without a key is one whose key is gone.
-		host := h
+		// The second is told that it is a new runner, rather than only that it joined.
+		host, says := h, "already joined"
 		switch gone {
 		case "runner.env":
 			host.EnvPath = filepath.Join(t.TempDir(), "runner.env")
 		case "runner.key":
 			host.KeyPath = filepath.Join(t.TempDir(), "runner.key")
+			says = "is gone, so this host cannot be that runner again: a host whose key is gone is a new runner"
 		}
 		_, err := Join(t.Context(), host)
-		if err == nil || !strings.Contains(err.Error(), "already joined") {
+		if err == nil || !strings.Contains(err.Error(), says) || !strings.Contains(err.Error(), "--replace") {
 			t.Errorf("with %q gone, joining again answered %v", gone, err)
 		}
 	}
@@ -368,12 +372,20 @@ func TestAHostThatHasJoinedIsReplacedOnlyWhenAsked(t *testing.T) {
 		t.Error("a refused join replaced runner.env")
 	}
 
+	// The credential serve renewed to is the replaced runner's, and serve prefers it to
+	// runner.env: left behind, it would have the new runner start as the old one.
+	if err := os.WriteFile(h.CredentialPath, []byte(`{"runner":"runner-dmz-02"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	h.Replace = true
 	if _, err := Join(t.Context(), h); err != nil {
 		t.Fatal(err)
 	}
 	if readKey(t, h.KeyPath).Equal(first) {
 		t.Error("a replaced identity kept its key, and a new runner is a new key")
+	}
+	if _, err := os.Lstat(h.CredentialPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the replaced runner's renewed credential is still there: %v", err)
 	}
 	ownedAlone(t, h.KeyPath, h.Owner)
 	ownedAlone(t, h.EnvPath, h.Owner)

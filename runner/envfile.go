@@ -70,7 +70,7 @@ type staged struct {
 // stage creates the temporary file for final, in final's directory, since a rename moves a file
 // within one filesystem alone.
 func stage(final string, owner *Owner) (*staged, error) {
-	f, err := os.CreateTemp(filepath.Dir(final), "."+filepath.Base(final)+".join-*")
+	f, err := os.CreateTemp(filepath.Dir(final), "."+filepath.Base(final)+".new-*")
 	if err != nil {
 		return nil, fmt.Errorf("runner: %s cannot be written: %s", final, reasonOf(err))
 	}

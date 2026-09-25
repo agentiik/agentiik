@@ -24,10 +24,10 @@ const (
 	// own code.
 	exitUsage = 2
 	// exitJoinAgain: the API refused the runner's credential, revoked past its grace, rotated
-	// past or never issued, and nothing the agent can do changes that. The unit the page gives
-	// lists it in RestartPreventExitStatus=, so that Restart=always does not bring back every
-	// few seconds an agent whose one heartbeat is refused, which is a retry loop run by systemd
-	// instead.
+	// past or never issued, or the host's key is gone, without which it can never be renewed,
+	// and nothing the agent can do changes that. The unit the page gives lists it in
+	// RestartPreventExitStatus=, so that Restart=always does not bring back every few seconds
+	// an agent whose one heartbeat is refused, which is a retry loop run by systemd instead.
 	exitJoinAgain = 3
 )
 
@@ -50,6 +50,10 @@ type env struct {
 	// KeyFile and MemInfo are what join writes the host's key to and reads its memory from,
 	// /var/lib/agentiik/runner.key and /proc/meminfo.
 	KeyFile, MemInfo string
+
+	// CredentialFile is where serve keeps the credential it renewed to, and join takes it away,
+	// /var/lib/agentiik/credential.
+	CredentialFile string
 
 	// HelperFile is where the static helper is installed beside the agent,
 	// /usr/local/lib/agentiik/agk-helper, which serve binds where runner.toml names none.
@@ -105,8 +109,9 @@ func main() {
 		Geteuid: os.Geteuid,
 		EnvFile: runner.EnvPath, PolicyFile: driver.PolicyPath,
 		KeyFile: runner.KeyPath, MemInfo: runner.MemInfoPath,
-		HelperFile: runner.HelperPath,
-		Account:    lookupAccount,
+		CredentialFile: runner.CredentialPath,
+		HelperFile:     runner.HelperPath,
+		Account:        lookupAccount,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)

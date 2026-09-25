@@ -52,6 +52,9 @@ type served struct {
 
 	// forward is how far the API's clock is ahead of the time of day, in nanoseconds.
 	forward atomic.Int64
+
+	// busTokens counts the bus credentials the API was asked for.
+	busTokens atomic.Int32
 }
 
 // now is the API's clock.
@@ -94,6 +97,13 @@ func (in *served) swept(t *testing.T, at time.Time) int {
 const servedCommit = "a3f9c1e"
 
 func anInstallationServing(t *testing.T) *served {
+	t.Helper()
+	return anInstallationRotating(t, time.Hour, make(ed25519.PublicKey, ed25519.PublicKeySize))
+}
+
+// anInstallationRotating is an installation whose credentials are accepted for rotation, and whose
+// runner joined with key.
+func anInstallationRotating(t *testing.T, rotation time.Duration, key ed25519.PublicKey) *served {
 	t.Helper()
 	url := os.Getenv("AGENTIIK_TEST_BUS_URL")
 	if url == "" {
@@ -152,10 +162,16 @@ func anInstallationServing(t *testing.T) *served {
 	}
 	if _, err := server.NewRunners(rt, server.RunnerOptions{
 		Pool: pool, Objects: in.objects, URLs: in.signed, BusIssuer: issuer, BusConsumers: control, Now: in.now,
+		JoinRotation: rotation,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	srv.Config.Handler = rt
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/bus/token" {
+			in.busTokens.Add(1)
+		}
+		rt.ServeHTTP(w, r)
+	})
 	srv.Start()
 	t.Cleanup(srv.Close)
 	in.url = srv.URL
@@ -200,9 +216,9 @@ func anInstallationServing(t *testing.T) *served {
 			return err
 		}
 		joined, err := w.Join(ctx, db.Joining{
-			Token: token.Clear, PublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
+			Token: token.Clear, PublicKey: key, CPU: 4, MemoryBytes: 1 << 33, DiskBytes: 1 << 37,
 			Architecture: "amd64", AgentVersion: "0.2.0",
-		}, time.Hour, now)
+		}, rotation, now)
 		in.runner, in.credential = joined.Runner, Secret(joined.Credential)
 		return err
 	}); err != nil {
