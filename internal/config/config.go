@@ -77,6 +77,8 @@ const (
 	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE"
 	AuditExportURL              = "AGK_AUDIT_EXPORT_URL"
 	AuditExportTokenFile        = "AGK_AUDIT_EXPORT_TOKEN_FILE"
+	MetricsListen               = "AGK_METRICS_LISTEN"
+	MetricsTokenFile            = "AGK_METRICS_TOKEN_FILE"
 )
 
 // secretFiles are the variables that name a secret's file. The same name without _FILE is the
@@ -84,7 +86,7 @@ const (
 // whether or not it reads the file.
 var secretFiles = []string{
 	DatabasePasswordFile, MigrateDatabasePasswordFile, BusCredentialsFile, BusAccountSeedFile,
-	PresignKeyFile, MasterKeyFile, OperatorTokenFile, AuditExportTokenFile,
+	PresignKeyFile, MasterKeyFile, OperatorTokenFile, AuditExportTokenFile, MetricsTokenFile,
 }
 
 // libpqSecrets are the variables pgx takes a secret from wherever the URL gives none, as libpq
@@ -277,6 +279,10 @@ type Controller struct {
 	// AuditExport is where the controller sends the audit log, and has no URL where the
 	// installation exports it nowhere.
 	AuditExport AuditExport
+
+	// Metrics is where the metrics are answered, and to whom. Its Listen is empty where the
+	// installation scrapes none, and the controller then opens no port at all.
+	Metrics Metrics
 }
 
 // AuditExport is the sink the audit log is exported to: an https URL the entries are POSTed to, and
@@ -284,6 +290,15 @@ type Controller struct {
 type AuditExport struct {
 	URL   string
 	Token Secret
+}
+
+// Metrics is the listener a program answers its metrics on, apart from any other.
+type Metrics struct {
+	// Listen is a host and a port as net.Listen takes them.
+	Listen string
+
+	// TokenHash is the SHA-256 of the token a scrape bears, in lowercase hexadecimal.
+	TokenHash string
 }
 
 // Migration is what agentiik-api migrate reads.
@@ -338,6 +353,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	c.MaxRequeues = r.maxRequeues()
 	c.TaskCeiling = r.taskCeiling()
 	c.AuditExport = r.auditExport()
+	c.Metrics = r.metrics()
 	return c, r.err()
 }
 
@@ -447,15 +463,45 @@ func (r *reader) listen() string {
 	if !set {
 		return DefaultListen
 	}
-	_, port, err := net.SplitHostPort(v)
-	if err == nil {
-		_, err = strconv.ParseUint(port, 10, 16)
-	}
-	if err != nil {
+	if !isAddress(v) {
 		r.refuse(Listen, fmt.Sprintf("is %q, and it is the address the API listens on, a host and a port such as :8080 or 127.0.0.1:8080", v))
 		return DefaultListen
 	}
 	return v
+}
+
+// isAddress says whether v is a host and a numeric port, the host possibly empty.
+func isAddress(v string) bool {
+	_, port, err := net.SplitHostPort(v)
+	if err == nil {
+		_, err = strconv.ParseUint(port, 10, 16)
+	}
+	return err == nil
+}
+
+// metrics reads where the controller answers its metrics, and the hash of the token a scrape
+// bears.
+//
+// Off unless asked for: an installation that scrapes nothing opens no port. Asked for, it is a
+// listener of its own, since the controller has no other, and the token is required, because the
+// metrics name every namespace and workflow that ran: a port nobody but the monitoring should reach
+// is a port somebody else eventually does. A token file with nothing to guard is refused too, as the
+// sign of an installation that meant to open the port and did not say where.
+func (r *reader) metrics() Metrics {
+	listen, set := r.value(MetricsListen)
+	if !set {
+		if _, token := r.value(MetricsTokenFile); token {
+			r.refuse(MetricsTokenFile, "is set and "+MetricsListen+" is not, so the token guards nothing: name the address the metrics are answered on in "+MetricsListen+", or unset this")
+		}
+		return Metrics{}
+	}
+	if !isAddress(listen) {
+		r.refuse(MetricsListen, fmt.Sprintf("is %q, and it is the address the metrics are answered on, a host and a port such as 10.0.0.5:9464", listen))
+	}
+	return Metrics{
+		Listen:    listen,
+		TokenHash: r.hash(MetricsTokenFile, "the token a scrape bears", "and "+MetricsListen+" is, and the metrics are answered to the token whose hash the file it names holds and to nobody else, since they name every namespace and workflow that ran"),
+	}
 }
 
 // directory is a directory named by an absolute path, which exists and which this program can
@@ -807,13 +853,19 @@ func (r *reader) presignKey() Secret {
 // shown once at creation". A file holding the token itself is refused, since it is a working
 // credential at rest on the server.
 func (r *reader) operatorToken() string {
-	content := r.file(OperatorTokenFile, "and it names the file holding the hash of the operator token, without which every request is refused")
+	return r.hash(OperatorTokenFile, "the operator token", "and it names the file holding the hash of the operator token, without which every request is refused")
+}
+
+// hash reads the SHA-256 of a token from the file name names, which what the token is and why the
+// file is required say.
+func (r *reader) hash(name, what, why string) string {
+	content := r.file(name, why)
 	if content == nil {
 		return ""
 	}
 	hash := strings.TrimSpace(string(content))
 	if len(hash) != 64 || strings.ContainsFunc(hash, func(c rune) bool { return !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') }) {
-		r.refuse(OperatorTokenFile, "names a file holding something other than the SHA-256 of the operator token in 64 lowercase hexadecimal characters: the file holds the token's hash and never the token")
+		r.refuse(name, "names a file holding something other than the SHA-256 of "+what+" in 64 lowercase hexadecimal characters: the file holds the token's hash and never the token")
 		return ""
 	}
 	return hash
