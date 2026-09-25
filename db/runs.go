@@ -194,6 +194,11 @@ type Evaluation struct {
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
 
+	// Version names the row as it was read: the transaction that last wrote it, which any write
+	// of it moves, a decision's, a loss's clock or a cancellation request alike. Rewake is held to
+	// it.
+	Version string
+
 	// CancelRequestedAt is when somebody asked through the API for this run to be cancelled, and
 	// zero while nobody has. The request is the API's to write and the cancellation is the
 	// controller's to carry out, so a run holding one is a run the next pass ends.
@@ -216,10 +221,10 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
-		        cancel_requested_at
+		        cancel_requested_at, xmin::text
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake, &cancel)
+			&inputs, &trigger, &wake, &cancel, &e.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -267,7 +272,9 @@ type Decision struct {
 	StartedAt  time.Time
 	FinishedAt time.Time
 
-	// WakeAt is Plan.Wake, and the zero time is "nothing waits on the clock".
+	// WakeAt is when the run is next due: Plan.Wake for a pass, and the moment of the result
+	// for a decision recording one, which the pass after it is due at. The zero time is
+	// "nothing waits on the clock".
 	WakeAt time.Time
 
 	// ExpiresAt is when this run's envelopes and logs may be purged, set when it finishes
@@ -394,22 +401,29 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		}
 	}
 
-	unheard := false
+	unheard, lostAt := false, time.Time{}
 	for _, t := range d.Tasks {
-		heard, err := w.writeTask(ctx, d.Namespace, d.Run, t)
+		heard, at, err := w.writeTask(ctx, d.Namespace, d.Run, t)
 		if err != nil {
 			return err
 		}
-		unheard = unheard || !heard
+		if !heard {
+			unheard = true
+			if !at.IsZero() && (lostAt.IsZero() || at.Before(lostAt)) {
+				lostAt = at
+			}
+		}
 	}
 	if unheard {
 		// A dispatch the heartbeat declared lost after this decision was read, and which the
-		// decision still thought in flight. The loss stands, and the run is left with nothing
-		// on the clock, which is what the sweep comes round for, so that the next pass hears
-		// of it rather than the first one after whatever this decision was waiting on.
+		// decision still thought in flight. The loss stands, and the run is left due at the
+		// moment of the loss, as the heartbeat left it before this decision wrote its own
+		// clock over it, so that the next pass hears of it rather than the first one after
+		// whatever this decision was waiting on. A loss is written with its moment; the run's
+		// start stands in for one that somehow has none, since either is past.
 		if _, err := w.tx.Exec(ctx,
-			`update runs set wake_at = null where namespace = $1 and id = $2`,
-			d.Namespace, string(d.Run)); err != nil {
+			`update runs set wake_at = coalesce($3, started_at, created_at) where namespace = $1 and id = $2`,
+			d.Namespace, string(d.Run), nilIfZero(lostAt)); err != nil {
 			return fmt.Errorf("db: run %s could not be woken for the loss it has not heard of: %w", d.Run, err)
 		}
 	}
@@ -423,6 +437,24 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		}
 	}
 	return w.emit(ctx, d.Namespace, d.Run, before, d.State, startedBy)
+}
+
+// Rewake sets the moment a run is due again, where nothing has written the run since it was read
+// at version. The zero time is "nothing waits on the clock".
+//
+// It is for a pass that decided nothing: its clock is all it has to write. A run written since it
+// was read has been given its clock by whatever wrote it: a decision, or a loss the heartbeat
+// declared or a runner reported, which writes the clock and not the sequence. Written over, that
+// loss would never be heard, and a run waiting on the task it lost would wait for ever. Not the
+// clock the pass read either, since a loss may set the very moment a result set before it.
+func (w *Wide) Rewake(ctx context.Context, namespace string, run agk.RunID, version string, wake time.Time) error {
+	if _, err := w.tx.Exec(ctx,
+		`update runs set wake_at = $4
+		 where namespace = $1 and id = $2 and xmin::text = $3 and wake_at is distinct from $4`,
+		namespace, string(run), version, nilIfZero(wake)); err != nil {
+		return fmt.Errorf("db: the clock of run %s could not be set: %w", run, err)
+	}
+	return nil
 }
 
 // stateOf is what a run was before this decision, and who started it.
@@ -460,8 +492,14 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // An ending is different. It came back from the runner, so the dispatch was not lost after all,
 // and it is written. Except the one the evaluator decides itself as it stops a task superseded or
 // sibling_failed while the run goes on, cancelled with nothing its runner said: the runner said
-// nothing, which is the loss, and the loss is kept, as CancelTasks and EndTasks keep one, so that it
-// is heard and a lost dispatch is never named in the heartbeat's cancel.
+// nothing, which is the loss, and the loss is kept, as CancelTasks and EndTasks keep one, so that
+// a lost dispatch is never named in the heartbeat's cancel. That loss is answered as heard, since
+// there is nothing left to hear: the evaluator ended the task as its stop went out, and takes from
+// a later report of it an exit code and nothing else. Answered as unheard, it woke the run for a
+// pass that decided nothing, and every such pass wrote the same row and woke it again.
+//
+// With whether it was heard comes when a dispatch not heard was lost, which is the moment the run
+// is due again.
 //
 // Nor does a decision move a dispatch back along the way to its ending. Running and publishing
 // are written by Progress, from the runner holding the dispatch, and the evaluator never hears of
@@ -470,9 +508,9 @@ func (w *Wide) stateOf(ctx context.Context, namespace string, run agk.RunID) (ag
 // are rows of their own, so the later of the two states in flight is kept. That is the row saying
 // more than the decision rather than something the decision has not heard, and it is answered as
 // heard.
-func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t TaskRow) (bool, error) {
+func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t TaskRow) (bool, time.Time, error) {
 	if err := t.ID.Validate(); err != nil {
-		return false, fmt.Errorf("db: a task of run %s: %w", run, err)
+		return false, time.Time{}, fmt.Errorf("db: a task of run %s: %w", run, err)
 	}
 	var shardIndex, shardOf *int
 	if !t.Shard.IsZero() {
@@ -486,7 +524,7 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 
 	usage, err := json.Marshal(orEmpty(t.Usage))
 	if err != nil {
-		return false, fmt.Errorf("db: the usage of task %s could not be written: %w", t.ID, err)
+		return false, time.Time{}, fmt.Errorf("db: the usage of task %s could not be written: %w", t.ID, err)
 	}
 
 	// The finish is kept where the decision has none, because a dispatch finishes once: a
@@ -496,6 +534,7 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 	// StopReport on a row the evaluator ended when the stop went out, and the run's later
 	// decisions, which know neither for it, would otherwise write them away.
 	var held string
+	var finished *time.Time
 	err = w.tx.QueryRow(ctx,
 		`insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, requeue, state,
 		                    runner, exit_code, log_uri, log_lines, log_truncated,
@@ -525,16 +564,23 @@ func (w *Wide) writeTask(ctx context.Context, namespace string, run agk.RunID, t
 		     deadline = coalesce(excluded.deadline, tasks.deadline),
 		     published_at = coalesce(tasks.published_at, excluded.published_at),
 		     usage = case when excluded.usage = '{}'::jsonb then tasks.usage else excluded.usage end
-		 returning state`,
+		 returning state, finished_at`,
 		namespace, ulid.New(), string(run), string(t.Step), t.Attempt, shardIndex, shardOf, t.Requeue,
 		t.State.String(), nilIfEmpty(t.Runner), t.ExitCode, log,
 		nilIfZeroInt(t.LogLines), t.LogCut,
 		nilIfZero(t.DispatchedAt), nilIfZero(t.StartedAt), nilIfZero(t.FinishedAt),
-		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage).Scan(&held)
+		nilIfZero(t.Deadline), nilIfZero(t.PublishedAt), usage).Scan(&held, &finished)
 	if err != nil {
-		return false, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
+		return false, time.Time{}, fmt.Errorf("db: task %s could not be written: %w", t.ID, err)
 	}
-	return held != agk.TaskLost.String() || t.State == agk.TaskLost, nil
+	stopped := t.State == agk.TaskCancelled && t.StartedAt.IsZero() && t.ExitCode == nil
+	if held != agk.TaskLost.String() || t.State == agk.TaskLost || stopped {
+		return true, time.Time{}, nil
+	}
+	if finished == nil {
+		return false, time.Time{}, nil
+	}
+	return false, *finished, nil
 }
 
 // TaskRow is the identifier a task's own row is keyed by: the row of the latest dispatch of the
@@ -784,12 +830,12 @@ func (w *Wide) Lose(ctx context.Context, namespace string, key agk.TaskID, row, 
 		namespace, row, string(key), runner, at).Scan(&run)
 	switch {
 	case err == nil:
-		// And the run is left for the next sweep, as Lost leaves it, so that the loss is
-		// heard even where whoever wrote it goes no further.
+		// And the run is left for the next sweep, due at the moment of the loss as Lost
+		// leaves it, so that the loss is heard even where whoever wrote it goes no further.
 		if _, err := w.tx.Exec(ctx,
-			`update runs set wake_at = null
+			`update runs set wake_at = $3
 			 where namespace = $1 and id = $2 and state in ('queued', 'running', 'waiting')`,
-			namespace, run); err != nil {
+			namespace, run, at); err != nil {
 			return false, fmt.Errorf("db: the run of task %s could not be woken for its loss: %w", key, err)
 		}
 		return true, nil
@@ -1070,6 +1116,12 @@ func (w *Wide) Published(ctx context.Context, namespace string, keys []agk.TaskI
 // is four things: a run that has never been decided, a run whose clock has come round, a run
 // holding a task whose message never went, and a run somebody has asked to cancel, whose clock
 // says nothing about when that was.
+//
+// A run decided with nothing on the clock is none of them. It waits on tasks in flight, and
+// what it waits for sets its clock to the moment it arrived: a result, written with the
+// decision that records it, and a loss, whether the heartbeat declared it or a runner reported
+// it. Read as never decided, as it once was, such a run was decided again on every sweep, with
+// nothing new to decide.
 func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.RunID, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -1078,7 +1130,7 @@ func (w *Wide) Actionable(ctx context.Context, now time.Time, batch int) ([]agk.
 	rows, err := w.tx.Query(ctx, `
 		select id from runs
 		where state in ('queued', 'running', 'waiting')
-		  and (wake_at is null or wake_at <= $1
+		  and (seq = 0 or wake_at <= $1
 		       or cancel_requested_at is not null
 		       or exists (select 1 from tasks t
 		                  where t.namespace = runs.namespace and t.run_id = runs.id

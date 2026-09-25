@@ -334,8 +334,8 @@ func TestARunsEndingEndsItsTasksStillInFlightWhateverItsVerdict(t *testing.T) {
 // A task the controller stops as superseded or sibling_failed while its run goes on is written
 // cancelled by the decision that sends the stop. Where the sweep declared its dispatch lost after
 // that decision was read, the loss stands: the runner said nothing, which is what a loss is, so
-// the next pass hears it and the heartbeat's cancel never names it. A runner's own report of how
-// its stopped container exited is another matter: the dispatch was not lost after all.
+// the heartbeat's cancel never names it. A runner's own report of how its stopped container exited
+// is another matter: the dispatch was not lost after all.
 func TestAStopWrittenOverALossKeepsTheLoss(t *testing.T) {
 	invoice := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
 	stopped := 143
@@ -392,8 +392,12 @@ func TestAStopWrittenOverALossKeepsTheLoss(t *testing.T) {
 			if state != c.want.String() {
 				t.Errorf("a lost dispatch written cancelled, %s, reads %s, want %s", c.name, state, c.want)
 			}
-			if c.want == agk.TaskLost && wake != nil {
-				t.Errorf("the run waits until %s, and the loss the decision did not hear is for the next pass", wake)
+			// And the run keeps the clock the decision gave it. The evaluator ended the task
+			// as its stop went out and takes nothing from its loss, so a pass woken for it
+			// decides nothing, and each such pass once wrote the row again and woke the run
+			// again.
+			if wake == nil || !wake.Equal(now.Add(time.Hour)) {
+				t.Errorf("the run waits until %v, want the %s the decision set: a loss of a task already stopped is nothing for a pass to hear", wake, now.Add(time.Hour))
 			}
 		})
 	}
