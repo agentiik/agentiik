@@ -27,6 +27,11 @@ type Granted struct {
 	Task      agk.TaskID
 	Clear     string
 	ExpiresAt time.Time
+
+	// Rewrite are the digests of input envelopes whose objects a sweep had claimed when the
+	// grant counted its reference onto them. The reference is safe, and the bytes may be what
+	// the sweep is about to delete, so the caller writes them again.
+	Rewrite []string
 }
 
 // GrantScope is what one grant may be turned into, and the whole of it.
@@ -53,10 +58,18 @@ type GrantScope struct {
 }
 
 // GrantInput is one input port's envelope, named by digest.
+//
+// Size is what its object is counted at. The envelope a shard is handed is often one nothing else
+// names, a slice of a fan-out or a port fed by the step's own inputs, and it is kept so that the
+// task can be read back as it ran, "so an incident is reproducible without extra instrumentation".
+// An object nothing counts is one the collector never sees and the purge never lowers, so it would
+// outlive its run's retention; and one shared with another run's envelope would go with that
+// run's.
 type GrantInput struct {
 	Port   agk.Port `json:"port"`
 	Digest string   `json:"digest"`
 	Items  int      `json:"items"`
+	Size   int64    `json:"size,omitempty"`
 }
 
 // GrantSecret is one secret the step asked for, by name, and the path the value is written at.
@@ -147,6 +160,12 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 		return Granted{}, fmt.Errorf("db: the grant for %s would never expire, and a grant expires with its task", task)
 	}
 
+	for _, in := range scope.Inputs {
+		if !hexDigest.MatchString(in.Digest) || in.Size <= 0 {
+			return Granted{}, fmt.Errorf("db: the grant for %s names the input on %s as %q of %d bytes, and an envelope is named by sixty-four lowercase hexadecimal characters and counted at its size", task, in.Port, in.Digest, in.Size)
+		}
+	}
+
 	clear, hashed, err := token.New(token.Grant, id)
 	if err != nil {
 		return Granted{}, fmt.Errorf("db: %w", err)
@@ -157,7 +176,19 @@ func (w *Wide) IssueGrant(ctx context.Context, namespace string, task agk.TaskID
 		namespace, id, hashed, until, scope); err != nil {
 		return Granted{}, fmt.Errorf("db: the grant for %s could not be recorded: %w", task, err)
 	}
-	return Granted{Task: task, Clear: clear, ExpiresAt: until}, nil
+	// Counted once per grant, as PurgeEnvelopes lowers them once per grant, so that a task
+	// issued a grant again counts again and the two agree however many a row holds.
+	granted := Granted{Task: task, Clear: clear, ExpiresAt: until}
+	for _, in := range scope.Inputs {
+		again, _, err := raise(ctx, w.tx, namespace, "sha256:"+in.Digest, in.Size, envelopeMediaType)
+		if err != nil {
+			return Granted{}, err
+		}
+		if again {
+			granted.Rewrite = append(granted.Rewrite, in.Digest)
+		}
+	}
+	return granted, nil
 }
 
 // Redeem checks a grant, binds the task to the runner redeeming it, and answers what it is for.
@@ -314,4 +345,28 @@ func (w *Wide) mayTake(ctx context.Context, runner, namespace string) error {
 		return ErrRunnerNarrowed
 	}
 	return nil
+}
+
+// inputsOf reads the input envelopes every grant of a run's tasks counted, one entry for each, as
+// IssueGrant raised them.
+func (w *Wide) inputsOf(ctx context.Context, namespace string, run agk.RunID) ([]EnvelopeRef, error) {
+	rows, err := w.tx.Query(ctx, `
+		select t.step, i->>'port', i->>'digest'
+		from tasks t
+		join task_grants g on g.namespace = t.namespace and g.task_id = t.id,
+		lateral jsonb_array_elements(coalesce(g.scope->'inputs', '[]'::jsonb)) as i
+		where t.namespace = $1 and t.run_id = $2`, namespace, string(run))
+	if err != nil {
+		return nil, fmt.Errorf("db: the input envelopes of run %s could not be read: %w", run, err)
+	}
+	defer rows.Close()
+	var out []EnvelopeRef
+	for rows.Next() {
+		var e EnvelopeRef
+		if err := rows.Scan(&e.Step, &e.Port, &e.Digest); err != nil {
+			return nil, fmt.Errorf("db: the input envelopes of run %s could not be read: %w", run, err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

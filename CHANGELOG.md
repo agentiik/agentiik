@@ -97,6 +97,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 - `db.Wide.Actionable` reads a run as never decided by `seq = 0` rather than by a null `wake_at`. A loss, reported or written over by a decision, sets `wake_at` to its moment rather than null, and `db.Wide.Rewake` puts back a run's clock only over the row as `db.Evaluation.Version` read it.
 - The audit log, append-only and chained: migration `0030_audit_log.sql` numbers, dates and hashes each entry after the head of the chain under a row lock, so acts committing at once take turns and never fork it. The application may only insert and read; triggers refuse an update, a delete or a truncate to every role. `NS.Audit` and `Wide.Audit` append in the act's transaction, and `Wide.VerifyAuditLog` checks the chain against its head. `NS.RequestCancel` also answers whether the request was the first.
+- A grant counts each input envelope it names, at the size `db.GrantInput.Size` now carries, and the envelope purge lowers them with the run's, so a shard's slice is kept as long as its run and collected after. `Granted.Rewrite` names an input a sweep had claimed, which the controller writes again.
 
 ### Bus
 
