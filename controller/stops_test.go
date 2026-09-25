@@ -79,12 +79,23 @@ func rowOf(t *testing.T, super, row string) (state string, runner *string, code 
 	return state, runner, code
 }
 
+// logOf reads where one dispatch's log went, how many lines it had, whether it was cut and what
+// the attempt cost.
+func logOf(t *testing.T, super, row string) (uri *string, lines *int, cut bool, usage map[string]any) {
+	t.Helper()
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select log_uri, log_lines, log_truncated, usage from tasks where id = $1`, row).Scan(&uri, &lines, &cut, &usage); err != nil {
+		t.Fatal(err)
+	}
+	return uri, lines, cut, usage
+}
+
 // fail_fast stops the shard still running beside the one that failed, and its runner never hears
 // the stop. The shard ends cancelled in the pass that sends it, while the run goes on: its step is
 // judged at once rather than when the container reaches its deadline, the heartbeat names it
 // until the runner reports, its runner's progress does not move it back, and the code its
-// container exits with lands on the row when the report comes, and stays there through the
-// decisions that follow.
+// container exits with, its log and its usage land on the row when the report comes, and stay
+// there through the decisions that follow.
 func TestAShardFailFastStoppedIsRepeatedByTheHeartbeatWhileTheRunGoesOn(t *testing.T) {
 	core, q, pool, super := decidingOn(t, failingFastWorkflow)
 	joinedAsTheRunner(t, super)
@@ -156,9 +167,15 @@ func TestAShardFailFastStoppedIsRepeatedByTheHeartbeatWhileTheRunGoesOn(t *testi
 	}
 
 	at := core.now()
+	log, err := agk.NewLogURI(second.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	late := Answer{
 		Result: graph.Result{Task: second.Task.ID, State: agk.TaskCancelled, ExitCode: 143, StartedAt: at, FinishedAt: at},
 		Row:    second.Row, Runner: theRunner,
+		Log: log, LogLines: 42, LogCut: true,
+		Usage: map[string]any{"cpu_seconds": 1.5, "image_pull_ms": 7.0},
 	}
 	if err := core.Answer(t.Context(), late); err != nil {
 		t.Fatalf("the report of the stopped shard answered %s", err)
@@ -166,6 +183,17 @@ func TestAShardFailFastStoppedIsRepeatedByTheHeartbeatWhileTheRunGoesOn(t *testi
 	if state, _, code := rowOf(t, super, second.Row); state != "cancelled" || code == nil || *code != 143 {
 		t.Errorf("after its runner reported exit 143 the stopped shard reads %s, exit %v", state, code)
 	}
+	reported := func(when string) {
+		t.Helper()
+		uri, lines, cut, usage := logOf(t, super, second.Row)
+		if uri == nil || *uri != log.String() || lines == nil || *lines != 42 || !cut {
+			t.Errorf("%s the stopped shard's log reads %v, %v lines, cut %t", when, uri, lines, cut)
+		}
+		if usage["cpu_seconds"] != 1.5 || usage["image_pull_ms"] != 7.0 {
+			t.Errorf("%s the stopped shard's usage reads %v", when, usage)
+		}
+	}
+	reported("after its runner reported")
 	if got := cancelled(t, core, archive.Task.ID); len(got) != 0 {
 		t.Errorf("the heartbeat answers cancel %v to a runner that reported the stopped shard", got)
 	}
@@ -177,6 +205,7 @@ func TestAShardFailFastStoppedIsRepeatedByTheHeartbeatWhileTheRunGoesOn(t *testi
 	if state, _, code := rowOf(t, super, second.Row); state != "cancelled" || code == nil || *code != 143 {
 		t.Errorf("once the run ended the stopped shard reads %s, exit %v", state, code)
 	}
+	reported("once the run ended")
 }
 
 // A runner that finished the task before the stop reached it reports how it ended, and the task

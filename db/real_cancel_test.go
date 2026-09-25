@@ -284,7 +284,8 @@ func TestARunsEndingEndsItsTasksStillInFlightWhateverItsVerdict(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				stopped, err = w.StopCode(ctx, "finance", invoice, row, "runner-1", 143, now)
+				exited := 143
+				stopped, err = w.StopReport(ctx, "finance", invoice, row, "runner-1", Stopped{ExitCode: &exited, StartedAt: now})
 				return err
 			})
 			if !c.run.Terminal() {
@@ -395,5 +396,83 @@ func TestAStopWrittenOverALossKeepsTheLoss(t *testing.T) {
 				t.Errorf("the run waits until %s, and the loss the decision did not hear is for the next pass", wake)
 			}
 		})
+	}
+}
+
+// A stopped container's report lands once, from the runner the dispatch is bound to, and brings
+// its log and usage with it. A report with no exit code still brings them, since the controller
+// hears nothing else of a task that was over when it came, and leaves the code for one that has.
+func TestAStopReportLandsItsLogAndUsageOnceFromItsRunner(t *testing.T) {
+	invoice := agk.NewTaskID(theRun, "invoice", 1, agk.Shard{})
+	pool, super := created(t)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+		return ns.CreateRun(ctx, aRun())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	decidedAs(t, pool, agk.Running, now,
+		TaskRow{ID: invoice, Step: "invoice", Attempt: 1, State: agk.TaskCancelled, Runner: "runner-1", DispatchedAt: now, FinishedAt: now})
+	log, err := agk.NewLogURI(invoice)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report := func(runner string, r Stopped) bool {
+		t.Helper()
+		var took bool
+		if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+			row, err := w.TaskRow(ctx, "finance", invoice)
+			if err != nil {
+				return err
+			}
+			took, err = w.StopReport(ctx, "finance", invoice, row, runner, r)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return took
+	}
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	type reported struct {
+		code  *int
+		lines int
+		cut   bool
+		usage map[string]any
+	}
+	read := func() reported {
+		t.Helper()
+		var r reported
+		if err := conn.QueryRow(t.Context(),
+			`select exit_code, coalesce(log_lines, 0), log_truncated, usage from tasks where idempotency_key = $1`,
+			string(invoice)).Scan(&r.code, &r.lines, &r.cut, &r.usage); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+
+	if report("runner-2", Stopped{Usage: map[string]any{"cpu_seconds": 9.0}}) {
+		t.Error("a report from a runner the dispatch is not bound to landed")
+	}
+	if !report("runner-1", Stopped{Log: log, LogLines: 42, LogCut: true, Usage: map[string]any{"cpu_seconds": 1.5}}) {
+		t.Error("a report with no exit code found no row to land on")
+	}
+	if got := read(); got.code != nil || got.lines != 42 || !got.cut || got.usage["cpu_seconds"] != 1.5 {
+		t.Errorf("after a report with no code the stopped task reads exit %v, %d lines, cut %t, usage %v", got.code, got.lines, got.cut, got.usage)
+	}
+
+	exited, again := 143, 137
+	if !report("runner-1", Stopped{ExitCode: &exited, StartedAt: now, Usage: map[string]any{"cpu_seconds": 2.0}}) {
+		t.Error("the exit code found no row to land on")
+	}
+	if report("runner-1", Stopped{ExitCode: &again, StartedAt: now}) {
+		t.Error("a second exit code landed on a row that had one")
+	}
+	if got := read(); got.code == nil || *got.code != 143 || got.lines != 42 || !got.cut || got.usage["cpu_seconds"] != 1.5 {
+		t.Errorf("the stopped task reads exit %v, %d lines, cut %t, usage %v", got.code, got.lines, got.cut, got.usage)
 	}
 }
