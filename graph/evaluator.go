@@ -678,9 +678,9 @@ func (e *Evaluator) dispatch(plan *Plan, now time.Time) (bool, error) {
 }
 
 // stops names the tasks that a rule of the language calls off while the run goes on, in
-// flight or not handed out yet, ends each one it names, and says whether it ended any. There are two such rules here,
-// merge: first and fail_fast, and the run's own deadline and cancellation are answered before
-// any of this is reached.
+// flight or not handed out yet, ends each one it names, and says whether it ended any.
+// There are two such rules here, merge: first and fail_fast, and the run's own deadline and
+// cancellation are answered before any of this is reached.
 //
 // "The task ends: cancelled", says the table of stops, and it ends as the stop goes out
 // rather than when its driver reports. The step is judged then: fail_fast frees the runners

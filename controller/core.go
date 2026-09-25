@@ -341,9 +341,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			// slot of max_concurrent_tasks for good, and keep the stop out of the
 			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
 			// hears it again. A run that reached its deadline is the obvious case. One that
-			// succeeded or failed has ended every task in its document, a merge: first's
-			// included, and leaves one in flight only where the document was decided before
-			// the evaluator ended the shards a merge: first left behind, handed out or not.
+			// succeeded or failed has ended every task its document holds, since the
+			// evaluator ends a merge: first's as the barrier lifts, handed out or not, in
+			// whichever pass first reads the cancelled step; ending them here is kept so
+			// that no row of an ended run is left in flight whatever the document says.
 			var err error
 			held, err = w.EndTasks(ctx, e.Namespace, run, now)
 			return err
@@ -437,11 +438,11 @@ func keysOf(stops []graph.Stop) []agk.TaskID {
 // stopOf is the stop a run's ending sends to a runner still holding one of its tasks, as the
 // documentation's table of stops names it: deadline for a run past its root timeout, cancelled
 // for a run called off, and superseded for a run that succeeded or failed. Such a run has ended
-// every step, and the only one whose tasks can still be in flight is a step a merge: first
-// cancelled when its barrier lifted on another edge, which is what superseded says. The evaluator
-// ends every task of that step as the barrier lifts, handed out or not, so what is left is a task
-// of a document decided before it did, whose dispatch that document never saw recorded. It is
-// never sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
+// every step, and the only step that ends while tasks of it may still be in flight is one a
+// merge: first cancelled when its barrier lifted on another edge, which is what superseded says.
+// The evaluator ends every task of that step as the barrier lifts, handed out or not, so this is
+// for a row the document does not describe, kept so that one is stopped for the right reason. It
+// is never sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
 func stopOf(run agk.RunState) graph.StopReason {
 	switch run {
 	case agk.TimedOut:
