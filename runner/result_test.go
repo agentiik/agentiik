@@ -106,6 +106,15 @@ type carrying struct {
 
 func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carrying {
 	t.Helper()
+	policy := driver.DefaultPolicy()
+	policy.StopGrace = 200 * time.Millisecond
+	return carrierWith(t, run, policy)
+}
+
+// carrierWith is a carrier whose driver holds policy, with the floors a fake daemon and a laptop
+// cannot meet lifted.
+func carrierWith(t *testing.T, run func(dockertest.Container) (int, error), policy driver.Policy) *carrying {
+	t.Helper()
 	daemon, err := dockertest.NewDaemon(dockertest.With(dockertest.Options{
 		Run:    run,
 		Images: map[string]dockertest.Image{"ghcr.io/acme/agk-invoice@" + imageDigest: {Digest: imageDigest, Manifest: []byte(brickManifest)}},
@@ -114,11 +123,9 @@ func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carryin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { daemon.Close() })
-	policy := driver.DefaultPolicy()
 	policy.RequireUsernsRemap = driver.RemapLifted
 	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
 	policy.SecretsDir = ""
-	policy.StopGrace = 200 * time.Millisecond
 	root := t.TempDir()
 	endings := &Endings{}
 	d, err := driver.New(driver.Config{

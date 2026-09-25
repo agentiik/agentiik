@@ -50,8 +50,9 @@ type Agent struct {
 // that heartbeat is answered: a runner whose API refuses it is not one to count as started, and a
 // restart that waited on anything else first would leave what the earlier agent held unnamed for
 // longer than the three intervals that have it declared lost. Then it asks the API for its bus
-// credential, publishes the kept results, and takes work until it is stopped, heartbeating every
-// interval throughout, and returns once every task it holds has been answered or given up with it.
+// credential, listens for stops on it, publishes the kept results, and takes work until it is
+// stopped, heartbeating every interval throughout, and returns once every task it holds has been
+// answered or given up with it.
 //
 // Ready comes before the bus credential and not after it. The heartbeat is where the API says it
 // accepts this runner, and the credential is asked for with the same one; a bus not reachable yet is
@@ -108,7 +109,8 @@ func Serve(ctx context.Context, a Agent) error {
 		say(err.Error() + ": the keys an earlier agent held are not named, and the sweep declares lost those still bound to this runner")
 	}
 
-	loop, beat := a.parts(results, earlier, say)
+	loop, beat, stops := a.parts(results, earlier, say)
+	defer stops.Wait()
 	defer beat.Wait()
 	if err := beat.First(ctx); err != nil || ctx.Err() != nil {
 		return err
@@ -149,6 +151,18 @@ func Serve(ctx context.Context, a Agent) error {
 	defer b.Close()
 	later.attach(b)
 
+	// Stops are listened for before anything is taken, since a task taken first could be
+	// stopped in the moment before anybody was listening, and for as long as Serve runs rather
+	// than as long as its context, since the loop answers for what it holds after a stop and a
+	// container still running then is still one to stop. The subscription ends as the bus is
+	// closed. One refused ends the agent: a runner that cannot hear stops would run every stopped
+	// container to its deadline, and the heartbeat's cancel only catches what it misses.
+	hearing, endHearing := context.WithCancel(context.WithoutCancel(ctx))
+	defer endHearing()
+	if err := stops.Hear(hearing, b); err != nil {
+		return err
+	}
+
 	// A result an earlier agent kept is published before anything new is taken, and one the bus
 	// does not take now goes out with the loop's later flushes.
 	if err := results.Flush(ctx); err != nil && ctx.Err() == nil {
@@ -173,10 +187,12 @@ func Serve(ctx context.Context, a Agent) error {
 	return refused(ctx)
 }
 
-// parts are the agent's loop and heartbeat, bound to each other: the heartbeat names what the loop
-// holds and every result kept, and the loop takes nothing while the heartbeat's last answer orders
-// a drain. The loop's bus and progress are given once the bus is open.
-func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat) {
+// parts are the agent's loop, heartbeat and stops, bound to each other: the heartbeat names what the
+// loop holds and every result kept, the loop takes nothing while the heartbeat's last answer orders
+// a drain, and a key the heartbeat's answer cancels is stopped through the same Stops as one heard
+// on the bus, which stops what the loop and the earlier agent hold. The loop's bus and progress are
+// given once the bus is open.
+func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat, *Stops) {
 	loop := &Loop{
 		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
 		Redeemer: a.Client, Holder: a.Driver,
@@ -189,14 +205,25 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
 		Log:      say,
 	}
+	// A result kept is of a task that has ended, so there is nothing of it to stop.
+	stops := &Stops{
+		Stopper: a.Driver, Log: say,
+		Holding: func() []string {
+			held := loop.Held()
+			for _, key := range earlier {
+				held = append(held, string(key))
+			}
+			return held
+		},
+	}
 	beat := &Heartbeat{
 		Client: a.Client, Runner: a.Config.Runner, Concurrency: a.Config.Concurrency,
 		Holding: func() []string { return append(loop.Held(), results.Keys()...) },
 		Earlier: earlier, EarlierFor: a.earlierFor,
-		Stopper: a.Driver, Log: say, Every: a.every,
+		Stopper: stops, Log: say, Every: a.every,
 	}
 	loop.Draining = func() bool { return beat.Drain().Ordered }
-	return loop, beat
+	return loop, beat, stops
 }
 
 // refused is the heartbeat's refusal where that is what ended the agent, and nil where its own
