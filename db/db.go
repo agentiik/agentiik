@@ -159,6 +159,11 @@ const (
 	// the question.
 	RunListing Reason = "a listing of runs across the namespaces its caller can read"
 
+	// AuditLog is the audit log read across the installation, by the export and by a verification:
+	// "separate and append-only", one chain holding the acts of every namespace and of the
+	// installation itself, which no namespace's handle could read whole.
+	AuditLog Reason = "the audit log, one chain across the installation"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"
