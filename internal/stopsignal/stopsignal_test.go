@@ -37,8 +37,7 @@ func TestMain(m *testing.M) {
 }
 
 // A second signal sent the moment the stop is seen under way ends the process, however long the
-// reset takes after the first: a context done before it would have let the second be taken and
-// dropped.
+// reset takes after the first, which is issue 316: signal.NotifyContext had it taken and dropped.
 func TestASecondSignalSentOnceTheStopIsUnderWayEndsTheProcess(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
 		t.Run(sig.String(), func(t *testing.T) {

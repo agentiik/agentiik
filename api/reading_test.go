@@ -713,10 +713,12 @@ func TestWhatADispatchWasHandedIsReadAsItIs(t *testing.T) {
 		t.Errorf("dave, holding run:read and not run:read_data, was answered %d %s, and a run nobody started %s", refused.Code, refused.Body, absent.Body)
 	}
 	for path, want := range map[string]int{
-		base:                        http.StatusNotFound,
-		base + "?shard=1&attempt=3": http.StatusNotFound,
-		base + "?shard=0":           http.StatusBadRequest,
-		base + "?attempt=first":     http.StatusBadRequest,
+		base:                                 http.StatusNotFound,
+		base + "?shard=1&attempt=3":          http.StatusNotFound,
+		base + "?shard=0":                    http.StatusBadRequest,
+		base + "?attempt=first":              http.StatusBadRequest,
+		base + "?attempt=3000000000&shard=1": http.StatusBadRequest,
+		base + "?shard=99999999999":          http.StatusBadRequest,
 		"/api/v1/runs/" + run + "/steps/archive/inputs/invoices?shard=1": http.StatusNotFound,
 		"/api/v1/runs/" + run + "/steps/normalize/inputs/orders":         http.StatusNotFound,
 		"/api/v1/runs/" + run + "/steps/notify/inputs/orders":            http.StatusNotFound,

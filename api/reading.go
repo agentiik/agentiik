@@ -263,11 +263,13 @@ func dispatchQuery(r *http.Request) (attempt, shard int, err error) {
 		if written == "" {
 			continue
 		}
-		n, err := strconv.Atoi(written)
+		// Within what the columns hold, so that a number past them is the caller's mistake
+		// and not a query that could not be sent.
+		n, err := strconv.ParseInt(written, 10, 32)
 		if err != nil || n < 1 {
 			return 0, 0, fmt.Errorf("%s is %q, and it is a whole number from 1, as the run's tasks list it", c.name, written)
 		}
-		*c.into = n
+		*c.into = int(n)
 	}
 	return attempt, shard, nil
 }

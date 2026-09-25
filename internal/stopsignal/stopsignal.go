@@ -22,14 +22,15 @@ var Signals = []os.Signal{os.Interrupt, syscall.SIGTERM}
 // their default, which is the window a second signal can arrive in. A test widens it.
 var betweenFirstAndReset = func() {}
 
-// Context is done at the first of Signals, and not before the signals have gone back to their
-// default. A program that sees it done and is still stopping when a second signal arrives is
-// ended by it, whenever that signal comes: a context done first would have been seen by a program,
-// or a person watching it, with a second signal still taken and dropped.
+// Context is done at the first of Signals, and a second one ends the process whenever it comes.
+// signal.NotifyContext with a goroutine calling its stop once it was done lost that second signal
+// when it arrived between the two: the context was done, a program or a person watching it saw
+// the stop under way, and the signal was still taken, into a channel nobody read again.
 //
-// A second signal arriving before the reset is not lost either: it is raised again once the
-// default is back. stop gives the signals back to their default, releases the context, and
-// returns once the default is back.
+// So a second signal arriving before the reset is raised again once the default is back, which is
+// what keeps it. The context is also done only once the default is back, so that a program seeing
+// it done is past that window altogether. stop gives the signals back to their default, releases
+// the context, and returns once the default is back.
 func Context() (ctx context.Context, stop context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Room for both, so that a second signal arriving before the first is read is kept too
