@@ -1262,3 +1262,32 @@ func TestAContainerStoppedAtItsDeadlineTellsTheCodeItsStopLeft(t *testing.T) {
 		t.Errorf("the key is recorded %s exiting %v from %s, want timed_out exiting 143 with its span", e.State, e.ExitCode, e.StartedAt)
 	}
 }
+
+// Recorded answers as Hold would, and writes nothing down: nil for a key nobody holds, which
+// leaves the record empty, ErrTaskInFlight for one a delivery holds, and the ending for one
+// that has completed, so that a runner can answer a message from the record before it decides
+// whether to write its key down at all.
+func TestRecordedAnswersAsHoldWouldAndWritesNothing(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := newRunner(t, oneImage(ref, goodManifest), func(dockertest.Container) (int, error) { return 0, nil })
+	task := oneTask(ref)
+
+	if err := r.Recorded(task.ID); err != nil {
+		t.Fatalf("a key nobody holds answered %v", err)
+	}
+	if _, found, _ := r.keys.read(task.ID); found {
+		t.Fatal("asking the record about a key wrote the key down")
+	}
+	if err := r.Hold(task.ID); err != nil {
+		t.Fatalf("holding the key: %s", err)
+	}
+	if err := r.Recorded(task.ID); !errors.Is(err, ErrTaskInFlight) {
+		t.Errorf("a key a delivery holds answered %v", err)
+	}
+	if _, err := r.Run(t.Context(), task); err != nil {
+		t.Fatalf("running the key: %s", err)
+	}
+	if err := r.Recorded(task.ID); !errors.Is(err, ErrCompleted) {
+		t.Errorf("a key that has completed answered %v", err)
+	}
+}

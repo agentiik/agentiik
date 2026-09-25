@@ -12,9 +12,9 @@ import (
 	"github.com/agentiik/agentiik/runner"
 )
 
-// The exit codes of the process. A unit restarts the agent whatever it exits with, so these are
-// for whoever reads systemctl status and for a script around join, and each says something
-// different about what to do next.
+// The exit codes of the process. A unit restarts the agent whatever it exits with but
+// exitJoinAgain, so these are for whoever reads systemctl status and for a script around join,
+// and each says something different about what to do next.
 const (
 	// exitSucceeded: the verb did what it says, and serve was stopped by its service manager.
 	exitSucceeded = 0
@@ -24,6 +24,12 @@ const (
 	// exitUsage: the command line was wrong, which is the standard library flag package's
 	// own code.
 	exitUsage = 2
+	// exitJoinAgain: the API refused the runner's credential, revoked past its grace, rotated
+	// past or never issued, and nothing the agent can do changes that. The unit the page gives
+	// lists it in RestartPreventExitStatus=, so that Restart=always does not bring back every
+	// few seconds an agent whose one heartbeat is refused, which is a retry loop run by systemd
+	// instead.
+	exitJoinAgain = 3
 )
 
 // env is everything the verbs reach outside the process through.

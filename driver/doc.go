@@ -119,25 +119,28 @@
 // One task is one conversation with the daemon, and its order is chosen so that the races
 // cannot happen rather than so that they are caught. Negotiate the API version and check
 // the floors, once per daemon, and again after its event stream drops, which is what a
-// restart looks like. Refuse a key this host has already carried to an
-// ending, which the record under the work root answers. Adopt by label or create. Pull by
-// digest, reading every message of the progress stream, because the daemon reports a
-// failed pull as an error object inside a 200 that has already streamed half its layers.
-// Read /agk/brick.yaml out of the image and cache what brick.ParseManifest returns under
-// the image digest. Prepare the working directory and its mounts. Open the wait with
-// condition=next-exit before the container is started, which makes the exit-during-attach
-// race unrepresentable rather than rare. Attach, start, write the envelope on standard
-// input from its own goroutine and half-close, treating a broken pipe as ordinary because
-// a brick is entitled not to read standard input. Read the demultiplexed stream, keeping
-// standard output for the shorthand and passing standard error through the masker into
-// the log. Take the exit code from the wait that was already open. Take the log from the
-// daemon, which is why AutoRemove is false and why nothing is lost on a fast exit.
-// Collect, upload, spill, and write each port's envelope to the store. Write the ending
-// down under the work root, after the store has everything it names and before anything
-// is removed, so that no moment passes in which the work is done and the record does not
-// say so, and none in which the record names what the store does not hold. Then remove
-// the container, the network and the working directory, in a defer that runs on every
-// path.
+// restart looks like. Refuse an image not named by digest on a server, and a key this host
+// has already carried to an ending, which the record under the work root answers. Look for
+// a container to adopt by label. Pull by digest, reading every message of the progress
+// stream, because the daemon reports a failed pull as an error object inside a 200 that has
+// already streamed half its layers. Read /agk/brick.yaml out of the image and cache what
+// brick.ParseManifest returns under the image digest. Both are bounded by the task's
+// deadline where there is nothing to adopt: a deadline that passes during either ends the
+// task timed_out with no container, which is an ending and not an error, since nothing
+// failed, and a stop that landed during them ends it cancelled. Adopt, or create. Prepare
+// the working directory and its mounts. Open the wait with condition=next-exit before the
+// container is started, which makes the exit-during-attach race unrepresentable rather than
+// rare. Attach, start, write the envelope on standard input from its own goroutine and
+// half-close, treating a broken pipe as ordinary because a brick is entitled not to read
+// standard input. Read the demultiplexed stream, keeping standard output for the shorthand
+// and passing standard error through the masker into the log. Take the exit code from the
+// wait that was already open. Take the log from the daemon, which is why AutoRemove is
+// false and why nothing is lost on a fast exit. Collect, upload, spill, and write each
+// port's envelope to the store. Write the ending down under the work root, after the store
+// has everything it names and before anything is removed, so that no moment passes in which
+// the work is done and the record does not say so, and none in which the record names what
+// the store does not hold. Then remove the container, the network and the working
+// directory, in a defer that runs on every path.
 //
 // The record is what a container is not. Adoption finds a container that is still
 // there; the record answers for a key whose container was collected and removed, which
@@ -164,7 +167,8 @@
 // The daemon is not the only source of truth about a container. The wait is the fast
 // path, the event stream filtered to the dev.agentiik.task label catches an exit this
 // driver did not cause with an out-of-memory kill the case the documentation names, and
-// an inspect is the backstop consulted when a task has been silent past its deadline.
+// an inspect is the backstop consulted when a task has been silent past its deadline, and
+// sooner where its wait ended with nothing or an event about it was dropped.
 // That is deliberately the shape the controller already uses for NOTIFY and its sweep:
 // the stream is a latency optimisation and the inspect is the correctness guarantee, so a
 // dropped event stream makes a task slow and never wrong.
@@ -207,6 +211,14 @@
 // after the event stream drops, since a daemon can only change its configuration by
 // restarting and a restart drops the stream. A daemon that no longer meets a floor refuses
 // each task with the sentinel New would have answered, and nothing is created on it.
+//
+// A runner's images are held to one more, Policy.RequireDigest. A task whose image is not
+// name@sha256 is refused with ErrImageNotByDigest before anything is asked of the host,
+// and a step that is not a script step, whose image carries no /agk/brick.yaml, is refused
+// before its working directory, its network or its container exists, rather than run as
+// the account the image declares.
+// Only callers that are not runners set DigestLifted: agk run --local runs images built
+// on the machine, which have only a tag, and reads every brick's manifest before it runs.
 //
 // Network egress is refused for now. network: none takes the none network mode and
 // network: internal takes a per-task network with no outbound route and no address of the

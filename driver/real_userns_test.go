@@ -100,6 +100,10 @@ func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, str
 	policy := DefaultPolicy()
 	policy.SecretsDir = secrets
 	policy.StopGrace = 2 * time.Second
+	// Every floor of a runner's host but the digest: the nonroot image is built on this
+	// daemon after the restart and has only its tag, and what is held here is the range,
+	// not where an image came from.
+	policy.RequireDigest = DigestLifted
 	d, err := New(Config{
 		Socket:   socket,
 		Store:    func(string) (*artifact.Store, error) { return store, nil },

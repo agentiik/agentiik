@@ -25,6 +25,8 @@ import (
 //	the record holds the key's ending   Bus.Ended, with that ending, and nothing redeemed
 //	the record holds the key in flight  nothing, and the message comes round after AckWait
 //	the key could not be written down   AgainAfter, for another runner of the pool
+//	an image not named by digest        report that no container ran, then Refused, before
+//	                                    the key is written down or anything is redeemed
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
 //	200                                 Held, then assemble, run and report
 //	403                                 Release and AgainAfter, for another runner of the pool
@@ -45,6 +47,7 @@ type Queue interface {
 // Holder is the host's record of the keys it took, which is driver.Docker.
 type Holder interface {
 	Hold(id agk.TaskID) error
+	Recorded(id agk.TaskID) error
 	Release(id agk.TaskID)
 }
 
@@ -85,6 +88,12 @@ type Loop struct {
 
 	// Log is where the agent writes a line.
 	Log func(string)
+
+	// Draining answers whether the last heartbeat ordered this runner to drain, "take nothing
+	// new; finish what is held". Nil is never. While it answers true the loop takes nothing, and
+	// what it already holds runs on to its answer; a message a take in flight hands it meanwhile
+	// is refused at the redemption with 403 and put back, as the table says.
+	Draining func() bool
 
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
 	// an answer that may change, and how long a message put back is held back and the loop takes
@@ -220,6 +229,16 @@ func (l *Loop) Run(ctx context.Context) error {
 				break fill
 			}
 		}
+		// Once there is room and not before, since a host full when the order came waits
+		// here and would otherwise take the moment a slot freed. Asked again after the pause
+		// a put back is held for, since the next heartbeat may lift the order.
+		if l.Draining != nil && l.Draining() {
+			free(room)
+			if !sleep(ctx, l.retryFirst()) {
+				return nil
+			}
+			continue
+		}
 
 		taken, err := l.Queue.Take(ctx, l.Pool, room, wait)
 		if ctx.Err() != nil {
@@ -285,25 +304,29 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 
-	err := l.Holder.Hold(id)
-	var completed *driver.Completed
-	switch {
-	case errors.As(err, &completed):
-		l.answerFromRecord(ctx, t, completed.Ending)
+	// "Of the rest", which the record does not answer, "before anything is written down": "a
+	// message whose image is not name@sha256 is reported as no container ran, on the platform's
+	// account, then acknowledged, since no runner of any pool could ever run it." A key this host
+	// ended or has in flight is answered as the record says whatever its message names, so the
+	// record is read first, and nothing is written for a key this host will never run. Before
+	// any redemption too: redeeming would bind the task and read its secrets for a container that
+	// is never created, and put back, the message would go round the pool for ever. The driver
+	// refuses the same image under Policy.RequireDigest, where a message did not come from here.
+	if !agk.ImageByDigest(m.Image) {
+		if l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+			return
+		}
+		l.say(fmt.Sprintf("task %s (%s) is reported as having reached no container, since it names the image %q, and a runner runs only an image named by digest", m.TaskID, m.IdempotencyKey, m.Image))
+		l.reportThenRefuse(ctx, t, unreached(m, l.Runner))
 		return
-	case errors.Is(err, driver.ErrTaskInFlight):
-		// The requeue of a key this host is still running, or a second delivery of one
-		// it holds. Nothing is redeemed, so nothing is bound, and the message comes round
-		// once AckWait has passed, to whichever runner takes it then.
-		l.say(fmt.Sprintf("task %s (%s) is left on the queue, since this host has its key in flight: %s", m.TaskID, m.IdempotencyKey, err))
-		return
-	case err != nil:
-		l.putBack(t, fmt.Sprintf("task %s (%s) is put back, since its key could not be written down: %s", m.TaskID, m.IdempotencyKey, err))
+	}
+
+	if l.answeredFromRecord(ctx, t, l.Holder.Hold(id)) {
 		return
 	}
 	// After the record, which answers a key this host ended or still has in flight whatever it
-	// claims now, and before anything is redeemed. What Hold wrote down is let go of, and the
-	// record keeps the key only as taken, which refuses nothing when the message comes round.
+	// claims now, and before anything is redeemed. What Hold wrote down is let go of and
+	// forgotten, and nothing refuses the key when the message comes round.
 	if missing := uncovered(m.RunsOn, l.Labels); len(missing) > 0 {
 		l.Holder.Release(id)
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since it runs on %s and this runner does not claim it", m.TaskID, m.IdempotencyKey, strings.Join(missing, ", ")))
@@ -341,6 +364,28 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		l.reportThenRefuse(ctx, t, timedOut(m, l.Runner))
 		l.Holder.Release(id)
 	}
+}
+
+// answeredFromRecord answers a message the host's record refused, as Hold or Recorded refused
+// it, and says whether it did: a key this host ended with its ending, one it has in flight by
+// saying nothing, and one whose record could not be read or written by putting it back.
+func (l *Loop) answeredFromRecord(ctx context.Context, t bus.Taken, err error) bool {
+	m := t.Task
+	var completed *driver.Completed
+	switch {
+	case err == nil:
+		return false
+	case errors.As(err, &completed):
+		l.answerFromRecord(ctx, t, completed.Ending)
+	case errors.Is(err, driver.ErrTaskInFlight):
+		// The requeue of a key this host is still running, or a second delivery of one
+		// it holds. Nothing is redeemed, so nothing is bound, and the message comes round
+		// once AckWait has passed, to whichever runner takes it then.
+		l.say(fmt.Sprintf("task %s (%s) is left on the queue, since this host has its key in flight: %s", m.TaskID, m.IdempotencyKey, err))
+	default:
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back, since its key could not be read or written down: %s", m.TaskID, m.IdempotencyKey, err))
+	}
+	return true
 }
 
 // uncovered are the labels a task runs on that a runner does not claim.

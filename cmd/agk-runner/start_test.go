@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -42,11 +43,13 @@ func (o *output) String() string {
 }
 
 // host is one runner host as serve finds it: a joined runner.env, a runner.toml or none, a daemon,
-// a service manager listening, and an API that counts what reaches it.
+// a service manager listening, and an API that counts what reaches it. The API answers a heartbeat
+// with beat, 200 where it is zero, and nothing else it is asked.
 type host struct {
 	e        env
 	out, err *output
 	requests atomic.Int32
+	beat     atomic.Int32
 	notify   *net.UnixConn
 }
 
@@ -56,7 +59,16 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 	h := &host{out: &output{}, err: &output{}}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.requests.Add(1)
-		w.WriteHeader(http.StatusServiceUnavailable)
+		if r.URL.Path != "/api/v1/runners/heartbeat" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if status := int(h.beat.Load()); status != 0 {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"received_at":%q,"drain":false,"cancel":[]}`, time.Now().UTC().Format(time.RFC3339Nano))
 	}))
 	t.Cleanup(api.Close)
 
@@ -285,7 +297,29 @@ func TestADirectoryAsRunnerTomlRefusesTheStart(t *testing.T) {
 	h.refused(t)
 }
 
-func TestServeSaysReadyOnceTheFloorHoldsAndTheDaemonIsOpen(t *testing.T) {
+// "A 401 stops the agent": a credential the API refuses at the first heartbeat ends the start
+// before systemd is told anything, saying to join again, with the status the unit's
+// RestartPreventExitStatus= names, so that systemd does not start it again.
+func TestACredentialRefusedAtTheHeartbeatEndsTheStartSayingToJoinAgain(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.beat.Store(http.StatusUnauthorized)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if code := run(ctx, h.e, []string{"serve"}); code != exitJoinAgain {
+		t.Errorf("serve whose credential was refused exited %d, want %d:\n%s", code, exitJoinAgain, h.err)
+	}
+	if n := h.requests.Load(); n != 1 {
+		t.Errorf("%d requests reached the API, want the one heartbeat and nothing asked again", n)
+	}
+	if said := h.heard(50 * time.Millisecond); said != "" {
+		t.Errorf("systemd was told %q by a start whose credential was refused", said)
+	}
+	if !strings.Contains(h.err.String(), "this runner's credential was refused: join it again with agk-runner join --replace") {
+		t.Errorf("the refusal does not say to join again:\n%s", h.err)
+	}
+}
+
+func TestServeSaysReadyOnceItsFirstHeartbeatIsAnswered(t *testing.T) {
 	h := newHost(t, daemon(t, true), secretsTmpfs)
 	h.serving(t)
 	for _, want := range []string{"serving as runner-dmz-02 in pool dmz", "2 tasks at once", "the daemon speaking API"} {

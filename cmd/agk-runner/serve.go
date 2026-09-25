@@ -16,7 +16,8 @@ import (
 
 // serve is the agent. Everything it refuses, it refuses before any call to the API, in this order:
 // the account it runs as, its settings and the host's policy, then the daemon, whose floors the
-// driver reads when it is opened. Only a start that passes all of them says it is ready.
+// driver reads when it is opened. Only a start that passes all of them asks the API anything, and it
+// says it is ready once the API has answered its first heartbeat.
 func serve(ctx context.Context, e env, args []string) int {
 	log := logger(e.Err)
 	if len(args) > 0 {
@@ -102,7 +103,11 @@ func serve(ctx context.Context, e env, args []string) int {
 		Config: cfg, Driver: d, Client: client, Endings: endings, Log: log,
 		Ready: func() error { return runner.Notify(notify, runner.Ready) },
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, runner.ErrCredentialRefused):
+		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
+		return exitJoinAgain
+	case err != nil:
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitRefused
 	}
