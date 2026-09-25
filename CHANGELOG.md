@@ -56,6 +56,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A pass that changes nothing counts no decision and writes none, and a run decided with nothing on the clock is no longer swept: a result or a loss makes it due at once, and a pass that then finds nothing to decide puts its clock back. A loss of a task the evaluator already stopped wakes nothing. Such runs were decided and rewritten on every sweep.
 - A run on a server starts with the workflow's `vars`, as `agk run --local` does, and reads them off the version on every pass, so a number among them is an int each time rather than a double after the first. A step reading `${{ vars.<name> }}` could not be built there, and failed with 120.
 - The leading controller exports the audit log to the https sink `AGK_AUDIT_EXPORT_URL` names, as newline-delimited JSON, at least once, and nothing past a break. `agentiik-api audit-verify FILE` checks an export as its receiver wrote it.
+- `agentiik-controller` exports the metrics on `AGK_METRICS_LISTEN`, to a scrape bearing the token whose hash `AGK_METRICS_TOKEN_FILE` holds, in the Prometheus text format: dispatches and losses per pool, retries and task durations per brick and version, end-to-end latency per workflow, queue depth per pool with each pool's labels, and each runner's slots and tasks. Only the instance that leads reports a figure. `controller.Options.Observer` is told each dispatch, ending, retry, loss and run verdict once it is written. A family keeps at most 1,000 label sets and folds the rest into `_other`.
 
 ### State
 
@@ -97,6 +98,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An installation is created with the pool `default`, which carries no label, accepts every namespace and has no ceiling, for a step that names no label. One already created by hand is kept. Migration `0028_default_pool.sql`.
 - `db.Wide.Actionable` reads a run as never decided by `seq = 0` rather than by a null `wake_at`. A loss, reported or written over by a decision, sets `wake_at` to its moment rather than null, and `db.Wide.Rewake` puts back a run's clock only over the row as `db.Evaluation.Version` read it.
 - The audit log, append-only and chained: migration `0030_audit_log.sql` numbers, dates and hashes each entry after the head of the chain under a row lock, so acts committing at once take turns and never fork it. The application may only insert and read; triggers refuse an update, a delete or a truncate to every role. `NS.Audit` and `Wide.Audit` append in the act's transaction, and `Wide.VerifyAuditLog` checks the chain against its head. `NS.RequestCancel` also answers whether the request was the first.
+- `db.Wide.Occupancy` reads each runner heard from within three heartbeat intervals, its concurrency, whether it takes new work and the dispatches it holds. `db.Loss.Pool` names the pool of the runner that held a lost dispatch, and `db.Evaluation.CreatedAt` when the run was created.
 
 ### Bus
 
@@ -138,6 +140,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `bus.Route` chooses a task's pool from the pools it is given, and `bus.Publish` takes the pool rather than reading one off a `pool=` label, which `bus.PoolOf` did.
 - A task message leaves out a resource nothing decided, where it wrote `"cpu": ""`, `"memory": ""` and `"pids": 0`, which the wire refuses.
 - A bus address that is `nats://` or `ws://` to anything but a loopback address is refused before it is dialled, with `bus.ErrPlaintext`, and a connection in plaintext takes no server the bus gossips.
+- `Bus.Depths` reads how many messages each pool's queue holds that no runner has acknowledged, in one request.
 
 ### Driver
 
@@ -343,6 +346,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Every connection the programs open holds TLS 1.2 as its floor and speaks 1.3 where the other end does: PostgreSQL through `db.Open` and `db.Connect`, the bus, a runner's calls to the API and its objects, and `agk`. `internal/tlsfloor` writes the floor once.
 - A request from `agk` or a runner to `localhost` in any case, `0.0.0.0` or `::` goes through no `HTTP_PROXY`, as one to `127.0.0.1` already did, so nothing let through as crossing no network crosses it to a proxy.
 - `AGK_AUDIT_EXPORT_URL` and `AGK_AUDIT_EXPORT_TOKEN_FILE` name the audit log's sink and its bearer credential, for the controller alone. Without them the controller starts and warns that the log goes nowhere.
+- `AGK_METRICS_LISTEN` and `AGK_METRICS_TOKEN_FILE`, the controller's, are both set or neither; the file holds the SHA-256 of the token and never the token.
 
 ### Command line
 
