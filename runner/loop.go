@@ -95,6 +95,11 @@ type Loop struct {
 	// is refused at the redemption with 403 and put back, as the table says.
 	Draining func() bool
 
+	// LetGo is told each key the loop no longer holds, once its task is answered or given up,
+	// which is the agent's Stops forgetting a stop sent for it: the message may come round to
+	// this host again, and a stop for that holding is one to send. Nil tells nobody.
+	LetGo func(key string)
+
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
 	// an answer that may change, and how long a message put back is held back and the loop takes
 	// nothing more. Zero is takeWait and retryFirst.
@@ -152,9 +157,14 @@ func (l *Loop) holding(key string) {
 
 func (l *Loop) letGo(key string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	gone := false
 	if l.held[key]--; l.held[key] <= 0 {
 		delete(l.held, key)
+		gone = true
+	}
+	l.mu.Unlock()
+	if gone && l.LetGo != nil {
+		l.LetGo(key)
 	}
 }
 

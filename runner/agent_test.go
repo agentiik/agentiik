@@ -30,6 +30,7 @@ func agentOf(t *testing.T, readies *int, url, root string) Agent {
 		Socket:   daemon.Socket(),
 		WorkRoot: root,
 		Policy:   driver.Policy{SecretsDir: "/run/agentiik/secrets"},
+		Logs:     TaskLogs{},
 		Observer: endings,
 		Host:     installed{},
 	})

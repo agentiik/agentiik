@@ -1,0 +1,52 @@
+# The workflow the killed-runner test runs: three steps in a line, each the sleep brick, whose
+# image the test writes in place of the name sleep once it has pushed it. The middle step is
+# idempotent and names lost in retry.on, which is what a loss is requeued on, and it waits long
+# enough for the test to kill the runner holding it while its container runs.
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: killed
+  namespace: e2e
+
+inputs:
+  orders:
+    schema: { type: array }
+    required: true
+
+outputs:
+  done:
+    from: { step: after, port: ok }
+
+# The pool both runners join, which a step with no runs_on of its own would not reach.
+defaults:
+  runs_on: [zone=e2e]
+
+steps:
+
+  before:
+    image: sleep
+    inputs:
+      in: ${{ workflow.inputs.orders }}
+    params:
+      seconds: 1
+    outputs: [ok]
+
+  held:
+    image: sleep
+    needs:
+      - { step: before, port: ok, as: in }
+    params:
+      seconds: 30
+    idempotent: true
+    retry:
+      on: [lost]
+    outputs: [ok]
+
+  after:
+    image: sleep
+    needs:
+      - { step: held, port: ok, as: in }
+    params:
+      seconds: 1
+    outputs: [ok]

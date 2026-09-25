@@ -100,11 +100,18 @@ type carrying struct {
 	daemon  *dockertest.Daemon
 	carrier *Carrier
 	bus     *published
+	logs    *fakeLogs
 	root    string
 	store   *objectStore
 }
 
 func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carrying {
+	t.Helper()
+	return carrierWith(t, run, nil)
+}
+
+// carrierWith is carrier with a driver policy changed by with.
+func carrierWith(t *testing.T, run func(dockertest.Container) (int, error), with func(*driver.Policy)) *carrying {
 	t.Helper()
 	daemon, err := dockertest.NewDaemon(dockertest.With(dockertest.Options{
 		Run:    run,
@@ -119,13 +126,16 @@ func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carryin
 	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
 	policy.SecretsDir = ""
 	policy.StopGrace = 200 * time.Millisecond
+	if with != nil {
+		with(&policy)
+	}
 	root := t.TempDir()
 	endings := &Endings{}
 	d, err := driver.New(driver.Config{
 		Socket:   daemon.Socket(),
 		WorkRoot: root,
 		Policy:   policy,
-		Logs:     &taskLogs{},
+		Logs:     TaskLogs{},
 		Observer: endings,
 		Host:     installed{},
 	})
@@ -138,10 +148,12 @@ func carrier(t *testing.T, run func(dockertest.Container) (int, error)) *carryin
 	if err != nil {
 		t.Fatal(err)
 	}
+	logs := &fakeLogs{}
 	return &carrying{
 		daemon:  daemon,
-		carrier: &Carrier{Runner: "runner-dmz-02", Driver: d, Endings: endings, Results: results, Logs: true, Log: func(s string) { t.Log(s) }},
+		carrier: &Carrier{Runner: "runner-dmz-02", Driver: d, Endings: endings, Results: results, Logs: logs, Log: func(s string) { t.Log(s) }},
 		bus:     b,
+		logs:    logs,
 		root:    root,
 		store:   newObjectStore(t),
 	}
@@ -401,12 +413,12 @@ func TestAUsageNobodySampledCarriesThePullAlone(t *testing.T) {
 		ExitCode: &code, StartedAt: started, FinishedAt: started.Add(time.Second),
 		Usage: driver.Usage{ImagePullMS: 3184},
 	}
-	r := resultOf(m, "runner-dmz-02", ended, false)
+	r := resultOf(m, "runner-dmz-02", ended)
 	if r.Usage == nil || r.Usage.CPUSeconds != nil || r.Usage.MaxRSSBytes != nil || r.Usage.ImagePullMS != 3184 {
 		t.Errorf("an unsampled usage is reported as %+v", r.Usage)
 	}
 	ended.Usage.Sampled = true
-	r = resultOf(m, "runner-dmz-02", ended, false)
+	r = resultOf(m, "runner-dmz-02", ended)
 	if r.Usage == nil || r.Usage.CPUSeconds == nil || *r.Usage.CPUSeconds != 0 || r.Usage.MaxRSSBytes == nil {
 		t.Errorf("a sampled usage of zero is reported as %+v", r.Usage)
 	}
