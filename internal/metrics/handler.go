@@ -23,9 +23,9 @@ const Path = "/metrics"
 // so the file the program reads it from is worth nothing to somebody who reads it, and in constant
 // time besides.
 //
-// The answer is written whole before any of it is sent, so that a scrape cut short is a failed scrape
-// rather than half an answer the scraper would store. So the gauges are read under one deadline for
-// the whole scrape, inside the time the scraper waits, which Prometheus sends as
+// The answer is written whole before any of it is sent, so that a scrape cut short is a failed
+// scrape rather than half an answer the scraper would store. So the gauges are read under one
+// deadline for the whole scrape, inside the time the scraper waits, which Prometheus sends as
 // X-Prometheus-Scrape-Timeout-Seconds: a gauge still reading then is left out, and the counters are
 // answered on time without it.
 func Handler(r *Registry, hash [sha256.Size]byte) http.Handler {
