@@ -405,7 +405,7 @@ func TestServeCarriesTheCredentialItRenewedTo(t *testing.T) {
 func TestServeSaysReadyOnceItsFirstHeartbeatIsAnswered(t *testing.T) {
 	h := newHost(t, daemon(t, true), secretsTmpfs)
 	h.serving(t)
-	for _, want := range []string{"serving as runner-dmz-02 in pool dmz", "2 tasks at once", "the daemon speaking API"} {
+	for _, want := range []string{"serving as runner-dmz-02 in pool dmz", "2 tasks at once", "declaring memory 16318196Ki and cpu ", "the daemon speaking API"} {
 		if !strings.Contains(h.err.String(), want) {
 			t.Errorf("the agent's log does not say %q:\n%s", want, h.err)
 		}
@@ -558,6 +558,16 @@ func TestAWorkRootTheAgentCannotCreateRefusesTheStart(t *testing.T) {
 	h.set("AGK_RUNNER_WORKDIR", filepath.Join(blocked, "work"))
 	if said := h.refused(t); !strings.Contains(said, runner.WorkDir) {
 		t.Errorf("the refusal does not name %s:\n%s", runner.WorkDir, said)
+	}
+}
+
+// A runner that cannot say how much it has cannot put back what it has no room for, and join refuses
+// the same host for the same reason.
+func TestAHostWhoseMemoryCannotBeMeasuredRefusesTheStart(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.e.MemInfo = filepath.Join(t.TempDir(), "meminfo")
+	if said := h.refused(t); !strings.Contains(said, h.e.MemInfo) {
+		t.Errorf("the refusal does not name %s:\n%s", h.e.MemInfo, said)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strconv"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
@@ -78,7 +79,18 @@ func (l *Loop) unreserve(need Room) {
 	l.using.NanoCPUs -= need.NanoCPUs
 }
 
-// String writes an amount as a step writes its resources, memory in bytes and cpu in cores.
+// String writes an amount as a step writes its resources, memory with a binary suffix and cpu in
+// cores, and a part at zero as none.
 func (r Room) String() string {
-	return fmt.Sprintf("memory %d bytes and cpu %g", r.Memory, float64(r.NanoCPUs)/1e9)
+	memory, cpu := "none", "none"
+	if r.Memory > 0 {
+		memory = strconv.FormatInt(r.Memory, 10) + " bytes"
+		if s, err := sizeOf(r.Memory); err == nil {
+			memory = s
+		}
+	}
+	if r.NanoCPUs > 0 {
+		cpu = strconv.FormatFloat(float64(r.NanoCPUs)/1e9, 'f', -1, 64)
+	}
+	return "memory " + memory + " and cpu " + cpu
 }

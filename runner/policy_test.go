@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -233,5 +234,18 @@ func TestTheHostsRoomIsMeasuredAsJoinMeasuresIt(t *testing.T) {
 	}
 	if _, err := HostRoom(filepath.Join(t.TempDir(), "meminfo")); err == nil {
 		t.Error("a host whose memory cannot be read has a capacity")
+	}
+}
+
+// The agent's loop is narrowed to the namespaces AGK_RUNNER_NAMESPACES names and sized to what the
+// host declares.
+func TestTheAgentsLoopIsNarrowedAndSizedAsTheHost(t *testing.T) {
+	a := Agent{Config: Config{Concurrency: 2, Namespaces: []string{"finance"}}, Capacity: Room{Memory: 8 << 30, NanoCPUs: 4e9}}
+	loop, _, _ := a.parts(nil, nil, func(string) {})
+	if !slices.Equal(loop.Namespaces, []string{"finance"}) || loop.Capacity != a.Capacity {
+		t.Errorf("the loop takes namespaces %v and declares %s, want finance and %s", loop.Namespaces, loop.Capacity, a.Capacity)
+	}
+	if got := a.Capacity.String(); got != "memory 8Gi and cpu 4" {
+		t.Errorf("the capacity is written %q", got)
 	}
 }
