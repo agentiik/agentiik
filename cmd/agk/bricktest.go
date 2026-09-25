@@ -15,9 +15,9 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
-	"github.com/agentiik/agentiik/cmd/agk/internal/diff"
 	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/diff"
 )
 
 // agk brick test: "Runs the brick against a set of sample envelopes and compares against

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/dbtest/dbname"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -68,12 +69,9 @@ func blank(t *testing.T) (super string, role string) {
 	}
 	defer conn.Close(ctx)
 
-	// One database per test, so that two tests cannot see each other's rows and a
-	// failure leaves something a person can open afterwards.
-	name := "agk_" + strings.ToLower(strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
-	if len(name) > 60 {
-		name = name[:60]
-	}
+	// One database per test, so that two tests cannot see each other's rows, under a name
+	// no test of another package shares.
+	name := dbname.Of(t)
 	// A role left by a run that never tidied up goes too, once the database that granted it
 	// something has, so that the role a test starts from is one it created.
 	for _, stmt := range []string{

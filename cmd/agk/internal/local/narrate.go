@@ -1,6 +1,7 @@
 package local
 
 import (
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -124,6 +125,12 @@ func (n *narrator) narrate(state *graph.State, now time.Time) {
 // already: the driver's dispatched is the moment its container was created, this one is the
 // moment the work became somebody's, and a narration saying dispatched twice would be reporting
 // the difference between the two to a person who cannot act on it.
+//
+// And so is one about a task the evaluator stopped, as superseded or sibling_failed, and ended
+// as the stop went out: its container may still say it is running or publishing before the stop
+// reaches it, and narrated, a task already said cancelled would read as running again. Only that
+// one: the observations of a task that ended on its own arrive by another route than its Result
+// and may come after it, and they are narrated in the order they arrived.
 func (n *narrator) observed(state *graph.State, e driver.Event, now time.Time) {
 	if n == nil || n.emit == nil || e.State.Terminal() || e.State == agk.TaskDispatched {
 		return
@@ -133,6 +140,11 @@ func (n *narrator) observed(state *graph.State, e driver.Event, now time.Time) {
 		return
 	}
 	ss := state.Steps[step]
+	if at := slices.IndexFunc(ss.Shards, func(sh graph.ShardState) bool { return sh.Shard == shard }); at >= 0 {
+		if sh := ss.Shards[at]; sh.Attempt == attempt && sh.Stopped {
+			return
+		}
+	}
 	n.emit(Event{
 		At:      n.since(now),
 		Step:    step,

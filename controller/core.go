@@ -278,20 +278,15 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
-	// A stop a rule of the language calls for while the run goes on ends its task here, before
-	// the decision is written, so that the row reads cancelled from the moment the stop goes
-	// out and the heartbeat repeats it to a runner that missed it on agentiik.stops.
-	plan, stopped, err := endStopped(ev, e.Namespace, pools, plan, now)
-	if err != nil {
-		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
-	}
-
 	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
 	// decision is written rather than after, so that the row says what was handed out. A task
 	// held back is not refused: it stays pending in the evaluator's state, which is what
-	// makes the next pass hand it out again. A task this pass stopped holds no slot, though its
-	// row reads in flight until the decision is written.
-	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start, stopped)
+	// makes the next pass hand it out again. A task this pass stops holds no slot, though its
+	// row reads in flight until the decision is written: the evaluator ended one stopped as
+	// superseded or sibling_failed as it named the stop, so the decision writes its row
+	// cancelled and the heartbeat repeats the stop to a runner that missed it on
+	// agentiik.stops, and a run whose ending stops the rest starts nothing.
+	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start, keysOf(plan.Stop))
 	if err != nil {
 		return err
 	}
@@ -326,10 +321,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			decision.Outputs = digestsOf(outputs)
 		}
 	}
-	// A pass that decided nothing writes nothing. The evaluator counts decisions, so a
+	// A pass that decided nothing writes no decision. The evaluator counts decisions, so a
 	// sequence that has not moved is the honest statement that this pass was a no-op:
 	// asking again at the same instant is idempotent by design, and the commonest case is
-	// a sweep reaching a run that is simply waiting.
+	// a sweep reaching a run that is simply waiting. The most such a pass writes is the
+	// clock, where the one it read is spent, which rewake below is for.
 	saved := e.Seq
 	var held []agk.TaskID
 	if state.Seq != saved {
@@ -345,9 +341,11 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			// leaves its tasks as they were, and a row left in flight would redeem, hold a
 			// slot of max_concurrent_tasks for good, and keep the stop out of the
 			// heartbeat's cancel, the one place a runner that missed it on agentiik.stops
-			// hears it again. A run that reached its deadline is the obvious case, and one
-			// that succeeded or failed with a task a merge: first superseded still in flight,
-			// whose dispatch the document never saw recorded, is the other.
+			// hears it again. A run that reached its deadline is the obvious case. One that
+			// succeeded or failed has ended every task its document holds, since the
+			// evaluator ends a merge: first's as the barrier lifts, handed out or not, in
+			// whichever pass first reads the cancelled step; ending them here is kept so
+			// that no row of an ended run is left in flight whatever the document says.
 			var err error
 			held, err = w.EndTasks(ctx, e.Namespace, run, now)
 			return err
@@ -369,7 +367,12 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// message that arrives twice carries a key a runner has already seen.
 	sent := co.hand(ctx, e.Namespace, run, plan)
 	if len(sent) == 0 {
-		return nil
+		if saved != e.Seq {
+			return nil
+		}
+		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
+			return rewake(ctx, w, e, plan.Wake)
+		})
 	}
 
 	// And the dispatch is recorded once the message has gone, not when the task was
@@ -395,8 +398,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// The messages went and the evaluator learned nothing from it, which happens
 		// only when every one of them was a task it had already seen dispatched.
 		return co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
-			_, err := w.Published(ctx, e.Namespace, sent, co.now().UTC())
-			return err
+			if _, err := w.Published(ctx, e.Namespace, sent, co.now().UTC()); err != nil || saved != e.Seq {
+				return err
+			}
+			return rewake(ctx, w, e, plan.Wake)
 		})
 	}
 	dispatched, err := Elide(ctx, state, e.Namespace, co.objects)
@@ -429,76 +434,40 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	})
 }
 
-// endStopped ends as cancelled every task in flight that the plan stops as superseded or
-// sibling_failed, asks the evaluator again, and answers the plan with every stop it named on the
-// way, until a round ends nothing more, and the keys it ended.
+// rewake puts on a run the clock a pass that decided nothing found, where it is not the one the
+// run holds.
 //
-// "The task ends: cancelled", says the table of stops, and it ends when the stop goes out rather
-// than when its runner reports. The heartbeat's cancel is read off the row, "each key the request
-// named whose dispatch, bound to this runner, the controller has ended as cancelled or timed_out",
-// and it is the backstop for agentiik.stops, which keeps nothing: a row left in flight until the
-// report would keep the stop out of it, and a runner that missed the stop would run the container
-// to its deadline, a fail_fast step waiting on it all that time. So the ending is recorded here, as
-// a run's own ending records its tasks' in the pass that ends it, and the report that follows adds
-// the exit code, the log and the usage, and nothing else. The evaluator keeps a stopped task in flight until a driver
-// reports the stop, which is right for a local run, whose driver stops the container itself and
-// always reports; a server's stop crosses a bus that may lose it.
-//
-// Ending a task may end its step, and what follows the step may then start or be stopped in turn,
-// so the evaluator is asked again, and its plan is held to the pools as the first one was. Each
-// round ends at least one task for good, so there are at most as many rounds as tasks in flight.
-func endStopped(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, []agk.TaskID, error) {
-	var stops []graph.Stop
-	var ended []agk.TaskID
-	for {
-		var ending []graph.Result
-		for _, s := range plan.Stop {
-			if !slices.Contains(stops, s) {
-				stops = append(stops, s)
-			}
-			if s.Reason != graph.StopSuperseded && s.Reason != graph.StopSiblingFailed {
-				continue
-			}
-			_, step, attempt, shard, err := agk.ParseTaskID(string(s.Task))
-			if err != nil {
-				return graph.Plan{}, nil, fmt.Errorf("the stop of %s names no task: %w", s.Task, err)
-			}
-			sh, ok := shardOf(ev.State(), step, shard)
-			if !ok || sh.Attempt != attempt || sh.Task == agk.TaskPending || sh.Task.Terminal() {
-				continue
-			}
-			ending = append(ending, graph.Result{
-				Task: s.Task, State: agk.TaskCancelled, Requeue: sh.Requeue, NoExitCode: true, FinishedAt: now,
-			})
-		}
-		if len(ending) == 0 {
-			plan.Stop = stops
-			return plan, ended, nil
-		}
-		for _, r := range ending {
-			if err := ev.Record(r, now); err != nil {
-				return graph.Plan{}, nil, fmt.Errorf("the stop of %s could not be recorded: %w", r.Task, err)
-			}
-			ended = append(ended, r.Task)
-		}
-		next, err := ev.Next(now)
-		if err != nil {
-			return graph.Plan{}, nil, err
-		}
-		if plan, err = refuseUnpooled(ev, namespace, pools, next, now); err != nil {
-			return graph.Plan{}, nil, err
-		}
+// Such a pass writes no decision, but the clock it read may be spent: a loss or a result sets
+// the run due at the moment it arrived, so that the next sweep comes for it, and a pass that
+// then finds nothing to decide, a loss of a task already over or a result that makes nothing
+// runnable, would otherwise leave it due, and every later sweep would decide it again. The clock
+// is written only where it differs, and only over the row as the pass read it, so that a decision
+// written since keeps its clock, and so does a loss declared since. PostgreSQL keeps a moment to
+// the microsecond, which is what the two are compared at.
+func rewake(ctx context.Context, w *db.Wide, e db.Evaluation, wake time.Time) error {
+	if e.WakeAt.Equal(wake.Truncate(time.Microsecond)) {
+		return nil
 	}
+	return w.Rewake(ctx, e.Namespace, e.Run, e.Version, wake)
+}
+
+// keysOf is the key of each task a plan stops.
+func keysOf(stops []graph.Stop) []agk.TaskID {
+	out := make([]agk.TaskID, 0, len(stops))
+	for _, s := range stops {
+		out = append(out, s.Task)
+	}
+	return out
 }
 
 // stopOf is the stop a run's ending sends to a runner still holding one of its tasks, as the
 // documentation's table of stops names it: deadline for a run past its root timeout, cancelled
 // for a run called off, and superseded for a run that succeeded or failed. Such a run has ended
-// every step, and the only one whose tasks can still be in flight is a step a merge: first
-// cancelled when its barrier lifted on another edge, which is what superseded says: a task whose
-// dispatch the document never saw recorded, since endStopped ends every one it did see when its
-// stop goes out. It is never sibling_failed, since a fail_fast step keeps running until every
-// shard of it has ended.
+// every step, and the only step that ends while tasks of it may still be in flight is one a
+// merge: first cancelled when its barrier lifted on another edge, which is what superseded says.
+// The evaluator ends every task of that step as the barrier lifts, handed out or not, so this is
+// for a row the document does not describe, kept so that one is stopped for the right reason. It
+// is never sibling_failed, since a fail_fast step keeps running until every shard of it has ended.
 func stopOf(run agk.RunState) graph.StopReason {
 	switch run {
 	case agk.TimedOut:

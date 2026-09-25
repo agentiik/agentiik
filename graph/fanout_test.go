@@ -208,22 +208,24 @@ func TestMaxParallelCountsEveryShardInFlight(t *testing.T) {
 	}
 }
 
-// fail_fast stops the shards still running when one has failed for good. The shard that
-// failed has already ended, and a shard nobody has handed out holds nothing.
-func TestFailFastStopsTheShardsStillRunning(t *testing.T) {
-	failed := agk.Shard{Index: 2, Of: 4}
+// fail_fast stops the shards still running when one has failed for good, and the ones
+// nobody has handed out yet. The shard that failed has already ended, and so has one that
+// finished before it.
+func TestFailFastStopsTheShardsNotOver(t *testing.T) {
+	failed := agk.Shard{Index: 2, Of: 5}
 	ss := StepState{Shards: []ShardState{
-		{Shard: agk.Shard{Index: 1, Of: 4}, Task: agk.TaskRunning},
+		{Shard: agk.Shard{Index: 1, Of: 5}, Task: agk.TaskRunning},
 		{Shard: failed, Task: agk.TaskFailed},
-		{Shard: agk.Shard{Index: 3, Of: 4}, Task: agk.TaskPublishing},
-		{Shard: agk.Shard{Index: 4, Of: 4}, Task: agk.TaskPending},
+		{Shard: agk.Shard{Index: 3, Of: 5}, Task: agk.TaskPublishing},
+		{Shard: agk.Shard{Index: 4, Of: 5}, Task: agk.TaskPending},
+		{Shard: agk.Shard{Index: 5, Of: 5}, Task: agk.TaskSucceeded},
 	}}
 	var stopped []int
-	for _, s := range siblingsInFlight(ss, failed) {
-		stopped = append(stopped, s.Shard.Index)
+	for _, i := range siblingsLeft(ss, failed) {
+		stopped = append(stopped, ss.Shards[i].Shard.Index)
 	}
-	if !reflect.DeepEqual(stopped, []int{1, 3}) {
-		t.Errorf("stopped %v, want the shards still in flight", stopped)
+	if !reflect.DeepEqual(stopped, []int{1, 3, 4}) {
+		t.Errorf("stopped %v, want the shards not over", stopped)
 	}
 	if !failFast(&Step{Strategy: Strategy{FailFast: true}}) || failFast(&Step{}) {
 		t.Error("fail_fast is read off the strategy and defaults to letting every shard finish")

@@ -136,10 +136,11 @@
 // here, and the two facts the command line needs off a daemon before there is a driver,
 // the platform a container runs natively and whether user namespaces are remapped, are
 // asked of driver.Probe so that driver stays the only package in this module that dials
-// one. Four packages sit under cmd/agk/internal because a laptop's facts are not the
-// command line's: local for one local run, draw for the DOT and the Mermaid, diff for what
-// "the same envelopes" means, and helper for where the static helper is carried and laid
-// down.
+// one. Three packages sit under cmd/agk/internal because a laptop's facts are not the
+// command line's: local for one local run, draw for the DOT and the Mermaid, and helper for
+// where the static helper is carried and laid down. What "the same envelopes" means is
+// internal/diff, at the module's top level, since the end-to-end tests under e2e compare a
+// server run's envelopes by the same rule.
 //
 // # The proof of v0.1.0
 //

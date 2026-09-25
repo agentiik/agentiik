@@ -129,15 +129,18 @@ type Ports map[agk.Port]Envelope
 
 // Envelope is one published envelope: what the database keeps of it, which is its digest,
 // its size and how many items it carried.
+//
+// It is what GET /api/v1/runs/{id} answers for each port of a step, so it is spelled as every
+// other field of that answer is, and says nothing of a purge that has not happened.
 type Envelope struct {
-	Digest string
-	Size   int64
-	Items  int
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
+	Items  int    `json:"items"`
 
 	// PurgedAt is when the bytes behind the digest were purged, and the zero time while
 	// they are still there. The digest outlives them: it is the record of what was
 	// published.
-	PurgedAt time.Time
+	PurgedAt time.Time `json:"purged_at,omitzero"`
 }
 
 // PublishedPorts reads back what a step published.
