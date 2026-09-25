@@ -26,6 +26,7 @@ import (
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/stopsignal"
 	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
@@ -63,7 +64,7 @@ func TestMain(m *testing.M) {
 		os.Exit(instance(raw))
 	}
 	if os.Getenv(slowStopVariable) != "" {
-		ctx, _ := signalled()
+		ctx, _ := stopsignal.Context()
 		fmt.Println("waiting")
 		<-ctx.Done()
 		fmt.Println("stopping")

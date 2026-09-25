@@ -78,6 +78,10 @@ type InputRef struct {
 	// written everywhere else.
 	Digest string
 	Items  int
+
+	// Size is what the grant counts the object at, so that the envelope is kept for as long
+	// as its run is and no longer. The message does not carry it.
+	Size int64
 }
 
 // Versions hands out the resolved graph of one workflow version.
