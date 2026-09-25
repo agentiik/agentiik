@@ -103,7 +103,11 @@ func serve(ctx context.Context, e env, args []string) int {
 		Config: cfg, Driver: d, Client: client, Endings: endings, Log: log,
 		Ready: func() error { return runner.Notify(notify, runner.Ready) },
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, runner.ErrCredentialRefused):
+		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
+		return exitJoinAgain
+	case err != nil:
 		fmt.Fprintln(e.Err, "agk-runner serve: "+err.Error())
 		return exitRefused
 	}

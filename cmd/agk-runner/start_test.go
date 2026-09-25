@@ -298,14 +298,15 @@ func TestADirectoryAsRunnerTomlRefusesTheStart(t *testing.T) {
 }
 
 // "A 401 stops the agent": a credential the API refuses at the first heartbeat ends the start
-// before systemd is told anything, saying to join again, and exits as a refused start does.
+// before systemd is told anything, saying to join again, with the status the unit's
+// RestartPreventExitStatus= names, so that systemd does not start it again.
 func TestACredentialRefusedAtTheHeartbeatEndsTheStartSayingToJoinAgain(t *testing.T) {
 	h := newHost(t, daemon(t, true), secretsTmpfs)
 	h.beat.Store(http.StatusUnauthorized)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if code := run(ctx, h.e, []string{"serve"}); code != exitRefused {
-		t.Errorf("serve whose credential was refused exited %d:\n%s", code, h.err)
+	if code := run(ctx, h.e, []string{"serve"}); code != exitJoinAgain {
+		t.Errorf("serve whose credential was refused exited %d, want %d:\n%s", code, exitJoinAgain, h.err)
 	}
 	if n := h.requests.Load(); n != 1 {
 		t.Errorf("%d requests reached the API, want the one heartbeat and nothing asked again", n)
