@@ -10,7 +10,9 @@ import (
 	"testing"
 )
 
-// A server that speaks nothing newer than TLS 1.1 is refused, before a request reaches it.
+// A server that speaks nothing newer than TLS 1.1 is refused, before a request reaches it. Go's
+// default refuses one too, so this holds the behaviour rather than proving the floor, which
+// TestEveryConfigurationHoldsTheFloor does.
 func TestAServerOfTLS11IsRefused(t *testing.T) {
 	reached := false
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
@@ -110,10 +112,16 @@ func TestARequestToThisMachineGoesThroughNoProxy(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		close(proxied)
+		elsewhere := false
 		for u := range proxied {
-			if !strings.Contains(u, "agentiik.example") {
+			if strings.Contains(u, "agentiik.example") {
+				elsewhere = true
+			} else {
 				t.Errorf("a request to this machine went through the proxy: %s", u)
 			}
+		}
+		if !elsewhere {
+			t.Error("a request to another machine did not go through the proxy")
 		}
 		return
 	}
