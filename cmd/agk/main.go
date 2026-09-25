@@ -60,11 +60,11 @@ type command struct {
 // commands is the table of #command-line, in the order the documentation writes it, with
 // each effect in the documentation's own words.
 //
-// Seven of these reach an installation that does not exist at v0.1.0 and each refuses naming
-// what is missing, because a verb the documentation lists and the binary does not know is a
-// binary that looks broken.
+// Four of these reach an installation for principals it does not hold until v0.3.0, and brick
+// init for templates released elsewhere, and each refuses naming what is missing, because a verb
+// the documentation lists and the binary does not know is a binary that looks broken.
 //
-// The row for agk run --local is added by run.go, the file that implements it beside
+// The row for agk run is added by run.go, the file that implements it beside
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
@@ -75,7 +75,8 @@ var commands = []command{
 	{"push", "Registers the workflow in a namespace on a server.", push},
 	{"share", "Grants or revokes access.", absent("share", "there is no server holding the grants", withTheAPI)},
 	{"grants", "Shows who can do what on a workflow, and which scope each permission comes from.", absent("grants", "there is no server holding the grants", withTheAPI)},
-	{"logs", "Follows the logs of a run.", absent("logs", "there is no server holding the run", withTheAPI)},
+	{"logs", "Follows the logs of a run.", logs},
+	{"status", "Shows how a run on an installation stands: its state, each step's, the envelope digests and what failed.", status},
 	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", absent("brick init", "there are no brick templates here", "They are released from agentiik/bricks")},
 	{"brick test", "Runs the brick against a set of sample envelopes and compares against expected outputs.", brickTest},
 }
