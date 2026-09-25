@@ -215,3 +215,19 @@ func TestAScrapeAnswersWithinTheTimeItsScraperWaits(t *testing.T) {
 		t.Errorf("a gauge that hung was answered:\n%s", rec.Body)
 	}
 }
+
+// The gauges are given a second less than the scraper waits, and never more than DefaultReadBound,
+// whatever it says it waits: the server writes within its own timeout.
+func TestTheGaugesAreReadWithinTheScrapersTimeAndTheBound(t *testing.T) {
+	for header, want := range map[string]time.Duration{
+		"":     DefaultReadBound,
+		"none": DefaultReadBound,
+		"2":    time.Second,
+		"0.5":  100 * time.Millisecond,
+		"60":   DefaultReadBound,
+	} {
+		if got := readBound(header); got != want {
+			t.Errorf("a scraper waiting %q gives the gauges %s, want %s", header, got, want)
+		}
+	}
+}

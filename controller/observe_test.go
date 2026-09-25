@@ -205,20 +205,49 @@ func TestACancelledRunIsToldAsItsVerdict(t *testing.T) {
 	}
 }
 
-// A pass the fence refuses has written nothing, and tells nothing.
+// usurped stands for another controller taking the term while this one decides: the pass has read
+// the run under its own term, and its write is the one the fence refuses.
+type usurped struct {
+	Versions
+	pool  *db.Pool
+	armed bool
+}
+
+func (u *usurped) Graph(ctx context.Context, namespace, workflow, commit string) (*graph.Graph, error) {
+	if u.armed {
+		u.armed = false
+		if _, err := u.pool.BeginTerm(ctx, "usurper"); err != nil {
+			return nil, err
+		}
+	}
+	return u.Versions.Graph(ctx, namespace, workflow, commit)
+}
+
+// A pass the fence refuses has written nothing, and tells nothing, though it holds news: a failure
+// that ran for 30 seconds and the retry it was granted, taken from a result read under a term that
+// passed before the decision could be written.
 func TestAPassTheFenceRefusesTellsNothing(t *testing.T) {
 	core, q, h := counting(t)
-	if _, err := core.controller.pool.BeginTerm(t.Context(), "usurper"); err != nil {
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.Decide(t.Context(), decidedRun); !errors.Is(err, db.ErrFenced) {
-		t.Fatalf("a pass after the term had passed answered %v", err)
+	first := q.dispatched()
+	if len(first) != 1 {
+		t.Fatalf("the first pass dispatched %d tasks", len(first))
+	}
+	h.since()
+
+	failure := core.answerOf(t, ran(first[0].Task, agk.TaskFailed, 1, 30*time.Second, core.now()))
+	u := &usurped{Versions: core.versions, pool: core.controller.pool, armed: true}
+	core.versions = u
+	if err := core.Answer(t.Context(), failure); !errors.Is(err, db.ErrFenced) {
+		t.Fatalf("an answer whose term passed while it decided answered %v", err)
+	}
+	if u.armed {
+		t.Fatal("the answer never resolved the graph, so the term never passed under it")
 	}
 	if got := h.since(); len(got) != 0 {
 		t.Errorf("a pass the fence refused told %q", got)
-	}
-	if got := q.dispatched(); len(got) != 0 {
-		t.Errorf("a pass the fence refused dispatched %d tasks", len(got))
 	}
 }
 

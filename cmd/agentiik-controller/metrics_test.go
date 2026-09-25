@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest"
 )
 
@@ -203,5 +204,24 @@ func TestWhatTheCoreTellsIsCountedUnderItsLabels(t *testing.T) {
 		if !has(body, line) {
 			t.Errorf("no line %s in\n%s", line, body)
 		}
+	}
+}
+
+// An address the metrics cannot be answered on refuses the start, naming the variable, rather than
+// leaving the monitoring to find out that nothing answers.
+func TestAMetricsAddressTakenRefusesTheStart(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	c := newCounted(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop, err := c.serveMetrics(t.Context(), config.Metrics{Listen: taken.Addr().String(), TokenHash: scrapeHash}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil {
+		stop()
+		t.Fatal("the metrics were answered on an address something else listens on")
+	}
+	if !strings.Contains(err.Error(), config.MetricsListen) {
+		t.Errorf("the refusal does not name %s: %s", config.MetricsListen, err)
 	}
 }

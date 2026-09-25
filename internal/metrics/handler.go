@@ -67,12 +67,13 @@ func Handler(r *Registry, hash [sha256.Size]byte) http.Handler {
 const DefaultReadBound = 4 * time.Second
 
 // readBound is how long the gauges of a scrape may take: a second less than the scraper says it
-// waits, left for writing the answer and carrying it back, and never more than DefaultReadBound
-// allows a scraper that says nothing.
+// waits, left for writing the answer and carrying it back, and never more than DefaultReadBound,
+// whatever the scraper says: a server answers within its own write timeout, and a gauge that has
+// not been read in four seconds is not going to be.
 func readBound(header string) time.Duration {
 	seconds, err := strconv.ParseFloat(header, 64)
 	if err != nil || seconds <= 0 {
 		return DefaultReadBound
 	}
-	return max(time.Duration(seconds*float64(time.Second))-time.Second, 100*time.Millisecond)
+	return min(max(time.Duration(seconds*float64(time.Second))-time.Second, 100*time.Millisecond), DefaultReadBound)
 }

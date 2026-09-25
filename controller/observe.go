@@ -9,8 +9,8 @@ import (
 
 // What the controller tells whoever counts.
 //
-// "The controller knows dispatch, retries, losses and latency": each of them is a decision this
-// package takes, and each is told here once, when the transaction that writes it has committed and
+// A dispatch, a retry, a loss heard and a run's verdict are each a decision this package takes,
+// and each is told here once, when the transaction that writes it has committed and
 // never before. A pass the fence or a newer decision refused tells nothing, and the pass that
 // decides the same thing again tells it then; a result delivered twice is news once, and the
 // evaluator already says which delivery that was by moving its sequence. So what is counted is
