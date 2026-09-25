@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -296,6 +297,7 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 	}
 	loop.Draining = func() bool { return beat.Drain().Ordered }
 	loop.Revoked = beat.Revoked
+	loop.HeldBefore = func(key string) bool { return slices.Contains(earlier, agk.TaskID(key)) }
 	loop.LetGo = stops.Forget
 	return loop, beat, stops
 }

@@ -295,6 +295,34 @@ func TestAMessageTakenAsADrainIsOrderedIsPutBackUnredeemed(t *testing.T) {
 	}
 }
 
+// A key an earlier agent on this host took may be bound here, its container still running, and the
+// API answers its holder's redemption while it drains: a drain ordered as its message comes round
+// again does not put it back for runners that would each be refused it.
+func TestADrainDoesNotPutBackAKeyAnEarlierAgentHeld(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is over")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Draining = func() bool { return true }
+	m, _ := l.task(t, nil)
+	earlier := []agk.TaskID{agk.TaskID(m.IdempotencyKey)}
+	// The agent's own wiring of what the driver's record listed.
+	loop, _, _ := Agent{Driver: l.carrier.Driver.(*driver.Docker)}.parts(l.carrier.Results, earlier, nil)
+	l.loop.HeldBefore = loop.HeldBefore
+	if l.loop.HeldBefore == nil || !l.loop.HeldBefore(m.IdempotencyKey) || l.loop.HeldBefore(string(storeRun)+"/other/1") {
+		t.Fatal("the agent's loop does not know the keys an earlier agent held")
+	}
+
+	taken, ok := l.pool.take(t, 5*time.Second)
+	if !ok {
+		t.Fatal("the pool handed out nothing")
+	}
+	l.loop.carry(t.Context(), taken)
+	if n := l.api.redemptions(m.TaskID); n != 1 {
+		t.Errorf("a key an earlier agent held was redeemed %d times while draining, want once, as its holder may", n)
+	}
+}
+
 // orderedOnHold is the host's record, with a drain ordered the moment a key is written down, which
 // is the last thing before the redemption.
 type orderedOnHold struct {

@@ -28,7 +28,8 @@ import (
 //	an image not named by digest        report that no container ran, then Refused, before
 //	                                    the key is written down or anything is redeemed
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
-//	a drain ordered since the take      Release and Again, before anything is redeemed
+//	a drain ordered since the take      Release and Again, before anything is redeemed, unless
+//	                                    an earlier agent here took the key, which may be bound
 //	200                                 Held, then assemble, run and report
 //	403                                 Release and AgainAfter, for another runner of the pool
 //	409                                 Refused and Release, and nothing reported
@@ -104,6 +105,12 @@ type Loop struct {
 	// returns ErrRevoked: nothing is left for it to do in its grace, and the one way it serves again
 	// is by joining again. Nil is never.
 	Revoked func() bool
+
+	// HeldBefore answers whether an earlier agent on this host took a key and never ended it,
+	// which the driver's record listed when this one started. Such a key may be bound here, its
+	// container still running, and the API answers its holder's redemption while it drains, so a
+	// drain puts back only the messages of other keys. Nil is none.
+	HeldBefore func(key string) bool
 
 	// LetGo is told each key the loop no longer holds, once its task is answered or given up,
 	// which is the agent's Stops forgetting a stop sent for it: the message may come round to
@@ -378,7 +385,7 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 	// came. Nothing is redeemed, so nothing is bound, and the message goes to another runner of
 	// the pool at once rather than to the redemption, whose 403 would say the same a round trip
 	// later, and hold the message back from every runner as a refusal does.
-	if l.Draining != nil && l.Draining() {
+	if l.Draining != nil && l.Draining() && (l.HeldBefore == nil || !l.HeldBefore(m.IdempotencyKey)) {
 		l.Holder.Release(id)
 		l.say(fmt.Sprintf("task %s (%s) is put back for another runner of the pool before it is redeemed, since this runner is ordered to drain", m.TaskID, m.IdempotencyKey))
 		if err := t.Again(); err != nil {
