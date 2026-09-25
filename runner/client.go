@@ -120,6 +120,12 @@ func newClient(api string, credential Secret, client *http.Client) *Client {
 // dropped. Anything but a 2xx comes back as an *APIError whose class says what to do next, and no
 // answer at all as ErrUnavailable.
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
+	return c.do(ctx, method, path, nil, in, out)
+}
+
+// do is Do with headers of the route's own beside the ones every call carries, which is how a
+// shipment carries its task's grant outside its body.
+func (c *Client) do(ctx context.Context, method, path string, header http.Header, in, out any) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("runner: %s is not a path below the API", path)
 	}
@@ -143,6 +149,11 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	}
 	if c.credential != "" {
 		req.Header.Set("Authorization", "Bearer "+string(c.credential))
+	}
+	for name, values := range header {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "agk-runner/"+Version())

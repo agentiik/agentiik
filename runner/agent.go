@@ -20,6 +20,9 @@ import (
 // before anything here runs, and a start refused at any of those has made no call to the API.
 type Agent struct {
 	Config Config
+
+	// Driver is opened with Endings as its Observer and TaskLogs as its Logs, and Client is what
+	// each task's log is shipped through.
 	Driver *driver.Docker
 	Client *Client
 
@@ -182,9 +185,9 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		Redeemer: a.Client, Holder: a.Driver,
 		Carrier: &Carrier{
 			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
-			// The driver is given nowhere to write a task's log yet, so a result addresses
-			// none.
-			Logs: false, Log: say,
+			// The driver is opened with TaskLogs, and each task's log is shipped through the
+			// client, with the task's grant.
+			Logs: a.Client, Log: say,
 		},
 		Assembly: Assembly{WorkRoot: a.Config.WorkDir},
 		Log:      say,
