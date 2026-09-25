@@ -68,13 +68,13 @@ type command struct {
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
-	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "there is no installation to sign in against", withTheAPI)},
-	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "there is no installation to ask who you are", withTheAPI)},
+	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation holds no principal to sign in as yet, only its interim operator", withPrincipals)},
+	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation holds no principal to say you are yet, only its interim operator", withPrincipals)},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},
-	{"share", "Grants or revokes access.", absent("share", "there is no server holding the grants", withTheAPI)},
-	{"grants", "Shows who can do what on a workflow, and which scope each permission comes from.", absent("grants", "there is no server holding the grants", withTheAPI)},
+	{"share", "Grants or revokes access.", absent("share", "an installation holds no grants yet, and its interim operator may do everything", withPrincipals)},
+	{"grants", "Shows who can do what on a workflow, and which scope each permission comes from.", absent("grants", "an installation holds no grants yet, and its interim operator may do everything", withPrincipals)},
 	{"logs", "Follows the logs of a run.", logs},
 	{"status", "Shows how a run on an installation stands: its state, each step's, the envelope digests and what failed.", status},
 	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", absent("brick init", "there are no brick templates here", "They are released from agentiik/bricks")},

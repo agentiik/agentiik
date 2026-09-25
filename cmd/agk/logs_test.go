@@ -288,3 +288,24 @@ func TestAnInterruptKeepsARefusalAlreadySaid(t *testing.T) {
 		t.Errorf("an interrupt after a refusal answered %d: %s", code, errs)
 	}
 }
+
+// What is said about a log rather than in it goes to standard error, naming the dispatch: lines
+// that cannot be read back, and a log its runner never closed.
+func TestWhatIsSaidAboutALogNamesItsDispatch(t *testing.T) {
+	gap := sse(firstDispatch+"/2/5", "gap", map[string]any{"task_id": firstDispatch, "first_line": 2, "lines": 4, "reason": "these lines were written and cannot be read back"})
+	s := &streamStandIn{scripts: map[string][]func(http.ResponseWriter, *http.Request){
+		"normalize": {streaming(dispatchEvent(firstDispatch, 1), lineEvent(firstDispatch, 1, 1, "one"), gap, sse("", "dispatch_end", map[string]any{"task_id": firstDispatch, "lines": 5, "truncated": false, "final": false}), stepOver)},
+	}}
+	code, out, errs := followLogs(t, s, aRun, "normalize")
+	if code != exitSucceeded || out != "normalize | one\n" {
+		t.Fatalf("agk logs answered %d: %s%s", code, out, errs)
+	}
+	for _, want := range []string{
+		"normalize: 4 lines are missing from line 2: these lines were written and cannot be read back",
+		"normalize: its runner never closed this log",
+	} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("agk logs does not say %q:\n%s", want, errs)
+		}
+	}
+}

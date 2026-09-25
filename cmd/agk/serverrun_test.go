@@ -46,6 +46,7 @@ type standIn struct {
 	mu       sync.Mutex
 	started  map[string]any
 	path     string
+	rawPath  string
 	readings []db.RunDetail
 	read     int
 	cancels  int
@@ -63,7 +64,7 @@ func (s *standIn) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/runs"):
-		s.path = r.URL.Path
+		s.path, s.rawPath = r.URL.Path, r.URL.EscapedPath()
 		json.NewDecoder(r.Body).Decode(&s.started)
 		if s.start != 0 {
 			w.WriteHeader(s.start)
@@ -493,5 +494,38 @@ func TestWhatHappenedBetweenTwoReadingsIsNarrated(t *testing.T) {
 		if strings.Count(errs, want) != 1 {
 			t.Errorf("the narration does not say %q once:\n%s", want, errs)
 		}
+	}
+}
+
+// A run that succeeded over a failure continue_on_error tolerated still reports the failure, as a
+// local run does.
+func TestAFailureToleratedIsReportedWithTheSuccess(t *testing.T) {
+	dir := repository(t)
+	d := runReading(agk.Succeeded, agk.VerdictSucceeded, aTask(agk.TaskFailed, new(3)))
+	s := &standIn{readings: []db.RunDetail{d}}
+	url := installationAt(t, s)
+
+	code, out, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitSucceeded {
+		t.Fatalf("agk run answered %d: %s", code, errs)
+	}
+	for _, want := range []string{"1 failure tolerated under continue_on_error:", "step normalize: exit code 3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+}
+
+// A namespace is one segment of the path, whatever it holds: one holding a slash or a question
+// mark asks for no other route.
+func TestANamespaceIsOneSegmentOfThePath(t *testing.T) {
+	dir := repository(t)
+	s := &standIn{start: http.StatusNotFound}
+	url := installationAt(t, s)
+	against(t.Context(), dir, url, "run", "--namespace", "fin/ance?x")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.path != "/api/v1/fin/ance?x/workflows/monthly-invoicing/runs" || s.rawPath != "/api/v1/fin%2Fance%3Fx/workflows/monthly-invoicing/runs" {
+		t.Errorf("the run was asked for at %q, raw %q", s.path, s.rawPath)
 	}
 }

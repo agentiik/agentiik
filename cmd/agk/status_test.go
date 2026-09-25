@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/db"
@@ -79,5 +80,47 @@ func TestAStatusOfARunNotThereIsRefused(t *testing.T) {
 	code, _, errs := askStatus(t, "", "01M3RUNBBBBBBBBBBBBBBBBBBB")
 	if code != exitRefused || !strings.Contains(errs, "no run 01M3RUNBBBBBBBBBBBBBBBBBBB, or not yours") {
 		t.Errorf("a run not there answered %d: %s", code, errs)
+	}
+}
+
+// -v lists every task, a purged envelope says so beside its digest, a run whose inputs are gone
+// says it replays from its start only, and a run's standing reads as how long it has been in it.
+func TestAStatusSaysWhatIsGoneAndHowLongARunHasStood(t *testing.T) {
+	d := runReading(agk.Succeeded, agk.VerdictSucceeded, aTask(agk.TaskSucceeded, new(0)))
+	p := d.Steps[0].Ports["ok"]
+	p.PurgedAt = runStart.Add(time.Hour)
+	d.Steps[0].Ports["ok"] = p
+	d.ReplayFromStartOnly = true
+	answer, _ := json.Marshal(d)
+	code, out, errs := askStatus(t, string(answer), aRun, "-v")
+	if code != exitSucceeded {
+		t.Fatalf("agk status -v answered %d: %s", code, errs)
+	}
+	for _, want := range []string{
+		"ok 1 sha256:abababababab (purged)",
+		"| attempt 1 succeeded, exit code 0, on runner-dmz-02",
+		"replays from its start only",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("agk status -v does not say %q:\n%s", want, out)
+		}
+	}
+
+	now := runStart.Add(90 * time.Second)
+	for _, c := range []struct {
+		d    db.RunDetail
+		want string
+	}{
+		{runReading(agk.Queued, agk.VerdictPending), "queued for 90.0s"},
+		{runReading(agk.Running, agk.VerdictRunning), "running for 90.0s"},
+		{func() db.RunDetail {
+			d := runReading(agk.Cancelled, agk.VerdictPending)
+			d.StartedAt = time.Time{}
+			return d
+		}(), "cancelled before it started"},
+	} {
+		if got := standing(c.d, now); got != c.want {
+			t.Errorf("a run %s stands %q, want %q", c.d.State, got, c.want)
+		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -187,7 +188,7 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 	if err != nil {
 		return "", fmt.Errorf("the inputs could not be written: %w", err)
 	}
-	path := fmt.Sprintf("/api/v1/%s/workflows/%s/runs", namespace, workflow)
+	path := fmt.Sprintf("/api/v1/%s/workflows/%s/runs", url.PathEscape(namespace), url.PathEscape(workflow))
 	req, err := at.request(ctx, http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -262,7 +263,7 @@ func (f *following) follow(ctx context.Context) (db.RunDetail, int) {
 	var failing time.Time
 	for {
 		var d db.RunDetail
-		err := f.at.getJSON(ctx, "/api/v1/runs/"+f.run, &d)
+		err := f.at.getJSON(ctx, "/api/v1/runs/"+url.PathEscape(f.run), &d)
 		switch {
 		case ctx.Err() != nil:
 			f.detached()
@@ -525,7 +526,7 @@ func itemsOf(output any) int {
 func outputsOf(ctx context.Context, at remote, d db.RunDetail) (map[string]agk.Envelope, error) {
 	out := make(map[string]agk.Envelope, len(d.Outputs))
 	for _, name := range slices.Sorted(maps.Keys(d.Outputs)) {
-		req, err := at.request(ctx, http.MethodGet, fmt.Sprintf("/api/v1/runs/%s/outputs/%s", d.Run, name), nil)
+		req, err := at.request(ctx, http.MethodGet, fmt.Sprintf("/api/v1/runs/%s/outputs/%s", url.PathEscape(string(d.Run)), url.PathEscape(name)), nil)
 		if err != nil {
 			return nil, err
 		}
