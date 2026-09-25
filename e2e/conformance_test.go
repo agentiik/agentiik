@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -75,9 +76,11 @@ func milestoneWorkflow(t *testing.T, module string, images map[string]string) st
 // wait_all, and a script step using the static helper. Its three bricks are built on this
 // machine and pushed to the registry, and so is the script step's image. agk run --local runs it
 // on this machine's daemon, with the secret on its command line and the helper the runner image
-// carries. Then it is pushed to the installation, billing_api is declared builtin with the same
-// value through the API, and it is started there with the same inputs and runs on the two
-// runners.
+// carries. Then it is pushed to the installation the way agk push pushes it, through
+// version.Capture with the digest the pushing daemon holds for each tag, and not by the agk binary,
+// since this machine's daemon does not resolve the registry's name that agk push would pin each
+// tag through. billing_api is declared builtin with the same value through the API, and the run is
+// started there with the same inputs and runs on the two runners.
 //
 // Every declared output of the server run is then compared with the local run's, member by member
 // through internal/diff under diff.Default, the rule agk brick test and the milestone proof use:
@@ -202,7 +205,7 @@ func (in *Installation) runLocally(document string, inputs []byte) (map[agk.Port
 	return out, out["invoiced"].Meta.RunID
 }
 
-func TestTheMilestoneRewrittenForTheInstallationChangesItsImagesNamespaceAndPoolAlone(t *testing.T) {
+func TestTheMilestoneRewrittenForTheInstallationChangesItsImagesNamespaceAndPoolAndNothingElse(t *testing.T) {
 	module, err := moduleRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +241,24 @@ func TestTheMilestoneRewrittenForTheInstallationChangesItsImagesNamespaceAndPool
 		}
 		if len(step.RunsOn) != 1 || step.RunsOn[0] != Label {
 			t.Errorf("step %s runs on %q, want the runners' label %s", name, step.RunsOn, Label)
+		}
+		// And the step is otherwise the fixture's, keyword for keyword.
+		before.Image, before.RunsOn = step.Image, step.RunsOn
+		if !reflect.DeepEqual(step, before) {
+			t.Errorf("step %s is %+v, and the fixture's is %+v once its image and pool are rewritten", name, step, before)
+		}
+	}
+	for _, same := range []struct {
+		what    string
+		was, is any
+	}{
+		{"inputs", was.Inputs, is.Inputs},
+		{"outputs", was.Outputs, is.Outputs},
+		{"vars", was.Vars, is.Vars},
+		{"secrets", was.Secrets, is.Secrets},
+	} {
+		if !reflect.DeepEqual(same.was, same.is) {
+			t.Errorf("the workflow's %s are %+v, and the fixture's %+v", same.what, same.is, same.was)
 		}
 	}
 }

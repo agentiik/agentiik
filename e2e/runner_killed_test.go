@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
-	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 )
 
@@ -71,6 +70,11 @@ func (in *Installation) dispatches(run string) map[string][]dispatch {
 	}
 	return out
 }
+
+// threeMissedIntervals is the documentation's figure, "Three missed intervals, 30 seconds, move a
+// redeemed task to lost", written here rather than read from db.LostAfter, which is the
+// constant under test.
+const threeMissedIntervals = 30 * time.Second
 
 // sweepMargin is how long past three silent intervals a loss may take to be declared: the
 // controller sweeps every ten seconds, and a pass takes a moment of its own.
@@ -164,10 +168,10 @@ func TestARunnerKilledMidStepLosesItsDispatchAndTheRunSucceedsOnTheOther(t *test
 	switch {
 	case lost.finished == nil || lost.heard == nil:
 		t.Errorf("the lost dispatch records no end or nothing its runner said of it: %+v", lost)
-	case lost.finished.Sub(*lost.heard) < db.LostAfter:
-		t.Errorf("the dispatch was declared lost %s after its runner last spoke of it, and three missed intervals are %s", lost.finished.Sub(*lost.heard), db.LostAfter)
-	case lost.finished.After(killedAt.Add(db.LostAfter + sweepMargin)):
-		t.Errorf("the dispatch was declared lost %s after its runner was killed, and three missed intervals and a sweep are within %s", lost.finished.Sub(killedAt), db.LostAfter+sweepMargin)
+	case lost.finished.Sub(*lost.heard) < threeMissedIntervals:
+		t.Errorf("the dispatch was declared lost %s after its runner last spoke of it, and three missed intervals are %s", lost.finished.Sub(*lost.heard), threeMissedIntervals)
+	case lost.finished.After(killedAt.Add(threeMissedIntervals + sweepMargin)):
+		t.Errorf("the dispatch was declared lost %s after its runner was killed, and three missed intervals and a sweep are within %s", lost.finished.Sub(killedAt), threeMissedIntervals+sweepMargin)
 	}
 
 	// Redeemed by the other runner with a grant of the requeue's own, once the loss was
