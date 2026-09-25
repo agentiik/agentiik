@@ -120,7 +120,7 @@ func TestOneWorkflowRunLocallyAndOnTheInstallationProducesTheSameEnvelopes(t *te
 	run := in.Start("monthly-invoicing", commit, started)
 	ended := in.Wait(run, 5*time.Minute)
 	if ended.State != "succeeded" {
-		t.Fatalf("run %s ended %s on the installation: %s", run, ended.State, ended.Answer)
+		t.Fatalf("run %s ended %s on the installation: %s\nits steps' reasons: %q", run, ended.State, ended.Answer, ended.Reasons)
 	}
 	server := map[agk.Port]agk.Envelope{}
 	for _, name := range milestoneOutputs {

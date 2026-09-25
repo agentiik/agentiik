@@ -135,7 +135,7 @@ func TestARunnerKilledMidStepLosesItsDispatchAndTheRunSucceedsOnTheOther(t *test
 	// Nobody touches the run from here: it is read, and nothing else.
 	ended := in.Wait(run, 5*time.Minute)
 	if ended.State != "succeeded" {
-		t.Fatalf("run %s ended %s: %s", run, ended.State, ended.Answer)
+		t.Fatalf("run %s ended %s: %s\nits steps' reasons: %q", run, ended.State, ended.Answer, ended.Reasons)
 	}
 
 	all := in.dispatches(run)

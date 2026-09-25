@@ -796,6 +796,11 @@ type Run struct {
 
 	// Answer is the whole of what the API answered, which a failure prints.
 	Answer json.RawMessage `json:"-"`
+
+	// Reasons are what the controller's evaluation says of each step it gave a reason for, by
+	// step, which a failure prints too: the API answers a verdict and not why, and a task that
+	// could not be built never reached a runner whose log would say.
+	Reasons map[string]string `json:"-"`
 }
 
 // Wait reads the run until it has ended, and answers it as it ended. A run that has not ended
@@ -823,5 +828,34 @@ func (in *Installation) Wait(run string, within time.Duration) Run {
 		}
 		return fmt.Errorf("it is %s: %s", r.State, body)
 	})
+	ended.Reasons = in.reasons(run)
 	return ended
+}
+
+// reasons reads the reason the controller's evaluation of run records for each step, as the
+// superuser. A reading that fails is itself the reason given, since it only ever explains a
+// failure and never makes one.
+func (in *Installation) reasons(run string) map[string]string {
+	out := map[string]string{}
+	conn, err := pgx.Connect(in.ctx, in.superuser)
+	if err != nil {
+		return map[string]string{"": err.Error()}
+	}
+	defer conn.Close(context.WithoutCancel(in.ctx))
+	rows, err := conn.Query(in.ctx, `
+		select s.key, s.value->>'reason'
+		from runs r, jsonb_each(coalesce(r.evaluation->'steps', '{}'::jsonb)) s
+		where r.namespace = $1 and r.id = $2 and s.value->>'reason' is not null`, Namespace, run)
+	if err != nil {
+		return map[string]string{"": err.Error()}
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var step, reason string
+		if err := rows.Scan(&step, &reason); err != nil {
+			return map[string]string{"": err.Error()}
+		}
+		out[step] = reason
+	}
+	return out
 }
