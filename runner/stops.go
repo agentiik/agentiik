@@ -92,7 +92,9 @@ func (s *Stops) Stop(ctx context.Context, st graph.Stop) error {
 func (s *Stops) Wait() { s.going.Wait() }
 
 // send asks the driver, and lets go of the key where the driver could not stop it, so that the
-// next stop for it, the heartbeat's above all, is sent rather than passed over.
+// next stop for it, the heartbeat's above all, is sent rather than passed over. The driver answers
+// an error only for a container it found by its label; one it watches is handed the stop at once,
+// and the driver sends it again itself for as long as the daemon refuses it.
 func (s *Stops) send(ctx context.Context, st graph.Stop) error {
 	err := s.Stopper.Stop(ctx, st)
 	if err != nil {

@@ -177,6 +177,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A pull a registry refused for want of credentials says so, and names v0.8.0's namespace credentials. `docker.IsPullDenied` reads the ways the daemon passes such a refusal on, and not its own 403.
 - A die event the watch had no room for arms the inspect, so the exit is read in seconds rather than at the deadline as `timed_out`.
 - `Docker.Stop` of a container this process did not start waits out the grace on a context of its own, so a caller that gives up sooner no longer takes the `SIGKILL` with it.
+- A stop the daemon refuses for a container the driver watches is sent again, from 1 s doubling to 10 s, until the daemon takes it or the task has its answer, where it was only logged.
 
 ### Runner
 

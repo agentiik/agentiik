@@ -295,6 +295,7 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 
 	deadline := deadlineOf(t, dispatched)
 	watcher := newWatch(d.cli, container, t.Step, log, deadline, d.cfg.Policy.StopGrace, d.cfg.Now)
+	defer watcher.end()
 	stoppedBefore := false
 	if h := d.lookup(t.ID); h != nil {
 		stoppedBefore = h.join(container, watcher)

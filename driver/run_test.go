@@ -968,6 +968,63 @@ func TestStoppingATaskNobodyHoldsIsNotAnError(t *testing.T) {
 	}
 }
 
+// Stop answers nil for a container it hands a stop to, and a runner asks once per key, so a stop
+// the daemon refuses is sent again by the driver until the daemon takes it.
+func TestAStopTheDaemonRefusedIsSentAgain(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	running := make(chan struct{})
+	taken := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		close(running)
+		<-taken
+		return 143, nil
+	})
+	var mu sync.Mutex
+	asked := 0
+	r.daemon.Handle("POST", "/containers/{id}/stop", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		asked++
+		first := asked == 1
+		mu.Unlock()
+		if first {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, `{"message":"the daemon is restarting"}`)
+			return
+		}
+		close(taken)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	task := oneTask(ref)
+	done := make(chan graph.Result, 1)
+	go func() {
+		result, err := r.Run(context.Background(), task)
+		if err != nil {
+			t.Errorf("running: %s", err)
+		}
+		done <- result
+	}()
+	<-running
+	// Past the moment Run sends again a stop that landed before the start, so that the only
+	// stop the daemon is asked for is this one and whatever the driver makes of its refusal.
+	time.Sleep(300 * time.Millisecond)
+	if err := r.Stop(t.Context(), graph.Stop{Task: task.ID, Reason: graph.StopCancelled}); err != nil {
+		t.Fatalf("stopping: %s", err)
+	}
+	select {
+	case result := <-done:
+		if result.State != agk.TaskCancelled {
+			t.Errorf("the state is %s, and a stop that landed is cancelled", result.State)
+		}
+	case <-time.After(10 * time.Second):
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("the daemon was asked to stop the container %d times, and the one refusal was never followed by another", asked)
+	}
+}
+
 // A stop for a container this process did not start, one a restarted runner's earlier agent left
 // running, is carried to its SIGKILL even where the caller gives up before the grace is out: the
 // daemon's stop answers only once the container has exited, and a heartbeat's stop is bounded by
