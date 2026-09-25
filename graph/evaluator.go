@@ -696,6 +696,7 @@ func (e *Evaluator) stops(plan *Plan, now time.Time) bool {
 		plan.Stop = append(plan.Stop, Stop{Task: e.taskID(name, sh), Reason: reason})
 		sh.Task, sh.ExitCode, sh.NoExitCode, sh.Stopped = agk.TaskCancelled, 0, true, true
 		sh.Ports = nil
+		sh.NextAttemptAt = time.Time{}
 		sh.FinishedAt = now
 		ss.Shards[i] = sh
 		e.s.Steps[name] = ss
@@ -716,6 +717,15 @@ func (e *Evaluator) stops(plan *Plan, now time.Time) bool {
 
 		// "fail_fast: the first shard to fail stops the shards still running beside
 		// it." A shard with another attempt coming has not failed yet.
+		//
+		// The shards nobody has handed out yet end with them, a reading the documentation
+		// takes in its staged rollout, where max_parallel: 1 and fail_fast "stops it at the
+		// first broken region": a region after the broken one never starts. Handing them out
+		// would start containers only to stop them on the next pass, and under max_parallel
+		// the slot a stopped sibling frees would take the next one while the sibling is still
+		// in its grace. Each is named a stop all the same, since a server may have published
+		// one whose dispatch it never recorded, and a stop for a task nobody holds is the
+		// ordinary consequence of at-least-once delivery.
 		if ss.Verdict != agk.VerdictRunning || !known || !failFast(st) {
 			continue
 		}
@@ -726,8 +736,7 @@ func (e *Evaluator) stops(plan *Plan, now time.Time) bool {
 			if shardVerdict(sh.Task, sh.ExitCode) != agk.VerdictFailed {
 				continue
 			}
-			for _, sibling := range siblingsInFlight(ss, sh.Shard) {
-				i := slices.IndexFunc(ss.Shards, func(s ShardState) bool { return s.Shard == sibling.Shard })
+			for _, i := range siblingsLeft(ss, sh.Shard) {
 				end(name, ss, i, StopSiblingFailed)
 			}
 			break

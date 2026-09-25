@@ -218,19 +218,16 @@ func holdsARunner(sh ShardState) bool {
 // than letting every shard finish before the step is judged.
 func failFast(st *Step) bool { return st.Strategy.FailFast }
 
-// siblingsInFlight names the shards of a step that are still in flight beside one that has
-// failed for good, which is what fail_fast stops. The shard that failed is not among
-// them: it has already ended.
-func siblingsInFlight(ss StepState, failed agk.Shard) []ShardState {
-	var out []ShardState
-	for _, sh := range ss.Shards {
-		if sh.Shard == failed {
+// siblingsLeft names, by their place in the step, the shards that are not over beside one
+// that has failed for good, which is what fail_fast stops: the ones in flight and the ones
+// nobody has handed out yet. The shard that failed is not among them: it has already ended.
+func siblingsLeft(ss StepState, failed agk.Shard) []int {
+	var out []int
+	for i, sh := range ss.Shards {
+		if sh.Shard == failed || sh.Task.Terminal() {
 			continue
 		}
-		if !holdsARunner(sh) {
-			continue
-		}
-		out = append(out, sh)
+		out = append(out, i)
 	}
 	return out
 }

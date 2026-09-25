@@ -187,3 +187,81 @@ func TestAShardADriverReportedCancelledTakesNoLaterCode(t *testing.T) {
 		t.Errorf("a duplicate report gave a code to a shard its driver ended: %+v", sh)
 	}
 }
+
+// "max_parallel: 1 makes it a staged rollout, fail_fast stops it at the first broken region": a
+// region nobody has handed out yet never starts once one has failed for good. It ends cancelled
+// in the pass that hears the failure, which judges the step there, and its stop is named in case
+// a server published it without recording the dispatch.
+func TestFailFastStartsNoRegionAfterTheBrokenOne(t *testing.T) {
+	e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: rollout, namespace: finance }
+steps:
+  deploy:
+    image: `+image+`
+    strategy:
+      matrix: { region: [eu-west, eu-central, us-east] }
+      max_parallel: 1
+      fail_fast: true
+    outputs: [ok]
+`, Options{})
+	plan := next(t, e, runAt)
+	if len(plan.Start) != 1 {
+		t.Fatalf("the first pass starts %s, and max_parallel is 1", starts(plan))
+	}
+	first := plan.Start[0]
+	record(t, e, Result{Task: first.ID, State: agk.TaskDispatched, DispatchedAt: runAt}, runAt)
+	record(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 1, StartedAt: runAt, FinishedAt: runAt}, runAt)
+
+	plan = next(t, e, runAt.Add(time.Minute))
+	if len(plan.Start) != 0 {
+		t.Errorf("the pass that heard %s fail starts %s", first.ID, starts(plan))
+	}
+	deploy := e.State().Steps["deploy"]
+	if deploy.Verdict != agk.VerdictFailed {
+		t.Errorf("deploy is %s once its first region failed", deploy.Verdict)
+	}
+	var stopped []agk.TaskID
+	for _, sh := range deploy.Shards[1:] {
+		if sh.Task != agk.TaskCancelled || !sh.Stopped || !sh.DispatchedAt.IsZero() {
+			t.Errorf("the region of shard %d is %s, stopped %t, dispatched at %s", sh.Shard.Index, sh.Task, sh.Stopped, sh.DispatchedAt)
+		}
+		stopped = append(stopped, e.taskID("deploy", sh))
+	}
+	var named []agk.TaskID
+	for _, s := range plan.Stop {
+		if s.Reason == StopSiblingFailed {
+			named = append(named, s.Task)
+		}
+	}
+	if !slices.Equal(named, stopped) {
+		t.Errorf("the pass names the stops of %v, want %v", named, stopped)
+	}
+	if e.State().Run.State != agk.Failed {
+		t.Errorf("the run is %s", e.State().Run.State)
+	}
+}
+
+// A sibling waiting out a backoff has another attempt coming, and fail_fast calls that attempt off
+// too: the step is judged in the pass that hears a shard fail for good, not when the backoff ends.
+func TestFailFastCallsOffASiblingsNextAttempt(t *testing.T) {
+	e := started(t, replace(failingFast, "    strategy: { fan_out: item, fail_fast: true }\n",
+		"    strategy: { fan_out: item, fail_fast: true }\n    retry: { max: 2, on: [failed], backoff: { type: exponential, base: 30s, max: 60s } }\n"), twoOrders)
+	plan := next(t, e, runAt)
+	first, second := plan.Start[0], plan.Start[1]
+	record(t, e, Result{Task: second.ID, State: agk.TaskFailed, ExitCode: 1, StartedAt: runAt, FinishedAt: runAt}, runAt)
+	if sh := e.State().Steps["invoice"].Shards[1]; sh.NextAttemptAt.IsZero() {
+		t.Fatal("the second shard has no attempt coming, so this is not the case under test")
+	}
+	record(t, e, Result{Task: first.ID, State: agk.TaskFailed, ExitCode: 120, StartedAt: runAt, FinishedAt: runAt}, runAt)
+
+	next(t, e, runAt.Add(time.Second))
+	invoice := e.State().Steps["invoice"]
+	if sh := invoice.Shards[1]; sh.Task != agk.TaskCancelled || !sh.NextAttemptAt.IsZero() {
+		t.Errorf("the second shard is %s with an attempt at %s", sh.Task, sh.NextAttemptAt)
+	}
+	if invoice.Verdict != agk.VerdictFailed {
+		t.Errorf("invoice is %s once its first shard failed for good", invoice.Verdict)
+	}
+}
