@@ -249,3 +249,57 @@ func TestAStoppedShardThatSucceededAnywayKeepsItsStop(t *testing.T) {
 		t.Errorf("the run is %s, and archive is still in flight", got)
 	}
 }
+
+// supersedingBesideAVault is supersedingWorkflow with a third step, vault, that waits on nothing
+// and so waits only on the namespace's quota.
+const supersedingBesideAVault = supersedingWorkflow + `  vault:
+    image: ` + theImage + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok]
+`
+
+// The slot a superseded task held is free in the pass that stops it, and what the quota held back
+// goes out in that pass rather than on the next sweep: the runner's report of the stopped task
+// comes to a task that is over and decides nothing.
+func TestTheSlotAStopFreesIsFreeInThePassThatStopsIt(t *testing.T) {
+	core, q, pool, super := decidingOn(t, supersedingBesideAVault)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`update namespaces set max_concurrent_tasks = 2 where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+	createRunOf(t, pool, "normalize", "archive", "pick", "vault")
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var fast, slow Dispatch
+	for _, d := range q.dispatched() {
+		switch d.Task.Step {
+		case "normalize":
+			fast = d
+		case "archive":
+			slow = d
+		default:
+			t.Fatalf("the first pass published %s, and the test wants normalize and archive first", d.Task.Step)
+		}
+	}
+	if fast.Row == "" || slow.Row == "" {
+		t.Fatal("the first pass did not publish normalize and archive")
+	}
+	if err := core.redeem(t, slow, theRunner); err != nil {
+		t.Fatal(err)
+	}
+
+	core.answer(t, succeeded(t, fast.Task, core.now()))
+	if stops := q.stops(); !slices.Contains(stops, graph.Stop{Task: slow.Task.ID, Reason: graph.StopSuperseded}) {
+		t.Fatalf("the pass that lifted the barrier stopped %+v", stops)
+	}
+	var went []agk.Step
+	for _, task := range q.taken() {
+		went = append(went, task.Step)
+	}
+	slices.Sort(went)
+	if !slices.Equal(went, []agk.Step{"pick", "vault"}) {
+		t.Errorf("with archive stopped and normalize over, the pass that stopped archive published %v of pick and vault", went)
+	}
+}

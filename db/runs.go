@@ -1345,8 +1345,9 @@ func (w *Wide) SetGroup(ctx context.Context, namespace string, run agk.RunID, gr
 // "max_concurrent_tasks: Caps how much of the runner fleet one namespace can hold at once, so a
 // fan-out of ten thousand items cannot starve everyone else." What counts against it is a task
 // that holds a runner or is on its way to one, which is the four states between being decided
-// and being over.
-func (w *Wide) Slots(ctx context.Context, namespace string) (int, error) {
+// and being over. The keys ending are left out: the caller is ending them in the decision it has
+// yet to write.
+func (w *Wide) Slots(ctx context.Context, namespace string, ending ...agk.TaskID) (int, error) {
 	var ceiling, held int
 	if err := w.tx.QueryRow(ctx,
 		`select max_concurrent_tasks from namespaces where name = $1`, namespace).Scan(&ceiling); err != nil {
@@ -1355,10 +1356,15 @@ func (w *Wide) Slots(ctx context.Context, namespace string) (int, error) {
 		}
 		return 0, fmt.Errorf("db: the task ceiling of namespace %q could not be read: %w", namespace, err)
 	}
+	keys := make([]string, len(ending))
+	for i, k := range ending {
+		keys[i] = string(k)
+	}
 	if err := w.tx.QueryRow(ctx,
 		`select count(*) from tasks
 		 where namespace = $1 and state in ('pending', 'dispatched', 'running', 'publishing')
-		   and published_at is not null`, namespace).Scan(&held); err != nil {
+		   and published_at is not null and not (idempotency_key = any($2::text[]))`,
+		namespace, keys).Scan(&held); err != nil {
 		return 0, fmt.Errorf("db: what namespace %q holds could not be counted: %w", namespace, err)
 	}
 	if held >= ceiling {

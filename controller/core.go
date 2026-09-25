@@ -281,15 +281,17 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// A stop a rule of the language calls for while the run goes on ends its task here, before
 	// the decision is written, so that the row reads cancelled from the moment the stop goes
 	// out and the heartbeat repeats it to a runner that missed it on agentiik.stops.
-	if plan, err = endStopped(ev, e.Namespace, pools, plan, now); err != nil {
+	plan, stopped, err := endStopped(ev, e.Namespace, pools, plan, now)
+	if err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
 	// What a namespace may hold at once bounds what leaves here, and it bounds it before the
 	// decision is written rather than after, so that the row says what was handed out. A task
 	// held back is not refused: it stays pending in the evaluator's state, which is what
-	// makes the next pass hand it out again.
-	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start)
+	// makes the next pass hand it out again. A task this pass stopped holds no slot, though its
+	// row reads in flight until the decision is written.
+	within, err := co.withinTheQuota(ctx, e.Namespace, plan.Start, stopped)
 	if err != nil {
 		return err
 	}
@@ -429,7 +431,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 
 // endStopped ends as cancelled every task in flight that the plan stops as superseded or
 // sibling_failed, asks the evaluator again, and answers the plan with every stop it named on the
-// way, until a round ends nothing more.
+// way, until a round ends nothing more, and the keys it ended.
 //
 // "The task ends: cancelled", says the table of stops, and it ends when the stop goes out rather
 // than when its runner reports. The heartbeat's cancel is read off the row, "each key the request
@@ -445,8 +447,9 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 // Ending a task may end its step, and what follows the step may then start or be stopped in turn,
 // so the evaluator is asked again, and its plan is held to the pools as the first one was. Each
 // round ends at least one task for good, so there are at most as many rounds as tasks in flight.
-func endStopped(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
+func endStopped(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, []agk.TaskID, error) {
 	var stops []graph.Stop
+	var ended []agk.TaskID
 	for {
 		var ending []graph.Result
 		for _, s := range plan.Stop {
@@ -458,7 +461,7 @@ func endStopped(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, pl
 			}
 			_, step, attempt, shard, err := agk.ParseTaskID(string(s.Task))
 			if err != nil {
-				return graph.Plan{}, fmt.Errorf("the stop of %s names no task: %w", s.Task, err)
+				return graph.Plan{}, nil, fmt.Errorf("the stop of %s names no task: %w", s.Task, err)
 			}
 			sh, ok := shardOf(ev.State(), step, shard)
 			if !ok || sh.Attempt != attempt || sh.Task == agk.TaskPending || sh.Task.Terminal() {
@@ -470,19 +473,20 @@ func endStopped(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, pl
 		}
 		if len(ending) == 0 {
 			plan.Stop = stops
-			return plan, nil
+			return plan, ended, nil
 		}
 		for _, r := range ending {
 			if err := ev.Record(r, now); err != nil {
-				return graph.Plan{}, fmt.Errorf("the stop of %s could not be recorded: %w", r.Task, err)
+				return graph.Plan{}, nil, fmt.Errorf("the stop of %s could not be recorded: %w", r.Task, err)
 			}
+			ended = append(ended, r.Task)
 		}
 		next, err := ev.Next(now)
 		if err != nil {
-			return graph.Plan{}, err
+			return graph.Plan{}, nil, err
 		}
 		if plan, err = refuseUnpooled(ev, namespace, pools, next, now); err != nil {
-			return graph.Plan{}, err
+			return graph.Plan{}, nil, err
 		}
 	}
 }
