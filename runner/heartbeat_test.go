@@ -712,7 +712,7 @@ func TestTheAgentsLoopDrainsOnTheHeartbeatsOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop, beat := a.parts(results, nil, nil)
+	loop, beat, _ := a.parts(results, nil, nil)
 	if loop.Draining() {
 		t.Error("the loop drains before any heartbeat was answered")
 	}
@@ -829,14 +829,19 @@ func TestTheAgentsHeartbeatIsWiredToItsDriverAndConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, beat := a.parts(results, nil, nil)
+	_, beat, stops := a.parts(results, nil, nil)
 	if err := beat.Beat(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got := api.heard()[0].Concurrency; got != 7 {
 		t.Errorf("the heartbeat reports a concurrency of %d, and the agent holds 7 tasks at once", got)
 	}
-	if d, ok := beat.Stopper.(*driver.Docker); !ok || d != a.Driver {
-		t.Errorf("a cancel is stopped through %T, not the agent's driver", beat.Stopper)
+	// Through the agent's Stops, which a stop heard on the bus goes through too, so that the
+	// two channels ask the driver once between them.
+	if s, ok := beat.Stopper.(*Stops); !ok || s != stops {
+		t.Errorf("a cancel is stopped through %T, not the agent's Stops", beat.Stopper)
+	}
+	if d, ok := stops.Stopper.(*driver.Docker); !ok || d != a.Driver {
+		t.Errorf("the agent's Stops stop through %T, not the agent's driver", stops.Stopper)
 	}
 }

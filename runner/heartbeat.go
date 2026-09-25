@@ -403,8 +403,9 @@ func (h *Heartbeat) ordered(a beatAnswer) {
 //
 // The stops go out beside the next heartbeat rather than before it: a stop waits on the daemon,
 // and a daemon slow to answer would otherwise hold up the heartbeat that keeps every other task
-// alive. The key stays named until its task is answered, and so stays in cancel, which stops a
-// stopped task again, and the driver takes a second stop as it takes a duplicate one.
+// alive. The key stays named until its task is answered, and so stays in cancel at every heartbeat
+// until then, and a stop on the bus may have reached it first: the agent's Stopper is its Stops,
+// which asks the driver once per key and passes the rest over.
 func (h *Heartbeat) cancel(ctx context.Context, named, cancel []string) {
 	var stop []agk.TaskID
 	for _, key := range cancel {
