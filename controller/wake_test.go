@@ -165,13 +165,14 @@ func TestTheSweepComesRoundWhileNotificationsKeepComing(t *testing.T) {
 	for {
 		select {
 		case w := <-wakes:
-			if w.Swept {
-				if notified == 0 {
-					t.Fatal("the sweep came round before any notification did, which proves nothing")
-				}
+			// A sweep before any notification proves nothing, and a loaded machine can
+			// be slow to send the first one, so the test waits for the next.
+			if w.Swept && notified > 0 {
 				return
 			}
-			notified++
+			if !w.Swept {
+				notified++
+			}
 		case <-deadline:
 			t.Fatalf("%d notifications in 10s and no sweep, on a sweep of 300ms", notified)
 		}

@@ -440,7 +440,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 // report would keep the stop out of it, and a runner that missed the stop would run the container
 // to its deadline, a fail_fast step waiting on it all that time. So the ending is recorded here, as
 // a run's own ending records its tasks' in the pass that ends it, and the report that follows adds
-// the exit code and nothing else. The evaluator keeps a stopped task in flight until a driver
+// the exit code, the log and the usage, and nothing else. The evaluator keeps a stopped task in flight until a driver
 // reports the stop, which is right for a local run, whose driver stops the container itself and
 // always reports; a server's stop crosses a bus that may lose it.
 //
