@@ -104,7 +104,11 @@ func TaskOf(m bus.TaskMessage, inputs map[agk.Port]agk.Envelope) (graph.Task, er
 	}
 
 	t := graph.Task{
-		ID:        id,
+		ID: id,
+		// The dispatch, which names the span the container's trace context points at: the
+		// controller exports each dispatch's span under its task_id, and a requeue after loss
+		// takes a new one.
+		Dispatch:  m.TaskID,
 		Run:       run,
 		Workflow:  workflow,
 		Namespace: m.Namespace,

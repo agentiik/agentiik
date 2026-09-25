@@ -46,6 +46,7 @@ type Core struct {
 	ceiling  time.Duration
 	requeues int
 	now      func() time.Time
+	tracer   Tracer
 	observer Observer
 }
 
@@ -105,6 +106,11 @@ type Options struct {
 	// costs its key one requeue however the host comes back.
 	MaxRequeues *int
 
+	// Tracer is where the trace of a run goes once the run has ended. Nil is no tracing, and
+	// then nothing is read or built for it: an installation that configured no collector pays
+	// nothing for one.
+	Tracer Tracer
+
 	// Observer is told what was dispatched, retried, lost and ended, once it is written down.
 	// Nil counts nothing.
 	Observer Observer
@@ -143,7 +149,7 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
 		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
-		observer: o.Observer,
+		observer: o.Observer, tracer: o.Tracer,
 	}, nil
 }
 
@@ -382,6 +388,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
 	sent, sentTo := co.hand(ctx, e.Namespace, run, plan)
+	if saved != e.Seq && state.Run.State.Terminal() {
+		// The pass that ended the run, and its trace goes once the stops have.
+		co.traced(ctx, e.Namespace, run)
+	}
 	if len(sent) == 0 {
 		if saved != e.Seq {
 			return nil

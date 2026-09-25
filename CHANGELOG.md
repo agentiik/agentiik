@@ -57,6 +57,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A run on a server starts with the workflow's `vars`, as `agk run --local` does, and reads them off the version on every pass, so a number among them is an int each time rather than a double after the first. A step reading `${{ vars.<name> }}` could not be built there, and failed with 120.
 - The leading controller exports the audit log to the https sink `AGK_AUDIT_EXPORT_URL` names, as newline-delimited JSON, at least once, and nothing past a break. `agentiik-api audit-verify FILE` checks an export as its receiver wrote it.
 - `agentiik-controller` exports the metrics on `AGK_METRICS_LISTEN`, to a scrape bearing the token whose hash `AGK_METRICS_TOKEN_FILE` holds, in the Prometheus text format: dispatches and losses per pool, retries and task durations per brick and version, end-to-end latency per workflow, queue depth per pool with each pool's labels, and each runner's slots and tasks. Only the instance that leads reports a figure. `controller.Options.Observer` is told each dispatch, ending, retry, loss and run verdict once it is written, and `graph.Graph.Brick` names a step's brick and version. A counter or histogram keeps at most 1,000 label sets and folds the rest into `_other`.
+- A run that ends is exported as one OpenTelemetry trace where `AGK_OTLP_ENDPOINT` names a collector: the run's span and one span per dispatch, a child of it identified by its `task_id` and named for its step, each carrying the namespace, read back from the rows and posted as OTLP/HTTP JSON by `internal/otlp`, written with the standard library. A collector that is down costs the spans and never a decision; with no endpoint nothing is read or built.
 
 ### State
 
@@ -189,6 +190,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `Docker.Logged` replaces what the record of an ended key says of its log, for a runner that learns what was kept of it only once the log is closed elsewhere.
 - A task's log caps (`log_max_bytes`, `log_max_lines`) count standard error alone, so an envelope on standard output no longer cuts a short log and reports it truncated. Standard output is still written into the log, up to `envelope_max_bytes` and as many lines as the cap, counted apart, and a line of the driver's on standard output says where it stopped.
 - The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
+- A container is given `TRACEPARENT`: the run's trace and the span of its dispatch, `graph.Task.Dispatch` on a server and the key on a laptop. `agk.RunID.Trace` and `agk.TaskSpan` derive both from the identifiers, so the runner, the controller and `agk run --local` name the same trace without the wire carrying it.
 
 ### Runner
 
@@ -350,6 +352,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A request from `agk` or a runner to `localhost` in any case, `0.0.0.0` or `::` goes through no `HTTP_PROXY`, as one to `127.0.0.1` already did, so nothing let through as crossing no network crosses it to a proxy.
 - `AGK_AUDIT_EXPORT_URL` and `AGK_AUDIT_EXPORT_TOKEN_FILE` name the audit log's sink and its bearer credential, for the controller alone. Without them the controller starts and warns that the log goes nowhere.
 - `AGK_METRICS_LISTEN` and `AGK_METRICS_TOKEN_FILE`, the controller's, are both set or neither; the file holds the SHA-256 of the token and never the token.
+- `AGK_OTLP_ENDPOINT`, read by the controller alone, is the collector traces are sent to: `https`, or `http` to a loopback address, with no user, query or fragment.
 
 ### Command line
 

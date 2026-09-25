@@ -289,7 +289,7 @@ func TestATaskSurvivesTheMessageItIsWrittenAs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := graph.Task{
-		ID: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/build/1", Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
+		ID: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/build/1", Dispatch: "01M2BBZ9G62NQXFAFCXKRPJEH6", Run: "01JMZ8V1P9C4XQ7K2N4D6F8H0A",
 		Workflow: "monthly-invoicing", Namespace: "finance", Commit: "a3f9c1e",
 		Step: "build", Attempt: 1, Image: m.Image,
 		Script: m.Script, BeforeScript: m.BeforeScript, AfterScript: m.AfterScript, Shell: m.Shell,
