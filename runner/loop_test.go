@@ -807,3 +807,44 @@ func TestADrainingRunnerTakesNothingUntilTheOrderIsLifted(t *testing.T) {
 	draining.Store(false)
 	eventually(t, "the task redeemed once the drain was lifted", func() bool { return l.api.redemptions(m.TaskID) > 0 })
 }
+
+// A drain ordered while the host is full is obeyed when a slot frees: the loop was waiting for room
+// when the order came, and takes nothing with the room it then gets.
+func TestADrainOrderedWhileTheHostIsFullIsObeyedWhenASlotFrees(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	api := anAPIAnswering(t, func(n int, _ string) (int, any) {
+		if n == 1 {
+			<-release
+		}
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Concurrency = 1
+	var draining atomic.Bool
+	l.loop.Draining = draining.Load
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- l.loop.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	first, _ := l.task(t, nil)
+	eventually(t, "the first task's redemption under way", func() bool { return l.api.redemptions(first.TaskID) > 0 })
+	draining.Store(true)
+	second, _ := l.task(t, func(m *bus.TaskMessage) {
+		m.Step = "invoice-2"
+		m.IdempotencyKey = string(storeRun) + "/" + m.Step + "/1"
+	})
+	unblock()
+	time.Sleep(time.Second)
+	if n := l.api.redemptions(second.TaskID); n != 0 {
+		t.Errorf("a runner told to drain while full redeemed a task %d times once a slot freed", n)
+	}
+}

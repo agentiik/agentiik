@@ -211,14 +211,6 @@ func (l *Loop) Run(ctx context.Context) error {
 		if d := l.quietFor(); d > 0 && !sleep(ctx, d) {
 			return nil
 		}
-		// Asked again after the pause a put back is held for, since the next heartbeat may
-		// lift the order.
-		if l.Draining != nil && l.Draining() {
-			if !sleep(ctx, l.retryFirst()) {
-				return nil
-			}
-			continue
-		}
 		select {
 		case slots <- struct{}{}:
 		case <-ctx.Done():
@@ -233,6 +225,16 @@ func (l *Loop) Run(ctx context.Context) error {
 			default:
 				break fill
 			}
+		}
+		// Once there is room and not before, since a host full when the order came waits
+		// here and would otherwise take the moment a slot freed. Asked again after the pause
+		// a put back is held for, since the next heartbeat may lift the order.
+		if l.Draining != nil && l.Draining() {
+			free(room)
+			if !sleep(ctx, l.retryFirst()) {
+				return nil
+			}
+			continue
 		}
 
 		taken, err := l.Queue.Take(ctx, l.Pool, room, wait)
