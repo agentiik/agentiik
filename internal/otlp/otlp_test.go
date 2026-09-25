@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -201,5 +202,74 @@ func TestACollectorThatNeverAnswersHoldsUpNothing(t *testing.T) {
 func TestAnExporterWithNoEndpointIsRefused(t *testing.T) {
 	if _, err := New(Options{}); err == nil {
 		t.Fatal("an exporter with no endpoint was built")
+	}
+}
+
+// Every span dropped is said, however it was dropped: queued behind a batch Close had no time to
+// finish, or exported once the exporter was closed. The count heard is the count lost.
+func TestEverySpanDroppedOnTheWayOutIsSaid(t *testing.T) {
+	hang := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(hang)
+	var mu sync.Mutex
+	var heard []string
+	e, err := New(Options{Endpoint: srv.URL, Interval: time.Millisecond, Batch: 100, Trouble: func(err error) {
+		mu.Lock()
+		heard = append(heard, err.Error())
+		mu.Unlock()
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Export(aSpan("in flight"))
+	time.Sleep(100 * time.Millisecond)
+	for range 50 {
+		e.Export(aSpan("queued"))
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	e.Close(ctx)
+	e.Export(aSpan("late"), aSpan("later"))
+
+	mu.Lock()
+	defer mu.Unlock()
+	dropped := 0
+	for _, line := range heard {
+		var n int
+		if _, err := fmt.Sscanf(line, "otlp: %d spans were dropped", &n); err == nil {
+			dropped += n
+		}
+	}
+	if dropped != 53 {
+		t.Errorf("trouble heard of %d spans dropped, and 53 were: one in flight, 50 queued behind it and 2 exported once closed\n%s", dropped, strings.Join(heard, "\n"))
+	}
+}
+
+// A collector that redirects is refused rather than followed: the endpoint was held to https, or
+// http on this machine, and a redirect could send the spans anywhere in plaintext.
+func TestARedirectIsNotFollowed(t *testing.T) {
+	elsewhere := newCollector(t, http.StatusOK)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+TracesPath, http.StatusPermanentRedirect)
+	}))
+	defer srv.Close()
+	var heard []string
+	e, err := New(Options{Endpoint: srv.URL, Trouble: func(err error) { heard = append(heard, err.Error()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Export(aSpan("a"))
+	e.Close(t.Context())
+	if elsewhere.sent() != 0 {
+		t.Error("the spans followed a redirect to another server")
+	}
+	if len(heard) != 1 || !strings.Contains(heard[0], "308") {
+		t.Errorf("trouble heard %q, want the redirect refused", heard)
 	}
 }

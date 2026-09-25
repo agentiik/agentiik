@@ -154,7 +154,13 @@ func New(o Options) (*Exporter, error) {
 		return nil, errors.New("otlp: an exporter with no endpoint, and a program given none builds none")
 	}
 	if o.Client == nil {
-		o.Client = &http.Client{Timeout: DefaultTimeout}
+		// A redirect is not followed, since the endpoint was held to https, or http on this
+		// machine, and a collector answering 307 towards http elsewhere would carry the spans
+		// across a network in plaintext. A 3xx is then an answer that is not 2xx, and refused.
+		o.Client = &http.Client{
+			Timeout:       DefaultTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	if o.Interval <= 0 {
 		o.Interval = DefaultInterval
@@ -178,12 +184,20 @@ func New(o Options) (*Exporter, error) {
 	return e, nil
 }
 
-// Export queues spans and returns at once. Past the queue's bound, or once the exporter is closed,
-// a span is dropped, and the drop is heard by Trouble with the next batch.
+// Export queues spans and returns at once. Past the queue's bound a span is dropped, and the drop
+// is heard by Trouble with the next batch; once the exporter is closed, every span is dropped and
+// heard at once, since there is no next batch.
 func (e *Exporter) Export(spans ...Span) {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		if len(spans) > 0 {
+			e.trouble(fmt.Errorf("otlp: %d spans were dropped, exported after the exporter to %s was closed", len(spans), e.url))
+		}
+		return
+	}
 	for _, s := range spans {
-		if e.closed || len(e.queued) >= e.bound {
+		if len(e.queued) >= e.bound {
 			e.dropped++
 			continue
 		}
@@ -216,6 +230,7 @@ func (e *Exporter) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		e.abandon()
 		<-e.done
+		e.discard()
 		return ctx.Err()
 	}
 	for {
@@ -226,9 +241,21 @@ func (e *Exporter) Close(ctx context.Context) error {
 		if err := e.send(ctx, batch); err != nil {
 			e.trouble(err)
 			if ctx.Err() != nil {
+				e.discard()
 				return ctx.Err()
 			}
 		}
+	}
+}
+
+// discard drops what is still queued once Close has no time left to send it, and says how much.
+func (e *Exporter) discard() {
+	e.mu.Lock()
+	n := len(e.queued) + e.dropped
+	e.queued, e.dropped = nil, 0
+	e.mu.Unlock()
+	if n > 0 {
+		e.trouble(fmt.Errorf("otlp: %d spans were dropped, the exporter to %s closing before they could be sent", n, e.url))
 	}
 }
 
