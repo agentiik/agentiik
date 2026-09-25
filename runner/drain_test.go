@@ -49,9 +49,9 @@ func (a *agentServing) ended() (bool, error) {
 	}
 }
 
-// anAgentServing serves one runner of in on c's driver, one task at once, with heartbeats and
-// takes short enough that an order is heard in a moment. It is stopped as the test ends.
-func anAgentServing(t *testing.T, in *served, c *carrying) *agentServing {
+// anAgentServing serves one runner of in on c's driver, concurrency tasks at once, with heartbeats
+// and takes short enough that an order is heard in a moment. It is stopped as the test ends.
+func anAgentServing(t *testing.T, in *served, c *carrying, concurrency int) *agentServing {
 	t.Helper()
 	client, err := NewClient(in.url, in.credential, nil)
 	if err != nil {
@@ -62,7 +62,7 @@ func anAgentServing(t *testing.T, in *served, c *carrying) *agentServing {
 	go func() {
 		a.served <- Serve(ctx, Agent{
 			Config: Config{
-				API: in.url, Runner: in.runner, Pool: in.poolName, Concurrency: 1,
+				API: in.url, Runner: in.runner, Pool: in.poolName, Concurrency: concurrency,
 				WorkDir: c.root, Credential: in.credential, Labels: []string{"zone=dmz"},
 			},
 			Driver: c.carrier.Driver.(*driver.Docker), Client: client, Endings: c.carrier.Endings,
@@ -155,7 +155,7 @@ func TestADrainOrderedMidTaskFinishesItAndTakesNothingMore(t *testing.T) {
 	in := anInstallationServing(t)
 	var held heldUntilReleased
 	c := carrier(t, held.run)
-	a := anAgentServing(t, in, c)
+	a := anAgentServing(t, in, c, 1)
 
 	first := in.dispatch(t, "invoice")
 	eventually(t, "the first task's container starting", startedFor(c, first.IdempotencyKey))
@@ -196,7 +196,9 @@ func TestARevokedRunnerPublishesWhatItHeldThenEnds(t *testing.T) {
 	in := anInstallationServing(t)
 	var held heldUntilReleased
 	c := carrier(t, held.run)
-	a := anAgentServing(t, in, c)
+	// Two slots, so that the loop has room to look while the task runs, and a runner that took
+	// room for having nothing in hand would end with the task unanswered.
+	a := anAgentServing(t, in, c, 2)
 
 	m := in.dispatch(t, "invoice")
 	eventually(t, "the task's container starting", startedFor(c, m.IdempotencyKey))
@@ -205,6 +207,8 @@ func TestARevokedRunnerPublishesWhatItHeldThenEnds(t *testing.T) {
 		return err
 	})
 	eventually(t, "the revocation heard", func() bool { return strings.Contains(a.said(), "It is revoked") })
+	// A few passes of the loop's pause while draining.
+	time.Sleep(3 * time.Second)
 	if ended, err := a.ended(); ended {
 		t.Fatalf("a revoked runner holding a running task stopped serving before it ended: %v", err)
 	}
@@ -232,7 +236,7 @@ func TestARevokedRunnerWhoseGraceEndsFirstEndsSayingToJoinAgain(t *testing.T) {
 	in := anInstallationRotating(t, 24*time.Hour, make(ed25519.PublicKey, ed25519.PublicKeySize))
 	var held heldUntilReleased
 	c := carrier(t, held.run)
-	a := anAgentServing(t, in, c)
+	a := anAgentServing(t, in, c, 1)
 
 	m := in.dispatch(t, "invoice")
 	eventually(t, "the task's container starting", startedFor(c, m.IdempotencyKey))
