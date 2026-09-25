@@ -874,10 +874,10 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	}
 }
 
-// A step a merge: first cancelled keeps the reason that cancelled it. The stop is only a
-// request, so its task in flight can still be lost, and a loss past max_requeues there
-// fails nothing: the verdict is already cancelled, and a reason saying the step fails
-// would contradict it.
+// A step a merge: first cancelled keeps the reason that cancelled it. Its task in flight
+// ended cancelled as the stop went out, so a loss its runner's host reports afterwards,
+// past max_requeues, is about a task that is over and fails nothing: the verdict is already
+// cancelled, and a reason saying the step fails would contradict it.
 func TestACancelledStepKeepsItsReasonThroughALossPastMaxRequeues(t *testing.T) {
 	e := started(t, `
 apiVersion: agentiik.dev/v1
@@ -916,8 +916,8 @@ steps:
 	if st.Verdict != agk.VerdictCancelled || st.Reason != cancelled.Reason {
 		t.Errorf("slow is %s because %q after its task was lost, and it was cancelled because %q", st.Verdict, st.Reason, cancelled.Reason)
 	}
-	if sh := st.Shards[0]; sh.Task != agk.TaskLost {
-		t.Errorf("the shard of slow is %s, and the loss is recorded where it happened", sh.Task)
+	if sh := st.Shards[0]; sh.Task != agk.TaskCancelled || sh.Requeue != 0 {
+		t.Errorf("the shard of slow is %s on dispatch %d, and it ended cancelled when its stop went out", sh.Task, sh.Requeue)
 	}
 }
 

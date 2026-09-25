@@ -107,6 +107,13 @@ type ShardState struct {
 	// NoExitCode is Result's: the ending reported no exit code, which ExitCode's 0 cannot say.
 	NoExitCode bool `json:"no_exit_code,omitempty"`
 
+	// Stopped says the evaluator ended this shard itself, cancelled, in the pass that
+	// named its stop as superseded or sibling_failed, rather than hearing the ending from a
+	// driver. The driver's report of it comes later, to a shard that is over, and all it
+	// may still add is how the container exited: Record reads it for that and for nothing
+	// else.
+	Stopped bool `json:"stopped,omitempty"`
+
 	// Ports is what this shard published, before the shards of the step are
 	// concatenated port by port into what the step publishes.
 	Ports map[agk.Port]agk.Envelope `json:"ports,omitempty"`

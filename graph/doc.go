@@ -50,6 +50,14 @@
 // stopped, and the moment to ask again. Nothing in a Plan has happened yet, and calling
 // Next twice with the same now returns the same Plan.
 //
+// With one exception, which is a rule of the language and so is decided here rather than by
+// whoever reads the Plan. A task stopped as superseded or sibling_failed while the run goes
+// on ends cancelled in the pass that names its stop, as the table of stops says it ends, and
+// its step is judged then; the second call finds it over and does not name it again. What
+// its driver reports afterwards adds how the container exited and nothing else. agk run
+// --local and the controller both read that from this package, which is what makes them
+// give one shard state for one history rather than one each.
+//
 // A Task is one shard of one attempt of one step, carrying everything a driver needs and
 // nothing it has to look up. Task.Inputs is exactly the argument brick.WriteInputs
 // takes and Task.Outputs is exactly the declared argument brick.Collect takes, so the
