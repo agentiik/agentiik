@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -89,4 +91,44 @@ func trusting(server *httptest.Server) *http.Transport {
 	t := Transport()
 	t.TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 	return t
+}
+
+// A request to this machine is never sent through the proxy the environment names, whatever
+// spelling of this machine its URL uses, and one anywhere else still is.
+func TestARequestToThisMachineGoesThroughNoProxy(t *testing.T) {
+	if os.Getenv("TLSFLOOR_PROXY_CHILD") == "" {
+		proxied := make(chan string, 8)
+		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			proxied <- r.URL.String()
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		defer proxy.Close()
+		child := exec.Command(os.Args[0], "-test.run=^TestARequestToThisMachineGoesThroughNoProxy$", "-test.count=1")
+		child.Env = append(os.Environ(), "TLSFLOOR_PROXY_CHILD=1", "HTTP_PROXY="+proxy.URL, "http_proxy="+proxy.URL, "NO_PROXY=", "no_proxy=")
+		out, err := child.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		close(proxied)
+		for u := range proxied {
+			if !strings.Contains(u, "agentiik.example") {
+				t.Errorf("a request to this machine went through the proxy: %s", u)
+			}
+		}
+		return
+	}
+	transport := Transport()
+	for _, host := range []string{"LOCALHOST", "0.0.0.0", "[::]", "127.0.0.1", "agentiik.example"} {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+host+":9/objects?sig=s3cr3t", nil)
+		u, err := transport.Proxy(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u != nil {
+			// Reach the proxy, so the parent sees which request was sent to it.
+			if answer, err := transport.RoundTrip(req); err == nil {
+				answer.Body.Close()
+			}
+		}
+	}
 }

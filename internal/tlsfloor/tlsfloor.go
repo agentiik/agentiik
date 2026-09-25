@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -43,10 +44,26 @@ func Floor(c *tls.Config) {
 //
 // A new one each call, and so a pool of connections of its own: a caller keeps the one it made
 // rather than making one per request, which would leave each request's idle connection behind.
+//
+// A request to an address Loopback takes for this machine goes to it directly, never through the
+// proxy the environment names. Go's own rule skips a proxy for localhost as written and for a
+// loopback address alone, so a plain http URL to LOCALHOST or 0.0.0.0, which a caller let through
+// as crossing no network, would cross it in plaintext to the proxy, signature and all.
 func Transport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = Config()
+	t.Proxy = bypassLoopback(http.ProxyFromEnvironment)
 	return t
+}
+
+// bypassLoopback is a proxy rule that sends nothing addressed to this machine through a proxy.
+func bypassLoopback(next func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+	return func(r *http.Request) (*url.URL, error) {
+		if Loopback(r.URL.Hostname()) {
+			return nil, nil
+		}
+		return next(r)
+	}
 }
 
 // Loopback says whether a host is this machine, by name or by address, which is the one place a
