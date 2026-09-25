@@ -27,12 +27,22 @@
 //	agk brick test    a brick against a set of sample envelopes, compared against
 //	                  expected outputs
 //
-// Seven more verbs are in the documented table and reach an installation that does not
-// exist at v0.1.0: login, whoami, push, share, grants, logs and brick init. Each is in
-// this table and each refuses naming what is missing, because a verb the documentation
-// lists and the binary does not know is a binary that looks broken. agk run without
-// --local gets the same treatment, since there is nothing to reach and agk login arrives
-// with the API.
+// Four reach an installation, whose address is --server or AGENTIIK_SERVER and whose
+// credential is AGENTIIK_TOKEN and never a flag:
+//
+//	agk push          a commit registered as a version, its tree carried with it
+//	agk run           with --namespace instead of --local, a run of a pushed commit
+//	                  started there and followed to its end, narrated as a local run is
+//	agk logs          the logs of a run's steps, history then live, resumed where a
+//	                  dropped connection left them
+//	agk status        how a run there stands: its state, each step's, the digests and
+//	                  what failed
+//
+// Five more verbs are in the documented table and wait for something that is not there
+// yet: login, whoami, share and grants for the principals v0.3.0 brings, and brick init for
+// templates released from agentiik/bricks. Each is in this table and each refuses naming
+// what is missing, because a verb the documentation lists and the binary does not know is a
+// binary that looks broken.
 //
 // --version is a flag rather than a command, reporting what runtime/debug.ReadBuildInfo
 // says, so the documented table stays exactly the table.
@@ -87,7 +97,8 @@
 //	   timed_out. It ran, and it did not succeed.
 //	4  No outcome could be determined: the daemon could not be reached, the userns floor
 //	   refused, network: egress was refused, a pull died, a working directory could not
-//	   be prepared.
+//	   be prepared, an installation stopped answering, or a run on one stopped being
+//	   followed before it ended.
 //
 // # Where this package is cut
 //
@@ -113,7 +124,12 @@
 //	graph.go         agk graph
 //	run.go           agk run --local
 //	bricktest.go     agk brick test
-//	absent.go        the seven verbs that reach an installation, each refusing by name
+//	push.go          agk push
+//	serverrun.go     agk run on an installation
+//	logs.go          agk logs
+//	status.go        agk status
+//	remote.go        the installation's address, the credential, and its refusals
+//	absent.go        the five verbs that wait, each refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid
 //	inputs.go        --input, --input-file, --inputs, through package schema and nothing

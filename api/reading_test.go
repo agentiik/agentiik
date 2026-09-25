@@ -522,6 +522,41 @@ func anEnvelope(run string) agk.Envelope {
 	}
 }
 
+// "Run state, per-step state, envelope digests": each port a step published reads as its digest,
+// its size and its item count, spelled as the rest of the answer is, with no purge where none
+// happened.
+func TestARunNamesWhatEachStepPublished(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	digest := s.finished(t, run, anEnvelope(run))
+	h := s.servedTo(t, granted{"alice": {{api.RunRead, api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}}}})
+
+	w, _ := call(t, h, "GET", "/api/v1/runs/"+run, "alice", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the run answered %d: %s", w.Code, w.Body)
+	}
+	var detail struct {
+		Steps []struct {
+			Step  string                    `json:"step"`
+			Ports map[string]map[string]any `json:"ports"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range detail.Steps {
+		if step.Step != "archive" {
+			continue
+		}
+		ok := step.Ports["ok"]
+		if ok["digest"] != digest || ok["items"] != 1.0 || ok["size"] == nil || len(ok) != 3 {
+			t.Errorf("the port ok of archive reads %v, and it published %s", ok, digest)
+		}
+		return
+	}
+	t.Errorf("the run names no step archive: %s", w.Body)
+}
+
 // "GET /api/v1/runs/{id}/outputs/{name}: One workflow output's envelope. Requires run:read_data."
 // run:read alone answers what a run nobody started answers; an output the run has not recorded,
 // because it has not ended or the workflow declares no such output, is a 404 of its own; one whose

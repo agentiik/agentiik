@@ -28,9 +28,11 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 	doubled := []string{"no a ", "no an ", "no the "}
 
 	// The verbs that do something here rather than waiting for an installation. push joined
-	// them when the API arrived: it no longer names what is missing, it goes and does it.
+	// them when the API arrived, and logs and status when runs could be read through it: none
+	// of them names what is missing any more, each goes and does it.
 	built := map[string]bool{
 		"validate": true, "graph": true, "run": true, "brick test": true, "push": true,
+		"logs": true, "status": true,
 	}
 	for _, c := range commands {
 		if built[c.name] {

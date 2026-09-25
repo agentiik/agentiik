@@ -291,6 +291,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/tasks/logs` takes a chunk of a task's log from the runner its task is bound to, draining or revoked in its grace included, with the task's grant in `Agentiik-Grant`, as `$defs/logShipment` describes: at most 1 MiB and 4,096 lines, written in order to the object store, one object a chunk, and indexed by migration `0026_task_logs.sql`. A chunk sent again is written once, one past a gap is kept nowhere, the last closes the log, and the log is capped at the runner policy's default caps. `db.Pool.ExpiredLogs` hands over an expired log's objects a batch at a time, and `LogsPurged` forgets only the keys it was handed and counts the logs gone whole.
 - `GET /api/v1/{ns}/runs` and `GET /api/v1/{ns}/runs/{run}` ask about each run's workflow, not the namespace: a deny of `run:read` on one workflow hides its runs, and `run:read` on one workflow reads them. A namespace the caller holds nothing in lists nothing, where it was a 404. `api.OnRun` and `api.Across` take a `{namespace}` in their pattern, and `api.AcrossHandler` is handed it as `within`.
 - `POST /api/v1/bus/token` only mints, so runners keep the bus once the control plane's credential has expired, where every one lost it within the hour. A pool's consumer is made ready as the pool is created, which is refused with 503 and creates nothing where the bus refuses it, and for every pool as `agentiik-api` starts, `default` included (`api.ReadyQueues`).
+- `GET /api/v1/runs/{id}` writes each port a step published as `digest`, `size` and `items`, with `purged_at` only once purged, where it wrote Go's field names and a zero time.
 
 ### Secrets
 
@@ -332,6 +333,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk run --local` ends a task stopped as `superseded` or `sibling_failed` `cancelled` as the stop goes out, as a server does, since `graph.Next` now decides it for both: a `fail_fast` sibling that exits 0 just before the stop reads `cancelled` with its code rather than `succeeded`. A stop is sent again on every pass until its task comes back.
 - A `fail_fast` step hands out no further shard once one has failed for good, locally and on a server: its shards not yet started, a retry waiting out its backoff included, end `cancelled`, so a staged rollout stops at the first broken region.
 - A step a `merge: first` cancels ends its shards not yet started `cancelled`, a retry waiting out its backoff included, locally and on a server, where they stayed `pending` for good and a run with a root `timeout` was decided again on every sweep. One published whose dispatch was never recorded is stopped then too, rather than when the run ends.
+- `agk run --namespace` starts a run of a pushed commit on an installation, its inputs bound against the commit's declaration, and follows it to its end in a local run's narration, report and exit codes. `-o json` writes its output envelopes. An interrupt stops following and leaves the run going. A local run's flags are refused on it, and the other way round.
+- `agk logs` follows the logs of a run's steps, or of those named, history then live. A stream cut off, or silent past three keep-alives, is asked again from its last event, and nothing is printed twice.
+- `agk status` shows how a run on an installation stands: its state, each step's verdict with its envelope digests, its inputs and outputs, and what failed. `-o json` writes the API's answer as given.
+- `agk push`, `run`, `logs` and `status` refuse an installation address that would carry `AGENTIIK_TOKEN` in plaintext: `https`, or `http` to a loopback address.
 
 ### Tests
 

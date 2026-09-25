@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -57,7 +58,7 @@ import (
 // --logs prints what each container wrote after the run and not while it runs. A log is written
 // by the driver as the container writes it, masked line by line, and eight of them interleaved
 // live is eight containers talking over each other; in order, after the run, each one is a thing
-// a person can read. Following one live is agk logs, which arrives with the API.
+// a person can read. Following one live is agk logs, on a run on an installation.
 
 // init adds the row for this command to the table.
 //
@@ -71,15 +72,18 @@ func init() {
 	}
 	commands = slices.Insert(commands, at, command{
 		name:    "run",
-		summary: "Runs the whole workflow against the local Docker daemon, with no controller, no bus and no database. Artifacts land in a working directory.",
+		summary: "With --local, runs the whole workflow against the local Docker daemon, with no controller, no bus and no database. Artifacts land in a working directory. With --namespace, starts a run of a pushed commit on an installation and follows it until it ends.",
 		run:     runLocal,
 	})
 }
 
 func runLocal(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk run", "agk run --local [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [--secret name=value] [--secret-file name=path] [--dir <path>] [--helper <path>|none] [--require-userns-remap] [-o json] [-v] [--logs]")
-	isLocal := fs.Bool("local", false, "Runs against the Docker daemon of this machine. It is the only run there is at v0.1.0.")
+	fs := flags(e, "agk run", "agk run --local [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [--secret name=value] [--secret-file name=path] [--dir <path>] [--helper <path>|none] [--require-userns-remap] [-o json] [-v] [--logs]\n\tagk run --namespace <namespace> [--server <url>] [--commit <commit>] [-f <path>] [--input name=value] [--input-file name=path] [--inputs <path>] [-o json] [-v]")
+	isLocal := fs.Bool("local", false, "Runs against the Docker daemon of this machine.")
 	entry := fs.String("f", "", "The entry point to run. Defaults to "+entryPoint+" in the directory the command is run in.")
+	namespace := fs.String("namespace", "", "Runs on an installation instead, in this namespace, the workflow the commit holds, as agk push registered it.")
+	server := fs.String("server", "", "The installation to run on. Defaults to "+serverVariable+".")
+	commit := fs.String("commit", "", "The commit to run on an installation: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
 
 	var inputs, inputFiles, secretValues, secretFiles pairs
 	fs.Var(&inputs, "input", "A workflow input, written name=value. The value is read as JSON and falls back to the string it is. Repeatable.")
@@ -101,11 +105,15 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "-o is %q: json is the one format there is\n", *output)
 		return exitUsage
 	}
+	if code, ok := oneKindOfRun(e, fs, *isLocal, *namespace); !ok {
+		return code
+	}
 	if !*isLocal {
-		// The command line was right and what is missing is on the other side of it,
-		// which is exit 1 and the same answer the seven absent verbs give.
-		fmt.Fprintln(e.Err, "run: refused: there is no installation to run against. --local runs the whole workflow on the Docker daemon of this machine, and a server run arrives with the API")
-		return exitRefused
+		return runOnServer(ctx, e, serverRun{
+			entry: *entry, namespace: *namespace, server: *server, commit: *commit,
+			inputs: inputs, inputFiles: inputFiles, document: *document,
+			json: *output == "json", verbose: *verbose,
+		})
 	}
 
 	// 1. The file. graph.Load resolves the includes in declaration order, then extends
@@ -301,4 +309,48 @@ func (e Env) paths(ps pairs) []string {
 		out = append(out, name+"="+e.path(path))
 	}
 	return out
+}
+
+// Which flags belong to which run. A local run's secrets, directory, helper and floor are this
+// machine's, and on an installation the namespace declares the secrets and the runner holds the
+// rest; the namespace, the installation and the commit name a server run. A flag of the other
+// kind is refused rather than ignored, since a run that silently dropped --secret would be a run
+// somebody believes had it.
+var (
+	localOnly  = []string{"secret", "secret-file", "dir", "helper", "require-userns-remap", "logs"}
+	serverOnly = []string{"namespace", "server", "commit"}
+)
+
+// oneKindOfRun says whether the flags name one run, local or on an installation, and answers
+// exitUsage where they do not.
+func oneKindOfRun(e Env, fs *flag.FlagSet, isLocal bool, namespace string) (int, bool) {
+	var set []string
+	fs.Visit(func(f *flag.Flag) { set = append(set, f.Name) })
+	switch {
+	case isLocal:
+		if wrong := slices.DeleteFunc(slices.Clone(set), func(n string) bool { return !slices.Contains(serverOnly, n) }); len(wrong) > 0 {
+			fmt.Fprintf(e.Err, "--%s names a run on an installation, and --local runs on this machine: drop one or the other\n", wrong[0])
+			return exitUsage, false
+		}
+	case namespace == "":
+		fmt.Fprintln(e.Err, "run: --local runs the whole workflow on the Docker daemon of this machine, and --namespace runs it on an installation, in that namespace: pass one")
+		return exitUsage, false
+	default:
+		if wrong := slices.DeleteFunc(slices.Clone(set), func(n string) bool { return !slices.Contains(localOnly, n) }); len(wrong) > 0 {
+			fmt.Fprintf(e.Err, "--%s is a local run's, and a run on an installation has none: %s\n", wrong[0], whyNotOnServer(wrong[0]))
+			return exitUsage, false
+		}
+	}
+	return exitSucceeded, true
+}
+
+// whyNotOnServer says where a local run's flag lives for a run on an installation.
+func whyNotOnServer(name string) string {
+	switch name {
+	case "secret", "secret-file":
+		return "its secrets are the ones its namespace declares, which PUT /api/v1/{ns}/secrets/{name} writes"
+	case "logs":
+		return "agk logs follows what its containers write"
+	}
+	return "the runner that takes each task holds its own working directory, helper and floor"
 }
