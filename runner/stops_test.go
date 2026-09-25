@@ -166,7 +166,7 @@ func graced(t *testing.T, toml string) (*carrying, *signalled) {
 		t.Fatal(err)
 	}
 	s := &signalled{got: map[string][]caught{}, released: map[string]chan struct{}{}}
-	return carrierWith(t, s.run, policy), s
+	return carrierWith(t, s.run, func(p *driver.Policy) { p.StopGrace = policy.StopGrace }), s
 }
 
 // carried is a task in flight on a carrier: its message and what Carry answered once it returned.

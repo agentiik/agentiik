@@ -323,6 +323,84 @@ func TestTheFirstPassPublishesWhatIsReady(t *testing.T) {
 	}
 }
 
+// A run on a server evaluates the workflow's vars as agk run --local does. The controller started
+// every run with none, so a step reading ${{ vars.x }} could not be built and failed with 120 on a
+// server while the same workflow succeeded locally, which the conformance test of package e2e
+// found running v0.1.0's milestone fixture.
+func TestAServerRunEvaluatesTheWorkflowsVars(t *testing.T) {
+	document := strings.Replace(theWorkflow, "steps:\n", "vars:\n  customer: { customer_id: C-1042 }\nsteps:\n", 1)
+	document = strings.Replace(document, "orders: ${{ workflow.inputs.orders }}", "orders: ${{ vars.customer }}", 1)
+	core, q, pool, _ := decidingOn(t, document)
+	createRun(t, pool)
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	taken := q.taken()
+	if len(taken) != 1 || taken[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v, want normalize fed from the workflow's vars", taken)
+	}
+	fed := taken[0].Inputs["orders"]
+	if len(fed.Items) != 1 || fed.Items[0].Data["customer_id"] != "C-1042" {
+		t.Errorf("normalize is fed %+v, want the one item vars.customer is", fed)
+	}
+}
+
+// A number among the vars is the same number on every pass. The first pass reads the vars off the
+// graph, where a number is a json.Number as agk run --local keeps it throughout, and an expression
+// takes it as an int; a later pass read them out of the stored document, where a number came back
+// a float64, so vars.n + 1 had no overload there and archive, decided on the second pass, failed
+// with 120.
+func TestANumberAmongTheVarsIsAnIntegerOnALaterPass(t *testing.T) {
+	document := strings.Replace(theWorkflow, "steps:\n", "vars:\n  n: 3\nsteps:\n", 1)
+	document = strings.Replace(document, "      - { step: normalize, port: ok, as: orders }\n", "      - { step: normalize, port: ok, as: orders }\n    if: ${{ vars.n + 1 == 4 }}\n", 1)
+	core, q, pool, _ := decidingOn(t, document)
+	createRun(t, pool)
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.taken()
+	if len(first) != 1 || first[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v, want normalize", first)
+	}
+	core.answer(t, succeeded(t, first[0], core.now()))
+	if second := q.taken(); len(second) != 1 || second[0].Step != "archive" {
+		t.Fatalf("the second pass published %+v, want archive, whose if reads vars.n + 1 as the integer 4", second)
+	}
+}
+
+// A number among the inputs is the same number on every pass too, which is a float64 as a local
+// run reads it, and an expression takes it as a double: workflow.inputs.n * 2.0 is 6.0 on the
+// pass that decides archive as it is on the first.
+func TestANumberAmongTheInputsIsADoubleOnALaterPass(t *testing.T) {
+	document := strings.Replace(theWorkflow, "      - { step: normalize, port: ok, as: orders }\n", "      - { step: normalize, port: ok, as: orders }\n    if: ${{ workflow.inputs.n * 2.0 == 6.0 }}\n", 1)
+	document = strings.Replace(document, "  orders: { schema: { type: array } }\n", "  orders: { schema: { type: array } }\n  n: { schema: { type: number } }\n", 1)
+	core, q, pool, _ := decidingOn(t, document)
+	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+		return ns.CreateRun(ctx, db.NewRun{
+			ID: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+			Trigger: agk.TriggerManual, TriggeredBy: "alice",
+			Inputs: json.RawMessage(`{"orders": [{"customer_id": "C-1042"}], "n": 3}`),
+			Steps:  []agk.Step{"normalize", "archive"},
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	first := q.taken()
+	if len(first) != 1 || first[0].Step != "normalize" {
+		t.Fatalf("the first pass published %+v, want normalize", first)
+	}
+	core.answer(t, succeeded(t, first[0], core.now()))
+	if second := q.taken(); len(second) != 1 || second[0].Step != "archive" {
+		t.Fatalf("the second pass published %+v, want archive, whose if reads workflow.inputs.n * 2.0 as 6.0", second)
+	}
+}
+
 // row is the task_id of the latest dispatch of a key, which is the one the runner answering it
 // in these tests took.
 func (co *Core) row(t *testing.T, key agk.TaskID) string {

@@ -13,8 +13,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/agentiik/agentiik/driver"
 )
 
 // The paths a runner's agent and its daemon share, each the same on both sides, since the daemon
@@ -177,6 +180,52 @@ func (in *Installation) volume(ctx context.Context, name string, opts ...string)
 func (r *Runner) running(ctx context.Context) bool {
 	state, err := docker(ctx, "inspect", "--format", "{{.State.Running}}", r.Agent)
 	return err == nil && state == "true"
+}
+
+// Kill ends the runner's agent with SIGKILL, as a host that loses its power or meets the kernel's
+// OOM killer ends it: nothing is told, the agent's heartbeat stops mid-interval, and its daemon
+// stays up with every container on it still running.
+func (r *Runner) Kill(ctx context.Context) error {
+	_, err := docker(ctx, "kill", "--signal", "KILL", r.Agent)
+	return err
+}
+
+// Running answers the containers of run the runner's daemon is running now, by the step their
+// label names, each as the idempotency key its task label carries.
+func (r *Runner) Running(ctx context.Context, run string) (map[string][]string, error) {
+	out, err := r.daemon(ctx, "ps", "--filter", "label="+driver.LabelRun+"="+run,
+		"--format", `{{.Label "`+driver.LabelStep+`"}} {{.Label "`+driver.LabelTask+`"}}`)
+	if err != nil {
+		return nil, err
+	}
+	return byStep(out), nil
+}
+
+// Created answers every container the runner's daemon created for run from since until now, by
+// the step their label names, each as the idempotency key its task label carries. It is read from
+// the daemon's events rather than from its containers, since a runner removes each container once
+// its task has ended and a daemon remembers that it created one.
+func (r *Runner) Created(ctx context.Context, run string, since time.Time) (map[string][]string, error) {
+	out, err := r.daemon(ctx, "events",
+		"--since", strconv.FormatInt(since.Unix(), 10), "--until", strconv.FormatInt(time.Now().Unix(), 10),
+		"--filter", "type=container", "--filter", "event=create", "--filter", "label="+driver.LabelRun+"="+run,
+		"--format", `{{index .Actor.Attributes "`+driver.LabelStep+`"}} {{index .Actor.Attributes "`+driver.LabelTask+`"}}`)
+	if err != nil {
+		return nil, err
+	}
+	return byStep(out), nil
+}
+
+// byStep reads lines of a step and a key into the keys of each step, in the order they came.
+func byStep(out string) map[string][]string {
+	steps := map[string][]string{}
+	for _, line := range strings.Split(out, "\n") {
+		step, key, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok {
+			steps[step] = append(steps[step], key)
+		}
+	}
+	return steps
 }
 
 // Holdings is everything a runner holds: the files under the directories its agent is given,

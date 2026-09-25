@@ -569,6 +569,17 @@ func TestAHelperRunnerTomlNamesIsTakenAsWritten(t *testing.T) {
 	}
 }
 
+// The driver writes every task's log into the shipment its carrier opens for it, which is what
+// ships the log to the API while the container runs.
+func TestTheDriverWritesEveryTasksLogWhereItIsShipped(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	cfg := opened(t)
+	h.serving(t)
+	if got, ok := cfg().Logs.(runner.TaskLogs); !ok {
+		t.Errorf("the driver was opened with the logs %#v, and not the runner's TaskLogs", got)
+	}
+}
+
 // No helper installed and none named is a runner that binds none, which the page allows: the
 // helper "is a convenience, never a requirement".
 func TestNoHelperInstalledStartsAndSaysScriptsHaveNone(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/bus"
@@ -23,7 +24,8 @@ import (
 // before anything is removed, and a result published there would tell the controller a task was over
 // while its container and its secrets were still on the host. What the result says comes from that
 // event all the same, kept until Run returns, because it is what names the envelopes by digest, the
-// log, the usage and the exit of a container a Result cannot carry.
+// usage and the exit of a container a Result cannot carry. The log is the API's last answer to its
+// shipment, which logs.go closes before the result goes out.
 
 // Endings keeps the terminal event of every task the driver carries until the task's result is
 // assembled from it. It is the driver's Observer, or the first of them.
@@ -76,12 +78,18 @@ type Carrier struct {
 	// Results is where the result goes, kept under the work root until the bus has taken it.
 	Results *Results
 
-	// Logs says the driver was given somewhere to write each task's log, which is what lets a
-	// result address one: a log written nowhere is not one to point at.
-	Logs bool
+	// Logs is where each task's log is shipped, which is Client. It goes with a driver opened with
+	// TaskLogs, which refuses a task its carrier ships no log for, and nil with a driver given
+	// nowhere to write a log, whose results address none: a log written nowhere is not one to
+	// point at.
+	Logs LogShipper
 
 	// Log is where the agent writes a line.
 	Log func(string)
+
+	// shipEvery and closeWithin are how often a running task's log is shipped and how long its
+	// closing chunk is waited for, zero being the constants of those names, which a test shortens.
+	shipEvery, closeWithin time.Duration
 }
 
 // ErrNotReported is a task Carry ran and reported nothing for, because nothing about it is this
@@ -110,7 +118,14 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	if say == nil {
 		say = func(string) {}
 	}
-	_, err := c.Driver.Run(a.Context(ctx), a.Task)
+	run := a.Context(ctx)
+	var log *shipment
+	if c.Logs != nil {
+		log = newShipment(ctx, c.Logs, m, say, c.shipEvery, c.closeWithin)
+		defer log.abandon()
+		run = withShipment(run, log)
+	}
+	_, err := c.Driver.Run(run, a.Task)
 
 	// Endings is keyed by the task, which is the key, and two deliveries of one key are two
 	// Carries. A Run that refused this delivery, for a key another delivery is running or has
@@ -144,7 +159,18 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	told, ended := c.Endings.take(a.Task.ID)
 	switch {
 	case ended:
-		r = resultOf(m, c.Runner, told, c.Logs)
+		// The closing chunk goes before the result, "so a finished task's log is whole by the
+		// time its step is judged", and the result's log is what the API answered it.
+		//
+		// The record of the key says what the result says of the log, since a later report
+		// is made from it: nothing while the close is waited for, since what the driver
+		// counted is not what the store holds, and the API's answer once it is known.
+		r = resultOf(m, c.Runner, told)
+		if log != nil {
+			c.logged(a.Task.ID, nil)
+			r.Log = log.finish(told.Log.Truncated)
+			c.logged(a.Task.ID, r.Log)
+		}
 	case err != nil && ctx.Err() != nil:
 		// The agent is stopping, and the task did not fail: nothing is said of it, the
 		// agent stops naming its key, and the heartbeat's sweep declares it lost, which is
@@ -154,6 +180,9 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	case err != nil:
 		say(fmt.Sprintf("runner: task %s (%s) ran no container: %s", m.TaskID, m.IdempotencyKey, err))
 		r = unreached(m, c.Runner)
+		// A log the driver opened before it failed is closed all the same, rather than left
+		// open for its readers to wait on.
+		r.Log = log.finish(false)
 	default:
 		return fmt.Errorf("runner: task %s ended and the driver told nothing of its ending, so the driver was not given this carrier's Endings as its observer", m.TaskID)
 	}
@@ -164,8 +193,34 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		// runner could not report what ran, charged to the platform.
 		say(fmt.Sprintf("runner: task %s: its ending cannot be reported as it is, so it is reported as a failure that ran no container: %s", m.TaskID, cerr))
 		r = unreached(m, c.Runner)
+		r.Log = log.finish(false)
 	}
 	return c.Results.Report(ctx, r)
+}
+
+// logRecorder is the host's record of the keys it ended, which is driver.Docker.
+type logRecorder interface {
+	Logged(id agk.TaskID, log *driver.EndedLog) error
+}
+
+// logged records what the result of a key says of its log in the host's record of its ending, where
+// the driver keeps one.
+func (c *Carrier) logged(id agk.TaskID, l *bus.Log) {
+	rec, ok := c.Driver.(logRecorder)
+	if !ok {
+		return
+	}
+	var ended *driver.EndedLog
+	if l != nil {
+		uri, err := agk.ParseLogURI(l.URI)
+		if err != nil {
+			return
+		}
+		ended = &driver.EndedLog{URI: uri, Lines: l.Lines, Truncated: l.Truncated}
+	}
+	if err := rec.Logged(id, ended); err != nil && c.Log != nil {
+		c.Log(err.Error() + ": a later report of the key from the record may not say of its log what its result said")
+	}
 }
 
 // resultOf is the result of dispatch m, from the ending the driver told of it.
@@ -176,7 +231,7 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 // does. Its artifacts, once each, since a digest is one object however many items name it. Its
 // usage, the two sampled figures only where a sample was read. A task that never reached a
 // container, stopped before its container started, carries none of it.
-func resultOf(m bus.TaskMessage, runner string, e driver.Event, logs bool) bus.TaskResult {
+func resultOf(m bus.TaskMessage, runner string, e driver.Event) bus.TaskResult {
 	r := bus.TaskResult{TaskID: m.TaskID, IdempotencyKey: m.IdempotencyKey, Runner: runner, State: e.State}
 	if !e.StartedAt.IsZero() {
 		r.StartedAt = e.StartedAt.UTC()
@@ -198,9 +253,6 @@ func resultOf(m bus.TaskMessage, runner string, e driver.Event, logs bool) bus.T
 			u.CPUSeconds, u.MaxRSSBytes = &cpu, &rss
 		}
 		r.Usage = u
-	}
-	if logs {
-		r.Log = logOf(m, e.Log.Lines, e.Log.Truncated)
 	}
 	return r
 }
@@ -244,16 +296,6 @@ func EndingOf(m bus.TaskMessage, runner string, e driver.Ending) (bus.TaskResult
 // nothing else, which the controller reads as the platform's failure and never the brick's.
 func unreached(m bus.TaskMessage, runner string) bus.TaskResult {
 	return bus.TaskResult{TaskID: m.TaskID, IdempotencyKey: m.IdempotencyKey, Runner: runner, State: agk.TaskFailed}
-}
-
-// logOf is where a task's log is addressed from: its key's, as agk.NewLogURI addresses it, and not
-// the sink's, which knows where its bytes went on this host and nowhere else.
-func logOf(m bus.TaskMessage, lines int, truncated bool) *bus.Log {
-	uri, err := agk.NewLogURI(agk.TaskID(m.IdempotencyKey))
-	if err != nil {
-		return nil
-	}
-	return &bus.Log{URI: uri.String(), Lines: lines, Truncated: truncated}
 }
 
 // appendArtifact adds an artifact unless the list already names its digest. The wire lists each
