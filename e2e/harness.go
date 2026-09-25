@@ -85,6 +85,13 @@ type Installation struct {
 	runnerIm string
 	network  string
 
+	// superuser is the database as its superuser reaches it, which Database connects to.
+	superuser string
+
+	// helper is the static helper built for the architecture the daemons run containers as,
+	// which the runner image carries and agk run --local is given.
+	helper string
+
 	// ctx bounds everything the installation asks of a program or a daemon: done a margin
 	// before go test's own timeout, so that a call that hangs fails the test while there is
 	// still time to print the logs and take the installation down, which a test killed by the
@@ -148,6 +155,7 @@ func Stand(t testing.TB) *Installation {
 	in.client = &http.Client{Timeout: time.Minute, Transport: &http.Transport{TLSClientConfig: ca.clientConfig()}}
 	in.build(ctx)
 	database := in.database(ctx)
+	in.superuser = database.admin
 	busURL := in.bus(ctx)
 	in.serve(ctx, ca, database, busURL)
 	in.registry(ctx)
@@ -248,9 +256,9 @@ func (in *Installation) secretFile(name, content string) string {
 	return path
 }
 
-// build compiles the four programs from this checkout. The API and the controller run on this
+// build compiles the programs from this checkout. The API, the controller and agk run on this
 // machine; the agent and the helper run in the runner image, for the architecture the daemon
-// runs containers as.
+// runs containers as, which is also the helper agk run --local mounts on this machine's daemon.
 func (in *Installation) build(ctx context.Context) {
 	in.bin = in.mkdir(0o755, "bin")
 	arch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
@@ -263,6 +271,7 @@ func (in *Installation) build(ctx context.Context) {
 	for _, b := range []struct{ cmd, out, goos, goarch string }{
 		{"agentiik-api", filepath.Join(in.bin, "agentiik-api"), runtime.GOOS, runtime.GOARCH},
 		{"agentiik-controller", filepath.Join(in.bin, "agentiik-controller"), runtime.GOOS, runtime.GOARCH},
+		{"agk", filepath.Join(in.bin, "agk"), runtime.GOOS, runtime.GOARCH},
 		{"agk-runner", filepath.Join(image, "agk-runner-linux-"+arch), "linux", arch},
 		{"agk-helper", filepath.Join(image, "agk-helper-linux-"+arch), "linux", arch},
 	} {
@@ -273,6 +282,7 @@ func (in *Installation) build(ctx context.Context) {
 			in.t.Fatalf("building %s: %s\n%s", b.cmd, err, out)
 		}
 	}
+	in.helper = filepath.Join(image, "agk-helper-linux-"+arch)
 }
 
 // databases are the two URLs migrate reads: the superuser it migrates as, and the role the API
@@ -617,6 +627,19 @@ func (in *Installation) ready() {
 		}
 		return nil
 	})
+}
+
+// Database connects to the installation's database as its superuser, which reads every
+// namespace's rows: for a test to read what no route answers, such as every dispatch of one key
+// and when each was redeemed. The connection is closed when the test ends.
+func (in *Installation) Database() *pgx.Conn {
+	in.t.Helper()
+	conn, err := pgx.Connect(in.ctx, in.superuser)
+	if err != nil {
+		in.t.Fatal(err)
+	}
+	in.t.Cleanup(func() { conn.Close(context.Background()) })
+	return conn
 }
 
 // label marks every container and volume this installation made, so that they are found by it.
