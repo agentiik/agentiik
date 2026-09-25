@@ -142,6 +142,9 @@ func Open(ctx context.Context, d Daemon, l Layout) (*Session, error) {
 	// Nor is it held to a tmpfs of the runner's own for its secret values: a laptop has
 	// none, and the driver says where a value lands instead.
 	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
+	// Nor to images named by digest: a brick built on this machine and never pushed has
+	// only its tag, and every brick's manifest is read before the run begins.
+	policy.RequireDigest = driver.DigestLifted
 
 	dk, err := driver.New(driver.Config{
 		Socket:   d.Socket,

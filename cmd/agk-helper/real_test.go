@@ -209,6 +209,8 @@ func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
 	policy.Helper = binary
+	// The image is the one this machine holds under its tag.
+	policy.RequireDigest = driver.DigestLifted
 
 	log := &memLog{}
 	d, err := driver.New(driver.Config{

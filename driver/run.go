@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -26,17 +27,19 @@ const drainGrace = 5 * time.Second
 
 // Run runs one task in one container and reports what became of it.
 //
-// The order is chosen so that the races cannot happen rather than so that they are
-// caught. Refuse what cannot run at all, and a key this host has already carried to an
-// ending. Resolve the image and read its manifest. Adopt by label or prepare and create.
-// Open the wait with condition=next-exit before the start, which is what makes the
+// The order is chosen so that the races cannot happen rather than so that they are caught.
+// Refuse what cannot run at all, an image not named by digest on a server among it, and a
+// key this host has already carried to an ending. Look for a container to adopt by label.
+// Resolve the image and read its manifest, bounded by the deadline where there is nothing
+// to adopt, and on a server refuse a brick that carries no manifest. Adopt, or prepare and
+// create. Open the wait with condition=next-exit before the start, which is what makes the
 // exit-during-attach race unrepresentable. Attach, start, write the envelope on standard
 // input from its own goroutine and half-close. Read the demultiplexed stream, keeping
-// standard output for the shorthand and passing standard error through the masker into
-// the log. Take the exit code from the wait that was already open, or from the event
-// stream where the wait missed it, or from an inspect under both. Collect and spill, hold
-// every envelope to the size rules, and only then upload the artifacts and write each
-// port's envelope to the store. Write the ending down under the work root. Then remove the
+// standard output for the shorthand and passing standard error through the masker into the
+// log. Take the exit code from the wait that was already open, or from the event stream
+// where the wait missed it, or from an inspect under both. Collect and spill, hold every
+// envelope to the size rules, and only then upload the artifacts and write each port's
+// envelope to the store. Write the ending down under the work root. Then remove the
 // container, the network and the working directory, in defers that run on every path.
 //
 // A graph.Result means a container ran. An error means none did, and it names the step
@@ -50,6 +53,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	if t.Call != nil && t.Image == "" {
 		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
 			"the step is a call to another workflow, which the evaluator expands and no container runs")
+	}
+	// A tag is refused before anything is asked of the host, since no runner of any pool
+	// could run it: what a tag names is whatever this host last pulled under it. It is the
+	// platform's refusal and not the brick's, because agk push records a digest in place of
+	// every tag and a message naming one is the control plane's to have sent. A step naming
+	// no image at all is left to resolveImage, which says so.
+	if ref := strings.TrimSpace(t.Image); ref != "" && !d.cfg.Policy.RequireDigest.Lifted() && !agk.ImageByDigest(ref) {
+		return graph.Result{}, fault(t.Step, ErrImageNotByDigest, ChargePlatform, "the task names the image %s", ref)
 	}
 
 	store, err := d.store(ctx, t)
@@ -102,19 +113,26 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	image, err := resolveImage(ctx, d.cli, d.cache, t, "", nil)
-	if err != nil {
-		return graph.Result{}, err
-	}
-
 	// Adoption comes before anything is created. A redelivered task re-attaches to
 	// the container it already started instead of starting a second one, which is
 	// what makes at-least-once delivery survivable in the way the Task comment
-	// promises.
+	// promises. It is asked before the image is resolved, because the pull is bounded
+	// by the deadline and a container that is already running is not: past its
+	// deadline, it is the watch that stops it and reads its exit.
 	adopted, err := d.containerOf(ctx, t.ID)
 	if err != nil {
 		return graph.Result{}, err
 	}
+
+	image, err := d.resolve(ctx, t, adopted == "")
+	if err != nil {
+		var late *pastDeadline
+		if errors.As(err, &late) {
+			return d.ended(d.timedOutPulling(ctx, t, late))
+		}
+		return graph.Result{}, err
+	}
+
 	if adopted != "" {
 		// An adopted container is removed and its working directory taken away
 		// exactly as one this delivery created is. The removal is the runner's
@@ -143,6 +161,15 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 			d.cli.ContainerRemove(tidy, adopted, true)
 		}()
 		return d.ended(d.rejoin(ctx, t, store, adopted, image))
+	}
+
+	// A brick is held to its manifest on a server, because the manifest is what says
+	// which account its container runs as: with none, it would run as the image's own,
+	// root included. An adopted container passed this when it was created, so the
+	// refusal is here, before the working directory, the network and the container.
+	if image.Manifest == nil && !isScript(t) && !d.cfg.Policy.RequireDigest.Lifted() {
+		return graph.Result{}, fault(t.Step, ErrContractBroken, ChargeBrick,
+			"%s carries no %s, so nothing declares the account its container would run as: an image becomes a brick by carrying one, and a step that runs an image with none is a script step", image.Ref, brick.ManifestPath)
 	}
 
 	w, err := newWorkdir(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
