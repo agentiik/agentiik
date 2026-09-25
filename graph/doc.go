@@ -176,7 +176,9 @@
 // What fail_fast does to the shards nobody has handed out yet. They never start: they end
 // cancelled with the ones in flight, a retry waiting out its backoff included, which is the
 // staged rollout the documentation describes, where fail_fast "stops it at the first broken
-// region". Its paragraph on fan-out names only "the shards still running".
+// region". Its paragraph on fan-out names only "the shards still running". A step a merge:
+// first cancelled ends its own the same way, since a cancelled step hands nothing out and a
+// shard left pending in it would read as work still to come.
 //
 // What becomes of a step that broke a rule of the language after the run had started: a
 // zip on envelopes of differing lengths, a batch too large to travel, a condition that

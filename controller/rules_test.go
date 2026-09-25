@@ -523,12 +523,13 @@ func TestATaskAMergeFirstSupersededEndsAsItsStopGoesOut(t *testing.T) {
 }
 
 // A task whose message the bus took but whose acknowledgement never reached the controller is not
-// recorded as dispatched, and stays pending in the document, where the evaluator names nothing to
-// stop; a runner may have redeemed it all the same. Superseded, and its run ended succeeded, it is
-// stopped from the row its redemption bound, with the stop its supersession calls for rather than
-// a deadline's.
-func TestARunsEndingStopsASupersededTaskWhoseDispatchWasNeverRecorded(t *testing.T) {
-	core, _, pool, _ := decidingOn(t, supersedingWorkflow)
+// recorded as dispatched, and stays pending in the document; a runner may have redeemed it all the
+// same. Superseded, it is ended and stopped in the pass that lifts the barrier, as one the document
+// saw dispatched is, rather than when the run ends: its row, which the redemption bound, reads
+// cancelled from then on, and the heartbeat's cancel names it to a runner that missed the stop.
+func TestASupersededTaskWhoseDispatchWasNeverRecordedIsStoppedAsTheBarrierLifts(t *testing.T) {
+	core, _, pool, super := decidingOn(t, supersedingWorkflow)
+	joinedAsTheRunner(t, super)
 	createRunOf(t, pool, "normalize", "archive", "pick")
 	q := &unanswered{step: "archive"}
 	core.queue = q
@@ -549,16 +550,19 @@ func TestARunsEndingStopsASupersededTaskWhoseDispatchWasNeverRecorded(t *testing
 	if len(picked) != 1 || picked[0].Step != "pick" {
 		t.Fatalf("the barrier lifted on normalize and published %+v", picked)
 	}
-	if stops := q.stops(); len(stops) != 0 {
-		t.Fatalf("a task the document never saw dispatched was stopped before the run ended: %+v", stops)
+	if stops := q.stops(); !slices.Equal(stops, []graph.Stop{{Task: slow.Task.ID, Reason: graph.StopSuperseded}}) {
+		t.Errorf("the pass that lifted the barrier stopped %+v, and %s had redeemed the superseded %s", stops, theRunner, slow.Task.ID)
 	}
+	if state, runner, _ := rowOf(t, super, slow.Row); state != "cancelled" || runner == nil || *runner != theRunner {
+		t.Errorf("the superseded task reads %s, bound to %s, while the run goes on", state, shownOf(runner))
+	}
+	if got := cancelled(t, core, slow.Task.ID); !slices.Equal(got, []agk.TaskID{slow.Task.ID}) {
+		t.Errorf("the heartbeat of %s holding %s answers cancel %v", theRunner, slow.Task.ID, got)
+	}
+
 	core.answer(t, succeeded(t, picked[0], core.now()))
 	if got := stateOf(t, core); got != agk.Succeeded {
 		t.Fatalf("the run is %s", got)
-	}
-	stops := q.stops()
-	if len(stops) != 1 || stops[0] != (graph.Stop{Task: slow.Task.ID, Reason: graph.StopSuperseded}) {
-		t.Errorf("the run's ending stopped %+v, and %s had redeemed the superseded %s", stops, theRunner, slow.Task.ID)
 	}
 }
 

@@ -206,10 +206,9 @@ func inFlight(ss StepState) int {
 }
 
 // holdsARunner says whether one shard is occupying a runner at this moment. It is the
-// reading max_parallel counts on, the reading a merge: first stops on and the reading a
-// cancelled run is called off by, written once so that the three cannot drift: a shard
-// that has not been handed out yet holds nothing, and a shard that has reached a terminal
-// state has let go.
+// reading max_parallel counts on and the reading a cancelled run is called off by, written
+// once so that the two cannot drift: a shard that has not been handed out yet holds
+// nothing, and a shard that has reached a terminal state has let go.
 func holdsARunner(sh ShardState) bool {
 	return sh.Task != agk.TaskPending && !sh.Task.Terminal()
 }
