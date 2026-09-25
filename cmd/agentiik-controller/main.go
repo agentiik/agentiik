@@ -254,8 +254,9 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		return err
 	}
 	if exporter != nil {
-		// Whatever is still queued is sent on the way out, for as long as a stop can wait
-		// without keeping the lock from a standby, and dropped past that.
+		// Whatever is still queued is sent on the way out, once the lock is already released,
+		// for five seconds at most: what the program sends on the way out is bounded, so that
+		// a supervisor's stop is not spent waiting on a collector, and what is left is dropped.
 		defer func() {
 			flush, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()

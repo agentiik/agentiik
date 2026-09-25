@@ -436,10 +436,9 @@ func (r *reader) maxRequeues() int {
 // otlpEndpoint is the OpenTelemetry collector's OTLP/HTTP address, as OTEL_EXPORTER_OTLP_ENDPOINT
 // names one: the base URL the spans are posted below, at /v1/traces. Unset is no tracing.
 //
-// https, or http to a loopback address alone, since "no plaintext path anywhere" is not waived for
-// telemetry: a span names a namespace, a workflow, its steps and the runners that ran them. A
-// collector beside the program, the commonest way to run one, is reached on this machine and
-// crosses no network. Never repeated in a refusal, and refused with a user, since a URL can carry a
+// https, or http to a loopback address alone: "no plaintext path anywhere" is waived only for this
+// machine, which no network carries, since a span names a namespace, a workflow, its steps and the
+// runners that ran them. A collector beside the program is the commonest way to run one. Never repeated in a refusal, and refused with a user, since a URL can carry a
 // password and nothing here would send it as one.
 func (r *reader) otlpEndpoint() string {
 	v, set := r.value(OTLPEndpoint)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/otlp"
 )
 
@@ -234,5 +236,59 @@ func TestADispatchTakenBeforeItWasRecordedStillHasItsSpan(t *testing.T) {
 	_, tasks := traceOfDecidedRun(t, spans)
 	if _, ok := tasks[agk.TaskSpan(sent[0].Row)]; !ok || len(tasks) != 1 {
 		t.Fatalf("the trace holds %d task spans and none for dispatch %s, which %s redeemed and whose container was told its span", len(tasks), sent[0].Row, theRunner)
+	}
+}
+
+// The spans of a run as the rows describe it, one rule per case: what fails is an error and what
+// was called off is not, a span begins at the earliest moment its row holds and never ends before
+// it begins, and an exit code nobody reported is not written as one.
+func TestTheSpansOfARunAreWhatItsRowsSay(t *testing.T) {
+	at := func(minute int) time.Time { return time.Date(2026, 9, 14, 6, minute, 0, 0, time.UTC) }
+	code := 1
+	r := db.RunTrace{
+		Namespace: "finance", Run: decidedRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+		State: agk.TimedOut, Trigger: agk.TriggerManual,
+		CreatedAt: at(0), StartedAt: at(1), FinishedAt: at(30),
+		Dispatches: []db.TracedDispatch{
+			// Published before its dispatch was recorded, and failed.
+			{ID: "01M2Z8V1P9C4XQ7K2N4D6F8H1A", Key: "k/normalize/1", Step: "normalize", Attempt: 1, State: agk.TaskFailed,
+				Runner: "runner-1", ExitCode: &code, PublishedAt: at(2), DispatchedAt: at(3), StartedAt: at(4), FinishedAt: at(5)},
+			// Stopped at the deadline, with a finish written before its start by another clock.
+			{ID: "01M2Z8V1P9C4XQ7K2N4D6F8H1B", Key: "k/archive/1", Step: "archive", Attempt: 1, State: agk.TaskTimedOut,
+				Runner: "runner-1", DispatchedAt: at(10), FinishedAt: at(9)},
+			// Cancelled before anybody took it: no span.
+			{ID: "01M2Z8V1P9C4XQ7K2N4D6F8H1C", Key: "k/notify/1", Step: "notify", Attempt: 1, State: agk.TaskCancelled},
+		},
+	}
+	spans := spansOf(r)
+	run, tasks := traceOfDecidedRun(t, spans)
+	if !run.Error || !run.Start.Equal(at(1)) || !run.End.Equal(at(30)) {
+		t.Errorf("the run's span is error %v from %s to %s, want an error from its start to its end", run.Error, run.Start, run.End)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("the trace holds %d task spans, want the two that were handed out", len(tasks))
+	}
+	failed := tasks[agk.TaskSpan("01M2Z8V1P9C4XQ7K2N4D6F8H1A")]
+	if !failed.Error || !failed.Start.Equal(at(2)) || !failed.End.Equal(at(5)) {
+		t.Errorf("the failed task's span is error %v from %s to %s, want an error from its publication to its end", failed.Error, failed.Start, failed.End)
+	}
+	if got, _ := attribute(failed, "agentiik.exit_code"); got != int64(1) {
+		t.Errorf("the failed task's span carries the exit code %v, want 1", got)
+	}
+	stopped := tasks[agk.TaskSpan("01M2Z8V1P9C4XQ7K2N4D6F8H1B")]
+	if !stopped.Error || !stopped.Start.Equal(at(10)) || !stopped.End.Equal(at(30)) {
+		t.Errorf("the timed-out task's span is error %v from %s to %s, want an error ending with the run", stopped.Error, stopped.Start, stopped.End)
+	}
+	if got, ok := attribute(stopped, "agentiik.exit_code"); ok {
+		t.Errorf("a task nobody reported an exit code for carries %v", got)
+	}
+
+	// A run cancelled while it queued starts at its creation, on the database's clock, and ends
+	// on the controller's, which may read earlier; it is called off, not failed.
+	queued := db.RunTrace{Namespace: "finance", Run: decidedRun, Workflow: "monthly-invoicing",
+		State: agk.Cancelled, Trigger: agk.TriggerManual, CreatedAt: at(7), FinishedAt: at(6)}
+	run, _ = traceOfDecidedRun(t, spansOf(queued))
+	if run.Error || !run.Start.Equal(at(7)) || run.End.Before(run.Start) {
+		t.Errorf("the span of a run cancelled while it queued is error %v from %s to %s", run.Error, run.Start, run.End)
 	}
 }

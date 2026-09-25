@@ -7,10 +7,10 @@
 // What is sent is a few spans per run, built after the fact from rows the database already holds:
 // no context threaded through calls, no sampler, no instrumentation of a library, which is what the
 // SDK is for. What is left is one POST of one JSON document, whose shape the OTLP specification
-// fixes, and a queue in front of it. The SDK would put its trace, metric and resource modules, gRPC
-// and protobuf in go.sum for everyone who builds any part of this repository, agk run --local on a
-// laptop included, to carry that; internal/docker gives the same reason for writing the Engine API
-// by hand, and refuses the same modules by name.
+// fixes, and a queue in front of it. The SDK would put its trace, metric and resource modules and
+// gRPC in go.sum for everyone who builds any part of this repository, agk run --local on a laptop
+// included, to carry that; internal/docker gives the same reason for writing the Engine API by
+// hand, and refuses the same modules by name.
 //
 // # What it costs a run
 //
@@ -213,8 +213,8 @@ func (e *Exporter) Export(spans ...Span) {
 	}
 }
 
-// Close sends what is queued, within ctx, and stops. What ctx leaves no time for is dropped, a batch
-// already on its way included.
+// Close sends what is queued, within ctx, and stops. What ctx leaves no time for is dropped, a
+// batch already on its way included.
 func (e *Exporter) Close(ctx context.Context) error {
 	e.mu.Lock()
 	if e.closed {
@@ -324,9 +324,10 @@ func (e *Exporter) send(ctx context.Context, spans []Span) error {
 	return nil
 }
 
-// Encode is the ExportTraceServiceRequest a batch travels as, in OTLP's JSON encoding: identifiers
-// in lowercase hexadecimal rather than the base64 protobuf's own JSON mapping would write, and every
-// 64-bit number as a decimal string.
+// Encode is the ExportTraceServiceRequest a batch travels as, in OTLP's JSON encoding, which departs
+// from protobuf's own JSON mapping where a collector would refuse or misread it: identifiers in
+// lowercase hexadecimal rather than base64, enumerations as integers only, and keys in
+// lowerCamelCase only. Every 64-bit number is a decimal string, as that mapping writes one.
 func Encode(resource []Attribute, spans []Span) any {
 	out := make([]map[string]any, 0, len(spans))
 	for _, s := range spans {

@@ -76,9 +76,9 @@ func aSpan(name string) Span {
 	}
 }
 
-// What travels is OTLP's JSON encoding, whose two departures from protobuf's own JSON mapping are
-// the ones a collector would refuse or misread: identifiers in hexadecimal, and every 64-bit number
-// as a string.
+// What travels is OTLP's JSON encoding, whose departures from protobuf's own JSON mapping are the
+// ones a collector would refuse or misread: identifiers in hexadecimal, and enumerations as
+// integers. Every 64-bit number is a string, as that mapping already writes one.
 func TestASpanTravelsInOTLPsJSONEncoding(t *testing.T) {
 	c := newCollector(t, http.StatusOK)
 	e, err := New(Options{Endpoint: c.URL, Resource: []Attribute{String("service.name", "agentiik-controller")}})

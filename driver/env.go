@@ -28,10 +28,11 @@ const (
 	EnvCommit    = "AGK_COMMIT"
 	EnvOutPorts  = "AGK_OUT_PORTS"
 
-	// EnvTraceParent is the trace context a brick that uses OpenTelemetry joins its spans to:
-	// "context propagated into the container environment for bricks that use it". Its name is
-	// not the table's to choose. OpenTelemetry's environment carrier spells the W3C header's
-	// name in capitals, which is what an SDK reading its parent from the environment looks for.
+	// EnvTraceParent is the trace context a brick that uses OpenTelemetry joins its
+	// spans to: "context propagated into the container environment for bricks that use
+	// it". Its name is not the table's to choose. OpenTelemetry's environment carrier
+	// spells the W3C header's name in capitals, which is what an SDK reading its parent
+	// from the environment looks for.
 	EnvTraceParent = "TRACEPARENT"
 
 	// EnvParamPrefix is what a script step's parameters are exported under. It is
@@ -102,11 +103,11 @@ func deadlineText(at time.Time) string {
 	return at.UTC().Format(time.RFC3339)
 }
 
-// traceParent names the task's span as the parent of whatever the container traces, in the run's
-// trace. The span is the dispatch's where a runner took one and the key's on a laptop, which is
-// what the controller exports the dispatch's span under and what nothing exports locally: the
-// derivation is agk's, so a container told this and a span exported elsewhere agree without a
-// word passing between them.
+// traceParent names the task's span as the parent of whatever the container traces, in
+// the run's trace. The span is the dispatch's where a runner took one and the key's on a
+// laptop, which is what the controller exports the dispatch's span under and what nothing
+// exports locally: the derivation is agk's, so a container told this and a span exported
+// elsewhere agree without a word passing between them.
 func traceParent(t graph.Task) string {
 	if t.Dispatch != "" {
 		return agk.TraceParent(t.Run, t.Dispatch)

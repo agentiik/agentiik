@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
@@ -25,8 +24,8 @@ import (
 // for each, and by statements that end rows the evaluator's state does not describe, a retry's
 // earlier attempt, a requeue's lost dispatch and the tasks a run's ending stops among them. The
 // rows hold every one of them once the run has ended, and one read of them is the one place the
-// whole trace can be built from. What that costs is a trace that appears when its run ends, which
-// in v0.2.0, where nothing can make a run wait, is minutes after its last task did.
+// whole trace can be built from. What that costs is a long run's early spans, held until the run
+// ends, which is the pass that hears its last result, rather than sent as each task ends.
 //
 // And never at the price of a run. The spans are handed to a queue and sent by somebody else; a
 // read that fails is reported and the run is not held back for it. A controller that dies between
@@ -100,11 +99,12 @@ func spansOf(r db.RunTrace) []otlp.Span {
 	if start.IsZero() {
 		start = r.CreatedAt
 	}
-	end := r.FinishedAt
-	if end.IsZero() {
-		end = start
-	}
-	name, _, _ := strings.Cut(r.Workflow, "@")
+	// The start of a run cancelled while it queued is its creation, the database's clock, and
+	// its end is the controller's, so the end is held to the start rather than trusted to be
+	// after it: two clocks a millisecond apart would otherwise give a span that ends before it
+	// begins.
+	end := maxTime(start, r.FinishedAt)
+	name := r.Workflow
 	spans := []otlp.Span{{
 		Trace: trace, ID: root, Name: name, Start: start, End: end,
 		Attributes: []otlp.Attribute{
