@@ -30,7 +30,7 @@ func join(ctx context.Context, e env, args []string) int {
 	fs.SetOutput(e.Err)
 	api := fs.String("api", "", "the address of the API, such as https://agentiik.example.com; "+runner.API+" where not given")
 	tokenFlag := fs.String("token", "", "the join token an administrator issued, agkjoin_...")
-	labels := fs.String("labels", "", "the labels this runner claims, such as zone=dmz,arch=amd64; "+runner.Labels+" where not given, and none where neither is, which is a runner of the pool default")
+	labels := fs.String("labels", "", "the labels this runner claims, such as zone=dmz,arch=amd64; "+runner.Labels+" where not given, and none where neither is, as a runner of the pool default claims")
 	account := fs.String("user", agentAccount, "the account the agent runs as, which the key and runner.env are given to when join runs as root")
 	replace := fs.Bool("replace", false, "replace the identity this host already has with a new runner and a new key")
 	if err := fs.Parse(args); err != nil {

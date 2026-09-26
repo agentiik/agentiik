@@ -150,6 +150,18 @@ func TestLabelsInTheEnvironmentOfARunnerThatJoinedClaimingNoneAreRefused(t *test
 	}
 }
 
+// A runner.env holding settings alone, written before joining, is a host that has not joined: it is
+// told to join, and not that it joined claiming no label.
+func TestLabelsInTheEnvironmentBeforeJoiningAreNotRefusedAsClaimedAfterIt(t *testing.T) {
+	_, err := ReadConfig(environment(map[string]string{API: "https://agentiik.example.com", Labels: "zone=dmz"}),
+		envFile(t, "AGK_RUNNER_CONCURRENCY=4\n", 0o600))
+	for _, e := range unjoin(err) {
+		if strings.Contains(e.Error(), "joined claiming no label") {
+			t.Errorf("a host that has not joined is told %s", e)
+		}
+	}
+}
+
 func TestAHostThatHasNotJoinedIsToldToJoin(t *testing.T) {
 	_, err := ReadConfig(environment(map[string]string{"AGK_API": "https://agentiik.example.com", "AGK_RUNNER_LABELS": "zone=dmz"}),
 		filepath.Join(t.TempDir(), "runner.env"))
