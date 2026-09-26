@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,6 +34,11 @@ const (
 	RunnerID   = "AGK_RUNNER_ID"
 	RunnerPool = "AGK_RUNNER_POOL"
 	Credential = "AGK_RUNNER_CREDENTIAL"
+
+	// The join token serve joins with where the host has no identity yet, as a value or in a
+	// file, read by serve alone and never written anywhere.
+	JoinToken     = "AGK_RUNNER_JOIN_TOKEN"
+	JoinTokenFile = "AGK_RUNNER_JOIN_TOKEN_FILE"
 )
 
 // EnvPath is the file join writes the runner's identity to, and serve reads.
@@ -149,7 +155,7 @@ type Error struct {
 func (e *Error) Error() string { return "runner: " + e.Variable + " " + e.Reason }
 
 // ErrNotJoined is runner.env missing, which is a host that has not joined.
-var ErrNotJoined = errors.New("runner: this host has not joined an installation: run agk-runner join, which writes the runner's identity to " + EnvPath)
+var ErrNotJoined = errors.New("runner: this host has not joined an installation: run agk-runner join, which writes the runner's identity to " + EnvPath + ", or give serve a join token in " + JoinToken + " or " + JoinTokenFile + ", with which it joins itself")
 
 var (
 	// givenName is the grammar the API mints a runner identifier and names a pool in, which is
@@ -205,7 +211,7 @@ func ReadConfig(lookup Lookup, path string) (Config, error) {
 	_, identity := r.file[RunnerID]
 	if _, inFile := r.file[Labels]; joined && identity && !inFile {
 		if _, inEnv := r.env(Labels); inEnv {
-			r.refuse(Labels, "is set in the environment, and this runner joined claiming no label, so "+r.path+" carries none: a runner claims labels at join, within what its token permits, so unset it, or join again with --replace and a token that permits them")
+			r.refuse(Labels, "is set in the environment, and this runner joined claiming no label, so "+r.path+" carries none: a runner claims labels at join, within what its token permits, so unset it, or join again with --replace and a token that permits them, or give serve such a token in "+JoinToken+" or "+JoinTokenFile+", with which it joins again itself")
 		}
 	}
 
@@ -222,6 +228,42 @@ func ReadConfig(lookup Lookup, path string) (Config, error) {
 		c.Credential = r.credential()
 	}
 	return c, r.err()
+}
+
+// WorkRoot is the work root serve works under, read from the environment and runner.env as serve
+// reads it, but without holding runner.env to its owner.
+//
+// It is what serve, started as root, gives to the account it serves as before it drops to it, and
+// that account is the one that owns runner.env, which serve reads as itself once it has dropped.
+// Only the work root is taken from the file here, and whatever else is wrong with it is refused by
+// that reading.
+func WorkRoot(lookup Lookup, path string) (string, error) {
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	r := &reader{lookup: lookup, path: path, file: map[string]string{}, written: map[string]bool{}}
+	there, _ := Joining{EnvPath: path}.existing(r)
+	if v, ok := there[WorkDir]; ok {
+		r.file[WorkDir] = v
+	}
+	dir := r.workDir()
+	return dir, r.err()
+}
+
+// sameSetting says whether two spellings of a setting say the same thing: the address without its
+// trailing slashes, since the client reaches it so, and a list as the set of its items, since what
+// a runner claims has no order. Anything else is the same only as written.
+func sameSetting(name, a, b string) bool {
+	switch name {
+	case API:
+		return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
+	case Labels, Namespaces:
+		as, bs := strings.Split(a, ","), strings.Split(b, ",")
+		slices.Sort(as)
+		slices.Sort(bs)
+		return slices.Equal(as, bs)
+	}
+	return a == b
 }
 
 // reader reads one start's settings and keeps every refusal.
@@ -256,7 +298,17 @@ func (r *reader) env(name string) (string, bool) {
 func (r *reader) value(name string) (string, bool) {
 	fromEnv, inEnv := r.env(name)
 	fromFile, inFile := r.file[name]
+	// Written two ways that say the same thing, the two are one value, and Drifted compares
+	// them so: a runner that did not join again for a spelling is not one to refuse for it.
+	if inEnv && inFile && sameSetting(name, fromEnv, fromFile) {
+		fromFile = fromEnv
+	}
 	switch {
+	case inEnv && inFile && fromEnv != fromFile && slices.Contains(joinWrites, name):
+		// The one in the file is what this runner joined with, and the API checked it against
+		// the join token then, so the runner cannot take the other one up by itself.
+		r.refuse(name, "is set in the environment and in "+r.path+" to two different values, and this runner joined with the one in the file, which it cannot change without joining again: give serve a join token in "+JoinToken+" or "+JoinTokenFile+", and it joins again with the one in the environment, or set it to the same value in both")
+		return "", false
 	case inEnv && inFile && fromEnv != fromFile:
 		r.refuse(name, "is set in the environment and in "+r.path+" to two different values, and a runner that chose one would be guessing which of them was meant: set it in one place, or to the same value in both")
 		return "", false

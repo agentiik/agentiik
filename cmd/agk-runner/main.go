@@ -64,6 +64,12 @@ type env struct {
 	// writes to.
 	Account func(name string) (runner.Owner, error)
 
+	// Become is serve started as root becoming the agent's account: its groups set to the
+	// ones given, its user and group to the account's, and the program started again as it,
+	// which returns only where that failed. Nil is the kernel's, which is what main gives; a
+	// test, which cannot drop what it never had, records what it was asked instead.
+	Become func(agent runner.Owner, groups []int) error
+
 	// Host is what the driver asks of this machine rather than of the daemon: the
 	// capabilities the agent holds and what its secrets directory is mounted as. Nil is
 	// the kernel's own answers, which is what main gives.

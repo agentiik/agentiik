@@ -9,6 +9,15 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agentiik-api init` prepares an installation from `AGK_*` variables alone and brings it back in line with them at every run, for a Compose `init` service: certificate, keys, bus identity and `nats.conf`, migration, namespace, the operator token's hash, and a join token of the pool `default` for the local runner.
 - `AGK_PROXY_URL` puts the API behind a proxy on the same host: reached at that URL, plain HTTP on the loopback, `AGK_PUBLIC_URL` and the TLS pair left unread.
 
+### Images
+
+- `ghcr.io/agentiik/runner` starts as root and `serve` drops to 65532 itself, so its container takes `cap_add` SETUID and SETGID beside CHOWN, FOWNER and DAC_OVERRIDE, and no `user` or `group_add`.
+
+### Runner
+
+- `agk-runner serve` started as root gives the key's directory, the work root and `runner.env`'s directory to `agentiik`, takes the group owning the Docker socket, drops to `agentiik` and starts itself again. It still never serves as root.
+- `serve` given `AGK_RUNNER_JOIN_TOKEN` or `AGK_RUNNER_JOIN_TOKEN_FILE` joins when the host has no identity, waiting up to 5 minutes for an API that does not answer, and joins again as a new runner when its key or `runner.env` is gone, or when `AGK_API`, `AGK_RUNNER_LABELS` or `AGK_RUNNER_NAMESPACES` in its environment differ from what it joined with, an unset one claiming none.
+
 ## v0.2.3, 2026-09-26
 
 - Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.
