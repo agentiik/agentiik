@@ -92,19 +92,39 @@ type Ulimit struct {
 // long form is what carries ReadOnly as a field instead of as a suffix nobody sees, and
 // an input a step can write to is an input a retry reads differently.
 type Mount struct {
-	Type         string        `json:"Type"`
-	Source       string        `json:"Source,omitempty"`
-	Target       string        `json:"Target"`
-	ReadOnly     bool          `json:"ReadOnly,omitempty"`
-	TmpfsOptions *TmpfsOptions `json:"TmpfsOptions,omitempty"`
+	Type          string         `json:"Type"`
+	Source        string         `json:"Source,omitempty"`
+	Target        string         `json:"Target"`
+	ReadOnly      bool           `json:"ReadOnly,omitempty"`
+	TmpfsOptions  *TmpfsOptions  `json:"TmpfsOptions,omitempty"`
+	VolumeOptions *VolumeOptions `json:"VolumeOptions,omitempty"`
 }
 
-// The mount types this product uses. A volume is not one of them: a task's working
-// directory is created fresh and removed with the container, and a volume outlives both.
+// The mount types this product uses. A volume is one only for a task's secret values: a
+// tmpfs volume is the one tmpfs a container can be given already filled, and it is
+// created for the task and removed with it. A task's working directory is a bind, since
+// a volume keeps what it is given on the daemon's disk.
 const (
-	MountBind  = "bind"
-	MountTmpfs = "tmpfs"
+	MountBind   = "bind"
+	MountTmpfs  = "tmpfs"
+	MountVolume = "volume"
 )
+
+// VolumeOptions are the options of a volume mount. NoCopy keeps what the image has at the
+// target out of the volume, and DriverConfig is what the daemon creates the volume with if
+// it is not there when the container is created, which it otherwise does as a volume on its
+// own disk.
+type VolumeOptions struct {
+	NoCopy       bool              `json:"NoCopy,omitempty"`
+	Labels       map[string]string `json:"Labels,omitempty"`
+	DriverConfig *VolumeDriver     `json:"DriverConfig,omitempty"`
+}
+
+// VolumeDriver names a volume driver and its options.
+type VolumeDriver struct {
+	Name    string            `json:"Name,omitempty"`
+	Options map[string]string `json:"Options,omitempty"`
+}
 
 // TmpfsOptions sizes a tmpfs mount. The flags themselves, noexec, nosuid and nodev,
 // travel on HostConfig.Tmpfs, which is where the settings table names them and where
@@ -287,6 +307,7 @@ type Endpoint struct {
 // Destination here and Target there.
 type MountPoint struct {
 	Type        string `json:"Type,omitempty"`
+	Name        string `json:"Name,omitempty"`
 	Source      string `json:"Source,omitempty"`
 	Destination string `json:"Destination,omitempty"`
 	RW          bool   `json:"RW,omitempty"`
