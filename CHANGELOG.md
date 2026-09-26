@@ -6,7 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Images
 
-- `ghcr.io/agentiik/api`, `controller` and `runner` are published for linux/amd64 and linux/arm64: `X.Y.Z`, `vX.Y.Z` and `latest` at every release tag, `dev` at every commit to main. Any other branch builds and checks them and pushes nothing.
+- `ghcr.io/agentiik/api`, `controller` and `runner` are published for linux/amd64 and linux/arm64: `X.Y.Z` and `vX.Y.Z` at every release tag, `latest` on the highest release, `dev` at every commit to main. Any other branch builds and checks them and pushes nothing.
 
 ## v0.2.0, 2026-09-26
 

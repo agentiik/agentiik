@@ -2,7 +2,7 @@
 # linux/amd64 and linux/arm64 from the static binaries build/*.Dockerfile say they hold, and pushed
 # with the GITHUB_TOKEN, so that publishing needs no secret of its own.
 #
-#   a v* tag        pushes X.Y.Z, vX.Y.Z and latest
+#   a v* tag        pushes X.Y.Z and vX.Y.Z, and latest when it is the highest release
 #   main            pushes dev, the same build as a release, at every commit
 #   another branch  builds everything and pushes to a registry inside the job, never to ghcr.io
 #   dispatch        builds an existing tag again, pushing it only from main and with dry_run off
@@ -10,9 +10,9 @@
 # A branch of this repository builds the release too, so that a Dockerfile a pull request breaks is
 # found on the pull request and not at the tag, when the version has already been said out loud.
 #
-# What keeps a branch from publishing is this file as main holds it: a branch runs its own copy with
-# packages: write, as every workflow does. Who may publish is who may push to main or push a v* tag,
-# which a tag ruleset restricts.
+# What keeps a branch from publishing is this file as the branch holds it: a branch runs its own copy
+# with packages: write, as every workflow does, so anyone who may push a branch here may publish by
+# editing it. The plan step keeps an honest branch from publishing by accident, not a dishonest one.
 name: release
 
 on:
@@ -39,7 +39,7 @@ permissions:
 # makes the older one's dev and dry run moot; a release is never cancelled, since one pushed halfway
 # is worse than one pushed twice.
 concurrency:
-  group: release-${{ inputs.tag || github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 jobs:

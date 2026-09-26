@@ -16,8 +16,9 @@
 #   docker buildx build --platform linux/amd64,linux/arm64 -f build/runner.Dockerfile \
 #     --build-arg VERSION=0.2.0 --build-arg REVISION=$(git rev-parse HEAD) .
 #
-# .github/workflows/release.yml builds it so and pushes it for both architectures, as X.Y.Z,
-# vX.Y.Z and latest at a release tag and as dev at every commit to main.
+# .github/workflows/release.yml builds it so and pushes it for both architectures: as X.Y.Z and
+# vX.Y.Z at a release tag, as latest too when that is the highest release, and as dev at every
+# commit to main.
 #
 # Run as the page's Compose sample runs it: as agentiik, in the group that owns the daemon socket,
 # in the host's user namespace, with cap_drop ALL and cap_add CHOWN, FOWNER and DAC_OVERRIDE, and

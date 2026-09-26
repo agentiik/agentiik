@@ -204,8 +204,8 @@ func daemonArch(t *testing.T, socket string) string {
 // passes, and answers with the path.
 //
 // CGO_ENABLED=0 is what makes it static. These are the flags the header of
-// build/controller.Dockerfile gives for the binaries the image is built from, and the two are
-// kept the same by hand until a release workflow builds from one definition of them. A machine
+// build/controller.Dockerfile gives for the binaries the image is built from, and the ones
+// .github/workflows/release.yml publishes it with; the three are kept the same by hand. A machine
 // with no Go toolchain in reach skips.
 func buildController(t *testing.T, arch string) string {
 	t.Helper()
