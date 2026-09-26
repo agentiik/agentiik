@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-yaml/parser"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/schema"
 )
 
 // The keys of the entry point, of a step and of defaults. They are written out because
@@ -1681,7 +1682,13 @@ func intAt(m map[string]any, key, where string) (int, bool, error) {
 	if !ok {
 		return 0, false, fmt.Errorf("%s is written as %s, and it is a whole number", keyPath(where, key), kindOf(v))
 	}
-	i, err := strconv.Atoi(n.String())
+	// A count written with a point and nothing after it, max: 3.0, is the whole number the
+	// schema's integer takes it for; it is only in an expression that 3.0 is a double.
+	written := n.String()
+	if whole, fraction, ok := strings.Cut(written, "."); ok && strings.Trim(fraction, "0") == "" {
+		written = whole
+	}
+	i, err := strconv.Atoi(written)
 	if err != nil {
 		return 0, false, fmt.Errorf("%s is %s, and it is a whole number", keyPath(where, key), n)
 	}
@@ -1792,7 +1799,9 @@ func keysOf(m map[string]any) []string {
 // The numbers matter twice over. A parameter is "validated against the manifest schema",
 // which is a JSON Schema validator reading a JSON value, and a step's params reach the
 // container as /agk/params.json, which is JSON. A YAML loader answering uint64 for 1
-// would make both of those a conversion somebody has to remember.
+// would make both of those a conversion somebody has to remember. And a number keeps the
+// way it was written, which is what an expression reads: one written without a fraction
+// or an exponent is an int, and any other a double.
 func jsonLike(v any, where string) (any, error) {
 	switch value := v.(type) {
 	case map[string]any:
@@ -1836,7 +1845,10 @@ func jsonLike(v any, where string) (any, error) {
 	case int:
 		return json.Number(strconv.Itoa(value)), nil
 	case float64:
-		return json.Number(strconv.FormatFloat(value, 'g', -1, 64)), nil
+		// The loader answers a float64 for a number written with a point, 1.0 included,
+		// and 1.0 is a double in an expression however whole it is: written 1, it would
+		// come back an int.
+		return schema.Double(value), nil
 	default:
 		return v, nil
 	}
