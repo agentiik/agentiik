@@ -323,6 +323,17 @@ func TestTheAPIRenewsAnExpiredCredentialBeforeItStarts(t *testing.T) {
 		t.Error("the renewed credential is not under the installation's account")
 	}
 
+	// A nil lookup is the process's environment, as it is for the settings.
+	for name, value := range env {
+		t.Setenv(name, value)
+	}
+	sharedCredential(t, issuer, path, time.Now().Add(-time.Hour), 0o600)
+	said.Reset()
+	renewExpired(nil, time.Now(), &said)
+	if left := time.Until(credentialExpiry(t, path)); left < controlPlaneLife-time.Minute {
+		t.Errorf("with the settings in the environment, the expired credential now expires in %s:\n%s", left, said.String())
+	}
+
 	// One that has not expired is the watch's to renew, and this leaves it, in silence.
 	before, _ = os.ReadFile(path)
 	said.Reset()

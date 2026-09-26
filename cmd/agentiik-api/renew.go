@@ -123,6 +123,10 @@ func replaceLike(path string, content []byte) error {
 // again. Anything else is left to the settings to refuse, saying why, so this says nothing unless
 // it renewed or tried to.
 func renewExpired(lookup config.Lookup, now time.Time, stderr io.Writer) {
+	if lookup == nil {
+		// As config reads a nil one: the process's environment.
+		lookup = os.LookupEnv
+	}
 	path, _ := lookup(config.BusCredentialsFile)
 	seedPath, _ := lookup(config.BusAccountSeedFile)
 	url, _ := lookup(config.BusURL)
