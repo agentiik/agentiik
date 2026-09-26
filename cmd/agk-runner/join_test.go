@@ -107,6 +107,28 @@ func TestJoinAsRootGivesItsFilesToTheAgentsAccount(t *testing.T) {
 	}
 }
 
+// join says which labels the host claims, and a host given no --labels in a pool other than
+// default, where every step names a label, that it will run none of them.
+func TestJoinSaysWhichLabelsTheHostClaims(t *testing.T) {
+	self := runner.Owner{UID: os.Getuid(), GID: os.Getgid()}
+	j := newJoiner(t, 0, map[string]runner.Owner{"agentiik": self})
+	if code := j.join(t); code != exitSucceeded {
+		t.Fatalf("join exited %d:\n%s", code, j.err)
+	}
+	if !strings.Contains(j.out.String(), "It claims the labels zone=dmz.") {
+		t.Errorf("join did not say the labels it claims:\n%s", j.out)
+	}
+
+	none := newJoiner(t, 0, map[string]runner.Owner{"agentiik": self})
+	code := run(context.Background(), none.e, []string{"join", "--api", none.api, "--token", aToken})
+	if code != exitSucceeded {
+		t.Fatalf("join with no --labels exited %d:\n%s", code, none.err)
+	}
+	if !strings.Contains(none.out.String(), "It claims no label, and pool dmz sends only steps that name one") {
+		t.Errorf("join with no --labels to pool dmz did not say it will run none of its steps:\n%s", none.out)
+	}
+}
+
 func TestJoinAsRootRefusesAnAccountItCannotGiveItsFilesTo(t *testing.T) {
 	for name, c := range map[string]struct {
 		args []string

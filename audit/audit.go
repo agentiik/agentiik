@@ -42,9 +42,9 @@ import (
 )
 
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
-// cancellation, secret write, runner policy change, and runner drain and revocation. Approval
-// arrives with the wait step in v0.8.0, and the identity and access events with principals in
-// v0.3.0.
+// cancellation, secret write, runner policy change, runner drain and revocation, and namespace
+// changes. Approval arrives with the wait step in v0.8.0, and the identity and access events with
+// principals in v0.3.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -62,6 +62,10 @@ const (
 	// RunnerDrain and RunnerRevoke are POST /api/v1/runners/{runner}/drain and /revoke.
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
+	// NamespaceCreate and NamespaceDelete are the namespace changes, made by agentiik-api
+	// namespace create and remove until v0.3.0's routes make them.
+	NamespaceCreate = "namespace.create"
+	NamespaceDelete = "namespace.delete"
 )
 
 // The results an entry records.

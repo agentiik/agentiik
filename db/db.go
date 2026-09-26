@@ -208,6 +208,12 @@ const (
 	// installation itself, which no namespace's handle could read whole.
 	AuditLog Reason = "the audit log, one chain across the installation"
 
+	// NamespaceAdministration is a namespace created or removed by agentiik-api namespace, the
+	// server-side verb that stands in for v0.3.0's routes. A namespace is the scope every other
+	// handle is opened in, so creating one is not something a handle on one can do, and removing
+	// one reads whether any of its rows remain.
+	NamespaceAdministration Reason = "a namespace created or removed on the server"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"

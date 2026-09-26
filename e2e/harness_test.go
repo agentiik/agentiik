@@ -117,6 +117,37 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 	}
 }
 
+// A first run as Get started makes one: a runner joins the pool default claiming no label, and a
+// workflow whose step names no runs_on runs on it to succeeded, and on no runner of the labelled
+// pool. Before, agk-runner join refused a host claiming no label, so no runner could join the pool
+// default and such a step ran nowhere.
+func TestAStepNamingNoRunsOnRunsOnARunnerOfThePoolDefaultClaimingNoLabel(t *testing.T) {
+	in := Stand(t)
+	c := in.JoinDefault("c")
+
+	tag, pinned := in.Brick("count")
+	manifest, err := os.ReadFile("testdata/bricks/count/brick.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := strings.Replace(smokeWorkflow(tag), "    runs_on: ["+Label+"]\n", "", 1)
+	if strings.Contains(document, "runs_on") {
+		t.Fatalf("the workflow still names runs_on:\n%s", document)
+	}
+	commit := randomHex(20)
+	in.Push("smoke", commit, document, map[string][]byte{tag: manifest}, map[string]string{tag: pinned})
+	run := in.Start("smoke", commit, map[string]any{"orders": []any{map[string]any{"ref": "a"}}})
+	ended := in.Wait(run, 3*time.Minute)
+	if ended.State != "succeeded" {
+		t.Fatalf("run %s ended %s: %s", run, ended.State, ended.Answer)
+	}
+	for _, task := range ended.Tasks {
+		if task.Runner != c.ID {
+			t.Errorf("a task ran on %s, and a step naming no runs_on goes to the pool default, whose one runner is %s", task.Runner, c.ID)
+		}
+	}
+}
+
 func TestEveryRequestOutsideTheOperatorIsARunnerRouteOrAPresignedObject(t *testing.T) {
 	signed := url.Values{"run": {"01JM"}, "expires": {"1790000000"}, "signature": {"ab12"}}
 	requests := []Request{

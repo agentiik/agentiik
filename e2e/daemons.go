@@ -56,7 +56,7 @@ secrets_dir = "/run/agentiik/secrets"
 // Runner is one runner of the installation: its agent, in the runner image as the container form
 // runs it, and the Docker daemon it drives, each in a container of its own.
 type Runner struct {
-	// Name is a or b.
+	// Name is a or b, or the name a test gave the runner it joined to the pool default.
 	Name string
 
 	// ID is the identifier the API minted when it joined.
@@ -68,7 +68,8 @@ type Runner struct {
 	in *Installation
 }
 
-// runner stands one runner up: a daemon, then join with token, then serve.
+// runner stands one runner up: a daemon, then join with token claiming labels, then serve. With
+// no label it joins with no --labels, as a runner of the pool default does.
 //
 // The agent runs in the runner image rather than as a process of this machine, because the paths
 // it reads, /etc/agentiik/runner.env, runner.toml and /var/lib/agentiik/runner.key, are fixed,
@@ -84,7 +85,7 @@ type Runner struct {
 //
 // The daemons are not on the host's network, because a daemon started with no bridge removes the
 // interface docker0 wherever it runs, which on the host's network is the host daemon's own.
-func (in *Installation) runner(ctx context.Context, name, token string) *Runner {
+func (in *Installation) runner(ctx context.Context, name, token string, labels ...string) *Runner {
 	r := &Runner{Name: name, Agent: in.id + "-runner-" + name, Daemon: in.id + "-daemon-" + name, in: in}
 	lib := in.volume(ctx, "lib-"+name)
 	socket := in.volume(ctx, "socket-"+name)
@@ -126,7 +127,10 @@ func (in *Installation) runner(ctx context.Context, name, token string) *Runner 
 	// join runs as root in the image, as the page runs it, and gives the key and runner.env
 	// to the agent's account.
 	joining := append([]string{"run", "--rm", "--user", "0:0", "--userns", "host"}, shared...)
-	joining = append(joining, in.runnerIm, "join", "--api", in.PublicURL, "--token", token, "--labels", Label)
+	joining = append(joining, in.runnerIm, "join", "--api", in.PublicURL, "--token", token)
+	if len(labels) > 0 {
+		joining = append(joining, "--labels", strings.Join(labels, ","))
+	}
 	said, err := docker(ctx, joining...)
 	if err != nil {
 		in.t.Fatalf("runner %s could not join: %s", name, err)

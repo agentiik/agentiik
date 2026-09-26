@@ -7,6 +7,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Images
 
 - `ghcr.io/agentiik/api`, `controller` and `runner` are published for linux/amd64 and linux/arm64: `X.Y.Z` and `vX.Y.Z` at every release tag, `latest` on the highest release, `dev` at every commit to main. Any other branch builds and checks them and pushes nothing.
+### Runner
+- A runner may claim no label: `agk-runner join` without `--labels` joins the token's pool claiming none, which with a token of the pool `default` takes the steps naming no `runs_on`. `serve` refuses `AGK_RUNNER_LABELS` in the environment of a runner that joined claiming none.
+- `agk-runner join --replace` claims only the labels it is given, no longer those of the `runner.env` it replaces.
+### API
+- `agentiik-api namespace create NAME` creates a namespace and `namespace remove NAME` removes one holding no workflow, run or secret, where the API runs and with its database settings, until v0.3.0's routes. Both are audited as `namespace.create` and `namespace.delete`.
 
 ## v0.2.0, 2026-09-26
 

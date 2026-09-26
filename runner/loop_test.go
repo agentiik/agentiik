@@ -509,6 +509,32 @@ func TestATaskOnALabelThisRunnerDoesNotClaimIsPutBackUnredeemed(t *testing.T) {
 	}
 }
 
+// A runner of the pool default claims no label, and redeems the task of a step that names no
+// runs_on, which is every task that pool is sent; one naming a label it would put back.
+func TestARunnerClaimingNoLabelRedeemsATaskNamingNoRunsOn(t *testing.T) {
+	api := anAPIAnswering(t, func(int, string) (int, any) {
+		return http.StatusConflict, refusedWith("the task is held by another runner")
+	})
+	l := aLoop(t, carrier(t, nil), aPoolOnTheBus(t, 30*time.Second), api)
+	l.loop.Labels = nil
+
+	none, _ := l.task(t, func(m *bus.TaskMessage) { m.RunsOn = nil })
+	l.carryOne(t)
+	if n := l.api.redemptions(none.TaskID); n != 1 {
+		t.Errorf("the grant of a task naming no runs_on was redeemed %d times by a runner claiming no label", n)
+	}
+
+	labelled, _ := l.task(t, func(m *bus.TaskMessage) { m.RunsOn = []string{"zone=dmz"} })
+	l.carryOne(t)
+	again, ok := l.pool.take(t, 3*time.Second)
+	if !ok || again.Task.TaskID != labelled.TaskID {
+		t.Fatal("a task on a label the runner does not claim was not put back")
+	}
+	if n := l.api.redemptions(labelled.TaskID); n != 0 {
+		t.Errorf("the grant of a task on zone=dmz was redeemed %d times by a runner claiming no label", n)
+	}
+}
+
 // "No answer at all, a 401 or any other 5xx: keeps the key, names it in its heartbeat and redeems
 // again, acknowledging nothing. Once the deadline the message carries has passed, no answer can
 // come, since the grant expires with it: it reports the task timed_out with no container ran, then

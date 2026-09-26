@@ -121,6 +121,47 @@ func TestASettingSetToNothingIsUnset(t *testing.T) {
 	}
 }
 
+// A runner of the pool default joined claiming no label, and runner.env carries none: serve reads
+// it as claiming none rather than refusing the start for a setting nobody had to write.
+func TestARunnerEnvWithNoLabelsClaimsNone(t *testing.T) {
+	text := strings.Replace(joined, "AGK_RUNNER_LABELS=zone=dmz,arch=amd64\n", "", 1)
+	text = strings.Replace(text, "AGK_RUNNER_POOL=dmz", "AGK_RUNNER_POOL=default", 1)
+	c, err := ReadConfig(environment(nil), envFile(t, text, 0o600))
+	if err != nil {
+		t.Fatalf("serve refuses a runner that claims no label: %s", err)
+	}
+	if c.Labels != nil || c.Pool != "default" {
+		t.Errorf("read the labels %q in pool %s, and it claims none in default", c.Labels, c.Pool)
+	}
+}
+
+// Labels are claimed at join, within what the token permits: a runner that joined claiming none is
+// not given labels afterwards by its environment, which would take work of its pool the API never
+// let it claim.
+func TestLabelsInTheEnvironmentOfARunnerThatJoinedClaimingNoneAreRefused(t *testing.T) {
+	text := strings.Replace(joined, "AGK_RUNNER_LABELS=zone=dmz,arch=amd64\n", "", 1)
+	_, err := ReadConfig(environment(map[string]string{Labels: "zone=dmz"}), envFile(t, text, 0o600))
+	if got := refusedFor(err); !slices.Equal(got, []string{Labels}) {
+		t.Errorf("refused %q (%v), want %s alone", got, err, Labels)
+	}
+	// Set to nothing, it is unset, and claims nothing either.
+	if _, err := ReadConfig(environment(map[string]string{Labels: ""}), envFile(t, text, 0o600)); err != nil {
+		t.Errorf("an empty %s refused the start: %s", Labels, err)
+	}
+}
+
+// A runner.env holding settings alone, written before joining, is a host that has not joined: it is
+// told to join, and not that it joined claiming no label.
+func TestLabelsInTheEnvironmentBeforeJoiningAreNotRefusedAsClaimedAfterIt(t *testing.T) {
+	_, err := ReadConfig(environment(map[string]string{API: "https://agentiik.example.com", Labels: "zone=dmz"}),
+		envFile(t, "AGK_RUNNER_CONCURRENCY=4\n", 0o600))
+	for _, e := range unjoin(err) {
+		if strings.Contains(e.Error(), "joined claiming no label") {
+			t.Errorf("a host that has not joined is told %s", e)
+		}
+	}
+}
+
 func TestAHostThatHasNotJoinedIsToldToJoin(t *testing.T) {
 	_, err := ReadConfig(environment(map[string]string{"AGK_API": "https://agentiik.example.com", "AGK_RUNNER_LABELS": "zone=dmz"}),
 		filepath.Join(t.TempDir(), "runner.env"))
@@ -273,10 +314,11 @@ func TestEverySettingIsHeldToItsGrammar(t *testing.T) {
 		{WorkDir, "work"},
 		{WorkDir, "./var/lib/agentiik/work"},
 	} {
-		text := strings.Replace(joined, "AGK_RUNNER_LABELS=zone=dmz,arch=amd64\n", "", 1)
-		vars := map[string]string{c.name: c.value}
-		if c.name != Labels {
-			vars[Labels] = "zone=dmz"
+		// Labels are written in runner.env, where join writes them, since a runner that joined
+		// claiming none is refused labels from the environment whatever they are.
+		text, vars := joined, map[string]string{c.name: c.value}
+		if c.name == Labels {
+			text, vars = strings.Replace(joined, "zone=dmz,arch=amd64", c.value, 1), nil
 		}
 		_, err := ReadConfig(environment(vars), envFile(t, text, 0o600))
 		if !slices.Equal(refusedFor(err), []string{c.name}) {
@@ -295,7 +337,7 @@ func TestConcurrencyStopsWhereAHeartbeatStops(t *testing.T) {
 func TestTheRequiredSettingsAreNamedWhenMissing(t *testing.T) {
 	_, err := ReadConfig(environment(nil), envFile(t, "# nothing yet\n", 0o600))
 	got := refusedFor(err)
-	want := []string{API, Labels, RunnerID, RunnerPool, Credential}
+	want := []string{API, RunnerID, RunnerPool, Credential}
 	if !slices.Equal(got, want) {
 		t.Errorf("refused %q, want %q named on the one start", got, want)
 	}

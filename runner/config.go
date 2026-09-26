@@ -73,7 +73,8 @@ type Config struct {
 	API string
 
 	// Labels are the labels this runner claims, each key=value, in the order they were
-	// written.
+	// written. Nil claims none, which is a runner of the pool default: it takes the steps that
+	// name no runs_on, and a pool with labels sends it nothing else.
 	Labels []string
 
 	// Concurrency is how many tasks this host holds at once.
@@ -198,6 +199,15 @@ func ReadConfig(lookup Lookup, path string) (Config, error) {
 		r.refuse(name, "is set in the environment, and a runner's identity is read from "+path+" alone, where join wrote it beside the credential it belongs to, so that the two never come from two places")
 	}
 	joined := r.readFile()
+	// A runner that joined claiming no label has no AGK_RUNNER_LABELS in runner.env, and one in
+	// the environment would claim labels the API never checked against its token: labels are
+	// claimed at join, within what the token permits, and never added afterwards.
+	_, identity := r.file[RunnerID]
+	if _, inFile := r.file[Labels]; joined && identity && !inFile {
+		if _, inEnv := r.env(Labels); inEnv {
+			r.refuse(Labels, "is set in the environment, and this runner joined claiming no label, so "+r.path+" carries none: a runner claims labels at join, within what its token permits, so unset it, or join again with --replace and a token that permits them")
+		}
+	}
 
 	c := Config{
 		API:         r.api(),
@@ -457,13 +467,12 @@ func loopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// labels are the labels this runner claims, key=value separated by commas.
+// labels are the labels this runner claims, key=value separated by commas, and nil where it
+// claims none: a runner of the pool default, which carries no label, takes the steps that name no
+// runs_on and needs none.
 func (r *reader) labels() []string {
 	v, set := r.value(Labels)
 	if !set {
-		if !r.conflicted(Labels) && !r.unread {
-			r.refuse(Labels, "is not set, and it is what a step's runs_on selects this runner on, claimed at join within what the token permits, such as zone=dmz,arch=amd64")
-		}
 		return nil
 	}
 	return r.list(Labels, v, labelForm, "a label is key=value, such as zone=dmz, the key lowercase words joined by dots, hyphens or underscores")

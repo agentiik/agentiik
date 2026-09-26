@@ -32,6 +32,10 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 		{"bus-init", ""},
 		{"bus-init", "/a", "/b"},
 		{"bus-credential"},
+		{"namespace"},
+		{"namespace", "create"},
+		{"namespace", "delete", "finance"},
+		{"namespace", "create", "finance", "team-ops"},
 		{"--version", "serve"},
 		{"--help", "serve"},
 	} {
