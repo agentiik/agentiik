@@ -216,7 +216,7 @@ func (d *Docker) fillSecrets(ctx context.Context, t graph.Task, image string, fi
 	if err := d.cli.ContainerStart(ctx, created.ID); err != nil {
 		return fail(fault(t.Step, err, ChargePlatform, "the container that fills the secrets volume could not be started"))
 	}
-	if err := h.write(files); err != nil {
+	if err := h.write(ctx, files); err != nil {
 		return fail(err)
 	}
 	return h, secretsMount(t, options, true), nil
@@ -232,7 +232,7 @@ func helperMount(t graph.Task, p Policy) (docker.Mount, error) {
 
 // write hands the holder the values as a tar stream on its standard input, and waits for it
 // to say they are written. Standard input stays open: its end is what lets the holder go.
-func (h *holder) write(files []secretFile) error {
+func (h *holder) write(ctx context.Context, files []secretFile) error {
 	fail := func(format string, a ...any) error {
 		return fault(h.t.Step, nil, ChargePlatform, "the secrets volume could not be filled: "+format, a...)
 	}
@@ -280,6 +280,9 @@ func (h *holder) write(files []secretFile) error {
 			return fail("%v", err)
 		}
 		return nil
+	case <-ctx.Done():
+		h.stream.Close()
+		return fault(h.t.Step, ctx.Err(), ChargePlatform, "the secrets volume was being filled when the task's context ended")
 	case <-time.After(holdGrace):
 		h.stream.Close()
 		return fail("the holder said nothing in %s", holdGrace)
