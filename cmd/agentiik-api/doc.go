@@ -69,19 +69,20 @@
 //
 // # init
 //
-// init prepares an installation in the directory AGK_INIT_DIR names, whose subdirectories are
-// what each service mounts, and brings it back in line with its settings at every run, so that a
-// Compose file runs it before every other service at every start. It makes the certificate for
+// init prepares an installation in the directory AGK_INIT_DIR names, whose subdirectories are what
+// each service mounts, and brings it back in line with its settings at every run, so that a Compose
+// file runs it before every other service at every start. It makes the certificate for
 // AGK_INIT_HOST, ECDSA P-256 and valid 825 days, and makes it again where the host changed or it
-// expired; the master key, the presign key and the database password, once; the bus identity,
-// once, as bus-init does, renewing the control plane's credential from when the API would warn of
-// it, and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of
-// one it mints and prints once where none is set and none was stored; the migration, as migrate
-// does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
-// namespace create does; and a join token of the pool default for the runner beside it, issued
-// through the database since the API is not serving yet. Each service is given its own copy of
-// what it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as
-// root, and the runner's certificate, which anybody may read.
+// expired, but never over one a person put there, which it refuses to start on instead; the master
+// key, the presign key and the database password, once; the bus identity, once, as bus-init does,
+// renewing the control plane's credential from when the API would warn of it, and the bus's
+// configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of one it mints and
+// prints once where none is set and none was stored; the migration, as migrate does, as the role
+// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does;
+// and a join token of the pool default for the runner beside it, issued through the database since
+// the API is not serving yet. Each service is given its own copy of what it reads, owned by uid
+// 65532 where init runs as root, but for the bus's, which runs as root, and the runner's
+// certificate, which anybody may read.
 //
 // It is the one program that takes a secret as a value: the operator token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.

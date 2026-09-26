@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -195,16 +196,19 @@ func (p *preparer) directories() error {
 // certificate makes the certificate the bus serves, and the API where no proxy is in front, and
 // gives each service its copy.
 //
-// The one in api/tls is kept while it still names host and has not expired, whoever issued it, so
-// that one from an authority clients already trust, put there in place of this one, stays. One
-// that no longer names host, which is AGK_INIT_HOST changed, or that expired, or that cannot be
-// read with its key, is replaced by a new one, signed by itself: clients then trust the new
-// agentiik.pem.
+// The one in api/tls is kept while it still names host, has not expired and pairs with its key.
+// One init issued that does not, which is AGK_INIT_HOST changed or 825 days gone by, is replaced
+// by a new one, signed by itself: clients then trust the new agentiik.pem. One a person put
+// there, from an authority clients already trust, is never replaced: a run where it no longer
+// serves is refused, saying why and what to do, since replacing it would move every client from
+// an authority it trusts to a certificate it does not, without a word.
 func (p *preparer) certificate(host string) error {
 	certPath, keyPath := p.dir.path(apiDir, "tls", "server.pem"), p.dir.path(apiDir, "tls", "server.key")
-	switch reason := p.keeps(certPath, keyPath, host); reason {
-	case "":
+	switch reason, issued := p.keeps(certPath, keyPath, host); {
+	case reason == "":
 		p.say("kept the certificate for %s", host)
+	case !issued:
+		return fmt.Errorf("the certificate in %s is not one init issued, and %s, so it is not replaced: put there a certificate for %s and its key, or remove both for init to issue its own", filepath.Dir(certPath), reason, host)
 	default:
 		certPEM, keyPEM, err := selfSigned(host, p.now)
 		if err != nil {
@@ -258,32 +262,69 @@ func (p *preparer) certificate(host string) error {
 }
 
 // keeps is why the certificate at certPath is replaced, or nothing where it is kept.
-func (p *preparer) keeps(certPath, keyPath, host string) string {
+func (p *preparer) keeps(certPath, keyPath, host string) (string, bool) {
 	certPEM, err := readRegular(certPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "there was none"
+		return "there was none", true
 	}
 	if err != nil {
-		return "the one there could not be read"
+		return "it could not be read", false
 	}
+	leaf := firstLeaf(certPEM)
+	if leaf == nil {
+		return "it holds no certificate", false
+	}
+	issued := issuedByInit(leaf)
 	keyPEM, err := readRegular(keyPath)
 	if err != nil {
-		return "its key could not be read"
+		return "its key could not be read", issued
 	}
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return "the one there is not a certificate and its key"
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		return "its key is not the certificate's", issued
 	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	switch {
-	case err != nil:
-		return "the one there could not be read"
 	case leaf.VerifyHostname(host) != nil:
-		return "the one there was not issued to " + host
+		return "it was not issued to " + host, issued
 	case !p.now.Before(leaf.NotAfter):
-		return "the one there expired at " + leaf.NotAfter.UTC().Format(time.RFC3339)
+		return "it expired at " + leaf.NotAfter.UTC().Format(time.RFC3339), issued
 	}
-	return ""
+	return "", issued
+}
+
+// issuer is the organisation every certificate init issues names as its subject, which is how a
+// later run tells one of its own from one a person put there.
+const issuer = "agentiik-api init"
+
+// firstLeaf is the first certificate a PEM file holds, or nil.
+func firstLeaf(certPEM []byte) *x509.Certificate {
+	for rest := certPEM; ; {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			return nil
+		}
+		if block.Type == "CERTIFICATE" {
+			leaf, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil
+			}
+			return leaf
+		}
+	}
+}
+
+// issuedByInit says whether init issued c: its subject's organisation is issuer, or it is what
+// setup issued before init existed, signed by itself, no authority, with a common name it is also
+// issued to.
+func issuedByInit(c *x509.Certificate) bool {
+	if slices.Contains(c.Subject.Organization, issuer) {
+		return true
+	}
+	if c.IsCA || c.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature) != nil ||
+		!bytes.Equal(c.RawIssuer, c.RawSubject) || c.Subject.CommonName == "" {
+		return false
+	}
+	return slices.Contains(c.DNSNames, c.Subject.CommonName) ||
+		slices.ContainsFunc(c.IPAddresses, func(ip net.IP) bool { return ip.String() == c.Subject.CommonName })
 }
 
 // names are what the certificate is issued to: host, and this machine's own names, so that a
@@ -314,7 +355,7 @@ func selfSigned(host string, now time.Time) ([]byte, []byte, error) {
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: host},
+		Subject:      pkix.Name{CommonName: host, Organization: []string{issuer}},
 		// An hour back, so that a runner whose clock is a little behind takes a certificate
 		// made a moment ago.
 		NotBefore:             now.Add(-time.Hour),

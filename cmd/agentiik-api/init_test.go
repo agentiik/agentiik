@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
 	"io"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -297,7 +302,7 @@ func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 		t.Errorf("an expired certificate was kept:\n%s", d.out.String())
 	}
 
-	// A certificate somebody put there, for the host, is theirs to keep.
+	// A certificate that names the host through a wildcard names it, and is kept.
 	certPEM, keyPEM, err := selfSigned("*.example.com", firstRun)
 	if err != nil {
 		t.Fatal(err)
@@ -714,5 +719,103 @@ func TestInitFollowsNoLinkInPlaceOfTheCertificatesKey(t *testing.T) {
 	}
 	if info, err := os.Lstat(key); err != nil || !info.Mode().IsRegular() {
 		t.Errorf("the link was not replaced by a key: %v", err)
+	}
+}
+
+// aCertificate is a certificate for host valid from notBefore to notAfter and its key, as PEM:
+// signed by an authority of its own where byAuthority is true, as a person's from elsewhere is,
+// and otherwise signed by itself with a common name and nothing else, as setup issued them.
+func aCertificate(t *testing.T, host string, notBefore, notAfter time.Time, byAuthority bool) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host},
+		NotBefore: notBefore, NotAfter: notAfter, DNSNames: []string{host},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true,
+	}
+	parent, signer := leaf, any(key)
+	if byAuthority {
+		authorityKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent = &x509.Certificate{
+			SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "An authority", Organization: []string{"Example"}},
+			NotBefore: notBefore, NotAfter: notAfter.Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+			KeyUsage: x509.KeyUsageCertSign,
+		}
+		signer = authorityKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, parent, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})
+}
+
+// put puts a certificate and its key in the API's tls directory, in place of what is there.
+func (d *prepared) put(t *testing.T, certPEM, keyPEM []byte) {
+	t.Helper()
+	for name, content := range map[string][]byte{"server.pem": certPEM, "server.key": keyPEM} {
+		path := filepath.Join(d.dir, apiDir, "tls", name)
+		os.Remove(path)
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A certificate init did not issue is never replaced: kept while it serves, and a run where it no
+// longer names the host, has expired or is not its key's is refused, saying why and what to do.
+// One init issued, or setup before it, is replaced.
+func TestInitReplacesOnlyACertificateItIssued(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "agentiik.example.com", "")
+	if !slices.Contains(d.leaf(t).Subject.Organization, issuer) {
+		t.Fatalf("the certificate init issued is not marked as init's: %v", d.leaf(t).Subject)
+	}
+
+	theirs, theirKey := aCertificate(t, "agentiik.example.com", firstRun.Add(-time.Hour), firstRun.Add(90*24*time.Hour), true)
+	d.put(t, theirs, theirKey)
+	d.files(t, firstRun.Add(time.Hour), "agentiik.example.com", "")
+	if d.read(t, apiDir, "tls", "server.pem") != string(theirs) {
+		t.Fatal("a certificate from an authority, naming the host, was not kept")
+	}
+
+	_, otherKey := aCertificate(t, "agentiik.example.com", firstRun, firstRun.Add(time.Hour), true)
+	for what, c := range map[string]struct {
+		host    string
+		at      time.Time
+		key     []byte
+		saysWhy string
+	}{
+		"another host":  {"other.example.com", firstRun.Add(time.Hour), theirKey, "not issued to other.example.com"},
+		"expired":       {"agentiik.example.com", firstRun.Add(91 * 24 * time.Hour), theirKey, "expired at"},
+		"another's key": {"agentiik.example.com", firstRun.Add(time.Hour), otherKey, "its key is not the certificate's"},
+	} {
+		d.put(t, theirs, c.key)
+		err := d.at(c.at).certificate(c.host)
+		if err == nil || !strings.Contains(err.Error(), "not one init issued") || !strings.Contains(err.Error(), c.saysWhy) || !strings.Contains(err.Error(), "remove both") {
+			t.Errorf("%s: a person's certificate was not refused as such: %v", what, err)
+		}
+		if d.read(t, apiDir, "tls", "server.pem") != string(theirs) || d.read(t, apiDir, "tls", "server.key") != string(c.key) {
+			t.Errorf("%s: a person's certificate was replaced", what)
+		}
+	}
+
+	// One setup issued before init existed: signed by itself, its common name among its names.
+	setups, setupKey := aCertificate(t, "agentiik.example.com", firstRun.Add(-time.Hour), firstRun.Add(825*24*time.Hour), false)
+	d.put(t, setups, setupKey)
+	d.out.Reset()
+	d.files(t, firstRun.Add(2*time.Hour), "other.example.com", "")
+	if d.read(t, apiDir, "tls", "server.pem") == string(setups) || d.leaf(t).VerifyHostname("other.example.com") != nil {
+		t.Errorf("a certificate setup issued, for another host, was not replaced:\n%s", d.out.String())
 	}
 }
