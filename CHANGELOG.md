@@ -2,7 +2,9 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
-## Unreleased
+## v0.2.4, 2026-09-26
+
+A server installed from one Compose file: `agentiik-api init` prepares and reconciles the installation at every start, the runner drops from root and joins on its own, step secrets are on a tmpfs volume of their own, and the API renews the control plane's bus credential.
 
 ### Upgrading
 
