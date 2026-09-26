@@ -18,10 +18,10 @@ import (
 // "Local runs bypass grants entirely because there is nothing to protect: the operator
 // already owns the file, the daemon and the secrets they supply on the command line." What
 // they do not bypass is the mounting: the value goes to the driver, which writes it on a tmpfs
-// volume of the task's own, mounted read-only at /agk/secrets/<name>, masks it out of the log and out of the payload
-// before anything is written, and never puts it in an environment variable. A local run
-// mounts a secret exactly as a server run does, which is what makes a workflow that works
-// here work there.
+// volume of the task's own, mounted read-only at /agk/secrets/<name>, masks it out of the log
+// and out of the payload before anything is written, and never puts it in an environment
+// variable. A local run mounts a secret exactly as a server run does, which is what makes a
+// workflow that works here work there.
 
 // suppliedSecrets reads the values the command line supplied.
 //
