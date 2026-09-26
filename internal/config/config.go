@@ -818,7 +818,9 @@ func (r *reader) proxiedListen() string {
 	case err != nil:
 		// Refused already by listen, which fell back to the default.
 		return listen
-	case host == "":
+	case host == "" || host == "localhost":
+		// localhost as the address it is, rather than whatever this machine's resolver makes of
+		// the name, since the listener's being on the loopback is what makes plaintext safe.
 		return net.JoinHostPort("127.0.0.1", port)
 	case !loopback(host):
 		r.refuse(Listen, fmt.Sprintf("is %q, and behind the proxy %s names the API serves plain HTTP, which only something on this host may reach: write the port alone, such as :8443, for the API to listen on 127.0.0.1", listen, ProxyURL))

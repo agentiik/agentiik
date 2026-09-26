@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,9 +45,9 @@ func aPreparedDirectory(t *testing.T) *prepared {
 // since a test does not run as root and cannot give one away.
 func (d *prepared) at(now time.Time) *preparer {
 	p := newPreparer(d.dir, now, &d.out)
-	p.chown = func(path string) error {
+	p.chown = func(f *os.File) error {
 		// A file is given away under its temporary name, then renamed into place.
-		dir, base := filepath.Split(path)
+		dir, base := filepath.Split(f.Name())
 		if strings.HasPrefix(base, ".") {
 			if i := strings.LastIndex(base, "-"); i > 0 {
 				base = base[1:i]
@@ -248,7 +249,7 @@ func TestInitMakesACertificateForTheHost(t *testing.T) {
 		if !slices.Equal(got, names) {
 			t.Errorf("the certificate for %s names %v, want %v", host, got, names)
 		}
-		if c.PublicKeyAlgorithm != x509.ECDSA || c.IsCA || !c.NotAfter.Equal(firstRun.Add(825*24*time.Hour)) || !slices.Equal(c.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}) {
+		if c.PublicKeyAlgorithm != x509.ECDSA || c.IsCA || !c.NotAfter.Equal(firstRun.Add(825*24*time.Hour)) || !c.NotBefore.Equal(firstRun.Add(-time.Hour)) || !slices.Equal(c.ExtKeyUsage, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}) {
 			t.Errorf("the certificate for %s is %v, an authority %v, until %s, for %v", host, c.PublicKeyAlgorithm, c.IsCA, c.NotAfter, c.ExtKeyUsage)
 		}
 		roots := x509.NewCertPool()
@@ -549,5 +550,107 @@ func TestInitIsAVerb(t *testing.T) {
 	}
 	if code := run(t.Context(), []string{"init"}, empty, io.Discard, &stderr); code != exitFailed || !strings.Contains(stderr.String(), config.InitDir) {
 		t.Errorf("init with nothing set exited %d:\n%s", code, stderr.String())
+	}
+}
+
+// A token init mints is printed, and its hash kept, only by a run that got to the end: one printed
+// by a run that failed would be in the log of a container the next run replaces.
+func TestInitPrintsAMintedTokenOnlyOnceTheRunSucceeds(t *testing.T) {
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "demo",
+		Admin:       config.Database{URL: "postgres://postgres@/agentiik?host=" + filepath.Join(d.dir, "no-socket"), Role: "postgres"},
+		Application: config.Database{URL: "postgres://agentiik@/agentiik?host=" + filepath.Join(d.dir, "no-socket"), Role: "agentiik"},
+	}
+	if err := initialize(t.Context(), c, d.at(firstRun)); err == nil {
+		t.Fatal("a run with no database reached succeeded")
+	}
+	if strings.Contains(d.out.String(), operatorTokenPrefix) {
+		t.Errorf("a run that failed printed a token:\n%s", d.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(d.dir, apiDir, "operator-token.sha256")); err == nil {
+		t.Error("a run that failed kept a token's hash")
+	}
+}
+
+// A bus identity whose creation was cut off part way is finished where the bus never had it, and
+// refused where it did.
+func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	dir := filepath.Join(d.dir, apiDir, "bus")
+	seed := d.read(t, apiDir, "bus", bus.AccountSeedFile)
+
+	os.Remove(filepath.Join(dir, bus.ControlPlaneFile))
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed || d.read(t, controllerDir, "bus", bus.ControlPlaneFile) != d.read(t, apiDir, "bus", bus.ControlPlaneFile) {
+		t.Error("a missing credential was not minted under the same account and given to the controller")
+	}
+
+	os.Remove(filepath.Join(dir, bus.ControlPlaneFile))
+	os.Remove(filepath.Join(dir, bus.AccountSeedFile))
+	p := d.at(firstRun.Add(2 * time.Hour))
+	if err := p.bus(); err == nil || !strings.Contains(err.Error(), "the bus was given its accounts") {
+		t.Errorf("an identity the bus had was made again: %v", err)
+	}
+	os.Remove(filepath.Join(d.dir, natsDir, bus.AccountsFile))
+	d.files(t, firstRun.Add(3*time.Hour), "localhost", "")
+	if d.read(t, apiDir, "bus", bus.AccountSeedFile) == seed {
+		t.Error("an identity the bus never had was not made again")
+	}
+}
+
+// A link or a pipe a service put in the volume it shares with init, which runs as root, is never
+// followed or waited on.
+func TestInitFollowsNoLinkAServicePutInItsVolume(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	elsewhere := filepath.Join(t.TempDir(), "superuser-password")
+	if err := os.WriteFile(elsewhere, []byte("SUPERUSER-SECRET\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	password := filepath.Join(d.dir, apiDir, "database-password")
+	os.Remove(password)
+	if err := os.Symlink(elsewhere, password); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.at(firstRun).secrets(); err == nil || strings.Contains(d.read(t, controllerDir, "database-password"), "SUPERUSER") {
+		t.Errorf("a link in place of the database password was followed: %v", err)
+	}
+	os.Remove(password)
+
+	trust := filepath.Join(d.dir, controllerDir, "trust")
+	os.RemoveAll(trust)
+	if err := os.Symlink(filepath.Join(d.dir, apiDir), trust); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.at(firstRun).directories(); err == nil {
+		t.Error("a link in place of a directory was taken for it")
+	}
+	if info, _ := os.Stat(filepath.Join(d.dir, apiDir)); info.Mode().Perm() != 0o700 {
+		t.Errorf("the API's directory was opened to mode %#o through a link", info.Mode().Perm())
+	}
+	os.Remove(trust)
+
+	pipe := filepath.Join(d.dir, controllerDir, "database-password")
+	os.Remove(pipe)
+	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.at(firstRun).secrets()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a pipe in place of the controller's password held init")
+	}
+	if info, err := os.Lstat(pipe); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the pipe was not replaced by the password: %v", err)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/agentiik/agentiik/api"
@@ -80,16 +81,17 @@ type preparer struct {
 	now time.Time
 	out io.Writer
 
-	// chown gives a path to the agent's account. It is os.Lchown where init runs as root, as it
-	// does in its Compose service, and nothing where it does not, which only a test does, since
-	// nobody else may give a file away.
-	chown func(path string) error
+	// chown gives an open file to the agent's account. It is a fchown where init runs as root,
+	// as it does in its Compose service, and nothing where it does not, which only a test does,
+	// since nobody else may give a file away. On the descriptor rather than a path, so that a
+	// link a service put in its own volume is never followed by root.
+	chown func(f *os.File) error
 }
 
 func newPreparer(dir string, now time.Time, out io.Writer) *preparer {
-	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(string) error { return nil }}
+	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(*os.File) error { return nil }}
 	if os.Geteuid() == 0 {
-		p.chown = func(path string) error { return os.Lchown(path, agent, agent) }
+		p.chown = func(f *os.File) error { return f.Chown(agent, agent) }
 	}
 	return p
 }
@@ -136,15 +138,18 @@ func initialize(ctx context.Context, c config.Init, p *preparer) error {
 	if err != nil {
 		return err
 	}
-	if err := p.operatorToken(c.OperatorToken); err != nil {
-		return err
-	}
 	if err := p.bus(); err != nil {
 		return err
 	}
 	application := c.Application
 	application.Password = password
-	return p.database(ctx, config.Migration{Admin: c.Admin, Application: application}, c.Namespace)
+	if err := p.database(ctx, config.Migration{Admin: c.Admin, Application: application}, c.Namespace); err != nil {
+		return err
+	}
+	// Last, so that a token init mints is printed by the run that succeeds: one printed by a
+	// run that then failed would be in the log of a container the next docker compose up
+	// replaces, with its hash kept and nobody holding it.
+	return p.operatorToken(c.OperatorToken)
 }
 
 // directories makes every directory of the layout, or puts back the mode and the owner of one that
@@ -169,16 +174,19 @@ func (p *preparer) directories() error {
 		{p.dir.path(runnerDir, "trust"), 0o755, false},
 		{p.dir.path(objectsDir), 0o700, true},
 	} {
-		if err := os.MkdirAll(d.path, d.mode); err != nil {
+		// Parents come before their children in the list, so each is made on one that was
+		// checked already, and never through a link.
+		if err := os.Mkdir(d.path, d.mode); err != nil && !errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("the directory %s could not be made: %w", d.path, err)
 		}
-		if err := os.Chmod(d.path, d.mode); err != nil {
-			return fmt.Errorf("the directory %s could not be given mode %#o: %w", d.path, d.mode, err)
+		f, err := os.OpenFile(d.path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+		if err != nil {
+			return fmt.Errorf("%s is not a directory, and init keeps one there: remove it, and run init again: %w", d.path, err)
 		}
-		if d.toAgent {
-			if err := p.chown(d.path); err != nil {
-				return fmt.Errorf("the directory %s could not be given to uid %d: %w", d.path, agent, err)
-			}
+		err = p.give(f, d.mode, d.toAgent)
+		f.Close()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -210,11 +218,11 @@ func (p *preparer) certificate(host string) error {
 		}
 		p.say("made a certificate for %s, valid %d days, since %s", strings.Join(names(host), ", "), int(certificateLife.Hours()/24), reason)
 	}
-	certPEM, err := os.ReadFile(certPath)
+	certPEM, err := readRegular(certPath)
 	if err != nil {
 		return fmt.Errorf("the certificate could not be read back: %w", err)
 	}
-	keyPEM, err := os.ReadFile(keyPath)
+	keyPEM, err := readRegular(keyPath)
 	if err != nil {
 		return fmt.Errorf("the certificate's key could not be read back: %w", err)
 	}
@@ -251,14 +259,14 @@ func (p *preparer) certificate(host string) error {
 
 // keeps is why the certificate at certPath is replaced, or nothing where it is kept.
 func (p *preparer) keeps(certPath, keyPath, host string) string {
-	certPEM, err := os.ReadFile(certPath)
+	certPEM, err := readRegular(certPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "there was none"
 	}
 	if err != nil {
 		return "the one there could not be read"
 	}
-	keyPEM, err := os.ReadFile(keyPath)
+	keyPEM, err := readRegular(keyPath)
 	if err != nil {
 		return "its key could not be read"
 	}
@@ -305,9 +313,11 @@ func selfSigned(host string, now time.Time) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("the certificate's serial number could not be drawn: %w", err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: host},
-		NotBefore:             now,
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: host},
+		// An hour back, so that a runner whose clock is a little behind takes a certificate
+		// made a moment ago.
+		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(certificateLife),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -360,7 +370,7 @@ func (p *preparer) secrets() (config.Secret, error) {
 		}
 		made = made || wrote
 	}
-	content, err := os.ReadFile(password)
+	content, err := readRegular(password)
 	if err != nil {
 		return "", fmt.Errorf("the database password could not be read back: %w", err)
 	}
@@ -387,11 +397,15 @@ func random(n int, encode func([]byte) string) ([]byte, error) {
 // once writes what content makes at path where path holds nothing, and says whether it did. What
 // is there is kept, and given back its mode and its owner.
 func (p *preparer) once(path string, content func() ([]byte, error)) (bool, error) {
-	info, err := os.Stat(path)
-	if err == nil && info.Size() > 0 {
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && !info.Mode().IsRegular():
+		// A secret is never taken from a link or a pipe put in its place, which root would
+		// follow to whatever it names and give on to the others.
+		return false, fmt.Errorf("%s is not a regular file, and init keeps a secret there: remove it, and run init again", path)
+	case err == nil && info.Size() > 0:
 		return false, p.settle(path, 0o600, true)
-	}
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		return false, fmt.Errorf("%s could not be looked at: %w", path, err)
 	}
 	data, err := content()
@@ -414,7 +428,7 @@ const operatorTokenPrefix = "agk_op_"
 // two leaves a token nobody can use rather than a hash nobody has the token of.
 func (p *preparer) operatorToken(token config.Secret) error {
 	path := p.dir.path(apiDir, "operator-token.sha256")
-	stored, err := os.ReadFile(path)
+	stored, err := readRegular(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("the operator token's hash could not be read: %w", err)
 	}
@@ -453,12 +467,17 @@ func (p *preparer) bus() error {
 	dir := p.dir.path(apiDir, "bus")
 	accounts := filepath.Join(dir, bus.AccountsFile)
 	creds := filepath.Join(dir, bus.ControlPlaneFile)
-	if _, err := os.Stat(accounts); errors.Is(err, fs.ErrNotExist) {
+	switch present := p.busFiles(dir); {
+	case present == 0:
 		if _, err := bus.NewInstallation(dir, p.now.Add(controlPlaneLife)); err != nil {
 			return err
 		}
 		p.say("created the installation's bus identity")
-	} else {
+	case present != 3:
+		if err := p.repairBus(dir); err != nil {
+			return err
+		}
+	default:
 		// Renewed from when the API starts warning, so that the chore it warns of is done by
 		// the next docker compose up rather than by a person.
 		expires, err := controlPlaneExpiry(creds)
@@ -486,7 +505,7 @@ func (p *preparer) bus() error {
 		{accounts, p.dir.path(natsDir, bus.AccountsFile), false},
 		{creds, p.dir.path(controllerDir, "bus", bus.ControlPlaneFile), true},
 	} {
-		content, err := os.ReadFile(c.from)
+		content, err := readRegular(c.from)
 		if err != nil {
 			return fmt.Errorf("%s could not be read: %w", c.from, err)
 		}
@@ -497,10 +516,54 @@ func (p *preparer) bus() error {
 	return p.write(p.dir.path(natsDir, "nats.conf"), []byte(natsConf), 0o644, false)
 }
 
+// busFiles is how many of the three files of the bus identity dir holds.
+func (p *preparer) busFiles(dir string) int {
+	n := 0
+	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile, bus.ControlPlaneFile} {
+		if _, err := os.Lstat(filepath.Join(dir, f)); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// repairBus finishes a bus identity whose creation was cut off part way, by a crash or a power cut
+// between two of its files, which bus.NewInstallation cannot undo.
+//
+// The account and its seed are there and the credential is not: a credential is minted under that
+// account, as bus-credential does. Otherwise, where the bus was never given the accounts, nothing
+// ever trusted what is there, and it is created again. Where the bus was given them, the streams
+// and the tasks on them are under that account, and a new one would lose them without a word, so
+// init refuses and says what a person decides.
+func (p *preparer) repairBus(dir string) error {
+	_, accountsErr := os.Lstat(filepath.Join(dir, bus.AccountsFile))
+	_, seedErr := os.Lstat(filepath.Join(dir, bus.AccountSeedFile))
+	if accountsErr == nil && seedErr == nil {
+		if _, _, err := bus.RenewControlPlane(dir, p.now.Add(controlPlaneLife)); err != nil {
+			return err
+		}
+		p.say("minted the control plane's bus credential, which a creation cut off part way had not written")
+		return nil
+	}
+	if _, err := os.Lstat(p.dir.path(natsDir, bus.AccountsFile)); err == nil {
+		return fmt.Errorf("%s holds part of the bus identity, and the bus was given its accounts already: an identity made again is one on which every stream and every task queued is gone, so it is a person's to decide: remove %s and %s to make it again", dir, dir, p.dir.path(natsDir, bus.AccountsFile))
+	}
+	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile, bus.ControlPlaneFile} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("what a creation cut off part way left in %s could not be removed: %w", dir, err)
+		}
+	}
+	if _, err := bus.NewInstallation(dir, p.now.Add(controlPlaneLife)); err != nil {
+		return err
+	}
+	p.say("created the installation's bus identity again, since a creation cut off part way had left part of it, which the bus was never given")
+	return nil
+}
+
 // controlPlaneExpiry is when the control plane's credential in path expires, or the zero time for one
 // that never does.
 func controlPlaneExpiry(path string) (time.Time, error) {
-	content, err := os.ReadFile(path)
+	content, err := readRegular(path)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("the control plane's bus credential could not be read: %w", err)
 	}
@@ -575,7 +638,9 @@ const defaultPool = "default"
 // by the agent's account where toAgent is true: a program starting at that moment reads the old
 // file or the new one, never half of each.
 func (p *preparer) write(path string, data []byte, mode fs.FileMode, toAgent bool) error {
-	current, err := os.ReadFile(path)
+	// Whatever is not a regular file there, a link or a pipe, is replaced by the rename rather
+	// than followed or read.
+	current, err := readRegular(path)
 	if err == nil && bytes.Equal(current, data) {
 		return p.settle(path, mode, toAgent)
 	}
@@ -597,18 +662,17 @@ func (p *preparer) write(path string, data []byte, mode fs.FileMode, toAgent boo
 	if _, err := f.Write(data); err != nil {
 		return fail(err)
 	}
+	if toAgent {
+		if err := p.chown(f); err != nil {
+			return fail(err)
+		}
+	}
 	if err := f.Sync(); err != nil {
 		return fail(err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(temporary)
 		return fmt.Errorf("%s could not be written: %w", path, err)
-	}
-	if toAgent {
-		if err := p.chown(temporary); err != nil {
-			os.Remove(temporary)
-			return fmt.Errorf("%s could not be given to uid %d: %w", path, agent, err)
-		}
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		os.Remove(temporary)
@@ -618,14 +682,57 @@ func (p *preparer) write(path string, data []byte, mode fs.FileMode, toAgent boo
 }
 
 // settle gives a file that exists its mode, and its owner where toAgent is true.
+//
+// Through a descriptor opened without following a link, so that root changes the file there and
+// never one a link a service put there names.
 func (p *preparer) settle(path string, mode fs.FileMode, toAgent bool) error {
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("%s could not be given mode %#o: %w", path, mode, err)
+	f, err := openRegular(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return p.give(f, mode, toAgent)
+}
+
+// give gives an open file or directory its mode, and to the agent's account where toAgent is true.
+func (p *preparer) give(f *os.File, mode fs.FileMode, toAgent bool) error {
+	if err := f.Chmod(mode); err != nil {
+		return fmt.Errorf("%s could not be given mode %#o: %w", f.Name(), mode, err)
 	}
 	if toAgent {
-		if err := p.chown(path); err != nil {
-			return fmt.Errorf("%s could not be given to uid %d: %w", path, agent, err)
+		if err := p.chown(f); err != nil {
+			return fmt.Errorf("%s could not be given to uid %d: %w", f.Name(), agent, err)
 		}
 	}
 	return nil
+}
+
+// openRegular opens the regular file at path, never through a link and never waiting on a pipe,
+// since a service may have put either in the volume it shares with init, which runs as root.
+func openRegular(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return f, nil
+}
+
+// readRegular is what the regular file at path holds, read as openRegular opens it. A path where
+// there is nothing is fs.ErrNotExist.
+func readRegular(path string) ([]byte, error) {
+	f, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, 1<<20))
 }

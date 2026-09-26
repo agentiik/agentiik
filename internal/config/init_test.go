@@ -125,7 +125,7 @@ func TestTheAPIBehindAProxyServesPlainHTTPOnTheLoopback(t *testing.T) {
 	if c.PublicURL != "https://agentiik.example.com" || c.Listen != "127.0.0.1:8443" || c.TLS.Served() {
 		t.Errorf("behind a proxy, the API is at %s, listens on %s, serves TLS %v", c.PublicURL, c.Listen, c.TLS.Served())
 	}
-	for listen, want := range map[string]string{"127.0.0.1:9000": "127.0.0.1:9000", "[::1]:9000": "[::1]:9000", "localhost:9000": "localhost:9000"} {
+	for listen, want := range map[string]string{"127.0.0.1:9000": "127.0.0.1:9000", "[::1]:9000": "[::1]:9000", "localhost:9000": "127.0.0.1:9000"} {
 		i.env[config.Listen] = listen
 		if c, err := config.ReadAPI(theAPI.environment(i)); err != nil || c.Listen != want {
 			t.Errorf("behind a proxy, %s is listened on as %s: %v", listen, c.Listen, err)
