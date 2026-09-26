@@ -31,7 +31,7 @@ type asRootHost struct {
 
 func newRootHost(t *testing.T) *asRootHost {
 	t.Helper()
-	h := &asRootHost{host: newHost(t, daemon(t, true), secretsTmpfs), agent: runner.Owner{UID: os.Getuid(), GID: os.Getgid()}}
+	h := &asRootHost{host: newHost(t, daemon(t, true), ""), agent: runner.Owner{UID: os.Getuid(), GID: os.Getgid()}}
 	h.e.Geteuid = func() int { return 0 }
 	h.e.Account = func(name string) (runner.Owner, error) {
 		if name != agentAccount {
