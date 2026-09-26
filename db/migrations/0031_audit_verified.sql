@@ -19,7 +19,9 @@ insert into audit_verified (through, hash) values (0, decode(repeat('00', 32), '
 -- It is kept, and moves only forward, whoever writes it: taken back, it would have a controller read
 -- again what was verified, which costs time and proves nothing more, and removed, it would stop the
 -- verification from carrying on at all. One moved forward past what was verified is not refused
--- here, since the row cannot tell, and the check of the entry it names is what finds it.
+-- here, since the row cannot tell. The check of the entry it names finds one that names it with a
+-- hash it does not carry, and not one moved on to an entry and its true hash, which skips what lies
+-- between: the entries before the record are the copy outside the installation's to vouch for.
 create function audit_verified_only_moves_forward() returns trigger
   language plpgsql
   as $$

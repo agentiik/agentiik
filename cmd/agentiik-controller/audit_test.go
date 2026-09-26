@@ -257,3 +257,51 @@ func TestATermSaysARecordThatDisagreesWithTheChain(t *testing.T) {
 		t.Fatalf("the term after it said:\n%s", said)
 	}
 }
+
+// A verification still reading holds nothing up: the term takes results meanwhile, and waits for it
+// only when it ends.
+func TestATermTakesResultsWhileTheChainIsVerified(t *testing.T) {
+	a := withAuditTerms(t)
+	ctl, err := controller.New(a.pool, "leading")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl.Sweep = time.Hour
+	tm, err := a.pool.BeginTerm(t.Context(), "leading")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reading, release := make(chan struct{}), make(chan struct{})
+	var returned sync.WaitGroup
+	returned.Add(1)
+	verify := func(ctx context.Context) {
+		defer returned.Done()
+		close(reading)
+		<-release
+	}
+	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
+	ctx, stop := context.WithCancel(t.Context())
+	ended := make(chan error, 1)
+	go func() {
+		ended <- lead(ctx, ctl, tm, a.queue, options(c, a.queue, versionsOf(t, a.pool)), nil, verify, logger(&a.log))
+	}()
+	<-reading
+	js := a.bus.streams(t)
+	eventually(t, 10*time.Second, "the term taking results while the chain is verified", func() bool {
+		_, err := js.Consumer(t.Context(), bus.Results, "controller")
+		return err == nil
+	})
+	stop()
+	select {
+	case err := <-ended:
+		t.Fatalf("the term ended with %v while its verification was still reading", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-ended:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the term did not end once its verification had")
+	}
+	returned.Wait()
+}

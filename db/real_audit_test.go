@@ -318,8 +318,8 @@ func TestAVerificationCarriesOnFromWhereTheLastStopped(t *testing.T) {
 		t.Fatalf("the record says the chain was verified through %d", got)
 	}
 
-	// An entry already verified, changed and keeping its hash, is not read again: that is what
-	// bounds the cost, and the copy outside is what finds it.
+	// No entry before the record is read again, so one changed there goes unnoticed here: that is
+	// what bounds the cost, and the copy outside is what finds it.
 	tamper(t, super, `update audit_log set actor = 'somebody else' where seq = 3`)
 	acts(t, pool, 5)
 	if v, err := trail.Verify(t.Context(), 10); err != nil || v != (AuditVerification{From: 25, Through: 30}) {

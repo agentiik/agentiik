@@ -225,10 +225,11 @@ type AuditVerification struct {
 // hash, before the chain is carried on from it. Where it does not, the whole log is verified
 // again and the first break found is answered, leaving the record where it was; a chain that holds
 // from its first entry all the same is an *AuditRecordDisagrees, and the record is moved forward
-// to the head it verified.
+// to the head it verified, where that is forward.
 //
-// An entry before the record that is changed and keeps its hash is not read again, which is what
-// bounds the cost on a long log, and is found by comparing with the copy outside the installation.
+// No entry before the record is read again, which is what bounds the cost on a long log: one
+// changed, hashed again or removed there, while the entry the record names is left as it was, is
+// found by comparing with the copy outside the installation, not here.
 func (a AuditTrail) Verify(ctx context.Context, batch int) (AuditVerification, error) {
 	if batch <= 0 {
 		batch = auditBatch
@@ -277,13 +278,16 @@ func (a AuditTrail) Verify(ctx context.Context, batch int) (AuditVerification, e
 	}
 	// The chain holds from its first entry, and the record does not agree with it. Moved forward
 	// to the head, so that the next verification carries on from there rather than reading the
-	// whole log at every term with nothing able to take the record back.
+	// whole log at every term with nothing able to take the record back. A record past the end of
+	// the log cannot be moved to the head, which is behind it, and the log is read whole at every
+	// term until it reaches the record, or until an operator puts the record back, which only a
+	// superuser with the triggers off can do.
 	if err := a.markVerified(ctx, through, lastHash); err != nil {
 		return v, err
 	}
 	disagrees := &AuditRecordDisagrees{Seq: from, Why: "it does not carry the hash it had when it was verified"}
 	if from > head {
-		disagrees = &AuditRecordDisagrees{Seq: from, Why: fmt.Sprintf("the log ends at entry %d", head)}
+		disagrees = &AuditRecordDisagrees{Seq: from, Why: fmt.Sprintf("the log ends at entry %d, so it is read whole at every term until a superuser with session_replication_role set to replica puts the record back with update audit_verified set through = 0", head)}
 	}
 	return v, disagrees
 }

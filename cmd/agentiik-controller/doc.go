@@ -38,10 +38,12 @@
 // the database. A sink that fails ends nothing; it is said, and tried again.
 //
 // Each term also begins by verifying the chain in the database, so that an entry changed after it
-// was exported is noticed without the copy outside. A break is a warning naming the first broken
-// entry, and holds nothing up. The verification carries on from the last entry the one before it
-// reached, whichever controller that was, and checks that entry against the hash recorded beside
-// it before trusting it, so a long log is not read again from its first entry at every failover.
+// was exported and before it was verified is noticed without the copy outside. A break is a warning
+// naming the first broken entry, and holds nothing up. The verification carries on from the last
+// entry the one before it proved, whichever controller that was, and checks that entry against the
+// hash recorded beside it before trusting it, so a long log is not read again from its first entry
+// at every failover. An entry before that point is not read again, and a change to it is found by
+// comparing with the copy outside.
 //
 // # Leading, and standing by
 //
