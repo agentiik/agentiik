@@ -168,15 +168,16 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 
 	// 5. The helper: --helper <path>, then --helper=none, then $AGK_HELPER, then the
 	// embedded binary for the daemon's platform, then nothing and one sentence saying so.
-	// It is a convenience and never a requirement, which is why nothing here refuses a
-	// build that carries none.
+	// For a script it is a convenience and never a requirement, which is why nothing here
+	// refuses a build that carries none; it is also what fills a step's secrets volume, so a
+	// step given a secret is refused by the driver where there is none.
 	binary, mounted, err := helper.Resolve(*helperPath, e.getenv("AGK_HELPER"), daemon.OSType, daemon.Architecture, layout.Bin())
 	if err != nil {
 		refusal(e.Err, err)
 		return exitNoOutcome
 	}
 	if !mounted {
-		fmt.Fprintf(e.Err, "no static helper is mounted at %s: a script step that calls agk items, agk emit or agk attach will not find one, and jq and a redirect do the same job\n", driver.BinPath)
+		fmt.Fprintf(e.Err, "no static helper is mounted at %s: a script step that calls agk items, agk emit or agk attach will not find one, and jq and a redirect do the same job; a step given a secret is refused, since the helper is what fills its tmpfs volume\n", driver.BinPath)
 	}
 
 	// The driver says its own sentences from inside Run, at the same time as the loop

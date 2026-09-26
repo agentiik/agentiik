@@ -14,9 +14,8 @@ func effectiveCapabilities() (uint64, error) {
 	return 0, nil
 }
 
-// filesystemOf answers for a platform with no tmpfs of Linux's, which is every directory
-// failing the secrets floor. macOS is the case that matters, and agk run --local, which
-// runs there, lifts the floor.
+// filesystemOf answers for a platform whose mounts statfs does not describe as Linux's
+// does, with no flag set: a runner runs on Linux, and nothing else asks.
 func filesystemOf(dir string) (Filesystem, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return Filesystem{}, err

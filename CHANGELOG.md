@@ -2,6 +2,16 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Runner
+
+- A task's secret values reach its container on a tmpfs volume of its own, filled by the static helper and removed with the task, instead of a bind from a host tmpfs: the host prepares nothing, `secrets_dir` in `runner.toml` is read and no longer used, and `Sweep` removes the volumes a runner that died left. A task given a secret on a runner with no helper is refused.
+
+### agk
+
+- `agk run --local` gives secret values the same tmpfs volume, so on macOS they no longer touch the working directory on disk; a build carrying no helper refuses a step given a secret.
+
 ## v0.2.3, 2026-09-26
 
 - Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.

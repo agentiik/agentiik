@@ -123,8 +123,6 @@ func TestARealBrickIsGivenWhatTheContractPromises(t *testing.T) {
 
 	policy := DefaultPolicy()
 	policy.RequireUsernsRemap = RemapLifted
-	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	// The probe is built here and never pushed, so it has only its tag.
 	policy.RequireDigest = DigestLifted
 
@@ -608,7 +606,7 @@ func TestARedeliveredTaskAdoptsTheRealContainerItAlreadyStarted(t *testing.T) {
 
 	// The first delivery's container, started outside this driver, exactly as one a
 	// runner that died between the start and the report would have left behind.
-	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	w, err := newWorkdir(d.cfg.WorkRoot, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +666,7 @@ func TestARealExitedContainerIsCollectedNotStartedAgain(t *testing.T) {
 
 	// The first delivery's container, run to its end and left there, exactly as one a
 	// runner that died between the exit and the tidying would have left behind.
-	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	w, err := newWorkdir(d.cfg.WorkRoot, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +736,7 @@ func TestARealExitedContainersOutputIsReadBackOffItsLog(t *testing.T) {
 		Network:   graph.NetworkNone,
 	}
 
-	w, err := newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	w, err := newWorkdir(d.cfg.WorkRoot, id)
 	if err != nil {
 		t.Fatal(err)
 	}

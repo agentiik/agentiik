@@ -117,10 +117,12 @@ func newRunner(t *testing.T, images map[string]dockertest.Image, run func(docker
 	// installation.
 	policy.RequireUsernsRemap = RemapLifted
 	policy.StopGrace = 200 * time.Millisecond
-	// A secret written into the task's working directory rather than onto a tmpfs,
-	// which is what a laptop with no /dev/shm does, and a laptop is not held to one.
-	policy.SecretsDir = ""
-	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
+	// The helper fills a task's secrets volume, and the fake daemon plays it: what is
+	// bound is only ever a file, and none of it runs.
+	policy.Helper = filepath.Join(t.TempDir(), "agk")
+	if err := os.WriteFile(policy.Helper, []byte("the helper, which the fake daemon plays"), 0o755); err != nil {
+		t.Fatalf("laying out the helper: %s", err)
+	}
 
 	d, err := New(Config{
 		Socket:   daemon.Socket(),
@@ -399,7 +401,7 @@ func TestWhatACompletedKeyLeftBehindIsTakenAwayByItsRefusal(t *testing.T) {
 // the task's label, beside the working directory it was given.
 func exitedFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, root string) {
 	t.Helper()
-	container, root = stageFirstDelivery(t, r, task)
+	container, root, hold := stageHeld(t, r, task)
 	waited, err := r.cli.ContainerWait(t.Context(), container, docker.WaitNextExit)
 	if err != nil {
 		t.Fatalf("opening the wait on the first delivery's container: %s", err)
@@ -407,6 +409,7 @@ func exitedFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, r
 	if err := r.cli.ContainerStart(t.Context(), container); err != nil {
 		t.Fatalf("starting the first delivery's container: %s", err)
 	}
+	hold.release(t.Context())
 	if exit := <-waited; exit.Err != nil {
 		t.Fatalf("waiting for the first delivery's container: %s", exit.Err)
 	}

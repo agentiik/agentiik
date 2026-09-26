@@ -24,12 +24,12 @@ func agentOf(t *testing.T, readies *int, url, root string) Agent {
 	}
 	t.Cleanup(func() { daemon.Close() })
 	// The host an installed agent finds: the three capabilities a remapped daemon asks
-	// for, and a secrets directory on a tmpfs mounted noexec,nosuid,nodev.
+	// for.
 	endings := &Endings{}
 	d, err := driver.New(driver.Config{
 		Socket:   daemon.Socket(),
 		WorkRoot: root,
-		Policy:   driver.Policy{SecretsDir: "/run/agentiik/secrets"},
+		Policy:   driver.Policy{},
 		Logs:     TaskLogs{},
 		Observer: endings,
 		Host:     installed{},

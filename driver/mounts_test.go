@@ -30,13 +30,9 @@ func (v vault) Value(_ context.Context, name string) ([]byte, error) {
 	return []byte(value), nil
 }
 
-// laptop is the policy these tests prepare under: the one of a machine with no tmpfs of
-// the runner's own, where a secret value is written under the task's working directory,
-// which is the directory newWorkdir is given here.
+// laptop is the policy these tests prepare under.
 func laptop() Policy {
 	p := DefaultPolicy()
-	p.SecretsDir = ""
-	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	return p
 }
 
@@ -51,14 +47,14 @@ func prepared(t *testing.T, task graph.Task, secrets Secrets, repo string) (*giv
 	if task.ID == "" {
 		task.ID = agk.NewTaskID("01JMZ8V1P9C4", task.Step, 1, agk.Shard{})
 	}
-	w, err := newWorkdir(t.TempDir(), task.ID, "")
+	w, err := newWorkdir(t.TempDir(), task.ID)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	t.Cleanup(func() { w.remove() })
 
 	run := agk.Run{ID: "01JMZ8V1P9C4", Workflow: "finance/monthly-invoicing@a3f9c1e", Namespace: "finance", Commit: "a3f9c1e"}
-	g, err := prepare(context.Background(), task, w, laptop(), kernel{}, store, run, repo, secrets)
+	g, err := prepare(context.Background(), task, w, laptop(), store, run, repo, secrets)
 	if err != nil {
 		t.Fatalf("prepare: %s", err)
 	}
@@ -218,14 +214,14 @@ func TestASelectorThatLeavesTheTreeIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening a store: %s", err)
 	}
-	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/load/1", "")
+	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/load/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	defer w.remove()
 
 	task := graph.Task{Step: "load", Attempt: 1, Files: []graph.FileSelector{{From: "../../etc/shadow", To: "/etc/shadow"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, t.TempDir(), nil)
+	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, t.TempDir(), nil)
 	if err == nil {
 		t.Fatalf("a selector reaching outside the repository tree was mounted")
 	}
@@ -282,29 +278,26 @@ func TestASecretIsMountedWhereTheManifestAsksForIt(t *testing.T) {
 		Attempt: 1,
 		Secrets: []graph.SecretMount{{Name: "billing", Mount: "/agk/secrets/billing"}},
 	}
-	g, _ := prepared(t, task, vault{"billing": "sk-live-9f11"}, "")
+	g, w := prepared(t, task, vault{"billing": "sk-live-9f11"}, "")
 
-	m := mountAt(t, g, "/agk/secrets/billing")
-	if !m.ReadOnly {
-		t.Fatalf("a secret is mounted writable")
+	if f := fileNamed(t, g, "billing"); string(f.Value) != "sk-live-9f11" {
+		t.Fatalf("the value to write at /agk/secrets/billing is %q", f.Value)
 	}
-	value, err := os.ReadFile(m.Source)
-	if err != nil {
-		t.Fatalf("reading the value: %s", err)
+	// The value goes on the task's secrets volume, and on nothing of the host: no bind
+	// under /agk/secrets, and nothing under the working directory holds it.
+	for _, m := range g.Mounts {
+		if strings.HasPrefix(m.Target, SecretsDir) {
+			t.Errorf("%s is bound from the host at %s", m.Source, m.Target)
+		}
 	}
-	if string(value) != "sk-live-9f11" {
-		t.Fatalf("the value under the mount is %q", value)
-	}
-	info, err := os.Stat(m.Source)
-	if err != nil {
-		t.Fatalf("stat: %s", err)
-	}
-	if info.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("the value is writable: %04o", info.Mode().Perm())
-	}
-	if info.Mode().Perm()&0o004 == 0 {
-		t.Fatalf("the value is %04o, and the account that reads it is the container's and not the runner's", info.Mode().Perm())
-	}
+	filepath.Walk(w.Root, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			if b, _ := os.ReadFile(path); strings.Contains(string(b), "sk-live-9f11") {
+				t.Errorf("the value was written on the host at %s", path)
+			}
+		}
+		return nil
+	})
 
 	// Masking is "a literal match against the values the task was given", and this
 	// is where a task is given them.
@@ -317,20 +310,32 @@ func TestASecretIsMountedWhereTheManifestAsksForIt(t *testing.T) {
 func TestASecretWithNoMountLandsUnderItsName(t *testing.T) {
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer"}}}
 	g, _ := prepared(t, task, vault{"bearer": "token"}, "")
-	mountAt(t, g, SecretsDir+"/bearer")
+	fileNamed(t, g, "bearer")
+}
+
+// fileNamed finds the value to be written under one name on the task's secrets volume.
+func fileNamed(t *testing.T, g *given, name string) secretFile {
+	t.Helper()
+	for _, f := range g.Secrets {
+		if f.Name == name {
+			return f
+		}
+	}
+	t.Fatalf("nothing is to be written at %s/%s: %v", SecretsDir, name, g.Secrets)
+	return secretFile{}
 }
 
 // "A mount elsewhere, /run/secrets/bearer out of habit, is refused."
 func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 	store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
-	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: "/run/secrets/bearer"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"bearer": "token"})
+	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"bearer": "token"})
 	if err == nil {
 		t.Fatalf("a secret was mounted at /run/secrets/bearer")
 	}
@@ -349,19 +354,19 @@ func TestASecretMountedOutsideAgkSecretsIsRefused(t *testing.T) {
 	}
 }
 
-// A mount is one file directly under /agk/secrets/, and the host side is named after its last
-// element. So a mount of . would replace the secrets directory with the value and one of .. would
-// name its parent, and both are refused as the brick's, while a file name carrying a dot, as a
-// key file does, lands where it says.
+// A mount is one file directly under /agk/secrets/, and the file on the volume is named after its
+// last element. So a mount of . would name the volume itself and one of .. its parent, and both
+// are refused as the brick's, while a file name carrying a dot, as a key file does, lands where it
+// says.
 func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
 	for _, mount := range []string{"/agk/secrets/..", "/agk/secrets/.", "/agk/secrets/.netrc", "/agk/secrets/a/b"} {
 		store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
-		w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+		w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1")
 		if err != nil {
 			t.Fatalf("newWorkdir: %s", err)
 		}
 		task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: mount}}}
-		_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"bearer": "token"})
+		_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"bearer": "token"})
 		w.remove()
 		if err == nil {
 			t.Errorf("a secret was mounted at %s", mount)
@@ -374,12 +379,12 @@ func TestASecretMountIsAFileUnderAgkSecretsAndNeverItsParent(t *testing.T) {
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "bearer", Mount: "/agk/secrets/client.key"}}}
 	g, _ := prepared(t, task, vault{"bearer": "token"}, "")
-	mountAt(t, g, "/agk/secrets/client.key")
+	fileNamed(t, g, "client.key")
 }
 
 func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 	store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
-	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -389,7 +394,7 @@ func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 		{Name: "billing", Mount: "/agk/secrets/token"},
 		{Name: "bearer", Mount: "/agk/secrets/token"},
 	}}
-	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{"billing": "a", "bearer": "b"})
+	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{"billing": "a", "bearer": "b"})
 	if err == nil {
 		t.Fatalf("two secrets were mounted at one path")
 	}
@@ -399,14 +404,14 @@ func TestTwoSecretsOnOnePathAreRefused(t *testing.T) {
 // cannot be run, and it is refused rather than started without the values.
 func TestSecretsWithNoSourceAreRefused(t *testing.T) {
 	store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
-	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	if _, err := prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", nil); err == nil {
+	if _, err := prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", nil); err == nil {
 		t.Fatalf("a task naming a secret was prepared with no secret source")
 	}
 }
@@ -415,14 +420,14 @@ func TestSecretsWithNoSourceAreRefused(t *testing.T) {
 // an empty file the brick would read as a value.
 func TestASecretThatCannotBeRedeemedRefusesTheTask(t *testing.T) {
 	store, _ := artifact.New(artifact.Dir(t.TempDir()), "finance", agk.DefaultLimits())
-	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1", "")
+	w, err := newWorkdir(t.TempDir(), "01JMZ8V1P9C4/invoice/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
 	defer w.remove()
 
 	task := graph.Task{Step: "invoice", Attempt: 1, Secrets: []graph.SecretMount{{Name: "billing"}}}
-	_, err = prepare(context.Background(), task, w, laptop(), kernel{}, store, agk.Run{}, "", vault{})
+	_, err = prepare(context.Background(), task, w, laptop(), store, agk.Run{}, "", vault{})
 	if err == nil || !strings.Contains(err.Error(), "billing") {
 		t.Fatalf("the refusal does not name the secret: %v", err)
 	}

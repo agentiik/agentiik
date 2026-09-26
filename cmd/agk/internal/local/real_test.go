@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,6 +51,7 @@ func realSession(t *testing.T, tree string) (*Session, Layout) {
 	}
 	session, err := Open(t.Context(), Daemon{
 		Socket:   socket,
+		Helper:   realHelper(t, socket),
 		Announce: func(s string) { t.Log(s) },
 	}, layout)
 	if err != nil {
@@ -57,6 +59,27 @@ func realSession(t *testing.T, tree string) (*Session, Layout) {
 	}
 	t.Cleanup(func() { session.Close() })
 	return session, layout
+}
+
+// realHelper builds the static helper for the daemon's platform, which fills a step's secrets
+// volume: a test binary embeds none.
+func realHelper(t *testing.T, socket string) string {
+	t.Helper()
+	daemon, err := driver.Probe(t.Context(), socket)
+	if err != nil {
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
+	}
+	arch := map[string]string{"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[daemon.Architecture]
+	if daemon.OSType != "linux" || arch == "" {
+		t.Skipf("the daemon runs %s/%s containers, and the helper is built for linux on amd64 and arm64", daemon.OSType, daemon.Architecture)
+	}
+	path := filepath.Join(t.TempDir(), "agk")
+	build := exec.Command("go", "build", "-trimpath", "-o", path, "github.com/agentiik/agentiik/cmd/agk-helper")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the static helper for linux/%s: %s\n%s", arch, err, out)
+	}
+	return path
 }
 
 // realImage is the base image every step of the fixture runs in. It is pinned and small, and

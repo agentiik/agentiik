@@ -22,20 +22,15 @@ import (
 
 // This file holds the driver to what a runner is on the machine it is installed on: a
 // daemon set to userns-remap, an agent that is not root and holds CAP_CHOWN, CAP_FOWNER and
-// CAP_DAC_OVERRIDE and nothing else, and a secrets directory on a tmpfs mounted
-// noexec,nosuid,nodev. Every floor is held, none is lifted.
+// CAP_DAC_OVERRIDE and nothing else. Every floor is held, none is lifted.
 //
 // Neither Docker Desktop nor the daemon of a CI runner remaps, so these tests skip on both
-// and say so. The userns job in CI sets the daemon to userns-remap, mounts the tmpfs, runs
-// them under setpriv with the three capabilities, and sets requireUserns so that a test
-// that cannot run there fails rather than skips.
+// and say so. The userns job in CI sets the daemon to userns-remap, runs them under setpriv
+// with the three capabilities, and sets requireUserns so that a test that cannot run there
+// fails rather than skips.
 
-// requireUserns names the variable that turns every skip in this file into a failure, and
-// secretsDirVariable the tmpfs the job mounted.
-const (
-	requireUserns      = "AGENTIIK_TEST_REQUIRE_USERNS"
-	secretsDirVariable = "AGENTIIK_TEST_SECRETS_DIR"
-)
+// requireUserns names the variable that turns every skip in this file into a failure.
+const requireUserns = "AGENTIIK_TEST_REQUIRE_USERNS"
 
 // usernsUnavailable skips, or fails where the userns job said it would not.
 func usernsUnavailable(t *testing.T, format string, args ...any) {
@@ -65,7 +60,7 @@ func (e *events) Observe(_ context.Context, ev Event) {
 
 // remappedDriver opens a driver as agk-runner serve opens one, every floor held, on the
 // daemon of this machine, or ends the test through usernsUnavailable.
-func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, string) {
+func remappedDriver(t *testing.T, observer Observer, image string) *Docker {
 	t.Helper()
 	socket, ok := dockertest.Socket()
 	if !ok {
@@ -77,10 +72,6 @@ func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, str
 	}
 	if !daemon.UsernsRemapped {
 		usernsUnavailable(t, "the daemon at %s does not remap user namespaces, and what is under test is a runner on one that does: the userns job in CI runs it", socket)
-	}
-	secrets := os.Getenv(secretsDirVariable)
-	if secrets == "" {
-		usernsUnavailable(t, "%s names no tmpfs mounted noexec,nosuid,nodev for the secret values", secretsDirVariable)
 	}
 
 	cli, err := docker.Dial(socket)
@@ -98,7 +89,7 @@ func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, str
 		t.Fatalf("opening the store: %s", err)
 	}
 	policy := DefaultPolicy()
-	policy.SecretsDir = secrets
+	policy.Helper = realHelper(t)
 	policy.StopGrace = 2 * time.Second
 	// Every floor of a runner's host but the digest: the nonroot image is built on this
 	// daemon after the restart and has only its tag, and what is held here is the range,
@@ -114,14 +105,14 @@ func remappedDriver(t *testing.T, observer Observer, image string) (*Docker, str
 		WorkRoot: t.TempDir(),
 		Announce: func(s string) { t.Log(s) },
 	})
-	if errors.Is(err, ErrOwnershipCapabilities) || errors.Is(err, ErrSecretsTmpfsRequired) {
+	if errors.Is(err, ErrOwnershipCapabilities) {
 		usernsUnavailable(t, "this is not a runner's host: %v", err)
 	}
 	if err != nil {
 		t.Fatalf("a runner's host was refused: %s", err)
 	}
 	t.Cleanup(func() { d.Close() })
-	return d, secrets
+	return d
 }
 
 // The two images a task in the range runs from: alpine as its own root, which is the base
@@ -159,7 +150,7 @@ func inRange(image string) graph.Task {
 			`input=$(stat -c %u:%g /agk/in/in/envelope.json)`,
 			`secret=$(stat -c %u:%g /agk/secrets/bearer)`,
 			`out=$(stat -c %u:%g /agk/out)`,
-			`flags=$(awk '$5 == "/agk/secrets/bearer" { print $6 }' /proc/self/mountinfo)`,
+			`flags=$(awk '$5 == "/agk/secrets" { print $6 }' /proc/self/mountinfo)`,
 			`mkdir -p /agk/out/scratch/nested`,
 			`echo residue > /agk/out/scratch/nested/left.txt`,
 			`chmod 0500 /agk/out/scratch/nested /agk/out/scratch`,
@@ -205,16 +196,17 @@ func runInRange(t *testing.T, d *Docker, task graph.Task) found {
 // "The runner prepares each task's working directory with ownership inside the remapped
 // range before it creates the container", and removes it with the container. The task's
 // files belong to the base of the range on the host, which the container reads as its own
-// root; the brick reads its input and its secret and writes its output; and the working
-// directory, the secret, the nested directory the brick closed and the file it left in a
-// sticky one are gone once the task has ended.
+// root, and so do its secret values on their tmpfs volume, which is given the same owner; the
+// brick reads its input and its secret and writes its output; and the working directory, the
+// secrets volume, the nested directory the brick closed and the file it left in a sticky one
+// are gone once the task has ended.
 func TestARealRemappedDaemonRunsATaskInsideItsRange(t *testing.T) {
 	for _, image := range []string{rootImage, nonRootImage} {
 		t.Run(image, func(t *testing.T) {
 			seen := &events{}
-			d, secretsDir := remappedDriver(t, seen, image)
+			d := remappedDriver(t, seen, image)
 			task := inRange(image)
-			w, err := workdirFor(d.cfg.WorkRoot, task.ID, secretsDir)
+			w, err := workdirFor(d.cfg.WorkRoot, task.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,54 +236,31 @@ func TestARealRemappedDaemonRunsATaskInsideItsRange(t *testing.T) {
 					t.Errorf("the container read %s as owned by %s, and what belongs to the base of the range is the container's root, 0:0", what, got)
 				}
 			}
-			for _, tree := range w.trees() {
-				if _, err := os.Lstat(tree); !errors.Is(err, fs.ErrNotExist) {
-					t.Errorf("%s survived the task: %v", tree, err)
-				}
+			if _, err := os.Lstat(w.Root); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s survived the task: %v", w.Root, err)
+			}
+			cli, err := docker.Dial(d.cli.Socket())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cli.Close()
+			left, err := cli.VolumeList(t.Context(), docker.Filters{}.Add("label", LabelSecrets+"="+string(task.ID)))
+			if err != nil || len(left) != 0 {
+				t.Errorf("the secrets volume survived the task: %v %v", left, err)
 			}
 		})
 	}
 }
 
-// "Tmpfs: /tmp and the secret mount points, with noexec,nosuid,nodev." A secret is bound
-// from the runner's tmpfs rather than mounted as one, and a bind keeps the flags of the
-// mount its source sits on, so the container's own mount table carries the three.
+// "Tmpfs: /tmp and the secret mount points, with noexec,nosuid,nodev." A secret is on a
+// tmpfs volume mounted with the three, so the container's own mount table carries them.
 func TestARealRemappedDaemonGivesTheSecretMountTheTmpfsFlags(t *testing.T) {
-	d, _ := remappedDriver(t, nil, rootImage)
+	d := remappedDriver(t, nil, rootImage)
 	f := runInRange(t, d, inRange(rootImage))
 	flags := strings.Split(f.Flags, ",")
 	for _, want := range []string{"noexec", "nosuid", "nodev"} {
 		if !slices.Contains(flags, want) {
 			t.Errorf("the secret mount is %q in /proc/self/mountinfo, without %s", f.Flags, want)
 		}
-	}
-}
-
-// A runner holding CAP_FOWNER can change the mode of a directory it does not own, so the
-// chmod that once refused a secrets base somebody else made first would now close it and
-// keep it, that account still its owner. The owner is read instead, and the base refused.
-// Only a process holding CAP_CHOWN can make a directory another account owns, so this runs
-// where the userns job gives it the three.
-func TestARealRunnerHostRefusesASecretsBaseAnotherAccountOwns(t *testing.T) {
-	held, err := effectiveCapabilities()
-	if err != nil || held&(1<<0|1<<3) != 1<<0|1<<3 {
-		usernsUnavailable(t, "this process does not hold CAP_CHOWN and CAP_FOWNER, so it can neither make a directory another account owns nor close one: %v", err)
-	}
-	secrets := t.TempDir()
-	base := secrets + "/" + secretsBase
-	if err := os.Mkdir(base, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chown(base, os.Geteuid()+1, os.Getegid()); err != nil {
-		t.Fatalf("giving %s to another account: %s", base, err)
-	}
-	t.Cleanup(func() { os.Chown(base, os.Geteuid(), os.Getegid()) })
-
-	_, err = newWorkdir(t.TempDir(), shardedTask, secrets)
-	if err == nil {
-		t.Fatalf("a secrets base another account owns was taken")
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("belongs to uid %d", os.Geteuid()+1)) {
-		t.Errorf("the refusal does not name the account that owns it: %s", err)
 	}
 }

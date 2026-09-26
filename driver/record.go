@@ -598,7 +598,8 @@ func (d *Docker) refuseCompleted(ctx context.Context, t graph.Task) error {
 	if left, err := d.containerOf(tidy, t.ID); err == nil && left != "" {
 		d.cli.ContainerRemove(tidy, left, true)
 	}
-	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
+	d.removeSecrets(tidy, t)
+	if w, err := workdirFor(d.cfg.WorkRoot, t.ID); err == nil {
 		d.tidy(t, w)
 	}
 	return &Completed{Ending: e}
@@ -650,7 +651,7 @@ func (d *Docker) ended(r graph.Result, err error) (graph.Result, error) {
 	if now.Sub(d.keys.pruned) >= pruneEvery {
 		d.keys.prune(now)
 		// The same lock and the same hour: sweep says why each.
-		sweep(d.cfg.WorkRoot, d.cfg.Policy.SecretsDir, now.Add(-emptyKept))
+		sweep(d.cfg.WorkRoot, now.Add(-emptyKept))
 	}
 	return r, err
 }

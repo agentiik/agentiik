@@ -94,9 +94,8 @@ type Config struct {
 	Announce func(string)
 
 	// Host answers what the floors ask of this machine rather than of the daemon: the
-	// capabilities this process holds, which a remapped daemon needs three of, and
-	// what the secrets directory is mounted as. Nil is the kernel's own answers, and
-	// only a test gives another.
+	// capabilities this process holds, which a remapped daemon needs three of. Nil is
+	// the kernel's own answers, and only a test gives another.
 	Host Host
 }
 

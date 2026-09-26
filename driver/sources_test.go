@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +13,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/docker"
 	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
@@ -143,11 +142,7 @@ func TestTwoTasksThatNameOneSecretAreEachGivenTheirOwnValue(t *testing.T) {
 		arrived.Done()
 		namespace := c.Labels[LabelNamespace]
 
-		m, ok := c.Mount(SecretsDir + "/billing")
-		if !ok {
-			return 1, errors.New("nothing is mounted at /agk/secrets/billing")
-		}
-		b, err := os.ReadFile(m.Source)
+		b, err := c.ReadFile(SecretsDir + "/billing")
 		if err != nil {
 			return 1, err
 		}
@@ -302,23 +297,42 @@ func TestAnAdoptedContainerIsMaskedWithTheValuesOfTheDeliveryThatAdoptsIt(t *tes
 	}
 }
 
+// runningFirstDelivery is a first delivery whose runner died while its container ran: the
+// container started with its values on its secrets volume, and it runs until released is
+// closed, which the test does once the redelivery has read what it masks with and is
+// carrying the container.
+func runningFirstDelivery(t *testing.T, r *runner, task graph.Task, released chan struct{}) {
+	t.Helper()
+	container, _, hold := stageHeld(t, r, task)
+	if err := r.cli.ContainerStart(t.Context(), container); err != nil {
+		t.Fatalf("starting the first delivery's container: %s", err)
+	}
+	hold.release(t.Context())
+	var once sync.Once
+	heard := r.cfg.Observer
+	r.cfg.Observer = &events{on: func(e Event) {
+		heard.Observe(context.Background(), e)
+		if e.State == agk.TaskDispatched {
+			once.Do(func() { close(released) })
+		}
+	}}
+}
+
 // A secret rotated between two deliveries leaves the container holding the value the
 // first one wrote for it, and the second one redeeming the new value. The container can
-// print only the first, so an adopted container is masked with the value it was given,
-// which is still on this host, as well as with the one this delivery redeemed, in its log
-// and in the outputs published from it alike.
+// print only the first, so an adopted container that is still running is masked with the
+// value it was given, read back off its secrets volume, as well as with the one this
+// delivery redeemed, in its log and in the outputs published from it alike.
 func TestAnAdoptedContainerIsMaskedWithTheValueItWasGivenAfterARotation(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
+	released := make(chan struct{})
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
-		m, ok := c.Mount(SecretsDir + "/bearer")
-		if !ok {
-			return 1, errors.New("nothing is mounted at /agk/secrets/bearer")
-		}
-		b, err := os.ReadFile(m.Source)
+		b, err := c.ReadFile(SecretsDir + "/bearer")
 		if err != nil {
 			return 1, err
 		}
+		<-released
 		fmt.Fprintf(c.Stderr, "authorising with %s\n", b)
 		return 0, wrote(c, "out", agk.NewItem(map[string]any{"token": string(b)}))
 	})
@@ -327,7 +341,7 @@ func TestAnAdoptedContainerIsMaskedWithTheValueItWasGivenAfterARotation(t *testi
 
 	// The first delivery is given s3cr3t-value, the value newRunner's own source holds.
 	task := taskWithASecret(ref)
-	exitedFirstDelivery(t, r, task)
+	runningFirstDelivery(t, r, task, released)
 
 	// The namespace rotated the value before the redelivery redeemed its grant.
 	refuseConfig(r)
@@ -363,12 +377,15 @@ func TestAnAdoptedContainerIsMaskedWithTheValueItWasGivenAfterARotation(t *testi
 	}
 }
 
-// With no secret source, an adopted container is masked with the values the first
-// delivery wrote for it, which are the values it can print, and nothing is refused.
+// With no secret source, an adopted container that is still running is masked with the
+// values the first delivery wrote on its secrets volume, which are the values it can print,
+// and nothing is refused.
 func TestAnAdoptedContainerWithNoSecretSourceIsMaskedWithWhatItWasGiven(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
+	released := make(chan struct{})
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-released
 		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
 		return 0, nil
 	})
@@ -376,7 +393,7 @@ func TestAnAdoptedContainerWithNoSecretSourceIsMaskedWithWhatItWasGiven(t *testi
 	r.cfg.Logs = &sinkFor{b: &written}
 
 	task := taskWithASecret(ref)
-	exitedFirstDelivery(t, r, task)
+	runningFirstDelivery(t, r, task, released)
 	r.cfg.Secrets = nil
 
 	if _, err := r.Run(t.Context(), task); err != nil {
@@ -391,9 +408,9 @@ func TestAnAdoptedContainerWithNoSecretSourceIsMaskedWithWhatItWasGiven(t *testi
 }
 
 // A server runner leaves Config.Secrets nil and gives each task its own. A redelivery that
-// came without them, to a host that no longer holds the values the first delivery wrote,
-// as after a restart that cleared the tmpfs, has nothing to mask an adopted container's
-// log with, and is refused rather than writing that log in the clear.
+// came without them, to a container that has exited, whose secrets volume the daemon emptied
+// as it let go of it, has nothing to mask the container's log with, and is refused rather
+// than writing that log in the clear.
 func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
@@ -405,11 +422,8 @@ func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *tes
 	r.cfg.Logs = &sinkFor{b: &written}
 
 	task := taskWithASecret(ref)
-	_, root := exitedFirstDelivery(t, r, task)
+	exitedFirstDelivery(t, r, task)
 	r.cfg.Secrets = nil
-	if err := os.RemoveAll(filepath.Join(root, "secrets")); err != nil {
-		t.Fatalf("taking away what the first delivery wrote: %s", err)
-	}
 
 	_, err := r.Run(t.Context(), task)
 	runnersOwn(t, err, "a redelivery with no secret source")
@@ -425,40 +439,25 @@ func TestAnAdoptedContainerWithNoSecretSourceIsRefusedNotLoggedInTheClear(t *tes
 	runnersOwn(t, err, "a first delivery with no secret source")
 }
 
-// What the first delivery wrote is read back only as a file. A link left under its name is
-// not followed, so with no secret source either there is nothing to mask with, and the
-// redelivery is refused rather than masking with whatever the link points at.
-func TestAnAdoptedContainersSecretIsNotReadBackThroughALink(t *testing.T) {
-	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
-
-	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
-		fmt.Fprintln(c.Stderr, "authorising with s3cr3t-value")
-		return 0, nil
-	})
-	var written strings.Builder
-	r.cfg.Logs = &sinkFor{b: &written}
-
-	task := taskWithASecret(ref)
-	_, root := exitedFirstDelivery(t, r, task)
-	r.cfg.Secrets = nil
-
-	elsewhere := filepath.Join(t.TempDir(), "bearer")
-	if err := os.WriteFile(elsewhere, []byte("s3cr3t-value"), 0o600); err != nil {
-		t.Fatalf("writing the file the link points at: %s", err)
-	}
-	secret := filepath.Join(root, "secrets", "bearer")
-	if err := os.Remove(secret); err != nil {
-		t.Fatalf("taking the first delivery's value away: %s", err)
-	}
-	if err := os.Symlink(elsewhere, secret); err != nil {
-		t.Fatalf("leaving a link in its place: %s", err)
-	}
-
-	if _, err := r.Run(t.Context(), task); err == nil {
-		t.Fatal("a redelivery that found a link where a value was written masked with what it points at")
-	}
-	if strings.Contains(written.String(), "s3cr3t-value") {
-		t.Errorf("the log carries the secret value: %q", written.String())
+// What the first delivery wrote is read back only off the task's own secrets volume. A
+// container carrying the task's label may have been started by anything, and one with any
+// other volume at /agk/secrets, or none, is not read at all.
+func TestOnlyTheTasksOwnSecretsVolumeIsReadBack(t *testing.T) {
+	task := taskWithASecret("ghcr.io/agentiik/http-request@" + imageDigest)
+	own := docker.MountPoint{Type: docker.MountVolume, Name: secretsVolume(task.ID), Destination: SecretsDir}
+	for _, c := range []struct {
+		mounts []docker.MountPoint
+		read   bool
+	}{
+		{[]docker.MountPoint{own}, true},
+		{nil, false},
+		{[]docker.MountPoint{{Type: docker.MountVolume, Name: "somebody-elses", Destination: SecretsDir}}, false},
+		{[]docker.MountPoint{{Type: docker.MountBind, Source: "/dev/shm/agentiik", Destination: SecretsDir}}, false},
+		{[]docker.MountPoint{{Type: docker.MountVolume, Name: secretsVolume(task.ID), Destination: "/elsewhere"}}, false},
+	} {
+		if got := ownSecretsVolume(task, c.mounts); got != c.read {
+			t.Errorf("a container with %+v is read back %v, and it is %v", c.mounts, got, c.read)
+		}
 	}
 }
 
@@ -469,8 +468,7 @@ func TestWithNoSourcesTheConfigAnswersAsBefore(t *testing.T) {
 
 	var value, tree string
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
-		m, _ := c.Mount(SecretsDir + "/bearer")
-		b, err := os.ReadFile(m.Source)
+		b, err := c.ReadFile(SecretsDir + "/bearer")
 		if err != nil {
 			return 1, err
 		}
@@ -505,8 +503,7 @@ func TestASourceLeftOutLeavesTheConfigHookInForce(t *testing.T) {
 
 	var value, tree string
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
-		m, _ := c.Mount(SecretsDir + "/bearer")
-		b, err := os.ReadFile(m.Source)
+		b, err := c.ReadFile(SecretsDir + "/bearer")
 		if err != nil {
 			return 1, err
 		}
