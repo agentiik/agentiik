@@ -360,6 +360,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A request from `agk` or a runner to `localhost` in any case, `0.0.0.0` or `::` goes through no `HTTP_PROXY`, as one to `127.0.0.1` already did, so nothing let through as crossing no network crosses it to a proxy.
 - `AGK_AUDIT_EXPORT_URL` and `AGK_AUDIT_EXPORT_TOKEN_FILE` name the audit log's sink and its bearer credential, for the controller alone. Without them the controller starts and warns that the log goes nowhere.
 - `AGK_METRICS_LISTEN` and `AGK_METRICS_TOKEN_FILE`, the controller's, are both set or neither; the file holds the SHA-256 of the token and never the token.
+- `AGK_TLS_CERT_FILE` and `AGK_TLS_KEY_FILE`, both or neither, have the API serve `AGK_LISTEN` and the controller serve `AGK_METRICS_LISTEN` over TLS themselves, 1.2 at the least and HTTP/1.1. The key's file is held to a secret's rules and `AGK_TLS_KEY` is refused; a key not matching, a certificate out of its validity or holding a key, or a certificate for a controller with no metrics refuses the start. The certificate is read once, so a renewed one is served from the next restart. Without them both serve plain HTTP, as before.
 - `AGK_OTLP_ENDPOINT`, read by the controller alone, is the collector traces are sent to: `https`, or `http` to a loopback address, with no user, query or fragment.
 
 ### Command line

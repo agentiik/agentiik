@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -101,8 +102,19 @@ const (
 
 // serve answers on ln until ctx is done, then finishes what it is answering and returns nil, or
 // returns why it could not go on.
+//
+// Over TLS where the settings hold a certificate, and in plain HTTP to a terminator in front where
+// they hold none. The listener is wrapped here rather than where it is opened, so that what a test
+// hands serve is served as main serves it.
 func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) error {
 	defer ln.Close()
+	served, err := s.TLS.Server()
+	if err != nil {
+		return config.Refuse(config.TLSCertFile, err)
+	}
+	if served != nil {
+		ln = tls.NewListener(ln, served)
+	}
 	in, err := open(ctx, s, log)
 	switch {
 	case err != nil && ctx.Err() != nil:
@@ -122,16 +134,16 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 		IdleTimeout:       idleTimeout,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(ln) }()
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Serve(ln) }()
 
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
 	go watchCredential(watching, s.Bus.Expires, log, time.Now, sleep)
 
-	log.Info("serving", "address", ln.Addr().String(), "public_url", s.PublicURL)
+	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL)
 	select {
-	case err := <-served:
+	case err := <-stopped:
 		return fmt.Errorf("the listener stopped: %w", err)
 	case <-ctx.Done():
 	}
@@ -141,7 +153,7 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 		log.Warn("the requests still being answered were cut", "after", shutdownGrace.String(), "error", err)
 		server.Close()
 	}
-	<-served
+	<-stopped
 	return nil
 }
 
