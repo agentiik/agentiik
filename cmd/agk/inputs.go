@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -52,7 +55,7 @@ func suppliedInputs(values, files []string, doc string) (map[string]any, error) 
 			return nil, fmt.Errorf("--inputs %s: %w", doc, err)
 		}
 		var document map[string]any
-		if err := json.Unmarshal(raw, &document); err != nil {
+		if err := decodeJSON(raw, &document); err != nil {
 			return nil, fmt.Errorf("--inputs %s is not a JSON object of input names and values: %w", doc, err)
 		}
 		maps.Copy(out, document)
@@ -92,8 +95,26 @@ func suppliedInputs(values, files []string, doc string) (map[string]any, error) 
 func valueOf(s string) any {
 	trimmed := strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r")
 	var v any
-	if err := json.Unmarshal([]byte(trimmed), &v); err == nil {
+	if err := decodeJSON([]byte(trimmed), &v); err == nil {
 		return v
 	}
 	return trimmed
+}
+
+// decodeJSON reads one JSON document as json.Unmarshal does, except that a number is read as it
+// was written, a json.Number: "a number written without a fraction or an exponent is an int in
+// an expression, and any other a double", and the API reads a server run's inputs the same way,
+// so --input n=3 is the int 3 in ${{ workflow.inputs.n + 1 }} wherever the run goes.
+func decodeJSON(b []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	if err := d.Decode(v); err != nil {
+		return err
+	}
+	// Unmarshal refuses what follows the document, and so does this: --input n='1 2' is the
+	// text it is and not the number 1.
+	if _, err := d.Token(); err != io.EOF {
+		return errors.New("a second document follows the first")
+	}
+	return nil
 }

@@ -30,9 +30,10 @@ import (
 // the declaration refuses is answered 422 naming the input, before any run exists. What is written
 // is what was bound, defaults included, so a run reads the same inputs whoever started it.
 //
-// They are decoded to be bound, as encoding/json decodes them, which is how agk run --local reads
-// an input and how the controller reads the run back: a number is a 64-bit float in all three.
-// Decoding costs values more than bytes, and the inputs were counted as they were read, so this
+// They are decoded to be bound with every number read as it was written, a json.Number, which is
+// how agk run --local reads an input and how the controller reads the run back: "a number written
+// without a fraction or an exponent is an int in an expression, and any other a double", in all
+// three. Decoding costs values more than bytes, and the inputs were counted as they were read, so this
 // costs no more than the controller already pays at every decision it takes on the run.
 
 // bindInputs binds the inputs a request supplied against the declaration of one version, and
@@ -40,9 +41,11 @@ import (
 func (s *Server) bindInputs(w http.ResponseWriter, ctx context.Context, over Target, commit string, g *graph.Graph, sent jsontext.Value) (json.RawMessage, bool) {
 	var supplied map[string]any
 	if len(sent) > 0 {
-		if err := json.Unmarshal(sent, &supplied); err != nil {
-			// Read already, as an object of names and values none of which a float refuses, so
-			// this is a document the body reader let through and should not have.
+		d := json.NewDecoder(bytes.NewReader(sent))
+		d.UseNumber()
+		if err := d.Decode(&supplied); err != nil {
+			// Read already, as one object of names and values, so this is a document the body
+			// reader let through and should not have.
 			fail(w, http.StatusBadRequest, "the inputs are not an object naming each input")
 			return nil, false
 		}

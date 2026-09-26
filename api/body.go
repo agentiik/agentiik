@@ -461,10 +461,11 @@ func (b *body) written(from int64) []byte {
 // was sent, which is 34 MB for all the values a run's inputs may hold: about what storing every
 // number as a 64-bit float cost when encoding/json wrote them, 5e-324 being read back in 326.
 //
-// A run's inputs are now bound before they are written, and written as encoding/json writes a
-// 64-bit float, so what the database holds of them is no longer the number as it was sent. The
-// rule stays as the route's documented answer: a number past it is refused with 400 before the
-// inputs are decoded, as it was, and whether it should go is the documentation's to say.
+// A run's inputs are bound before they are written, and written as they were sent but for an
+// exponent, which schema.Canonical writes out in full so that 1e3 reads back a double: at most
+// numberMaxDigits digits either side of the point, which is what jsonb would have written back
+// of it anyway. The rule is the route's documented answer: a number past it is refused with 400
+// before the inputs are decoded.
 const numberMaxDigits = 340
 
 // skim reads one value and everything in it, counting each against b.values.
