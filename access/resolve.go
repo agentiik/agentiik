@@ -1,6 +1,7 @@
 package access
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,8 +53,13 @@ func (p Principal) named(ref string) bool {
 // nothing, and the question it was written to answer cannot be answered without it.
 //
 // at is the installation when it names no namespace, and the installation resolves to nothing:
-// no grant is scoped to it.
+// no grant is scoped to it. now is never the zero time, which is before every expiry and would
+// bring back every grant that has lapsed; a caller that read no time is refused rather than
+// answered.
 func Resolve(p Principal, grants []Grant, at Scope, now time.Time) (Set, error) {
+	if now.IsZero() {
+		return Set{}, errors.New("grants are resolved as of a time, and none was given: every grant that has lapsed would hold again at the zero time")
+	}
 	if at.Namespace == "" {
 		return Set{}, nil
 	}

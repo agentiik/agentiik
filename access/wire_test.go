@@ -33,6 +33,8 @@ type wireDef struct {
 	Pattern string    `json:"pattern"`
 	Ref     string    `json:"$ref"`
 	OneOf   []wireDef `json:"oneOf"`
+	Not     *wireDef  `json:"not"`
+	Const   string    `json:"const"`
 }
 
 // The vocabulary is the wire's, word for word and in its order: a permission the wire does not
@@ -75,6 +77,52 @@ func TestTheScopeGrammarsAreTheWiresOwn(t *testing.T) {
 	}
 	if got, want := `^`+namespaceGrammar+`/`+workflowGrammar+`$`, scope[1].Pattern; got != want {
 		t.Errorf("a workflow's scope is read as %s, and the wire writes %s", got, want)
+	}
+}
+
+// A principal is read on the wire's three forms, pattern for pattern: a login is a namespace's name
+// and never operator, a group is group:NAME and a service account NS/NAME, both on the namespace
+// grammar.
+func TestThePrincipalGrammarsAreTheWiresOwn(t *testing.T) {
+	defs := wireDefs(t)
+	forms := defs["principalRef"].OneOf
+	if len(forms) != 3 || forms[0].Ref != "#/$defs/login" || forms[1].Ref != "#/$defs/groupRef" || forms[2].Ref != "#/$defs/serviceAccountRef" {
+		t.Fatalf("the wire's principalRef is %+v, and this package reads a login, a group and a service account", forms)
+	}
+	if login := defs["login"]; login.Ref != "#/$defs/namespace" || login.Not == nil || login.Not.Const != "operator" {
+		t.Errorf("the wire's login is %+v, and this package reads a namespace's name that is not operator", login)
+	}
+	if got, want := `^group:`+namespaceGrammar+`$`, defs["groupRef"].Pattern; got != want {
+		t.Errorf("a group is read as %s, and the wire writes %s", got, want)
+	}
+	if got, want := `^`+namespaceGrammar+`/`+namespaceGrammar+`$`, defs["serviceAccountRef"].Pattern; got != want {
+		t.Errorf("a service account is read as %s, and the wire writes %s", got, want)
+	}
+}
+
+// Every principal reference the corpus holds valid is one a grant can name, and every one it holds
+// invalid is refused.
+func TestThePrincipalReferenceCorpus(t *testing.T) {
+	cases, err := fixtures.PrincipalRefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		b, err := fs.ReadFile(fixtures.FS, c.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ref string
+		if err := json.Unmarshal(b, &ref); err != nil {
+			t.Fatalf("%s: %v", c.File, err)
+		}
+		err = principalRef(ref)
+		if c.Valid && err != nil {
+			t.Errorf("%s: %q is refused, and the corpus accepts it as %s: %v", c.File, ref, c.Covers, err)
+		}
+		if !c.Valid && err == nil {
+			t.Errorf("%s: %q is accepted, and the corpus refuses it: %s", c.File, ref, c.Rule)
+		}
 	}
 }
 

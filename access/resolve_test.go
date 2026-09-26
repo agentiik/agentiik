@@ -33,7 +33,7 @@ func deny(id, who string, at access.Scope, p access.Permission) access.Grant {
 }
 
 func until(g access.Grant, end time.Time) access.Grant {
-	g.ExpiresAt = end
+	g.ExpiresAt = &end
 	return g
 }
 
@@ -246,6 +246,29 @@ func TestAGrantLapsesAtItsExpiry(t *testing.T) {
 	}
 	if (access.Grant{}).Expired(end.AddDate(100, 0, 0)) {
 		t.Error("a grant with no expiry has ended")
+	}
+
+	// The zero time is an instant the wire can write, and a grant that ended then has ended; it
+	// is not a grant with no expiry.
+	long := until(allow("g4", "alice", finance, access.Owner), time.Time{})
+	if got := resolved(t, alice, []access.Grant{long}, finance, t0); got != (access.Set{}) {
+		t.Errorf("a grant that ended at 0001-01-01T00:00:00Z holds %s", got)
+	}
+}
+
+// Grants are resolved as of a time. The zero time is before every expiry, so a caller that read none
+// is refused rather than handed back every grant that has lapsed.
+func TestGrantsAreNotResolvedAsOfNoTime(t *testing.T) {
+	grants := []access.Grant{until(allow("g1", "alice", finance, access.Owner), t0.Add(-24*time.Hour))}
+	if got := resolved(t, alice, grants, finance, t0); got != (access.Set{}) {
+		t.Fatalf("a grant that lapsed yesterday holds %s", got)
+	}
+	held, err := access.Resolve(alice, grants, finance, time.Time{})
+	if err == nil || held != (access.Set{}) {
+		t.Errorf("as of the zero time, alice holds %s: %v", held, err)
+	}
+	if ok, err := access.Holds(alice, grants, access.GrantManage, finance, time.Time{}); ok || err == nil {
+		t.Errorf("as of the zero time, Holds answers %v, %v", ok, err)
 	}
 }
 

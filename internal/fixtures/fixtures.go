@@ -108,6 +108,7 @@ type index struct {
 		LogShipment        corpus `json:"log-shipment"`
 		RunnerPool         corpus `json:"runner-pool"`
 		Stop               corpus `json:"stop"`
+		PrincipalRef       corpus `json:"principal-ref"`
 		AccessGrant        corpus `json:"access-grant"`
 		Role               corpus `json:"role"`
 		Permission         corpus `json:"permission"`
@@ -177,6 +178,12 @@ func RunnerHeartbeats() ([]Case, error) {
 // after the chunk it sent.
 func LogShipments() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.LogShipment })
+}
+
+// PrincipalRefs returns the principal reference corpus: a principal written as a grant, a token or
+// an audit row names it, as a login, group:NAME or NS/NAME, and strings that name nobody.
+func PrincipalRefs() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.PrincipalRef })
 }
 
 // AccessGrants returns the access grant corpus: one principal bound to a role, or denied one

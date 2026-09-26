@@ -123,21 +123,23 @@ type Grant struct {
 	// Deny is the permission taken away, on a deny, and empty on an allow.
 	Deny Permission `json:"deny,omitempty"`
 
-	// ExpiresAt is when the grant ends by itself, and zero for one that lasts until it is
-	// revoked.
-	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	// ExpiresAt is when the grant ends by itself, and nil for one that lasts until it is
+	// revoked. A pointer rather than the zero time for none, because the zero time is an instant
+	// the wire can write, 0001-01-01T00:00:00Z, and a grant that ended then has ended.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
 	GrantedBy string    `json:"granted_by"`
 	GrantedAt time.Time `json:"granted_at"`
 }
 
-// Validate refuses a grant that does not say what it binds: no principal, a scope no grant can
-// name, neither a role nor a deny or both, a role that is not one of the four, or a deny that is
-// not one of the nine. What the row records about itself, its identifier and who wrote it when,
-// is the store's to fill and is not read here.
+// Validate refuses a grant that does not say what it binds: a principal no grant can name, a scope
+// no grant can name, neither a role nor a deny or both, a role that is not one of the four, or a
+// deny that is not one of the nine. What the row records about itself, its identifier and who wrote
+// it when, is the store's to fill and is not read here, and so is whether the principal exists,
+// which only the store knows.
 func (g Grant) Validate() error {
-	if g.Principal == "" {
-		return errors.New("a grant names the principal it is for: a login, group:NAME or NS/NAME")
+	if err := principalRef(g.Principal); err != nil {
+		return err
 	}
 	if err := g.Scope.validate(); err != nil {
 		return err
@@ -168,5 +170,41 @@ func (g Grant) binds() error {
 // remembering to revoke it", at the instant it names: a grant ending at midnight is not held at
 // midnight.
 func (g Grant) Expired(now time.Time) bool {
-	return !g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt)
+	return g.ExpiresAt != nil && !now.Before(*g.ExpiresAt)
+}
+
+// principalRef refuses a principal no grant can name, on the wire's three forms: a login, which is
+// held to the namespace grammar and its reserved words since each user's personal namespace is
+// named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account.
+// The forms cannot be taken for one another, since a login holds neither a colon nor a slash.
+//
+// Resolve matches a principal by its exact string, so a grant written for one spelled wrongly is a
+// grant for nobody, and a deny for nobody denies nothing while reading as though it did.
+func principalRef(ref string) error {
+	given := func(name string) bool {
+		return len(name) <= agk.IdentifierMaxBytes && namespaceForm.MatchString(name)
+	}
+	if group, ok := strings.CutPrefix(ref, "group:"); ok {
+		if given(group) {
+			return nil
+		}
+		return fmt.Errorf("%.64q names no group: a group is written group:NAME, the name in lowercase words joined by hyphens, such as group:team-finance", ref)
+	}
+	if ns, name, ok := strings.Cut(ref, "/"); ok {
+		if given(ns) && given(name) {
+			return nil
+		}
+		return fmt.Errorf("%.64q names no service account: one is written NS/NAME, both in lowercase words joined by hyphens, such as finance/agentiik", ref)
+	}
+	switch {
+	case ref == "":
+		return errors.New("a grant names the principal it is for: a login such as alice, group:NAME such as group:team-finance, or NS/NAME such as finance/agentiik")
+	case ref == "operator":
+		return errors.New("operator names the v0.2 operator on the rows it wrote, and is no principal a grant can name")
+	case !given(ref):
+		return fmt.Errorf("%.64q names no principal: a login is lowercase words joined by hyphens, such as alice, a group is group:NAME and a service account NS/NAME", ref)
+	case agk.IsReservedNamespace(ref):
+		return fmt.Errorf("%s is a word the API routes on, which names no user, since a user's personal namespace is named after their login", ref)
+	}
+	return nil
 }

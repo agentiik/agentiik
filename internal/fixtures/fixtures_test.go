@@ -274,6 +274,9 @@ func TestTheAccessCorporaCarryTheWholeCorpus(t *testing.T) {
 		// carrying a role and a deny, a deny naming a role, a role that is not one of the four,
 		// and a scope on a reserved word.
 		{"access grants", AccessGrants, 3, 4},
+		// A login, a group and a service account; refused, operator, a user written with a
+		// prefix, and a group written in capitals.
+		{"principal references", PrincipalRefs, 3, 3},
 		// operator and owner; refused, admin.
 		{"roles", Roles, 2, 1},
 		// run:read_data and grant:manage; refused, a hyphenated one and a wildcard.
