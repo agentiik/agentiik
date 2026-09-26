@@ -1,0 +1,6 @@
+# The programs a go build or a test leaves at the root of the checkout, which are never committed.
+/agentiik-api
+/agentiik-controller
+/agk
+/agk-runner
+/agk-helper
