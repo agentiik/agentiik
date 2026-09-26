@@ -4,6 +4,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### API
+
+- `agentiik-api init` prepares an installation from `AGK_*` variables alone and brings it back in line with them at every run, for a Compose `init` service: certificate, keys, bus identity and `nats.conf`, migration, namespace, the operator token's hash, and a join token of the pool `default` for the local runner.
+- `AGK_PROXY_URL` puts the API behind a proxy on the same host: reached at that URL, plain HTTP on the loopback, `AGK_PUBLIC_URL` and the TLS pair left unread.
+
 ### Images
 
 - `ghcr.io/agentiik/runner` starts as root and `serve` drops to 65532 itself, so its container takes `cap_add` SETUID and SETGID beside CHOWN, FOWNER and DAC_OVERRIDE, and no `user` or `group_add`.

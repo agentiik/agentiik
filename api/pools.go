@@ -411,26 +411,7 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 	// answered with is the hour it was given and not an hour less the time between two reads
 	// of a clock.
 	now := s.now()
-	pool := r.PathValue("pool")
-	var issued db.JoinToken
-	var from db.RunnerPool
-	err := s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
-		var err error
-		if issued, err = wide.IssueJoinToken(ctx, pool, ask.Labels, string(who), now, now.Add(life)); err != nil {
-			return err
-		}
-		if from, err = wide.RunnerPoolNamed(ctx, pool); err != nil {
-			return err
-		}
-		// Recorded by its identifier, and never by the token, which is shown once, here.
-		return wide.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.JoinTokenIssue, Target: issued.ID, Result: audit.Done,
-			Detail: map[string]any{
-				"pool": issued.Pool, "labels": orEmpty(issued.Labels),
-				"expires_at": issued.ExpiresAt.UTC().Format(time.RFC3339Nano),
-			},
-		})
-	})
+	issued, from, err := IssueJoinToken(r.Context(), s.pool, r.PathValue("pool"), ask.Labels, who, now, now.Add(life))
 	switch {
 	case errors.Is(err, db.ErrNoRunnerPool):
 		// A pool is installation-wide and the caller is already an administrator, so there
@@ -458,6 +439,36 @@ func (s *RunnerAPI) issue(w http.ResponseWriter, r *http.Request, who Principal,
 			ExpiresAt: issued.ExpiresAt.UTC().Format(time.RFC3339Nano),
 		},
 	})
+}
+
+// IssueJoinToken issues a join token of the pool named pool, permitting labels, from at until
+// until, as who, recorded in the audit log in the same transaction, and answers it with the pool it
+// was issued from. It is what the route does once the request is read, and what agentiik-api init
+// does for the runner beside the installation, since the API it would ask is not serving yet.
+//
+// A pool that does not exist is db.ErrNoRunnerPool, and a label the pool does not carry
+// db.ErrNotThePoolsLabel. The token's secret is in the answer's Clear, and nowhere else.
+func IssueJoinToken(ctx context.Context, pool *db.Pool, name string, labels []string, who Principal, at, until time.Time) (db.JoinToken, db.RunnerPool, error) {
+	var issued db.JoinToken
+	var from db.RunnerPool
+	err := pool.Installation(ctx, db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		if issued, err = wide.IssueJoinToken(ctx, name, labels, string(who), at, until); err != nil {
+			return err
+		}
+		if from, err = wide.RunnerPoolNamed(ctx, name); err != nil {
+			return err
+		}
+		// Recorded by its identifier, and never by the token, which is shown once, here.
+		return wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.JoinTokenIssue, Target: issued.ID, Result: audit.Done,
+			Detail: map[string]any{
+				"pool": issued.Pool, "labels": orEmpty(issued.Labels),
+				"expires_at": issued.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			},
+		})
+	})
+	return issued, from, err
 }
 
 func orEmpty(s []string) []string {
