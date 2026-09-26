@@ -77,10 +77,10 @@ type Options struct {
 
 	// Reread, where set, reads the credential again, from wherever Credentials was read, at
 	// every connection: a reconnection after the bus dropped this one, above all when the
-	// credential it held expired. So a credential renewed in its file
-	// is the one the connection comes back with, and the program holding it goes on without a
-	// restart. Where it fails, the credential read last is used again, which the bus refuses
-	// only if it has expired.
+	// credential it held expired. So a credential renewed in its file is the one the
+	// connection comes back with, and the program holding it goes on without a restart. Where
+	// it fails, the credential read last is used again, which the bus refuses only if it has
+	// expired.
 	Reread func() (Credentials, error)
 }
 

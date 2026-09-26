@@ -562,7 +562,8 @@ func (in *Installation) issue(pool string, labels ...string) string {
 // JoinDefault stands one more runner up, name, in the pool default, which every installation is
 // migrated with and which carries no label, as the Compose file's runner is: with the join token
 // init wrote for it, which permits no label, and claiming none. It waits until every runner
-// reports ready.
+// reports ready. It is called once per installation: the runner has init's one runner volume as
+// its /etc/agentiik, and init's join token is spent by the one join that uses it.
 func (in *Installation) JoinDefault(name string) *Runner {
 	in.t.Helper()
 	r := in.runner(in.ctx, name, joinFromInit)

@@ -132,17 +132,12 @@ func TestHealthDialsWhereTheAPIListens(t *testing.T) {
 }
 
 // health asks the API itself, never a proxy the environment names, whatever address the API
-// listens on: a proxy's answer would pass for the API's.
+// listens on: a proxy's answer would pass for the API's. Held on the transport rather than through
+// the environment, which net/http reads once per process.
 func TestHealthGoesThroughNoProxy(t *testing.T) {
-	t.Setenv("HTTPS_PROXY", "http://proxy.example.com:3128")
-	t.Setenv("HTTP_PROXY", "http://proxy.example.com:3128")
 	for _, overTLS := range []bool{false, true} {
-		transport := healthTransport(overTLS)
-		if transport.Proxy != nil {
-			request, _ := http.NewRequest(http.MethodGet, "http://10.0.0.5:8443/", nil)
-			if proxy, _ := transport.Proxy(request); proxy != nil {
-				t.Errorf("health over TLS %v asks the API at 10.0.0.5 through %s", overTLS, proxy)
-			}
+		if healthTransport(overTLS).Proxy != nil {
+			t.Errorf("health over TLS %v has a proxy function, which asks the environment for a proxy", overTLS)
 		}
 	}
 }

@@ -13,8 +13,12 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agentiik-api init` prepares an installation from `AGK_*` variables alone and brings it back in line with them at every run, for a Compose `init` service: certificate, keys, bus identity and `nats.conf`, migration, namespace, the operator token's hash, and a join token of the pool `default` for the local runner.
 - `AGK_PROXY_URL` puts the API behind a proxy on the same host: reached at that URL, plain HTTP on the loopback, `AGK_PUBLIC_URL` and the TLS pair left unread.
 - `agentiik-api health` exits 0 once the API beside it answers, for a Compose health check in the image, which has no shell.
-- The API and the controller take a control plane bus credential renewed in `AGK_BUS_CREDENTIALS_FILE` when the bus drops the old one at its expiry, with no restart; the controller no longer ends at that expiry when the file holds a later one.
+- `agentiik-api serve` takes a control plane bus credential renewed in `AGK_BUS_CREDENTIALS_FILE` when the bus drops the old one at its expiry, with no restart.
 - `init` names no variable when it mints an operator token, and says to keep it where the installation's settings are.
+
+### Controller
+
+- `agentiik-controller` takes a renewed bus credential likewise, and no longer ends at the old one's expiry when the file holds a later one.
 
 ### Images
 

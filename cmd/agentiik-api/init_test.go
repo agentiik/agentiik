@@ -389,14 +389,20 @@ func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
 		t.Errorf("a run with no token set did not keep the hash, or printed a token:\n%s", d.out.String())
 	}
 
+	// Nor does any other run, whatever it did with the hash.
+	said := d.out.String()
 	chosen := config.Secret("a-token-of-my-own-at-least-32-characters")
 	d.out.Reset()
 	d.files(t, firstRun.Add(2*time.Hour), "localhost", chosen)
+	said += d.out.String()
 	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(chosen)) || strings.Contains(d.out.String(), string(chosen)) {
 		t.Errorf("a token set after a minted one did not replace its hash, or was printed:\n%s", d.out.String())
 	}
 	changed := config.Secret("another-token-of-my-own-32-characters")
+	d.out.Reset()
 	d.files(t, firstRun.Add(3*time.Hour), "localhost", changed)
+	d.files(t, firstRun.Add(3*time.Hour+time.Minute), "localhost", changed)
+	said += d.out.String()
 	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(changed)) {
 		t.Error("a token changed did not replace the hash")
 	}
@@ -404,6 +410,10 @@ func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
 	d.files(t, firstRun.Add(4*time.Hour), "localhost", "")
 	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(changed)) || strings.Contains(d.out.String(), operatorTokenPrefix) {
 		t.Error("unsetting the token minted another, rather than keeping the hash of the last one set")
+	}
+	said += d.out.String()
+	if strings.Contains(said, config.OperatorToken) {
+		t.Errorf("init names %s, which is not the variable a Compose user sets:\n%s", config.OperatorToken, said)
 	}
 }
 

@@ -725,6 +725,17 @@ func TestTheProgramGoesOnWithACredentialRenewedInItsFile(t *testing.T) {
 	if !strings.Contains(out.String(), "took the control plane's bus credential renewed in its file") {
 		t.Errorf("the controller did not say it took the renewed credential\n%s", out.String())
 	}
+
+	// And it still hears the bus, which a controller whose connection was closed at the old
+	// credential's expiry would not, while it looked alive: a result nobody can read is taken
+	// off the queue and said, which only a consuming controller does.
+	js := b.streams(t)
+	if _, err := js.Publish(t.Context(), bus.ResultSubject("rn-unreadable"), []byte("not a result")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 15*time.Second, "the controller took the unreadable result off the queue", func() bool {
+		return strings.Contains(out.String(), "a message was taken off the queue without being handled")
+	})
 }
 
 // The first SIGTERM is a stop asked for, and the program takes it. The second is somebody for whom

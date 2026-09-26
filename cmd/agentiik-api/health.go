@@ -23,7 +23,7 @@ const healthTimeout = 5 * time.Second
 func healthVerb(ctx context.Context, lookup config.Lookup, _, stderr io.Writer) int {
 	h, err := config.ReadAPIHealth(lookup)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s health: the configuration refuses the start:\n%s\n", program, err)
+		fmt.Fprintf(stderr, "%s health: the configuration does not say where the API listens:\n%s\n", program, err)
 		return exitFailed
 	}
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)

@@ -407,7 +407,7 @@ var (
 	}
 
 	// agentEnvKeys are the settings the agent's environment may carry besides: the join token
-	// it joins with on its own, as a value or a file, and where it trusts certificates.
+	// it joins with on its own, as a value or a file. SSL_CERT_DIR is not an AGK_ setting.
 	agentEnvKeys = map[string]bool{"AGK_RUNNER_JOIN_TOKEN": true, "AGK_RUNNER_JOIN_TOKEN_FILE": true}
 
 	// agentMounts are where the agent's container has something mounted: the two directories,
