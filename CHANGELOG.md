@@ -33,6 +33,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `Policy.SecretsDir`, `Policy.RequireSecretsTmpfs`, `SecretsFloor` and `ErrSecretsTmpfsRequired` are gone; `LabelSecrets`, `HolderCommand` and `Policy.SecretsDirSkipped` are new.
 
+### Tests
+
+- `e2e` stands the installation up as the Compose file does: `agentiik-api init` and the three images, the API behind `AGK_PROXY_URL` checked with `agentiik-api health`, and runners that start as root and join on their own; no secrets volume is left on a runner's daemon after a run.
+
 ### agk
 
 - `agk run --local` gives secret values the same tmpfs volume, so on macOS they no longer touch the working directory on disk; a build carrying no helper refuses a step given a secret.

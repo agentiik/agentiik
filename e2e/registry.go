@@ -165,17 +165,28 @@ func (in *Installation) carry(tag string) string {
 	return ""
 }
 
-// runnerImage builds the runner image from build/runner.Dockerfile, around the agent and the
-// helper built from this checkout, as a release builds it around the binaries it ships.
-func (in *Installation) runnerImage(ctx context.Context) {
-	in.runnerIm = "agk-e2e/runner:" + in.id
-	if _, err := docker(ctx, "build", "--provenance=false", "-t", in.runnerIm,
-		"-f", filepath.Join(in.module, "build", "runner.Dockerfile"), filepath.Join(in.bin, "image")); err != nil {
-		in.t.Fatal(err)
+// images builds the three images of the installation from build/*.Dockerfile, around the programs
+// built from this checkout, as a release builds them around the binaries it ships: the API's, which
+// init runs from too, the controller's and the runner's.
+func (in *Installation) images(ctx context.Context) {
+	for _, image := range []struct {
+		name string
+		into *string
+	}{
+		{"api", &in.apiIm},
+		{"controller", &in.controllerIm},
+		{"runner", &in.runnerIm},
+	} {
+		tag := "agk-e2e/" + image.name + ":" + in.id
+		if _, err := docker(ctx, "build", "--provenance=false", "-t", tag,
+			"-f", filepath.Join(in.module, "build", image.name+".Dockerfile"), filepath.Join(in.bin, "image")); err != nil {
+			in.t.Fatal(err)
+		}
+		in.undo(func() {
+			gone, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			docker(gone, "image", "rm", "-f", tag)
+		})
+		*image.into = tag
 	}
-	in.undo(func() {
-		gone, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		docker(gone, "image", "rm", "-f", in.runnerIm)
-	})
 }

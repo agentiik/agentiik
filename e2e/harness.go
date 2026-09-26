@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,15 +15,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/brick"
-	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
@@ -38,7 +35,7 @@ import (
 const Variable = "AGENTIIK_E2E"
 
 // The images the installation is made of besides what it builds. PostgreSQL and NATS are the
-// images the page's Compose sample names, and alpine:3.21 the one the other tests pull.
+// images the Compose file names, and alpine:3.21 the one the other tests pull.
 // docker:29-dind is the major the rest of the project runs, the first whose bridge keeps the
 // host out of an internal network being 28.
 const (
@@ -76,15 +73,24 @@ type Installation struct {
 	// Requests records every request the terminator passed to the API.
 	Requests *Requests
 
-	t        testing.TB
-	id       string
-	root     string
-	module   string
-	bin      string
-	token    string
-	client   *http.Client
-	runnerIm string
-	network  string
+	t       testing.TB
+	id      string
+	root    string
+	module  string
+	bin     string
+	token   string
+	client  *http.Client
+	network string
+
+	// apiIm, controllerIm and runnerIm are the images built from this checkout.
+	apiIm, controllerIm, runnerIm string
+
+	// volumes are init's, by the service each is for, as the Compose file names them.
+	volumes map[string]string
+
+	// private are the volumes and the directories of this machine that are the installation's,
+	// which no runner may have mounted.
+	private []string
 
 	// superuser is the database as its superuser reaches it, which Database connects to.
 	superuser string
@@ -134,7 +140,7 @@ func Stand(t testing.TB) *Installation {
 	// against the host, and a daemon in a virtual machine, which is what Docker is on macOS
 	// and Windows, resolves them against the machine's disk and not this one's.
 	if runtime.GOOS != "linux" {
-		t.Fatalf("%s=1 asks for the test installation, which runs on Linux alone: each runner's work root and secrets tmpfs are named volumes its Docker daemon and its agent share, and the agent and the daemons join the host's network", Variable)
+		t.Fatalf("%s=1 asks for the test installation, which runs on Linux alone: each runner's work root is a named volume its Docker daemon and its agent share, and the agents, the API and the bus join the host's network", Variable)
 	}
 
 	in := &Installation{t: t, id: "agk-e2e-" + randomHex(4)}
@@ -155,16 +161,16 @@ func Stand(t testing.TB) *Installation {
 	ca := in.certificates()
 	in.client = &http.Client{Timeout: time.Minute, Transport: &http.Transport{TLSClientConfig: ca.clientConfig()}}
 	in.build(ctx)
-	database := in.database(ctx)
-	in.superuser = database.admin
+	in.images(ctx)
+	socket := in.database(ctx)
+	in.initialize(ctx, socket)
 	busURL := in.bus(ctx)
-	in.serve(ctx, ca, database, busURL)
+	in.serve(ctx, ca, socket, busURL)
 	in.registry(ctx)
-	in.runnerImage(ctx)
 
 	in.pool()
 	for _, name := range []string{"a", "b"} {
-		in.Runners = append(in.Runners, in.runner(ctx, name, in.issue(Pool, Label), Label))
+		in.Runners = append(in.Runners, in.runner(ctx, name, joinWith(in.issue(Pool, Label)), Label))
 	}
 	in.ready()
 	return in
@@ -216,8 +222,8 @@ func tail(s string, max int) string {
 }
 
 // removeRoot removes the directory everything was written under. Some of it belongs to other
-// accounts by then, the socket PostgreSQL left and what join gave to the agent's account, so it
-// is emptied from a container, as root, before it is removed.
+// accounts by then, the socket PostgreSQL left and what a runner gave to the agent's account, so
+// it is emptied from a container, as root, before it is removed.
 func (in *Installation) removeRoot() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -247,32 +253,22 @@ func (in *Installation) mkdir(mode os.FileMode, parts ...string) string {
 	return dir
 }
 
-// secretFile writes a secret where its owner alone can read it, as internal/config requires, and
-// answers its path.
-func (in *Installation) secretFile(name, content string) string {
-	path := filepath.Join(in.mkdir(0o700, "secrets"), name)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		in.t.Fatal(err)
-	}
-	return path
-}
-
-// build compiles the programs from this checkout. The API, the controller and agk run on this
-// machine; the agent and the helper run in the runner image, for the architecture the daemon
-// runs containers as, which is also the helper agk run --local mounts on this machine's daemon.
+// build compiles the programs from this checkout. agk runs on this machine; the API, the
+// controller, the agent and the helper run in the images, for the architecture the daemon runs
+// containers as, which is also the helper agk run --local mounts on this machine's daemon.
 func (in *Installation) build(ctx context.Context) {
 	in.bin = in.mkdir(0o755, "bin")
 	arch, err := docker(ctx, "version", "--format", "{{.Server.Arch}}")
 	if err != nil {
 		in.t.Fatal(err)
 	}
-	// The image's two in a directory of their own, which is the image's build context, named
-	// as build/runner.Dockerfile names them.
+	// The images' binaries in a directory of their own, which is the images' build context,
+	// named as build/*.Dockerfile name them.
 	image := in.mkdir(0o755, "bin", "image")
 	for _, b := range []struct{ cmd, out, goos, goarch string }{
-		{"agentiik-api", filepath.Join(in.bin, "agentiik-api"), runtime.GOOS, runtime.GOARCH},
-		{"agentiik-controller", filepath.Join(in.bin, "agentiik-controller"), runtime.GOOS, runtime.GOARCH},
 		{"agk", filepath.Join(in.bin, "agk"), runtime.GOOS, runtime.GOARCH},
+		{"agentiik-api", filepath.Join(image, "agentiik-api-linux-"+arch), "linux", arch},
+		{"agentiik-controller", filepath.Join(image, "agentiik-controller-linux-"+arch), "linux", arch},
 		{"agk-runner", filepath.Join(image, "agk-runner-linux-"+arch), "linux", arch},
 		{"agk-helper", filepath.Join(image, "agk-helper-linux-"+arch), "linux", arch},
 	} {
@@ -286,22 +282,17 @@ func (in *Installation) build(ctx context.Context) {
 	in.helper = filepath.Join(image, "agk-helper-linux-"+arch)
 }
 
-// databases are the two URLs migrate reads: the superuser it migrates as, and the role the API
-// and the controller connect as, which it creates.
-type databases struct {
-	admin, application, passwordFile string
-}
-
-// database starts PostgreSQL and migrates it with agentiik-api migrate, as an installation is.
+// database starts PostgreSQL, as the Compose file does, and answers the directory its socket is
+// in, which init, the API and the controller mount at /run/postgresql.
 //
-// It is reached over its socket, which the container writes in a directory of the test's own: a
-// local socket is the one path internal/config lets a database be reached on without TLS, since
-// it crosses no network, and it spares the test a certificate the server would have to own.
-func (in *Installation) database(ctx context.Context) databases {
+// It is reached over its socket alone, in a directory of the test's own, so that this machine reads
+// it too, as its superuser, for what no route answers. A local socket is the one path
+// internal/config lets a database be reached on without TLS, since it crosses no network.
+func (in *Installation) database(ctx context.Context) string {
 	socket := in.mkdir(0o755, "postgres")
 	name := in.id + "-postgres"
 	superuser := randomHex(16)
-	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(),
+	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(), "--network", "none",
 		"-e", "POSTGRES_PASSWORD="+superuser, "-e", "POSTGRES_DB=agentiik",
 		"-v", socket+":/var/run/postgresql", postgresImage)
 
@@ -317,151 +308,169 @@ func (in *Installation) database(ctx context.Context) databases {
 		}
 		return nil
 	})
-	d := databases{
-		admin:       "postgres://postgres@/agentiik?host=" + socket,
-		application: "postgres://agentiik@/agentiik?host=" + socket,
-	}
-	password := randomHex(24)
-	d.passwordFile = in.secretFile("database-password", password)
+	in.superuser = "postgres://postgres@/agentiik?host=" + socket
 	in.held = append(in.held,
 		heldValue{"the database superuser's password", superuser},
-		heldValue{"the application role's password", password},
+		heldValue{"the database URL", applicationURL},
 	)
 	eventually(in.ctx, in.t, time.Minute, "PostgreSQL answered on its socket", func() error {
-		conn, err := pgx.Connect(ctx, d.admin)
+		conn, err := pgx.Connect(ctx, in.superuser)
 		if err != nil {
 			return err
 		}
 		defer conn.Close(context.WithoutCancel(ctx))
 		return conn.Ping(ctx)
 	})
+	return socket
+}
 
-	out, err := in.program(ctx, "agentiik-api", []string{"migrate"}, map[string]string{
-		config.MigrateDatabaseURL:   d.admin,
-		config.DatabaseURL:          d.application,
-		config.DatabasePasswordFile: d.passwordFile,
+// The databases as the programs in the images reach them, on the socket mounted at /run/postgresql:
+// the superuser init migrates as, and the role the API and the controller connect as, which it
+// creates, with a password it generates.
+const (
+	migrateURL     = "postgres://postgres@/agentiik?host=/run/postgresql"
+	applicationURL = "postgres://agentiik@/agentiik?host=/run/postgresql"
+)
+
+// initHost is AGK_INIT_HOST: the address the runners reach the bus at, on the host's network,
+// which the certificate init makes is issued to.
+const initHost = "127.0.0.1"
+
+// The volumes init prepares, one per service, each named as the Compose file names it and mounted
+// where the Compose file mounts it: in init under /init, and in its service where each says.
+var initVolumes = []string{"api", "controller", "nats", "runner", "objects"}
+
+// initialize runs agentiik-api init from the API's image, as root, as the Compose file's init
+// service runs it, on a volume per service: it makes the certificate, the keys, the database
+// password, the bus identity and the bus's configuration, migrates, creates the namespace, writes
+// the operator token's hash and a join token of the pool default. Everything it writes that no
+// runner may hold is read back, as root, to be looked for in what the runners hold.
+func (in *Installation) initialize(ctx context.Context, socket string) {
+	in.volumes = map[string]string{}
+	args := []string{"run", "--name", in.id + "-init", "--label", in.label(),
+		"--user", "0:0", "--network", "none", "--userns", "host",
+		"-e", config.InitDir + "=/init",
+		"-e", config.InitHost + "=" + initHost,
+		"-e", config.InitNamespace + "=" + Namespace,
+		"-e", config.OperatorToken + "=" + in.token,
+		"-e", config.MigrateDatabaseURL + "=" + migrateURL,
+		"-e", config.DatabaseURL + "=" + applicationURL,
+		"-v", socket + ":/run/postgresql",
+	}
+	for _, v := range initVolumes {
+		in.volumes[v] = in.volume(ctx, v)
+		args = append(args, "-v", in.volumes[v]+":/init/"+v)
+	}
+	// The API, the controller, the bus and the objects are the installation's, which no runner
+	// sees; the runner's volume is the runner's.
+	in.private = []string{in.volumes["api"], in.volumes["controller"], in.volumes["nats"], in.volumes["objects"], socket}
+
+	name := in.id + "-init"
+	in.undo(func() {
+		gone, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		docker(gone, "rm", "-f", "-v", name)
 	})
+	out, err := dockerCombined(ctx, append(args, in.apiIm, "init")...)
+	in.logged(name, func() string { return out })
 	if err != nil {
-		in.t.Fatalf("agentiik-api migrate: %s\n%s", err, out)
+		in.t.Fatalf("agentiik-api init: %s\n%s", err, out)
+	}
+	if strings.Contains(out, in.token) {
+		in.t.Fatalf("agentiik-api init printed the operator token it was given:\n%s", out)
 	}
 
-	// A namespace, which v0.2.0 has no route to create, so agentiik-api namespace create does,
-	// where migrate ran and with its settings, as Get started has it.
-	out, err = in.program(ctx, "agentiik-api", []string{"namespace", "create", Namespace}, map[string]string{
-		config.MigrateDatabaseURL:   d.admin,
-		config.DatabaseURL:          d.application,
-		config.DatabasePasswordFile: d.passwordFile,
-	})
-	if err != nil || !strings.Contains(out, "created namespace "+Namespace) {
-		in.t.Fatalf("agentiik-api namespace create %s: %v\n%s", Namespace, err, out)
-	}
-	return d
-}
-
-// bus writes the installation's bus identity with agentiik-api bus-init, and starts a NATS server
-// on the configuration it wrote, with JetStream and TLS. It answers the bus's URL.
-func (in *Installation) bus(ctx context.Context) string {
-	dir := in.path("bus")
-	if out, err := in.program(ctx, "agentiik-api", []string{"bus-init", dir}, nil); err != nil {
-		in.t.Fatalf("agentiik-api bus-init: %s\n%s", err, out)
-	}
-	for _, f := range []struct{ what, file string }{
-		{"the control plane's bus credential", bus.ControlPlaneFile},
-		{"the bus account seed", bus.AccountSeedFile},
+	for _, f := range []struct{ what, path string }{
+		{"the presign key", "api/presign-key"},
+		{"the master key", "api/master-key"},
+		{"the application role's password", "api/database-password"},
+		{"the control plane's bus credential", "api/bus/control-plane.creds"},
+		{"the bus account seed", "api/bus/account.seed"},
+		{"the private key of the bus's certificate", "api/tls/server.key"},
+		{"the operator token's hash", "api/operator-token.sha256"},
 	} {
-		content, err := os.ReadFile(filepath.Join(dir, f.file))
-		if err != nil {
-			in.t.Fatal(err)
+		in.held = append(in.held, heldValue{f.what, in.read(ctx, f.path)})
+	}
+	// The master key file's key line alone, which is what would be copied out of it.
+	for _, line := range strings.Split(in.read(ctx, "api/master-key"), "\n") {
+		if key, ok := strings.CutPrefix(line, "key: "); ok {
+			in.held = append(in.held, heldValue{"the master key", key})
 		}
-		in.held = append(in.held, heldValue{f.what, strings.TrimSpace(string(content))})
 	}
+}
 
-	port := freePort(in.t)
-	conf := fmt.Sprintf(`# What agentiik-api bus-init asks of the server beside the file it wrote: a listen address,
-# TLS, since the bus is never reached in plaintext, and JetStream.
-listen: "127.0.0.1:%d"
-tls {
-  cert_file: "/etc/agentiik-e2e/tls/server.pem"
-  key_file: "/etc/agentiik-e2e/tls/server.key"
-}
-jetstream {
-  store_dir: "/data/jetstream"
-}
-include %q
-`, port, bus.AccountsFile)
-	if err := os.WriteFile(filepath.Join(dir, "nats-server.conf"), []byte(conf), 0o600); err != nil {
-		in.t.Fatal(err)
+// read is what the file at path under init's volumes holds, trimmed, read as root from a container
+// that mounts them, since each is its service's account's alone.
+func (in *Installation) read(ctx context.Context, path string) string {
+	volume, rest, _ := strings.Cut(path, "/")
+	out, err := docker(ctx, "run", "--rm", "--network", "none", "--userns", "host",
+		"-v", in.volumes[volume]+":/v:ro", alpineImage, "cat", "/v/"+rest)
+	if err != nil {
+		in.t.Fatalf("%s could not be read from init's volume: %s", path, err)
 	}
+	return out
+}
+
+// busPort is where the bus listens on every interface, as the nats.conf init writes has it, and
+// busHealth where its health check answers, on the loopback.
+const (
+	busPort   = "4222"
+	busHealth = "http://127.0.0.1:8222/healthz"
+)
+
+// bus starts the NATS server on the configuration init wrote, as the Compose file does, on the
+// host's network, where the API, the controller and every agent reach it at initHost. It answers
+// the bus's URL.
+func (in *Installation) bus(ctx context.Context) string {
 	name := in.id + "-nats"
-	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(), "--network", "host",
-		"-v", dir+":/etc/agentiik-e2e/bus:ro", "-v", in.path("tls")+":/etc/agentiik-e2e/tls:ro",
-		natsImage, "-c", "/etc/agentiik-e2e/bus/nats-server.conf")
-
-	// A NATS server greets every connection with its INFO line, before any TLS, which is what
-	// says it is listening.
-	address := fmt.Sprintf("127.0.0.1:%d", port)
-	eventually(in.ctx, in.t, time.Minute, "the bus listened", func() error {
-		conn, err := net.DialTimeout("tcp", address, time.Second)
+	in.container(ctx, name, "run", "-d", "--name", name, "--label", in.label(), "--network", "host", "--userns", "host",
+		"-v", in.volumes["nats"]+":/nats", natsImage, "-c", "/nats/nats.conf")
+	eventually(in.ctx, in.t, time.Minute, "the bus's health check answered", func() error {
+		answer, err := http.Get(busHealth)
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		line := make([]byte, 5)
-		if _, err := io.ReadFull(conn, line); err != nil || string(line) != "INFO " {
-			return fmt.Errorf("it answered %q: %v", line, err)
+		answer.Body.Close()
+		if answer.StatusCode != http.StatusOK {
+			return fmt.Errorf("it answered %d", answer.StatusCode)
 		}
 		return nil
 	})
-	return "tls://" + address
+	return "tls://" + net.JoinHostPort(initHost, busPort)
 }
 
-// serve starts the API and the controller from what the installation holds, and the terminator
-// in front of the API. Both programs share one object-store directory, which no runner sees.
-func (in *Installation) serve(ctx context.Context, ca authority, d databases, busURL string) {
-	objects := in.mkdir(0o700, "objects")
-	presign := make([]byte, 32)
-	rand.Read(presign)
-	master := make([]byte, 32)
-	rand.Read(master)
-	hash := sha256.Sum256([]byte(in.token))
-
-	presignText := base64.StdEncoding.EncodeToString(presign)
-	masterText := "id: e2e\nkey: " + base64.StdEncoding.EncodeToString(master) + "\n"
-	in.held = append(in.held,
-		heldValue{"the presign key", presignText},
-		heldValue{"the master key", base64.StdEncoding.EncodeToString(master)},
-		heldValue{"the operator token", in.token},
-		heldValue{"the database URL", d.application},
-		heldValue{"the object-store directory", objects},
-	)
-
-	apiAddress := fmt.Sprintf("127.0.0.1:%d", freePort(in.t))
+// serve starts the API and the controller from their images, on what init prepared, as the Compose
+// file does, and the terminator in front of the API. The API is behind that proxy, AGK_PROXY_URL,
+// so it serves plain HTTP on the loopback, and both share the objects volume, which no runner sees.
+func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL string) {
+	port := strconv.Itoa(freePort(in.t))
 	in.Requests = &Requests{operator: in.token}
-	in.PublicURL = in.terminate(ca, "http://"+apiAddress)
+	in.PublicURL = in.terminate(ca, "http://127.0.0.1:"+port)
 
-	// The certificate authority the bus's certificate is signed by, which these two trust
-	// through the variable the standard library reads on Linux, as a private CA is trusted.
-	common := map[string]string{
-		config.DatabaseURL:          d.application,
-		config.DatabasePasswordFile: d.passwordFile,
-		config.BusURL:               busURL,
-		config.BusCredentialsFile:   in.path("bus", bus.ControlPlaneFile),
-		config.ObjectsDir:           objects,
-		"SSL_CERT_FILE":             in.path("tls", "ca.pem"),
-	}
-	apiEnv := map[string]string{
-		config.BusAccountSeedFile: in.path("bus", bus.AccountSeedFile),
-		config.PublicURL:          in.PublicURL,
-		config.PresignKeyFile:     in.secretFile("presign-key", presignText+"\n"),
-		config.MasterKeyFile:      in.secretFile("master-key", masterText),
-		config.OperatorTokenFile:  in.secretFile("operator-token", hex.EncodeToString(hash[:])+"\n"),
-		config.Listen:             apiAddress,
-	}
-	for k, v := range common {
-		apiEnv[k] = v
-	}
-	in.start("agentiik-api", []string{"serve"}, apiEnv)
+	api := in.id + "-api"
+	in.container(ctx, api, "run", "-d", "--name", api, "--label", in.label(), "--network", "host", "--userns", "host",
+		"-e", config.DatabaseURL+"="+applicationURL,
+		"-e", config.DatabasePasswordFile+"=/agentiik/database-password",
+		"-e", config.BusURL+"="+busURL,
+		"-e", config.BusCredentialsFile+"=/agentiik/bus/control-plane.creds",
+		"-e", config.BusAccountSeedFile+"=/agentiik/bus/account.seed",
+		"-e", config.ObjectsDir+"=/objects",
+		"-e", config.PresignKeyFile+"=/agentiik/presign-key",
+		"-e", config.MasterKeyFile+"=/agentiik/master-key",
+		"-e", config.OperatorTokenFile+"=/agentiik/operator-token.sha256",
+		"-e", config.Listen+"=:"+port,
+		"-e", config.ProxyURL+"="+in.PublicURL,
+		"-e", "SSL_CERT_DIR=/agentiik/trust",
+		"-v", in.volumes["api"]+":/agentiik", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
+		in.apiIm)
+	// The Compose file's health check, run as it runs it, in the API's own container.
+	eventually(in.ctx, in.t, time.Minute, "agentiik-api health said the API is ready", func() error {
+		out, err := dockerCombined(ctx, "exec", api, "/agentiik-api", "health")
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+		return nil
+	})
 	eventually(in.ctx, in.t, time.Minute, "the API answered the operator", func() error {
 		code, body, err := in.call(ctx, "GET", "/api/v1/runner-pools", nil)
 		if err != nil {
@@ -472,62 +481,17 @@ func (in *Installation) serve(ctx context.Context, ca authority, d databases, bu
 		}
 		return nil
 	})
-	in.start("agentiik-controller", nil, common)
-}
 
-// program runs one of the programs built from this checkout to its end, with only the
-// environment it is given, and answers what it wrote.
-func (in *Installation) program(ctx context.Context, name string, args []string, env map[string]string) (string, error) {
-	cmd := exec.CommandContext(ctx, filepath.Join(in.bin, name), args...)
-	cmd.Env = environment(env)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// environment is a program's whole environment: what it is given, and a PATH and a HOME, and
-// nothing inherited from the test, which may hold a variable internal/config refuses.
-func environment(env map[string]string) []string {
-	out := []string{"PATH=/usr/bin:/bin", "HOME=" + os.TempDir()}
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	return out
-}
-
-// start starts one of the programs built from this checkout and leaves it running, its log in a
-// file of the test's directory. It is stopped with SIGTERM, as a service manager stops it.
-func (in *Installation) start(name string, args []string, env map[string]string) {
-	logPath := filepath.Join(in.mkdir(0o755, "logs"), name+".log")
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		in.t.Fatal(err)
-	}
-	cmd := exec.Command(filepath.Join(in.bin, name), args...)
-	cmd.Env = environment(env)
-	cmd.Stdout, cmd.Stderr = logFile, logFile
-	tied(cmd)
-	if err := cmd.Start(); err != nil {
-		in.t.Fatalf("starting %s: %s", name, err)
-	}
-	exited := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(exited)
-	}()
-	in.logged(name, func() string {
-		b, _ := os.ReadFile(logPath)
-		return string(b)
-	})
-	in.undo(func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-exited:
-		case <-time.After(40 * time.Second):
-			cmd.Process.Kill()
-			<-exited
-		}
-		logFile.Close()
-	})
+	controller := in.id + "-controller"
+	in.container(ctx, controller, "run", "-d", "--name", controller, "--label", in.label(), "--network", "host", "--userns", "host",
+		"-e", config.DatabaseURL+"="+applicationURL,
+		"-e", config.DatabasePasswordFile+"=/agentiik/database-password",
+		"-e", config.BusURL+"="+busURL,
+		"-e", config.BusCredentialsFile+"=/agentiik/bus/control-plane.creds",
+		"-e", config.ObjectsDir+"=/objects",
+		"-e", "SSL_CERT_DIR=/agentiik/trust",
+		"-v", in.volumes["controller"]+":/agentiik", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
+		in.controllerIm)
 }
 
 // call is one request of the operator's to the API, through the terminator, and what it answered.
@@ -595,11 +559,12 @@ func (in *Installation) issue(pool string, labels ...string) string {
 }
 
 // JoinDefault stands one more runner up, name, in the pool default, which every installation is
-// migrated with and which carries no label: its join token permits none and it joins with no
-// --labels, as a first runner does. It waits until every runner reports ready.
+// migrated with and which carries no label, as the Compose file's runner is: with the join token
+// init wrote for it, which permits no label, and claiming none. It waits until every runner
+// reports ready.
 func (in *Installation) JoinDefault(name string) *Runner {
 	in.t.Helper()
-	r := in.runner(in.ctx, name, in.issue("default"))
+	r := in.runner(in.ctx, name, joinFromInit)
 	in.Runners = append(in.Runners, r)
 	in.ready()
 	return r

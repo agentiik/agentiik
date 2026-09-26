@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -22,39 +23,41 @@ import (
 
 // The paths a runner's agent and its daemon share, each the same on both sides, since the daemon
 // resolves every bind source it is asked for in its own filesystem: the work root under
-// /var/lib/agentiik and the secrets tmpfs, as the page's Compose sample mounts them.
+// /var/lib/agentiik, as the Compose file mounts it. etcPath is the agent's own.
 const (
-	libPath     = "/var/lib/agentiik"
-	secretsPath = "/run/agentiik/secrets"
-	etcPath     = "/etc/agentiik"
+	libPath = "/var/lib/agentiik"
+	etcPath = "/etc/agentiik"
+)
+
+// caPath is where each agent finds the authority the terminator's certificate is signed by, as the
+// Compose file mounts AGENTIIK_CA, and trusted is SSL_CERT_DIR as it sets it: init's certificate,
+// which the bus presents, and that authority.
+const (
+	caPath  = "/etc/ssl/agentiik"
+	trusted = etcPath + "/trust:" + caPath
 )
 
 // The daemon's socket, which the daemon writes in a volume of its own and the agent finds at the
-// path it looks at when DOCKER_HOST is unset. socketGroup owns it, and the agent is given that
-// group and no other way in, as the group that owns the socket is on a host.
+// path it looks at when DOCKER_HOST is unset. socketGroup owns it, as the group that owns the
+// socket does on a host, and the agent, started as root, reads it off the socket and takes it.
 const (
 	daemonSocketDir = "/run/agk-docker"
 	agentSocketDir  = "/var/run"
 	socketGroup     = "2375"
 )
 
-// agentUser is the account the runner image runs the agent as, agentiik.
-const agentUser = "65532"
-
-// runnerPolicy is each runner's /etc/agentiik/runner.toml.
+// runnerPolicy is each runner's /etc/agentiik/runner.toml, as the Compose file writes it with its
+// default.
 //
 // require_userns_remap = false because a docker:dind daemon does not remap user namespaces, and
 // the floor would refuse it: this installation tests what a server run does, and the remapped
 // floor is held by the userns job of test.yml, on a daemon remapped as the page installs one.
-// secrets_dir names the tmpfs of the runner's own, mounted noexec,nosuid,nodev, which a runner
-// is refused without.
 const runnerPolicy = `# The test installation's runners, on docker:dind daemons, which do not remap user namespaces.
 require_userns_remap = false
-secrets_dir = "/run/agentiik/secrets"
 `
 
-// Runner is one runner of the installation: its agent, in the runner image as the container form
-// runs it, and the Docker daemon it drives, each in a container of its own.
+// Runner is one runner of the installation: its agent, in the runner image as the Compose file runs
+// it, and the Docker daemon it drives, each in a container of its own.
 type Runner struct {
 	// Name is a or b, or the name a test gave the runner it joined to the pool default.
 	Name string
@@ -68,13 +71,27 @@ type Runner struct {
 	in *Installation
 }
 
-// runner stands one runner up: a daemon, then join with token claiming labels, then serve. With
-// no label it joins with no --labels, as a runner of the pool default does.
+// joining is how a runner is given its join token: a value, in AGK_RUNNER_JOIN_TOKEN, or none,
+// which is the file init wrote in its runner volume, which the runner then mounts at /etc/agentiik
+// and names in AGK_RUNNER_JOIN_TOKEN_FILE, as the Compose file's runner does.
+type joining struct{ token string }
+
+// joinWith is a join token given as a value.
+func joinWith(token string) joining { return joining{token: token} }
+
+// joinFromInit is the join token of the pool default init wrote for the runner beside it.
+var joinFromInit = joining{}
+
+// runner stands one runner up: a daemon, then the agent, which joins on its own with join,
+// claiming labels, and serves. With no label it claims none, as a runner of the pool default does.
 //
-// The agent runs in the runner image rather than as a process of this machine, because the paths
-// it reads, /etc/agentiik/runner.env, runner.toml and /var/lib/agentiik/runner.key, are fixed,
-// and two agents on one filesystem would share them. The container form gives each its own, which
-// is also a form the page installs a runner in.
+// The agent is started as the Compose file starts it: as root, in the runner image, with the
+// capabilities it needs to prepare the host and drop to agentiik, the join token and the labels in
+// its environment, and runner.toml mounted at /etc/agentiik/runner.toml. It gives itself its
+// directories, takes the socket's group and joins; nothing is prepared for it here. Each agent has
+// an /etc/agentiik of its own, since runner.env is written there: the runner of the pool default
+// has init's runner volume, as the Compose file's has, and the others a directory holding init's
+// certificate, as a runner on another machine would be given it.
 //
 // Each daemon is a docker:dind container of its own, so that runner b never sees runner a's
 // containers: on one daemon, b would adopt a's container by its label, and a test of two machines
@@ -85,21 +102,12 @@ type Runner struct {
 //
 // The daemons are not on the host's network, because a daemon started with no bridge removes the
 // interface docker0 wherever it runs, which on the host's network is the host daemon's own.
-func (in *Installation) runner(ctx context.Context, name, token string, labels ...string) *Runner {
+func (in *Installation) runner(ctx context.Context, name string, join joining, labels ...string) *Runner {
 	r := &Runner{Name: name, Agent: in.id + "-runner-" + name, Daemon: in.id + "-daemon-" + name, in: in}
 	lib := in.volume(ctx, "lib-"+name)
 	socket := in.volume(ctx, "socket-"+name)
-	// A tmpfs with the flags the secrets floor holds it to, owned by the agent. One mount,
-	// which both containers bind, so a value the agent writes is the value the daemon binds.
-	secrets := in.volume(ctx, "secrets-"+name, "--driver", "local",
-		"--opt", "type=tmpfs", "--opt", "device=tmpfs",
-		"--opt", "o=noexec,nosuid,nodev,size=16m,mode=0700,uid="+agentUser+",gid="+agentUser)
-	etc := in.mkdir(0o755, "runner-"+name, "etc")
-	if err := os.WriteFile(filepath.Join(etc, "runner.toml"), []byte(runnerPolicy), 0o644); err != nil {
-		in.t.Fatal(err)
-	}
-	// /var/lib/agentiik is the agent's, as the page has it, and a volume is root's when made.
-	if _, err := docker(ctx, "run", "--rm", "--network", "none", "--userns", "host", "-v", lib+":"+libPath, alpineImage, "chown", agentUser+":"+agentUser, libPath); err != nil {
+	policy := in.path("runner.toml")
+	if err := os.WriteFile(policy, []byte(runnerPolicy), 0o644); err != nil {
 		in.t.Fatal(err)
 	}
 
@@ -107,7 +115,6 @@ func (in *Installation) runner(ctx context.Context, name, token string, labels .
 		"--privileged", "--network", in.network,
 		"-v", socket+":"+daemonSocketDir,
 		"-v", lib+":"+libPath,
-		"-v", secrets+":"+secretsPath,
 		dindImage,
 		"dockerd", "--host=unix://"+daemonSocketDir+"/docker.sock", "--group="+socketGroup,
 		"--insecure-registry="+in.Registry)
@@ -116,37 +123,45 @@ func (in *Installation) runner(ctx context.Context, name, token string, labels .
 		return err
 	})
 
-	shared := []string{
+	etc := in.volumes["runner"]
+	environment := []string{"-e", "AGK_API=" + in.PublicURL, "-e", "SSL_CERT_DIR=" + trusted}
+	if join.token == "" {
+		environment = append(environment, "-e", "AGK_RUNNER_JOIN_TOKEN_FILE="+etcPath+"/join-token")
+	} else {
+		etc = in.mkdir(0o755, "runner-"+name, "etc")
+		trust := in.mkdir(0o755, "runner-"+name, "etc", "trust")
+		if err := os.WriteFile(filepath.Join(trust, "agentiik.pem"), []byte(in.read(ctx, "runner/trust/agentiik.pem")+"\n"), 0o644); err != nil {
+			in.t.Fatal(err)
+		}
+		environment = append(environment, "-e", "AGK_RUNNER_JOIN_TOKEN="+join.token)
+	}
+	if len(labels) > 0 {
+		environment = append(environment, "-e", "AGK_RUNNER_LABELS="+strings.Join(labels, ","))
+	}
+	serving := append([]string{"run", "-d", "--name", r.Agent, "--label", in.label(), "--userns", "host",
 		"--network", "host",
+		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE",
+		"--cap-add", "SETUID", "--cap-add", "SETGID",
 		"-v", etc + ":" + etcPath,
+		"-v", policy + ":" + etcPath + "/runner.toml:ro",
 		"-v", lib + ":" + libPath,
 		"-v", socket + ":" + agentSocketDir,
-		"-v", in.path("tls", "ca.pem") + ":/etc/ssl/certs/ca-certificates.crt:ro",
-	}
+		"-v", in.path("tls") + ":" + caPath + ":ro"}, environment...)
+	in.container(ctx, r.Agent, append(serving, in.runnerIm, "serve")...)
 
-	// join runs as root in the image, as the page runs it, and gives the key and runner.env
-	// to the agent's account.
-	joining := append([]string{"run", "--rm", "--user", "0:0", "--userns", "host"}, shared...)
-	joining = append(joining, in.runnerIm, "join", "--api", in.PublicURL, "--token", token)
-	if len(labels) > 0 {
-		joining = append(joining, "--labels", strings.Join(labels, ","))
-	}
-	said, err := docker(ctx, joining...)
-	if err != nil {
-		in.t.Fatalf("runner %s could not join: %s", name, err)
-	}
-	if r.ID = joinedAs(said); r.ID == "" {
-		in.t.Fatalf("runner %s joined and did not say as whom:\n%s", name, said)
-	}
-
-	// serve as the page's Compose sample runs it: as agentiik, in the group that owns the
-	// socket, holding the three capabilities and no other.
-	serving := append([]string{"run", "-d", "--name", r.Agent, "--label", in.label(), "--userns", "host",
-		"--user", agentUser + ":" + agentUser, "--group-add", socketGroup,
-		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE",
-		"-v", secrets + ":" + secretsPath}, shared...)
-	serving = append(serving, in.runnerIm, "serve")
-	in.container(ctx, r.Agent, serving...)
+	eventually(in.ctx, in.t, 2*time.Minute, "runner "+name+" joined", func() error {
+		said, err := dockerCombined(ctx, "logs", r.Agent)
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, said)
+		}
+		if r.ID = joinedAs(said); r.ID == "" {
+			if !r.running(ctx) {
+				return errStop(fmt.Errorf("runner %s's agent exited without joining:\n%s", name, said))
+			}
+			return errors.New("it has not said it joined")
+		}
+		return nil
+	})
 	return r
 }
 
@@ -155,9 +170,10 @@ func (r *Runner) daemon(ctx context.Context, args ...string) (string, error) {
 	return docker(ctx, append([]string{"exec", r.Daemon, "docker", "-H", "unix://" + daemonSocketDir + "/docker.sock"}, args...)...)
 }
 
-// joinedAs reads the runner's identifier out of what join said.
+// joinedAs reads the runner's identifier out of what joining said: agk-runner join's sentence, or
+// the line serve logs when it joins on its own.
 func joinedAs(said string) string {
-	m := regexp.MustCompile(`joined pool \S+ as runner (\S+)\.`).FindStringSubmatch(said)
+	m := regexp.MustCompile(`joined pool \S+ as runner ([^\s,.]+)`).FindStringSubmatch(said)
 	if m == nil {
 		return ""
 	}
@@ -252,9 +268,9 @@ type Holdings struct {
 	// everything mounted into it: what the agent wrote anywhere but where it is given to.
 	Added []string
 
-	// Secrets are the files on the secrets tmpfs, where a value is written for the task that
-	// is given it and removed when that task ends.
-	Secrets []string
+	// SecretsVolumes are the volumes of a task's secrets still on the runner's daemon, each made
+	// for the task that is given a value and removed with it.
+	SecretsVolumes []string
 }
 
 // Mount is one mount of the agent's container.
@@ -263,7 +279,8 @@ type Mount struct {
 }
 
 // Holdings reads what the runner holds, from outside it: docker cp copies the two directories
-// out whoever owns what is in them, and docker inspect answers the environment and the mounts.
+// out whoever owns what is in them, docker inspect answers the environment and the mounts, and
+// the runner's daemon lists the secrets volumes it still has.
 func (r *Runner) Holdings(ctx context.Context) (Holdings, error) {
 	h := Holdings{Files: map[string][]byte{}}
 	for _, dir := range []string{etcPath, libPath} {
@@ -275,15 +292,11 @@ func (r *Runner) Holdings(ctx context.Context) (Holdings, error) {
 			return Holdings{}, fmt.Errorf("the archive of %s: %w", dir, err)
 		}
 	}
-	archive, err := dockerBytes(ctx, "cp", r.Agent+":"+secretsPath, "-")
+	volumes, err := r.SecretsVolumes(ctx)
 	if err != nil {
 		return Holdings{}, err
 	}
-	var secrets Holdings
-	if err := secrets.read(filepath.Dir(secretsPath), archive); err != nil {
-		return Holdings{}, fmt.Errorf("the archive of %s: %w", secretsPath, err)
-	}
-	h.Secrets = slices.Sorted(maps.Keys(secrets.Files))
+	h.SecretsVolumes = volumes
 
 	diff, err := docker(ctx, "diff", r.Agent)
 	if err != nil {
@@ -308,6 +321,24 @@ func (r *Runner) Holdings(ctx context.Context) (Holdings, error) {
 	}
 	h.Env, h.Mounts = inspected[0].Config.Env, inspected[0].Mounts
 	return h, nil
+}
+
+// SecretsVolumes answers the volumes of a task's secrets the runner's daemon still has. The driver
+// makes one for each task given a value and removes it with the task, so once every task has
+// ended there is none.
+func (r *Runner) SecretsVolumes(ctx context.Context) ([]string, error) {
+	out, err := r.daemon(ctx, "volume", "ls", "--quiet", "--filter", "name="+secretsVolumePrefix)
+	if err != nil {
+		return nil, err
+	}
+	var volumes []string
+	for _, v := range strings.Fields(out) {
+		// The filter matches a name anywhere, and a secrets volume's begins with the prefix.
+		if strings.HasPrefix(v, secretsVolumePrefix) {
+			volumes = append(volumes, v)
+		}
+	}
+	return volumes, nil
 }
 
 // read adds what a tar archive holds, its paths taken as under parent.
@@ -350,13 +381,20 @@ func dockerBytes(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+// secretsVolumePrefix begins the name of every volume the driver gives a task's secret values on,
+// which is removed with the task.
+const secretsVolumePrefix = "agk-secrets-"
+
 // What a runner holds, and what it must not, in its own words: "a runner never speaks git, holds
 // no lasting credential beyond its own runner identity, and obtains what its task names only by
 // redeeming that task's grant". Its identity is runner.env, which holds AGK_API and the runner
-// credential, and its key; runner.toml is the host's own settings.
+// credential, and its key; runner.toml is the host's own settings, and trust/agentiik.pem and
+// join-token are what init gives the runner beside it, as the Compose file mounts them: the
+// certificate the bus presents, and a join token of the pool default, spent by the one join that
+// uses it and valid an hour.
 var (
-	// etcFiles are the files /etc/agentiik holds, and nothing else.
-	etcFiles = []string{etcPath + "/runner.env", etcPath + "/runner.toml"}
+	// etcFiles are the files /etc/agentiik may hold, and nothing else.
+	etcFiles = []string{etcPath + "/runner.env", etcPath + "/runner.toml", etcPath + "/trust/agentiik.pem", etcPath + "/join-token"}
 
 	// keyFile is the host's key, which proves the machine.
 	keyFile = libPath + "/runner.key"
@@ -368,11 +406,14 @@ var (
 		"AGK_RUNNER_LABELS": true, "AGK_RUNNER_CONCURRENCY": true, "AGK_RUNNER_WORKDIR": true, "AGK_RUNNER_NAMESPACES": true,
 	}
 
+	// agentEnvKeys are the settings the agent's environment may carry besides: the join token
+	// it joins with on its own, as a value or a file, and where it trusts certificates.
+	agentEnvKeys = map[string]bool{"AGK_RUNNER_JOIN_TOKEN": true, "AGK_RUNNER_JOIN_TOKEN_FILE": true}
+
 	// agentMounts are where the agent's container has something mounted: the two directories,
-	// the secrets tmpfs, the daemon's socket, and the authority it trusts.
+	// runner.toml, the daemon's socket, and the authority it trusts.
 	agentMounts = map[string]bool{
-		etcPath: true, libPath: true, secretsPath: true, agentSocketDir: true,
-		"/etc/ssl/certs/ca-certificates.crt": true,
+		etcPath: true, etcPath + "/runner.toml": true, libPath: true, agentSocketDir: true, caPath: true,
 	}
 
 	// A bus credential at rest, whichever way it is written: the decorated file nats and nsc
@@ -384,12 +425,13 @@ var (
 
 // breaches holds what a runner holds to what it may, and answers each breach in a sentence.
 // publicURL is the one address it is given; held are the installation's values it must hold
-// nowhere; forbidden are the directories of this machine that must not be mounted into it.
+// nowhere; forbidden are the volumes, by name, and the directories of this machine that must not
+// be mounted into it.
 func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []string) []string {
 	var broken []string
 	for path := range h.Files {
 		if strings.HasPrefix(path, etcPath+"/") && !slices.Contains(etcFiles, path) {
-			broken = append(broken, fmt.Sprintf("%s is in %s, which holds runner.env and runner.toml alone", path, etcPath))
+			broken = append(broken, fmt.Sprintf("%s is in %s, which holds runner.env, runner.toml, trust/agentiik.pem and join-token alone", path, etcPath))
 		}
 	}
 
@@ -430,13 +472,13 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 	}
 	for _, v := range h.Env {
 		name, _, _ := strings.Cut(v, "=")
-		// A host setting may be in the environment, as the page's Compose sample sets the
-		// labels and the concurrency; the credential never is, and nothing else of AGK_ is a
-		// runner's.
+		// A host setting may be in the environment, as the Compose file sets the labels, the
+		// concurrency and the join token; the credential never is, and nothing else of AGK_ is
+		// a runner's.
 		switch {
 		case name == "AGK_RUNNER_CREDENTIAL":
 			broken = append(broken, "the agent's environment sets AGK_RUNNER_CREDENTIAL, and a credential is read from runner.env alone, never inherited by what the agent starts")
-		case strings.HasPrefix(name, "AGK_") && !runnerEnvKeys[name]:
+		case strings.HasPrefix(name, "AGK_") && !runnerEnvKeys[name] && !agentEnvKeys[name]:
 			broken = append(broken, fmt.Sprintf("the agent's environment sets %s, which is not a runner's setting", name))
 		}
 		broken = append(broken, heldIn("the agent's environment", v, held)...)
@@ -447,15 +489,15 @@ func (h Holdings) breaches(publicURL string, held []heldValue, forbidden []strin
 			broken = append(broken, fmt.Sprintf("%s was written in the agent's own filesystem, and it keeps nothing outside %s and %s", path, etcPath, libPath))
 		}
 	}
-	for _, path := range h.Secrets {
-		broken = append(broken, fmt.Sprintf("%s is still on the secrets tmpfs, and a value is removed when the task it was given to ends", path))
+	for _, v := range h.SecretsVolumes {
+		broken = append(broken, fmt.Sprintf("the volume %s is still on the runner's daemon, and a task's secrets volume is removed with the task", v))
 	}
 	for _, m := range h.Mounts {
 		if !agentMounts[m.Destination] {
 			broken = append(broken, fmt.Sprintf("%s is mounted at %s, which the agent is not given", m.Source, m.Destination))
 		}
 		for _, dir := range forbidden {
-			if m.Source == dir || strings.HasPrefix(m.Source, dir+"/") {
+			if m.Name == dir || m.Source == dir || strings.HasPrefix(m.Source, dir+"/") {
 				broken = append(broken, fmt.Sprintf("%s is mounted at %s, and it is the installation's, which no runner sees", m.Source, m.Destination))
 			}
 		}

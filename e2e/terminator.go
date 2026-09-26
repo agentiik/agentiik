@@ -21,21 +21,21 @@ import (
 	"time"
 )
 
-// authority is the installation's private certificate authority, and the one certificate it
-// signs, for 127.0.0.1: the bus presents it, and so does the terminator in front of the API.
+// authority is a private certificate authority, and the one certificate it signs, for 127.0.0.1:
+// the terminator in front of the API presents it, as a proxy with a certificate from an
+// authority of the organisation's own would.
 //
-// A private authority rather than plaintext, because internal/config refuses a bus reached at
-// nats:// and an API whose public URL is http, and the runners hold both to the same rule. Every
-// program trusts it the way an installation with a private authority does: the API and the
-// controller through SSL_CERT_FILE, and each runner through the authority mounted over the
-// bundle its image carries at /etc/ssl/certs/ca-certificates.crt, where Go looks first on Linux.
+// The runners trust it as the Compose file has them trust such an authority, AGENTIIK_CA: a file
+// in /etc/ssl/agentiik, which SSL_CERT_DIR names beside init's certificate. The bus presents the
+// certificate init made, which the API, the controller and the runners trust through SSL_CERT_DIR
+// too.
 type authority struct {
 	pool *x509.CertPool
 	leaf tls.Certificate
 }
 
-// certificates makes the authority and its certificate, and writes both where the bus and the
-// runners read them: tls/ca.pem, tls/server.pem and tls/server.key.
+// certificates makes the authority and its certificate, and writes the authority where the
+// runners read it: tls/ca.pem.
 func (in *Installation) certificates() authority {
 	dir := in.mkdir(0o755, "tls")
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -86,22 +86,11 @@ func (in *Installation) certificates() authority {
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	for _, f := range []struct {
-		name    string
-		content []byte
-		mode    os.FileMode
-	}{
-		// The authority is mounted read-only into each runner, whose agent runs as 65532.
-		{"ca.pem", caPEM, 0o644},
-		{"server.pem", leafPEM, 0o644},
-		// Read by the bus's server, which runs as root in its container.
-		{"server.key", keyPEM, 0o600},
-	} {
-		if err := os.WriteFile(filepath.Join(dir, f.name), f.content, f.mode); err != nil {
-			in.t.Fatal(err)
-		}
+	// Mounted read-only into each runner, whose agent runs as 65532.
+	if err := os.WriteFile(filepath.Join(dir, "ca.pem"), caPEM, 0o644); err != nil {
+		in.t.Fatal(err)
 	}
-	in.held = append(in.held, heldValue{"the private key of the bus and of the API's terminator", strings.TrimSpace(string(keyPEM))})
+	in.held = append(in.held, heldValue{"the private key of the API's terminator", strings.TrimSpace(string(keyPEM))})
 
 	leaf, err := tls.X509KeyPair(leafPEM, keyPEM)
 	if err != nil {

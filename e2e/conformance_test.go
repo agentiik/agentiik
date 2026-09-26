@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -151,6 +152,22 @@ func TestOneWorkflowRunLocallyAndOnTheInstallationProducesTheSameEnvelopes(t *te
 				t.Fatalf("the local run's %s item %s attaches %d files, want the one its step attached", name, item.ID, len(item.Files))
 			}
 		}
+	}
+
+	// Each task given the secret had it on a volume of its own, removed with the task, so no
+	// runner's daemon keeps one once the run has ended. A task's removal may follow the run's
+	// end by a moment.
+	for _, r := range in.Runners {
+		eventually(in.ctx, t, 30*time.Second, "runner "+r.Name+"'s daemon kept no secrets volume", func() error {
+			volumes, err := r.SecretsVolumes(in.ctx)
+			if err != nil {
+				return err
+			}
+			if len(volumes) > 0 {
+				return fmt.Errorf("it still has %q", volumes)
+			}
+			return nil
+		})
 	}
 
 	found := diff.Envelopes(local, server, diff.Default)
