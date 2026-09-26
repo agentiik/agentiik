@@ -12,6 +12,10 @@
 #   done
 #   docker buildx build --platform linux/amd64,linux/arm64 -f build/controller.Dockerfile \
 #     --build-arg VERSION=0.2.0 --build-arg REVISION=$(git rev-parse HEAD) .
+#
+# .github/workflows/release.yml builds it so and pushes it for both architectures: as X.Y.Z and
+# vX.Y.Z at a release tag, as latest too when that is the highest release, and as dev at every
+# commit to main.
 
 # The certificates come from alpine:3.21, which is the one image the tests already name and pull,
 # pinned to the minor for the reason the Go version is. Every path the controller has leaves over
