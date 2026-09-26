@@ -241,6 +241,8 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"tasks": true, "approvals": true, "artifacts": true, "artifact_objects": true,
 		"notification_events": true, "task_grants": true, "secret_declarations": true,
 		"secret_values": true, "task_logs": true, "task_log_chunks": true, "task_log_objects": true,
+		// What a namespace grants is not another's to read.
+		"grants": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
@@ -252,6 +254,13 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// The audit log is one chain across the installation, holding the acts of every
 		// namespace and of the installation itself, and the export reads it whole.
 		"audit_log": true, "audit_head": true, "audit_export": true, "audit_verified": true,
+		// Who somebody is and how they prove it is read before any namespace is in question: a
+		// token, a session or a passkey names its principal, and only then is a namespace asked
+		// about. A service account belongs to a namespace and is identified the same way, and
+		// the authentication policy applies at sign-in, to everybody holding a grant anywhere.
+		"principals": true, "users": true, "groups": true, "group_members": true,
+		"service_accounts": true, "credentials": true, "api_tokens": true, "sessions": true,
+		"enrolment_codes": true, "auth_policy": true, "bootstrap": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
@@ -411,6 +420,8 @@ func TestEveryNameTheFileWritesIsAnIdentifier(t *testing.T) {
 	otherNames := map[string]string{
 		"namespaces":        "a namespace is held to a narrower grammar of its own",
 		"runner_pools":      "a pool is named by an administrator, not by the workflow file",
+		"groups":            "a group is named by an administrator, on the namespace grammar",
+		"service_accounts":  "a service account is named by a namespace's owner, on the namespace grammar",
 		"artifacts":         "an artifact is named after the file it is, dot and all, and held to one segment of its URI",
 		"schema_migrations": "a migration is named after its file, dot and all",
 	}
@@ -495,6 +506,9 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		{`insert into secret_declarations (namespace, name, provider, declared_by)
 		  values ('finance', $1, 'builtin', 'alice')`, []any{secret}},
 		{`insert into secret_values (namespace, name, version) values ('finance', $1, 0)`, []any{secret}},
+		{`insert into principals (id, kind) values ('alice', 'user')`, nil},
+		{`insert into grants (id, namespace, workflow, principal, role, granted_by)
+		  values ('01JQ3M8T', 'finance', $1, 'alice', 'viewer', 'alice')`, []any{workflow}},
 	} {
 		if _, err := conn.Exec(ctx, s.sql, s.args...); err != nil {
 			t.Fatalf("%s: %s", s.sql, err)
@@ -511,6 +525,7 @@ func TestANameLongerThanPostgreSQLsOwnIsKeptWhole(t *testing.T) {
 		"artifacts.port":             {port},
 		"secret_declarations.name":   {secret},
 		"secret_values.name":         {secret},
+		"grants.workflow":            {workflow},
 	}
 	for _, c := range schemaColumns(t, conn) {
 		if c.typeName == "identifier" && written[c.table+"."+c.column] == nil {
