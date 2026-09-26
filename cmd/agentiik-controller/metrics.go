@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -214,6 +215,9 @@ func (c *counted) readRunners(ctx context.Context, g *metrics.Gauges) error {
 // serveMetrics answers the metrics on m.Listen until ctx is done, and answers once it is listening:
 // an address it cannot listen on refuses the start rather than leaving an installation's monitoring
 // to find out that nothing answers.
+//
+// Over TLS where m holds a certificate, and in plain HTTP, for a network only the monitoring reaches
+// or a terminator in front, where it holds none.
 func (c *counted) serveMetrics(ctx context.Context, m config.Metrics, log *slog.Logger) (func(), error) {
 	raw, err := hex.DecodeString(m.TokenHash)
 	if err != nil || len(raw) != sha256.Size {
@@ -222,9 +226,16 @@ func (c *counted) serveMetrics(ctx context.Context, m config.Metrics, log *slog.
 	var hash [sha256.Size]byte
 	copy(hash[:], raw)
 
+	served, err := m.TLS.Server()
+	if err != nil {
+		return nil, config.Refuse(config.TLSCertFile, err)
+	}
 	ln, err := net.Listen("tcp", m.Listen)
 	if err != nil {
 		return nil, fmt.Errorf("the metrics cannot be answered on %s, which %s names: %w", m.Listen, config.MetricsListen, err)
+	}
+	if served != nil {
+		ln = tls.NewListener(ln, served)
 	}
 	server := &http.Server{
 		Handler:           metrics.Handler(c.registry, hash),
@@ -241,7 +252,7 @@ func (c *counted) serveMetrics(ctx context.Context, m config.Metrics, log *slog.
 			log.Warn("the metrics stopped being answered", "error", err)
 		}
 	}()
-	log.Info("answering the metrics", "address", ln.Addr().String(), "path", metrics.Path)
+	log.Info("answering the metrics", "address", ln.Addr().String(), "tls", m.TLS.Served(), "path", metrics.Path)
 	return func() {
 		server.Close()
 		<-done

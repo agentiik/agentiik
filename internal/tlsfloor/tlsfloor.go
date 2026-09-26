@@ -79,3 +79,9 @@ func Loopback(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
+
+// Server is a server configuration holding the floor, serving certificate: TLS 1.3 to a client that
+// speaks it, 1.2 to one that goes no higher, and nothing to one older still.
+func Server(certificate tls.Certificate) *tls.Config {
+	return &tls.Config{MinVersion: MinVersion, Certificates: []tls.Certificate{certificate}}
+}

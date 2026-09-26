@@ -24,8 +24,10 @@
 //
 // "No plaintext path anywhere, including between the control plane and the bus." A database URL
 // sets an sslmode that never falls back to plaintext, the bus is reached at tls:// or wss://, and
-// the public URL is https. The one path left without TLS is a local socket, which crosses no
-// network.
+// the public URL is https. The one path left without TLS that crosses no network is a local socket.
+// The one that does is the hop from a TLS terminator to the API or the metrics listener, on a
+// network only the terminator reaches, where AGK_TLS_CERT_FILE names no certificate for the program
+// to serve TLS with itself.
 //
 // # Each program reads what it needs
 //
@@ -80,6 +82,8 @@ const (
 	MetricsListen               = "AGK_METRICS_LISTEN"
 	MetricsTokenFile            = "AGK_METRICS_TOKEN_FILE"
 	OTLPEndpoint                = "AGK_OTLP_ENDPOINT"
+	TLSCertFile                 = "AGK_TLS_CERT_FILE"
+	TLSKeyFile                  = "AGK_TLS_KEY_FILE"
 )
 
 // secretFiles are the variables that name a secret's file. The same name without _FILE is the
@@ -88,6 +92,7 @@ const (
 var secretFiles = []string{
 	DatabasePasswordFile, MigrateDatabasePasswordFile, BusCredentialsFile, BusAccountSeedFile,
 	PresignKeyFile, MasterKeyFile, OperatorTokenFile, AuditExportTokenFile, MetricsTokenFile,
+	TLSKeyFile,
 }
 
 // libpqSecrets are the variables pgx takes a secret from wherever the URL gives none, as libpq
@@ -104,9 +109,9 @@ var libpqSecrets = []struct{ name, use, instead string }{
 
 // DefaultListen is where the API listens when AGK_LISTEN is unset.
 //
-// Every interface, on 8080. Every profile terminates TLS in front of the API, so what listens here
-// speaks plain HTTP to that terminator, and it runs as a user that cannot bind a port below 1024:
-// 8080 is the port such a service conventionally takes.
+// Every interface, on 8080. What listens here speaks plain HTTP to a TLS terminator in front, or TLS
+// itself where AGK_TLS_CERT_FILE names a certificate, and it runs as a user that cannot bind a port
+// below 1024: 8080 is the port such a service conventionally takes.
 const DefaultListen = ":8080"
 
 // DefaultTaskCeiling is how long a task no timeout bounds may run, where AGK_TASK_CEILING is unset.
@@ -261,7 +266,12 @@ type API struct {
 	// opts in none, which is what an installation that is not for development is.
 	EnvPrefixes map[string]string
 
-	Listen          string
+	Listen string
+
+	// TLS is the certificate the API serves Listen with itself, and is zero where it speaks
+	// plain HTTP to a terminator in front.
+	TLS TLS
+
 	JoinRotation    time.Duration
 	RevocationGrace time.Duration
 
@@ -304,6 +314,10 @@ type Metrics struct {
 
 	// TokenHash is the SHA-256 of the token a scrape bears, in lowercase hexadecimal.
 	TokenHash string
+
+	// TLS is the certificate the metrics are served with, and is zero where they are answered
+	// in plain HTTP.
+	TLS TLS
 }
 
 // Migration is what agentiik-api migrate reads.
@@ -334,6 +348,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 	c.MasterKey = Secret(r.file(MasterKeyFile, "and it names the file holding the master key the built-in secret store seals every value under"))
 	c.EnvPrefixes = r.envPrefixes()
 	c.Listen = r.listen()
+	c.TLS = r.served(Listen)
 	c.JoinRotation = r.duration(JoinRotation, DefaultJoinRotation, "how long a runner credential is accepted for",
 		"a credential accepted for no time is a runner that cannot join")
 	// The grace defaults to the ceiling, since no task legitimately runs longer, so a task a
@@ -527,19 +542,30 @@ func isAddress(v string) bool {
 	return err == nil
 }
 
-// metrics reads where the controller answers its metrics, and the hash of the token a scrape
-// bears.
+// metrics reads where the controller answers its metrics, the hash of the token a scrape bears,
+// and the certificate they are served with, where there is one.
 //
 // Off unless asked for: an installation that scrapes nothing opens no port. Asked for, it is a
 // listener of its own, since the controller has no other, and the token is required, because the
 // metrics name every namespace and workflow that ran: a port nobody but the monitoring should reach
 // is a port somebody else eventually does. A token file with nothing to guard is refused too, as the
-// sign of an installation that meant to open the port and did not say where.
+// sign of an installation that meant to open the port and did not say where, and so is a
+// certificate with nothing to serve.
+//
+// The certificate is AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE, the pair the API reads, rather than a
+// pair of the metrics' own. Each program reads its own environment and serves one listener, so the
+// variables say what is served with TLS and the program says where, as AGK_DATABASE_URL names
+// each program's database under one name.
 func (r *reader) metrics() Metrics {
 	listen, set := r.value(MetricsListen)
 	if !set {
 		if _, token := r.value(MetricsTokenFile); token {
 			r.refuse(MetricsTokenFile, "is set and "+MetricsListen+" is not, so the token guards nothing: name the address the metrics are answered on in "+MetricsListen+", or unset this")
+		}
+		for _, file := range []string{TLSCertFile, TLSKeyFile} {
+			if _, served := r.value(file); served {
+				r.refuse(file, "is set and "+MetricsListen+" is not, and the metrics are the controller's one listener, so the certificate serves nothing: name the address the metrics are answered on in "+MetricsListen+", or unset this")
+			}
 		}
 		return Metrics{}
 	}
@@ -549,6 +575,7 @@ func (r *reader) metrics() Metrics {
 	return Metrics{
 		Listen:    listen,
 		TokenHash: r.hash(MetricsTokenFile, "the token a scrape bears", "and "+MetricsListen+" is, and the metrics are answered to the token whose hash the file it names holds and to nobody else, since they name every namespace and workflow that ran"),
+		TLS:       r.served(MetricsListen),
 	}
 }
 
@@ -959,10 +986,17 @@ func (r *reader) file(name, why string) []byte {
 //
 // The file is held to what "a file the API user alone can open" means for the master key: an
 // absolute path, a regular file, and no permission for its group or anybody else. The rule is one
-// rule for every file, so that nobody has to decide which of them a reader could use. Refusing is
+// rule for every secret's file, so that nobody has to decide which of them a reader could use. Refusing is
 // better than warning, because a warning in a log nobody reads is how a key stays world readable
 // for a year.
 func (r *reader) optionalFile(name string) []byte {
+	return r.readFile(name, true)
+}
+
+// readFile reads the file a _FILE variable names, held to every rule of optionalFile but the mode
+// where secret is false: for a file holding nothing secret, which its tools write for anybody to
+// read.
+func (r *reader) readFile(name string, secret bool) []byte {
 	path, set := r.value(name)
 	if !set {
 		return nil
@@ -980,7 +1014,7 @@ func (r *reader) optionalFile(name string) []byte {
 	case !info.Mode().IsRegular():
 		r.refuse(name, "names something that is not a file")
 		return nil
-	case info.Mode().Perm()&0o077 != 0:
+	case secret && info.Mode().Perm()&0o077 != 0:
 		r.refuse(name, fmt.Sprintf("names a file of mode %#o, and a file holding a secret is readable by its owner alone: chmod 600 it, because a secret anybody on the host can read is a secret anybody on the host has", info.Mode().Perm()))
 		return nil
 	}
