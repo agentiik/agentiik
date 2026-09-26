@@ -60,8 +60,8 @@
 // the directory is read only to the API, the API says why and that the credential is running out,
 // once a day, and tries again the next. One that expired while the API was down is renewed before
 // the settings are read, which would refuse it, so that the API is not left failing at every
-// restart; it goes on serving past the expiry, for the reason
-// watchCredential gives, and still gives runners their bus credentials, but creates no runner pool.
+// restart; it goes on serving past the expiry, for the reason watchCredential gives, and still
+// gives runners their bus credentials, but creates no runner pool.
 //
 // # health
 //
@@ -96,14 +96,14 @@
 // key, the presign key and the database password, once; the bus identity, once, as bus-init does,
 // with the control plane's credential in a directory of its own that the API and the controller
 // share, renewed from when the API would renew it, and moved there from where an earlier init put
-// it; and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of one it mints and
-// prints once where none is set and none was stored; the migration, as migrate does, as the role
-// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does;
-// and a join token of the pool default for the runner beside it, issued through the database since
-// the API is not serving yet. Each service is given its own copy of what it reads, owned by uid
-// 65532 where init runs as root, but for the bus's, which runs as root, and the runner's
-// certificate, which anybody may read; the control plane's credential alone is one file for two,
-// since the API renews it while it runs.
+// it; and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of
+// one it mints and prints once where none is set and none was stored; the migration, as migrate
+// does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
+// namespace create does; and a join token of the pool default for the runner beside it, issued
+// through the database since the API is not serving yet. Each service is given its own copy of what
+// it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as root, and
+// the runner's certificate, which anybody may read; the control plane's credential alone is one
+// file for two, since the API renews it while it runs.
 //
 // It is the one program that takes a secret as a value: the operator token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.

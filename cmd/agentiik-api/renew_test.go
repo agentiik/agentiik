@@ -206,6 +206,31 @@ func TestTheAPILooksEveryDayAndTriesAFailedRenewalAgain(t *testing.T) {
 		t.Errorf("it warned %d times, once for each day the renewal failed:\n%s", n, logged.String())
 	}
 
+	// A renewal that fails past the expiry is still tried every day, and the one that then
+	// succeeds says the API needs a restart, whose connection gave up, and nothing expired after.
+	clock, expires, tried, waited = start, start.Add(time.Hour), nil, nil
+	logged.Reset()
+	renew = func() (time.Time, error) {
+		tried = append(tried, clock)
+		if clock.Before(start.Add(2 * 24 * time.Hour)) {
+			return time.Time{}, errors.New("the bus directory is read only")
+		}
+		expires = clock.Add(controlPlaneLife)
+		return expires, nil
+	}
+	watchCredential(t.Context(), func() time.Time { return expires }, renew, slog.New(slog.NewTextHandler(&logged, nil)), func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
+		waited = append(waited, d)
+		clock = clock.Add(d)
+		return len(waited) < 5
+	})
+	if len(tried) < 4 || tried[len(tried)-1].Before(start.Add(2*24*time.Hour)) {
+		t.Errorf("it tried to renew at %v, and a renewal is tried every day past the expiry too", tried)
+	}
+	_, after, renewedLate := strings.Cut(logged.String(), "which had expired already: restart the API")
+	if !renewedLate || strings.Contains(after, "level=ERROR") {
+		t.Errorf("the renewal past the expiry did not say to restart the API, or the credential was said to have expired after it:\n%s", logged.String())
+	}
+
 	// At start inside the fourteen days, it renews before it waits at all.
 	clock, expires, tried, waited = start, start.Add(time.Hour), nil, nil
 	renew = func() (time.Time, error) {

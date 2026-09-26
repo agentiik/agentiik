@@ -6,7 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Upgrading
 
-- The Compose file gains a `bus` volume, mounted at `/bus` in `init` (`/init/bus`), the API and the controller (read only), with `AGK_BUS_CREDENTIALS_FILE=/bus/control-plane.creds` in both; the next `init` moves the credential there, and refuses to run under a Compose file without that volume.
+- The Compose file gains a `bus` volume, mounted at `/init/bus` in `init` and at `/bus` in the API and, read only, the controller, with `AGK_BUS_CREDENTIALS_FILE=/bus/control-plane.creds` in both; the next `init` moves the credential there, and refuses to run under a Compose file without that volume.
 - Values a runner before this one wrote under `<secrets_dir>/agentiik` are removed by nothing now; the runner names the path once at start, and the host tmpfs can go once it is empty.
 
 ### API
