@@ -388,6 +388,15 @@ func ReadMigration(lookup Lookup) (Migration, error) {
 	return c, r.err()
 }
 
+// ReadNamespace reads what agentiik-api namespace needs through lookup, which is os.LookupEnv when
+// nil: the role the API connects as, read as migrate and serve read it, since the verb runs where
+// the API runs and needs no role that may change the schema.
+func ReadNamespace(lookup Lookup) (Database, error) {
+	r := newReader(lookup)
+	d := r.database(DatabaseURL, DatabasePasswordFile, true)
+	return d, r.err()
+}
+
 // reader reads one program's settings and keeps every refusal.
 type reader struct {
 	lookup  Lookup

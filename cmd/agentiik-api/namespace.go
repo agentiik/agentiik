@@ -27,12 +27,12 @@ func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name strin
 			return exitFailed
 		}
 	}
-	c, err := config.ReadMigration(lookup)
+	d, err := config.ReadNamespace(lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s namespace %s: the configuration refuses the start:\n%s\n", program, action, err)
 		return exitFailed
 	}
-	if err := namespace(ctx, c.Application, action, name, stdout); err != nil {
+	if err := namespace(ctx, d, action, name, stdout); err != nil {
 		fmt.Fprintf(stderr, "%s namespace %s: %s\n", program, action, err)
 		return exitFailed
 	}
@@ -42,9 +42,9 @@ func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name strin
 // namespace creates or removes one namespace, as the role the API connects as, and records it in
 // the audit log in the same transaction. It says what it did.
 //
-// It reads the settings migrate reads and runs where migrate runs, because v0.2.0 has no route
-// that creates a namespace: this verb stands in for v0.3.0's, which an administrator reaches
-// through the API. Creating a namespace that exists changes nothing and says so, so that an
+// It reads AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE, as serve does, and runs where the API
+// runs, because v0.2.0 has no route that creates a namespace: this verb stands in for v0.3.0's,
+// which an administrator reaches through the API. Creating a namespace that exists changes nothing and says so, so that an
 // installation script run twice succeeds twice.
 func namespace(ctx context.Context, d config.Database, action, name string, stdout io.Writer) error {
 	pool, err := db.Open(ctx, d.ConnString())

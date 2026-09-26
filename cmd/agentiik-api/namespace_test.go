@@ -95,17 +95,16 @@ func TestNamespaceCreateRefusesANameTheAPIRefuses(t *testing.T) {
 	}
 }
 
-// With nothing configured, namespace refuses and names the settings migrate reads.
-func TestNamespaceReadsTheSettingsMigrateReads(t *testing.T) {
+// With nothing configured, namespace refuses and names the database setting the API reads, and not
+// the privileged role migrate connects as, which it never uses.
+func TestNamespaceReadsTheAPIsDatabaseSettingAlone(t *testing.T) {
 	for _, action := range []string{"create", "remove"} {
 		var stdout, stderr bytes.Buffer
 		if code := run(t.Context(), []string{"namespace", action, "finance"}, empty, &stdout, &stderr); code != exitFailed {
 			t.Errorf("%s with nothing configured exited %d, want %d", action, code, exitFailed)
 		}
-		for _, variable := range []string{config.MigrateDatabaseURL, config.DatabaseURL} {
-			if !strings.Contains(stderr.String(), variable) {
-				t.Errorf("%s's refusal does not name %s:\n%s", action, variable, stderr.String())
-			}
+		if !strings.Contains(stderr.String(), config.DatabaseURL) || strings.Contains(stderr.String(), config.MigrateDatabaseURL) {
+			t.Errorf("%s's refusal names the wrong settings:\n%s", action, stderr.String())
 		}
 	}
 }
