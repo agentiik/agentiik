@@ -6,8 +6,9 @@
 // "Effective permissions are the union of every applying grant: the principal's own and its
 // groups', at both scopes." "A workflow-scope grant only adds. Only an explicit deny removes,
 // and it wins over any allow at any scope." "An optional expiry ends it without anyone
-// remembering to revoke it." Those three sentences are the whole of the rule, and Resolve is
-// them and nothing else.
+// remembering to revoke it." Those three sentences are the rule, with one more the permissions
+// table adds: secret:use and secret:write "count at namespace scope only". Resolve is those
+// and nothing else.
 //
 // # Why a package of its own
 //
@@ -26,7 +27,7 @@
 // # What it does not decide
 //
 // Who the principal is, which groups it belongs to and which grants exist are the caller's to
-// read. Administration is not a grant either: a grant binds "one scope (a namespace or a single
-// workflow)", so a question about the installation resolves to nothing here, and whoever
-// administers it is answered for elsewhere.
+// read. Administration is not a grant either: a grant's scope "is written NS for a namespace or
+// NS/workflow for a single workflow", so a question about the installation resolves to nothing
+// here, and whoever administers it is answered for elsewhere.
 package access

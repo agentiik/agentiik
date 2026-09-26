@@ -27,6 +27,10 @@ func TestAGrantSaysWhatItBinds(t *testing.T) {
 		{"a group name with a space", access.Grant{Principal: "group:team finance", Scope: finance, Deny: access.RunReadData}, "names no group"},
 		{"a service account with three parts", access.Grant{Principal: "finance/nightly/sync", Scope: finance, Role: access.Viewer}, "names no service account"},
 		{"a service account with no namespace", access.Grant{Principal: "/agentiik", Scope: finance, Role: access.Viewer}, "names no service account"},
+		{"a service account of a reserved word", access.Grant{Principal: "runs/agentiik", Scope: finance, Role: access.Viewer}, "routes on"},
+		{"a login longer than a name is", access.Grant{Principal: strings.Repeat("a", 256), Scope: finance, Role: access.Viewer}, "names no principal"},
+		{"a group longer than a name is", access.Grant{Principal: "group:" + strings.Repeat("a", 256), Scope: finance, Role: access.Viewer}, "names no group"},
+		{"a service account longer than a name is", access.Grant{Principal: "finance/" + strings.Repeat("a", 256), Scope: finance, Role: access.Viewer}, "names no service account"},
 		{"no scope", access.Grant{Principal: "alice", Role: access.Viewer}, "installation"},
 		{"a scope on a reserved word", access.Grant{Principal: "alice", Scope: access.Scope{Namespace: "runs"}, Role: access.Viewer}, "routes on"},
 		{"neither a role nor a deny", access.Grant{Principal: "alice", Scope: finance}, "neither"},
@@ -50,6 +54,7 @@ func TestAGrantSaysWhatItBinds(t *testing.T) {
 		deny("d1", "alice", invoicing, access.RunReadData),
 		allow("g3", "bob-martin", finance, access.Editor),
 		allow("g4", "group:runs", finance, access.Viewer),
+		allow("g5", strings.Repeat("a", 255), finance, access.Viewer),
 	} {
 		if err := g.Validate(); err != nil {
 			t.Errorf("%+v is refused: %v", g, err)

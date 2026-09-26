@@ -39,8 +39,8 @@ const (
 	// counts at namespace scope only, as SecretWrite does.
 	SecretUse Permission = "secret:use"
 
-	// SecretWrite declares, moves and removes a namespace's secrets: which store holds each
-	// value and where in it. Never allows reading a value.
+	// SecretWrite: "Declare, change and delete the namespace's secrets, and write a builtin
+	// value. Never allows reading one."
 	//
 	// An atom of its own rather than workflow:write, because a declaration is not part of a
 	// workflow: it is what decides which credential a step is handed, for every workflow of the

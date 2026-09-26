@@ -104,10 +104,10 @@ func (s Scope) covers(q Scope) bool {
 
 // Grant is one row of what a principal may do: the wire's accessGrant.
 //
-// "A grant binds one principal, one scope (a namespace or a single workflow) and one role." A
-// deny is a grant row too, naming one permission instead of a role, since the documentation's own
-// deny takes run:read_data away from an operator and no role is that one permission. A row
-// carries exactly one of the two, so that revoking one row never revokes half of another.
+// "A grant binds one principal, one scope and either one role or a deny." "A deny names one
+// permission, never a role, since the payloads kept out of reach are run:read_data alone and no
+// role is that." A row carries exactly one of the two, so that revoking one row never revokes
+// half of another.
 type Grant struct {
 	ID string `json:"id"`
 
@@ -175,7 +175,8 @@ func (g Grant) Expired(now time.Time) bool {
 
 // principalRef refuses a principal no grant can name, on the wire's three forms: a login, which is
 // held to the namespace grammar and its reserved words since each user's personal namespace is
-// named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account.
+// named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account,
+// whose namespace is never a reserved word either. Each name is bounded as every name is.
 // The forms cannot be taken for one another, since a login holds neither a colon nor a slash.
 //
 // Resolve matches a principal by its exact string, so a grant written for one spelled wrongly is a
@@ -191,10 +192,16 @@ func principalRef(ref string) error {
 		return fmt.Errorf("%.64q names no group: a group is written group:NAME, the name in lowercase words joined by hyphens, such as group:team-finance", ref)
 	}
 	if ns, name, ok := strings.Cut(ref, "/"); ok {
-		if given(ns) && given(name) {
-			return nil
+		switch {
+		case !given(ns) || !given(name):
+			return fmt.Errorf("%.64q names no service account: one is written NS/NAME, both in lowercase words joined by hyphens, such as finance/agentiik", ref)
+		case agk.IsReservedNamespace(ns):
+			// The wire leaves this to the API, since a reserved word never names a
+			// namespace and so a reference through one names nobody; a scope on one is
+			// refused the same way.
+			return fmt.Errorf("%s is a word the API routes on, which names no namespace, so %s names no service account", ns, ref)
 		}
-		return fmt.Errorf("%.64q names no service account: one is written NS/NAME, both in lowercase words joined by hyphens, such as finance/agentiik", ref)
+		return nil
 	}
 	switch {
 	case ref == "":

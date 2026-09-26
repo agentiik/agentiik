@@ -49,8 +49,9 @@ func resolved(t *testing.T, who access.Principal, grants []access.Grant, at acce
 
 // The documentation's own example, as its figure draws it: alice, a member of team-finance, holds
 // viewer on the namespace finance through her group and operator on monthly-invoicing herself, and
-// a deny on that workflow takes run:read_data from her. "Grants add up; a deny is the only thing
-// that subtracts."
+// a deny on that workflow keeps run:read_data from her there. "Grants add up; a deny is the only
+// thing that subtracts." Neither role holds run:read_data, so here the deny takes nothing away; it
+// is what keeps the payloads out of reach once a wider grant arrives, which the last case adds.
 func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 	grants := []access.Grant{
 		allow("01JQ3M8T", "group:team-finance", finance, access.Viewer),
@@ -106,6 +107,21 @@ func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 			}
 		})
 	}
+
+	// team-finance later becomes editor of the namespace: alice reads data everywhere in finance
+	// but on monthly-invoicing, where the deny still wins, and carol reads it there too.
+	grants = append(grants, allow("01JQ3MA0", "group:team-finance", finance, access.Editor))
+	if got := resolved(t, alice, grants, invoicing, t0); got.Has(access.RunReadData) || !got.Has(access.WorkflowWrite) {
+		t.Errorf("an editor through her group, alice holds %s on monthly-invoicing", got)
+	}
+	for _, c := range []struct {
+		who access.Principal
+		at  access.Scope
+	}{{alice, finance}, {alice, payroll}, {carol, invoicing}} {
+		if got := resolved(t, c.who, grants, c.at, t0); !got.Has(access.RunReadData) {
+			t.Errorf("an editor through team-finance, %s holds %s at %q", c.who.Ref, got, c.at)
+		}
+	}
 }
 
 // "A deny wins over any allow at any scope": a deny on the workflow takes run:read_data from an
@@ -152,16 +168,18 @@ func TestADenyForAGroupReachesItsMembers(t *testing.T) {
 }
 
 // A principal may hold several roles at one scope, and holds their union: "someone who needs both
-// holds both roles".
+// holds both roles", whether both are granted in its own name or one comes through a group.
 func TestSeveralRolesAtOneScopeAddUp(t *testing.T) {
-	grants := []access.Grant{
-		allow("g1", "alice", finance, access.Operator),
-		allow("g2", "group:team-finance", finance, access.Viewer),
-	}
 	want := []access.Permission{access.WorkflowRead, access.WorkflowRun, access.RunRead}
-	for _, at := range []access.Scope{finance, invoicing} {
-		if got := resolved(t, alice, grants, at, t0); !slices.Equal(got.Permissions(), want) {
-			t.Errorf("an operator and a viewer at %q holds %s", at, got)
+	for _, grants := range [][]access.Grant{
+		{allow("g1", "alice", finance, access.Viewer), allow("g2", "alice", finance, access.Operator)},
+		{allow("g1", "alice", finance, access.Operator), allow("g2", "alice", finance, access.Viewer)},
+		{allow("g1", "alice", finance, access.Operator), allow("g2", "group:team-finance", finance, access.Viewer)},
+	} {
+		for _, at := range []access.Scope{finance, invoicing} {
+			if got := resolved(t, alice, grants, at, t0); !slices.Equal(got.Permissions(), want) {
+				t.Errorf("%s and %s at %q holds %s", grants[0].Role, grants[1].Role, at, got)
+			}
 		}
 	}
 }
@@ -343,6 +361,12 @@ func TestAGrantNamesItsPrincipalExactly(t *testing.T) {
 		{alice, "group:team-finance", true},
 		{alice, "Alice", false},
 		{alice, "alice ", false},
+		{alice, "al", false},
+		{alice, "alice-martin", false},
+		{access.Principal{Ref: "alice-martin"}, "alice", false},
+		{alice, "group:team", false},
+		{alice, "group:team-finance-leads", false},
+		{access.Principal{Ref: "alice", Groups: []string{"team-finance-leads"}}, "group:team-finance", false},
 		{alice, "team-finance", false},
 		{alice, "group:team-ops", false},
 		{alice, "group:", false},
