@@ -757,10 +757,19 @@ func TestProgressNeverBlocksTheDriverAndSaysNothingOfAKeyNobodyCarries(t *testin
 	}
 }
 
-// countingHolder is the host's record, counting the deliveries it refused as in flight.
+// countingHolder is the host's record, counting the deliveries it refused as in flight, whether
+// reading the key or writing it down found it so.
 type countingHolder struct {
 	Holder
 	inFlight atomic.Int32
+}
+
+func (h *countingHolder) Recorded(id agk.TaskID) error {
+	err := h.Holder.Recorded(id)
+	if errors.Is(err, driver.ErrTaskInFlight) {
+		h.inFlight.Add(1)
+	}
+	return err
 }
 
 func (h *countingHolder) Hold(id agk.TaskID) error {

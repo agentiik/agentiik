@@ -884,7 +884,7 @@
             },
             "truncated": {
               "title": "Truncated",
-              "description": "Whether the cap was reached and the rest of the output dropped. It is its own field because the count cannot say it: four hundred lines is either the whole log or the first four hundred of one, and somebody chasing a failure has to know which before reading the last line as the last thing that happened.",
+              "description": "Whether the store holds less than the container wrote: the cap was reached, or the closing chunk was never answered, or the log was resumed after a restart. It is its own field because the count cannot say it: four hundred lines is either the whole log or the first four hundred of one, and somebody chasing a failure has to know which before reading the last line as the last thing that happened.",
               "type": "boolean",
               "examples": [
                 false,
@@ -2571,7 +2571,7 @@
             },
             "truncated": {
               "type": "boolean",
-              "description": "Whether the cap has been reached and further lines will be dropped, which is the value the result message reports as log.truncated. The cap is applied where the log is written, so that one component keeps one account of how much of a task's log exists. A runner reading true stops shipping and keeps draining the container's stream all the same, because a container whose output nobody reads blocks on a full pipe, and a brick stalled by its own logging would be a failure charged to the brick for something the platform did.",
+              "description": "Whether the cap has been reached and further lines will be dropped, which the result message then reports as log.truncated, as it does a closing chunk never answered and a log resumed after a restart. The cap is applied where the log is written, so that one component keeps one account of how much of a task's log exists. A runner reading true stops shipping and keeps draining the container's stream all the same, because a container whose output nobody reads blocks on a full pipe, and a brick stalled by its own logging would be a failure charged to the brick for something the platform did.",
               "examples": [
                 false,
                 true
