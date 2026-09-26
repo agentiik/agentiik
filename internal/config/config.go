@@ -79,6 +79,7 @@ const (
 	AuditExportTokenFile        = "AGK_AUDIT_EXPORT_TOKEN_FILE"
 	MetricsListen               = "AGK_METRICS_LISTEN"
 	MetricsTokenFile            = "AGK_METRICS_TOKEN_FILE"
+	OTLPEndpoint                = "AGK_OTLP_ENDPOINT"
 )
 
 // secretFiles are the variables that name a secret's file. The same name without _FILE is the
@@ -283,6 +284,10 @@ type Controller struct {
 	// Metrics is where the metrics are answered, and to whom. Its Listen is empty where the
 	// installation scrapes none, and the controller then opens no port at all.
 	Metrics Metrics
+
+	// OTLPEndpoint is the OpenTelemetry collector every run's trace is sent to, and empty where
+	// none is: then nothing is traced, and nothing is paid for it.
+	OTLPEndpoint string
 }
 
 // AuditExport is the sink the audit log is exported to: an https URL the entries are POSTed to, and
@@ -354,6 +359,7 @@ func ReadController(lookup Lookup) (Controller, error) {
 	c.TaskCeiling = r.taskCeiling()
 	c.AuditExport = r.auditExport()
 	c.Metrics = r.metrics()
+	c.OTLPEndpoint = r.otlpEndpoint()
 	return c, r.err()
 }
 
@@ -455,6 +461,48 @@ func (r *reader) maxRequeues() int {
 		return graph.DefaultMaxRequeues
 	}
 	return n
+}
+
+// otlpEndpoint is the OpenTelemetry collector's OTLP/HTTP address, as OTEL_EXPORTER_OTLP_ENDPOINT
+// names one: the base URL the spans are posted below, at /v1/traces. Unset is no tracing.
+//
+// https, or http to a loopback address alone: "no plaintext path anywhere" is waived only for this
+// machine, which no network carries, since a span names a namespace, a workflow, its steps and the
+// runners that ran them. A collector beside the program is the commonest way to run one. Never repeated in a refusal, and refused with a user, since a URL can carry a
+// password and nothing here would send it as one.
+func (r *reader) otlpEndpoint() string {
+	v, set := r.value(OTLPEndpoint)
+	if !set {
+		return ""
+	}
+	if _, has := userinfo(v); has {
+		r.refuse(OTLPEndpoint, "carries a user, and the collector is sent spans with no credential: one reached across a network is reached over https")
+		return ""
+	}
+	u, err := url.Parse(v)
+	switch {
+	case err != nil || u.Host == "" || u.Opaque != "":
+		r.refuse(OTLPEndpoint, "is not a URL with a host, such as http://localhost:4318"+unparsed)
+		return ""
+	case strings.ContainsAny(v, "?#"):
+		r.refuse(OTLPEndpoint, "carries a query or a fragment, even an empty one, and the spans are posted to a path below it, /v1/traces")
+		return ""
+	case u.Scheme == "https":
+	case u.Scheme == "http" && loopback(u.Hostname()):
+	default:
+		r.refuse(OTLPEndpoint, "is not an https URL, and a span, which names a namespace, a workflow and its steps, is never sent in plaintext across a network: http is taken for a loopback address alone, such as a collector beside the controller")
+		return ""
+	}
+	return strings.TrimRight(v, "/")
+}
+
+// loopback says whether a host is this machine.
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // listen is the address the API listens on, a host and a port as net.Listen takes them.

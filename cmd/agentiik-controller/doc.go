@@ -22,8 +22,9 @@
 // Only its environment, read by config.ReadController: the database it connects to as the
 // application role, the bus and the control plane's credential, the object-store directory,
 // AGK_MAX_REQUEUES, AGK_TASK_CEILING, the sink the audit log is exported to, which is the one
-// setting it starts without, saying so, and where it answers its metrics, AGK_METRICS_LISTEN, with
-// the hash of the token a scrape bears in the file AGK_METRICS_TOKEN_FILE names. It takes no
+// setting it starts without, saying so, where it answers its metrics, AGK_METRICS_LISTEN, with the
+// hash of the token a scrape bears in the file AGK_METRICS_TOKEN_FILE names, and AGK_OTLP_ENDPOINT,
+// the OpenTelemetry collector every ended run's trace is sent to, where one is named. It takes no
 // argument, since a flag would be a second way to say what the environment says and a Compose file,
 // a systemd unit and a container platform all set an environment the same way. A setting that
 // refuses the start is named, with every other one that does, and nothing is opened.

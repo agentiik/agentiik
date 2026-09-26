@@ -603,6 +603,162 @@ func TestAWorkflowOutputIsItsEnvelope(t *testing.T) {
 	}
 }
 
+// "Every step keeps its input and output envelopes, readable as they are": what a step published on
+// a port is read by the step and the port, whether or not a workflow output is a view of it, under
+// run:read_data, and is 410 once its run's envelopes were purged.
+func TestWhatAStepPublishedIsReadAsItIs(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	envelope := anEnvelope(run)
+	s.finished(t, run, envelope)
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	h := s.servedTo(t, granted{
+		"alice": {{api.RunReadData, invoicing}},
+		"dave":  {{api.RunRead, invoicing}, {api.WorkflowRun, invoicing}},
+	})
+
+	path := "/api/v1/runs/" + run + "/steps/archive/outputs/ok"
+	w, _ := call(t, h, "GET", path, "alice", nil)
+	var want bytes.Buffer
+	envelope.Encode(&want)
+	if w.Code != http.StatusOK || w.Body.String() != want.String() || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("the port answered %d %q: %s, want %s", w.Code, w.Header().Get("Content-Type"), w.Body, want.String())
+	}
+
+	absent, _ := call(t, h, "GET", "/api/v1/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ/steps/archive/outputs/ok", "alice", nil)
+	refused, _ := call(t, h, "GET", path, "dave", nil)
+	if refused.Code != http.StatusNotFound || refused.Body.String() != absent.Body.String() {
+		t.Errorf("dave, holding run:read and not run:read_data, was answered %d %s, and a run nobody started %s", refused.Code, refused.Body, absent.Body)
+	}
+	for _, path := range []string{
+		"/api/v1/runs/" + run + "/steps/archive/outputs/rejected",
+		"/api/v1/runs/" + run + "/steps/normalize/outputs/ok",
+		"/api/v1/runs/" + run + "/steps/notify/outputs/ok",
+		"/api/v1/runs/" + run + "/steps/%ff/outputs/ok",
+		"/api/v1/runs/" + run + "/steps/archive/outputs/%ff",
+		"/api/v1/runs/" + s.finance[1] + "/steps/archive/outputs/ok",
+	} {
+		if w, _ := call(t, h, "GET", path, "alice", nil); w.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d: %s", path, w.Code, w.Body)
+		}
+	}
+
+	s.sql(t, `update steps set envelopes_purged_at = now() where run_id = $1`, run)
+	if w, _ := call(t, h, "GET", path, "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("a port whose envelope was purged answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// handed dispatches one shard of archive, attempt and index given of two, handed envelope on orders,
+// as the controller dispatches it: the envelope in the store, the task's row, and its grant.
+func (s someRuns) handed(t *testing.T, run, row string, attempt, shard int, envelope agk.Envelope) string {
+	t.Helper()
+	digest, size, err := artifact.PutEnvelope(t.Context(), s.objects, "finance", envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sql(t, `insert into tasks (namespace, id, run_id, step, attempt, shard_index, shard_of, state)
+		values ('finance', $1, $2, 'archive', $3, $4, 2, 'dispatched')`, row, run, attempt, shard)
+	err = s.pool.Installation(t.Context(), db.ControllerSweep, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.IssueGrant(ctx, "finance", agk.NewTaskID(agk.RunID(run), "archive", attempt, agk.Shard{Index: shard, Of: 2}), row,
+			db.GrantScope{Run: agk.RunID(run), Step: "archive", Inputs: []db.GrantInput{{Port: "orders", Digest: digest, Items: len(envelope.Items), Size: size}}},
+			time.Now().UTC().Add(time.Hour))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+// What a dispatch was handed on an input port is read by the step, the port, and the attempt and
+// shard the run lists it under, the last attempt where none is named; the run names its digest to
+// run:read, and its contents are run:read_data's.
+func TestWhatADispatchWasHandedIsReadAsItIs(t *testing.T) {
+	s := withSomeRuns(t)
+	run := s.finance[0]
+	slice := func(customer string) agk.Envelope {
+		e := anEnvelope(run)
+		e.Meta.Step, e.Meta.Port = "normalize", "ok"
+		e.Items[0].Data = map[string]any{"customer_id": customer}
+		return e
+	}
+	first, second, retried := slice("C-1"), slice("C-2"), slice("C-3")
+	s.handed(t, run, "01M2T1AAAAAAAAAAAAAAAAAAAA", 1, 1, first)
+	s.handed(t, run, "01M2T2AAAAAAAAAAAAAAAAAAAA", 1, 2, second)
+	retriedDigest := s.handed(t, run, "01M2T3AAAAAAAAAAAAAAAAAAAA", 2, 1, retried)
+	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
+	h := s.servedTo(t, granted{
+		"alice": {{api.RunReadData, invoicing}, {api.RunRead, invoicing}},
+		"dave":  {{api.RunRead, invoicing}},
+	})
+
+	base := "/api/v1/runs/" + run + "/steps/archive/inputs/orders"
+	for query, want := range map[string]agk.Envelope{
+		"?attempt=1&shard=1": first,
+		"?attempt=1&shard=2": second,
+		"?shard=1":           retried,
+		"?attempt=2&shard=1": retried,
+	} {
+		var encoded bytes.Buffer
+		want.Encode(&encoded)
+		if w, _ := call(t, h, "GET", base+query, "alice", nil); w.Code != http.StatusOK || w.Body.String() != encoded.String() {
+			t.Errorf("%s answered %d: %s, want %s", query, w.Code, w.Body, encoded.String())
+		}
+	}
+
+	absent, _ := call(t, h, "GET", "/api/v1/runs/01M2ZZZZZZZZZZZZZZZZZZZZZZ/steps/archive/inputs/orders?shard=1", "alice", nil)
+	refused, _ := call(t, h, "GET", base+"?shard=1", "dave", nil)
+	if refused.Code != http.StatusNotFound || refused.Body.String() != absent.Body.String() {
+		t.Errorf("dave, holding run:read and not run:read_data, was answered %d %s, and a run nobody started %s", refused.Code, refused.Body, absent.Body)
+	}
+	for path, want := range map[string]int{
+		base:                                 http.StatusNotFound,
+		base + "?shard=1&attempt=3":          http.StatusNotFound,
+		base + "?shard=0":                    http.StatusBadRequest,
+		base + "?attempt=first":              http.StatusBadRequest,
+		base + "?attempt=3000000000&shard=1": http.StatusBadRequest,
+		base + "?shard=99999999999":          http.StatusBadRequest,
+		"/api/v1/runs/" + run + "/steps/archive/inputs/invoices?shard=1": http.StatusNotFound,
+		"/api/v1/runs/" + run + "/steps/normalize/inputs/orders":         http.StatusNotFound,
+		"/api/v1/runs/" + run + "/steps/notify/inputs/orders":            http.StatusNotFound,
+	} {
+		if w, _ := call(t, h, "GET", path, "alice", nil); w.Code != want {
+			t.Errorf("%s answered %d, want %d: %s", path, w.Code, want, w.Body)
+		}
+	}
+
+	// The run lists every dispatch with what it was handed, by digest, to run:read alone.
+	w, _ := call(t, h, "GET", "/api/v1/runs/"+run, "dave", nil)
+	var detail struct {
+		Tasks []struct {
+			Task   string                    `json:"task"`
+			Inputs map[string]map[string]any `json:"inputs"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("the run answered %d: %s", w.Code, w.Body)
+	}
+	listed := 0
+	for _, task := range detail.Tasks {
+		if task.Task != string(agk.NewTaskID(agk.RunID(run), "archive", 2, agk.Shard{Index: 1, Of: 2})) {
+			continue
+		}
+		listed++
+		if orders := task.Inputs["orders"]; orders["digest"] != retriedDigest || orders["items"] != 1.0 || orders["size"] == nil {
+			t.Errorf("the retried dispatch lists orders as %v, and it was handed %s", orders, retriedDigest)
+		}
+	}
+	if listed != 1 {
+		t.Errorf("the run lists the retried dispatch %d times: %s", listed, w.Body)
+	}
+
+	s.sql(t, `update steps set envelopes_purged_at = now() where run_id = $1`, run)
+	if w, _ := call(t, h, "GET", base+"?shard=1", "alice", nil); w.Code != http.StatusGone {
+		t.Errorf("an input whose envelope was purged answered %d: %s", w.Code, w.Body)
+	}
+}
+
 // anArtifact records one artifact of run on archive/ok, with the fetch budget given, and puts its
 // bytes in the store.
 func (s someRuns) anArtifact(t *testing.T, run, name string, fetches int, content []byte) agk.URI {

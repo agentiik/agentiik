@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,5 +242,109 @@ func TestTheProgramTakesNoArgument(t *testing.T) {
 	stdout.Reset()
 	if code := run(t.Context(), []string{"--version"}, nil, &stdout, &stderr); code != exitStopped || !strings.HasPrefix(stdout.String(), program+" ") {
 		t.Errorf("--version exited %d printing %q", code, stdout.String())
+	}
+}
+
+// AGK_OTLP_ENDPOINT reaches the core as the collector every ended run's trace is posted to, under
+// this program's name: here a run whose one task is lost and, under AGK_MAX_REQUEUES=0, never
+// handed out again, which fails it. Its trace is the run's, its span the lost dispatch's task_id's,
+// the one the runner told its container, and the namespace is on both.
+func TestAGKOTLPEndpointIsSentTheTraceOfARunThatEnded(t *testing.T) {
+	var mu sync.Mutex
+	var posted []string
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		posted = append(posted, r.URL.Path+" "+string(body))
+		mu.Unlock()
+	}))
+	defer collector.Close()
+
+	read, err := config.ReadController(environment(t, map[string]string{
+		config.MaxRequeues: "0", config.OTLPEndpoint: collector.URL,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, super := dbtest.Open(t)
+	seeded(t, pool, super)
+	versions, err := version.New(pool, version.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := controller.New(pool, "tracing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := pool.BeginTerm(t.Context(), "tracing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exporter, err := tracer(read, "tracing", slog.New(slog.DiscardHandler))
+	if err != nil || exporter == nil {
+		t.Fatalf("a controller given %s built the exporter %v: %v", config.OTLPEndpoint, exporter, err)
+	}
+	q := &heard{}
+	o := options(read, q, versions)
+	o.Tracer = exporter
+	now := time.Date(2026, 9, 24, 6, 0, 0, 0, time.UTC)
+	o.Now = func() time.Time { return now }
+	core, err := controller.NewCore(ctl, tm, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := started(t, pool, goodCommit)
+	if err := core.Decide(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	sent := q.taken()
+	if len(sent) != 1 {
+		t.Fatalf("the first pass handed out %d tasks", len(sent))
+	}
+	if err := ctl.Fenced(t.Context(), tm, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.Redeem(ctx, sent[0].Grant, sent[0].Task.ID, "runner-1", now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(db.LostAfter + time.Second)
+	if err := core.Wake(t.Context(), controller.Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := exporter.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(posted) != 1 {
+		t.Fatalf("the collector was sent %d requests, want the one trace of the run that failed", len(posted))
+	}
+	trace, root := run.Trace()
+	for _, want := range []string{
+		"/v1/traces ",
+		`"key":"service.name","value":{"stringValue":"agentiik-controller"}`,
+		`"traceId":"` + trace.String() + `"`,
+		`"spanId":"` + root.String() + `"`,
+		`"spanId":"` + agk.TaskSpan(sent[0].Row).String() + `","startTimeUnixNano"`,
+		`"key":"agentiik.namespace","value":{"stringValue":"finance"}`,
+		`"key":"agentiik.state","value":{"stringValue":"lost"}`,
+		`"key":"agentiik.state","value":{"stringValue":"failed"}`,
+	} {
+		if !strings.Contains(posted[0], want) {
+			t.Errorf("the collector was sent\n%s\nwhich does not hold %s", posted[0], want)
+		}
+	}
+}
+
+// With no AGK_OTLP_ENDPOINT, nothing is built, so the core is handed nothing to call.
+func TestNoAGKOTLPEndpointBuildsNoExporter(t *testing.T) {
+	read, err := config.ReadController(environment(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := tracer(read, "tracing", slog.New(slog.DiscardHandler)); e != nil || err != nil {
+		t.Fatalf("a controller given no %s built %v, %v", config.OTLPEndpoint, e, err)
 	}
 }

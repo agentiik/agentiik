@@ -46,6 +46,7 @@ type Core struct {
 	ceiling  time.Duration
 	requeues int
 	now      func() time.Time
+	tracer   Tracer
 	observer Observer
 }
 
@@ -105,6 +106,11 @@ type Options struct {
 	// costs its key one requeue however the host comes back.
 	MaxRequeues *int
 
+	// Tracer is where the trace of a run goes once the run has ended. Nil is no tracing, and
+	// then nothing is read or built for it: an installation that configured no collector pays
+	// nothing for one.
+	Tracer Tracer
+
 	// Observer is told what was dispatched, retried, lost and ended, once it is written down.
 	// Nil counts nothing.
 	Observer Observer
@@ -143,7 +149,7 @@ func NewCore(c *Controller, term db.Term, o Options) (*Core, error) {
 		controller: c, term: term,
 		queue: o.Queue, versions: o.Versions, objects: o.Objects,
 		limits: o.Limits, ceiling: o.Ceiling, requeues: requeues, now: o.Now,
-		observer: o.Observer,
+		observer: o.Observer, tracer: o.Tracer,
 	}, nil
 }
 
@@ -382,6 +388,10 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// repeatable: a stop that arrives twice stops a task that is already stopping, and a
 	// message that arrives twice carries a key a runner has already seen.
 	sent, sentTo := co.hand(ctx, e.Namespace, run, plan)
+	if saved != e.Seq && state.Run.State.Terminal() {
+		// The pass that ended the run, and its trace goes once the stops have.
+		co.traced(ctx, e.Namespace, run)
+	}
 	if len(sent) == 0 {
 		if saved != e.Seq {
 			return nil
@@ -612,9 +622,10 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 		if err != nil {
 			return Dispatch{}, fmt.Errorf("the input on %s could not be written: %w", port, err)
 		}
-		d.Inputs[port] = InputRef{Digest: ref.Digest, Items: e.Meta.Count}
+		d.Inputs[port] = InputRef{Digest: ref.Digest, Items: e.Meta.Count, Size: ref.Size}
 	}
 
+	var rewrite []string
 	err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		// The pool's policy before the grant, so that a task no runner may be handed is
 		// given no credential either, and read in the transaction that issues it.
@@ -632,11 +643,25 @@ func (co *Core) dispatchOf(ctx context.Context, namespace string, t graph.Task) 
 		if err != nil {
 			return err
 		}
-		d.Grant = granted.Clear
+		d.Grant, rewrite = granted.Clear, granted.Rewrite
 		return nil
 	})
 	if err != nil {
 		return Dispatch{}, err
+	}
+	// And again for any input a sweep had claimed while the grant was counting it, or had
+	// collected whole since put found it in the store: the count keeps any sweep away from it
+	// now, and the bytes may be what that one is about to delete or has deleted.
+	for _, digest := range rewrite {
+		for port, ref := range d.Inputs {
+			if ref.Digest != digest {
+				continue
+			}
+			if err := putAgain(ctx, namespace, co.objects, digest, t.Inputs[port]); err != nil {
+				return Dispatch{}, fmt.Errorf("the input on %s could not be written again: %w", port, err)
+			}
+			break
+		}
 	}
 	return d, nil
 }
@@ -662,7 +687,7 @@ func scopeOf(t graph.Task, inputs map[agk.Port]InputRef) db.GrantScope {
 	for _, port := range ports {
 		ref := inputs[port]
 		scope.Inputs = append(scope.Inputs, db.GrantInput{
-			Port: port, Digest: ref.Digest, Items: ref.Items,
+			Port: port, Digest: ref.Digest, Items: ref.Items, Size: ref.Size,
 		})
 	}
 	// Each with the mount the evaluator resolved from the manifest, which is the one the task

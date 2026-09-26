@@ -27,7 +27,12 @@ import (
 //	the key could not be written down   AgainAfter, for another runner of the pool
 //	an image not named by digest        report that no container ran, then Refused, before
 //	                                    the key is written down or anything is redeemed
+//	a namespace AGK_RUNNER_NAMESPACES   AgainAfter, before the key is written down or anything
+//	leaves out, or more than the host   is redeemed
+//	has room for with what it holds
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
+//	a drain ordered since the take      Release and Again, before anything is redeemed, unless
+//	                                    an earlier agent here took the key, which may be bound
 //	200                                 Held, then assemble, run and report
 //	403                                 Release and AgainAfter, for another runner of the pool
 //	409                                 Refused and Release, and nothing reported
@@ -36,7 +41,9 @@ import (
 //	                                    report timed_out with no container ran, Refused, Release
 //
 // Nothing is put back once a redemption may have bound the task: a message is put back only before
-// the redemption and after a 403, which binds nothing, and held back a moment from every runner.
+// the redemption and after a 403, which binds nothing. It is held back a moment from every runner,
+// but for one put back because a drain was ordered, which goes to another runner of the pool at
+// once: this one takes nothing while the order stands, so it cannot come straight back here.
 
 // Queue is the task bus as the loop uses it, which is bus.Bus.
 type Queue interface {
@@ -71,6 +78,13 @@ type Loop struct {
 	// was published to is not for that reason a runner the task may run on.
 	Labels []string
 
+	// Namespaces are the namespaces this host takes work of, AGK_RUNNER_NAMESPACES, and nil is
+	// every namespace its pool accepts. Capacity is what this host declares, and a task that would
+	// take it past that with what the loop already holds is put back: "oversubscription is a
+	// choice, not an accident". A part of it at zero bounds nothing.
+	Namespaces []string
+	Capacity   Room
+
 	Queue    Queue
 	Redeemer Redeemer
 	Holder   Holder
@@ -92,8 +106,21 @@ type Loop struct {
 	// Draining answers whether the last heartbeat ordered this runner to drain, "take nothing
 	// new; finish what is held". Nil is never. While it answers true the loop takes nothing, and
 	// what it already holds runs on to its answer; a message a take in flight hands it meanwhile
-	// is refused at the redemption with 403 and put back, as the table says.
+	// is put back before it is redeemed, and one whose redemption was already asked is refused
+	// with 403 and put back, as the table says.
 	Draining func() bool
+
+	// Revoked answers whether the last heartbeat said this runner is revoked, which it never comes
+	// back from. Once a revoked loop holds nothing and every result it kept is published, Run
+	// returns ErrRevoked: nothing is left for it to do in its grace, and the one way it serves again
+	// is by joining again. Nil is never.
+	Revoked func() bool
+
+	// HeldBefore answers whether an earlier agent on this host took a key and never ended it,
+	// which the driver's record listed when this one started. Such a key may be bound here, its
+	// container still running, and the API answers its holder's redemption while it drains, so a
+	// drain puts back only the messages of other keys. Nil is none.
+	HeldBefore func(key string) bool
 
 	// LetGo is told each key the loop no longer holds, once its task is answered or given up,
 	// which is the agent's Stops forgetting a stop sent for it: the message may come round to
@@ -101,8 +128,8 @@ type Loop struct {
 	LetGo func(key string)
 
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
-	// an answer that may change, and how long a message put back is held back and the loop takes
-	// nothing more. Zero is takeWait and retryFirst.
+	// an answer that may change, and how long a message put back is held back and, but for one
+	// put back for want of room, the loop takes nothing more. Zero is takeWait and retryFirst.
 	Wait  time.Duration
 	Retry time.Duration
 
@@ -111,6 +138,7 @@ type Loop struct {
 
 	mu    sync.Mutex
 	held  map[string]int
+	using Room
 	quiet time.Time
 }
 
@@ -130,6 +158,17 @@ const (
 	// flushEvery is how often a result the bus did not take is published again.
 	flushEvery = 10 * time.Second
 )
+
+// ErrRevoked is what Run returns once a revoked runner has answered for everything it held.
+//
+// "Revoking a credential never destroys work already done": its grace is there for the results of
+// what it holds to be published, and once they are, an agent that stayed up would only wait for the
+// grace to end and every call to be refused. It is the end a refused credential is, since a
+// revocation is not undone and the one thing left is to join again, and the agent exits with the
+// status the unit's RestartPreventExitStatus= names for that, so that Restart=always does not start
+// it again.
+var ErrRevoked = errors.New("runner: this runner is revoked, and has answered for every task it held: " +
+	"it takes no work again, and serves again only once it joins again with agk-runner join --replace")
 
 // Held are the idempotency keys this loop holds: written down and not yet answered, a redemption
 // asked again or a container running among them. The heartbeat names them, with the keys of the
@@ -182,7 +221,8 @@ func (l *Loop) now() time.Time {
 }
 
 // Run takes work until ctx ends, and returns once every task it took has been answered or given
-// up with the agent.
+// up with the agent. A revoked runner's returns ErrRevoked once it holds nothing and every result
+// it kept is published, and a drained one's goes on taking nothing until the order is lifted.
 //
 // One goroutine takes, and one goroutine per task carries. A take is made only when there is room
 // and asks for as many tasks as there is room for, so a full host asks for nothing and a message it
@@ -202,8 +242,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		wait = takeWait
 	}
 
+	// Ended on the way out, before what is carried is waited for, so that the flush ends with
+	// a return that is not ctx's own: a revoked runner's.
 	var carrying sync.WaitGroup
 	defer carrying.Wait()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	carrying.Add(1)
 	go func() {
 		defer carrying.Done()
@@ -244,6 +288,12 @@ func (l *Loop) Run(ctx context.Context) error {
 		// a put back is held for, since the next heartbeat may lift the order.
 		if l.Draining != nil && l.Draining() {
 			free(room)
+			// Every slot free is nothing in hand, since a slot is held from the take
+			// until the task is answered, and no take is under way, since this goroutine
+			// makes them.
+			if room == l.Concurrency && l.Revoked != nil && l.Revoked() && len(l.Carrier.Results.Keys()) == 0 {
+				return ErrRevoked
+			}
 			if !sleep(ctx, l.retryFirst()) {
 				return nil
 			}
@@ -331,6 +381,24 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 
+	// Of the rest too, after the record for the same reason: a key this host has in flight is
+	// neither put back for another runner the moment it comes round nor counted twice against
+	// the host's capacity. A task too large is held back from every runner and does not pause
+	// this one, since the next message on the queue may well fit.
+	if l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+		return
+	}
+	if !l.accepts(m.Namespace) {
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since this host takes no work of namespace %s", m.TaskID, m.IdempotencyKey, m.Namespace))
+		return
+	}
+	need, fits, why := l.reserve(m)
+	if !fits {
+		l.holdBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool or a later take, since %s", m.TaskID, m.IdempotencyKey, why))
+		return
+	}
+	defer l.unreserve(need)
+
 	if l.answeredFromRecord(ctx, t, l.Holder.Hold(id)) {
 		return
 	}
@@ -340,6 +408,18 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 	if missing := uncovered(m.RunsOn, l.Labels); len(missing) > 0 {
 		l.Holder.Release(id)
 		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since it runs on %s and this runner does not claim it", m.TaskID, m.IdempotencyKey, strings.Join(missing, ", ")))
+		return
+	}
+	// A drain ordered while the message was on its way here, a take under way when the order
+	// came. Nothing is redeemed, so nothing is bound, and the message goes to another runner of
+	// the pool at once rather than to the redemption, whose 403 would say the same a round trip
+	// later, and hold the message back from every runner as a refusal does.
+	if l.Draining != nil && l.Draining() && (l.HeldBefore == nil || !l.HeldBefore(m.IdempotencyKey)) {
+		l.Holder.Release(id)
+		l.say(fmt.Sprintf("task %s (%s) is put back for another runner of the pool before it is redeemed, since this runner is ordered to drain", m.TaskID, m.IdempotencyKey))
+		if err := t.Again(); err != nil {
+			l.say(err.Error())
+		}
 		return
 	}
 	l.holding(m.IdempotencyKey)
@@ -419,13 +499,19 @@ func uncovered(runsOn, claimed []string) []string {
 // spin through its queue, writing keys down and redeeming grants as fast as the API answers. Held
 // back and paused, a runner refused everything asks for at most its free slots every Retry.
 func (l *Loop) putBack(t bus.Taken, why string) {
+	l.holdBack(t, why)
+	l.mu.Lock()
+	l.quiet = l.now().Add(l.retryFirst())
+	l.mu.Unlock()
+}
+
+// holdBack puts a message back for another runner of the pool, held back a moment from every
+// runner, and leaves this loop taking.
+func (l *Loop) holdBack(t bus.Taken, why string) {
 	l.say(why)
 	if err := t.AgainAfter(l.retryFirst()); err != nil {
 		l.say(err.Error())
 	}
-	l.mu.Lock()
-	l.quiet = l.now().Add(l.retryFirst())
-	l.mu.Unlock()
 }
 
 // quietFor is how long the loop takes nothing more, after a message was put back.

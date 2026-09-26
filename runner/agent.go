@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,10 @@ import (
 // before anything here runs, and a start refused at any of those has made no call to the API.
 type Agent struct {
 	Config Config
+
+	// Capacity is what this host declares, which the loop puts back a task past, with what it
+	// already holds. Its zero value bounds nothing, which is a test's.
+	Capacity Room
 
 	// Driver is opened with Endings as its Observer and TaskLogs as its Logs, and Client is what
 	// each task's log is shipped through.
@@ -77,6 +82,13 @@ type Agent struct {
 //
 // A heartbeat answered 401 ends the agent with an error saying to join again: the credential opens
 // nothing, and an agent asking again for ever would only ask again.
+//
+// A drain order has it take nothing new, and a message taken as the order came is put back before
+// it is redeemed. What it holds is carried to its result, and a drained runner then stays up, idle
+// and reporting draining, until the order is lifted or it is revoked. A revoked one returns
+// ErrRevoked once it holds nothing and every result it kept is published, and one whose grace
+// ends first is answered 401 at its next heartbeat, which ends it saying to join again: the grace
+// is the most it is given, and not something it waits out.
 func Serve(ctx context.Context, a Agent) error {
 	switch {
 	case a.Driver == nil:
@@ -95,9 +107,9 @@ func Serve(ctx context.Context, a Agent) error {
 	if len(a.Config.Namespaces) > 0 {
 		namespaces = strings.Join(a.Config.Namespaces, ", ")
 	}
-	say(fmt.Sprintf("agk-runner %s serving as %s in pool %s: %d tasks at once under %s, labels %s, namespaces %s, the daemon speaking API %s",
+	say(fmt.Sprintf("agk-runner %s serving as %s in pool %s: %d tasks at once under %s, labels %s, namespaces %s, declaring %s, the daemon speaking API %s",
 		Version(), a.Config.Runner, a.Config.Pool, a.Config.Concurrency, a.Config.WorkDir,
-		strings.Join(a.Config.Labels, ","), namespaces, a.Driver.APIVersion()))
+		strings.Join(a.Config.Labels, ","), namespaces, a.Capacity, a.Driver.APIVersion()))
 
 	// A stop that arrived while the agent was starting is not followed by a ready it would
 	// contradict.
@@ -166,7 +178,7 @@ func Serve(ctx context.Context, a Agent) error {
 	if a.Key != nil {
 		rotator := NewRotator(a.Client, a.Config.Runner, a.Key, a.CredentialFile, a.Held)
 		rotator.Log = say
-		rotator.Revoked = func() bool { return !beat.Drain().ResultsAcceptedUntil.IsZero() }
+		rotator.Revoked = beat.Revoked
 		var rotating sync.WaitGroup
 		defer rotating.Wait()
 		defer stop(nil)
@@ -258,12 +270,13 @@ func Serve(ctx context.Context, a Agent) error {
 
 // parts are the agent's loop, heartbeat and stops, bound to each other: the heartbeat names what the
 // loop holds and every result kept, the loop takes nothing while the heartbeat's last answer orders
-// a drain, and a key the heartbeat's answer cancels is stopped through the same Stops as one heard
+// a drain and ends once a revoked runner has answered for what it held, and a key the heartbeat's answer cancels is stopped through the same Stops as one heard
 // on the bus, which stops what the loop and the earlier agent hold. The loop's bus and progress are
 // given once the bus is open.
 func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (*Loop, *Heartbeat, *Stops) {
 	loop := &Loop{
 		Runner: a.Config.Runner, Pool: a.Config.Pool, Concurrency: a.Config.Concurrency, Labels: a.Config.Labels,
+		Namespaces: a.Config.Namespaces, Capacity: a.Capacity,
 		Redeemer: a.Client, Holder: a.Driver,
 		Carrier: &Carrier{
 			Runner: a.Config.Runner, Driver: a.Driver, Endings: a.Endings, Results: results,
@@ -293,6 +306,8 @@ func (a Agent) parts(results *Results, earlier []agk.TaskID, say func(string)) (
 		Stopper: stops, Log: say, Every: a.every,
 	}
 	loop.Draining = func() bool { return beat.Drain().Ordered }
+	loop.Revoked = beat.Revoked
+	loop.HeldBefore = func(key string) bool { return slices.Contains(earlier, agk.TaskID(key)) }
 	loop.LetGo = stops.Forget
 	return loop, beat, stops
 }
