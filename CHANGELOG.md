@@ -13,7 +13,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### State
 
-- Migration 0032 adds the v0.3.0 identity and access tables: `principals`, `users`, `credentials`, `groups`, `group_members`, `service_accounts`, `api_tokens`, `sessions`, `enrolment_codes`, `grants` under row level security, `auth_policy` and `bootstrap`; `namespaces` gains `kind`, `owner`, `max_runs_per_hour`, `max_artifact_bytes`, `max_run_duration` and `allowed_runner_pools`. Nothing reads them yet, and `init` applies it to a v0.2.5 database at the next `docker compose up` with every row kept as it was.
+- Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 
 ### Tests
 

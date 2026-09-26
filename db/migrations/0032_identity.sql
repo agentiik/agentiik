@@ -66,12 +66,13 @@ create table principals (
   created_at timestamptz not null default now(),
   unique (id, kind),
 
-  -- A login is also the name of its owner's personal namespace, and operator names the v0.2
-  -- operator on old rows, so a user of that name would read as their author.
+  -- A login is also the name of its owner's personal namespace. operator names the v0.2 operator
+  -- on old rows, and installation the migration that created the pool default, so a user of
+  -- either name would read as their author.
   constraint principals_id_check check (
     case kind
       when 'user' then
-        agentiik_given_name(id) and not agentiik_reserved(id) and id <> 'operator'
+        agentiik_given_name(id) and not agentiik_reserved(id) and id not in ('operator', 'installation')
       when 'group' then
         id like 'group:%' and agentiik_given_name(substr(id, 7))
         and not agentiik_reserved(substr(id, 7))
@@ -132,9 +133,13 @@ create table service_accounts (
   name       text not null,
   kind       text not null default 'service_account' check (kind = 'service_account'),
   principal  text not null generated always as (namespace || '/' || name) stored,
-  created_by text not null check (created_by <> ''),
+  -- Who created it, and nobody for the namespace's built-in identity, NS/agentiik, which the
+  -- installation creates with the namespace. agentiik names the built-in identity in every
+  -- namespace and no other service account.
+  created_by text check (created_by <> ''),
   created_at timestamptz not null default now(),
   primary key (namespace, name),
+  constraint service_accounts_built_in check ((name = 'agentiik') = (created_by is null)),
   foreign key (principal, kind) references principals (id, kind) on delete cascade
 );
 
@@ -225,23 +230,26 @@ create table api_tokens (
   device_label   text check (length(device_label) between 1 and 256),
   created_at     timestamptz not null default now(),
   -- Every token expires, a year after it was minted at most, so that no token is a credential
-  -- for good and every one is renewed by somebody who still means it.
+  -- for good and every one is renewed by somebody who still means it. A year counted in any time
+  -- zone, a leap day and a change of clock included, is less than 367 days of 24 hours, which is
+  -- the bound held here, and the API holds the exact rule.
   expires_at     timestamptz not null,
   last_used_at   timestamptz,
   revoked_at     timestamptz,
-  constraint api_tokens_expiry check (expires_at > created_at and expires_at <= created_at + interval '1 year'),
+  constraint api_tokens_expiry check (expires_at > created_at and expires_at <= created_at + interval '8808 hours'),
   foreign key (principal, principal_kind) references principals (id, kind) on delete cascade
 );
 
 create index api_tokens_by_principal on api_tokens (principal);
 
--- A code that lets one user enrol a passkey and nothing else: the first administrator's, made
--- with the bootstrap token, or a recovery code an administrator issues. Kept as its SHA-256,
--- single use, and good for an hour.
+-- A code that lets one user enrol a passkey and nothing else: the first administrator's link, made
+-- with the bootstrap token; the link a new user is given, which an administrator issues and issues
+-- again while the user holds no credential; or a recovery code an administrator issues. Kept as
+-- its SHA-256, single use, and good for an hour.
 create table enrolment_codes (
   hash       bytea primary key check (octet_length(hash) = 32),
   login      text not null references users (login) on delete cascade,
-  kind       text not null check (kind in ('first-administrator', 'recovery')),
+  kind       text not null check (kind in ('first-administrator', 'enrolment', 'recovery')),
   -- Who issued it: an administrator's login, or operator for the bootstrap token.
   issued_by  text not null check (issued_by <> ''),
   issued_at  timestamptz not null default now(),
@@ -255,18 +263,23 @@ create table enrolment_codes (
 );
 
 -- One code of each kind open for a user at a time, so that a link issued again leaves the one it
--- replaced unusable rather than beside it.
+-- replaced unusable rather than beside it. And one first administrator's link open across the
+-- installation, whoever it is for: a fresh link revokes the one before it even where the login
+-- was mistyped, so that no link made with the bootstrap token is left open beside the one used.
 create unique index enrolment_codes_one_open on enrolment_codes (login, kind)
   where used_at is null and revoked_at is null;
+create unique index enrolment_codes_one_first_administrator on enrolment_codes (kind)
+  where kind = 'first-administrator' and used_at is null and revoked_at is null;
 
 -- A console session: an opaque identifier in a cookie, kept as its SHA-256. It records what opened
 -- it, a credential or an enrolment code, so that a session that may only enrol a passkey is known
 -- as one on the server and not by convention. Removing that credential ends the session with it.
+-- A code opens one session at most, which lives no longer than the code is good for.
 create table sessions (
   hash            bytea primary key check (octet_length(hash) = 32),
   login           text not null references users (login) on delete cascade,
   credential      text,
-  enrolment_code  bytea,
+  enrolment_code  bytea unique,
   created_at      timestamptz not null default now(),
   idle_expires_at timestamptz not null,
   revoked_at      timestamptz,
@@ -305,6 +318,41 @@ alter table namespaces
   -- A personal namespace is named after its owner's login, so its owner is that user: no group
   -- and no service account is written without a colon or a slash.
   add constraint namespaces_personal_owner check (kind = 'shared' or owner is not distinct from name);
+
+-- Logins and namespace names share one name space: a login is refused where a namespace of that
+-- name exists, and a namespace where a login does, but for the user's own personal namespace. A
+-- user's personal namespace is named after their login, and a namespace created first would take
+-- it from them.
+--
+-- Held here rather than by whoever creates either, because a check made before an insert cannot
+-- hold it: a user and a namespace of one name created at the same moment would each find the other
+-- missing. Both checks take the same lock, held until the transaction ends, so the second waits for
+-- the first to commit and then sees it. The number is the bytes of "names", 0x6e616d6573, written as
+-- a literal so that a person can search for it.
+create function agentiik_names_are_shared() returns trigger
+  language plpgsql
+  as $$
+begin
+  perform pg_advisory_xact_lock(474080961907);
+  if tg_table_name = 'users' then
+    if exists (select from namespaces where name = new.login) then
+      raise exception 'the login % is the name of a namespace, and logins and namespaces share one name space', new.login
+        using errcode = 'unique_violation', constraint = 'logins_and_namespaces';
+    end if;
+  elsif exists (select from users where login = new.name)
+        and not (new.kind = 'personal' and new.owner is not distinct from new.name) then
+    raise exception 'the namespace % is the login of a user, and logins and namespaces share one name space', new.name
+      using errcode = 'unique_violation', constraint = 'logins_and_namespaces';
+  end if;
+  return new;
+end
+$$;
+
+create trigger users_share_names_with_namespaces before insert on users
+  for each row execute function agentiik_names_are_shared();
+
+create trigger namespaces_share_names_with_logins before insert on namespaces
+  for each row execute function agentiik_names_are_shared();
 
 -- One principal, one scope, and one role or one denied permission.
 --
@@ -367,6 +415,21 @@ create unique index auth_policy_installation on auth_policy ((namespace is null)
 
 insert into auth_policy (password, passkey, user_verification, device_bound_only, min_passkeys)
   values ('allowed', 'required', 'required', false, 2);
+
+-- The installation's row is kept, since a policy nothing is inherited from cannot be absent.
+create function auth_policy_installation_is_kept() returns trigger
+  language plpgsql
+  as $$
+begin
+  if old.namespace is null then
+    raise exception 'the installation''s authentication policy is kept, and changed rather than removed';
+  end if;
+  return old;
+end
+$$;
+
+create trigger auth_policy_installation_is_kept before delete on auth_policy
+  for each row execute function auth_policy_installation_is_kept();
 
 -- The bootstrap token and whether it has ended. The v0.2.5 operator token becomes the bootstrap
 -- token: it works as it did until the first administrator has enrolled a passkey, and then never

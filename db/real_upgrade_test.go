@@ -208,7 +208,7 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 	var enrolled *time.Time
 	var password, passkey string
 	var minPasskeys int
-	err = pool.Installation(ctx, NamespaceAdministration, func(ctx context.Context, w *Wide) error {
+	err = pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
 		if err := w.tx.QueryRow(ctx, `select token_hash, enrolled_at from bootstrap`).Scan(&hash, &enrolled); err != nil {
 			return err
 		}
