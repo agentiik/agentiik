@@ -4,6 +4,7 @@
 //
 //	agentiik-api serve                 serve every route
 //	agentiik-api migrate               apply the migrations and create the application role
+//	agentiik-api init                  prepare an installation, and bring it in line with its settings
 //	agentiik-api bus-init DIR          create the installation's NATS operator and accounts
 //	agentiik-api bus-credential DIR    mint the control plane a new bus credential
 //	agentiik-api audit-verify FILE     verify an export of the audit log
@@ -40,6 +41,11 @@
 // itself, 1.3 where the client speaks it and 1.2 at the least. The certificate is read once, at
 // start, so a renewed one is served from the next restart.
 //
+// AGK_PROXY_URL names a proxy on this host that terminates TLS in front of it. The API is then
+// reached at that URL, and serves plain HTTP on the loopback at AGK_LISTEN's port, leaving
+// AGK_PUBLIC_URL and the certificate unread, so that one environment, a Compose file's, serves
+// either way and setting that one variable chooses.
+//
 // At SIGINT or SIGTERM it stops taking connections, ends the log streams at once so that their
 // readers resume at another API, and finishes the requests being answered, for up to thirty
 // seconds, then cuts what is left.
@@ -60,6 +66,24 @@
 // It reads config.ReadMigration and runs db.Provision as the role AGK_MIGRATE_DATABASE_URL names:
 // the migrations, then the NOSUPERUSER NOBYPASSRLS role AGK_DATABASE_URL names, with the password
 // in AGK_DATABASE_PASSWORD_FILE. Running it again applies nothing and changes nothing.
+//
+// # init
+//
+// init prepares an installation in the directory AGK_INIT_DIR names, whose subdirectories are
+// what each service mounts, and brings it back in line with its settings at every run, so that a
+// Compose file runs it before every other service at every start. It makes the certificate for
+// AGK_INIT_HOST, ECDSA P-256 and valid 825 days, and makes it again where the host changed or it
+// expired; the master key, the presign key and the database password, once; the bus identity,
+// once, as bus-init does, renewing the control plane's credential from when the API would warn of
+// it, and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of
+// one it mints and prints once where none is set and none was stored; the migration, as migrate
+// does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
+// namespace create does; and a join token of the pool default for the runner beside it, issued
+// through the database since the API is not serving yet. Each service is given its own copy of
+// what it reads, owned by uid 65532 where init runs as root.
+//
+// It is the one program that takes a secret as a value: the operator token, which a person sets
+// once in the file Docker Compose reads, and of which init writes the hash alone.
 //
 // # namespace
 //

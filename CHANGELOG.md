@@ -2,6 +2,13 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### API
+
+- `agentiik-api init` prepares an installation from `AGK_*` variables alone and brings it back in line with them at every run, for a Compose `init` service: certificate, keys, bus identity and `nats.conf`, migration, namespace, the operator token's hash, and a join token of the pool `default` for the local runner.
+- `AGK_PROXY_URL` puts the API behind a proxy on the same host: reached at that URL, plain HTTP on the loopback, `AGK_PUBLIC_URL` and the TLS pair left unread.
+
 ## v0.2.3, 2026-09-26
 
 - Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.
