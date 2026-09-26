@@ -702,7 +702,14 @@ func TestARedeemedTaskStaysAliveWhileTheAgentRunsAndIsLostThirtySecondsAfterItSt
 	if lost := in.swept(t, last.Add(db.LostAfter-time.Second)); lost != 0 {
 		t.Errorf("the sweep declared %d tasks lost within 30 seconds of the last heartbeat", lost)
 	}
-	if lost := in.swept(t, last.Add(db.LostAfter+time.Second)); lost != 1 {
+	// Swept until it is declared, as the controller sweeps every interval: the heartbeat the agent
+	// gave up on as it returned may still hold the task's row in the API's transaction, and the
+	// sweep passes over a row somebody holds and judges it on the next.
+	lost := 0
+	for deadline := time.Now().Add(10 * time.Second); lost == 0 && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+		lost = in.swept(t, last.Add(db.LostAfter+time.Second))
+	}
+	if lost != 1 {
 		t.Errorf("the sweep declared %d tasks lost 30 seconds after the agent stopped, want the one it held", lost)
 	}
 	if got := in.state(t, m.TaskID); got != "lost "+in.runner {
