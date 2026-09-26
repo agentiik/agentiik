@@ -42,7 +42,7 @@ The Docker Engine API is spoken with the standard library.
 
 ## Status
 
-`agk run --local` runs a whole workflow on one machine, which was v0.1.0, and `agk validate`, `agk graph` and `agk brick test` work beside it. v0.2.0, a server running it instead, is in progress: the controller, the bus, the API and the secret store exist as packages and `agk push` sends a version, but there is no server binary yet, so `agk run` without `--local`, `login`, `whoami`, `share`, `grants`, `logs` and `brick init` refuse and say why. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
+`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. Since v0.2.0 a server runs it instead: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it, as the operator whose token is in `AGENTIIK_TOKEN`. `login`, `whoami`, `share` and `grants` refuse and say why until principals arrive in v0.3.0, and `brick init` until its templates are released from `agentiik/bricks`. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
 
 ## Building and testing
 
@@ -59,7 +59,7 @@ CI runs the same four, and `gofmt -l .` passes only by printing nothing. Tests t
 - NATS: set `AGENTIIK_TEST_BUS_URL` to a server started with `-js`.
 - Docker: found through `DOCKER_HOST`, then the usual socket paths. The tests run their containers from `alpine:3.21`, and one that finds it missing skips rather than pull it. It is pulled from Docker Hub only as the base of a fixture build, or by `agk run --local` in the milestone test, and a test that comes before either still skips, so `docker pull alpine:3.21` first. `AGENTIIK_TEST_REQUIRE_DOCKER=1`, which CI sets, fails a test that would otherwise skip for want of the daemon or the image.
 
-`cmd/agk/milestone_test.go` is the proof of v0.1.0: a workflow with a fan-out and a merge, run twice against the real daemon, producing the same envelopes.
+`cmd/agk/milestone_test.go` is the proof of v0.1.0: a workflow with a fan-out and a merge, run twice against the real daemon, producing the same envelopes. `e2e/` is the proof of v0.2.0: it stands up a test installation from the checkout when `AGENTIIK_E2E=1`, and its two gate tests run one workflow locally and on the installation to the same envelopes, and kill a runner mid-step without losing the run.
 
 A plain `go build` gives an `agk` with no embedded helper; `--helper <path>` or `$AGK_HELPER` supplies one to a script step, and `cmd/agk/internal/helper/bin/README.md` says how to build the binaries a release embeds.
 
