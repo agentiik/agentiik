@@ -302,10 +302,11 @@ func TestEverySettingIsHeldToItsGrammar(t *testing.T) {
 		{WorkDir, "work"},
 		{WorkDir, "./var/lib/agentiik/work"},
 	} {
-		text := strings.Replace(joined, "AGK_RUNNER_LABELS=zone=dmz,arch=amd64\n", "", 1)
-		vars := map[string]string{c.name: c.value}
-		if c.name != Labels {
-			vars[Labels] = "zone=dmz"
+		// Labels are written in runner.env, where join writes them, since a runner that joined
+		// claiming none is refused labels from the environment whatever they are.
+		text, vars := joined, map[string]string{c.name: c.value}
+		if c.name == Labels {
+			text, vars = strings.Replace(joined, "zone=dmz,arch=amd64", c.value, 1), nil
 		}
 		_, err := ReadConfig(environment(vars), envFile(t, text, 0o600))
 		if !slices.Equal(refusedFor(err), []string{c.name}) {
