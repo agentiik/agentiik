@@ -96,9 +96,14 @@ func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, str
 
 // realHelper builds the static helper for the platform the daemon of this machine runs
 // containers on, as the release builds it, and answers with its path: it is what fills a
-// task's secrets volume, so a real test that gives a task a secret needs it.
+// task's secrets volume, so a real test that gives a task a secret needs it. A job that runs
+// the tests where no toolchain is on the PATH builds it first and names it in
+// AGENTIIK_TEST_HELPER.
 func realHelper(t *testing.T) string {
 	t.Helper()
+	if built := os.Getenv("AGENTIIK_TEST_HELPER"); built != "" {
+		return built
+	}
 	socket, ok := dockertest.Socket()
 	if !ok {
 		dockertest.Unavailable(t, "no Docker daemon on this machine")

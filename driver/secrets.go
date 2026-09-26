@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -176,7 +177,7 @@ func (d *Docker) fillSecrets(ctx context.Context, t graph.Task, image string, fi
 		return nil, docker.Mount{}, fault(t.Step, err, ChargePlatform, "the secrets volume %s could not be created, and no secret value was written", name)
 	}
 	if v.Driver != volumeDriver || v.Options["type"] != volumeTmpfs || v.Options["device"] != volumeTmpfs || v.Labels[LabelSecrets] != string(t.ID) {
-		return nil, docker.Mount{}, fault(t.Step, nil, ChargePlatform, "a volume named %s is already on this daemon and is not this task's tmpfs, so no secret value was written on it: a value on a volume that is not a tmpfs is on a disk. The runner's next start sweeps it once no container uses it", name)
+		return nil, docker.Mount{}, fault(t.Step, nil, ChargePlatform, "a volume named %s is already on this daemon and is not this task's tmpfs, so no secret value was written on it and it is left as it is: a value on a volume that is not a tmpfs is on a disk, and a volume this task did not make is not this runner's to remove", name)
 	}
 
 	helper, err := helperMount(t, d.cfg.Policy)
@@ -334,6 +335,13 @@ func (d *Docker) removeSecrets(ctx context.Context, t graph.Task) {
 	defer cancel()
 	d.removeHolders(tidy, t)
 	name := secretsVolume(t.ID)
+	// Only the volume this task made, a tmpfs carrying its label: one somebody else made
+	// under the name was refused before anything was written on it, and is not this
+	// runner's to remove.
+	ours, err := d.cli.VolumeList(tidy, docker.Filters{}.Add("label", LabelSecrets+"="+string(t.ID)).Add("name", name))
+	if err != nil || !slices.ContainsFunc(ours, func(v docker.Volume) bool { return v.Name == name && v.Options["type"] == volumeTmpfs }) {
+		return
+	}
 	if err := d.cli.VolumeRemove(tidy, name); err != nil && !docker.IsNotFound(err) {
 		d.say(fmt.Sprintf("%s left its secrets volume %s on this daemon, and the runner's next start sweeps it once no container uses it: %v", t.Step, name, err))
 	}

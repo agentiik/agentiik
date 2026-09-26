@@ -204,7 +204,7 @@ func TestASecretWithNoHelperIsRefusedBeforeAnythingIsCreated(t *testing.T) {
 
 // A volume already under the task's name is taken over only where it is a tmpfs this task
 // made. One on the daemon's disk would put the value on a disk, and it is refused before
-// anything is written on it.
+// anything is written on it, and left where it is.
 func TestAVolumeUnderTheTasksNameThatIsNotItsTmpfsIsRefused(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 	r := secretsRunner(t, ref)
@@ -224,8 +224,9 @@ func TestAVolumeUnderTheTasksNameThatIsNotItsTmpfsIsRefused(t *testing.T) {
 				t.Errorf("a container was created on %+v: %v %v", spec, c.Config.Entrypoint, c.Config.Cmd)
 			}
 		}
-		if err := r.cli.VolumeRemove(t.Context(), spec.Name); err != nil && !docker.IsNotFound(err) {
-			t.Fatal(err)
+		// It is left as it was: a volume this task did not make is not the runner's.
+		if err := r.cli.VolumeRemove(t.Context(), spec.Name); err != nil {
+			t.Fatalf("the volume under the task's name was taken away with the refusal: %s", err)
 		}
 	}
 }
@@ -275,6 +276,15 @@ func TestTheSweepTakesAwayTheSecretsVolumesAndHoldersARunnerLeft(t *testing.T) {
 	adopted.ID = agk.NewTaskID(adopted.Run, "adopted", 1, agk.Shard{})
 	stageFirstDelivery(t, r, adopted)
 
+	// Another live process on the same daemon, filling a volume at this moment.
+	filling := taskWithASecret(ref)
+	filling.ID = agk.NewTaskID(filling.Run, "filling", 1, agk.Shard{})
+	live, _, err := r.fillSecrets(ctx, filling, ref, []secretFile{{Name: "bearer", Value: []byte("s3cr3t-value")}})
+	if err != nil {
+		t.Fatalf("filling: %s", err)
+	}
+	defer live.release(ctx)
+
 	young := taskWithASecret(ref)
 	young.ID = agk.NewTaskID(young.Run, "young", 1, agk.Shard{})
 	if _, err := r.cli.VolumeCreate(ctx, docker.VolumeSpec{Name: secretsVolume(young.ID), Labels: map[string]string{LabelSecrets: string(young.ID)}}); err != nil {
@@ -303,6 +313,9 @@ func TestTheSweepTakesAwayTheSecretsVolumesAndHoldersARunnerLeft(t *testing.T) {
 		if dockertest.IsHolder(c) && c.Labels[LabelSecrets] == string(left.ID) && !slices.Contains(r.daemon.Removed(), c.ID) {
 			t.Errorf("the holder a dead runner left survived the sweep")
 		}
+	}
+	if slices.Contains(r.daemon.Removed(), live.id) || !slices.Contains(r.daemon.Volumes(), secretsVolume(filling.ID)) {
+		t.Errorf("the sweep took away a holder another live process is filling with, or its volume")
 	}
 }
 
@@ -381,5 +394,25 @@ func TestAHolderARunnerLeftBeforeTheContainerGoesWithTheTask(t *testing.T) {
 	}
 	if !slices.Contains(r.daemon.Removed(), hold.id) {
 		t.Errorf("the holder the first delivery left survived the task")
+	}
+}
+
+// A running container a delivery adopts holds its own secrets volume, so a runner that has
+// lost its helper since still carries it to its end rather than refusing it and leaving it
+// running with nobody to collect it.
+func TestARunningContainerIsCarriedByARunnerWithNoHelper(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	released := make(chan struct{})
+	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
+		<-released
+		return 0, wrote(c, "out", agk.NewItem(map[string]any{"n": 1}))
+	})
+	task := taskWithASecret(ref)
+	runningFirstDelivery(t, r, task, released)
+	r.cfg.Policy.Helper = ""
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil || result.State != agk.TaskSucceeded {
+		t.Fatalf("the adopted container ended %s: %v", result.State, err)
 	}
 }

@@ -255,12 +255,13 @@ func sweep(root string, cutoff time.Time) {
 	if root == "" {
 		return
 	}
-	sweepTree(root, root, cutoff)
+	sweepTree(root, cutoff)
 }
 
-// sweepTree is sweep over the tree under top, whose runs are the ones the record under root
-// has.
-func sweepTree(root, top string, cutoff time.Time) {
+// sweepTree is sweep over the tree under the work root, whose runs are the ones the record
+// under it has.
+func sweepTree(root string, cutoff time.Time) {
+	top := root
 	var found []string
 	filepath.WalkDir(top, func(path string, d fs.DirEntry, err error) error {
 		if path == top {

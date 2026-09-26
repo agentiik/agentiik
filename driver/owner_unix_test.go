@@ -7,7 +7,8 @@ import (
 	"syscall"
 )
 
-// ownerOf reads the account that owns a file, where the platform says.
+// ownerOf reads the account that owns a file, where the platform says, for a test asking who
+// owns what the runner gave a task.
 func ownerOf(info fs.FileInfo) (int, bool) {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {

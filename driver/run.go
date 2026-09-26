@@ -64,13 +64,6 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, fault(t.Step, ErrImageNotByDigest, ChargePlatform, "the task names the image %s", ref)
 	}
 
-	// A secret reaches the container on a tmpfs volume the static helper fills, so a
-	// driver with no helper cannot give a task one. It is refused here, before anything is
-	// pulled or created, rather than once the image has arrived.
-	if len(t.Secrets) > 0 && d.cfg.Policy.Helper == "" {
-		return graph.Result{}, fault(t.Step, nil, ChargePlatform, "%d secrets to give the task and no static helper: a secret reaches the container on a tmpfs volume, and the helper at %s is what fills it; a runner lays it out under its work root, and agk run --local carries one for the daemon's platform", len(t.Secrets), BinPath)
-	}
-
 	store, err := d.store(ctx, t)
 	if err != nil {
 		return graph.Result{}, err
@@ -130,6 +123,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	adopted, err := d.containerOf(ctx, t.ID)
 	if err != nil {
 		return graph.Result{}, err
+	}
+
+	// A secret reaches the container on a tmpfs volume the static helper fills, so a
+	// driver with no helper cannot give a task one it has still to start. It is refused
+	// here, before anything is pulled or created; a key already ended is answered from the
+	// record above, and a container already running is carried whatever this host has.
+	if len(t.Secrets) > 0 && d.cfg.Policy.Helper == "" && !d.running(ctx, adopted) {
+		return graph.Result{}, fault(t.Step, nil, ChargePlatform, "%d secrets to give the task and no static helper: a secret reaches the container on a tmpfs volume, and the helper at %s is what fills it; a runner lays it out under its work root, and agk run --local carries one for the daemon's platform", len(t.Secrets), BinPath)
 	}
 
 	image, err := d.resolve(ctx, t, adopted == "")
@@ -894,6 +895,16 @@ func (d *Docker) values(ctx context.Context, t graph.Task, container string, rea
 	return values, nil
 }
 
+// running says whether an adopted container has started once, so that it needs no secrets
+// volume filled: one that is running holds its own, and one that has exited is collected.
+func (d *Docker) running(ctx context.Context, container string) bool {
+	if container == "" {
+		return false
+	}
+	in, err := d.cli.ContainerInspect(ctx, container)
+	return err == nil && !in.State.StartedAt.IsZero()
+}
+
 // abandon takes away what an earlier delivery of a refused task left: its container, its
 // network and its working directory. A key this host carried under a build that ran the
 // posture comes back to one that refuses it, on a daemon too old to keep the host out of an
@@ -933,7 +944,8 @@ func (d *Docker) removeNetwork(ctx context.Context, t graph.Task, n network) {
 // It is said and not returned, because by the time a directory is removed the task has
 // ended one way or the other and a removal cannot change which. It is said every time and
 // not once, since each is a directory of its own left on this host, and the step is named
-// first for the reason announceSecrets names it.
+// first, because a sentence said while a run narrates itself lands between two lines about
+// some other step.
 func (d *Docker) tidy(t graph.Task, w *workdir) {
 	if err := w.remove(); err != nil {
 		d.say(fmt.Sprintf("%s left files on this host that were not removed with its container, so what task %s was given and what its brick wrote survive into the tasks after it until somebody removes them: %v", t.Step, t.ID, err))

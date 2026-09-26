@@ -156,8 +156,8 @@ func (h *held) join(container string, w *watch) bool {
 //
 // Three things happen here rather than once per task: the API version is negotiated, the
 // userns floor, the capabilities it asks of this process, the confinement the daemon
-// applies and the cores it has are read, and the machine says what it gives up. Each is a fact about the daemon and the policy, and a
-// task that re-read them would be a task that could answer differently from the one
+// applies and the cores it has are read, and the machine says what it gives up. Each is a
+// fact about the daemon and the policy, and a task that re-read them would be a task that could answer differently from the one
 // beside it. The one exception is the daemon changing under this process, which it can
 // only do by restarting: the floors are read again before the first container after the
 // event stream drops, in heldToFloors.
