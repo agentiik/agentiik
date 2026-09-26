@@ -7,6 +7,8 @@
 // anybody allowed to inspect the process or its container reads. It is a file readable by its
 // owner alone, named by a variable ending _FILE, and a secret written as the value of a variable is
 // refused rather than used. So are PGPASSWORD and PGSSLPASSWORD, which pgx would take one from.
+// One verb is the exception, and says why: agentiik-api init takes the operator token as a value
+// and writes its hash alone.
 //
 // # Refusing to start
 //
@@ -31,12 +33,12 @@
 //
 // # Each program reads what it needs
 //
-// ReadAPI, ReadController and ReadMigration each read the settings of one program, or of one verb
-// of it, and nothing else, so a program never opens a file it has no use for. The controller goes
-// one step further with the master key. "The master key, held by the API alone, is what keeps them
-// from it": the sealed values sit in the database the controller shares, so a controller whose
-// environment names the master key's file is an installation deployed with that key in the
-// controller's reach, and it refuses to start.
+// ReadAPI, ReadController, ReadMigration and ReadInit each read the settings of one program, or of
+// one verb of it, and nothing else, so a program never opens a file it has no use for. The
+// controller goes one step further with the master key. "The master key, held by the API alone, is
+// what keeps them from it": the sealed values sit in the database the controller shares, so a
+// controller whose environment names the master key's file is an installation deployed with that
+// key in the controller's reach, and it refuses to start.
 package config
 
 import (
@@ -49,6 +51,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +87,11 @@ const (
 	OTLPEndpoint                = "AGK_OTLP_ENDPOINT"
 	TLSCertFile                 = "AGK_TLS_CERT_FILE"
 	TLSKeyFile                  = "AGK_TLS_KEY_FILE"
+	ProxyURL                    = "AGK_PROXY_URL"
+	InitDir                     = "AGK_INIT_DIR"
+	InitHost                    = "AGK_INIT_HOST"
+	InitNamespace               = "AGK_INIT_NAMESPACE"
+	OperatorToken               = "AGK_OPERATOR_TOKEN"
 )
 
 // secretFiles are the variables that name a secret's file. The same name without _FILE is the
@@ -343,12 +351,22 @@ func ReadAPI(lookup Lookup) (API, error) {
 	c.Bus = r.bus()
 	c.AccountSeed = r.accountSeed()
 	c.Objects = r.directory(ObjectsDir, "and it is the directory the built-in object store keeps every object in")
-	c.PublicURL = r.publicURL()
 	c.PresignKey = r.presignKey()
 	c.MasterKey = Secret(r.file(MasterKeyFile, "and it names the file holding the master key the built-in secret store seals every value under"))
 	c.EnvPrefixes = r.envPrefixes()
-	c.Listen = r.listen()
-	c.TLS = r.served(Listen)
+	if proxy, behind := r.proxyURL(); behind {
+		// Behind a proxy on this host, which is the public URL, and the listener it forwards
+		// to. The TLS pair and AGK_PUBLIC_URL are left unread rather than refused, so that one
+		// environment, a Compose file's, serves the installation both ways and a person
+		// chooses between them by setting this one variable or not: a Compose file sets a
+		// variable to a default or to a value and cannot leave one out on a condition.
+		c.PublicURL = proxy
+		c.Listen = r.proxiedListen()
+	} else {
+		c.PublicURL = r.publicURL()
+		c.Listen = r.listen()
+		c.TLS = r.served(Listen)
+	}
 	c.JoinRotation = r.duration(JoinRotation, DefaultJoinRotation, "how long a runner credential is accepted for",
 		"a credential accepted for no time is a runner that cannot join")
 	// The grace defaults to the ceiling, since no task legitimately runs longer, so a task a
@@ -397,19 +415,135 @@ func ReadNamespace(lookup Lookup) (Database, error) {
 	return d, r.err()
 }
 
+// Init is what agentiik-api init reads.
+type Init struct {
+	// Dir is the directory init prepares, whose subdirectories are what each service mounts.
+	Dir string
+
+	// Host is the DNS name or IPv4 address runners reach the bus at, and clients the API
+	// where no proxy is in front: the name the certificate is issued to.
+	Host string
+
+	// Namespace is the namespace init creates, where it does not exist yet.
+	Namespace string
+
+	// OperatorToken is the interim operator's token, where one is set, which init keeps the
+	// hash of and nothing else. Empty, init keeps the hash it stored, or mints a token where it
+	// stored none.
+	OperatorToken Secret
+
+	// Admin is the role that applies the migrations. Application is the role the API and the
+	// controller connect as, which migrating creates, with no password: init generates the
+	// password and gives it to both.
+	Admin, Application Database
+}
+
+// operatorTokenMinBytes is the shortest operator token init takes: 128 bits, as openssl rand -hex 16
+// writes them, since the token is every permission at every scope and is guessed at over the
+// network by anybody who reaches the API.
+const operatorTokenMinBytes = 32
+
+// ReadInit reads what agentiik-api init needs through lookup, which is os.LookupEnv when nil.
+//
+// It is the one reading that takes a secret as a value, AGK_OPERATOR_TOKEN, and it is the decision
+// that the token is written once, by the person, in the file Docker Compose reads its variables
+// from. init hashes it and writes the hash alone, so the plaintext never reaches a disk init
+// writes; every other program still refuses it, the API above all.
+func ReadInit(lookup Lookup) (Init, error) {
+	r := newReader(lookup, OperatorToken)
+	var c Init
+	c.Dir = r.directory(InitDir, "and it is the directory init prepares, whose subdirectories each service mounts")
+	c.Host = r.host()
+	c.Namespace, _ = r.required(InitNamespace, "and it is the namespace init creates, where workflows are pushed and run")
+	c.OperatorToken = r.operatorTokenValue()
+	c.Admin = r.database(MigrateDatabaseURL, MigrateDatabasePasswordFile, false)
+	if _, set := r.value(DatabasePasswordFile); set {
+		r.refuse(DatabasePasswordFile, "is set for init, and init generates the password of the role the API and the controller connect as, and writes it where each of them reads it")
+	}
+	c.Application = r.databaseURL(DatabaseURL, DatabasePasswordFile, true)
+	return c, r.err()
+}
+
+// host is a DNS name or an IPv4 address, which the certificate init makes is issued to.
+//
+// Not an IPv6 address, which a URL writes in brackets and every setting built from this one would
+// have to, nor a name with a port or a scheme, which is a mistake in what was pasted.
+func (r *reader) host() string {
+	v, set := r.required(InitHost, "and it is the name runners reach the bus at, and clients the API, which the certificate is issued to")
+	if !set {
+		return ""
+	}
+	if ip := net.ParseIP(v); ip != nil && ip.To4() != nil && !strings.Contains(v, ":") {
+		return v
+	}
+	if !dnsName(v) {
+		r.refuse(InitHost, fmt.Sprintf("is %q, and it is a DNS name or an IPv4 address, such as agentiik.example.com or 192.0.2.10, with no scheme and no port", v))
+		return ""
+	}
+	return v
+}
+
+// dnsName says whether v is a DNS name: labels of letters, digits and hyphens, none beginning or
+// ending with a hyphen, each at most 63 characters and all of them at most 253.
+func dnsName(v string) bool {
+	if v == "" || len(v) > 253 {
+		return false
+	}
+	for label := range strings.SplitSeq(v, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		if strings.ContainsFunc(label, func(c rune) bool {
+			return !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-')
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+// operatorTokenValue is the operator token set as a value, or empty where it is unset.
+//
+// Held to what a bearer token may be, the characters RFC 6750 allows, since the token is sent in
+// an Authorization header and one holding anything else would not reach the API as it was written,
+// and to 128 bits at the least. Never repeated in a refusal.
+func (r *reader) operatorTokenValue() Secret {
+	v, set := r.value(OperatorToken)
+	if !set {
+		return ""
+	}
+	if len(v) < operatorTokenMinBytes {
+		r.refuse(OperatorToken, fmt.Sprintf("is %d characters, and the operator token is %d or more, as openssl rand -hex %d writes one: it allows everything, to whoever guesses it", len(v), operatorTokenMinBytes, operatorTokenMinBytes/2))
+		return ""
+	}
+	body := strings.TrimRight(v, "=")
+	if body == "" || strings.ContainsFunc(body, func(c rune) bool {
+		return !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.ContainsRune("-._~+/", c))
+	}) {
+		r.refuse(OperatorToken, "holds a character a bearer token cannot, and it is sent as one: letters, digits and - . _ ~ + / alone, with = only at its end")
+		return ""
+	}
+	return Secret(v)
+}
+
 // reader reads one program's settings and keeps every refusal.
 type reader struct {
 	lookup  Lookup
 	refused []error
 }
 
-func newReader(lookup Lookup) *reader {
+// newReader reads through lookup, refusing every secret set as a value but those valued names,
+// which the one verb reading them takes as a value on purpose.
+func newReader(lookup Lookup, valued ...string) *reader {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
 	r := &reader{lookup: lookup}
 	for _, file := range secretFiles {
 		value := strings.TrimSuffix(file, "_FILE")
+		if slices.Contains(valued, value) {
+			continue
+		}
 		if _, set := r.value(value); set {
 			r.refuse(value, fmt.Sprintf("is set, and a secret is never read from the environment, which every process started from this one inherits and anybody who can inspect it reads: write it to a file its owner alone can read, and name that file in %s", file))
 		}
@@ -631,27 +765,65 @@ func (r *reader) publicURL() string {
 	if !set {
 		return ""
 	}
+	return r.httpsURL(PublicURL, v, "it names whatever terminates TLS in front of it")
+}
+
+// proxyURL is the address of a TLS terminator on this host that the API is served behind, and
+// whether one is named.
+func (r *reader) proxyURL() (string, bool) {
+	v, set := r.value(ProxyURL)
+	if !set {
+		return "", false
+	}
+	return r.httpsURL(ProxyURL, v, "it names the proxy that terminates TLS in front of the API"), true
+}
+
+// httpsURL is an https URL with a host and no user, query or fragment, without the slashes at its
+// end, or nothing where name's value v is not one. what ends the refusal of a URL of another
+// scheme, saying what the URL names.
+func (r *reader) httpsURL(name, v, what string) string {
 	if _, has := userinfo(v); has {
-		r.refuse(PublicURL, "carries a user, and it is the address a runner is handed, which carries no credential")
+		r.refuse(name, "carries a user, and it is the address a runner is handed, which carries no credential")
 		return ""
 	}
 	u, err := url.Parse(v)
 	switch {
 	case err != nil:
-		r.refuse(PublicURL, "is not a URL"+unparsed)
+		r.refuse(name, "is not a URL"+unparsed)
 		return ""
 	case u.Scheme != "https" || u.Host == "":
-		r.refuse(PublicURL, "is not an https URL with a host, such as https://agentiik.example.com, and runners and clients never reach the API in plaintext: it names whatever terminates TLS in front of it")
+		r.refuse(name, "is not an https URL with a host, such as https://agentiik.example.com, and runners and clients never reach the API in plaintext: "+what)
 		return ""
 	case strings.ContainsAny(v, "?#"):
 		// Looked for in the text, since net/url reads a ? or a # with nothing after it as an
 		// empty query or fragment, which a check of either passes.
-		r.refuse(PublicURL, "carries a query or a fragment, even an empty one, and every route is a path below it: a path added after a ? or a # would be read as part of the query or the fragment, and every URL minted on it would reach the root")
+		r.refuse(name, "carries a query or a fragment, even an empty one, and every route is a path below it: a path added after a ? or a # would be read as part of the query or the fragment, and every URL minted on it would reach the root")
 		return ""
 	}
 	// Every slash at the end, rather than one, since each URL minted on it adds a path that
 	// begins with a slash, and a // left in it is a path no route answers.
 	return strings.TrimRight(v, "/")
+}
+
+// proxiedListen is where the API listens behind the proxy AGK_PROXY_URL names: AGK_LISTEN on the
+// loopback, 127.0.0.1 where it names no host, in plain HTTP.
+//
+// The loopback alone, because the hop from the proxy is the one the API serves without TLS, and
+// "no plaintext path anywhere" is waived for it only where no network carries it. AGK_LISTEN
+// naming another host is refused rather than moved, since whoever wrote it meant that host.
+func (r *reader) proxiedListen() string {
+	listen := r.listen()
+	host, port, err := net.SplitHostPort(listen)
+	switch {
+	case err != nil:
+		// Refused already by listen, which fell back to the default.
+		return listen
+	case host == "":
+		return net.JoinHostPort("127.0.0.1", port)
+	case !loopback(host):
+		r.refuse(Listen, fmt.Sprintf("is %q, and behind the proxy %s names the API serves plain HTTP, which only something on this host may reach: write the port alone, such as :8443, for the API to listen on 127.0.0.1", listen, ProxyURL))
+	}
+	return listen
 }
 
 // database reads one PostgreSQL URL and the file its password is in.
