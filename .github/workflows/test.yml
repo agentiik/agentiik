@@ -202,8 +202,9 @@ jobs:
               -f build/runner.Dockerfile "$RUNNER_TEMP/image"
           done
 
-      # The host as the page lays it out: the work root, runner.env, runner.toml and the key owned
-      # by the image's account, 65532, and the secrets tmpfs mounted noexec,nosuid,nodev. runner.env
+      # The host as the page lays it out: runner.env, runner.toml and the key owned by the image's
+      # account, 65532, and the secrets tmpfs mounted noexec,nosuid,nodev. /var/lib/agentiik is
+      # left root's, as Docker creates a bind source, for the image started as root to give it. runner.env
       # and the key are what join writes, with an API nothing listens at, since serve calls none
       # before it is ready.
       - name: host
@@ -215,12 +216,22 @@ jobs:
             | sudo tee /etc/agentiik/runner.env >/dev/null
           echo 'secrets_dir = "/run/agentiik/secrets"' | sudo tee /etc/agentiik/runner.toml >/dev/null
           sudo openssl genpkey -algorithm ed25519 -out /var/lib/agentiik/runner.key
-          sudo chown 65532:65532 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik /var/lib/agentiik/runner.key
+          sudo chown 65532:65532 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik/runner.key
           sudo chmod 600 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik/runner.key
 
-          # The Compose sample's runner service, as docker run options.
+          # The Compose sample's runner service, as docker run options: started as root, which
+          # serve drops after taking the socket's group itself. nonroot_form is the image started
+          # as agentiik with the group named, which serves as it did before serve dropped root.
           cat > "$RUNNER_TEMP/compose.sh" <<'SH'
           compose_form() {
+            echo --userns host \
+              --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID \
+              -v /var/run/docker.sock:/var/run/docker.sock:ro \
+              -v /var/lib/agentiik:/var/lib/agentiik \
+              -v /run/agentiik/secrets:/run/agentiik/secrets \
+              -v /etc/agentiik:/etc/agentiik
+          }
+          nonroot_form() {
             echo --user agentiik --group-add "$(stat -c %g /var/run/docker.sock)" --userns host \
               --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
               -v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -250,12 +261,18 @@ jobs:
             echo "$arch: agk-runner $version"
             echo "$version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' >/dev/null
 
-            if said=$(timeout 120 docker run --rm --platform linux/$arch $(compose_form) $image 2>&1); then
-              echo "serve started on a daemon that does not remap user namespaces:"; echo "$said"; exit 1
-            fi
-            echo "$said"
-            echo "$said" | grep 'does not remap user namespaces' >/dev/null
+            for form in compose_form nonroot_form; do
+              if said=$(timeout 120 docker run --rm --platform linux/$arch $($form) $image 2>&1); then
+                echo "serve started on a daemon that does not remap user namespaces:"; echo "$said"; exit 1
+              fi
+              echo "$said"
+              echo "$said" | grep 'does not remap user namespaces' >/dev/null
+              # Started as root, it said so, and dropped before the floor refused the daemon.
+              [ $form = nonroot_form ] || echo "$said" | grep 'started as root' >/dev/null
+            done
           done
+          # The image started as root gave the agent the directory Docker would have left root's.
+          test "$(stat -c %u /var/lib/agentiik)" = 65532
 
       - name: past the floor
         run: |

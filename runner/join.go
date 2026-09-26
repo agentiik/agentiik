@@ -38,6 +38,14 @@ type Joining struct {
 	// Replace lets join replace an identity the host already has, with a new key.
 	Replace bool
 
+	// EnvironmentOnly takes AGK_API, AGK_RUNNER_LABELS and AGK_RUNNER_NAMESPACES from the
+	// environment alone, never from a runner.env already there, so that what is claimed is what
+	// the environment says, one unset there claiming none. It is how serve joins, since it
+	// joins again whenever its environment says otherwise than the runner.env it joined with,
+	// and a join that kept a value from that file would be one it joined again for at every
+	// start.
+	EnvironmentOnly bool
+
 	// Owner is the account the key and runner.env are given to, and nil is whoever runs join.
 	Owner *Owner
 
@@ -171,8 +179,8 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 		return fmt.Errorf("runner: the API created runner %.64q in pool %.64q and spent the token, and this host could not keep what it was given, so it has not joined: %w. Revoke that runner, and join again with a new token and --replace", answer.Runner, answer.Pool, err)
 	}
 	// AGK_API is written as it was given rather than as the client reaches it, without its
-	// trailing slashes: serve compares the file with its environment as written, and a unit
-	// setting the same address join was given would otherwise be refused as another.
+	// trailing slashes, so that the file says what the operator wrote; serve holds the two to
+	// the same address, and sameSetting says what that is.
 	text, err := renderEnv(j.EnvPath, []variable{
 		{API, settings.written},
 		{RunnerID, answer.Runner},
@@ -258,6 +266,13 @@ func (j Joining) settings() (joinSettings, error) {
 			r.file[name], c.kept[name] = v, v
 		}
 	}
+	// The identity is refused in the environment as serve refuses it there, so that no token is
+	// spent on a host whose every start would then be refused.
+	for _, name := range fileOnly {
+		if v, set := lookup(name); set && v != "" {
+			r.refuse(name, "is set in the environment, and a runner's identity is read from "+j.EnvPath+" alone, where join writes it, so serve would refuse every start of the runner this join made: unset it")
+		}
+	}
 	// The command line stands in front of the environment, as a flag given means that value,
 	// and the environment in front of the file join is about to replace.
 	r.lookup = func(name string) (string, bool) {
@@ -276,7 +291,7 @@ func (j Joining) settings() (joinSettings, error) {
 		if name == Labels && c.identity {
 			return "", false
 		}
-		if slices.Contains(joinWrites, name) {
+		if slices.Contains(joinWrites, name) && !j.EnvironmentOnly {
 			v, ok := there[name]
 			return v, ok
 		}
@@ -303,12 +318,10 @@ func (j Joining) settings() (joinSettings, error) {
 	// The work root is where the disk is measured, so it is read as serve will read it, from
 	// the environment or the file join keeps it in.
 	c.Namespaces, c.WorkDir, _ = r.namespaces(), r.workDir(), r.concurrency()
-	switch kind, ok := token.KindOf(string(j.Token)); {
+	switch {
 	case j.Token == "":
 		r.refuse("--token", "is not given, and it is the join token an administrator issued for this host's pool")
-	case !ok || kind != token.Join || strings.ContainsFunc(string(j.Token), func(c rune) bool {
-		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-')
-	}):
+	case !isJoinToken(j.Token):
 		r.refuse("--token", "is not a join token, which is written agkjoin_ followed by its secret")
 	}
 
@@ -320,6 +333,14 @@ func (j Joining) settings() (joinSettings, error) {
 		}
 	}
 	return c, r.err()
+}
+
+// isJoinToken says whether s is written as a join token is, agkjoin_ followed by its secret.
+func isJoinToken(s Secret) bool {
+	kind, ok := token.KindOf(string(s))
+	return ok && kind == token.Join && !strings.ContainsFunc(string(s), func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-')
+	})
 }
 
 // existing reads the runner.env already on the host, where there is one: its settings, and
