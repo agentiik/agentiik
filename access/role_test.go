@@ -7,15 +7,16 @@ import (
 	"github.com/agentiik/agentiik/access"
 )
 
-// The role matrix, as the page's table writes it: six columns for nine atoms. Each role's row is
-// written out atom by atom, and each column the page names an atom for is checked against it.
+// The role matrix, as the page's tables write it: seven columns, and the permissions of each.
+// Each role's row is written out atom by atom, and each column is checked against it by the
+// permissions the page names for that column.
 func TestTheFourRolesAreThePageTable(t *testing.T) {
 	for _, c := range []struct {
 		role  access.Role
 		holds []access.Permission
 
-		// The page's row: read, run, write, data, secret, grant.
-		read, run, write, data, secret, grant bool
+		// The page's row: read, run, write, data, secret, delete, grant.
+		read, run, write, data, secret, delete, grant bool
 	}{
 		{
 			role:  access.Viewer,
@@ -24,13 +25,13 @@ func TestTheFourRolesAreThePageTable(t *testing.T) {
 		},
 		{
 			role:  access.Operator,
-			holds: []access.Permission{access.WorkflowRun},
+			holds: []access.Permission{access.WorkflowRun, access.RunRead},
 			run:   true,
 		},
 		{
 			role: access.Editor,
 			holds: []access.Permission{
-				access.WorkflowRead, access.WorkflowRun, access.WorkflowWrite, access.WorkflowDelete,
+				access.WorkflowRead, access.WorkflowRun, access.WorkflowWrite,
 				access.RunRead, access.RunReadData, access.SecretUse, access.SecretWrite,
 			},
 			read: true, run: true, write: true, data: true, secret: true,
@@ -41,25 +42,25 @@ func TestTheFourRolesAreThePageTable(t *testing.T) {
 				access.WorkflowRead, access.WorkflowRun, access.WorkflowWrite, access.WorkflowDelete,
 				access.RunRead, access.RunReadData, access.SecretUse, access.SecretWrite, access.GrantManage,
 			},
-			read: true, run: true, write: true, data: true, secret: true, grant: true,
+			read: true, run: true, write: true, data: true, secret: true, delete: true, grant: true,
 		},
 	} {
 		got := c.role.Permissions()
 		if !slices.Equal(got.Permissions(), c.holds) {
 			t.Errorf("%s holds %s, want %s", c.role, got, access.SetOf(c.holds...))
 		}
-		// The columns, by the atoms the page names for them: its example expands viewer to
-		// workflow:read and run:read and operator to workflow:run, and it says the secret
-		// column is secret:write.
+		// The columns, by the permissions the page names for each. run:read is in two, so a
+		// role holds it where either says yes.
 		for _, col := range []struct {
 			p    access.Permission
 			want bool
 		}{
-			{access.WorkflowRead, c.read}, {access.RunRead, c.read},
+			{access.WorkflowRead, c.read}, {access.RunRead, c.read || c.run},
 			{access.WorkflowRun, c.run},
-			{access.WorkflowWrite, c.write},
+			{access.WorkflowWrite, c.write}, {access.SecretUse, c.write},
 			{access.RunReadData, c.data},
 			{access.SecretWrite, c.secret},
+			{access.WorkflowDelete, c.delete},
 			{access.GrantManage, c.grant},
 		} {
 			if got.Has(col.p) != col.want {
@@ -73,15 +74,28 @@ func TestTheFourRolesAreThePageTable(t *testing.T) {
 }
 
 // "operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the
-// queries, endpoints and business rules inside it."
+// queries, endpoints and business rules inside it. It holds run:read to follow the runs it starts,
+// their state and log lines, and never run:read_data."
 func TestAnOperatorRunsWhatItCannotRead(t *testing.T) {
 	op := access.Operator.Permissions()
 	if !op.Has(access.WorkflowRun) {
 		t.Error("an operator cannot run")
 	}
+	if !op.Has(access.RunRead) {
+		t.Error("an operator cannot follow the runs it starts")
+	}
 	for _, p := range []access.Permission{access.WorkflowRead, access.RunReadData, access.WorkflowWrite, access.SecretUse} {
 		if op.Has(p) {
 			t.Errorf("an operator holds %s", p)
+		}
+	}
+}
+
+// "workflow:delete is the owner's alone": no other role holds it, and an owner does.
+func TestOnlyAnOwnerDeletes(t *testing.T) {
+	for _, r := range access.Roles {
+		if got := r.Permissions().Has(access.WorkflowDelete); got != (r == access.Owner) {
+			t.Errorf("%s holding workflow:delete is %v", r, got)
 		}
 	}
 }

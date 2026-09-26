@@ -12,16 +12,20 @@ const (
 	// Viewer reads: the workflow and its runs, without their data.
 	Viewer Role = "viewer"
 
-	// Operator runs, and reads nothing. It "deliberately lacks workflow:read, so a colleague can
-	// launch a job without seeing the queries, endpoints and business rules inside it".
+	// Operator runs, and follows the runs it starts: it "deliberately lacks workflow:read, so a
+	// colleague can launch a job without seeing the queries, endpoints and business rules inside
+	// it", and holds run:read "to follow the runs it starts, their state and log lines, and never
+	// run:read_data".
 	Operator Role = "operator"
 
 	// Editor reads, runs, writes, reads data and uses and writes the namespace's secrets.
 	// "editor holds it by default, and a deny takes it away where only owners should say where
-	// a value lives": the it is secret:write.
+	// a value lives": the it is secret:write. It does not delete: "every change an editor makes
+	// is a new version the history keeps; a deletion takes the versions with it".
 	Editor Role = "editor"
 
-	// Owner is editor and grant:manage, "because someone has to be able to share".
+	// Owner is editor, workflow:delete and grant:manage, "because someone has to be able to
+	// share", and "workflow:delete is the owner's alone".
 	Owner Role = "owner"
 )
 
@@ -29,19 +33,18 @@ const (
 // wire's enumeration.
 var Roles = []Role{Viewer, Operator, Editor, Owner}
 
-// The page's table has six columns for nine atoms, and these are the columns. read is what the
-// page's own example expands a viewer grant to, "workflow:read, run:read", and run what it expands
-// an operator grant to, "workflow:run". data is run:read_data, and secret is secret:write, as the
-// page says of that column. The table names no column for workflow:delete or secret:use, so they
-// sit with write: deleting a workflow and letting its steps reference a namespace secret are both
-// part of deciding what the workflow is, and the roles holding write are the ones that decide it.
-// No role holds write without secret, so where the two sit changes nothing a role holds.
+// The page's table has seven columns for nine atoms, and a second table names the atoms of each,
+// which these are: "A role holds every permission of each column it says yes to, so each of the
+// nine sits in one column, run:read in two." run:read is in read and in run, since reading a
+// workflow and running one both come with following its runs; secret:use is in write, "because it
+// is checked at the push, which is writing"; and delete is the owner's column alone.
 var (
 	readColumn   = SetOf(WorkflowRead, RunRead)
-	runColumn    = SetOf(WorkflowRun)
-	writeColumn  = SetOf(WorkflowWrite, WorkflowDelete, SecretUse)
+	runColumn    = SetOf(WorkflowRun, RunRead)
+	writeColumn  = SetOf(WorkflowWrite, SecretUse)
 	dataColumn   = SetOf(RunReadData)
 	secretColumn = SetOf(SecretWrite)
+	deleteColumn = SetOf(WorkflowDelete)
 	grantColumn  = SetOf(GrantManage)
 )
 
@@ -66,7 +69,7 @@ func (r Role) Permissions() Set {
 	case Editor:
 		return readColumn.union(runColumn).union(writeColumn).union(dataColumn).union(secretColumn)
 	case Owner:
-		return Editor.Permissions().union(grantColumn)
+		return Editor.Permissions().union(deleteColumn).union(grantColumn)
 	}
 	return Set{}
 }
