@@ -1,0 +1,9 @@
+{
+  "id": "01M2AC7N2P4R6T8V0X2Z4B6D8F",
+  "principal": "group:team-ops",
+  "scope": "finance/monthly-invoicing",
+  "role": "operator",
+  "expires_at": "2027-01-01T00:00:00Z",
+  "granted_by": "alice",
+  "granted_at": "2026-09-27T09:00:00Z"
+}

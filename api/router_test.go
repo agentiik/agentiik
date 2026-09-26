@@ -357,26 +357,6 @@ func TestTheSurfaceCanBeReadBack(t *testing.T) {
 	}
 }
 
-// The nine atoms, held to the page. A permission invented here is one nothing documents and one
-// no role includes.
-func TestThePermissionsAreThePageOwn(t *testing.T) {
-	want := []string{
-		"workflow:read", "workflow:run", "workflow:write", "workflow:delete",
-		"run:read", "run:read_data", "secret:use", "secret:write", "grant:manage",
-	}
-	if len(api.Permissions) != len(want) {
-		t.Fatalf("this package has %d permissions and the page names %d", len(api.Permissions), len(want))
-	}
-	for i, w := range want {
-		if string(api.Permissions[i]) != w {
-			t.Errorf("permission %d is %q and the page names %q", i, api.Permissions[i], w)
-		}
-	}
-	if api.Permission("run:read_data").Valid() != true || api.Permission("run:everything").Valid() {
-		t.Error("Valid does not answer for the nine")
-	}
-}
-
 // A refusal says nothing a caller could learn from, and is not cached by anything in between.
 func TestARefusalSaysNothingUseful(t *testing.T) {
 	rt := router(t, api.DenyAll{})

@@ -2,6 +2,19 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Access
+
+- Package `access` resolves permissions with no database, bus or HTTP behind it, so the API and the controller share one rule. `api.Permission` and the nine are its own, under the same names.
+- The four roles are fixed permission sets: `viewer` reads, `operator` runs without `workflow:read`, `editor` adds writing, run data and secrets, and `owner` adds `grant:manage`. Roles held together add up.
+- A principal holds the union of its own and its groups' grants on a namespace and on a workflow. A workflow's grant only adds, and never gives `secret:use` or `secret:write`.
+- A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
+
+### Tests
+
+- The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
+
 ## v0.2.5, 2026-09-26
 
 - Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.

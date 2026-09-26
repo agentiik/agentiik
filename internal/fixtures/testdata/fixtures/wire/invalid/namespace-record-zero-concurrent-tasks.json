@@ -1,0 +1,8 @@
+{
+  "name": "finance",
+  "kind": "shared",
+  "owner": "alice",
+  "quotas": {
+    "max_concurrent_tasks": 0
+  }
+}

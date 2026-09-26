@@ -19,8 +19,9 @@
 // every request that needs one, which is what deny by default means when there is nothing to
 // grant yet.
 //
-// The permissions themselves are here rather than in v0.3.0, because a route declares what it
-// needs and a route is written now. They are the page's own nine, held to it by a test.
+// The permissions themselves arrived before v0.3.0, because a route declares what it needs and a
+// route was written then. They are the page's own nine, held to it by a test, and they live in
+// package access, which resolves them from grants, with their names kept here for the routes.
 //
 // # Absent and forbidden answer the same thing
 //

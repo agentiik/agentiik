@@ -1,0 +1,7 @@
+{
+  "password": "allowed",
+  "passkey": "required",
+  "user_verification": "required",
+  "device_bound_only": false,
+  "min_passkeys": 2
+}

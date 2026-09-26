@@ -14,7 +14,16 @@
     "grant-redemption": "../wire.schema.json",
     "log-shipment": "../wire.schema.json",
     "runner-pool": "../wire.schema.json",
-    "stop": "../wire.schema.json"
+    "stop": "../wire.schema.json",
+    "principal": "../wire.schema.json",
+    "principal-ref": "../wire.schema.json",
+    "credential": "../wire.schema.json",
+    "api-token": "../wire.schema.json",
+    "access-grant": "../wire.schema.json",
+    "role": "../wire.schema.json",
+    "permission": "../wire.schema.json",
+    "namespace-record": "../wire.schema.json",
+    "auth-policy": "../wire.schema.json"
   },
   "notes": [
     "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
@@ -846,6 +855,352 @@
           "file": "wire/invalid/stop-reason-a-task-state.json",
           "rule": "a reason is why a task is stopped and not what it ends as: timed_out is the state a deadline stop ends in, and deadline is the reason",
           "refused_by": "schema"
+        }
+      ]
+    },
+    "principal": {
+      "valid": [
+        {
+          "file": "wire/valid/principal-user.json",
+          "covers": "a user: a login, a display name, and whether the account is an administrator's or suspended"
+        },
+        {
+          "file": "wire/valid/principal-group.json",
+          "covers": "a group of users, by login, as the documentation's team-finance is"
+        },
+        {
+          "file": "wire/valid/principal-service-account-built-in.json",
+          "covers": "the built-in identity of a namespace, NS/agentiik, which scheduled, webhook and event runs are attributed to and which nobody created"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/principal-user-login-operator.json",
+          "rule": "operator is refused as a login: it is the principal the v0.2.5 operator token wrote on the rows it touched, and those rows keep it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-login-reserved.json",
+          "rule": "a login is also the name of its personal namespace, so the words the API's first path segment routes on cannot be one",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/principal-user-with-password-hash.json",
+          "rule": "a user record never carries what the user proves themselves with; the object is closed so that a hash cannot be written into it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/principal-group-holding-a-group.json",
+          "rule": "a group is a named set of users, so its members are logins and a group reference is not one",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        }
+      ]
+    },
+    "principal-ref": {
+      "valid": [
+        {
+          "file": "wire/valid/principal-ref-login.json",
+          "covers": "a user, named by login"
+        },
+        {
+          "file": "wire/valid/principal-ref-group.json",
+          "covers": "a group, named group:NAME"
+        },
+        {
+          "file": "wire/valid/principal-ref-service-account.json",
+          "covers": "a service account, named NS/NAME, here the namespace's built-in identity"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/principal-ref-operator.json",
+          "rule": "operator names the v0.2.5 operator token on the rows it wrote and is no principal a grant or a token can name",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-ref-user-prefix.json",
+          "rule": "a user is named by the bare login; only a group carries a prefix, and a login holds no colon",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-ref-group-uppercase.json",
+          "rule": "a group's name is written on the namespace grammar, lowercase words joined by hyphens",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        }
+      ]
+    },
+    "credential": {
+      "valid": [
+        {
+          "file": "wire/valid/credential-passkey-device-bound.json",
+          "covers": "a device-bound passkey: Backup Eligibility clear, so the kind is device-bound"
+        },
+        {
+          "file": "wire/valid/credential-passkey-synced.json",
+          "covers": "a synced passkey: Backup Eligibility set, so the kind is synced, with its last use"
+        },
+        {
+          "file": "wire/valid/credential-password.json",
+          "covers": "a password, described by its existence and never by its hash"
+        },
+        {
+          "file": "wire/valid/credential-totp.json",
+          "covers": "a TOTP generator, described by its existence and never by its shared secret"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/credential-passkey-kind-contradicts-flag.json",
+          "rule": "the kind is recorded from the Backup Eligibility flag, and a credential eligible for backup is a synced passkey whatever it is called",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/credential-passkey-backed-up-without-eligibility.json",
+          "rule": "Backup State can only be set where Backup Eligibility is, as Web Authentication defines the two flags the kind is recorded from",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/credential-password-with-hash.json",
+          "rule": "a credential is described and never held: the hash stays in the database, and forbidding passwords deletes it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        }
+      ]
+    },
+    "api-token": {
+      "valid": [
+        {
+          "file": "wire/valid/api-token.json",
+          "covers": "a user's token as it is listed: its expiry 90 days out, its last use and its device label, and no value"
+        },
+        {
+          "file": "wire/valid/api-token-service-account-scoped.json",
+          "covers": "a service account's token narrowed to two permissions on one workflow, expiring a year out, the longest allowed"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/api-token-with-value.json",
+          "rule": "a token is stored hashed and shown once, so the record a listing returns cannot carry its value",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/api-token-without-expiry.json",
+          "rule": "an API token is a bearer credential with an expiry, and one that never ends is one nobody remembers to revoke",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/api-token-empty-scope.json",
+          "rule": "a scope narrows the principal's rights, and an empty one narrows nothing while reading as if it did: absent is how a token says it keeps them all",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/api-token-longer-than-a-year.json",
+          "rule": "a token lasts at most a year from its creation, a rule between two values of one record that JSON Schema cannot hold, so the API holds it",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/api-token-for-a-group.json",
+          "rule": "a token belongs to the caller or to a service account it owns; a group is a set of users and holds no credential, which the API refuses at minting",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        }
+      ]
+    },
+    "access-grant": {
+      "valid": [
+        {
+          "file": "wire/valid/access-grant-operator-on-a-workflow.json",
+          "covers": "the documentation's Terraform grant: team-ops runs monthly-invoicing as operator until an expiry"
+        },
+        {
+          "file": "wire/valid/access-grant-viewer-on-a-namespace.json",
+          "covers": "a namespace-scope grant, inherited by every workflow inside, written by the bootstrap token before any administrator existed"
+        },
+        {
+          "file": "wire/valid/access-grant-deny.json",
+          "covers": "the documentation's deny: alice keeps workflow:run on monthly-invoicing and loses run:read_data, whatever any allow gives"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/access-grant-role-and-deny.json",
+          "rule": "a grant binds one role or denies one permission, never both, so that revoking one row never revokes half of another",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/access-grant-deny-a-role.json",
+          "rule": "a deny names a permission, as the documentation's deny of run:read_data does, and not a role",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/access-grant-unknown-role.json",
+          "rule": "the roles are viewer, operator, editor and owner; being an administrator is a property of a user and never a role on a scope",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#roles"
+        },
+        {
+          "file": "wire/invalid/access-grant-scope-reserved.json",
+          "rule": "a scope is a namespace or one workflow in it, and a reserved word can never name a namespace",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        }
+      ]
+    },
+    "role": {
+      "valid": [
+        {
+          "file": "wire/valid/role-operator.json",
+          "covers": "the run role, which deliberately lacks workflow:read"
+        },
+        {
+          "file": "wire/valid/role-owner.json",
+          "covers": "the role that can share, holding grant:manage"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/role-admin.json",
+          "rule": "four roles and no more; an administrator is a user property with no implicit run:read_data",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#roles"
+        }
+      ]
+    },
+    "permission": {
+      "valid": [
+        {
+          "file": "wire/valid/permission-run-read-data.json",
+          "covers": "the permission a deny most often names, written with its underscore"
+        },
+        {
+          "file": "wire/valid/permission-grant-manage.json",
+          "covers": "the permission that makes owner the role that can share"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/permission-run-read-data-hyphenated.json",
+          "rule": "identifiers are never prettified: the permission is run:read_data in the YAML, the API, the HCL and the prose",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#permissions"
+        },
+        {
+          "file": "wire/invalid/permission-wildcard.json",
+          "rule": "a permission is one of nine atoms; a wildcard would grant whatever atom is added next, which deny by default forbids",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#permissions"
+        }
+      ]
+    },
+    "namespace-record": {
+      "valid": [
+        {
+          "file": "wire/valid/namespace-record-shared.json",
+          "covers": "the documentation's finance namespace with all six quotas, owned by a group"
+        },
+        {
+          "file": "wire/valid/namespace-record-personal.json",
+          "covers": "a personal namespace, named after its owner's login and bound by no quota of its own"
+        },
+        {
+          "file": "wire/valid/namespace-record-tightened.json",
+          "covers": "a namespace requiring device-bound passkeys, and one more of them, of everyone holding a grant in it"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/namespace-record-reserved-name.json",
+          "rule": "the API's first path segment decides the route, so a reserved word cannot name a namespace",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/namespace-record-personal-owned-by-a-group.json",
+          "rule": "a personal namespace belongs to one user, named after their login",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/namespace-record-personal-not-named-after-its-owner.json",
+          "rule": "a personal namespace is named after its owner's login, a rule between two values of one record that the API holds",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/namespace-record-zero-concurrent-tasks.json",
+          "rule": "a quota bounds what a namespace consumes and starts at one; stopping a namespace is what removing its grants or its pools is for",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#quotas-per-namespace"
+        },
+        {
+          "file": "wire/invalid/namespace-record-no-runner-pool.json",
+          "rule": "absent allows every pool that accepts the namespace, and a pool's own empty list of namespaces means every one, so an empty list here is refused rather than read",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#quotas-per-namespace"
+        },
+        {
+          "file": "wire/invalid/namespace-record-unknown-quota.json",
+          "rule": "the quotas are the six the documentation lists; a seventh would be a bound the engine never enforces",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#quotas-per-namespace"
+        },
+        {
+          "file": "wire/invalid/namespace-record-policy-loosened.json",
+          "rule": "a namespace may tighten the installation's policy and never loosen it, so allowing passwords where the installation forbids them is refused; it needs the installation's policy beside this record, so the API holds it",
+          "refused_by": "validator",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        }
+      ]
+    },
+    "auth-policy": {
+      "valid": [
+        {
+          "file": "wire/valid/auth-policy-defaults.json",
+          "covers": "the installation defaults, written out: password as a fallback, a passkey required, user verification required, synced passkeys accepted, two passkeys before a password may go"
+        },
+        {
+          "file": "wire/valid/auth-policy-passwords-forbidden.json",
+          "covers": "passwords turned off and synced passkeys refused, every other key at its default"
+        },
+        {
+          "file": "wire/valid/auth-policy-empty.json",
+          "covers": "a policy that states nothing, which is every default"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/auth-policy-min-passkeys-zero.json",
+          "rule": "min_passkeys is what a user must hold before the password may go, and zero would let it go from an account with nothing to replace it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/auth-policy-totp.json",
+          "rule": "no TOTP on top of a passkey: with user verification required an assertion already proves two factors, so the policy has no TOTP setting",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/auth-policy-user-verification-discouraged.json",
+          "rule": "user_verification is required or preferred; Web Authentication's discouraged would make a passkey one factor",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
         }
       ]
     }

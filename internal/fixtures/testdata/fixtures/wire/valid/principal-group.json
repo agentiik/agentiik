@@ -1,0 +1,8 @@
+{
+  "kind": "group",
+  "name": "team-finance",
+  "members": [
+    "alice",
+    "bob-martin"
+  ]
+}
