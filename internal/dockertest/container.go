@@ -53,6 +53,10 @@ type Container struct {
 	Signals []string
 
 	signal <-chan string
+
+	// volumes is what was on each volume the container has mounted when it started, by
+	// volume and file, which ReadFile answers from.
+	volumes map[string]map[string][]byte
 }
 
 // Signalled is what a container waits on to notice a stop. A container that ignores it
@@ -115,6 +119,7 @@ type live struct {
 
 	started    bool
 	exited     bool
+	holding    bool
 	code       int
 	oom        bool
 	signals    []string
@@ -156,6 +161,7 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 		signal: make(chan string, 8),
 		done:   newEnding(),
 	}
+	d.createVolumes(body.HostConfig.Mounts)
 	d.seq++
 	d.containers[l.id] = l
 	d.order = append(d.order, l)
@@ -208,6 +214,7 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	l.runs++
 	run, c := l.runs, l.containerLocked()
 	l.mu.Unlock()
+	c.volumes = d.mountVolumes(l)
 
 	d.emit(docker.Event{
 		Type: docker.EventTypeContainer, Action: docker.ActionStart,
@@ -215,7 +222,7 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 		Time:  time.Now().Unix(), TimeNano: time.Now().UnixNano(),
 	})
 
-	if d.opts.exitsDuringAttach {
+	if d.opts.exitsDuringAttach && !isHolder(l.config) {
 		// The container runs to completion before the answer to the start, and
 		// nothing it wrote reaches the attached stream. What it wrote is in the
 		// daemon's log, which is the reason AutoRemove is false.
@@ -234,7 +241,10 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) run(l *live, run int, c Container) {
 	code := 0
 	var err error
-	if d.opts.Run != nil {
+	switch {
+	case isHolder(l.config):
+		code, err = d.hold(l, c)
+	case d.opts.Run != nil:
 		code, err = d.opts.Run(c)
 	}
 	if err != nil {
@@ -253,6 +263,9 @@ func (d *Daemon) run(l *live, run int, c Container) {
 		code, oom = 137, true
 	}
 	ended := l.exit(run, code, oom)
+	if ended {
+		d.unmountVolumes(l)
+	}
 	// A real daemon closes the attached stream when the container exits, which is
 	// what gives a reader of it an end. The log is what survives afterwards.
 	l.closeStream(run)
@@ -409,9 +422,13 @@ func (d *Daemon) containerInspect(w http.ResponseWriter, r *http.Request) {
 	// used and which is where a driver adopting a container reads what it was given.
 	mounts := make([]docker.MountPoint, 0, len(host.Mounts))
 	for _, m := range host.Mounts {
-		mounts = append(mounts, docker.MountPoint{
-			Type: m.Type, Source: m.Source, Destination: m.Target, RW: !m.ReadOnly,
-		})
+		mp := docker.MountPoint{Type: m.Type, Source: m.Source, Destination: m.Target, RW: !m.ReadOnly}
+		if m.Type == docker.MountVolume {
+			// A daemon names a volume in Name and puts where it is mounted from on
+			// its own disk in Source.
+			mp.Name, mp.Source = m.Source, "/var/lib/docker/volumes/"+m.Source+"/_data"
+		}
+		mounts = append(mounts, mp)
 	}
 	writeJSON(w, http.StatusOK, docker.Inspected{
 		ID: l.id, Name: "/" + l.name, Image: l.config.Image,
@@ -480,6 +497,7 @@ func (d *Daemon) containerStop(w http.ResponseWriter, r *http.Request) {
 	case <-time.After(grace):
 		l.deliver(run, "SIGKILL")
 		if l.exit(run, 137, false) {
+			d.unmountVolumes(l)
 			d.emitExit(l, 137, false)
 		}
 	case <-r.Context().Done():
@@ -505,6 +523,7 @@ func (d *Daemon) containerKill(w http.ResponseWriter, r *http.Request) {
 	l.deliver(run, signal)
 	if signal == "SIGKILL" || signal == "KILL" || signal == "9" {
 		if l.exit(run, 137, false) {
+			d.unmountVolumes(l)
 			d.emitExit(l, 137, false)
 		}
 	}
@@ -529,6 +548,9 @@ func (d *Daemon) containerRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A container removed while it runs is killed first, as a daemon's forced removal
+	// kills it, and lets go of its volumes with it.
+	d.unmountVolumes(l)
 	d.mu.Lock()
 	delete(d.containers, id)
 	d.removed = append(d.removed, id)
@@ -547,6 +569,9 @@ func (d *Daemon) containerArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wanted := r.URL.Query().Get("path")
+	if d.volumeArchive(w, l, wanted) {
+		return
+	}
 
 	_, img, ok := d.image(l.config.Image)
 	if !ok || len(img.Manifest) == 0 {
