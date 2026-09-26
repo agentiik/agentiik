@@ -251,7 +251,7 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"runner_pools": true,
 		// The audit log is one chain across the installation, holding the acts of every
 		// namespace and of the installation itself, and the export reads it whole.
-		"audit_log": true, "audit_head": true, "audit_export": true,
+		"audit_log": true, "audit_head": true, "audit_export": true, "audit_verified": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

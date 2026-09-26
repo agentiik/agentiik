@@ -389,6 +389,19 @@ type term struct {
 	holder string
 }
 
+// listening is whether a session of this database listens for runs, which is how the one leading
+// hears of a run written after its term began.
+func listening(t *testing.T, conn *pgx.Conn) bool {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from pg_stat_activity where datname = current_database() and query = 'listen ' || $1::text`,
+		db.RunChannel).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n > 0
+}
+
 func termOf(t *testing.T, conn *pgx.Conn) term {
 	t.Helper()
 	var tm term
@@ -474,7 +487,12 @@ func TestOfTwoControllersOneLeadsAndTheOtherTakesOverWhenTheFirstIsKilled(t *tes
 	}, both...)
 
 	// It decides what it is told of, and a run it cannot decide ends nothing. The broken run
-	// is notified first, so the good one is decided after it or not at all.
+	// is notified first, so the good one is decided after it or not at all. Only once the
+	// leader listens: a run written before it does is found by its sweep instead, which says
+	// so in other words, and the term begins with more than listening to do.
+	eventually(t, 10*time.Second, "the leader listening for runs", func() bool {
+		return listening(t, conn)
+	}, both...)
 	started(t, pool, brokenCommit)
 	started(t, pool, goodCommit)
 	eventually(t, 30*time.Second, "the leader publishing the ready task of the run it could decide", func() bool {
@@ -565,7 +583,7 @@ func TestATermEndsAtTheFirstAnswerTheFenceRefuses(t *testing.T) {
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
 	o := options(c, queue, versionsOf(t, pool))
 	ended := make(chan error, 1)
-	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, logger(&log)) }()
+	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, nil, logger(&log)) }()
 
 	// Once results are being taken, and the sweep a term begins with has had time to pass.
 	js := b.streams(t)
