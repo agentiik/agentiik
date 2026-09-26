@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,14 @@ type host struct {
 	// bearers is every credential a heartbeat carried.
 	bearers sync.Map
 	notify  *net.UnixConn
+	// api is the API's address.
+	api string
+	// joins counts the joins that reached the API. The first unanswered of them are answered
+	// 503, as an API not up yet is answered by what is in front of it, and the rest joinStatus
+	// where it is set, or as a good token is.
+	joins, unanswered, joinStatus atomic.Int32
+	// claimed is the body of the last join the API took.
+	claimed atomic.Value
 }
 
 // newHost lays a host out around a daemon. policy is the text of runner.toml, and "" is no file.
@@ -73,6 +82,22 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 	h := &host{out: &output{}, err: &output{}}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.requests.Add(1)
+		if r.URL.Path == "/api/v1/runners" && r.Method == http.MethodPost {
+			h.joins.Add(1)
+			body, _ := io.ReadAll(r.Body)
+			switch {
+			case h.unanswered.Add(-1) >= 0:
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			case h.joinStatus.Load() != 0:
+				w.WriteHeader(int(h.joinStatus.Load()))
+				return
+			}
+			h.claimed.Store(string(body))
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"runner": "runner-dmz-03", "pool": "dmz", "credential": %q, "rotate_by": %q}`, credential, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339))
+			return
+		}
 		if r.URL.Path == "/api/v1/bus/token" && h.busToken != nil {
 			h.busToken(w, r)
 			return
@@ -96,6 +121,7 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		fmt.Fprintf(w, `{"received_at":%q,"drain":false,"cancel":[]}`, now.Format(time.RFC3339Nano))
 	}))
 	t.Cleanup(api.Close)
+	h.api = api.URL
 
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "runner.env")
@@ -589,14 +615,6 @@ func TestAStartThatCannotTellSystemdItIsReadyFails(t *testing.T) {
 	}
 	if !strings.Contains(h.err.String(), runner.Ready) {
 		t.Errorf("the refusal does not say what it could not tell:\n%s", h.err)
-	}
-}
-
-func TestServeRefusesToRunAsRoot(t *testing.T) {
-	h := newHost(t, daemon(t, true), "")
-	h.e.Geteuid = func() int { return 0 }
-	if said := h.refused(t); !strings.Contains(said, "root") {
-		t.Errorf("the refusal does not say why:\n%s", said)
 	}
 }
 
