@@ -6,6 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Upgrading
 
+- The Compose file gains a `bus` volume, mounted at `/bus` in `init` (`/init/bus`), the API and the controller (read only), with `AGK_BUS_CREDENTIALS_FILE=/bus/control-plane.creds` in both; the next `init` moves the credential there.
 - Values a runner before this one wrote under `<secrets_dir>/agentiik` are removed by nothing now; the runner names the path once at start, and the host tmpfs can go once it is empty.
 
 ### API
@@ -14,6 +15,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `AGK_PROXY_URL` puts the API behind a proxy on the same host: reached at that URL, plain HTTP on the loopback, `AGK_PUBLIC_URL` and the TLS pair left unread.
 - `agentiik-api health` exits 0 once the API beside it answers, for a Compose health check in the image, which has no shell.
 - `agentiik-api serve` takes a control plane bus credential renewed in `AGK_BUS_CREDENTIALS_FILE` when the bus drops the old one at its expiry, with no restart.
+- `agentiik-api serve` renews the control plane bus credential itself, at start and daily, from 14 days before its expiry, in `AGK_BUS_CREDENTIALS_FILE`, and warns only where it cannot.
+- `init` keeps the control plane bus credential in a new `bus` directory of `AGK_INIT_DIR`, shared by the API (read and write) and the controller (read only), and moves it there from `api/bus` and `controller/bus`.
 - `init` names no variable when it mints an operator token, and says to keep it where the installation's settings are.
 
 ### Controller

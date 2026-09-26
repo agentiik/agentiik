@@ -13,10 +13,11 @@ import (
 // controlPlaneLife is how long the control plane's bus credential is minted for: ninety days.
 //
 // It expires, because one that never does is one a stolen disk still holds. Ninety days rather than
-// the hour a runner's lasts, because what renews it is init, run at every docker compose up, or
-// somebody running bus-credential, and a chore that comes round every quarter, announced two weeks
-// ahead, is one a person does rather than one that is automated badly. The API and the controller
-// take the renewed one from their files with no restart.
+// the hour a runner's lasts, because a renewal that fails, where the API may not write to the
+// directory, leaves two weeks of daily warnings for a person to act on, which an hour would not.
+// The API renews it itself from fourteen days before, in the file the controller reads too, init
+// does at a docker compose up inside those days, and bus-credential where a person runs it; the
+// API and the controller take the renewed one from their files with no restart.
 const controlPlaneLife = 90 * 24 * time.Hour
 
 // busInit is agentiik-api bus-init DIR: the installation's NATS operator, application account and
@@ -68,7 +69,7 @@ func busCredential(dir string, now time.Time, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, `%s holds a new control plane credential, which expires at %s.
 
-Give the API and the controller their copies of it where each holds one elsewhere. Both take it from their files when the bus drops the credential it replaced, which works until its own expiry, and a restart takes it at once.
+Give the API and the controller their copies of it where each holds one elsewhere; agentiik-api init moves it to the directory the two share. Both take it from their files when the bus drops the credential it replaced, which works until its own expiry, and a restart takes it at once.
 `, path, expires.UTC().Format(time.RFC3339))
 	return exitStopped
 }
