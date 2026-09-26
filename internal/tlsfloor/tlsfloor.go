@@ -9,11 +9,17 @@
 // the toolchain's that a release or a library building its own configuration could move without
 // this module saying so.
 //
+// The floor holds for what the programs accept as well, through Server, where the API or the
+// controller's metrics serve TLS themselves.
+//
 // The one path allowed without TLS is one that crosses no network: a loopback address, which is
 // how a person runs agk against an installation on their own machine and how the tests reach the
 // servers they start, and a local unix socket, which is how a runner reaches its Docker daemon and
 // how PostgreSQL may be reached on the host it runs on. Neither leaves the kernel, and the socket
-// is guarded by its file permission, as the Channels table says.
+// is guarded by its file permission, as the Channels table says. The one exception that crosses a
+// network is not this package's to allow: the hop from a TLS terminator to the API or the metrics
+// listener, which internal/config says is plain where no certificate is given, on a network only
+// the terminator reaches.
 package tlsfloor
 
 import (

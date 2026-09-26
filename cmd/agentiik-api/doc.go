@@ -35,7 +35,8 @@
 //
 // It serves plain HTTP, to the TLS terminator in front on a network only the terminator reaches,
 // unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its key: then it serves TLS
-// itself, 1.3 where the client speaks it and 1.2 at the least.
+// itself, 1.3 where the client speaks it and 1.2 at the least. The certificate is read once, at
+// start, so a renewed one is served from the next restart.
 //
 // At SIGINT or SIGTERM it stops taking connections, ends the log streams at once so that their
 // readers resume at another API, and finishes the requests being answered, for up to thirty
