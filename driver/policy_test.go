@@ -93,7 +93,7 @@ nproc = { soft = 400, hard = 500 }
 		read any
 	}{
 		{"require_userns_remap", p.RequireUsernsRemap.Lifted(), p.RequireUsernsRemap},
-		{"secrets_dir", p.SecretsDirSkipped, p.SecretsDirSkipped},
+		{"secrets_dir", p.SecretsDirSkipped == "/run/agentiik/secrets", p.SecretsDirSkipped},
 		{"stop_grace", p.StopGrace == 30*time.Second, p.StopGrace},
 		{"helper", p.Helper == "/usr/local/lib/agentiik/agk-helper", p.Helper},
 		{"seccomp_profile", p.Seccomp == `{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}`, p.Seccomp},
@@ -137,7 +137,7 @@ func TestLoadPolicyKeepsTheDefaultsOfWhatItDoesNotWrite(t *testing.T) {
 	if p.RequireUsernsRemap.Lifted() {
 		t.Fatalf("a file that says nothing about the floor lifted it")
 	}
-	if p.PidsLimit != want.PidsLimit || p.Ulimits != want.Ulimits || p.StopGrace != want.StopGrace || p.TmpSize != want.TmpSize || p.SecretsDirSkipped || p.LogMaxBytes != want.LogMaxBytes {
+	if p.PidsLimit != want.PidsLimit || p.Ulimits != want.Ulimits || p.StopGrace != want.StopGrace || p.TmpSize != want.TmpSize || p.SecretsDirSkipped != "" || p.LogMaxBytes != want.LogMaxBytes {
 		t.Fatalf("one line moved more than its setting: %+v", p)
 	}
 }
@@ -593,8 +593,8 @@ func TestASecretsDirIsReadAndSaidToBeUnused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a file naming a secrets_dir was refused: %s", err)
 	}
-	if !p.SecretsDirSkipped {
-		t.Fatalf("the secrets_dir was read without saying it is unused")
+	if p.SecretsDirSkipped != "/run/agentiik/secrets" {
+		t.Fatalf("the secrets_dir was read as %q, and it is said to be unused by its path", p.SecretsDirSkipped)
 	}
 
 	daemon, err := dockertest.NewDaemon()
@@ -610,7 +610,7 @@ func TestASecretsDirIsReadAndSaidToBeUnused(t *testing.T) {
 	d.Close()
 	n := 0
 	for _, s := range said {
-		if strings.Contains(s, path+" names a secrets_dir") && strings.Contains(s, "the line can go") {
+		if strings.Contains(s, path+" names a secrets_dir") && strings.Contains(s, "the line can go") && strings.Contains(s, "/run/agentiik/secrets/agentiik") {
 			n++
 		}
 	}

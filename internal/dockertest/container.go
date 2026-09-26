@@ -120,6 +120,7 @@ type live struct {
 	started    bool
 	exited     bool
 	holding    bool
+	created    time.Time
 	code       int
 	oom        bool
 	signals    []string
@@ -160,6 +161,8 @@ func (d *Daemon) containerCreate(w http.ResponseWriter, r *http.Request) {
 		stdinW: pw,
 		signal: make(chan string, 8),
 		done:   newEnding(),
+
+		created: time.Now().UTC(),
 	}
 	d.createVolumes(body.HostConfig.Mounts)
 	d.seq++
@@ -453,7 +456,7 @@ func (d *Daemon) containerList(w http.ResponseWriter, r *http.Request) {
 		l.mu.Lock()
 		list = append(list, docker.Summary{
 			ID: l.id, Names: []string{"/" + l.name}, Image: l.config.Image,
-			State: l.status(), Labels: l.config.Labels,
+			State: l.status(), Labels: l.config.Labels, Created: l.created.Unix(),
 		})
 		l.mu.Unlock()
 	}

@@ -136,6 +136,9 @@ func TestTheHolderIsTheHelperAloneAndGoesOnceTheContainerHasStarted(t *testing.T
 	if !slices.Equal(append(h.Config.Entrypoint, h.Config.Cmd...), HolderCommand) || h.Config.Image != ref {
 		t.Errorf("the holder runs %v %v in %s", h.Config.Entrypoint, h.Config.Cmd, h.Config.Image)
 	}
+	if h.Config.Healthcheck == nil || !slices.Equal(h.Config.Healthcheck.Test, []string{"NONE"}) {
+		t.Errorf("the holder's health check is %+v, and the image's own would run image code beside the values", h.Config.Healthcheck)
+	}
 	if _, ok := h.Labels[LabelTask]; ok {
 		t.Errorf("the holder carries %s, and a redelivery would adopt it as the task's container", LabelTask)
 	}
@@ -217,9 +220,11 @@ func TestAVolumeUnderTheTasksNameThatIsNotItsTmpfsIsRefused(t *testing.T) {
 		_, err := r.Run(t.Context(), task)
 		runnersOwn(t, err, "a volume that is not the task's tmpfs")
 		for _, c := range r.daemon.Created() {
-			t.Errorf("a container was created on %+v: %v %v", spec, c.Config.Entrypoint, c.Config.Cmd)
+			if dockertest.IsHolder(c) || c.Labels[LabelTask] == string(task.ID) {
+				t.Errorf("a container was created on %+v: %v %v", spec, c.Config.Entrypoint, c.Config.Cmd)
+			}
 		}
-		if err := r.cli.VolumeRemove(t.Context(), spec.Name); err != nil {
+		if err := r.cli.VolumeRemove(t.Context(), spec.Name); err != nil && !docker.IsNotFound(err) {
 			t.Fatal(err)
 		}
 	}
@@ -262,8 +267,9 @@ func TestTheSweepTakesAwayTheSecretsVolumesAndHoldersARunnerLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filling: %s", err)
 	}
-	// The runner died holding it: the holder is not released, and it is old.
-	hold.id = ""
+	// The runner died holding it: its end of the attach goes, the holder's standard input
+	// ends and it exits, a moment ago, and nobody removes it.
+	diedHolding(t, r, hold)
 
 	adopted := taskWithASecret(ref)
 	adopted.ID = agk.NewTaskID(adopted.Run, "adopted", 1, agk.Shard{})
@@ -300,6 +306,48 @@ func TestTheSweepTakesAwayTheSecretsVolumesAndHoldersARunnerLeft(t *testing.T) {
 	}
 }
 
+// diedHolding is a runner that dies while its holder holds a volume: the attach goes with it,
+// the holder's standard input ends, and the holder exits and stays.
+func diedHolding(t *testing.T, r *runner, h *holder) {
+	t.Helper()
+	h.stream.Close()
+	h.once.Do(func() {})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		in, err := r.cli.ContainerInspect(t.Context(), h.id)
+		if err == nil && !in.State.Running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the holder did not exit when its standard input ended")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A runner that died between filling a volume and starting the task's container leaves the
+// holder it filled with, exited and naming the volume. The redelivery that adopts the
+// container takes both away with the task, rather than being refused the volume's removal by
+// a container nothing would remove before the runner's next start.
+func TestAHolderARunnerLeftGoesWithTheRedeliveredTask(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := secretsRunner(t, ref)
+	task := taskWithASecret(ref)
+	_, _, hold := stageHeld(t, r, task)
+	diedHolding(t, r, hold)
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil || result.State != agk.TaskSucceeded {
+		t.Fatalf("the redelivery ended %s: %v", result.State, err)
+	}
+	if left := r.daemon.Volumes(); len(left) != 0 {
+		t.Errorf("the volumes %v survived the task", left)
+	}
+	if !slices.Contains(r.daemon.Removed(), hold.id) {
+		t.Errorf("the holder the first delivery left survived the task")
+	}
+}
+
 // The command the holder runs is spelled in three places, the driver, the helper and the fake
 // daemon that plays the helper, and they are one spelling.
 func TestTheHolderCommandIsTheOneTheFakeDaemonPlays(t *testing.T) {
@@ -308,5 +356,30 @@ func TestTheHolderCommandIsTheOneTheFakeDaemonPlays(t *testing.T) {
 	}
 	if HolderCommand[0] != BinPath {
 		t.Errorf("the holder runs %s, and the helper is mounted at %s", HolderCommand[0], BinPath)
+	}
+}
+
+// The same runner dying before it created the task's container at all leaves the holder and
+// the volume and nothing to adopt: the redelivery creates the container afresh and still takes
+// the holder away with the volume.
+func TestAHolderARunnerLeftBeforeTheContainerGoesWithTheTask(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+	r := secretsRunner(t, ref)
+	task := taskWithASecret(ref)
+	hold, _, err := r.fillSecrets(t.Context(), task, ref, []secretFile{{Name: "bearer", Value: []byte("s3cr3t-value")}})
+	if err != nil {
+		t.Fatalf("filling: %s", err)
+	}
+	diedHolding(t, r, hold)
+
+	result, err := r.Run(t.Context(), task)
+	if err != nil || result.State != agk.TaskSucceeded {
+		t.Fatalf("the redelivery ended %s: %v", result.State, err)
+	}
+	if left := r.daemon.Volumes(); len(left) != 0 {
+		t.Errorf("the volumes %v survived the task", left)
+	}
+	if !slices.Contains(r.daemon.Removed(), hold.id) {
+		t.Errorf("the holder the first delivery left survived the task")
 	}
 }

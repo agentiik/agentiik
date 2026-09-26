@@ -342,8 +342,8 @@ func (d *Daemon) networkRemove(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Backdate makes a network or a volume older than it is, a network by its identifier or its
-// name and a volume by its name, which is how a test leaves one behind as a process that died
+// Backdate makes a network, a volume or a container older than it is, a network by its
+// identifier or its name, a volume by its name and a container by its identifier, which is how a test leaves one behind as a process that died
 // a while ago left it. It answers false where there is no such network or volume.
 func (d *Daemon) Backdate(ref string, by time.Duration) bool {
 	d.mu.Lock()
@@ -355,6 +355,12 @@ func (d *Daemon) Backdate(ref string, by time.Duration) bool {
 	}
 	if v, ok := d.volumes[ref]; ok {
 		v.created = v.created.Add(-by)
+		return true
+	}
+	if l, ok := d.containers[ref]; ok {
+		l.mu.Lock()
+		l.created = l.created.Add(-by)
+		l.mu.Unlock()
 		return true
 	}
 	return false

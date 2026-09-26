@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -205,8 +206,8 @@ func New(cfg Config) (*Docker, error) {
 	if cfg.Policy.HooksSkipped {
 		d.say(sourceOf(cfg.Policy) + " has a [hooks] table, and this runner runs no hook: runner-side hooks arrive in v0.9.0, so nothing in it runs before or after a task.")
 	}
-	if cfg.Policy.SecretsDirSkipped {
-		d.say(sourceOf(cfg.Policy) + " names a secrets_dir, and this runner writes no secret value on the host: a task's values are on a tmpfs volume of its own, which the daemon mounts from memory and removes with the task, so the line can go.")
+	if dir := cfg.Policy.SecretsDirSkipped; dir != "" {
+		d.say(sourceOf(cfg.Policy) + " names a secrets_dir, and this runner writes no secret value on the host: a task's values are on a tmpfs volume of its own, which the daemon mounts from memory and removes with the task, so the line can go, and so can the tmpfs once nothing is left under " + filepath.Join(dir, "agentiik") + ", where a runner before this one wrote values and nothing now removes them.")
 	}
 
 	d.wg.Add(1)

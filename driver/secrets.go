@@ -102,10 +102,7 @@ func secretsLabels(t graph.Task) map[string]string {
 // the base of its range: without uid and gid the tmpfs belongs to the host's own root, whom a
 // remapped container cannot write as.
 func volumeOptions(files []secretFile, uid, gid int, remapped bool) map[string]string {
-	var total int64
-	for _, f := range files {
-		total += int64(len(f.Value))
-	}
+	total := valuesSize(files)
 	// A megabyte over the values, and a page of the largest size a kernel uses for each,
 	// so that a value of any size fits whatever the page size is.
 	size := total + int64(len(files))*(64<<10) + (1 << 20)
@@ -114,6 +111,15 @@ func volumeOptions(files []secretFile, uid, gid int, remapped bool) map[string]s
 		o = append(o, "uid="+strconv.Itoa(uid), "gid="+strconv.Itoa(gid))
 	}
 	return map[string]string{"type": volumeTmpfs, "device": volumeTmpfs, "o": strings.Join(o, ",")}
+}
+
+// valuesSize is what the values take together.
+func valuesSize(files []secretFile) int64 {
+	var total int64
+	for _, f := range files {
+		total += int64(len(f.Value))
+	}
+	return total
 }
 
 // secretsMount is the task's secrets volume at /agk/secrets, read-only.
@@ -178,12 +184,16 @@ func (d *Docker) fillSecrets(ctx context.Context, t graph.Task, image string, fi
 		return nil, docker.Mount{}, err
 	}
 	config := docker.Config{
-		Image:        image,
-		Entrypoint:   HolderCommand[:1],
-		Cmd:          HolderCommand[1:],
-		User:         "0:0",
-		WorkingDir:   "/",
-		Labels:       secretsLabels(t),
+		Image:      image,
+		Entrypoint: HolderCommand[:1],
+		Cmd:        HolderCommand[1:],
+		User:       "0:0",
+		WorkingDir: "/",
+		Labels:     secretsLabels(t),
+		// The image's own health check would run image code in the holder, as root
+		// and with the volume writable, and the daemon keeps what a check prints on
+		// its disk.
+		Healthcheck:  &docker.HealthConfig{Test: []string{"NONE"}},
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -197,7 +207,8 @@ func (d *Docker) fillSecrets(ctx context.Context, t graph.Task, image string, fi
 		ReadonlyRootfs: true,
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    securityOptions(d.cfg.Policy),
-		Resources:      docker.Resources{Memory: holderMemory, PidsLimit: &pids},
+		// The tmpfs pages the holder writes are counted against its memory.
+		Resources: docker.Resources{Memory: holderMemory + valuesSize(files), PidsLimit: &pids},
 	}
 	created, err := d.cli.ContainerCreate(ctx, "", config, host, docker.NetworkingConfig{})
 	if err != nil {
@@ -310,15 +321,34 @@ func (h *holder) release(ctx context.Context) {
 
 // removeSecrets takes the task's secrets volume away, once no container uses it, and says
 // what it could not take away. Said and not returned, for the reason tidy says a directory.
+//
+// A holder an earlier delivery left, one whose runner died before it let it go, is removed
+// first: it has exited, since its standard input ended with that runner, and it still names
+// the volume, which the daemon would otherwise refuse to remove. It belongs to this task,
+// which this process holds.
 func (d *Docker) removeSecrets(ctx context.Context, t graph.Task) {
 	if len(t.Secrets) == 0 {
 		return
 	}
 	tidy, cancel := context.WithTimeout(context.WithoutCancel(ctx), removalGrace)
 	defer cancel()
+	d.removeHolders(tidy, t)
 	name := secretsVolume(t.ID)
 	if err := d.cli.VolumeRemove(tidy, name); err != nil && !docker.IsNotFound(err) {
 		d.say(fmt.Sprintf("%s left its secrets volume %s on this daemon, and the runner's next start sweeps it once no container uses it: %v", t.Step, name, err))
+	}
+}
+
+// removeHolders removes every holder of the task's secrets volume, whichever delivery made it.
+func (d *Docker) removeHolders(ctx context.Context, t graph.Task) {
+	left, err := d.cli.ContainerList(ctx, docker.Filters{}.Add("label", LabelSecrets+"="+string(t.ID)))
+	if err != nil {
+		return
+	}
+	for _, c := range left {
+		if err := d.cli.ContainerRemove(ctx, c.ID, true); err != nil && !docker.IsNotFound(err) {
+			d.say(fmt.Sprintf("%s left a container that filled its secrets volume on this daemon, and it was not removed: %v", t.Step, err))
+		}
 	}
 }
 
@@ -367,10 +397,11 @@ func ownSecretsVolume(t graph.Task, mounts []docker.MountPoint) bool {
 // sweepSecrets removes the holders and the secrets volumes an earlier process left: a runner
 // that died while a volume was being filled leaves the holder, which ends when its standard
 // input does and stays as a container that has exited, and one that died before it removed a
-// task's volume leaves the volume. A volume a container still uses is refused by the daemon
-// and left, since a delivery that adopts that container will need it; one younger than
-// sweepAge, or of a task this process holds, is another live process's, as sweepAge says of a
-// network.
+// task's volume leaves the volume. A holder that has exited holds nothing, whatever its age,
+// and is removed; a running one is another live process's filling unless it is older than
+// sweepAge. A volume a container still uses is refused by the daemon and left, since a
+// delivery that adopts that container will need it; one younger than sweepAge, or of a task
+// this process holds, is another live process's, as sweepAge says of a network.
 func (d *Docker) sweepSecrets(ctx context.Context) error {
 	holders, err := d.cli.ContainerList(ctx, docker.Filters{}.Add("label", LabelSecrets))
 	if err != nil {
@@ -379,7 +410,7 @@ func (d *Docker) sweepSecrets(ctx context.Context) error {
 	left := d.now().Add(-sweepAge)
 	for _, c := range holders {
 		task := c.Labels[LabelSecrets]
-		if d.lookup(agk.TaskID(task)) != nil || time.Unix(c.Created, 0).After(left) {
+		if d.lookup(agk.TaskID(task)) != nil || (c.State == "running" && time.Unix(c.Created, 0).After(left)) {
 			continue
 		}
 		if err := d.cli.ContainerRemove(ctx, c.ID, true); err != nil && !docker.IsNotFound(err) {

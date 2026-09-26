@@ -31,6 +31,11 @@ type Config struct {
 	WorkingDir string            `json:"WorkingDir,omitempty"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 
+	// Healthcheck replaces the image's own. Left out, the daemon runs whatever check the
+	// image declares inside the container, which is image code a container of the
+	// runner's own must not run.
+	Healthcheck *HealthConfig `json:"Healthcheck,omitempty"`
+
 	AttachStdin  bool `json:"AttachStdin"`
 	AttachStdout bool `json:"AttachStdout"`
 	AttachStderr bool `json:"AttachStderr"`
@@ -42,6 +47,11 @@ type Config struct {
 	// shorthand's standard output be published while standard error goes to the
 	// masked log.
 	Tty bool `json:"Tty"`
+}
+
+// HealthConfig is a container's health check. Test ["NONE"] turns off the image's.
+type HealthConfig struct {
+	Test []string `json:"Test,omitempty"`
 }
 
 // HostConfig is the settings table of the documentation, field for field. It is written

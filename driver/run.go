@@ -629,6 +629,9 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 		return graph.Result{}, err
 	}
 	if len(g.Secrets) > 0 {
+		// The holder the first delivery left, exited when its runner went, is removed
+		// first, so that the volume is held by this delivery's alone.
+		d.removeHolders(ctx, t)
 		hold, _, err := d.fillSecrets(ctx, t, image.Ref, g.Secrets)
 		if err != nil {
 			return graph.Result{}, err

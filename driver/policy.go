@@ -234,12 +234,12 @@ type Policy struct {
 	// having run.
 	HooksSkipped bool
 
-	// SecretsDirSkipped says the file names a secrets_dir, which this version reads and
+	// SecretsDirSkipped is the secrets_dir the file names, which this version reads and
 	// uses for nothing: a task's secret values are on a tmpfs volume of its own, which no
 	// directory of the host names. The line is still read rather than refused, so that a
 	// file written for the version before this one does not stop its runner, and the
-	// driver says once that it can go.
-	SecretsDirSkipped bool
+	// driver says once that it can go, with what the version before left under it.
+	SecretsDirSkipped string
 }
 
 // DefaultPolicy is the runner as it is installed: both floors in place, the documented
@@ -359,7 +359,9 @@ func readPolicy(path string, text []byte) (Policy, error) {
 	// Read off the document rather than the struct: an empty [hooks] decodes into
 	// nothing, and it is still a table somebody wrote.
 	_, p.HooksSkipped = raw["hooks"]
-	p.SecretsDirSkipped = f.SecretsDir != nil
+	if f.SecretsDir != nil {
+		p.SecretsDirSkipped = *f.SecretsDir
+	}
 	return p, nil
 }
 
