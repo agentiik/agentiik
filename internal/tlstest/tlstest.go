@@ -30,6 +30,12 @@ type Pair struct {
 // NewPair makes a pair valid from an hour ago until notAfter.
 func NewPair(t testing.TB, notAfter time.Time) Pair {
 	t.Helper()
+	return NewPairFrom(t, time.Now().Add(-time.Hour), notAfter)
+}
+
+// NewPairFrom makes a pair valid from notBefore until notAfter.
+func NewPairFrom(t testing.TB, notBefore, notAfter time.Time) Pair {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +43,7 @@ func NewPair(t testing.TB, notAfter time.Time) Pair {
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "127.0.0.1"},
-		NotBefore:             time.Now().Add(-time.Hour),
+		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

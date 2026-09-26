@@ -155,6 +155,43 @@ func TestACertificateThatCannotBeServedRefusesTheStart(t *testing.T) {
 			},
 			want: config.TLSCertFile,
 		},
+		"a certificate and its key in one file": {
+			fault: func(t *testing.T, i *installation) {
+				chain, err := os.ReadFile(i.env[config.TLSCertFile])
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := os.ReadFile(i.env[config.TLSKeyFile])
+				if err != nil {
+					t.Fatal(err)
+				}
+				both := i.write(t, "combined.pem", append(key, chain...))
+				i.env[config.TLSCertFile], i.env[config.TLSKeyFile] = both, both
+			},
+			want: config.TLSCertFile,
+		},
+		"a key after the certificate, in the certificate's file": {
+			fault: func(t *testing.T, i *installation) {
+				chain, err := os.ReadFile(i.env[config.TLSCertFile])
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := os.ReadFile(i.env[config.TLSKeyFile])
+				if err != nil {
+					t.Fatal(err)
+				}
+				i.env[config.TLSCertFile] = chmod(t, i.write(t, "combined.pem", append(chain, key...)), 0o644)
+			},
+			want: config.TLSCertFile,
+		},
+		"a certificate not valid yet": {
+			fault: func(t *testing.T, i *installation) {
+				early := tlstest.NewPairFrom(t, time.Now().Add(time.Hour), time.Now().Add(48*time.Hour))
+				i.secrets = append(i.secrets, string(early.Key))
+				i.env[config.TLSCertFile], i.env[config.TLSKeyFile] = early.Write(t, t.TempDir())
+			},
+			want: config.TLSCertFile,
+		},
 		"a certificate that expired": {
 			fault: func(t *testing.T, i *installation) {
 				expired := tlstest.NewPair(t, time.Now().Add(-time.Minute))

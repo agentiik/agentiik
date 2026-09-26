@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/internal/tlsfloor"
@@ -76,33 +77,47 @@ func (r *reader) served(listener string) TLS {
 		r.refuse(TLSCertFile, reason)
 		return TLS{}
 	}
-	if now := time.Now(); now.After(leaf.NotAfter) {
+	switch now := time.Now(); {
+	case now.After(leaf.NotAfter):
 		r.refuse(TLSCertFile, fmt.Sprintf("names a certificate that expired at %s, which every client refuses", leaf.NotAfter.UTC().Format(time.RFC3339)))
+		return TLS{}
+	case now.Before(leaf.NotBefore):
+		r.refuse(TLSCertFile, fmt.Sprintf("names a certificate valid from %s only, which every client refuses until then: check this host's clock", leaf.NotBefore.UTC().Format(time.RFC3339)))
 		return TLS{}
 	}
 	if _, err := tls.X509KeyPair(chain, key); err != nil {
-		// What crypto/tls says of a key is a sentence of its own that quotes none of it.
-		r.refuse(TLSKeyFile, "names a file holding no private key for the certificate "+TLSCertFile+" names: "+err.Error())
+		// What crypto/tls says of a key is a sentence of its own that quotes none of it. The
+		// certificate the key is paired with is the chain's first, so a chain in another order
+		// is refused here too, and the refusal says so.
+		r.refuse(TLSKeyFile, "names a file holding no private key for the first certificate "+TLSCertFile+" names, which is the server's own, since a chain begins with it: "+err.Error())
 		return TLS{}
 	}
 	return TLS{Certificate: string(chain), Key: Secret(key)}
 }
 
 // firstCertificate is the server's own certificate, the first of a PEM chain, or why there is none.
+//
+// A file holding a private key beside the chain, as haproxy and some ACME clients write one, is
+// refused. Held as the certificate, the key would be a value the configuration prints, and the file
+// a key's file excused from the mode a key's is held to.
 func firstCertificate(chain []byte) (*x509.Certificate, string) {
+	var leaf *x509.Certificate
 	for rest := chain; ; {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
-		if block == nil {
+		switch {
+		case block == nil && leaf == nil:
 			return nil, "names a file holding no PEM certificate, which begins -----BEGIN CERTIFICATE-----"
-		}
-		if block.Type != "CERTIFICATE" {
+		case block == nil:
+			return leaf, ""
+		case strings.Contains(block.Type, "PRIVATE KEY"):
+			return nil, "names a file holding a private key, which belongs in the file " + TLSKeyFile + " names and nowhere else, since this one is held to no secret's rules"
+		case block.Type != "CERTIFICATE" || leaf != nil:
 			continue
 		}
-		leaf, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
+		var err error
+		if leaf, err = x509.ParseCertificate(block.Bytes); err != nil {
 			return nil, "names a file whose first certificate cannot be read: " + err.Error()
 		}
-		return leaf, ""
 	}
 }
