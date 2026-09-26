@@ -24,8 +24,9 @@
 # namespace, with cap_drop ALL and cap_add CHOWN, FOWNER, DAC_OVERRIDE, SETUID and SETGID, the
 # daemon socket mounted, and the work root mounted at the path it has on the host, since the
 # daemon resolves every bind source there. serve gives the agent's directories to agentiik, takes
-# the group that owns the socket, drops to agentiik and starts itself again, so nothing is
-# prepared on the host and no group is named in the Compose file.
+# the group that owns the socket, drops to agentiik and starts itself again, so neither a
+# directory nor a group is prepared on the host or named in the Compose file. The secrets
+# directory runner.toml names is mounted as well, as a tmpfs.
 
 # The certificates and setcap come from alpine:3.21, which is the one image the tests already name
 # and pull, pinned to the minor for the reason the Go version is. This stage runs on the builder's
@@ -41,9 +42,10 @@ RUN apk add --no-cache libcap-setcap
 # systemd unit gives them with AmbientCapabilities. A process that sets its user from root to
 # agentiik loses every capability it held, and so does one the runtime starts as agentiik, since
 # the runtime sets no ambient ones; the file's are what the exec that follows grants again, within
-# the bounding set cap_add leaves, and CAP_SETUID and CAP_SETGID are not among them. Without them the agent refuses a remapped daemon, since it could not own a
-# task's directory inside the range. The effective bit makes the kernel refuse the exec outright
-# where the bounding set lacks one of the three, as cap_drop ALL alone leaves it.
+# the bounding set cap_add leaves, and CAP_SETUID and CAP_SETGID are not among them. Without the
+# three the agent refuses a remapped daemon, since it could not own a task's directory inside the
+# range. The effective bit makes the kernel refuse the exec outright where the bounding set lacks
+# one of the three, as cap_drop ALL alone leaves it.
 COPY agk-runner-linux-${TARGETARCH} /out/usr/local/bin/agk-runner
 RUN setcap cap_chown,cap_fowner,cap_dac_override=ep /out/usr/local/bin/agk-runner
 

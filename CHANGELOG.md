@@ -11,7 +11,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Runner
 
 - `agk-runner serve` started as root gives the key's directory, the work root and `runner.env`'s directory to `agentiik`, takes the group owning the Docker socket, drops to `agentiik` and starts itself again. It still never serves as root.
-- `serve` given `AGK_RUNNER_JOIN_TOKEN` or `AGK_RUNNER_JOIN_TOKEN_FILE` joins when the host has no identity, waiting up to 5 minutes for an API that does not answer, and joins again as a new runner when `AGK_API`, `AGK_RUNNER_LABELS` or `AGK_RUNNER_NAMESPACES` in its environment differ from what it joined with. Without a token, one set in the environment to another value than `runner.env` holds refuses the start.
+- `serve` given `AGK_RUNNER_JOIN_TOKEN` or `AGK_RUNNER_JOIN_TOKEN_FILE` joins when the host has no identity, waiting up to 5 minutes for an API that does not answer, and joins again as a new runner when its key or `runner.env` is gone, or when `AGK_API`, `AGK_RUNNER_LABELS` or `AGK_RUNNER_NAMESPACES` in its environment differ from what it joined with, an unset one claiming none.
 
 ## v0.2.3, 2026-09-26
 

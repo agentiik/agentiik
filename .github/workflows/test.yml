@@ -204,8 +204,9 @@ jobs:
               -f build/runner.Dockerfile "$RUNNER_TEMP/image"
           done
 
-      # The host as the page lays it out: the work root, runner.env, runner.toml and the key owned
-      # by the image's account, 65532, and the secrets tmpfs mounted noexec,nosuid,nodev. runner.env
+      # The host as the page lays it out: runner.env, runner.toml and the key owned by the image's
+      # account, 65532, and the secrets tmpfs mounted noexec,nosuid,nodev. /var/lib/agentiik is
+      # left root's, as Docker creates a bind source, for the image started as root to give it. runner.env
       # and the key are what join writes, with an API nothing listens at, since serve calls none
       # before it is ready.
       - name: host
@@ -217,7 +218,7 @@ jobs:
             | sudo tee /etc/agentiik/runner.env >/dev/null
           echo 'secrets_dir = "/run/agentiik/secrets"' | sudo tee /etc/agentiik/runner.toml >/dev/null
           sudo openssl genpkey -algorithm ed25519 -out /var/lib/agentiik/runner.key
-          sudo chown 65532:65532 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik /var/lib/agentiik/runner.key
+          sudo chown 65532:65532 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik/runner.key
           sudo chmod 600 /etc/agentiik/runner.env /etc/agentiik/runner.toml /var/lib/agentiik/runner.key
 
           # The Compose sample's runner service, as docker run options: started as root, which
@@ -272,6 +273,8 @@ jobs:
               [ $form = nonroot_form ] || echo "$said" | grep 'started as root' >/dev/null
             done
           done
+          # The image started as root gave the agent the directory Docker would have left root's.
+          test "$(stat -c %u /var/lib/agentiik)" = 65532
 
       - name: past the floor
         run: |

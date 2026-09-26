@@ -33,8 +33,8 @@
 // # Joining on its own
 //
 // serve given a join token, in AGK_RUNNER_JOIN_TOKEN or the file AGK_RUNNER_JOIN_TOKEN_FILE names,
-// joins where the host has no identity yet, and joins again where its environment claims another
-// address, other labels or other namespaces than the runner.env it joined with, so that a runner
-// configured by its environment at every start is never one serving as a runner that environment
-// no longer describes.
+// joins where the host has no identity yet, and joins again where its key or runner.env is gone or
+// its environment claims another address, other labels or other namespaces than the runner.env it
+// joined with, so that a runner configured by its environment at every start is never one serving
+// as a runner that environment no longer describes.
 package main

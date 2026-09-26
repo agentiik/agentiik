@@ -250,6 +250,22 @@ func WorkRoot(lookup Lookup, path string) (string, error) {
 	return dir, r.err()
 }
 
+// sameSetting says whether two spellings of a setting say the same thing: the address without its
+// trailing slashes, since the client reaches it so, and a list as the set of its items, since what
+// a runner claims has no order. Anything else is the same only as written.
+func sameSetting(name, a, b string) bool {
+	switch name {
+	case API:
+		return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
+	case Labels, Namespaces:
+		as, bs := strings.Split(a, ","), strings.Split(b, ",")
+		slices.Sort(as)
+		slices.Sort(bs)
+		return slices.Equal(as, bs)
+	}
+	return a == b
+}
+
 // reader reads one start's settings and keeps every refusal.
 type reader struct {
 	lookup Lookup
@@ -282,10 +298,9 @@ func (r *reader) env(name string) (string, bool) {
 func (r *reader) value(name string) (string, bool) {
 	fromEnv, inEnv := r.env(name)
 	fromFile, inFile := r.file[name]
-	// The address is the same one written with trailing slashes or without, since the client
-	// reaches it without them, and Drifted compares it so: a runner that did not join again for
-	// a slash is not one to refuse for it.
-	if name == API && strings.TrimRight(fromEnv, "/") == strings.TrimRight(fromFile, "/") {
+	// Written two ways that say the same thing, the two are one value, and Drifted compares
+	// them so: a runner that did not join again for a spelling is not one to refuse for it.
+	if inEnv && inFile && sameSetting(name, fromEnv, fromFile) {
 		fromFile = fromEnv
 	}
 	switch {

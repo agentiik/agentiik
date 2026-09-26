@@ -151,16 +151,19 @@ func serve(ctx context.Context, e env, args []string) int {
 // need not wait that long.
 var joinPatience = 5 * time.Minute
 
-// joinFirst joins with the join token serve was given where this host has no identity yet, or has
-// one its environment has moved on from, and says whether the start ends there, with its code.
+// joinFirst joins with the join token serve was given where this host has no identity yet, has
+// half of one, its key or runner.env gone, or has one its environment has moved on from, and says
+// whether the start ends there, with its code.
 //
 // A runner given a join token is one its environment configures at every start, as a Compose file
 // does, so the address and the labels it serves with are the environment's, never ones a first
 // start wrote down and nothing changes afterwards. The identity cannot follow them, since the API
 // checked what the runner claims against the token it joined with, so a runner whose environment
 // says otherwise joins again, as join --replace does: a new runner with a new key, the one it was
-// staying registered until an administrator revokes it. It joins as the account it serves as, so
-// what it writes is that account's already.
+// staying registered until an administrator revokes it. What the environment leaves unset it
+// claims none of, labels and namespaces alike, but AGK_API, without which there is nothing to join,
+// is refused unset rather than read from the file. It joins as the account it serves as, so what it
+// writes is that account's already.
 func joinFirst(ctx context.Context, e env, token runner.Secret, socket string, log func(string)) (int, bool) {
 	given := runner.JoinToken
 	if v, _ := e.Lookup(runner.JoinTokenFile); v != "" {
@@ -170,6 +173,10 @@ func joinFirst(ctx context.Context, e env, token runner.Secret, socket string, l
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
 		}
+		return exitRefused, true
+	}
+	if v, _ := e.Lookup(runner.API); v == "" {
+		fmt.Fprintln(e.Err, "agk-runner serve: "+runner.API+" is not set, and a runner given a join token in "+given+" is configured by its environment at every start, where the address it joins and serves with is: set it")
 		return exitRefused, true
 	}
 
@@ -198,7 +205,7 @@ func joinFirst(ctx context.Context, e env, token runner.Secret, socket string, l
 			log("this host has joined already, and its environment claims what it joined with, so the join token in " + given + " is not used")
 			return 0, false
 		default:
-			log(strings.Join(drifted, ", ") + " in the environment says otherwise than " + e.EnvFile + ", which this runner joined with, so it joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
+			log("the environment claims otherwise of " + strings.Join(drifted, ", ") + " than " + e.EnvFile + ", which this runner joined with, so it joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
 			replace = true
 		}
 	}

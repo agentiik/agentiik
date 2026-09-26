@@ -51,39 +51,54 @@ func newRootHost(t *testing.T) *asRootHost {
 	// below where anything is, and each its own.
 	fresh := t.TempDir()
 	h.e.KeyFile = filepath.Join(fresh, "lib", "runner.key")
-	h.e.CredentialFile = filepath.Join(fresh, "lib", "credential")
+	h.e.CredentialFile = filepath.Join(fresh, "state", "credential")
 	h.set("AGK_RUNNER_WORKDIR", filepath.Join(fresh, "work", "root"))
+	env := filepath.Join(fresh, "etc", "runner.env")
+	if err := os.MkdirAll(filepath.Dir(env), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(h.e.EnvFile, env); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(env), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.e.EnvFile = env
 	return h
 }
 
-// groupOf is the group that owns path.
-func groupOf(t *testing.T, path string) int {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+// socketOwnedBy has the daemon socket stand for one owned by group, which a test cannot give a file
+// to where it is not in it.
+func socketOwnedBy(t *testing.T, group int) {
+	was := socketGroupOf
+	socketGroupOf = func(path string) (int, error) {
+		if _, err := socketGroup(path); err != nil {
+			return 0, err
+		}
+		return group, nil
 	}
-	return int(info.Sys().(*syscall.Stat_t).Gid)
+	t.Cleanup(func() { socketGroupOf = was })
 }
 
 // Started as root, serve prepares what the agent needs, takes the group of the socket it was given
 // and becomes the agent's account, before asking the API anything or saying it is ready.
 func TestServeStartedAsRootTakesTheSocketsGroupAndBecomesTheAgent(t *testing.T) {
 	h := newRootHost(t)
-	socket, _ := h.e.Lookup("DOCKER_HOST")
+	socketOwnedBy(t, 4242)
+	// Where runner.env goes on a host that never joined, in a directory nobody made yet, as a
+	// volume's is before anything is written to it.
+	h.e.EnvFile = filepath.Join(t.TempDir(), "etc", "agentiik", "runner.env")
 	if code := run(context.Background(), h.e, []string{"serve"}); code != exitSucceeded {
 		t.Fatalf("serve started as root exited %d:\n%s", code, h.err)
 	}
 	if h.calls != 1 {
 		t.Fatalf("serve became the agent %d times, want once:\n%s", h.calls, h.err)
 	}
-	for _, want := range []int{h.agent.GID, groupOf(t, socket)} {
-		if !slices.Contains(h.became, want) {
-			t.Errorf("serve took the groups %v, which leave out %d", h.became, want)
-		}
+	if want := []int{h.agent.GID, 4242}; !slices.Equal(h.became, want) {
+		t.Errorf("serve took the groups %v, want the agent's and the socket's, %v", h.became, want)
 	}
 	work, _ := h.e.Lookup("AGK_RUNNER_WORKDIR")
-	for _, dir := range []string{filepath.Dir(h.e.KeyFile), work, filepath.Dir(h.e.EnvFile)} {
+	for _, dir := range []string{filepath.Dir(h.e.KeyFile), filepath.Dir(h.e.CredentialFile), work, filepath.Dir(h.e.EnvFile)} {
 		info, err := os.Stat(dir)
 		if err != nil || !info.IsDir() {
 			t.Errorf("%s was not prepared for the agent: %v", dir, err)

@@ -12,6 +12,10 @@ import (
 	"github.com/agentiik/agentiik/runner"
 )
 
+// socketGroupOf is socketGroup, and a variable so that a test, whose sockets are all its own
+// group's, can stand for a host whose socket is another's.
+var socketGroupOf = socketGroup
+
 // asRoot is serve started as root, as the image starts it: it prepares what the agent needs, takes
 // the group that owns the daemon's socket, drops to the agent's account and starts itself again as
 // that account, which serves. It never serves as root, and where any of that cannot be done it
@@ -46,7 +50,7 @@ func asRoot(e env, log func(string)) int {
 	if serr == nil {
 		var path string
 		if path, serr = docker.SocketPath(socket); serr == nil {
-			group, serr = socketGroup(path)
+			group, serr = socketGroupOf(path)
 		}
 	}
 	workRoot, werr := runner.WorkRoot(e.Lookup, e.EnvFile)

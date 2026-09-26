@@ -125,7 +125,7 @@ func TestServeJoinsAgainWhenItsEnvironmentClaimsOtherwiseThanItJoinedWith(t *tes
 	if now, _ := os.ReadFile(h.e.KeyFile); string(now) == string(key) {
 		t.Error("the runner joined again with the key it had, and a new runner has a new key")
 	}
-	for _, want := range []string{runner.Labels + " in the environment says otherwise", "serving as runner-dmz-03"} {
+	for _, want := range []string{"the environment claims otherwise of " + runner.Labels, "serving as runner-dmz-03"} {
 		if !strings.Contains(h.err.String(), want) {
 			t.Errorf("the agent's log does not say %q:\n%s", want, h.err)
 		}
@@ -324,5 +324,32 @@ func TestAHostThatLostHalfItsIdentityJoinsAgainWithItsJoinToken(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Labels claimed in another order are the labels the runner joined with: it joins no more for an
+// order, and serves.
+func TestLabelsInAnotherOrderAreTheOnesTheRunnerJoinedWith(t *testing.T) {
+	for _, token := range []bool{false, true} {
+		h := newHost(t, daemon(t, true), secretsTmpfs)
+		h.set(runner.API, h.api)
+		h.set(runner.Labels, "arch=amd64,zone=dmz")
+		if token {
+			h.withTokenFile(t)
+		}
+		h.serving(t)
+		if n := h.joins.Load(); n != 0 {
+			t.Errorf("with a token %v, the runner joined %d times for an order", token, n)
+		}
+	}
+}
+
+// A runner given a join token is configured by its environment, and one that names no API is
+// refused, saying so, rather than joined or served with the address the file holds.
+func TestARunnerGivenAJoinTokenAndNoAPIIsRefused(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.withTokenFile(t)
+	if said := h.refused(t); !strings.Contains(said, runner.API+" is not set, and a runner given a join token") {
+		t.Errorf("the refusal does not say why:\n%s", said)
 	}
 }

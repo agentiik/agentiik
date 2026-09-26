@@ -84,8 +84,8 @@ func joinTokenOf(name, s string) (Secret, error) {
 // join writes before it.
 //
 // A key alone is an identity too, since join puts the key in place before runner.env and a host
-// holding one has spent a token already: joining again would only be refused, or orphan the runner
-// the key belongs to.
+// holding one has spent a token already. It answers only whether the host has one: a caller that
+// joins again over it, as serve does over half an identity, does so knowingly, with Replace.
 func HasJoined(envPath, keyPath string) (bool, error) {
 	r := &reader{path: envPath, file: map[string]string{}, written: map[string]bool{}}
 	_, identity := Joining{EnvPath: envPath}.existing(r)
@@ -167,13 +167,7 @@ func Drifted(lookup Lookup, path string) ([]string, error) {
 	var drifted []string
 	for _, name := range joinWrites {
 		now, _ := lookup(name)
-		was := there[name]
-		// The address is compared as the client reaches it, without its trailing slashes; a
-		// list is compared as written, since its grammar allows it one spelling.
-		if name == API {
-			now, was = strings.TrimRight(now, "/"), strings.TrimRight(was, "/")
-		}
-		if now != was {
+		if !sameSetting(name, now, there[name]) {
 			drifted = append(drifted, name)
 		}
 	}

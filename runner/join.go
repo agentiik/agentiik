@@ -179,8 +179,8 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 		return fmt.Errorf("runner: the API created runner %.64q in pool %.64q and spent the token, and this host could not keep what it was given, so it has not joined: %w. Revoke that runner, and join again with a new token and --replace", answer.Runner, answer.Pool, err)
 	}
 	// AGK_API is written as it was given rather than as the client reaches it, without its
-	// trailing slashes: serve compares the file with its environment as written, and a unit
-	// setting the same address join was given would otherwise be refused as another.
+	// trailing slashes, so that the file says what the operator wrote; serve holds the two to
+	// the same address, and sameSetting says what that is.
 	text, err := renderEnv(j.EnvPath, []variable{
 		{API, settings.written},
 		{RunnerID, answer.Runner},
