@@ -37,6 +37,12 @@
 // so that two never race to the sink, and a standby that takes over carries on from the cursor in
 // the database. A sink that fails ends nothing; it is said, and tried again.
 //
+// Each term also begins by verifying the chain in the database, so that an entry changed after it
+// was exported is noticed without the copy outside. A break is a warning naming the first broken
+// entry, and holds nothing up. The verification carries on from the last entry the one before it
+// reached, whichever controller that was, and checks that entry against the hash recorded beside
+// it before trusting it, so a long log is not read again from its first entry at every failover.
+//
 // # Leading, and standing by
 //
 // "Runs as several instances with one active at a time, elected by a session-level PostgreSQL

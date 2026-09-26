@@ -227,7 +227,7 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		defer counts.lead(ctl, term)()
 		o := o
 		o.Observer = counts
-		return lead(ctx, ctl, term, queue, o, export, log)
+		return lead(ctx, ctl, term, queue, o, export, verifier(pool.AuditTrail(), 0, log), log)
 	})
 	return ended(err)
 }
@@ -294,10 +294,34 @@ func exporter(sink config.AuditExport, trail db.AuditTrail, log *slog.Logger) *a
 	}
 }
 
+// verifier is what checks the audit log's chain in the database at the start of a term, reading
+// batch entries at a time, the default where batch is not positive.
+//
+// It warns, naming the first broken entry, and ends nothing: the chain is evidence of what was done
+// to the log, and a controller that stopped leading over it would stop the runs and leave the log as
+// it is. A verification that could not finish is said too, and the next term tries again from as
+// far as this one reached.
+func verifier(trail db.AuditTrail, batch int, log *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
+		v, err := trail.Verify(ctx, batch)
+		var broke *audit.Break
+		switch {
+		case errors.As(err, &broke):
+			log.Warn("the audit log's chain in the database is broken, and an entry was changed or removed after it was written: compare the log with its copy outside the installation", "entry", broke.Seq, "error", err)
+		case err != nil && ctx.Err() == nil:
+			log.Warn("the audit log's chain could not be verified, and the next term carries on from where this one stopped", "through", v.Through, "error", err)
+		case err == nil:
+			log.Info("the audit log's chain holds", "from", v.From, "through", v.Through)
+		}
+	}
+}
+
 // lead is one term: watching and sweeping on one side, taking results and progress back on the
 // other, until the fence refuses a write, either of them fails, or ctx is done. The audit log is
 // exported beside them for as long as the term lasts, by the one controller that leads, so that two
-// never race each other to the sink; a sink that fails ends nothing, and is tried again.
+// never race each other to the sink; a sink that fails ends nothing, and is tried again. Its chain
+// in the database is verified beside them too, once at the start of the term where verify is not
+// nil, and a break found holds nothing up.
 //
 // Each goes through the core of the term, and neither ends it for a run or a result it could not
 // handle. Watch returns whatever the function it calls returns, so a notification about one run
@@ -305,7 +329,7 @@ func exporter(sink config.AuditExport, trail db.AuditTrail, log *slog.Logger) *a
 // the same run, would end the term, and the program with it, over one run; a sweep reports such a
 // run and moves on, and a notification is only a shortcut to what a sweep finds. So both are
 // reported and left to the next sweep, and only the fence ends the term.
-func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, log *slog.Logger) error {
+func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
 		return err
@@ -326,6 +350,19 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 		defer func() {
 			cancel(nil)
 			<-exported
+		}()
+	}
+
+	if verify != nil {
+		verified := make(chan struct{})
+		go func() {
+			defer close(verified)
+			verify(ctx)
+		}()
+		// As the export's: a term never ends with its verification still reading.
+		defer func() {
+			cancel(nil)
+			<-verified
 		}()
 	}
 

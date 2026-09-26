@@ -565,7 +565,7 @@ func TestATermEndsAtTheFirstAnswerTheFenceRefuses(t *testing.T) {
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
 	o := options(c, queue, versionsOf(t, pool))
 	ended := make(chan error, 1)
-	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, logger(&log)) }()
+	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, nil, logger(&log)) }()
 
 	// Once results are being taken, and the sweep a term begins with has had time to pass.
 	js := b.streams(t)

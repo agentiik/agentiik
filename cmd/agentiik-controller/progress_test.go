@@ -44,7 +44,7 @@ func TestATermEndsAtTheFirstProgressTheFenceRefuses(t *testing.T) {
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
 	o := options(c, queue, versionsOf(t, pool))
 	ended := make(chan error, 1)
-	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, logger(&log)) }()
+	go func() { ended <- lead(t.Context(), ctl, tm, queue, o, nil, nil, logger(&log)) }()
 
 	js := b.streams(t)
 	eventually(t, 10*time.Second, "the term taking results", func() bool {
