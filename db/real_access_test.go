@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentiik/agentiik/access"
 )
 
 // The typed paths over grants, namespaces, the authentication policy and the bootstrap state.
@@ -28,13 +31,15 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	finance := access.Scope{Namespace: "finance"}
+	invoicing := access.Scope{Namespace: "finance", Workflow: "monthly-invoicing"}
 	in("finance", func(ctx context.Context, n *NS) error {
-		for _, g := range []AccessGrant{
-			{ID: "01JQ3M8A", Principal: "group:team-finance", Role: "viewer", GrantedBy: "operator"},
-			{ID: "01JQ3M8B", Workflow: "monthly-invoicing", Principal: "alice", Role: "operator", GrantedBy: "bob"},
-			{ID: "01JQ3M8C", Workflow: "monthly-invoicing", Principal: "alice", Deny: "run:read_data", GrantedBy: "bob"},
-			{ID: "01JQ3M8D", Principal: "alice", Role: "editor", GrantedBy: "bob", ExpiresAt: now},
-			{ID: "01JQ3M8E", Principal: "bob", Role: "owner", GrantedBy: "operator"},
+		for _, g := range []access.Grant{
+			{ID: "01JQ3M8A", Scope: finance, Principal: "group:team-finance", Role: access.Viewer, GrantedBy: "operator"},
+			{ID: "01JQ3M8B", Scope: invoicing, Principal: "alice", Role: access.Operator, GrantedBy: "bob"},
+			{ID: "01JQ3M8C", Scope: invoicing, Principal: "alice", Deny: access.RunReadData, GrantedBy: "bob"},
+			{ID: "01JQ3M8D", Scope: finance, Principal: "alice", Role: access.Editor, GrantedBy: "bob", ExpiresAt: &now},
+			{ID: "01JQ3M8E", Scope: finance, Principal: "bob", Role: access.Owner, GrantedBy: "operator"},
 		} {
 			if err := n.GrantAccess(ctx, g); err != nil {
 				return err
@@ -43,10 +48,11 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 		return nil
 	})
 	in("team-ops", func(ctx context.Context, n *NS) error {
-		return n.GrantAccess(ctx, AccessGrant{ID: "01JQ3M8F", Principal: "alice", Role: "viewer", GrantedBy: "operator"})
+		return n.GrantAccess(ctx, access.Grant{ID: "01JQ3M8F", Scope: access.Scope{Namespace: "team-ops"}, Principal: "alice",
+			Role: access.Viewer, GrantedBy: "operator"})
 	})
 
-	ids := func(grants []AccessGrant) []string {
+	ids := func(grants []access.Grant) []string {
 		var out []string
 		for _, g := range grants {
 			out = append(out, g.ID)
@@ -54,7 +60,7 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	alice := []string{"alice", "group:team-finance"}
+	alice := access.Principal{Ref: "alice", Groups: []string{"team-finance"}}
 	in("finance", func(ctx context.Context, n *NS) error {
 		onWorkflow, err := n.AccessGrantsFor(ctx, alice, "monthly-invoicing", now)
 		if err != nil {
@@ -78,13 +84,25 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 			t.Errorf("finance lists %d grants, and wrote 5", len(all))
 		}
 		for _, g := range all {
-			if g.ID == "01JQ3M8C" && (g.Deny != "run:read_data" || g.Role != "" || g.Workflow != "monthly-invoicing" || g.Namespace != "finance") {
+			switch {
+			case g.ID == "01JQ3M8C" && (g.Deny != access.RunReadData || g.Role != "" || g.Scope != invoicing || g.ExpiresAt != nil):
 				t.Errorf("the deny reads as %+v", g)
+			case g.ID == "01JQ3M8D" && (g.ExpiresAt == nil || !g.ExpiresAt.Equal(now)):
+				t.Errorf("the grant that expired reads as %+v", g)
 			}
+		}
+		// What is read resolves as it was written: alice runs the workflow and reads it through
+		// her group, and never reads its data.
+		held, err := access.Resolve(alice, onWorkflow, invoicing, now)
+		if err != nil {
+			return err
+		}
+		if !held.Has(access.WorkflowRun) || !held.Has(access.WorkflowRead) || held.Has(access.RunReadData) {
+			t.Errorf("alice holds %s on the workflow", held)
 		}
 		return nil
 	})
-	wide(t, pool, func(ctx context.Context, w *Wide) error {
+	if err := pool.Installation(ctx, Authorisation, func(ctx context.Context, w *Wide) error {
 		across, err := w.AccessGrantsAcross(ctx, alice, now)
 		if err != nil {
 			return err
@@ -93,19 +111,37 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 			t.Errorf("across the namespaces, alice holds %v", got)
 		}
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, c := range []struct {
 		what  string
-		grant AccessGrant
+		grant access.Grant
 		want  error
 	}{
-		{"nobody", AccessGrant{ID: "01JQ3M8G", Principal: "carol", Role: "viewer", GrantedBy: "bob"}, ErrNoPrincipal},
-		{"a workflow that is not there", AccessGrant{ID: "01JQ3M8G", Workflow: "nightly", Principal: "alice", Role: "viewer", GrantedBy: "bob"}, ErrNoWorkflow},
+		{"nobody", access.Grant{ID: "01JQ3M8G", Scope: finance, Principal: "carol", Role: access.Viewer, GrantedBy: "bob"}, ErrNoPrincipal},
+		{"a workflow that is not there", access.Grant{ID: "01JQ3M8G", Scope: access.Scope{Namespace: "finance", Workflow: "nightly"},
+			Principal: "alice", Role: access.Viewer, GrantedBy: "bob"}, ErrNoWorkflow},
 	} {
 		err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error { return n.GrantAccess(ctx, c.grant) })
 		if !errors.Is(err, c.want) {
 			t.Errorf("a grant to %s was answered %v", c.what, err)
+		}
+	}
+	// And one on another namespace, or one access refuses, is not written at all, and is refused
+	// in its words before the table is asked.
+	for what, c := range map[string]struct {
+		grant access.Grant
+		says  string
+	}{
+		"on team-ops":     {access.Grant{ID: "01JQ3M8H", Scope: access.Scope{Namespace: "team-ops"}, Principal: "alice", Role: access.Owner, GrantedBy: "bob"}, "a namespace writes only its own"},
+		"denying a role":  {access.Grant{ID: "01JQ3M8H", Scope: finance, Principal: "alice", Deny: "owner", GrantedBy: "bob"}, "owner is a role"},
+		"with no granter": {access.Grant{ID: "01JQ3M8H", Scope: finance, Principal: "alice", Role: access.Viewer}, "somebody who granted it"},
+	} {
+		err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error { return n.GrantAccess(ctx, c.grant) })
+		if err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("a grant %s was answered %v", what, err)
 		}
 	}
 
@@ -127,9 +163,9 @@ func TestANamespaceCarriesItsKindOwnerAndQuotas(t *testing.T) {
 	var before, after, kept Namespace
 	var listed []Namespace
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateGroup(ctx, "finance-leads"); err != nil {
-			return err
-		}
+		return w.CreateGroup(ctx, "finance-leads")
+	})
+	err := pool.Installation(ctx, NamespaceAdministration, func(ctx context.Context, w *Wide) error {
 		var err error
 		if before, err = w.NamespaceNamed(ctx, "finance"); err != nil {
 			return err
@@ -153,6 +189,9 @@ func TestANamespaceCarriesItsKindOwnerAndQuotas(t *testing.T) {
 		listed, err = w.Namespaces(ctx)
 		return err
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	same := func(a, b Quotas) bool {
 		return slices.Equal(a.AllowedRunnerPools, b.AllowedRunnerPools) &&
 			a.MaxConcurrentTasks == b.MaxConcurrentTasks && a.MaxRetentionDays == b.MaxRetentionDays &&

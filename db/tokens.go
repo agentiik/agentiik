@@ -175,6 +175,8 @@ func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 	switch {
 	case errors.As(err, &pg) && pg.ConstraintName == "sessions_enrolment_code_key":
 		return fmt.Errorf("%w: that code opened a session already", ErrSessionRefused)
+	case errors.As(err, &pg) && pg.ConstraintName == "sessions_login_fkey":
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, s.Login)
 	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
 		return fmt.Errorf("%w: %s holds nothing that session names", ErrNoCredential, s.Login)
 	case err != nil:
@@ -245,8 +247,14 @@ func (w *Wide) RevokeSessions(ctx context.Context, login string, hash []byte, at
 
 // The kinds of enrolment code, as enrolment_codes.kind writes them.
 const (
+	// EnrolmentFirstAdministrator is the first administrator's link, made with the bootstrap
+	// token.
 	EnrolmentFirstAdministrator = "first-administrator"
-	EnrolmentRecovery           = "recovery"
+	// EnrolmentNewUser is the link a new user is given, and given again while they hold no
+	// credential.
+	EnrolmentNewUser = "enrolment"
+	// EnrolmentRecovery is a recovery code, for a user who lost their passkeys.
+	EnrolmentRecovery = "recovery"
 )
 
 // ErrNoEnrolmentCode is a code that opens nothing: never issued, used, revoked or expired.
@@ -266,7 +274,8 @@ type EnrolmentCode struct {
 
 // IssueEnrolmentCode writes a code, revoking at its IssuedAt the code it replaces, and answers
 // whether there was one: a link issued again leaves the one before it unusable, and the session it
-// opened with it. A recovery code replaces the user's open recovery code. A first administrator's
+// opened with it. A new user's link or a recovery code replaces the user's open code of its kind. A
+// first administrator's
 // link replaces every open one, whoever it was for, and is ErrBootstrapEnded once the first
 // administrator has enrolled.
 //

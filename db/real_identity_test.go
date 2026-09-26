@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,8 +99,8 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 	if !slices.Equal(kinds, []string{KindUser, KindGroup, KindServiceAccount}) {
 		t.Errorf("the three principals are of the kinds %v", kinds)
 	}
-	if !slices.Equal(groups, []string{"group:team-finance"}) {
-		t.Errorf("alice's groups are %v, as a grant names them", groups)
+	if !slices.Equal(groups, []string{"team-finance"}) {
+		t.Errorf("alice's groups are %v", groups)
 	}
 	if !slices.Equal(team.Members, []string{"alice"}) {
 		t.Errorf("the group holds %v", team.Members)
@@ -539,7 +540,7 @@ func TestAFirstAdministratorsLinkEndsWithTheBootstrapToken(t *testing.T) {
 		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("mistyped"), now); !errors.Is(err, ErrNoEnrolmentCode) {
 			t.Errorf("the mistyped link was answered %v once another was issued", err)
 		}
-		// bob's link, issued last, is left open when alice enrols through hers.
+		// bob's link, issued last, is still open when the bootstrap token ends.
 		if _, err := w.IssueEnrolmentCode(ctx, link("bob", "bobs")); err != nil {
 			return err
 		}
@@ -645,4 +646,106 @@ func TestANameIsALoginOrANamespaceAndACounterMovesForward(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A code is not spent, and opens no session, at or past the end of its hour, and what records a
+// use or ends one session records that and nothing more.
+func TestWhatIsSpentOrUsedIsRecordedAndNothingPastItsHour(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	link := EnrolmentCode{Hash: valueHash("welcome"), Login: "alice", Kind: EnrolmentNewUser, IssuedBy: "bob",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	password := Credential{ID: "password-alice", Login: "alice", Type: CredentialPassword, PasswordHash: "h"}
+	token := APIToken{ID: "01JQ3M8T", Hash: valueHash("agk_alice"), Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	var accounts []ServiceAccount
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+			return err
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, link); err != nil {
+			return err
+		}
+		if _, err := w.UseEnrolmentCode(ctx, link.Hash, link.ExpiresAt); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("a code was spent at the end of its hour, answered %v", err)
+		}
+		if err := w.AddCredential(ctx, password); err != nil {
+			return err
+		}
+		if err := w.CredentialUsed(ctx, password.ID, now); err != nil {
+			return err
+		}
+		if err := w.MintToken(ctx, token); err != nil {
+			return err
+		}
+		if err := w.TokenUsed(ctx, token.ID, now.Add(time.Minute)); err != nil {
+			return err
+		}
+		for _, value := range []string{"kept", "ended"} {
+			if err := w.OpenSession(ctx, Session{Hash: valueHash(value), Login: "alice", Credential: password.ID,
+				CreatedAt: now, IdleExpiresAt: now.Add(time.Hour)}); err != nil {
+				return err
+			}
+		}
+		if n, err := w.RevokeSessions(ctx, "alice", valueHash("ended"), now); err != nil || n != 1 {
+			t.Errorf("one session was revoked as %d, %v", n, err)
+		}
+		if _, err := w.SessionByHash(ctx, valueHash("kept"), now); err != nil {
+			t.Errorf("the session left alone was answered %v", err)
+		}
+		if err := w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: BuiltIn}); err != nil {
+			return err
+		}
+		if err := w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "nightly-sync", CreatedBy: "alice"}); err != nil {
+			return err
+		}
+		var err error
+		accounts, err = w.ServiceAccounts(ctx, "finance")
+		if err != nil {
+			return err
+		}
+		used, err := w.Credential(ctx, password.ID)
+		if err != nil {
+			return err
+		}
+		if !used.LastUsedAt.Equal(now) {
+			t.Errorf("the password reads as last used at %s", used.LastUsedAt)
+		}
+		tokens, err := w.TokensOf(ctx, "alice")
+		if err != nil {
+			return err
+		}
+		if len(tokens) != 1 || !tokens[0].LastUsedAt.Equal(now.Add(time.Minute)) {
+			t.Errorf("alice's token reads as %+v", tokens)
+		}
+		return nil
+	})
+	if len(accounts) != 2 || accounts[0].Principal() != "finance/agentiik" || accounts[0].CreatedBy != "" ||
+		accounts[1].Principal() != "finance/nightly-sync" || accounts[1].CreatedBy != "alice" {
+		t.Errorf("finance's service accounts are %+v", accounts)
+	}
+
+	for _, c := range []struct {
+		what string
+		do   func(context.Context, *Wide) error
+		want error
+	}{
+		{"a session opened at the end of its code's hour", func(ctx context.Context, w *Wide) error {
+			return w.OpenSession(ctx, Session{Hash: valueHash("late"), Login: "alice", EnrolmentCode: link.Hash,
+				CreatedAt: link.ExpiresAt, IdleExpiresAt: link.ExpiresAt.Add(time.Hour)})
+		}, ErrSessionRefused},
+		{"a session of nobody", func(ctx context.Context, w *Wide) error {
+			return w.OpenSession(ctx, Session{Hash: valueHash("nobody"), Login: "carol", Credential: password.ID,
+				CreatedAt: now, IdleExpiresAt: now.Add(time.Hour)})
+		}, ErrNoPrincipal},
+	} {
+		if err := pool.Installation(t.Context(), Identity, c.do); !errors.Is(err, c.want) {
+			t.Errorf("%s was answered %v", c.what, err)
+		}
+	}
+	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+		return w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "deploy"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "not the built-in identity") {
+		t.Errorf("a service account nobody created was answered %v", err)
+	}
 }

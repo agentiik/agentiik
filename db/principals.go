@@ -203,11 +203,11 @@ func (w *Wide) RemoveMember(ctx context.Context, group, login string) (bool, err
 	return tag.RowsAffected() == 1, nil
 }
 
-// GroupsOf answers the groups a user is in, as the principals a grant names them by, group:NAME,
-// ordered. With the login itself, they are every principal whose grants the user holds.
+// GroupsOf answers the names of the groups a user is in, ordered, which with the login are the
+// access.Principal a question about the user is asked with.
 func (w *Wide) GroupsOf(ctx context.Context, login string) ([]string, error) {
 	rows, err := w.tx.Query(ctx,
-		`select 'group:' || group_name from group_members where login = $1 order by 1`, login)
+		`select group_name from group_members where login = $1 order by 1`, login)
 	if err != nil {
 		return nil, fmt.Errorf("db: the groups of %s could not be read: %w", login, err)
 	}
@@ -222,26 +222,33 @@ func (w *Wide) GroupsOf(ctx context.Context, login string) ([]string, error) {
 type ServiceAccount struct {
 	Namespace string
 	Name      string
+
+	// CreatedBy is who created it, and empty on the namespace's built-in identity, NS/agentiik,
+	// which the installation creates with the namespace.
 	CreatedBy string
 	CreatedAt time.Time
 }
+
+// BuiltIn is the name of every namespace's built-in identity, and of no other service account.
+const BuiltIn = "agentiik"
 
 // Principal is the string a grant names it by.
 func (s ServiceAccount) Principal() string { return s.Namespace + "/" + s.Name }
 
 // CreateServiceAccount writes a service account and the principal it is. One in a namespace
-// nobody created is ErrNoNamespace.
+// nobody created is ErrNoNamespace. The built-in identity is written with no CreatedBy, and every
+// other with one, which the table holds.
 func (w *Wide) CreateServiceAccount(ctx context.Context, s ServiceAccount) error {
-	if s.CreatedBy == "" {
-		return errors.New("db: a service account nobody created")
-	}
 	_, err := w.tx.Exec(ctx,
 		`with p as (insert into principals (id, kind) values ($1 || '/' || $2, 'service_account') returning id)
 		 insert into service_accounts (namespace, name, created_by) select $1, $2, $3 from p`,
-		s.Namespace, s.Name, s.CreatedBy)
+		s.Namespace, s.Name, nilIfEmpty(s.CreatedBy))
 	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == foreignKeyViolation {
+	switch {
+	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
 		return fmt.Errorf("%w: %s", ErrNoNamespace, s.Namespace)
+	case errors.As(err, &pg) && pg.ConstraintName == "service_accounts_built_in":
+		return fmt.Errorf("db: %s is written with a creator where it is not the built-in identity, %s/%s, and with none where it is", s.Principal(), s.Namespace, BuiltIn)
 	}
 	return principalCreated(err, "service account", s.Principal())
 }
@@ -249,7 +256,7 @@ func (w *Wide) CreateServiceAccount(ctx context.Context, s ServiceAccount) error
 // ServiceAccounts answers a namespace's, ordered by name.
 func (w *Wide) ServiceAccounts(ctx context.Context, namespace string) ([]ServiceAccount, error) {
 	rows, err := w.tx.Query(ctx,
-		`select namespace, name, created_by, created_at from service_accounts
+		`select namespace, name, coalesce(created_by, ''), created_at from service_accounts
 		  where namespace = $1 order by name`, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("db: the service accounts of %s could not be read: %w", namespace, err)

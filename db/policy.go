@@ -47,7 +47,7 @@ func (w *Wide) InstallationPolicy(ctx context.Context) (AuthPolicy, error) {
 // SetInstallationPolicy writes the installation's, every setting of it. One with a setting
 // missing is refused: the installation's policy is the one nothing is inherited from.
 func (w *Wide) SetInstallationPolicy(ctx context.Context, p AuthPolicy, at time.Time) error {
-	_, err := w.tx.Exec(ctx,
+	tag, err := w.tx.Exec(ctx,
 		`update auth_policy set password = $1, passkey = $2, user_verification = $3,
 		        device_bound_only = $4, min_passkeys = $5, updated_at = $6
 		  where namespace is null`,
@@ -55,6 +55,9 @@ func (w *Wide) SetInstallationPolicy(ctx context.Context, p AuthPolicy, at time.
 		zeroIsNull(p.MinPasskeys), at)
 	if err != nil {
 		return fmt.Errorf("db: the installation's authentication policy could not be written: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("db: the installation has no authentication policy to write, which its migration wrote and nothing removes")
 	}
 	return nil
 }
