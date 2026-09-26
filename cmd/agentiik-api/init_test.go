@@ -476,6 +476,40 @@ func TestInitRefusesABusDirectoryThatIsNoVolume(t *testing.T) {
 	}
 }
 
+// A renewal cut off between writing its file and renaming it leaves a live credential beside the
+// real one, which the next run removes, a link in its place among them, without following it.
+func TestInitRemovesWhatARenewalCutOffLeft(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	dir := filepath.Join(d.dir, busDir)
+	creds := d.read(t, busDir, bus.ControlPlaneFile)
+	leftover := filepath.Join(dir, "."+bus.ControlPlaneFile+"-1234")
+	if err := os.WriteFile(leftover, []byte(creds), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "kept")
+	if err := os.WriteFile(elsewhere, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "."+bus.ControlPlaneFile+"-5678")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
+	d.out.Reset()
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	for _, gone := range []string{leftover, link} {
+		if _, err := os.Lstat(gone); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is left: %v", gone, err)
+		}
+	}
+	if _, err := os.Stat(elsewhere); err != nil {
+		t.Errorf("the file a leftover link named was removed: %v", err)
+	}
+	if d.read(t, busDir, bus.ControlPlaneFile) != creds || !strings.Contains(d.out.String(), "cut off part way left") {
+		t.Errorf("the credential changed, or the removal was not said:\n%s", d.out.String())
+	}
+}
+
 // issuedUnder says whether the credential in creds was signed by the account whose seed is in seed.
 func issuedUnder(t *testing.T, creds, seed string) bool {
 	t.Helper()

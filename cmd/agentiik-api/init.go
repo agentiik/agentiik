@@ -622,6 +622,9 @@ func (p *preparer) identity(dir string) bool {
 // API cannot renew it still has it renewed at the next docker compose up.
 func (p *preparer) controlPlane(identity string) error {
 	creds := p.dir.path(busDir, bus.ControlPlaneFile)
+	if err := p.removeLeftovers(); err != nil {
+		return err
+	}
 	legacy := filepath.Join(identity, bus.ControlPlaneFile)
 	content, err := readRegular(legacy)
 	switch {
@@ -690,6 +693,44 @@ func (p *preparer) removeControllerCopy() error {
 	}
 	if err := root.Remove("bus"); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
 		return fmt.Errorf("%s could not be removed: %w", p.dir.path(controllerDir, "bus"), err)
+	}
+	return nil
+}
+
+// removeLeftovers removes what a renewal cut off part way left in the bus directory: the file it
+// writes beside the credential before renaming it over it, which holds a credential as live as the
+// one it was to replace and which nothing else ever removes.
+//
+// Through the directory opened as a root, since the API writes to it while init runs as root: an
+// entry is removed itself, a link included, and nothing it names is followed. A renewal the API is
+// making at this very moment loses its file and fails, and the API tries again the next day.
+func (p *preparer) removeLeftovers() error {
+	root, err := os.OpenRoot(p.dir.path(busDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be opened: %w", p.dir.path(busDir), err)
+	}
+	defer root.Close()
+	d, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("%s could not be read: %w", p.dir.path(busDir), err)
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("%s could not be read: %w", p.dir.path(busDir), err)
+	}
+	removed := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "."+bus.ControlPlaneFile+"-") {
+			continue
+		}
+		if err := root.Remove(e.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s, which a renewal cut off part way left, could not be removed: %w", p.dir.path(busDir, e.Name()), err)
+		}
+		removed++
+	}
+	if removed > 0 {
+		p.say("removed %d file(s) a renewal of the control plane's bus credential cut off part way left in %s", removed, p.dir.path(busDir))
 	}
 	return nil
 }
