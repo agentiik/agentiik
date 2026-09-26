@@ -8,12 +8,14 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentiik/agentiik/internal/tlsfloor"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nkeys"
 )
 
 // Stream is the one stream every task travels on.
@@ -72,6 +74,14 @@ type Options struct {
 	// control plane's for Open, the one the API minted for a runner's pool for OpenRunner.
 	// Nil is a bus that takes none.
 	Credentials *Credentials
+
+	// Reread, where set, reads the credential again, from wherever Credentials was read, at
+	// every connection: a reconnection after the bus dropped this one, above all when the
+	// credential it held expired. So a credential renewed in its file is the one the
+	// connection comes back with, and the program holding it goes on without a restart. Where
+	// it fails, the credential read last is used again, which the bus refuses only if it has
+	// expired.
+	Reread func() (Credentials, error)
 }
 
 // Open connects, and makes sure the stream is there.
@@ -190,7 +200,12 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 		// A credential rather than a password, and one that expires. An installation
 		// whose bus takes no credential at all is profile A, where the bus is on the
 		// same host and reachable by nothing else.
-		options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
+		if o.Reread == nil {
+			options = append(options, nats.UserJWTAndSeed(o.Credentials.JWT, o.Credentials.Seed))
+		} else {
+			held := &rereading{current: *o.Credentials, reread: o.Reread}
+			options = append(options, nats.UserJWT(held.jwt, held.sign))
+		}
 	}
 	if inbox != "" {
 		options = append(options, nats.CustomInboxPrefix(inbox))
@@ -220,6 +235,44 @@ func connect(o Options, inbox string) (*nats.Conn, jetstream.JetStream, error) {
 
 // Close releases the connection.
 func (b *Bus) Close() { b.conn.Close() }
+
+// rereading is a credential read again at every connection.
+//
+// The bus drops a connection the moment its credential expires, and nats.go reconnects with what
+// its callbacks answer then: a credential held in memory would be the expired one again, refused,
+// and the connection closed for good after the second refusal. The JWT and the seed are answered
+// from one reading, since the server checks that the nonce is signed by the key the JWT was issued
+// to, and a JWT from the new file signed with the old seed is refused.
+type rereading struct {
+	mu      sync.Mutex
+	current Credentials
+	reread  func() (Credentials, error)
+}
+
+// jwt is nats.go's user callback, which it calls at the start of every connection, each time
+// before sign.
+func (r *rereading) jwt() (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, err := r.reread(); err == nil && c.JWT != "" && c.Seed != "" {
+		r.current = c
+	}
+	return r.current.JWT, nil
+}
+
+// sign is nats.go's signature callback: the server's nonce, signed with the seed of the JWT jwt
+// answered last.
+func (r *rereading) sign(nonce []byte) ([]byte, error) {
+	r.mu.Lock()
+	seed := r.current.Seed
+	r.mu.Unlock()
+	kp, err := nkeys.FromSeed([]byte(seed))
+	if err != nil {
+		return nil, fmt.Errorf("bus: the credential's seed could not be read: %w", err)
+	}
+	defer kp.Wipe()
+	return kp.Sign(nonce)
+}
 
 // AckWait is how long a pool's consumer waits for a runner to acknowledge a task it was handed,
 // before handing it to another runner of the pool.

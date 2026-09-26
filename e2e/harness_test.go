@@ -100,7 +100,6 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 	// What each runner holds at rest, once the task's own directory is gone. A task's
 	// directory holds the tree while its brick runs, and is removed when it has ended, which
 	// may be a moment after the run is read as succeeded.
-	forbidden := []string{in.path("objects"), in.path("bus"), in.path("postgres"), in.path("secrets")}
 	held := append(in.held, heldValue{"the workflow's repository", document})
 	for _, r := range in.Runners {
 		var last []string
@@ -109,7 +108,7 @@ func TestAOneStepWorkflowRunsToSucceededAndEachRunnerHoldsItsOwnIdentityAlone(t 
 			if err != nil {
 				return err
 			}
-			if last = h.breaches(in.PublicURL, held, forbidden); len(last) > 0 {
+			if last = h.breaches(in.PublicURL, held, in.private); len(last) > 0 {
 				return fmt.Errorf("%s", strings.Join(last, "; "))
 			}
 			return nil
@@ -198,9 +197,13 @@ func TestTheCallerIsToldFromTheAuthorizationHeader(t *testing.T) {
 }
 
 func TestTheRunnerIsReadOutOfWhatJoinSaid(t *testing.T) {
-	said := "This host joined pool e2e as runner rn-01jm8v1p9c.\nIts key is in /var/lib/agentiik/runner.key\n"
-	if got := joinedAs(said); got != "rn-01jm8v1p9c" {
-		t.Errorf("join said %q, and it was read as runner %q", said, got)
+	for _, said := range []string{
+		"This host joined pool e2e as runner rn-01jm8v1p9c.\nIts key is in /var/lib/agentiik/runner.key\n",
+		"agk-runner: this host joined pool e2e as runner rn-01jm8v1p9c, claiming the labels zone=e2e, with the join token in AGK_RUNNER_JOIN_TOKEN\n",
+	} {
+		if got := joinedAs(said); got != "rn-01jm8v1p9c" {
+			t.Errorf("joining said %q, and it was read as runner %q", said, got)
+		}
 	}
 	if got := joinedAs("agk-runner join: refused"); got != "" {
 		t.Errorf("a refusal was read as runner %q", got)
@@ -213,20 +216,25 @@ func aRunnerAtRest() Holdings {
 		Files: map[string][]byte{
 			"/etc/agentiik/runner.env":             []byte("AGK_API=https://127.0.0.1:8443\nAGK_RUNNER_ID=rn-1\nAGK_RUNNER_POOL=e2e\nAGK_RUNNER_LABELS=zone=e2e\nAGK_RUNNER_CREDENTIAL=agkrunner_abc\n"),
 			"/etc/agentiik/runner.toml":            []byte(runnerPolicy),
+			"/etc/agentiik/trust/agentiik.pem":     []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"),
 			"/var/lib/agentiik/runner.key":         []byte("-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n"),
 			"/var/lib/agentiik/work/.bin/agk":      []byte("\x7fELF"),
 			"/var/lib/agentiik/work/.keys/01JM.ok": []byte(`{"state":"succeeded"}`),
 		},
-		Directories: []string{"/etc/agentiik", "/var/lib/agentiik", "/var/lib/agentiik/work"},
-		// A host setting in the environment, as the page's Compose sample sets it.
-		Env:   []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "AGK_RUNNER_CONCURRENCY=4"},
-		Added: []string{"/run", "/run/agentiik", "/var/run"},
+		Directories: []string{"/etc/agentiik", "/etc/agentiik/trust", "/var/lib/agentiik", "/var/lib/agentiik/work"},
+		// Host settings in the environment, as the Compose file sets them.
+		Env: []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "AGK_RUNNER_CONCURRENCY=4",
+			"AGK_API=https://127.0.0.1:8443", "AGK_RUNNER_JOIN_TOKEN=agkjoin_abc", "AGK_RUNNER_LABELS=zone=e2e",
+			"SSL_CERT_DIR=/etc/agentiik/trust:/etc/ssl/agentiik",
+		},
+		Added: []string{"/etc/ssl/agentiik", "/var/run"},
 		Mounts: []Mount{
 			{Type: "bind", Source: "/tmp/agk-e2e-1/runner-a/etc", Destination: "/etc/agentiik"},
-			{Type: "volume", Source: "/var/lib/docker/volumes/agk-e2e-1-lib-a/_data", Destination: "/var/lib/agentiik"},
-			{Type: "volume", Source: "/var/lib/docker/volumes/agk-e2e-1-secrets-a/_data", Destination: "/run/agentiik/secrets"},
-			{Type: "volume", Source: "/var/lib/docker/volumes/agk-e2e-1-socket-a/_data", Destination: "/var/run"},
-			{Type: "bind", Source: "/tmp/agk-e2e-1/tls/ca.pem", Destination: "/etc/ssl/certs/ca-certificates.crt"},
+			{Type: "bind", Source: "/tmp/agk-e2e-1/runner.toml", Destination: "/etc/agentiik/runner.toml"},
+			{Type: "volume", Name: "agk-e2e-1-lib-a", Source: "/var/lib/docker/volumes/agk-e2e-1-lib-a/_data", Destination: "/var/lib/agentiik"},
+			{Type: "volume", Name: "agk-e2e-1-socket-a", Source: "/var/lib/docker/volumes/agk-e2e-1-socket-a/_data", Destination: "/var/run"},
+			{Type: "bind", Source: "/tmp/agk-e2e-1/tls", Destination: "/etc/ssl/agentiik"},
 		},
 	}
 }
@@ -238,7 +246,7 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		{"the database URL", "postgres://agentiik@/agentiik?host=/tmp/agk-e2e-1/postgres"},
 		{"the workflow's repository", "apiVersion: agentiik.dev/v1\nkind: Workflow\n"},
 	}
-	forbidden := []string{"/tmp/agk-e2e-1/objects", "/tmp/agk-e2e-1/bus"}
+	forbidden := []string{"agk-e2e-1-objects", "agk-e2e-1-api", "/tmp/agk-e2e-1/postgres"}
 	if broken := aRunnerAtRest().breaches(public, held, forbidden); len(broken) != 0 {
 		t.Fatalf("a runner holding its identity alone broke %q", broken)
 	}
@@ -248,7 +256,7 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 		change func(*Holdings)
 		says   string
 	}{
-		{"a file beside runner.env", func(h *Holdings) { h.Files["/etc/agentiik/database.env"] = nil }, "holds runner.env and runner.toml alone"},
+		{"a file beside runner.env", func(h *Holdings) { h.Files["/etc/agentiik/database.env"] = nil }, "holds runner.env, runner.toml, trust/agentiik.pem and join-token alone"},
 		{"no runner.env", func(h *Holdings) { delete(h.Files, "/etc/agentiik/runner.env") }, "there is no runner.env"},
 		{"a database URL in runner.env", func(h *Holdings) {
 			h.Files["/etc/agentiik/runner.env"] = append(h.Files["/etc/agentiik/runner.env"], []byte("AGK_DATABASE_URL=x\n")...)
@@ -281,10 +289,19 @@ func TestARunnerHoldingItsIdentityAloneBreaksNothingAndEveryOtherHoldingIsNamed(
 			h.Env = append(h.Env, "DB=postgres://agentiik@/agentiik?host=/tmp/agk-e2e-1/postgres")
 		}, "the agent's environment holds the database URL"},
 		{"the object store mounted", func(h *Holdings) {
-			h.Mounts = append(h.Mounts, Mount{Type: "bind", Source: "/tmp/agk-e2e-1/objects", Destination: "/var/lib/agentiik/objects"})
+			h.Mounts = append(h.Mounts, Mount{Type: "volume", Name: "agk-e2e-1-objects", Source: "/var/lib/docker/volumes/agk-e2e-1-objects/_data", Destination: "/var/lib/agentiik/objects"})
+		}, "no runner sees"},
+		{"the API's volume mounted where the agent may have something", func(h *Holdings) {
+			h.Mounts[0] = Mount{Type: "volume", Name: "agk-e2e-1-api", Source: "/var/lib/docker/volumes/agk-e2e-1-api/_data", Destination: "/etc/agentiik"}
+		}, "no runner sees"},
+		{"the database's socket mounted", func(h *Holdings) {
+			h.Mounts = append(h.Mounts, Mount{Type: "bind", Source: "/tmp/agk-e2e-1/postgres", Destination: "/run/postgresql"})
 		}, "no runner sees"},
 		{"a file written outside the two directories", func(h *Holdings) { h.Added = append(h.Added, "/tmp/bus.creds") }, "written in the agent's own filesystem"},
-		{"a value left on the tmpfs", func(h *Holdings) { h.Secrets = append(h.Secrets, "/run/agentiik/secrets/t1/billing") }, "still on the secrets tmpfs"},
+		{"a secrets volume left", func(h *Holdings) { h.SecretsVolumes = append(h.SecretsVolumes, "agk-secrets-01jm") }, "is removed with the task"},
+		{"a join token set as a value in runner.env", func(h *Holdings) {
+			h.Files["/etc/agentiik/runner.env"] = append(h.Files["/etc/agentiik/runner.env"], []byte("AGK_RUNNER_JOIN_TOKEN=agkjoin_abc\n")...)
+		}, "sets AGK_RUNNER_JOIN_TOKEN, which is not a runner's setting"},
 		{"something else mounted", func(h *Holdings) {
 			h.Mounts = append(h.Mounts, Mount{Type: "bind", Source: "/home", Destination: "/home"})
 		}, "which the agent is not given"},

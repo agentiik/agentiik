@@ -20,13 +20,14 @@
 # vX.Y.Z at a release tag, as latest too when that is the highest release, and as dev at every
 # commit to main.
 #
-# Run as the page's Compose sample runs it: as root, which serve drops, in the host's user
-# namespace, with cap_drop ALL and cap_add CHOWN, FOWNER, DAC_OVERRIDE, SETUID and SETGID, the
-# daemon socket mounted, and the work root mounted at the path it has on the host, since the
-# daemon resolves every bind source there. serve gives the agent's directories to agentiik, takes
-# the group that owns the socket, drops to agentiik and starts itself again, so neither a
-# directory nor a group is prepared on the host or named in the Compose file. The secrets
-# directory runner.toml names is mounted as well, as a tmpfs.
+# Run as the Compose file runs it: as root, which serve drops, in the host's user namespace, with
+# cap_drop ALL and cap_add CHOWN, FOWNER, DAC_OVERRIDE, SETUID and SETGID, the daemon socket
+# mounted, and the work root mounted at the path it has on the host, since the daemon resolves
+# every bind source there. serve gives the agent's directories to agentiik, takes the group that
+# owns the socket, drops to agentiik and starts itself again, so neither a directory nor a group is
+# prepared on the host or named in the Compose file. Nothing is mounted for secrets: a task's
+# values are on a tmpfs volume of its own, which the daemon makes in memory and removes with the
+# task.
 
 # The certificates and setcap come from alpine:3.21, which is the one image the tests already name
 # and pull, pinned to the minor for the reason the Go version is. This stage runs on the builder's

@@ -39,6 +39,7 @@ import (
 	"github.com/agentiik/agentiik/version"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	natsjwt "github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
@@ -335,6 +336,61 @@ func TestARunnerKeepsTheBusOnceTheControlPlanesCredentialHasExpired(t *testing.T
 	defer d.Close()
 	if _, err := d.Take(t.Context(), "default", 1, 200*time.Millisecond); err != nil {
 		t.Errorf("a runner of the pool default could not take from it: %s", err)
+	}
+}
+
+// A control plane credential renewed in its file before the one the API started with expires is the
+// one its bus connection comes back with when the bus drops the old one: a runner pool is created
+// after the old one's expiry, with no restart.
+func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
+	database := freshDatabase(t)
+	if err := migrate(t.Context(), database, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "bus")
+	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	natsURL := natsFrom(t, dir)
+	s := servingSettings(t, database.Application, dir, natsURL)
+	issuer, err := bus.NewIssuer(string(s.AccountSeed), natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), bus.ControlPlaneFile)
+	write := func(until time.Time) bus.Credentials {
+		c, err := issuer.ForControlPlane("agentiik-api", until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := natsjwt.FormatUserConfig(c.JWT, []byte(c.Seed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+".new", content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+".new", path); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	short := write(time.Now().Add(3 * time.Second))
+	s.Bus.JWT, s.Bus.Seed, s.Bus.Expires, s.Bus.CredentialsFile = short.JWT, config.Secret(short.Seed), short.ExpiresAt, path
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(t.Context(), s, ln, slog.New(slog.DiscardHandler)) }()
+	c := client{t: t, base: "http://" + ln.Addr().String(), served: served}
+	write(time.Now().Add(time.Hour))
+
+	// Past the old one's expiry, and the reconnection a second after it.
+	time.Sleep(time.Until(short.ExpiresAt) + 3*time.Second)
+	if code, answer := c.do("POST", "/api/v1/runner-pools", theToken, aPool()); code != http.StatusCreated {
+		t.Fatalf("with the credential renewed in its file, the pool answered %d: %v", code, answer)
 	}
 }
 

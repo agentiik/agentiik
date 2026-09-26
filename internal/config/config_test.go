@@ -252,7 +252,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 	if api.Database != wantDatabase {
 		t.Errorf("the API's database reads %#v", api.Database)
 	}
-	wantBus := config.Bus{URL: i.env[config.BusURL], JWT: i.busJWT, Seed: config.Secret(i.busSeed), Expires: i.busExpires}
+	wantBus := config.Bus{URL: i.env[config.BusURL], JWT: i.busJWT, Seed: config.Secret(i.busSeed), Expires: i.busExpires, CredentialsFile: i.env[config.BusCredentialsFile]}
 	if api.Bus != wantBus {
 		t.Errorf("the API's bus reads %+v, and was written %+v", api.Bus, wantBus)
 	}
@@ -1169,4 +1169,51 @@ func TestAMetricsTokenWithNoAddressIsRefused(t *testing.T) {
 		t.Fatalf("the start was refused naming %v: %v", names, err)
 	}
 	saysNothingOf(t, err, i.secrets...)
+}
+
+// A credential renewed in its file while a program runs is the one RereadBus reads, held to the
+// rules the start held the first to; one that no longer reads leaves the program with the one it
+// has.
+func TestRereadingTheBusCredentialTakesTheOneRenewedInItsFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "bus")
+	first := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	created, err := bus.NewInstallation(dir, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := anInstallation(t)
+	i.env[config.BusCredentialsFile] = created.ControlPlane
+	controller, err := config.ReadController(theController.environment(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controller.Bus.CredentialsFile != created.ControlPlane {
+		t.Fatalf("the controller's bus says it was read from %q, and it was read from %s", controller.Bus.CredentialsFile, created.ControlPlane)
+	}
+
+	second := first.Add(90 * 24 * time.Hour)
+	if _, _, err := bus.RenewControlPlane(dir, second); err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := config.RereadBus(controller.Bus)
+	if err != nil {
+		t.Fatalf("the renewed credential is refused: %s", err)
+	}
+	if !renewed.Expires.Equal(second) || renewed.JWT == controller.Bus.JWT || renewed.Seed == controller.Bus.Seed {
+		t.Errorf("rereading reads a credential until %s, and the one renewed is until %s", renewed.Expires, second)
+	}
+	if renewed.URL != controller.Bus.URL || renewed.CredentialsFile != created.ControlPlane {
+		t.Errorf("rereading changed the bus's address or its file: %+v", renewed)
+	}
+
+	if err := os.WriteFile(created.ControlPlane, []byte("not a credential\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := config.RereadBus(renewed)
+	if err == nil || !strings.Contains(err.Error(), config.BusCredentialsFile) {
+		t.Errorf("a file holding no credential is read again as %v", err)
+	}
+	if kept != renewed {
+		t.Error("a refused reread changed the credential held")
+	}
 }

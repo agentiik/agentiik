@@ -139,7 +139,7 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
-	go watchCredential(watching, s.Bus.Expires, log, time.Now, sleep)
+	go watchCredential(watching, expiry(s.Bus), log, time.Now, sleep)
 
 	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL)
 	select {
@@ -195,6 +195,7 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		URL:         s.Bus.URL,
 		Name:        program + " " + instanceName(os.Getpid()),
 		Credentials: &bus.Credentials{JWT: s.Bus.JWT, Seed: string(s.Bus.Seed)},
+		Reread:      rereadBus(s.Bus),
 	})
 	if err != nil {
 		pool.Close()
@@ -306,27 +307,57 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// rereadBus reads the control plane's credential again from its file, which the bus connection
+// does at every reconnection, so that it comes back with a credential renewed while the API runs.
+func rereadBus(b config.Bus) func() (bus.Credentials, error) {
+	return func() (bus.Credentials, error) {
+		renewed, err := config.RereadBus(b)
+		if err != nil {
+			return bus.Credentials{}, err
+		}
+		return bus.Credentials{JWT: renewed.JWT, Seed: string(renewed.Seed)}, nil
+	}
+}
+
+// expiry answers when the control plane's credential in its file expires, read again at every
+// call, and when the one read last did where the file no longer reads. It is called by one
+// goroutine alone.
+func expiry(b config.Bus) func() time.Time {
+	return func() time.Time {
+		if renewed, err := config.RereadBus(b); err == nil {
+			b = renewed
+		}
+		return b.Expires
+	}
+}
+
 // watchCredential says when the control plane's bus credential nears its expiry, and when it
-// passes it, until ctx is done.
+// passes it, until ctx is done. expiry answers when it expires, from its file, at every wake.
 //
-// The API goes on serving past it, though what it serves narrows. Its bus connection is refused
-// from then on, so a runner pool can no longer be created, since its consumer is made ready on that
-// connection. A runner is still given its bus credential, which is signed with the account seed
-// and not with this one, so the runners keep the bus and finish what they hold, and their
+// A credential renewed in its file before the old one expires silences it: the bus drops the API's
+// connection when the old one expires, and the connection comes back with the renewed one, as
+// rereadBus reads it. One renewed only after the old one expired needs a restart, since the
+// connection gave up at the bus's second refusal.
+//
+// The API goes on serving past the expiry, though what it serves narrows. Its bus connection is
+// refused from then on, so a runner pool can no longer be created, since its consumer is made ready
+// on that connection. A runner is still given its bus credential, which is signed with the account
+// seed and not with this one, so the runners keep the bus and finish what they hold, and their
 // heartbeats are still heard. An API that ended would stop both, and the controller's first sweep
 // after a restart would declare lost every task in flight. The controller holds the same
 // credential and ends, so nothing new is dispatched until it is renewed.
-func watchCredential(ctx context.Context, expires time.Time, log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
-	if expires.IsZero() {
-		return
-	}
-	renew := "agentiik-api bus-credential on the directory holding the bus identity, then restart the API and the controller"
+func watchCredential(ctx context.Context, expiry func() time.Time, log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
+	renew := "agentiik-api init, or agentiik-api bus-credential on the directory holding the bus identity, before it expires: the API and the controller take the renewed credential from their files when the bus drops the old one, with no restart"
 	for {
+		expires := expiry()
+		if expires.IsZero() {
+			return
+		}
 		left := expires.Sub(now())
 		var next time.Duration
 		switch {
 		case left <= 0:
-			log.Error("the control plane's bus credential has expired, and the bus refuses it: the controller, which holds the same credential, ends, so nothing is dispatched until it is renewed, and no runner pool can be created, while the runners are still given their bus credentials and finish what they hold", "expired", expires.UTC().Format(time.RFC3339), "renew", renew)
+			log.Error("the control plane's bus credential has expired, and the bus refuses it: the controller, which holds the same credential, ends, so nothing is dispatched until it is renewed, and no runner pool can be created, while the runners are still given their bus credentials and finish what they hold", "expired", expires.UTC().Format(time.RFC3339), "renew", "agentiik-api init, or agentiik-api bus-credential on the directory holding the bus identity, then restart the API and the controller")
 			return
 		case left <= credentialWarning:
 			log.Warn("the control plane's bus credential expires soon", "expires", expires.UTC().Format(time.RFC3339), "left", left.Round(time.Minute).String(), "renew", renew)

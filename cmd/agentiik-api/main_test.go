@@ -28,6 +28,7 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 		{"run"},
 		{"serve", "--listen=:9090"},
 		{"migrate", "now"},
+		{"health", "now"},
 		{"bus-init"},
 		{"bus-init", ""},
 		{"bus-init", "/a", "/b"},
@@ -115,7 +116,7 @@ func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 	var waited []time.Duration
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, nil))
-	watchCredential(t.Context(), expires, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
+	watchCredential(t.Context(), func() time.Time { return expires }, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
 		waited = append(waited, d)
 		clock = clock.Add(d)
 		return true
@@ -145,10 +146,43 @@ func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 	}{{start.Add(time.Hour), true}, {time.Time{}, false}} {
 		logged.Reset()
 		clock = start
-		watchCredential(t.Context(), c.expires, log, func() time.Time { return clock }, func(context.Context, time.Duration) bool { return false })
+		watchCredential(t.Context(), func() time.Time { return c.expires }, log, func() time.Time { return clock }, func(context.Context, time.Duration) bool { return false })
 		if got := strings.Contains(logged.String(), "level=WARN"); got != c.warns {
 			t.Errorf("a credential expiring at %s warned %v at once:\n%s", c.expires, got, logged.String())
 		}
+	}
+}
+
+// A credential renewed in its file inside the fourteen days is warned about no more, and never said
+// to have expired: the API's connection comes back with it when the bus drops the old one.
+func TestTheAPIStopsWarningOnceTheCredentialIsRenewed(t *testing.T) {
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	expires, renewed := start.Add(10*24*time.Hour), start.Add(100*24*time.Hour)
+	clock := start
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	read := 0
+	var waited []time.Duration
+	watchCredential(t.Context(), func() time.Time {
+		// Renewed for ninety days after the third warning, as init renews it.
+		if read++; read > 3 {
+			return renewed
+		}
+		return expires
+	}, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
+		waited = append(waited, d)
+		clock = clock.Add(d)
+		return len(waited) < 4
+	})
+	if n := strings.Count(logged.String(), "level=WARN"); n != 3 || strings.Contains(logged.String(), "level=ERROR") {
+		t.Errorf("it warned %d times, or said the renewed credential expired:\n%s", n, logged.String())
+	}
+	// Its fourth wait is for the renewed credential's own fourteen days, in silence.
+	if len(waited) != 4 || waited[3] != renewed.Add(-14*24*time.Hour).Sub(start.Add(3*24*time.Hour)) {
+		t.Errorf("it waited %v, and after the renewal it waits for the renewed credential's fourteen days", waited)
+	}
+	if !strings.Contains(logged.String(), "with no restart") {
+		t.Errorf("the warning does not say the renewal needs no restart:\n%s", logged.String())
 	}
 }
 
@@ -184,8 +218,8 @@ func TestBusInitWritesANinetyDayCredentialThatBusCredentialRenews(t *testing.T) 
 	if renewed := credentialExpiry(t, filepath.Join(dir, bus.ControlPlaneFile)); renewed.Sub(later) < 90*24*time.Hour-time.Second {
 		t.Errorf("bus-credential wrote a credential expiring %s after it ran, and it is valid ninety days", renewed.Sub(later))
 	}
-	if !strings.Contains(stdout.String(), "restart") {
-		t.Errorf("bus-credential does not say the programs read it when they start:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "when the bus drops the credential it replaced") {
+		t.Errorf("bus-credential does not say when the programs take it:\n%s", stdout.String())
 	}
 
 	// Run twice, bus-init is refused, since an operator created twice is two sets of keys.

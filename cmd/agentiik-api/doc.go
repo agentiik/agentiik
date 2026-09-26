@@ -5,6 +5,7 @@
 //	agentiik-api serve                 serve every route
 //	agentiik-api migrate               apply the migrations and create the application role
 //	agentiik-api init                  prepare an installation, and bring it in line with its settings
+//	agentiik-api health                exit 0 where the API serving beside it answers
 //	agentiik-api bus-init DIR          create the installation's NATS operator and accounts
 //	agentiik-api bus-credential DIR    mint the control plane a new bus credential
 //	agentiik-api audit-verify FILE     verify an export of the audit log
@@ -52,7 +53,19 @@
 //
 // The control plane's bus credential expires. From fourteen days before, the API says so once a
 // day, and says so again when it has; it goes on serving past it, for the reason watchCredential
-// gives, and still gives runners their bus credentials, but creates no runner pool.
+// gives, and still gives runners their bus credentials, but creates no runner pool. One renewed in
+// the file AGK_BUS_CREDENTIALS_FILE names before then is taken with no restart: the bus drops the
+// connection when the old one expires, and the connection comes back with what the file holds then.
+//
+// # health
+//
+// health exits 0 where the API serving in the same container, or on the same host, answers, and 1
+// where it does not, saying why: a health check a Compose file runs in the API's image, which has
+// no shell and nothing else to run one with. It reads AGK_LISTEN, AGK_PROXY_URL and whether
+// AGK_TLS_CERT_FILE is set, and asks for the root where serve listens, on the loopback where serve
+// listens on every interface, over TLS where serve speaks it, without verifying the certificate,
+// for up to five seconds. Any answer is ready, since serve answers nothing until the database, the
+// bus and every route are open; health.go says why that is enough.
 //
 // # The interim operator
 //
@@ -104,7 +117,8 @@
 // include, account.seed for the API, and control-plane.creds for the API and the controller, valid
 // ninety days. bus-credential mints a new control-plane.creds in DIR from the account seed, leaving
 // the operator and the accounts alone, so the streams and the tasks queued on them stay; the API and
-// the controller read it at their next start. Both refuse a DIR its group or anybody else may write
+// the controller take it from their files when the bus drops the credential it replaces, at its
+// expiry, and a restart takes it at once. Both refuse a DIR its group or anybody else may write
 // to. They take the directory as their one argument rather than from the environment, since they
 // are run once by a person, and print the paths to name in the settings.
 //
