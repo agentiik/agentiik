@@ -27,6 +27,9 @@ import (
 //	the key could not be written down   AgainAfter, for another runner of the pool
 //	an image not named by digest        report that no container ran, then Refused, before
 //	                                    the key is written down or anything is redeemed
+//	a namespace AGK_RUNNER_NAMESPACES   AgainAfter, before the key is written down or anything
+//	leaves out, or more than the host   is redeemed
+//	has room for with what it holds
 //	runs_on names a label not claimed   Release and AgainAfter, before anything is redeemed
 //	a drain ordered since the take      Release and Again, before anything is redeemed, unless
 //	                                    an earlier agent here took the key, which may be bound
@@ -75,6 +78,13 @@ type Loop struct {
 	// was published to is not for that reason a runner the task may run on.
 	Labels []string
 
+	// Namespaces are the namespaces this host takes work of, AGK_RUNNER_NAMESPACES, and nil is
+	// every namespace its pool accepts. Capacity is what this host declares, and a task that would
+	// take it past that with what the loop already holds is put back: "oversubscription is a
+	// choice, not an accident". A part of it at zero bounds nothing.
+	Namespaces []string
+	Capacity   Room
+
 	Queue    Queue
 	Redeemer Redeemer
 	Holder   Holder
@@ -118,8 +128,8 @@ type Loop struct {
 	LetGo func(key string)
 
 	// Wait is how long one take waits for work. Retry is the first wait before asking again after
-	// an answer that may change, and how long a message put back is held back and the loop takes
-	// nothing more. Zero is takeWait and retryFirst.
+	// an answer that may change, and how long a message put back is held back and, but for one
+	// put back for want of room, the loop takes nothing more. Zero is takeWait and retryFirst.
 	Wait  time.Duration
 	Retry time.Duration
 
@@ -128,6 +138,7 @@ type Loop struct {
 
 	mu    sync.Mutex
 	held  map[string]int
+	using Room
 	quiet time.Time
 }
 
@@ -370,6 +381,24 @@ func (l *Loop) carry(ctx context.Context, t bus.Taken) {
 		return
 	}
 
+	// Of the rest too, after the record for the same reason: a key this host has in flight is
+	// neither put back for another runner the moment it comes round nor counted twice against
+	// the host's capacity. A task too large is held back from every runner and does not pause
+	// this one, since the next message on the queue may well fit.
+	if l.answeredFromRecord(ctx, t, l.Holder.Recorded(id)) {
+		return
+	}
+	if !l.accepts(m.Namespace) {
+		l.putBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool, since this host takes no work of namespace %s", m.TaskID, m.IdempotencyKey, m.Namespace))
+		return
+	}
+	need, fits, why := l.reserve(m)
+	if !fits {
+		l.holdBack(t, fmt.Sprintf("task %s (%s) is put back for another runner of the pool or a later take, since %s", m.TaskID, m.IdempotencyKey, why))
+		return
+	}
+	defer l.unreserve(need)
+
 	if l.answeredFromRecord(ctx, t, l.Holder.Hold(id)) {
 		return
 	}
@@ -470,13 +499,19 @@ func uncovered(runsOn, claimed []string) []string {
 // spin through its queue, writing keys down and redeeming grants as fast as the API answers. Held
 // back and paused, a runner refused everything asks for at most its free slots every Retry.
 func (l *Loop) putBack(t bus.Taken, why string) {
+	l.holdBack(t, why)
+	l.mu.Lock()
+	l.quiet = l.now().Add(l.retryFirst())
+	l.mu.Unlock()
+}
+
+// holdBack puts a message back for another runner of the pool, held back a moment from every
+// runner, and leaves this loop taking.
+func (l *Loop) holdBack(t bus.Taken, why string) {
 	l.say(why)
 	if err := t.AgainAfter(l.retryFirst()); err != nil {
 		l.say(err.Error())
 	}
-	l.mu.Lock()
-	l.quiet = l.now().Add(l.retryFirst())
-	l.mu.Unlock()
 }
 
 // quietFor is how long the loop takes nothing more, after a message was put back.

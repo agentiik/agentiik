@@ -74,7 +74,9 @@
 // Where AGK_METRICS_LISTEN is set, the program answers GET /metrics there in the Prometheus text
 // format, to a request bearing the token, from the moment it starts, standing by or not. It is the
 // one program of the installation that exports metrics, and only the instance that leads reports
-// any figure: metrics.go says why. A port it cannot listen on refuses the start.
+// any figure: metrics.go says why. A port it cannot listen on refuses the start. The metrics are
+// answered in plain HTTP, unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its
+// key, which they are then served over TLS with.
 //
 // # Exit codes
 //

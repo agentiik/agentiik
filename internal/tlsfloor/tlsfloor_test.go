@@ -62,6 +62,9 @@ func TestEveryConfigurationHoldsTheFloor(t *testing.T) {
 	if v := Transport().TLSClientConfig.MinVersion; v != tls.VersionTLS12 {
 		t.Fatalf("Transport's floor is %s", tls.VersionName(v))
 	}
+	if v := Server(tls.Certificate{}).MinVersion; v != tls.VersionTLS12 {
+		t.Fatalf("Server's floor is %s", tls.VersionName(v))
+	}
 	built := &tls.Config{MinVersion: tls.VersionTLS10}
 	Floor(built)
 	if built.MinVersion != tls.VersionTLS12 {
