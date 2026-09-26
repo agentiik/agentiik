@@ -2,6 +2,16 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Runner
+
+- A runner may claim no label: `agk-runner join` without `--labels` joins the pool `default` with a token that permits none, and takes the steps naming no `runs_on`. `serve` refuses `AGK_RUNNER_LABELS` in the environment of a runner that joined claiming none.
+
+### API
+
+- `agentiik-api namespace create NAME` creates a namespace and `namespace remove NAME` removes one holding no workflow, run or secret, with the settings `migrate` reads, until v0.3.0's routes. Both are audited as `namespace.create` and `namespace.delete`.
+
 ## v0.2.0, 2026-09-26
 
 The first server release. An installation of the API, the controller, the bus and runners runs a pushed workflow as `agk run --local` runs it, and a test installation stood up from the checkout proves it in CI. Access control arrives in v0.3.0; until then only the operator token is allowed anything.

@@ -51,7 +51,8 @@ const (
 
 // The installation's names: the one namespace, the one pool both runners join, and the label
 // they claim, which a step selects them by with runs_on. A pool of the test's own rather than
-// default, because a runner claims at least one label and default carries none.
+// default, so that a step naming no runs_on reaches neither of them, and a test that joins a
+// runner to default, claiming no label, knows which runner such a step ran on.
 const (
 	Namespace = "e2e"
 	Pool      = "e2e"
@@ -163,7 +164,7 @@ func Stand(t testing.TB) *Installation {
 
 	in.pool()
 	for _, name := range []string{"a", "b"} {
-		in.Runners = append(in.Runners, in.runner(ctx, name, in.issue()))
+		in.Runners = append(in.Runners, in.runner(ctx, name, in.issue(Pool, Label), Label))
 	}
 	in.ready()
 	return in
@@ -344,14 +345,15 @@ func (in *Installation) database(ctx context.Context) databases {
 		in.t.Fatalf("agentiik-api migrate: %s\n%s", err, out)
 	}
 
-	// A namespace, which v0.2.0 has no route to create.
-	conn, err := pgx.Connect(ctx, d.admin)
-	if err != nil {
-		in.t.Fatal(err)
-	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	if _, err := conn.Exec(ctx, `insert into namespaces (name) values ($1)`, Namespace); err != nil {
-		in.t.Fatal(err)
+	// A namespace, which v0.2.0 has no route to create, so agentiik-api namespace create does,
+	// where migrate ran and with its settings, as Get started has it.
+	out, err = in.program(ctx, "agentiik-api", []string{"namespace", "create", Namespace}, map[string]string{
+		config.MigrateDatabaseURL:   d.admin,
+		config.DatabaseURL:          d.application,
+		config.DatabasePasswordFile: d.passwordFile,
+	})
+	if err != nil || !strings.Contains(out, "created namespace "+Namespace) {
+		in.t.Fatalf("agentiik-api namespace create %s: %v\n%s", Namespace, err, out)
 	}
 	return d
 }
@@ -580,16 +582,27 @@ func (in *Installation) pool() {
 	}}, http.StatusCreated, nil)
 }
 
-// issue issues one join token for the pool, permitting its label.
-func (in *Installation) issue() string {
+// issue issues one join token for a pool, permitting the labels given.
+func (in *Installation) issue(pool string, labels ...string) string {
 	var issued struct {
 		JoinToken api.JoinToken `json:"join_token"`
 	}
-	in.Operator("POST", "/api/v1/runner-pools/"+Pool+"/join-tokens", api.Issue{Labels: []string{Label}}, http.StatusCreated, &issued)
+	in.Operator("POST", "/api/v1/runner-pools/"+pool+"/join-tokens", api.Issue{Labels: labels}, http.StatusCreated, &issued)
 	if issued.JoinToken.Token == "" {
 		in.t.Fatal("the join token was answered without its secret")
 	}
 	return issued.JoinToken.Token
+}
+
+// JoinDefault stands one more runner up, name, in the pool default, which every installation is
+// migrated with and which carries no label: its join token permits none and it joins with no
+// --labels, as a first runner does. It waits until every runner reports ready.
+func (in *Installation) JoinDefault(name string) *Runner {
+	in.t.Helper()
+	r := in.runner(in.ctx, name, in.issue("default"))
+	in.Runners = append(in.Runners, r)
+	in.ready()
+	return r
 }
 
 // ready waits until the API has heard each runner's heartbeat say it is ready.

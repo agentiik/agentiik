@@ -106,14 +106,10 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 		t.Errorf("migrating again said:\n%s", out.String())
 	}
 
-	// A namespace, which v0.2.0 has no route to create.
-	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close(context.WithoutCancel(t.Context()))
-	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
-		t.Fatal(err)
+	// A namespace, which v0.2.0 has no route to create, so namespace create does.
+	out.Reset()
+	if err := namespace(t.Context(), database.Application, "create", "finance", &out); err != nil {
+		t.Fatalf("creating the namespace failed: %s", err)
 	}
 
 	// bus-init, and a server on what it wrote.
