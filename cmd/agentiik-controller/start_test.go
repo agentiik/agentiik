@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -667,6 +668,62 @@ func TestTheProgramEndsWhenItsBusCredentialExpires(t *testing.T) {
 	}
 	if !strings.Contains(standing.String(), "standing by") || termOf(t, conn) != began {
 		t.Errorf("the controller whose credential expired was not standing by: the term went from %+v to %+v\n%s", began, termOf(t, conn), standing.String())
+	}
+}
+
+// A credential renewed in its file before the one the controller started with expires is the one
+// it goes on with, as agentiik-api init renews it: the program does not end at the old one's expiry,
+// and needs no restart to take the new one.
+func TestTheProgramGoesOnWithACredentialRenewedInItsFile(t *testing.T) {
+	super := dbtest.Migrated(t)
+	b := withInstallationBus(t)
+	path := filepath.Join(t.TempDir(), "control-plane.creds")
+	write := func(until time.Time) bus.Credentials {
+		credential, err := b.issuer.ForControlPlane("agentiik-controller", until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := jwt.FormatUserConfig(credential.JWT, []byte(credential.Seed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Beside it and renamed over it, as init writes it.
+		aside := path + ".new"
+		if err := os.WriteFile(aside, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(aside, path); err != nil {
+			t.Fatal(err)
+		}
+		return credential
+	}
+	first := write(time.Now().Add(3 * time.Second))
+	c := config.Controller{
+		Database: config.Database{URL: dbtest.Application(super)},
+		Bus: config.Bus{
+			URL: b.url, JWT: first.JWT, Seed: config.Secret(first.Seed), Expires: first.ExpiresAt,
+			CredentialsFile: path,
+		},
+		Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour,
+	}
+
+	var out output
+	ended := make(chan error, 1)
+	go func() { ended <- serve(t.Context(), c, logger(&out)) }()
+	t.Cleanup(func() { <-ended })
+	eventually(t, 30*time.Second, "a controller leading", func() bool {
+		return strings.Contains(out.String(), "leading")
+	})
+	write(time.Now().Add(time.Hour))
+
+	select {
+	case err := <-ended:
+		ended <- err
+		t.Fatalf("the controller ended with %v, although its credential was renewed in its file before it expired\n%s", err, out.String())
+	case <-time.After(time.Until(first.ExpiresAt) + 5*time.Second):
+	}
+	if !strings.Contains(out.String(), "took the control plane's bus credential renewed in its file") {
+		t.Errorf("the controller did not say it took the renewed credential\n%s", out.String())
 	}
 }
 

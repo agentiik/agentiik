@@ -245,6 +245,28 @@ type Bus struct {
 	JWT     string
 	Seed    Secret
 	Expires time.Time
+
+	// CredentialsFile is the file they were read from, which RereadBus reads again for a
+	// credential renewed since.
+	CredentialsFile string
+}
+
+// RereadBus is b with the credential its file holds now, held to every rule the start held it to,
+// for a program that takes a credential renewed while it runs rather than waiting for a restart.
+// It refuses one that no longer reads, and one that has expired, as the start would.
+func RereadBus(b Bus) (Bus, error) {
+	r := newReader(func(name string) (string, bool) {
+		if name == BusCredentialsFile {
+			return b.CredentialsFile, true
+		}
+		return "", false
+	})
+	renewed := b
+	r.busCredential(&renewed)
+	if err := r.err(); err != nil {
+		return b, err
+	}
+	return renewed, nil
 }
 
 // API is what agentiik-api serve reads.
@@ -981,9 +1003,6 @@ func unescape(s string) (string, bool) {
 }
 
 // bus reads where the control plane reaches the bus, and its credential.
-//
-// The credential is a NATS credential file, the JWT and the seed each between the BEGIN and END
-// lines nats and nsc write, which is what jwt.FormatUserConfig writes too.
 func (r *reader) bus() Bus {
 	var b Bus
 	if v, set := r.required(BusURL, "and it is the bus the controller publishes tasks on and every runner takes them from"); set {
@@ -1002,44 +1021,54 @@ func (r *reader) bus() Bus {
 		}
 	}
 
+	r.busCredential(&b)
+	return b
+}
+
+// busCredential reads the control plane's credential into b.
+//
+// The credential is a NATS credential file, the JWT and the seed each between the BEGIN and END
+// lines nats and nsc write, which is what jwt.FormatUserConfig writes too.
+func (r *reader) busCredential(b *Bus) {
 	content := r.file(BusCredentialsFile, "and it names the file holding the control plane's bus credential")
 	if content == nil {
-		return b
+		return
 	}
 	token, err := jwt.ParseDecoratedJWT(content)
 	if err != nil {
 		r.refuse(BusCredentialsFile, "names a file holding no NATS user JWT: "+err.Error())
-		return b
+		return
 	}
 	claims, err := jwt.DecodeUserClaims(token)
 	if err != nil {
 		r.refuse(BusCredentialsFile, "names a file holding no NATS user JWT: "+err.Error())
-		return b
+		return
 	}
 	user, err := jwt.ParseDecoratedUserNKey(content)
 	if err != nil {
 		r.refuse(BusCredentialsFile, "names a file holding no NATS user seed: "+err.Error())
-		return b
+		return
 	}
 	public, err := user.PublicKey()
 	if err != nil || public != claims.Subject {
 		r.refuse(BusCredentialsFile, "names a file whose seed is not the key its JWT was issued to, so the bus would refuse it")
-		return b
+		return
 	}
 	seed, err := user.Seed()
 	if err != nil {
 		r.refuse(BusCredentialsFile, "names a file whose seed cannot be read: "+err.Error())
-		return b
+		return
 	}
+	b.Expires = time.Time{}
 	if claims.Expires != 0 {
 		b.Expires = time.Unix(claims.Expires, 0).UTC()
 		if !b.Expires.After(time.Now()) {
 			r.refuse(BusCredentialsFile, fmt.Sprintf("names a credential that expired at %s, which the bus refuses", b.Expires.Format(time.RFC3339)))
-			return b
+			return
 		}
 	}
 	b.JWT, b.Seed = token, Secret(seed)
-	return b
+	b.CredentialsFile, _ = r.value(BusCredentialsFile)
 }
 
 // notABusServer is why one address of AGK_BUS_URL is not one, or nothing where it is. NATS takes

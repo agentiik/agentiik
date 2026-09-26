@@ -524,3 +524,78 @@ func TestABusDirectoryOthersMayWriteToIsRefused(t *testing.T) {
 		t.Errorf("a directory others may read and not write to is refused: %s", err)
 	}
 }
+
+// readControlPlane reads the credential file as controlPlane does, answering what fails rather than
+// failing a test, since the connection calls it from its own goroutine.
+func readControlPlane(path, url string) (Credentials, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return Credentials{}, err
+	}
+	token, err := jwt.ParseDecoratedJWT(content)
+	if err != nil {
+		return Credentials{}, err
+	}
+	user, err := jwt.ParseDecoratedUserNKey(content)
+	if err != nil {
+		return Credentials{}, err
+	}
+	seed, err := user.Seed()
+	if err != nil {
+		return Credentials{}, err
+	}
+	return Credentials{Kind: Kind, URL: url, JWT: token, Seed: string(seed)}, nil
+}
+
+// The bus drops a connection when its credential expires. One that rereads its file comes back
+// with the credential renewed there in the meantime, and goes on without a restart; one that holds
+// its credential in memory comes back with the expired one, is refused, and is closed for good.
+func TestAConnectionComesBackWithTheCredentialRenewedInItsFile(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		rereads  bool
+		survives bool
+	}{
+		{"rereading its file", true, true},
+		{"holding its credential", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "bus")
+			// Whole seconds, which is what a JWT's expiry is written in, and far enough ahead
+			// for the connection to be made on it.
+			expires := time.Unix(time.Now().Unix()+3, 0)
+			in, err := NewInstallation(dir, expires)
+			if err != nil {
+				t.Fatal(err)
+			}
+			url := serveFrom(t, in)
+			held := controlPlane(t, in, url)
+			o := Options{URL: url, Name: "controller", Credentials: &held}
+			if c.rereads {
+				o.Reread = func() (Credentials, error) { return readControlPlane(in.ControlPlane, url) }
+			}
+			b, err := Open(t.Context(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.Close()
+			if _, _, err := RenewControlPlane(dir, time.Now().Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+
+			// Past the expiry, and past the reconnection that follows it, a second apart.
+			time.Sleep(time.Until(expires) + 3*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			err = b.Consumer(ctx, "dmz")
+			switch {
+			case c.survives && err != nil:
+				t.Fatalf("the connection did not come back with the renewed credential: %s (closed: %v)", err, b.conn.IsClosed())
+			case c.survives && b.conn.Stats().Reconnects == 0:
+				t.Fatal("the bus never dropped the connection whose credential expired, so the renewal was not what kept it")
+			case !c.survives && err == nil:
+				t.Fatal("a connection holding an expired credential still reached the bus: the test no longer tells a renewal taken from an expiry survived")
+			}
+		})
+	}
+}

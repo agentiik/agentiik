@@ -73,9 +73,11 @@
 // frees the lock within half a minute rather than the operating system's two hours, and a standby
 // takes over. A second SIGINT or SIGTERM ends a process whose way out takes too long.
 //
-// So does the control plane's bus credential running out, at the instant it does. The bus refuses
-// it from then on, and a controller left running would publish nothing and hear nothing while
-// looking alive.
+// So does the control plane's bus credential running out, at the instant it does, unless the file
+// AGK_BUS_CREDENTIALS_FILE names holds one renewed since, as agentiik-api init renews it. The bus
+// refuses the old one from then on, and a controller left running would publish nothing and hear
+// nothing while looking alive. A renewed one is taken with no restart: the bus drops the connection
+// when the old one expires, and the connection comes back with what the file holds then.
 //
 // # Metrics
 //
