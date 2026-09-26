@@ -38,6 +38,14 @@ type Joining struct {
 	// Replace lets join replace an identity the host already has, with a new key.
 	Replace bool
 
+	// EnvironmentOnly takes AGK_API, AGK_RUNNER_LABELS and AGK_RUNNER_NAMESPACES from the
+	// environment alone, never from a runner.env already there, so that what is claimed is what
+	// the environment says, one unset there claiming none. It is how serve joins, since it
+	// joins again whenever its environment says otherwise than the runner.env it joined with,
+	// and a join that kept a value from that file would be one it joined again for at every
+	// start.
+	EnvironmentOnly bool
+
 	// Owner is the account the key and runner.env are given to, and nil is whoever runs join.
 	Owner *Owner
 
@@ -276,7 +284,7 @@ func (j Joining) settings() (joinSettings, error) {
 		if name == Labels && c.identity {
 			return "", false
 		}
-		if slices.Contains(joinWrites, name) {
+		if slices.Contains(joinWrites, name) && !j.EnvironmentOnly {
 			v, ok := there[name]
 			return v, ok
 		}
@@ -303,12 +311,10 @@ func (j Joining) settings() (joinSettings, error) {
 	// The work root is where the disk is measured, so it is read as serve will read it, from
 	// the environment or the file join keeps it in.
 	c.Namespaces, c.WorkDir, _ = r.namespaces(), r.workDir(), r.concurrency()
-	switch kind, ok := token.KindOf(string(j.Token)); {
+	switch {
 	case j.Token == "":
 		r.refuse("--token", "is not given, and it is the join token an administrator issued for this host's pool")
-	case !ok || kind != token.Join || strings.ContainsFunc(string(j.Token), func(c rune) bool {
-		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-')
-	}):
+	case !isJoinToken(j.Token):
 		r.refuse("--token", "is not a join token, which is written agkjoin_ followed by its secret")
 	}
 
@@ -320,6 +326,14 @@ func (j Joining) settings() (joinSettings, error) {
 		}
 	}
 	return c, r.err()
+}
+
+// isJoinToken says whether s is written as a join token is, agkjoin_ followed by its secret.
+func isJoinToken(s Secret) bool {
+	kind, ok := token.KindOf(string(s))
+	return ok && kind == token.Join && !strings.ContainsFunc(string(s), func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-')
+	})
 }
 
 // existing reads the runner.env already on the host, where there is one: its settings, and
