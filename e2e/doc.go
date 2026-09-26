@@ -11,7 +11,8 @@
 //	                    which is AGK_PROXY_URL and the installation's public URL; agentiik-api health
 //	                    says when it is ready, as the Compose file's health check does
 //	the controller      agentiik-controller from its image, sharing the API's objects volume, which
-//	                    no runner sees
+//	                    no runner sees, and its bus volume read only, where the API renews the
+//	                    control plane's credential
 //	the registry        registry:2 on the installation's network, holding the fixture bricks by
 //	                    digest
 //	runner a, runner b  each an agent in the runner image, started as root with the capabilities
