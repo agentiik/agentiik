@@ -89,7 +89,8 @@ func TestTheBuiltAgentAnswersItsOwnCommandLine(t *testing.T) {
 // buildRunner builds this program for one platform, statically, and answers with the path.
 //
 // CGO_ENABLED=0 is the setting that makes it static, and it is written here so that whatever
-// builds the shipped binary has one place to take its flags from. stripped is -s -w, as
+// builds the shipped binary has one place to take its flags from; .github/workflows/release.yml
+// and the header of build/runner.Dockerfile copy them by hand. stripped is -s -w, as
 // cmd/agk-helper is built; the symbol check in boundary_test.go builds without it, since a
 // stripped binary has no symbol table to read and would pass any check of one. A machine with no
 // Go toolchain in reach skips rather than fails.

@@ -2,6 +2,12 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## Unreleased
+
+### Images
+
+- `ghcr.io/agentiik/api`, `controller` and `runner` are published for linux/amd64 and linux/arm64: `X.Y.Z` and `vX.Y.Z` at every release tag, `latest` on the highest release, `dev` at every commit to main. Any other branch builds and checks them and pushes nothing.
+
 ## v0.2.0, 2026-09-26
 
 The first server release. An installation of the API, the controller, the bus and runners runs a pushed workflow as `agk run --local` runs it, and a test installation stood up from the checkout proves it in CI. Access control arrives in v0.3.0; until then only the operator token is allowed anything.
