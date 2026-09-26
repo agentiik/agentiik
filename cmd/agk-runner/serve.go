@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentiik/agentiik/driver"
 	"github.com/agentiik/agentiik/runner"
@@ -27,19 +28,26 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitUsage
 	}
 	if e.Geteuid() == 0 {
-		fmt.Fprintln(e.Err, "agk-runner serve: refusing to run as root. The agent runs as its own account, in the group that owns the daemon socket and holding CAP_CHOWN, CAP_FOWNER and CAP_DAC_OVERRIDE, and a root agent is one whose every mistake is made as the host's root")
-		return exitRefused
+		return asRoot(e, log)
 	}
 
-	cfg, err := runner.ReadConfig(e.Lookup, e.EnvFile)
 	policy, perr := loadPolicy(e.PolicyFile, log)
 	socket, derr := dockerHost(e)
 	// Measured as join measured what it declared, and refused as join refuses it: a runner that
 	// cannot say how much it has cannot put back what it has no room for.
 	capacity, merr := runner.HostRoom(e.MemInfo)
+	token, terr := runner.ReadJoinToken(e.Lookup)
+	// A join token is used only once everything else read so far holds, so that none is spent
+	// on a start that is refused anyway.
+	if token != "" && errors.Join(perr, derr, merr) == nil {
+		if code, done := joinFirst(ctx, e, token, socket, log); done {
+			return code
+		}
+	}
+	cfg, err := runner.ReadConfig(e.Lookup, e.EnvFile)
 	// All are reported on the one start, so that an operator fixing a unit is told
 	// everything that is wrong with it rather than one thing per restart.
-	if err := errors.Join(err, perr, derr, merr); err != nil {
+	if err := errors.Join(err, perr, derr, merr, terr); err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
 		}
@@ -135,6 +143,79 @@ func serve(ctx context.Context, e env, args []string) int {
 		return exitRefused
 	}
 	return exitSucceeded
+}
+
+// joinPatience is how long serve waits for an API that does not answer its join, which is longer
+// than an installation takes to come up beside it on a slow host, and short enough that a runner
+// given an address nothing answers says so in its log within minutes. A variable so that a test
+// need not wait that long.
+var joinPatience = 5 * time.Minute
+
+// joinFirst joins with the join token serve was given where this host has no identity yet, or has
+// one its environment has moved on from, and says whether the start ends there, with its code.
+//
+// A runner given a join token is one its environment configures at every start, as a Compose file
+// does, so the address and the labels it serves with are the environment's, never ones a first
+// start wrote down and nothing changes afterwards. The identity cannot follow them, since the API
+// checked what the runner claims against the token it joined with, so a runner whose environment
+// says otherwise joins again, as join --replace does: a new runner with a new key, the one it was
+// staying registered until an administrator revokes it. It joins as the account it serves as, so
+// what it writes is that account's already.
+func joinFirst(ctx context.Context, e env, token runner.Secret, socket string, log func(string)) (int, bool) {
+	given := runner.JoinToken
+	if v, _ := e.Lookup(runner.JoinTokenFile); v != "" {
+		given = runner.JoinTokenFile
+	}
+	refuse := func(err error) (int, bool) {
+		for _, line := range strings.Split(err.Error(), "\n") {
+			fmt.Fprintln(e.Err, "agk-runner serve: "+line)
+		}
+		return exitRefused, true
+	}
+
+	joined, err := runner.HasJoined(e.EnvFile, e.KeyFile)
+	if err != nil {
+		return refuse(err)
+	}
+	replace := false
+	if joined {
+		drifted, err := runner.Drifted(e.Lookup, e.EnvFile)
+		switch {
+		case err != nil:
+			return refuse(err)
+		case len(drifted) == 0:
+			log("this host has joined already, and its environment claims what it joined with, so the join token in " + given + " is not used")
+			return 0, false
+		}
+		log(strings.Join(drifted, ", ") + " in the environment says otherwise than " + e.EnvFile + ", which this runner joined with, so it joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
+		replace = true
+	}
+
+	j, err := runner.JoinWhenReady(ctx, runner.Joining{
+		Token:           token,
+		Lookup:          e.Lookup,
+		EnvironmentOnly: true,
+		Replace:         replace,
+		EnvPath:         e.EnvFile, KeyPath: e.KeyFile, MemInfo: e.MemInfo,
+		CredentialPath: e.CredentialFile,
+		Socket:         socket,
+	}, joinPatience, log)
+	switch {
+	case ctx.Err() != nil:
+		fmt.Fprintln(e.Err, "agk-runner serve: stopped while joining, before it was ready")
+		return exitSucceeded, true
+	case err != nil:
+		return refuse(err)
+	}
+	claims := "no label"
+	if len(j.Labels) > 0 {
+		claims = "the labels " + strings.Join(j.Labels, ",")
+	}
+	log(fmt.Sprintf("this host joined pool %s as runner %s, claiming %s, with the join token in %s", j.Pool, j.Runner, claims, given))
+	if len(j.Labels) == 0 && j.Pool != "default" {
+		log("it claims no label, and pool " + j.Pool + " sends only steps that name one, so it will run none of them: set " + runner.Labels)
+	}
+	return 0, false
 }
 
 // openDriver opens the driver on the daemon, or gives up on it when the agent is stopped.

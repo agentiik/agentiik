@@ -24,7 +24,17 @@
 // for a laptop, and this program does not share that path: a missing runner.toml keeps the floor,
 // and one that cannot be read refuses the start rather than falling back to anything.
 //
-// serve also refuses to run as root. The agent needs the group that owns the daemon socket and
-// three capabilities to own a task's directory, and a root agent is a runner whose every mistake is
-// made as the host's root.
+// serve never serves as root. The agent needs the group that owns the daemon socket and three
+// capabilities to own a task's directory, and a root agent is a runner whose every mistake is made
+// as the host's root. Started as root, as the image starts it, serve gives the agent's account its
+// directories, takes the socket's group, drops to that account and starts itself again, and it
+// refuses the start where it cannot; root.go says why it goes about it so.
+//
+// # Joining on its own
+//
+// serve given a join token, in AGK_RUNNER_JOIN_TOKEN or the file AGK_RUNNER_JOIN_TOKEN_FILE names,
+// joins where the host has no identity yet, and joins again where its environment claims another
+// address, other labels or other namespaces than the runner.env it joined with, so that a runner
+// configured by its environment at every start is never one serving as a runner that environment
+// no longer describes.
 package main
