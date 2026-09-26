@@ -10,6 +10,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The four roles are fixed permission sets: `viewer` reads, `operator` runs and follows its runs without `workflow:read`, `editor` adds writing, run data and secrets, and `owner` adds `workflow:delete` and `grant:manage`. Roles held together add up.
 - A principal holds the union of its own and its groups' grants on a namespace and on a workflow. A workflow's grant only adds, and never gives `secret:use` or `secret:write`.
 - A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
+- A push of a version naming a secret is refused with 403 unless the pusher holds `secret:use` in the namespace, and a deny of it on the workflow counts; running the version takes `workflow:run` alone. A route declares such a second permission as `api.Needs.Also`, and its handler asks it with `api.HoldsAlso`.
 
 ### Tests
 
