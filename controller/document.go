@@ -200,8 +200,19 @@ func roundTrip(s *graph.State) (*graph.State, error) {
 		return nil, fmt.Errorf("controller: the state could not be written down: %w", err)
 	}
 	var out graph.State
-	if err := json.Unmarshal(b, &out); err != nil {
+	if err := asWritten(b, &out); err != nil {
 		return nil, fmt.Errorf("controller: the state could not be read back: %w", err)
 	}
 	return &out, nil
+}
+
+// asWritten reads a state, or a document holding one, with every number as it was written, a
+// json.Number, as the evaluator holds one in agk run --local: "a number written without a
+// fraction or an exponent is an int in an expression, and any other a double". Read as a float64,
+// vars.n + 1 has no overload on any pass after the first, where a local run, which keeps its state
+// in memory, finishes the run.
+func asWritten(b []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	return d.Decode(v)
 }

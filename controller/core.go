@@ -540,21 +540,13 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	}
 
 	var doc Document
-	if err := json.Unmarshal(e.Document, &doc); err != nil {
+	if err := asWritten(e.Document, &doc); err != nil {
 		return nil, fmt.Errorf("controller: the document of run %s could not be read: %w", e.Run, err)
 	}
 	state, err := Rehydrate(ctx, doc, e.Namespace, co.objects, co.limits)
 	if err != nil {
 		return nil, err
 	}
-	// The vars are the version's again rather than the document's, which holds the same
-	// values with every number read back as a float64: graph.Parse reads a number among the
-	// vars as a json.Number, which an expression takes as an int, so vars.n + 1 had no overload
-	// on any pass after the first, where agk run --local, which keeps its state in memory,
-	// finishes the run. They are the same values, since a version never changes and there are
-	// no namespace variables yet. Nothing else of the document is read with UseNumber, because
-	// the inputs are float64 from the first pass on, as they are locally.
-	state.Vars = g.Workflow().Vars
 	ev, err := graph.New(g, state, co.limits, co.requeues)
 	if err != nil {
 		return nil, fmt.Errorf("controller: run %s could not be resumed: %w", e.Run, err)
