@@ -7,8 +7,12 @@
 #   another branch  builds everything and pushes to a registry inside the job, never to ghcr.io
 #   dispatch        builds an existing tag again, pushing it only from main and with dry_run off
 #
-# A branch builds the release too, so that a Dockerfile a pull request breaks is found on the pull
-# request and not at the tag, when the version has already been said out loud.
+# A branch of this repository builds the release too, so that a Dockerfile a pull request breaks is
+# found on the pull request and not at the tag, when the version has already been said out loud.
+#
+# What keeps a branch from publishing is this file as main holds it: a branch runs its own copy with
+# packages: write, as every workflow does. Who may publish is who may push to main or push a v* tag,
+# which a tag ruleset restricts.
 name: release
 
 on:
@@ -30,14 +34,18 @@ on:
 permissions:
   contents: read
 
-# One build of a ref at a time. A newer commit makes the older one's dev and the older one's dry run
-# moot; a tag is never cancelled, since a release pushed halfway is worse than one pushed twice.
+# One build of a tag or a branch at a time, a tag's push and its dispatch included, since two builds
+# of one tag give two digests and the check of the first would find the second's. A newer commit
+# makes the older one's dev and dry run moot; a release is never cancelled, since one pushed halfway
+# is worse than one pushed twice.
 concurrency:
-  group: release-${{ github.ref }}-${{ inputs.tag }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 jobs:
   image:
+    # A fork builds nothing: it cannot push to ghcr.io/agentiik, and its main would try.
+    if: github.repository == 'agentiik/agentiik'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -62,14 +70,6 @@ jobs:
       run:
         # bash with -eo pipefail, which a step that names no shell does not get.
         shell: bash
-
-    # The registry a dry run pushes to, so that a branch goes through every step a release does,
-    # the push and the checks of what was pushed included, with nothing leaving the job.
-    services:
-      registry:
-        image: registry:2
-        ports:
-          - 5000:5000
 
     steps:
       # What to build and where it goes, decided from the event alone, before anything is checked
@@ -172,6 +172,13 @@ jobs:
             echo "tags=$tags"
           } >> "$GITHUB_OUTPUT"
 
+      # The registry a dry run pushes to, so that a branch goes through every step a release does,
+      # the push and the checks of what was pushed included, with nothing leaving the job. Started
+      # only for a dry run, so that a release does not depend on pulling an image it does not use.
+      - name: registry
+        if: steps.plan.outputs.publish != 'true'
+        run: docker run -d --name registry -p 5000:5000 registry:2
+
       # arm64 under QEMU for the one RUN step the api and controller images take from alpine; the
       # binaries themselves are cross-compiled above. The builder shares the job's network, so a dry
       # run reaches the registry at localhost.
@@ -223,6 +230,7 @@ jobs:
       # every tag on that index, and each platform's image labelled with this version and commit.
       - name: check
         env:
+          PUBLISH: ${{ steps.plan.outputs.publish }}
           IMAGE: ${{ matrix.image }}
           REGISTRY: ${{ steps.plan.outputs.registry }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -258,6 +266,15 @@ jobs:
             done
             echo "$platform: $(echo "$config" | jq -c '{architecture, user: .config.User}')"
           done
+
+          # Pulled as nobody, as an installation pulls it. A package the GITHUB_TOKEN creates in the
+          # organisation starts private, and making it public is a setting of the package's that no
+          # token of the workflow's can change, so until someone does, every publish says so here.
+          if [ "$PUBLISH" = true ]; then
+            docker logout ghcr.io
+            docker buildx imagetools inspect "$ref" >/dev/null || {
+              echo "$REGISTRY/$IMAGE was pushed and cannot be pulled anonymously: make the package public in its settings on GitHub"; exit 1; }
+          fi
 
           echo "### $IMAGE" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$ref\`, tagged $TAGS" >> "$GITHUB_STEP_SUMMARY"
