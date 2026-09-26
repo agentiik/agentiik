@@ -42,6 +42,10 @@ type Input struct {
 // "the graph reads one value and never tests for absence". Everything else is the
 // input's own schema.
 //
+// A value is read with UseNumber by every caller, so that a whole number is an int in an
+// expression and any other number a double, and it is bound with every exponent written out
+// (Canonical says why). A float64 is taken too, and bound as it came.
+//
 // An input that is neither supplied nor defaulted is absent from the result rather than
 // present and nil. The language gives default as the way to make an optional input
 // ordinary, so an input that declines to declare one has said that absence is a state
@@ -108,7 +112,9 @@ func Bind(declared map[string]Input, supplied map[string]any) (map[string]any, e
 				return nil, &InputRefusal{Input: name, Rule: RuleSchema, Detail: detail}
 			}
 		}
-		bound[name] = v
+		// Written out once it is known good, so that the value validated is the one sent and
+		// the value bound reads back from storage as what it is.
+		bound[name] = Canonical(v)
 	}
 	return bound, nil
 }

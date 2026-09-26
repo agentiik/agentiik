@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/numbertest"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -99,23 +101,26 @@ func TestARunsInputsAreBoundAgainstTheDeclarationOfItsVersion(t *testing.T) {
 		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
 	}
 
-	w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[{"id":"A-1","amount":12.50}]}}`)
+	// A number is held as it was written, which is what makes it an int or a double in an
+	// expression, save for an exponent, written out so that PostgreSQL writes back a double: 12.50
+	// keeps its point, 2^53 - 1 every digit, and 1e1 is 10.0 rather than the 10 jsonb would make it.
+	w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[{"id":"A-1","amount":12.50}],"note":1e1,"edge":9007199254740991}}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
 	}
 	var started map[string]any
 	json.Unmarshal(w.Body.Bytes(), &started)
-	_, detail := call(t, h, "GET", "/api/v1/finance/runs/"+started["run"].(string), "alice", nil)
-	got, _ := json.Marshal(detail["inputs"])
-	if want := `{"batch":3,"customers":[],"cycle":"2026-01","orders":[{"amount":12.5,"id":"A-1"}]}`; string(got) != want {
-		t.Errorf("the run holds the inputs %s, where binding gives %s", got, want)
+	read := sent(t, h, "GET", "/api/v1/finance/runs/"+started["run"].(string), "alice", "")
+	var detail struct{ Inputs json.RawMessage }
+	json.Unmarshal(read.Body.Bytes(), &detail)
+	if want := `{"batch":3,"customers":[],"cycle":"2026-01","edge":9007199254740991,"note":10.0,"orders":[{"amount":12.50,"id":"A-1"}]}`; string(detail.Inputs) != want {
+		t.Errorf("the run holds the inputs %s, where binding gives %s", detail.Inputs, want)
 	}
 
-	// A number is held to its schema as agk run --local holds it, as a 64-bit float, so that one no
-	// float holds exactly is accepted or refused alike: read exactly, 2^53 + 1 is past a maximum of
-	// 2^53, and read as a float it is 2^53.
-	if w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[],"edge":9007199254740993}}`); w.Code != http.StatusAccepted {
-		t.Errorf("a number a local run accepts answered %d: %s", w.Code, w.Body)
+	// And held to its schema as it was written, as agk run --local holds it: 2^53 + 1 is past a
+	// maximum of 2^53, where a 64-bit float would have read it as 2^53 and let it through.
+	if w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":{"orders":[],"edge":9007199254740993}}`); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"input":"edge"`) {
+		t.Errorf("a number past its maximum answered %d: %s", w.Code, w.Body)
 	}
 
 	for name, c := range map[string]struct {
@@ -139,8 +144,39 @@ func TestARunsInputsAreBoundAgainstTheDeclarationOfItsVersion(t *testing.T) {
 			t.Errorf("%s is refused saying %q, and a local run says %q first", name, refused["error"], want)
 		}
 	}
-	if n := runsHeld(t, super); n != 2 {
-		t.Errorf("%d runs exist, and two starts were accepted", n)
+	if n := runsHeld(t, super); n != 1 {
+		t.Errorf("%d runs exist, and one start was accepted", n)
+	}
+}
+
+// The workflow numbertest runs locally and through the controller is started here as any client
+// starts it, and the run holds the inputs the controller test is given: the same numbers, the same
+// kinds, whoever started the run.
+func TestARunHoldsItsNumbersAsTheControllerIsGivenThem(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", pushTo, "alice", declaringPush(t, numbertest.Workflow, nil)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":`+numbertest.Body+`}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	var held string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(), `select inputs::text from runs`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	// Compared as written, number by number, since jsonb orders the keys its own way.
+	asWritten := func(doc string) any {
+		d := json.NewDecoder(strings.NewReader(doc))
+		d.UseNumber()
+		var v any
+		if err := d.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if !reflect.DeepEqual(asWritten(held), asWritten(numbertest.Stored)) {
+		t.Errorf("the run holds the inputs %s, and the controller is tested on %s", held, numbertest.Stored)
 	}
 }
 

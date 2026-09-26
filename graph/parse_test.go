@@ -437,3 +437,33 @@ steps:
 		t.Fatal("a key the file never wrote was given a position")
 	}
 }
+
+// A number keeps the way it was written, which is what an expression reads: one written without
+// a fraction or an exponent is an int and any other a double, so 2.0 among the vars stays 2.0
+// rather than the 2 a float64 would print. A count written 3.0 is still the whole number the
+// schema's integer takes it for.
+func TestANumberKeepsTheWayItWasWritten(t *testing.T) {
+	wf := parsed(t, strings.Replace(minimal, "steps:\n", "vars: { n: 3, x: 2.0, big: 1.0e21 }\nsteps:\n", 1)+"    retry: { max: 3.0 }\n")
+	for name, want := range map[string]json.Number{"n": "3", "x": "2.0", "big": "1000000000000000000000.0"} {
+		if got := wf.Vars[name]; got != want {
+			t.Errorf("vars.%s is read as %#v, want %#v", name, got, want)
+		}
+	}
+	if got := wf.Steps["reconcile"].Retry.Max; got != 3 {
+		t.Errorf("retry.max: 3.0 is read as %d, want 3", got)
+	}
+	if err := refused(t, strings.Replace(minimal, "    outputs: [out]\n", "    outputs: [out]\n    retry: { max: 2.5 }\n", 1)); !strings.Contains(err.Error(), "retry.max is 2.5, and it is a whole number") {
+		t.Errorf("retry.max: 2.5 is refused with %q", err)
+	}
+}
+
+// Infinity and NaN are numbers YAML writes and JSON does not, so a run on a server could never
+// store one: they are refused where they are written rather than by a run that never moves.
+func TestInfinityIsRefusedWhereItIsWritten(t *testing.T) {
+	for _, written := range []string{".inf", "-.inf", ".nan"} {
+		err := refused(t, strings.Replace(minimal, "steps:\n", "vars: { x: "+written+" }\nsteps:\n", 1))
+		if !strings.Contains(err.Error(), "vars.x") {
+			t.Errorf("%s is refused with %q, which does not name where it is written", written, err)
+		}
+	}
+}

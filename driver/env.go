@@ -190,6 +190,16 @@ func paramValue(v any) string {
 	case int64:
 		return strconv.FormatInt(value, 10)
 	case json.Number:
+		// An exponent here is a double an expression computed, which the runner reads off
+		// the wire as the controller wrote it, 1.5e-7; agk run --local hands the same value
+		// over as a float64 and exports it 0.00000015. Written as that case writes it, so a
+		// step sees one text wherever it runs. A literal never has one: the workflow file's
+		// numbers are written out when it is read.
+		if strings.ContainsAny(string(value), "eE") {
+			if f, err := value.Float64(); err == nil {
+				return strconv.FormatFloat(f, 'f', -1, 64)
+			}
+		}
 		return value.String()
 	default:
 		b, err := json.Marshal(value)

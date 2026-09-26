@@ -179,7 +179,7 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 		if len(c.body) == 0 {
 			continue
 		}
-		if err := json.Unmarshal(c.body, c.into); err != nil {
+		if err := asWritten(c.body, c.into); err != nil {
 			return RunDetail{}, fmt.Errorf("db: run %s could not be read: %w", run, err)
 		}
 	}

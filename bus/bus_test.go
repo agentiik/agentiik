@@ -159,7 +159,11 @@ func rowOf(step agk.Step) string {
 func TestATaskIsTakenWholeByTheRunnersOfItsPool(t *testing.T) {
 	b := open(t)
 
-	if err := b.Publish(t.Context(), "dmz", message(step(t), "zone=dmz", "arch=amd64")); err != nil {
+	// A param written 1.0 comes back 1.0, as agk run --local hands it to the container, and not
+	// the 1 a float64 would print.
+	sent := message(step(t), "zone=dmz", "arch=amd64")
+	sent.Params = map[string]any{"ratio": json.Number("1.0"), "count": json.Number("3")}
+	if err := b.Publish(t.Context(), "dmz", sent); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,6 +189,9 @@ func TestATaskIsTakenWholeByTheRunnersOfItsPool(t *testing.T) {
 	}
 	if got.Grant == "" {
 		t.Error("the task came back with no grant, which is the hinge the whole message turns on")
+	}
+	if got.Params["ratio"] != json.Number("1.0") || got.Params["count"] != json.Number("3") {
+		t.Errorf("the params came back as %#v, want each number as it was written", got.Params)
 	}
 	if err := taken[0].Held(t.Context()); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -245,7 +246,7 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 		return Evaluation{}, fmt.Errorf("db: run %s says it was started by %q: %w", run, trigger, err)
 	}
 	if len(inputs) > 0 {
-		if err := json.Unmarshal(inputs, &e.Inputs); err != nil {
+		if err := asWritten(inputs, &e.Inputs); err != nil {
 			return Evaluation{}, fmt.Errorf("db: the inputs of run %s could not be read: %w", run, err)
 		}
 	}
@@ -1439,4 +1440,15 @@ func (w *Wide) Slots(ctx context.Context, namespace string, ending ...agk.TaskID
 		return 0, nil
 	}
 	return ceiling - held, nil
+}
+
+// asWritten reads a document the database holds with every number as it was written, a
+// json.Number, which is how agk run --local holds one: "a number written without a fraction or an
+// exponent is an int in an expression, and any other a double". Read as a float64, an input 3
+// would be the double 3.0 to the controller and the int 3 to a local run, and 2^53 + 1 would be
+// shown as 2^53.
+func asWritten(b []byte, v any) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	return d.Decode(v)
 }

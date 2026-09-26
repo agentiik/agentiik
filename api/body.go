@@ -461,10 +461,11 @@ func (b *body) written(from int64) []byte {
 // was sent, which is 34 MB for all the values a run's inputs may hold: about what storing every
 // number as a 64-bit float cost when encoding/json wrote them, 5e-324 being read back in 326.
 //
-// A run's inputs are now bound before they are written, and written as encoding/json writes a
-// 64-bit float, so what the database holds of them is no longer the number as it was sent. The
-// rule stays as the route's documented answer: a number past it is refused with 400 before the
-// inputs are decoded, as it was, and whether it should go is the documentation's to say.
+// A run's inputs are bound before they are written, and written as they were sent but for an
+// exponent, which schema.Canonical writes out in full so that 1e3 reads back a double: at most
+// numberMaxDigits digits either side of the point, which is what jsonb would have written back
+// of it anyway. The rule is the route's documented answer: a number past it is refused with 400
+// before the inputs are decoded.
 const numberMaxDigits = 340
 
 // skim reads one value and everything in it, counting each against b.values.
@@ -508,13 +509,13 @@ func (b *body) skim(tooMany string) error {
 	return malformed(err)
 }
 
-// number refuses a number of a document that whoever decodes it cannot hold, or that reaches
-// further from the point than numberMaxDigits.
+// number refuses a number of a document that an expression cannot hold, or that reaches further
+// from the point than numberMaxDigits.
 //
-// Whoever decodes it holds it in a 64-bit float, so 1e400, which no float holds, would be refused
-// by the controller's own decoding at every pass on the run rather than by this request in front
-// of whoever sent it, and 1e-400, which is not zero but which a float holds only as zero, would be
-// read as zero with nobody told.
+// An expression holds a number that is not an int in a 64-bit float, so 1e400, which no float
+// holds, would fail every expression reading it on every pass on the run rather than this
+// request in front of whoever sent it, and 1e-400, which is not zero but which a float holds only
+// as zero, would be read as zero with nobody told.
 func (b *body) number(t jsontext.Token, written []byte) error {
 	mantissa, exponent := written, 0
 	if e := bytes.IndexAny(written, "eE"); e >= 0 {
@@ -531,7 +532,7 @@ func (b *body) number(t jsontext.Token, written []byte) error {
 		}
 	}
 	if f, err := t.Float(); err != nil || f == 0 && bytes.ContainsAny(mantissa, "123456789") {
-		return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and a value is decoded into one", b.d.StackPointer())
+		return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and an expression reads a number as one", b.d.StackPointer())
 	}
 	scale := 0
 	if _, fraction, ok := bytes.Cut(mantissa, []byte(".")); ok {

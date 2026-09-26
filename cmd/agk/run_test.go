@@ -3,16 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
 	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/internal/numbertest"
 )
 
 // What agk run --local can be held to with no daemon in reach is everything it does before it
@@ -172,17 +175,60 @@ func TestAnInputIsReadAsJSONAndFallsBackToTheStringItIs(t *testing.T) {
 		"cycle": "2026-01",
 		// A list is a list, which is the reason the value is read as JSON at all.
 		"regions": []any{"eu", "us"},
-		// A number is a number and a boolean is a boolean.
-		"count":   float64(3),
+		// A number is a number, read as it was written, and a boolean is a boolean.
+		"count":   json.Number("3"),
 		"dry_run": true,
 		// And anything that is not JSON is the string it is, rather than a parse
 		// error.
 		"note": "a sentence",
 		// A file is read the same way, with the newline an editor left taken off.
-		"orders": []any{map[string]any{"id": float64(1)}},
+		"orders": []any{map[string]any{"id": json.Number("1")}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the inputs are %#v, want %#v", got, want)
+	}
+}
+
+// A number is read as it was written, which is what makes it an int or a double in an expression,
+// and the inputs a local run binds are the ones a server run holds for the same start: a whole
+// number an int, one written with a point or an exponent a double, the defaults as the workflow
+// writes them.
+func TestTheInputsALocalRunBindsAreTheOnesAServerRunHolds(t *testing.T) {
+	wf, err := graph.Parse([]byte(numbertest.Workflow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	supplied, err := suppliedInputs(numbertest.Flags, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := bindInputs(wf, fstest.MapFS{}, supplied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := json.NewDecoder(strings.NewReader(numbertest.Stored))
+	d.UseNumber()
+	var held map[string]any
+	if err := d.Decode(&held); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(bound, held) {
+		t.Errorf("a local run binds %#v, and a server run holds %#v", bound, held)
+	}
+
+	// Read exactly, 2^53 + 1 is past a maximum of 2^53, as the API reads it; as a float it would
+	// be 2^53 and pass.
+	supplied, err = suppliedInputs([]string{"count=9007199254740993", "ratio=1", "tenfold=1"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bindInputs(wf, fstest.MapFS{}, supplied); err == nil || !strings.Contains(err.Error(), "input count: schema: maximum") {
+		t.Errorf("2^53 + 1 against a maximum of 2^53 is bound with %v, and a server run refuses it", err)
+	}
+
+	// And what follows a number makes the value the text it is, as json.Unmarshal would.
+	if v := valueOf("1 2"); v != "1 2" {
+		t.Errorf("--input n='1 2' is read as %#v, want the text it is", v)
 	}
 }
 
