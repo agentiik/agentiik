@@ -1,77 +1,32 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
 
-// Permission is one atom of what a principal may do.
-//
-// "Permissions are atoms, the union is recomputed per request, a deny wins at any scope."
-// Atoms rather than roles, because a role is a name for a set of these and two installations
-// will disagree about what a role should contain long before they disagree about whether seeing
-// an envelope's contents is the same thing as seeing that a step ran.
-type Permission string
-
-const (
-	// WorkflowRead: "See the YAML, the resolved graph, the version history and the
-	// schedule."
-	WorkflowRead Permission = "workflow:read"
-
-	// WorkflowRun: "Start a manual run, cancel it, replay it, approve or reject a waiting
-	// run."
-	WorkflowRun Permission = "workflow:run"
-
-	// WorkflowWrite: "Register a new version, change triggers, rename, move between
-	// namespaces the principal owns on both sides."
-	WorkflowWrite Permission = "workflow:write"
-
-	// WorkflowDelete: "Delete the workflow and its versions."
-	WorkflowDelete Permission = "workflow:delete"
-
-	// RunRead: "See run state, per-step state, timings and log lines."
-	RunRead Permission = "run:read"
-
-	// RunReadData: "See envelope contents and download artifacts, not only state and
-	// digests." It is separate from RunRead because the two are different questions, and
-	// the page is explicit that nothing grants it implicitly: "No implicit run:read_data
-	// anywhere."
-	RunReadData Permission = "run:read_data"
-
-	// SecretUse: "Let a step reference a namespace secret. Never allows reading its value."
-	SecretUse Permission = "secret:use"
-
-	// SecretWrite declares, moves and removes a namespace's secrets: which store holds each
-	// value and where in it. Never allows reading a value.
-	//
-	// An atom of its own rather than workflow:write, because a declaration is not part of a
-	// workflow: it is what decides which credential a step is handed, for every workflow of the
-	// namespace at once, and the one holding workflow:write on a single workflow has no business
-	// pointing another's secret somewhere else. Reading the declarations needs workflow:read,
-	// since a workflow names the secrets it uses and the declarations are where they live.
-	//
-	// Owner holds it, and editor by default. Which atoms a role holds arrives with the roles in
-	// v0.3.0, and nothing here guesses at the rest of that mapping ahead of it.
-	SecretWrite Permission = "secret:write"
-
-	// GrantManage: "Grant and revoke access at this scope."
-	GrantManage Permission = "grant:manage"
+	"github.com/agentiik/agentiik/access"
 )
 
-// Permissions are the nine, in the order the page lists them. A test holds this list to the
-// page, because a permission invented here would be one nothing documents and one no role
-// includes.
-var Permissions = []Permission{
-	WorkflowRead, WorkflowRun, WorkflowWrite, WorkflowDelete,
-	RunRead, RunReadData, SecretUse, SecretWrite, GrantManage,
-}
+// Permission is one atom of what a principal may do. It is package access's, which resolves what a
+// principal holds from its grants with no HTTP behind it, so that the controller asks the same
+// question with the same words when a run is created. The names are kept here so that every route
+// reads as it was written: one vocabulary, spelled from either package.
+type Permission = access.Permission
 
-// Valid says whether this is one of the nine.
-func (p Permission) Valid() bool {
-	for _, known := range Permissions {
-		if p == known {
-			return true
-		}
-	}
-	return false
-}
+// The nine, as package access names them.
+const (
+	WorkflowRead   = access.WorkflowRead
+	WorkflowRun    = access.WorkflowRun
+	WorkflowWrite  = access.WorkflowWrite
+	WorkflowDelete = access.WorkflowDelete
+	RunRead        = access.RunRead
+	RunReadData    = access.RunReadData
+	SecretUse      = access.SecretUse
+	SecretWrite    = access.SecretWrite
+	GrantManage    = access.GrantManage
+)
+
+// Permissions are the nine, in the order the page lists them: package access's list.
+var Permissions = access.Permissions
 
 // Scope is what a permission is held at.
 //
