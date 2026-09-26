@@ -50,9 +50,14 @@ func (h *NamespaceHolds) Held() string {
 }
 
 // CreateNamespace creates a namespace, and answers whether it did: false is one that already
-// existed, which is left as it was, so that an installation script run twice creates it once.
+// existed, which is left as it was, so that an installation script run twice creates it once. A
+// name that is a user's login is ErrNameTaken.
 func (w *Wide) CreateNamespace(ctx context.Context, name string) (bool, error) {
 	tag, err := w.tx.Exec(ctx, `insert into namespaces (name) values ($1) on conflict (name) do nothing`, name)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.ConstraintName == namesShared {
+		return false, fmt.Errorf("%w: %s", ErrNameTaken, name)
+	}
 	if err != nil {
 		return false, fmt.Errorf("db: namespace %s could not be created: %w", name, err)
 	}

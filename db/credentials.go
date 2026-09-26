@@ -133,19 +133,35 @@ func (w *Wide) CredentialsOf(ctx context.Context, login string) ([]Credential, e
 	return all, nil
 }
 
+// ErrSignCountBehind is an assertion whose signature counter did not move past the one recorded,
+// which is what a cloned authenticator's does. Two authenticators that count nothing both report
+// zero, and are not refused for it.
+var ErrSignCountBehind = errors.New("db: that passkey's signature counter did not move forward")
+
 // PasskeyUsed records an assertion made with a passkey: the counter and the Backup State it
-// reported, and when. Whether the counter went forward is the verifier's to judge before this.
+// reported, and when. A counter that did not move past the recorded one is ErrSignCountBehind and
+// nothing is recorded, checked in the statement that writes it, so that of two assertions verified
+// against one reading the second is still refused.
 func (w *Wide) PasskeyUsed(ctx context.Context, id string, count uint32, backedUp bool, at time.Time) error {
 	tag, err := w.tx.Exec(ctx,
 		`update credentials set sign_count = $2, backup_state = $3, last_used_at = $4
-		  where id = $1 and type = 'passkey'`, id, int64(count), backedUp, at)
+		  where id = $1 and type = 'passkey' and ($2 > sign_count or ($2 = 0 and sign_count = 0))`,
+		id, int64(count), backedUp, at)
 	if err != nil {
 		return fmt.Errorf("db: the use of passkey %s could not be recorded: %w", id, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoCredential
+	if tag.RowsAffected() == 1 {
+		return nil
 	}
-	return nil
+	var passkey bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select from credentials where id = $1 and type = 'passkey')`, id).Scan(&passkey); err != nil {
+		return fmt.Errorf("db: passkey %s could not be read: %w", id, err)
+	}
+	if passkey {
+		return ErrSignCountBehind
+	}
+	return ErrNoCredential
 }
 
 // CredentialUsed records when a password or a TOTP was last used.

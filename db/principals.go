@@ -28,6 +28,10 @@ var ErrNoPrincipal = errors.New("db: no principal of that name")
 // ErrPrincipalExists is a principal created under a name another already has.
 var ErrPrincipalExists = errors.New("db: a principal of that name exists")
 
+// ErrNameTaken is a login where a namespace of that name exists, or a namespace where a login
+// does: the two share one name space, since a user's personal namespace is named after their login.
+var ErrNameTaken = errors.New("db: that name is a login or a namespace already")
+
 // ErrOwnsNamespace is a principal refused removal while it owns a namespace, which would be left
 // owned by somebody who is gone.
 var ErrOwnsNamespace = errors.New("db: that principal owns a namespace")
@@ -57,11 +61,17 @@ func (w *Wide) CreateUser(ctx context.Context, u User) error {
 	return principalCreated(err, "user", u.Login)
 }
 
+// namesShared is what refuses a login or a namespace whose name the other already has.
+const namesShared = "logins_and_namespaces"
+
 // principalCreated answers what writing a principal answered, in this package's words.
 func principalCreated(err error, what, name string) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == uniqueViolation && pg.ConstraintName == "principals_pkey" {
 		return fmt.Errorf("%w: %s", ErrPrincipalExists, name)
+	}
+	if errors.As(err, &pg) && pg.ConstraintName == namesShared {
+		return fmt.Errorf("%w: %s", ErrNameTaken, name)
 	}
 	if err != nil {
 		return fmt.Errorf("db: %s %s could not be created: %w", what, name, err)

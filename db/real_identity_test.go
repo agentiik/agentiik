@@ -183,7 +183,7 @@ func TestACredentialIsARowOfItsOwn(t *testing.T) {
 	ctx := t.Context()
 	passkey := Credential{
 		ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, Label: "laptop",
-		PublicKey: []byte{0xa5, 0x01, 0x02}, SignCount: 4294967295, AAGUID: make([]byte, 16),
+		PublicKey: []byte{0xa5, 0x01, 0x02}, SignCount: 4294967294, AAGUID: make([]byte, 16),
 		BackupEligible: true, BackupState: true,
 	}
 	password := Credential{ID: "password-alice", Login: "alice", Type: CredentialPassword, PasswordHash: "$pbkdf2-sha256$i=600000$c2FsdA$aGFzaA"}
@@ -230,7 +230,7 @@ func TestACredentialIsARowOfItsOwn(t *testing.T) {
 	// it when the password is deleted, which is deleting its row.
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.PasskeyUsed(ctx, passkey.ID, 7, false, now); err != nil {
+		if err := w.PasskeyUsed(ctx, passkey.ID, 4294967295, false, now); err != nil {
 			return err
 		}
 		var err error
@@ -255,7 +255,7 @@ func TestACredentialIsARowOfItsOwn(t *testing.T) {
 		}
 		return nil
 	})
-	if read.SignCount != 7 || read.BackupState || !read.LastUsedAt.Equal(now) {
+	if read.SignCount != 4294967295 || read.BackupState || !read.LastUsedAt.Equal(now) {
 		t.Errorf("the passkey reads as %+v after an assertion", read)
 	}
 	if len(all) != 1 || all[0].ID != passkey.ID {
@@ -392,4 +392,257 @@ func TestAnEnrolmentCodeIsSpentOnceAndASessionIsNotOpenedAgain(t *testing.T) {
 	if session.Credential != "" || !bytes.Equal(session.EnrolmentCode, again.Hash) {
 		t.Errorf("the session reads as opened by %q and %x, and an enrolment code opened it", session.Credential, session.EnrolmentCode)
 	}
+}
+
+// A suspended account opens no session, and neither a session nor a token of theirs opens
+// anything while the suspension lasts.
+func TestASuspendedUserOpensNothing(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	passkey := Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}
+	token := APIToken{ID: "01JQ3M8T", Hash: valueHash("agk_alice"), Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	robot := APIToken{ID: "01JQ3M8V", Hash: valueHash("agk_robot"), Principal: "finance/nightly-sync", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	session := Session{Hash: valueHash("session"), Login: "alice", Credential: passkey.ID, CreatedAt: now, IdleExpiresAt: now.Add(time.Hour)}
+	suspend := func(ctx context.Context, w *Wide, suspended bool) error {
+		return w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: suspended})
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+			return err
+		}
+		if err := w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "nightly-sync", CreatedBy: "alice"}); err != nil {
+			return err
+		}
+		if err := w.AddCredential(ctx, passkey); err != nil {
+			return err
+		}
+		for _, tk := range []APIToken{token, robot} {
+			if err := w.MintToken(ctx, tk); err != nil {
+				return err
+			}
+		}
+		if err := w.OpenSession(ctx, session); err != nil {
+			return err
+		}
+		if err := suspend(ctx, w, true); err != nil {
+			return err
+		}
+		if _, err := w.TokenByHash(ctx, token.Hash, now); !errors.Is(err, ErrNoToken) {
+			t.Errorf("a suspended user's token was answered %v", err)
+		}
+		if _, err := w.SessionByHash(ctx, session.Hash, now); !errors.Is(err, ErrNoSession) {
+			t.Errorf("a suspended user's session was answered %v", err)
+		}
+		opened := session
+		opened.Hash = valueHash("another")
+		if err := w.OpenSession(ctx, opened); !errors.Is(err, ErrSessionRefused) {
+			t.Errorf("a suspended user opened a session, answered %v", err)
+		}
+		// A service account is nobody's to suspend, and lifting the suspension gives back what
+		// it held.
+		if _, err := w.TokenByHash(ctx, robot.Hash, now); err != nil {
+			t.Errorf("a service account's token was answered %v while a user was suspended", err)
+		}
+		if err := suspend(ctx, w, false); err != nil {
+			return err
+		}
+		if _, err := w.TokenByHash(ctx, token.Hash, now); err != nil {
+			t.Errorf("a token was answered %v once the suspension was lifted", err)
+		}
+		return nil
+	})
+}
+
+// A session opened by an enrolment code lives no longer than the code: a link issued again ends
+// it, and it ends with the code's hour however often it is kept open.
+func TestASessionOpenedByALinkEndsWithTheLink(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	code := func(value string, at time.Time) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentRecovery, IssuedBy: "bob",
+			IssuedAt: at, ExpiresAt: at.Add(time.Hour)}
+	}
+	session := func(value string, c EnrolmentCode, at time.Time) Session {
+		return Session{Hash: valueHash(value), Login: "alice", EnrolmentCode: c.Hash, CreatedAt: at, IdleExpiresAt: at.Add(30 * time.Minute)}
+	}
+	unopened, first, second := code("unopened", now), code("first", now), code("second", now.Add(time.Minute))
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+			return err
+		}
+		for _, c := range []EnrolmentCode{unopened, first} {
+			if _, err := w.IssueEnrolmentCode(ctx, c); err != nil {
+				return err
+			}
+		}
+		if err := w.OpenSession(ctx, session("by-unopened", unopened, now)); !errors.Is(err, ErrSessionRefused) {
+			t.Errorf("a code replaced before it opened anything opened a session, answered %v", err)
+		}
+		return w.OpenSession(ctx, session("by-first", first, now))
+	})
+	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+		return w.OpenSession(ctx, session("by-first-again", first, now))
+	})
+	if !errors.Is(err, ErrSessionRefused) {
+		t.Errorf("a code opened a second session, answered %v", err)
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if _, err := w.IssueEnrolmentCode(ctx, second); err != nil {
+			return err
+		}
+		if _, err := w.SessionByHash(ctx, valueHash("by-first"), now.Add(2*time.Minute)); !errors.Is(err, ErrNoSession) {
+			t.Errorf("the session of a link issued again was answered %v", err)
+		}
+
+		// Spent as the session opens, and kept open every twenty minutes: live within the hour,
+		// and not a moment past it.
+		opened := now.Add(2 * time.Minute)
+		if _, err := w.UseEnrolmentCode(ctx, second.Hash, opened); err != nil {
+			return err
+		}
+		if err := w.OpenSession(ctx, session("by-second", second, opened)); err != nil {
+			return err
+		}
+		for at := opened.Add(20 * time.Minute); at.Before(second.ExpiresAt); at = at.Add(20 * time.Minute) {
+			if err := w.TouchSession(ctx, valueHash("by-second"), at, at.Add(30*time.Minute)); err != nil {
+				t.Errorf("the session was not kept open at %s, within its code's hour: %v", at.Sub(now), err)
+			}
+		}
+		if _, err := w.SessionByHash(ctx, valueHash("by-second"), second.ExpiresAt); !errors.Is(err, ErrNoSession) {
+			t.Errorf("a session outlived the hour of the code that opened it, answered %v", err)
+		}
+		return nil
+	})
+}
+
+// A first administrator's link replaces the one before it whoever that was for, and none is open
+// or issued once the first administrator has enrolled.
+func TestAFirstAdministratorsLinkEndsWithTheBootstrapToken(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	link := func(login, value string) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: login, Kind: EnrolmentFirstAdministrator, IssuedBy: "operator",
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []string{"alcie", "alice", "bob"} {
+			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u, Admin: true}); err != nil {
+				return err
+			}
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, link("alcie", "mistyped")); err != nil {
+			return err
+		}
+		if replaced, err := w.IssueEnrolmentCode(ctx, link("alice", "meant")); err != nil || !replaced {
+			t.Errorf("a link for alice replaced the one for alcie as %v, %v", replaced, err)
+		}
+		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("mistyped"), now); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("the mistyped link was answered %v once another was issued", err)
+		}
+		// bob's link, issued last, is left open when alice enrols through hers.
+		if _, err := w.IssueEnrolmentCode(ctx, link("bob", "bobs")); err != nil {
+			return err
+		}
+		if _, err := w.EndBootstrap(ctx, now); err != nil {
+			return err
+		}
+		if _, err := w.UseEnrolmentCode(ctx, valueHash("bobs"), now); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("a first administrator's link was used after the bootstrap token ended, answered %v", err)
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, link("alice", "late")); !errors.Is(err, ErrBootstrapEnded) {
+			t.Errorf("a first administrator's link was issued after the bootstrap token ended, answered %v", err)
+		}
+		recovery := link("alice", "recovery")
+		recovery.Kind, recovery.IssuedBy = EnrolmentRecovery, "bob"
+		if _, err := w.IssueEnrolmentCode(ctx, recovery); err != nil {
+			t.Errorf("a recovery code was refused after the bootstrap token ended: %v", err)
+		}
+		return nil
+	})
+}
+
+// Two links issued for one user at once both succeed, the second replacing the first, rather than
+// the second failing on the first.
+func TestTwoLinksIssuedAtOnceTakeTurns(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
+	})
+	errs := make(chan error, 2)
+	for _, value := range []string{"one", "two"} {
+		go func() {
+			errs <- pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+				_, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentRecovery,
+					IssuedBy: "bob", IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+				// Held open a moment, so that the other issue arrives while this one is uncommitted.
+				time.Sleep(200 * time.Millisecond)
+				return err
+			})
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("one of two links issued at once was answered %v", err)
+		}
+	}
+	open := 0
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, value := range []string{"one", "two"} {
+			if _, err := w.EnrolmentCodeByHash(ctx, valueHash(value), now); err == nil {
+				open++
+			}
+		}
+		return nil
+	})
+	if open != 1 {
+		t.Errorf("%d of two links issued at once are open, and the second replaces the first", open)
+	}
+}
+
+// Logins and namespaces share one name space, and a signature counter only moves forward.
+func TestANameIsALoginOrANamespaceAndACounterMovesForward(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+		return w.CreateUser(ctx, User{Login: "finance", DisplayName: "Finance"})
+	})
+	if !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a login named after a namespace was answered %v", err)
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
+	})
+	err = pool.Installation(t.Context(), NamespaceAdministration, func(ctx context.Context, w *Wide) error {
+		_, err := w.CreateNamespace(ctx, "alice")
+		return err
+	})
+	if !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a namespace named after a login was answered %v", err)
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, c := range []Credential{
+			{ID: "Y291bnRz", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16), SignCount: 7},
+			{ID: "bm9uZQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)},
+		} {
+			if err := w.AddCredential(ctx, c); err != nil {
+				return err
+			}
+		}
+		if err := w.PasskeyUsed(ctx, "Y291bnRz", 10, false, now); err != nil {
+			t.Errorf("a counter moving from 7 to 10 was answered %v", err)
+		}
+		for _, behind := range []uint32{10, 8, 0} {
+			if err := w.PasskeyUsed(ctx, "Y291bnRz", behind, false, now); !errors.Is(err, ErrSignCountBehind) {
+				t.Errorf("a counter going from 10 to %d was answered %v", behind, err)
+			}
+		}
+		if err := w.PasskeyUsed(ctx, "bm9uZQ", 0, false, now); err != nil {
+			t.Errorf("an authenticator that counts nothing was answered %v", err)
+		}
+		if err := w.PasskeyUsed(ctx, "bm9uZSBhdCBhbGw", 1, false, now); !errors.Is(err, ErrNoCredential) {
+			t.Errorf("a passkey nobody enrolled was answered %v", err)
+		}
+		return nil
+	})
 }
