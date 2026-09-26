@@ -425,7 +425,6 @@ func TestAJoinIsRefusedBeforeAnythingIsSentWhereItsSettingsAreWrong(t *testing.T
 		"no address":                     {func(j *Joining) { j.API = "" }, "--api"},
 		"a plaintext address":            {func(j *Joining) { j.API = "http://agentiik.example.com" }, API},
 		"an address with a $":            {func(j *Joining) { j.API = "https://agentiik.example.com/$x" }, API},
-		"no labels":                      {func(j *Joining) { j.Labels = "" }, "--labels"},
 		"a label out of grammar":         {func(j *Joining) { j.Labels = "zone dmz" }, Labels},
 		"no token":                       {func(j *Joining) { j.Token = "" }, "--token"},
 		"a runner credential":            {func(j *Joining) { j.Token = credential }, "--token"},
@@ -448,6 +447,67 @@ func TestAJoinIsRefusedBeforeAnythingIsSentWhereItsSettingsAreWrong(t *testing.T
 				t.Errorf("a refused join left %v", files)
 			}
 		})
+	}
+}
+
+// A host joins the pool default, which every installation is migrated with and which carries no
+// label, with a token that permits none and no --labels: the API takes a join claiming nothing,
+// and serve reads what join wrote as a runner claiming no label, which is one that takes the steps
+// naming no runs_on.
+func TestAHostJoinsThePoolDefaultClaimingNoLabel(t *testing.T) {
+	in := anInstallation(t)
+	var token db.JoinToken
+	if err := in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		now := time.Now().UTC()
+		token, err = w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := aJoiningHost(t, in.url, Secret(token.Clear))
+	h.Labels = ""
+
+	joined, err := Join(t.Context(), h)
+	if err != nil {
+		t.Fatalf("the host could not join the pool default: %s", err)
+	}
+	if joined.Pool != "default" || joined.Labels != nil {
+		t.Errorf("the join came to %+v", joined)
+	}
+	text, err := os.ReadFile(h.EnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(text), Labels) {
+		t.Errorf("runner.env names %s for a runner claiming none:\n%s", Labels, text)
+	}
+	c, err := ReadConfig(environment(nil), h.EnvPath)
+	if err != nil {
+		t.Fatalf("serve refuses what join wrote: %s", err)
+	}
+	if c.Pool != "default" || c.Labels != nil {
+		t.Errorf("serve reads pool %s claiming %q", c.Pool, c.Labels)
+	}
+	runners := in.inventory(t)
+	if len(runners) != 1 || runners[0].Pool != "default" || len(runners[0].Labels) != 0 {
+		t.Errorf("the installation holds %+v", runners)
+	}
+}
+
+// A join claiming no label says so on the wire, with "labels": [], which is what the API takes as
+// a claim of nothing rather than a request that left the field out.
+func TestAJoinClaimingNoLabelSendsAnEmptyList(t *testing.T) {
+	url, sent := fakeAPI(t, aJoined)
+	h := aJoiningHost(t, url, aToken)
+	h.Labels = ""
+	if _, err := Join(t.Context(), h); err != nil {
+		t.Fatal(err)
+	}
+	var said map[string]json.RawMessage
+	json.Unmarshal(sent(), &said)
+	if string(said["labels"]) != "[]" {
+		t.Errorf("the join sent labels %s, want []", said["labels"])
 	}
 }
 

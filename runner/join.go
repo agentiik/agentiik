@@ -27,7 +27,8 @@ type Joining struct {
 	Token Secret
 
 	// Labels is --labels, the labels this runner claims written as AGK_RUNNER_LABELS writes
-	// them, and where it is empty, AGK_RUNNER_LABELS from the environment.
+	// them, and where it is empty, AGK_RUNNER_LABELS from the environment. Neither claims no
+	// label, which is what a runner of the pool default claims.
 	Labels string
 
 	// Lookup is the environment, which also gives AGK_RUNNER_NAMESPACES, the host's narrowing,
@@ -57,6 +58,9 @@ type Joining struct {
 // Joined is what a join came to.
 type Joined struct {
 	Runner, Pool string
+
+	// Labels are the labels it claimed, and nil is none.
+	Labels []string
 
 	// RotateBy is when the credential stops being accepted.
 	RotateBy time.Time
@@ -136,11 +140,17 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 		return Joined{}, err
 	}
 
+	// Written [] where it claims none, since the wire takes claiming nothing as something the
+	// request says rather than a field it left out.
+	claimed := settings.Labels
+	if claimed == nil {
+		claimed = []string{}
+	}
 	var answer joinAnswer
 	err = newClient(settings.API, "", j.HTTP).Do(ctx, http.MethodPost, "/api/v1/runners", joinRequest{
 		Token:        string(j.Token),
 		PublicKey:    key.public,
-		Labels:       settings.Labels,
+		Labels:       claimed,
 		Capacity:     capacity,
 		Architecture: Architecture(),
 		AgentVersion: Version(),
@@ -205,7 +215,7 @@ func Join(ctx context.Context, j Joining) (Joined, error) {
 	if err := envFile.commit(j.Replace || settings.settingsOnly); err != nil {
 		return Joined{}, spent(err)
 	}
-	return Joined{Runner: answer.Runner, Pool: answer.Pool, RotateBy: answer.RotateBy}, nil
+	return Joined{Runner: answer.Runner, Pool: answer.Pool, Labels: settings.Labels, RotateBy: answer.RotateBy}, nil
 }
 
 // joinSettings are the settings join sends and writes.
@@ -281,11 +291,9 @@ func (j Joining) settings() (joinSettings, error) {
 	} else {
 		r.refuse("--api", "is not given and "+API+" is not set, and it is the address of the API this host joins, such as https://agentiik.example.com")
 	}
-	if _, set := r.env(Labels); set {
-		c.Labels = r.labels()
-	} else {
-		r.refuse("--labels", "is not given and "+Labels+" is not set, and they are the labels this runner claims, within what the token permits, such as zone=dmz,arch=amd64: serve refuses to start without them")
-	}
+	// Neither --labels nor AGK_RUNNER_LABELS claims no label, which is a runner of the pool
+	// default: it takes the steps that name no runs_on, and a token of that pool permits none.
+	c.Labels = r.labels()
 	// The work root is where the disk is measured, so it is read as serve will read it, from
 	// the environment or the file join keeps it in.
 	c.Namespaces, c.WorkDir, _ = r.namespaces(), r.workDir(), r.concurrency()

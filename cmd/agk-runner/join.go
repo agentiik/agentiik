@@ -30,7 +30,7 @@ func join(ctx context.Context, e env, args []string) int {
 	fs.SetOutput(e.Err)
 	api := fs.String("api", "", "the address of the API, such as https://agentiik.example.com; "+runner.API+" where not given")
 	tokenFlag := fs.String("token", "", "the join token an administrator issued, agkjoin_...")
-	labels := fs.String("labels", "", "the labels this runner claims, such as zone=dmz,arch=amd64; "+runner.Labels+" where not given")
+	labels := fs.String("labels", "", "the labels this runner claims, such as zone=dmz,arch=amd64; "+runner.Labels+" where not given, and none where neither is, which is a runner of the pool default")
 	account := fs.String("user", agentAccount, "the account the agent runs as, which the key and runner.env are given to when join runs as root")
 	replace := fs.Bool("replace", false, "replace the identity this host already has with a new runner and a new key")
 	if err := fs.Parse(args); err != nil {
@@ -122,6 +122,11 @@ func lookupAccount(name string) (runner.Owner, error) {
 // given is, and until when.
 func said(w io.Writer, j runner.Joined, e env, whom string) {
 	fmt.Fprintf(w, "This host joined pool %s as runner %s.\n", j.Pool, j.Runner)
+	if len(j.Labels) == 0 {
+		fmt.Fprintln(w, "It claims no label, so it takes only the steps that name no runs_on, which go to the pool default.")
+	} else {
+		fmt.Fprintf(w, "It claims the labels %s.\n", strings.Join(j.Labels, ","))
+	}
 	fmt.Fprintf(w, "Its key is in %s and its credential in %s, both mode 0600 and owned by %s.\n", e.KeyFile, e.EnvFile, whom)
 	fmt.Fprintf(w, "The credential is accepted until %s.\n", j.RotateBy.UTC().Format(time.RFC3339))
 	fmt.Fprintln(w, "agk-runner serve starts the agent, as the unit runs it.")
