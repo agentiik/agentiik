@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +175,23 @@ func TestEnvironmentExportsAScriptsParams(t *testing.T) {
 	// either, and no shell could read it. The file still carries it.
 	if _, ok := env["AGK_PARAM_MAX-AGE"]; ok {
 		t.Errorf("a parameter no shell can name was exported anyway")
+	}
+}
+
+// A double an expression computed reaches a runner as the controller wrote it on the wire, with
+// an exponent, and is exported as agk run --local exports the float64 it holds: one text for one
+// value wherever the step runs. A number written in the file keeps its spelling.
+func TestAComputedDoubleIsExportedAsALocalRunExportsIt(t *testing.T) {
+	for number, want := range map[json.Number]string{
+		"1.5e-7": strconv.FormatFloat(1.5e-7, 'f', -1, 64),
+		"1e+21":  strconv.FormatFloat(1e21, 'f', -1, 64),
+		"2.0":    "2.0",
+		"3":      "3",
+	} {
+		task := graph.Task{Step: "check-vat", Attempt: 1, Script: []string{"true"}, Params: map[string]any{"n": number}}
+		if got := envMap(t, environment(task, task.Deadline))["AGK_PARAM_N"]; got != want {
+			t.Errorf("%s is exported %q, want %q", number, got, want)
+		}
 	}
 }
 

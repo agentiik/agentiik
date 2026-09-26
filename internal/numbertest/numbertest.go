@@ -21,8 +21,8 @@ import (
 	"github.com/agentiik/agentiik/agk"
 )
 
-// Workflow is the workflow. Every step is a script step, so it runs with no manifest and no
-// image pulled.
+// Workflow is the workflow. Every step is a script step naming its image by digest, so it runs
+// with no manifest and a server takes it as pushed.
 const Workflow = `
 apiVersion: agentiik.dev/v1
 kind: Workflow
@@ -38,12 +38,12 @@ inputs:
   scale: { default: 2.0 }
 steps:
   first:
-    image: alpine:3.21
+    image: alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
     script: [ "true" ]
     params:
 ` + numbers + `    outputs: [out]
   second:
-    image: alpine:3.21
+    image: alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
     needs:
       - { step: first, port: out, as: in }
     strategy:
@@ -56,7 +56,7 @@ steps:
       half_scaled: ${{ matrix.half * 1.5 }}
     outputs: [out]
   third:
-    image: alpine:3.21
+    image: alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
     needs:
       - { step: second, port: out, as: in }
     script: [ "true" ]

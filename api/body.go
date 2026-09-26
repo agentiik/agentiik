@@ -509,13 +509,13 @@ func (b *body) skim(tooMany string) error {
 	return malformed(err)
 }
 
-// number refuses a number of a document that whoever decodes it cannot hold, or that reaches
-// further from the point than numberMaxDigits.
+// number refuses a number of a document that an expression cannot hold, or that reaches further
+// from the point than numberMaxDigits.
 //
-// Whoever decodes it holds it in a 64-bit float, so 1e400, which no float holds, would be refused
-// by the controller's own decoding at every pass on the run rather than by this request in front
-// of whoever sent it, and 1e-400, which is not zero but which a float holds only as zero, would be
-// read as zero with nobody told.
+// An expression holds a number that is not an int in a 64-bit float, so 1e400, which no float
+// holds, would fail every expression reading it on every pass on the run rather than this
+// request in front of whoever sent it, and 1e-400, which is not zero but which a float holds only
+// as zero, would be read as zero with nobody told.
 func (b *body) number(t jsontext.Token, written []byte) error {
 	mantissa, exponent := written, 0
 	if e := bytes.IndexAny(written, "eE"); e >= 0 {
@@ -532,7 +532,7 @@ func (b *body) number(t jsontext.Token, written []byte) error {
 		}
 	}
 	if f, err := t.Float(); err != nil || f == 0 && bytes.ContainsAny(mantissa, "123456789") {
-		return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and a value is decoded into one", b.d.StackPointer())
+		return fmt.Errorf("the request body holds a number at %.100q that no 64-bit float holds, and an expression reads a number as one", b.d.StackPointer())
 	}
 	scale := 0
 	if _, fraction, ok := bytes.Cut(mantissa, []byte(".")); ok {

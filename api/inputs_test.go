@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/numbertest"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -144,6 +146,37 @@ func TestARunsInputsAreBoundAgainstTheDeclarationOfItsVersion(t *testing.T) {
 	}
 	if n := runsHeld(t, super); n != 1 {
 		t.Errorf("%d runs exist, and one start was accepted", n)
+	}
+}
+
+// The workflow numbertest runs locally and through the controller is started here as any client
+// starts it, and the run holds the inputs the controller test is given: the same numbers, the same
+// kinds, whoever started the run.
+func TestARunHoldsItsNumbersAsTheControllerIsGivenThem(t *testing.T) {
+	h, _, super := serving(t)
+	if w, _ := call(t, h, "PUT", pushTo, "alice", declaringPush(t, numbertest.Workflow, nil)); w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	w := sent(t, h, "POST", startAt, "alice", `{"commit":"`+aCommit+`","inputs":`+numbertest.Body+`}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("starting a run answered %d: %s", w.Code, w.Body)
+	}
+	var held string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(), `select inputs::text from runs`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	// Compared as written, number by number, since jsonb orders the keys its own way.
+	asWritten := func(doc string) any {
+		d := json.NewDecoder(strings.NewReader(doc))
+		d.UseNumber()
+		var v any
+		if err := d.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if !reflect.DeepEqual(asWritten(held), asWritten(numbertest.Stored)) {
+		t.Errorf("the run holds the inputs %s, and the controller is tested on %s", held, numbertest.Stored)
 	}
 }
 

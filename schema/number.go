@@ -19,10 +19,9 @@ import (
 
 // Canonical returns v with every number written with an exponent written out in full with a
 // point, 1e3 as 1000.0 and 15e-1 as 1.5, a double minus zero written 0.0, and every other value
-// as it was. The digits are moved
-// rather than recomputed, so the number is the one that was written, to its last digit, and
-// validates as it did. v is a decoded JSON value, read with UseNumber; a map or a list is copied
-// rather than written into.
+// as it was. The digits are moved rather than recomputed, so the number is the one that was
+// written, to its last digit, and validates as it did. v is a decoded JSON value, read with
+// UseNumber; a map or a list is copied rather than written into.
 func Canonical(v any) any {
 	switch v := v.(type) {
 	case json.Number:
