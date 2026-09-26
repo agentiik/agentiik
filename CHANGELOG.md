@@ -14,6 +14,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### State
 
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
+- Package `db` reads and writes them: users, groups and service accounts, credentials, API tokens, sessions and enrolment codes by the SHA-256 of their value and only while they open something, access grants of a namespace (`In`) or of a principal across namespaces, a namespace's kind, owner and quotas, the authentication policy and the bootstrap state, under two new reasons, `Identity` and `Authorisation`.
 
 ### Tests
 
