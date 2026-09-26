@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1848,6 +1849,9 @@ func jsonLike(v any, where string) (any, error) {
 		// The loader answers a float64 for a number written with a point, 1.0 included,
 		// and 1.0 is a double in an expression however whole it is: written 1, it would
 		// come back an int.
+		if math.IsInf(value, 0) || math.IsNaN(value) {
+			return nil, fmt.Errorf("%s is written as %v, which is no number JSON can write: a run on a server could never store it", where, value)
+		}
 		return schema.Double(value), nil
 	default:
 		return v, nil

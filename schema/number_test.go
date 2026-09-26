@@ -25,6 +25,9 @@ func TestAnExponentIsWrittenOutAndEveryOtherNumberLeftAsWritten(t *testing.T) {
 		"-1.5e-2":                  "-0.015",
 		"1.00000000000000000001e3": "1000.00000000000000001",
 		"0e5":                      "0.0",
+		"-0.0":                     "0.0",
+		"-0.00e3":                  "0.0",
+		"-0.5":                     "-0.5",
 	} {
 		if got := Canonical(written); got != want {
 			t.Errorf("%s is written %s, want %s", written, got, want)
@@ -53,6 +56,9 @@ func TestAFloatIsADoubleHoweverWholeItIs(t *testing.T) {
 		2.5:    "2.5",
 		1e21:   "1000000000000000000000.0",
 		1.5e-7: "0.00000015",
+		// Minus zero is written as PostgreSQL gives it back, so that a local run and a server
+		// divide by the same zero.
+		math.Copysign(0, -1): "0.0",
 	} {
 		if got := Double(f); got != want {
 			t.Errorf("%v is written %s, want %s", f, got, want)

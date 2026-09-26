@@ -456,3 +456,14 @@ func TestANumberKeepsTheWayItWasWritten(t *testing.T) {
 		t.Errorf("retry.max: 2.5 is refused with %q", err)
 	}
 }
+
+// Infinity and NaN are numbers YAML writes and JSON does not, so a run on a server could never
+// store one: they are refused where they are written rather than by a run that never moves.
+func TestInfinityIsRefusedWhereItIsWritten(t *testing.T) {
+	for _, written := range []string{".inf", "-.inf", ".nan"} {
+		err := refused(t, strings.Replace(minimal, "steps:\n", "vars: { x: "+written+" }\nsteps:\n", 1))
+		if !strings.Contains(err.Error(), "vars.x") {
+			t.Errorf("%s is refused with %q, which does not name where it is written", written, err)
+		}
+	}
+}

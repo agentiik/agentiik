@@ -18,7 +18,8 @@ import (
 // read back from the database sees the double agk run --local saw.
 
 // Canonical returns v with every number written with an exponent written out in full with a
-// point, 1e3 as 1000.0 and 15e-1 as 1.5, and every other value as it was. The digits are moved
+// point, 1e3 as 1000.0 and 15e-1 as 1.5, a double minus zero written 0.0, and every other value
+// as it was. The digits are moved
 // rather than recomputed, so the number is the one that was written, to its last digit, and
 // validates as it did. v is a decoded JSON value, read with UseNumber; a map or a list is copied
 // rather than written into.
@@ -46,7 +47,7 @@ func Canonical(v any) any {
 // Double is f as a number an expression takes as a double however whole it is: 1 is written 1.0.
 // It is how a number that arrived as a float64, from a YAML loader, is put on the same terms as
 // one that was read as written. Infinity and NaN, which JSON cannot write, are left as
-// strconv writes them, to be refused by whatever writes them down.
+// strconv writes them: a caller refuses them before asking.
 func Double(f float64) json.Number {
 	written := strconv.FormatFloat(f, 'g', -1, 64)
 	if math.IsInf(f, 0) || math.IsNaN(f) {
@@ -65,7 +66,7 @@ func canonicalNumber(n json.Number) json.Number {
 	written := string(n)
 	e := strings.IndexAny(written, "eE")
 	if e < 0 {
-		return n
+		return plusZero(n)
 	}
 	mantissa, exponent := written[:e], written[e+1:]
 	shift, err := strconv.Atoi(exponent)
@@ -98,5 +99,15 @@ func canonicalNumber(n json.Number) json.Number {
 	if fraction == "" {
 		fraction = "0"
 	}
-	return json.Number(sign + whole + "." + fraction)
+	return plusZero(json.Number(sign + whole + "." + fraction))
+}
+
+// plusZero writes a double minus zero without its sign, as PostgreSQL writes it back: -0.0 in
+// jsonb is 0.0, and 1.0 / x would be minus infinity in a local run and infinity on a server.
+func plusZero(n json.Number) json.Number {
+	written := string(n)
+	if strings.HasPrefix(written, "-") && strings.Contains(written, ".") && strings.Trim(written, "-0.") == "" {
+		return n[1:]
+	}
+	return n
 }

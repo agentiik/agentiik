@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -287,8 +288,12 @@ func (b *Bus) taken(pool string, msgs jetstream.MessageBatch) ([]Taken, bool) {
 	arrived := false
 	for msg := range msgs.Messages() {
 		arrived = true
+		// Read with every number as it was written, so that a param written 1.0 reaches the
+		// container as 1.0, as it does in agk run --local, and not as the 1 a float64 prints.
 		var t TaskMessage
-		if err := json.Unmarshal(msg.Data(), &t); err != nil {
+		d := json.NewDecoder(bytes.NewReader(msg.Data()))
+		d.UseNumber()
+		if err := d.Decode(&t); err != nil {
 			// A message nobody can read is not work and will never become work, so it
 			// is taken off the queue rather than redelivered for ever. Losing it costs
 			// one task, which the run's own deadline already accounts for; leaving it
