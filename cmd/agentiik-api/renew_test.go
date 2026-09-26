@@ -252,3 +252,54 @@ func TestARenewalThatCannotWriteLeavesTheCredential(t *testing.T) {
 		t.Error("the credential changed")
 	}
 }
+
+// An API started on a credential that expired while it was down renews it before reading its
+// settings, which would refuse it, rather than fail at every restart; with a seed its start would
+// refuse, it renews nothing and says why.
+func TestTheAPIRenewsAnExpiredCredentialBeforeItStarts(t *testing.T) {
+	identity := filepath.Join(t.TempDir(), "bus")
+	if code := run(t.Context(), []string{"bus-init", identity}, empty, io.Discard, io.Discard); code != exitStopped {
+		t.Fatal("bus-init failed")
+	}
+	seedPath := filepath.Join(identity, bus.AccountSeedFile)
+	seed, _ := os.ReadFile(seedPath)
+	account, err := natsjwt.ParseDecoratedNKey(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := account.Seed()
+	issuer, err := bus.NewIssuer(string(raw), "tls://nats.example.com:4222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, path := sharedDirectory(t)
+	env := map[string]string{config.BusURL: "tls://nats.example.com:4222", config.BusCredentialsFile: path, config.BusAccountSeedFile: seedPath}
+	lookup := func(name string) (string, bool) { v, ok := env[name]; return v, ok }
+
+	sharedCredential(t, issuer, path, time.Now().Add(-time.Hour), 0o600)
+	os.Chmod(seedPath, 0o640)
+	before, _ := os.ReadFile(path)
+	var said bytes.Buffer
+	renewExpired(lookup, time.Now(), &said)
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) || !strings.Contains(said.String(), "could not be renewed") {
+		t.Errorf("with a seed others may read, the credential was renewed, or nothing said why:\n%s", said.String())
+	}
+
+	os.Chmod(seedPath, 0o600)
+	said.Reset()
+	renewExpired(lookup, time.Now(), &said)
+	if left := time.Until(credentialExpiry(t, path)); left < controlPlaneLife-time.Minute || !strings.Contains(said.String(), "renewed the control plane's bus credential") {
+		t.Errorf("the expired credential now expires in %s:\n%s", left, said.String())
+	}
+	if !issuedUnder(t, path, seedPath) {
+		t.Error("the renewed credential is not under the installation's account")
+	}
+
+	// One that has not expired is the watch's to renew, and this leaves it, in silence.
+	before, _ = os.ReadFile(path)
+	said.Reset()
+	renewExpired(lookup, time.Now(), &said)
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) || said.Len() != 0 {
+		t.Errorf("a credential that has not expired was renewed before the start:\n%s", said.String())
+	}
+}

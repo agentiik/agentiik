@@ -450,6 +450,32 @@ func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 	}
 }
 
+// A Compose file older than the bus volume, run with this init, would have the credential moved
+// into init's own container and removed from where the API and the controller read it: the API's
+// directory being a volume and the bus directory not one is refused, and nothing is moved.
+func TestInitRefusesABusDirectoryThatIsNoVolume(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	old := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
+	if err := os.WriteFile(old, []byte(d.read(t, busDir, bus.ControlPlaneFile)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(d.dir, busDir, bus.ControlPlaneFile))
+	p := d.at(firstRun.Add(time.Hour))
+	p.device = func(path string) (uint64, error) {
+		if path == filepath.Join(d.dir, apiDir) {
+			return 2, nil
+		}
+		return 1, nil
+	}
+	if err := p.bus(); err == nil || !strings.Contains(err.Error(), "compose.yaml") {
+		t.Errorf("a bus directory that is no volume was taken: %v", err)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("the credential was moved all the same: %v", err)
+	}
+}
+
 // issuedUnder says whether the credential in creds was signed by the account whose seed is in seed.
 func issuedUnder(t *testing.T, creds, seed string) bool {
 	t.Helper()

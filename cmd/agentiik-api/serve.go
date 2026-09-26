@@ -55,6 +55,7 @@ func readSettings(lookup config.Lookup) (settings, error) {
 
 // serveVerb is agentiik-api serve.
 func serveVerb(ctx context.Context, lookup config.Lookup, _, stderr io.Writer) int {
+	renewExpired(lookup, time.Now(), stderr)
 	s, err := readSettings(lookup)
 	if err != nil {
 		// One line per setting, each naming its variable, which is how config words them.

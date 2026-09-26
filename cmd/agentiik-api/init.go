@@ -95,10 +95,14 @@ type preparer struct {
 	// since nobody else may give a file away. On the descriptor rather than a path, so that a
 	// link a service put in its own volume is never followed by root.
 	chown func(f *os.File) error
+
+	// device is the file system a directory is on, which tells a volume mounted there from a
+	// directory of init's own container.
+	device func(path string) (uint64, error)
 }
 
 func newPreparer(dir string, now time.Time, out io.Writer) *preparer {
-	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(*os.File) error { return nil }}
+	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(*os.File) error { return nil }, device: deviceOf}
 	if os.Geteuid() == 0 {
 		p.chown = func(f *os.File) error { return f.Chown(agent, agent) }
 	}
@@ -517,6 +521,9 @@ func (p *preparer) operatorToken(token config.Secret) error {
 // credential where the API and the controller read it, renewing it where it is near its expiry, as
 // the API does while it runs, and gives the bus its copy of the accounts, with its configuration.
 func (p *preparer) bus() error {
+	if err := p.busMounted(); err != nil {
+		return err
+	}
 	dir := p.dir.path(apiDir, "bus")
 	accounts := filepath.Join(dir, bus.AccountsFile)
 	switch {
@@ -548,6 +555,47 @@ func (p *preparer) bus() error {
 		return err
 	}
 	return p.write(p.dir.path(natsDir, "nats.conf"), []byte(natsConf), 0o644, false)
+}
+
+// busMounted refuses a bus directory that is no volume of its own where the API's is one, before
+// the control plane's credential is moved there.
+//
+// That is a Compose file from before the bus volume, run with a newer image: init would make the
+// bus directory in its own container, move the credential into it and remove the copies the API and
+// the controller read, and both would refuse to start, the credential gone with init's container.
+// A directory on the file system of AGK_INIT_DIR itself, while the API's is on another, is that.
+// Where every directory is on one file system, as on a host with no volumes, there is nothing to
+// tell, and nothing is refused.
+func (p *preparer) busMounted() error {
+	parent, err := p.device(string(p.dir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir, err)
+	}
+	api, err := p.device(p.dir.path(apiDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(apiDir), err)
+	}
+	shared, err := p.device(p.dir.path(busDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(busDir), err)
+	}
+	if api != parent && shared == parent {
+		return fmt.Errorf("%s is no volume, while %s is one: the Compose file is older than the bus volume, which holds the control plane's bus credential for the API and the controller. Download the current compose.yaml, which mounts it in init, the API and the controller, and run docker compose up -d again; nothing was moved", p.dir.path(busDir), p.dir.path(apiDir))
+	}
+	return nil
+}
+
+// deviceOf is the file system path is on.
+func deviceOf(path string) (uint64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, nil
+	}
+	return uint64(st.Dev), nil
 }
 
 // identity says whether dir holds the account and its seed, which is a whole identity once the
@@ -618,24 +666,30 @@ func (p *preparer) controlPlane(identity string) error {
 // removeControllerCopy removes the copy of the control plane's credential an installation
 // prepared before the bus directory existed gave the controller, and the directory that held it.
 //
-// Never through a link, since the controller may write to its own volume and init runs as root:
-// a link in place of that directory is removed itself, and never followed to the file of the same
-// name the bus directory holds. A directory holding anything else is left, which is not init's.
+// Through the controller's directory opened as a root, since the controller may write to its own
+// volume while init runs as root: a link it put in place of the old directory, even between one
+// look and the next, can name nothing outside that volume, and the link itself is what is removed.
+// A directory holding anything else is left, which is not init's.
 func (p *preparer) removeControllerCopy() error {
-	dir := p.dir.path(controllerDir, "bus")
-	info, err := os.Lstat(dir)
+	root, err := os.OpenRoot(p.dir.path(controllerDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be opened: %w", p.dir.path(controllerDir), err)
+	}
+	defer root.Close()
+	old := filepath.Join("bus", bus.ControlPlaneFile)
+	info, err := root.Lstat("bus")
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
-		return fmt.Errorf("%s could not be looked at: %w", dir, err)
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(controllerDir, "bus"), err)
 	case info.IsDir():
-		if err := os.Remove(filepath.Join(dir, bus.ControlPlaneFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%s, which the control plane's bus credential moved from, could not be removed: %w", filepath.Join(dir, bus.ControlPlaneFile), err)
+		if err := root.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s, which the control plane's bus credential moved from, could not be removed: %w", p.dir.path(controllerDir, old), err)
 		}
 	}
-	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
-		return fmt.Errorf("%s could not be removed: %w", dir, err)
+	if err := root.Remove("bus"); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("%s could not be removed: %w", p.dir.path(controllerDir, "bus"), err)
 	}
 	return nil
 }

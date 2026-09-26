@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/internal/config"
 	"github.com/nats-io/jwt/v2"
 )
 
@@ -106,4 +109,62 @@ func replaceLike(path string, content []byte) error {
 		return fmt.Errorf("%s could not be written to the disk: %w", dir, err)
 	}
 	return nil
+}
+
+// renewExpired renews, before the settings are read, a control plane credential that has expired
+// already, which the settings would refuse the start on.
+//
+// That is an installation whose API was down past the expiry, its host off say: at the next boot
+// Docker starts the API again but not init, which ran to its end once, and an API that only renewed
+// once started would refuse to start on the very credential it could renew, over and over. So
+// where the file AGK_BUS_CREDENTIALS_FILE names holds an expired credential and the account seed
+// is in the file AGK_BUS_ACCOUNT_SEED_FILE names, readable by its owner alone as the start holds
+// it, a new one is minted first; the controller, which ended at the expiry, takes it as it starts
+// again. Anything else is left to the settings to refuse, saying why, so this says nothing unless
+// it renewed or tried to.
+func renewExpired(lookup config.Lookup, now time.Time, stderr io.Writer) {
+	path, _ := lookup(config.BusCredentialsFile)
+	seedPath, _ := lookup(config.BusAccountSeedFile)
+	url, _ := lookup(config.BusURL)
+	if !filepath.IsAbs(path) || !filepath.IsAbs(seedPath) || url == "" {
+		return
+	}
+	expires, err := controlPlaneExpiry(path)
+	if err != nil || expires.IsZero() || expires.After(now) {
+		return
+	}
+	issuer, err := seedIssuer(seedPath, url)
+	if err == nil {
+		var renewed time.Time
+		if renewed, err = renewer(issuer, path, func() time.Time { return now })(); err == nil {
+			fmt.Fprintf(stderr, "%s: renewed the control plane's bus credential, which expired at %s, before starting: it now expires at %s\n", program, expires.UTC().Format(time.RFC3339), renewed.UTC().Format(time.RFC3339))
+			return
+		}
+	}
+	fmt.Fprintf(stderr, "%s: the control plane's bus credential expired at %s, and could not be renewed: %s\n", program, expires.UTC().Format(time.RFC3339), err)
+}
+
+// seedIssuer is an issuer on the account seed in path, held to what the start holds the file to: a
+// regular file its owner alone may read.
+func seedIssuer(path, url string) (*bus.Issuer, error) {
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return nil, err
+	case !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0:
+		return nil, errors.New(path + " is not a regular file its owner alone may read, as the account seed is")
+	}
+	content, err := readRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	account, err := jwt.ParseDecoratedNKey(content)
+	if err != nil {
+		return nil, fmt.Errorf("%s holds no seed: %w", path, err)
+	}
+	seed, err := account.Seed()
+	if err != nil {
+		return nil, fmt.Errorf("%s holds no seed: %w", path, err)
+	}
+	return bus.NewIssuer(string(seed), url)
 }
