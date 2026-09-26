@@ -92,6 +92,12 @@ func run(e env, args []string) int {
 	case "help", "-h", "--help":
 		usage(e.Out)
 		return 0
+	case holdVerb:
+		if err := hold(e, args[1:]); err != nil {
+			fmt.Fprintf(e.Err, "agk %s: %s\n", holdVerb, err)
+			return 1
+		}
+		return 0
 	}
 
 	for _, c := range commands {
