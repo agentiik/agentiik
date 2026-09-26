@@ -125,6 +125,7 @@ func TestARealBrickIsGivenWhatTheContractPromises(t *testing.T) {
 	policy.RequireUsernsRemap = RemapLifted
 	// The probe is built here and never pushed, so it has only its tag.
 	policy.RequireDigest = DigestLifted
+	policy.Helper = realHelper(t)
 
 	var said []string
 	logs := &memLogs{}
