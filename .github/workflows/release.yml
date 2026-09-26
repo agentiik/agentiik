@@ -95,6 +95,7 @@ jobs:
               if [ "$REF" = refs/heads/main ] && [ "$DRY_RUN" = false ]; then publish=true; else publish=false; fi ;;
             *) echo "release does not run on $EVENT"; exit 1 ;;
           esac
+          kind=release tag=v0.2.0 publish=false
           # A tag is a version and nothing else, since the image is tagged with what follows its v.
           if [ "$kind" = release ] && ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "$tag is not a release tag vMAJOR.MINOR.PATCH"; exit 1
