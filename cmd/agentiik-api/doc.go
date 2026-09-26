@@ -7,6 +7,8 @@
 //	agentiik-api bus-init DIR          create the installation's NATS operator and accounts
 //	agentiik-api bus-credential DIR    mint the control plane a new bus credential
 //	agentiik-api audit-verify FILE     verify an export of the audit log
+//	agentiik-api namespace create NAME create a namespace
+//	agentiik-api namespace remove NAME remove a namespace that holds nothing
 //
 // Every rule it follows is somebody else's. Package api authorises and answers, package secret
 // seals and reads values, package artifact signs and keeps objects, package bus mints credentials
@@ -58,6 +60,17 @@
 // It reads config.ReadMigration and runs db.Provision as the role AGK_MIGRATE_DATABASE_URL names:
 // the migrations, then the NOSUPERUSER NOBYPASSRLS role AGK_DATABASE_URL names, with the password
 // in AGK_DATABASE_PASSWORD_FILE. Running it again applies nothing and changes nothing.
+//
+// # namespace
+//
+// namespace create NAME creates a namespace, and namespace remove NAME removes one that holds no
+// workflow, run or secret, refusing one that does and saying what it holds. v0.2.0 has no route
+// that makes either change, so this verb stands in for v0.3.0's until they do. It reads the
+// settings migrate reads and connects as the role AGK_DATABASE_URL names, the one the API
+// connects as, so it runs where migrate runs; the name is held to what the API holds a namespace
+// to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
+// namespace.create or namespace.delete by the operator, and a namespace created again is recorded
+// unchanged and left as it was, so that an installation script can run it every time.
 //
 // # bus-init and bus-credential
 //
