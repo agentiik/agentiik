@@ -63,10 +63,7 @@ func DefaultSocket() string {
 // because every path this package builds carries the version and there is no correct
 // path to build before the daemon has answered.
 func Dial(socket string) (*Client, error) {
-	if socket == "" {
-		socket = DefaultSocket()
-	}
-	path, err := socketPath(socket)
+	path, err := SocketPath(socket)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +96,16 @@ func Dial(socket string) (*Client, error) {
 	}
 	c.version = spoken
 	return c, nil
+}
+
+// SocketPath is the filesystem path of the socket Dial opens for socket, where empty is
+// DefaultSocket, so that a caller asking something of the socket file itself, such as the
+// group that owns it, asks it of the one Dial will reach.
+func SocketPath(socket string) (string, error) {
+	if socket == "" {
+		socket = DefaultSocket()
+	}
+	return socketPath(socket)
 }
 
 // socketPath reads a DOCKER_HOST or a plain path and answers with the filesystem path of
