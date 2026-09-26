@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,8 +108,9 @@ func TestAMasterKeyOrAPrefixTheAPICannotUseRefusesTheStart(t *testing.T) {
 	}
 }
 
-// From fourteen days before the control plane's credential expires, the API says so once a day,
-// then says it has expired, and nothing before those fourteen days.
+// Where nothing may renew it, from fourteen days before the control plane's credential expires the
+// API says so once a day, then says it has expired, and nothing before those fourteen days, while it
+// looks at the file every day.
 func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	expires := start.Add(20 * 24 * time.Hour)
@@ -116,14 +118,14 @@ func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 	var waited []time.Duration
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, nil))
-	watchCredential(t.Context(), func() time.Time { return expires }, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
+	watchCredential(t.Context(), func() time.Time { return expires }, nil, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
 		waited = append(waited, d)
 		clock = clock.Add(d)
 		return true
 	})
 
-	if len(waited) == 0 || waited[0] != 6*24*time.Hour {
-		t.Fatalf("it waited %v first, and the first warning is fourteen days before the expiry, six days on", waited)
+	if len(waited) != 20 || slices.Max(waited) != 24*time.Hour {
+		t.Fatalf("it waited %v, and it looks at the credential once a day over its twenty days", waited)
 	}
 	if strings.Count(logged.String(), "level=WARN") != 14 {
 		t.Errorf("it warned %d times over fourteen days, once a day:\n%s", strings.Count(logged.String(), "level=WARN"), logged.String())
@@ -146,15 +148,16 @@ func TestTheAPIWarnsFromFourteenDaysBeforeTheCredentialExpires(t *testing.T) {
 	}{{start.Add(time.Hour), true}, {time.Time{}, false}} {
 		logged.Reset()
 		clock = start
-		watchCredential(t.Context(), func() time.Time { return c.expires }, log, func() time.Time { return clock }, func(context.Context, time.Duration) bool { return false })
+		watchCredential(t.Context(), func() time.Time { return c.expires }, nil, log, func() time.Time { return clock }, func(context.Context, time.Duration) bool { return false })
 		if got := strings.Contains(logged.String(), "level=WARN"); got != c.warns {
 			t.Errorf("a credential expiring at %s warned %v at once:\n%s", c.expires, got, logged.String())
 		}
 	}
 }
 
-// A credential renewed in its file inside the fourteen days is warned about no more, and never said
-// to have expired: the API's connection comes back with it when the bus drops the old one.
+// A credential renewed in its file inside the fourteen days, by init or by a person, is warned about
+// no more, and never said to have expired: the API's connection comes back with it when the bus
+// drops the old one.
 func TestTheAPIStopsWarningOnceTheCredentialIsRenewed(t *testing.T) {
 	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	expires, renewed := start.Add(10*24*time.Hour), start.Add(100*24*time.Hour)
@@ -169,7 +172,7 @@ func TestTheAPIStopsWarningOnceTheCredentialIsRenewed(t *testing.T) {
 			return renewed
 		}
 		return expires
-	}, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
+	}, nil, log, func() time.Time { return clock }, func(_ context.Context, d time.Duration) bool {
 		waited = append(waited, d)
 		clock = clock.Add(d)
 		return len(waited) < 4
@@ -177,9 +180,9 @@ func TestTheAPIStopsWarningOnceTheCredentialIsRenewed(t *testing.T) {
 	if n := strings.Count(logged.String(), "level=WARN"); n != 3 || strings.Contains(logged.String(), "level=ERROR") {
 		t.Errorf("it warned %d times, or said the renewed credential expired:\n%s", n, logged.String())
 	}
-	// Its fourth wait is for the renewed credential's own fourteen days, in silence.
-	if len(waited) != 4 || waited[3] != renewed.Add(-14*24*time.Hour).Sub(start.Add(3*24*time.Hour)) {
-		t.Errorf("it waited %v, and after the renewal it waits for the renewed credential's fourteen days", waited)
+	// Its fourth wait is a day, in silence, as every wait outside the fourteen days is.
+	if len(waited) != 4 || waited[3] != 24*time.Hour {
+		t.Errorf("it waited %v, and after the renewal it looks again a day later", waited)
 	}
 	if !strings.Contains(logged.String(), "with no restart") {
 		t.Errorf("the warning does not say the renewal needs no restart:\n%s", logged.String())
