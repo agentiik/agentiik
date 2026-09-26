@@ -158,6 +158,7 @@ func Stand(t testing.TB) *Installation {
 
 	ctx := in.ctx
 	in.token = "agk_op_" + randomHex(24)
+	in.held = append(in.held, heldValue{"the operator token", in.token})
 	ca := in.certificates()
 	in.client = &http.Client{Timeout: time.Minute, Transport: &http.Transport{TLSClientConfig: ca.clientConfig()}}
 	in.build(ctx)

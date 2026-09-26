@@ -50,11 +50,10 @@ func healthVerb(ctx context.Context, lookup config.Lookup, _, stderr io.Writer) 
 func answers(ctx context.Context, h config.Health) error {
 	address := dialable(h.Listen)
 	scheme := "http"
-	transport := tlsfloor.Transport()
 	if h.TLS {
 		scheme = "https"
-		transport.TLSClientConfig.InsecureSkipVerify = true
 	}
+	transport := healthTransport(h.TLS)
 	defer transport.CloseIdleConnections()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+address+"/", nil)
 	if err != nil {
@@ -66,6 +65,18 @@ func answers(ctx context.Context, h config.Health) error {
 	}
 	answer.Body.Close()
 	return nil
+}
+
+// healthTransport is how health reaches the API: never through a proxy the environment names,
+// which tlsfloor bypasses for the loopback alone, since the API asked is the one on this host at
+// whatever address it listens on, and a proxy's answer would pass for the API's.
+func healthTransport(overTLS bool) *http.Transport {
+	transport := tlsfloor.Transport()
+	transport.Proxy = nil
+	if overTLS {
+		transport.TLSClientConfig.InsecureSkipVerify = true
+	}
+	return transport
 }
 
 // dialable is the address a listener on listen is reached at from the same host: the loopback where
