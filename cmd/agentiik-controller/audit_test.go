@@ -239,3 +239,21 @@ func TestAFailoverVerifiesFromTheRecordedEntry(t *testing.T) {
 		t.Fatalf("a term carrying on from entry 8, changed since it was verified, said:\n%s", said)
 	}
 }
+
+// A record of how far the chain was verified that does not agree with a chain that holds is said
+// apart from a break, naming the entry recorded, and the term after it carries on from the head.
+func TestATermSaysARecordThatDisagreesWithTheChain(t *testing.T) {
+	a := withAuditTerms(t)
+	a.record(t, 5)
+	a.lead(t, "first")
+	if _, err := dbtest.Superuser(t, a.super).Exec(t.Context(), `update audit_verified set through = 6`); err != nil {
+		t.Fatal(err)
+	}
+	a.record(t, 2)
+	if said := a.lead(t, "second"); !strings.Contains(said, "level=WARN") || !strings.Contains(said, "does not agree") || !strings.Contains(said, "entry=6") || strings.Contains(said, "is broken") {
+		t.Fatalf("a term beginning on a record that disagrees with the chain said:\n%s", said)
+	}
+	if said := a.lead(t, "third"); !strings.Contains(said, "chain holds") || !strings.Contains(said, "from=7 through=7") {
+		t.Fatalf("the term after it said:\n%s", said)
+	}
+}

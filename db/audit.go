@@ -95,16 +95,31 @@ func (w *Wide) VerifyAuditLog(ctx context.Context) error {
 }
 
 // verifyChain carries chain on through entry head, whose hash is hash, reading batch entries at a
-// time with read, and tells progress, where it is given, the last entry verified after each batch.
+// time with read, and tells progress, where it is given, how far the chain is proved to hold after
+// each batch.
 //
 // The head is read before the entries rather than after them. An append commits its entry and the
 // head it moved together, so every entry up to a head already read is there to be read, and an act
 // committing in the middle of the verification adds entries past it, which are left to the next
 // one. Read after the entries, the head of an act that committed in between would be taken for
 // entries removed from the end.
+//
+// An entry is proved only once something that follows it carries its hash: the next entry, or the
+// head for the last. The last entry of a batch is not proved yet, since an entry changed and hashed
+// again holds on its own and breaks only at what follows it, so progress is told the entry before
+// it, and the head once the head has been checked.
 func verifyChain(ctx context.Context, chain *audit.Chain, head int64, hash []byte, batch int,
 	read func(ctx context.Context, seq int64, limit int) ([]audit.Entry, error),
 	progress func(ctx context.Context, seq int64, hash []byte) error) error {
+	proved, provedHash := chain.Last()
+	told := proved
+	tell := func(seq int64, hash []byte) error {
+		if progress == nil || seq <= told {
+			return nil
+		}
+		told = seq
+		return progress(ctx, seq, hash)
+	}
 	for {
 		last, _ := chain.Last()
 		if last >= head {
@@ -114,19 +129,23 @@ func verifyChain(ctx context.Context, chain *audit.Chain, head int64, hash []byt
 		if err != nil {
 			return err
 		}
-		for _, e := range entries {
-			if err := chain.Next(e); err != nil {
-				return err
-			}
-		}
-		if progress != nil && len(entries) > 0 {
-			seq, hash := chain.Last()
-			if err := progress(ctx, seq, hash); err != nil {
-				return err
-			}
-		}
 		if len(entries) == 0 {
 			break
+		}
+		for _, e := range entries {
+			before, beforeHash := chain.Last()
+			if err := chain.Next(e); err != nil {
+				// What held before the break is kept, so the next verification reads no
+				// more than it has to to find the break again.
+				if err := tell(proved, provedHash); err != nil {
+					return err
+				}
+				return err
+			}
+			proved, provedHash = before, beforeHash
+		}
+		if err := tell(proved, provedHash); err != nil {
+			return err
 		}
 	}
 	last, lastHash := chain.Last()
@@ -136,7 +155,7 @@ func verifyChain(ctx context.Context, chain *audit.Chain, head int64, hash []byt
 	case !bytes.Equal(lastHash, hash):
 		return &audit.Break{Seq: last, Why: "the last entry is not the one the head of the chain follows"}
 	}
-	return nil
+	return tell(last, lastHash)
 }
 
 // AuditTrail is the audit log as the export reads it, across the installation.
@@ -204,10 +223,9 @@ type AuditVerification struct {
 // The record is the application's to write, and moves only forward, so it is never taken on
 // trust: the entry it names has to carry the hash recorded beside it, and fields that give that
 // hash, before the chain is carried on from it. Where it does not, the whole log is verified
-// again, the first break found is answered, and the record is left where it was. A chain that
-// holds from its first entry while the entry the record names has another hash was written again
-// from that entry or before it, head and all, which only the record can show: that is a break
-// too, at the entry recorded.
+// again and the first break found is answered, leaving the record where it was; a chain that holds
+// from its first entry all the same is an *AuditRecordDisagrees, and the record is moved forward
+// to the head it verified.
 //
 // An entry before the record that is changed and keeps its hash is not read again, which is what
 // bounds the cost on a long log, and is found by comparing with the copy outside the installation.
@@ -219,12 +237,15 @@ func (a AuditTrail) Verify(ctx context.Context, batch int) (AuditVerification, e
 	var headHash, fromHash []byte
 	var recorded []audit.Entry
 	err := a.pool.Installation(ctx, AuditLog, func(ctx context.Context, w *Wide) error {
+		// The record before the head: a verification records no further than the head it read,
+		// which is never past a head read after it, so one that finishes in between cannot
+		// leave a record that reads as past the end of the log.
+		if err := w.tx.QueryRow(ctx, `select through, hash from audit_verified`).Scan(&from, &fromHash); err != nil {
+			return fmt.Errorf("db: how far the audit log was verified could not be read: %w", err)
+		}
 		var err error
 		if head, headHash, err = w.AuditHead(ctx); err != nil {
 			return err
-		}
-		if err := w.tx.QueryRow(ctx, `select through, hash from audit_verified`).Scan(&from, &fromHash); err != nil {
-			return fmt.Errorf("db: how far the audit log was verified could not be read: %w", err)
 		}
 		if from > 0 && from <= head {
 			recorded, err = w.AuditEntries(ctx, from-1, 1)
@@ -249,16 +270,39 @@ func (a AuditTrail) Verify(ctx context.Context, batch int) (AuditVerification, e
 
 	chain := audit.From(0, audit.Genesis)
 	err = verifyChain(ctx, chain, head, headHash, batch, a.After, nil)
-	through, _ := chain.Last()
+	through, lastHash := chain.Last()
 	v := AuditVerification{Through: through}
-	switch {
-	case err != nil:
+	if err != nil {
 		return v, err
-	case from > head:
-		return v, &audit.Break{Seq: head + 1, Why: fmt.Sprintf("the chain was verified through entry %d, and the log now ends at %d, so the last entries were removed and its head taken back", from, head)}
-	default:
-		return v, &audit.Break{Seq: from, Why: "it does not carry the hash it had when it was verified, so the chain was written again from it or before it"}
 	}
+	// The chain holds from its first entry, and the record does not agree with it. Moved forward
+	// to the head, so that the next verification carries on from there rather than reading the
+	// whole log at every term with nothing able to take the record back.
+	if err := a.markVerified(ctx, through, lastHash); err != nil {
+		return v, err
+	}
+	disagrees := &AuditRecordDisagrees{Seq: from, Why: "it does not carry the hash it had when it was verified"}
+	if from > head {
+		disagrees = &AuditRecordDisagrees{Seq: from, Why: fmt.Sprintf("the log ends at entry %d", head)}
+	}
+	return v, disagrees
+}
+
+// AuditRecordDisagrees is a chain that holds from its first entry while the entry the last
+// verification recorded reaching does not agree with the record: it has another hash, or the log
+// no longer reaches it.
+//
+// Only the record shows it, and the record alone cannot tell which it is. Either the chain was
+// written again from that entry or before it, head and all, which is what the record is there to
+// catch, or the record was written by something other than a verification, which the
+// application's role can do. Both want the log compared with its copy outside the installation.
+type AuditRecordDisagrees struct {
+	Seq int64
+	Why string
+}
+
+func (d *AuditRecordDisagrees) Error() string {
+	return fmt.Sprintf("db: the audit log's chain holds from its first entry, and entry %d, which the last verification reached, does not agree with its record: %s", d.Seq, d.Why)
 }
 
 // markVerified records that the chain holds through entry seq, whose hash is hash. Like the

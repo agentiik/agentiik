@@ -333,40 +333,64 @@ func TestAVerificationCarriesOnFromWhereTheLastStopped(t *testing.T) {
 	}
 }
 
-// A break is answered at the entry where it is, and the record stays at the last batch that held,
-// so that every verification after it finds the break again.
+// A break is answered at the entry where it is, and the record stays before it, so that every
+// verification after it finds the break again.
 func TestABreakIsFoundAgainByEveryVerification(t *testing.T) {
 	pool, super := auditLog(t)
 	trail := pool.AuditTrail()
 	acts(t, pool, 25)
 	tamper(t, super, `update audit_log set detail = '{"why":"another"}' where seq = 15`)
-	for _, from := range []int64{0, 10} {
+	for _, from := range []int64{0, 13} {
 		var broke *audit.Break
 		v, err := trail.Verify(t.Context(), 10)
 		if !errors.As(err, &broke) || broke.Seq != 15 || v.From != from || v.Through != 14 {
 			t.Fatalf("a log changed at entry 15 verifies as %+v: %v", v, err)
 		}
-		if got := verifiedThrough(t, super); got != 10 {
+		if got := verifiedThrough(t, super); got != 13 {
 			t.Fatalf("after a break at entry 15 the record says the chain was verified through %d", got)
 		}
 	}
 }
 
+// An entry is recorded as verified only once what follows it carries its hash: the last entry of
+// the log, changed and hashed again, holds on its own and breaks only against the head, and is not
+// recorded.
+func TestTheRecordNeverVouchesForAnEntryNothingFollows(t *testing.T) {
+	pool, super := auditLog(t)
+	acts(t, pool, 5)
+	tamper(t, super, `update audit_log set actor = 'x', hash = audit_entry_hash(prev_hash, seq, at, 'x', action, namespace, target, result, detail) where seq = 5`)
+	var broke *audit.Break
+	if v, err := pool.AuditTrail().Verify(t.Context(), 10); !errors.As(err, &broke) || broke.Seq != 5 {
+		t.Fatalf("a last entry changed and hashed again verifies as %+v: %v", v, err)
+	}
+	if got := verifiedThrough(t, super); got != 4 {
+		t.Fatalf("the record says the chain was verified through %d, past the last entry proved", got)
+	}
+}
+
 // The record is the application's to write, so the entry it names is checked before anything is
-// carried on from it, and where it does not hold the whole log is verified again and a break is
-// answered.
+// carried on from it, and where it does not hold the whole log is verified again: a break found is
+// answered and leaves the record where it was, and a chain that holds all the same is a record that
+// disagrees with it, which moves the record forward to the head so that the next verification
+// carries on from there.
 func TestARecordTheChainDoesNotCheckIsNotTrusted(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		// app is run by the application's role and tampered by a superuser with the
-		// triggers off, after the log of four entries was verified through its last.
+		// triggers off, after the log of four entries was verified through its last and two
+		// more were appended.
 		app, tampered []string
-		at            int64
+		// at is the entry a break is found at, and disagrees the entry the record named
+		// where the chain holds.
+		at, disagrees int64
+		// then is where the record is left.
+		then int64
 	}{
-		{name: "a record moved forward onto a hash the entry does not carry", app: []string{`update audit_verified set through = 6, hash = decode(repeat('07', 32), 'hex')`}, at: 6},
-		{name: "a record moved past the end of the log", app: []string{`update audit_verified set through = 99`}, at: 7},
-		{name: "the entry recorded changed and keeping its hash", tampered: []string{`update audit_log set actor = 'somebody else' where seq = 4`}, at: 4},
-		{name: "the entry recorded removed", tampered: []string{`delete from audit_log where seq = 4`}, at: 4},
+		{name: "a record moved forward onto a hash the entry does not carry", app: []string{`update audit_verified set through = 5, hash = decode(repeat('07', 32), 'hex')`}, disagrees: 5, then: 6},
+		{name: "a record moved forward keeping the hash of the entry verified", app: []string{`update audit_verified set through = 5`}, disagrees: 5, then: 6},
+		{name: "a record moved past the end of the log", app: []string{`update audit_verified set through = 99`}, disagrees: 99, then: 99},
+		{name: "the entry recorded changed and keeping its hash", tampered: []string{`update audit_log set actor = 'somebody else' where seq = 4`}, at: 4, then: 4},
+		{name: "the entry recorded removed", tampered: []string{`delete from audit_log where seq = 4`}, at: 4, then: 4},
 		{
 			name: "the chain written again from before the entry recorded, head and all",
 			tampered: []string{
@@ -381,7 +405,7 @@ func TestARecordTheChainDoesNotCheckIsNotTrusted(t *testing.T) {
 				`update audit_log set hash = audit_entry_hash(prev_hash, seq, at, actor, action, namespace, target, result, detail) where seq = 6`,
 				`update audit_head set hash = (select hash from audit_log where seq = 6)`,
 			},
-			at: 4,
+			disagrees: 4, then: 6,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -403,13 +427,24 @@ func TestARecordTheChainDoesNotCheckIsNotTrusted(t *testing.T) {
 			for _, stmt := range c.tampered {
 				tamper(t, super, stmt)
 			}
-			record := verifiedThrough(t, super)
 			var broke *audit.Break
-			if v, err := trail.Verify(t.Context(), 0); !errors.As(err, &broke) || broke.Seq != c.at || v.From != 0 {
+			var disagrees *AuditRecordDisagrees
+			v, err := trail.Verify(t.Context(), 0)
+			switch {
+			case v.From != 0:
+				t.Fatalf("after %s the verification carried on from entry %d", c.name, v.From)
+			case c.at != 0 && (!errors.As(err, &broke) || broke.Seq != c.at):
 				t.Fatalf("after %s the log verifies as %+v: %v, and it breaks at entry %d", c.name, v, err, c.at)
+			case c.disagrees != 0 && (!errors.As(err, &disagrees) || disagrees.Seq != c.disagrees || v.Through != 6):
+				t.Fatalf("after %s the log verifies as %+v: %v, and the record of entry %d disagrees with a chain that holds", c.name, v, err, c.disagrees)
 			}
-			if got := verifiedThrough(t, super); got != record {
-				t.Fatalf("a verification that did not trust the record moved it from %d to %d", record, got)
+			if got := verifiedThrough(t, super); got != c.then {
+				t.Fatalf("after %s the record is at %d, and belongs at %d", c.name, got, c.then)
+			}
+			if c.disagrees != 0 && c.then == 6 {
+				if v, err := trail.Verify(t.Context(), 0); err != nil || v.From != 6 {
+					t.Fatalf("the verification after a record that disagreed verifies as %+v: %v", v, err)
+				}
 			}
 		})
 	}

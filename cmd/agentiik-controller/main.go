@@ -305,9 +305,12 @@ func verifier(trail db.AuditTrail, batch int, log *slog.Logger) func(context.Con
 	return func(ctx context.Context) {
 		v, err := trail.Verify(ctx, batch)
 		var broke *audit.Break
+		var disagrees *db.AuditRecordDisagrees
 		switch {
 		case errors.As(err, &broke):
 			log.Warn("the audit log's chain in the database is broken, and an entry was changed or removed after it was written: compare the log with its copy outside the installation", "entry", broke.Seq, "error", err)
+		case errors.As(err, &disagrees):
+			log.Warn("the audit log's chain holds, and does not agree with how far it was last verified: either it was written again from that entry, head and all, or the record was written by something other than a verification; compare the log with its copy outside the installation", "entry", disagrees.Seq, "through", v.Through, "error", err)
 		case err != nil && ctx.Err() == nil:
 			log.Warn("the audit log's chain could not be verified, and the next term carries on from where this one stopped", "through", v.Through, "error", err)
 		case err == nil:
