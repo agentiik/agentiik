@@ -399,6 +399,31 @@ func ReadAPI(lookup Lookup) (API, error) {
 	return c, r.err()
 }
 
+// Health is where agentiik-api health finds the API serving beside it.
+type Health struct {
+	// Listen is AGK_LISTEN as serve listens on it: on the loopback behind a proxy.
+	Listen string
+
+	// TLS says whether serve speaks TLS there, which it does where it holds a certificate and
+	// is not behind a proxy.
+	TLS bool
+}
+
+// ReadAPIHealth reads where the API listens, and whether over TLS, through lookup, which is
+// os.LookupEnv when nil, as ReadAPI reads it: from the same environment, and nothing else of it,
+// since a health check run every few seconds has no business opening the secrets' files.
+func ReadAPIHealth(lookup Lookup) (Health, error) {
+	r := newReader(lookup)
+	var h Health
+	if _, behind := r.proxyURL(); behind {
+		h.Listen = r.proxiedListen()
+	} else {
+		h.Listen = r.listen()
+		_, h.TLS = r.value(TLSCertFile)
+	}
+	return h, r.err()
+}
+
 // ReadController reads the controller's configuration through lookup, which is os.LookupEnv
 // when nil.
 func ReadController(lookup Lookup) (Controller, error) {

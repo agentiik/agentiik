@@ -28,6 +28,7 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 		{"run"},
 		{"serve", "--listen=:9090"},
 		{"migrate", "now"},
+		{"health", "now"},
 		{"bus-init"},
 		{"bus-init", ""},
 		{"bus-init", "/a", "/b"},

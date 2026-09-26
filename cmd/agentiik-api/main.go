@@ -44,7 +44,7 @@ func untilSignalled(fn func(context.Context) int) int {
 // reads the environment, and is os.LookupEnv where nil.
 func run(ctx context.Context, args []string, lookup config.Lookup, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "%s: no verb, and it is told which of its seven jobs to do\n", program)
+		fmt.Fprintf(stderr, "%s: no verb, and it is told which of its eight jobs to do\n", program)
 		usage(stderr)
 		return exitUsage
 	}
@@ -60,7 +60,7 @@ func run(ctx context.Context, args []string, lookup config.Lookup, stdout, stder
 			usage(stdout)
 			return exitStopped
 		}
-	case "serve", "migrate", "init":
+	case "serve", "migrate", "init", "health":
 		if len(rest) == 0 {
 			return verbs[verb](ctx, lookup, stdout, stderr)
 		}
@@ -103,6 +103,7 @@ var verbs = map[string]func(ctx context.Context, lookup config.Lookup, stdout, s
 	"serve":   serveVerb,
 	"migrate": migrateVerb,
 	"init":    initVerb,
+	"health":  healthVerb,
 }
 
 // inDirectory are the verbs that take the directory holding the bus identity, and the moment the
@@ -117,13 +118,14 @@ func usage(w io.Writer) {
   %[1]s serve                 serve every route, the built-in object store and the secret providers
   %[1]s migrate               apply the migrations, and create the role the API and the controller connect as
   %[1]s init                  prepare an installation, or bring it back in line with its settings: certificate, keys, bus, database, runner's join token
+  %[1]s health                exit 0 where the API serving beside it answers, for a health check in its container
   %[1]s bus-init DIR          create the installation's NATS operator and accounts in DIR
   %[1]s bus-credential DIR    mint the control plane a new bus credential under the account in DIR
   %[1]s audit-verify FILE     verify the chain of an audit log export, as its receiver wrote it down
   %[1]s namespace create NAME create a namespace, until v0.3.0's routes do
   %[1]s namespace remove NAME remove a namespace that holds no workflow, run or secret
 
-serve, migrate, init and namespace read their settings from AGK_* environment variables, as
+serve, migrate, init, health and namespace read their settings from AGK_* environment variables, as
 https://agentiik.github.io/docs/#configuration lists them. --version and --help take nothing else.
 `, program)
 }
