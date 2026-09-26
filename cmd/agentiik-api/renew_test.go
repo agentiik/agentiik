@@ -285,9 +285,12 @@ func TestTheAPIRenewsAnExpiredCredentialBeforeItStarts(t *testing.T) {
 		t.Errorf("with a seed others may read, the credential was renewed, or nothing said why:\n%s", said.String())
 	}
 
+	// Through serve, which then refuses the settings this test leaves out, having renewed first.
 	os.Chmod(seedPath, 0o600)
 	said.Reset()
-	renewExpired(lookup, time.Now(), &said)
+	if code := serveVerb(t.Context(), lookup, io.Discard, &said); code != exitFailed {
+		t.Fatalf("serve with half its settings exited %d", code)
+	}
 	if left := time.Until(credentialExpiry(t, path)); left < controlPlaneLife-time.Minute || !strings.Contains(said.String(), "renewed the control plane's bus credential") {
 		t.Errorf("the expired credential now expires in %s:\n%s", left, said.String())
 	}

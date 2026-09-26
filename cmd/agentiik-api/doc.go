@@ -58,7 +58,9 @@
 // renewed one with no restart: the bus drops each connection when the old one expires, and the
 // connection comes back with what the file holds then. Where the renewal fails, as it does where
 // the directory is read only to the API, the API says why and that the credential is running out,
-// once a day, and tries again the next; it goes on serving past the expiry, for the reason
+// once a day, and tries again the next. One that expired while the API was down is renewed before
+// the settings are read, which would refuse it, so that the API is not left failing at every
+// restart; it goes on serving past the expiry, for the reason
 // watchCredential gives, and still gives runners their bus credentials, but creates no runner pool.
 //
 // # health
