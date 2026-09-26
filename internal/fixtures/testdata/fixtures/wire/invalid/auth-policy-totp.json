@@ -1,0 +1,4 @@
+{
+  "password": "allowed",
+  "totp": "required"
+}

@@ -108,6 +108,9 @@ type index struct {
 		LogShipment        corpus `json:"log-shipment"`
 		RunnerPool         corpus `json:"runner-pool"`
 		Stop               corpus `json:"stop"`
+		AccessGrant        corpus `json:"access-grant"`
+		Role               corpus `json:"role"`
+		Permission         corpus `json:"permission"`
 	} `json:"fixtures"`
 }
 
@@ -174,6 +177,23 @@ func RunnerHeartbeats() ([]Case, error) {
 // after the chunk it sent.
 func LogShipments() ([]Case, error) {
 	return read(func(i index) corpus { return i.Fixtures.LogShipment })
+}
+
+// AccessGrants returns the access grant corpus: one principal bound to a role, or denied one
+// permission, at a namespace or on one workflow.
+func AccessGrants() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.AccessGrant })
+}
+
+// Roles returns the role corpus: the names a grant binds, and one it cannot.
+func Roles() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.Role })
+}
+
+// Permissions returns the permission corpus: the atoms a role expands to and a deny names, and
+// strings that look like one and are not.
+func Permissions() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.Permission })
 }
 
 // Wire is the schema document every message above is held to.
