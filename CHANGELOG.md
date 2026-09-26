@@ -11,6 +11,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A principal holds the union of its own and its groups' grants on a namespace and on a workflow. A workflow's grant only adds, and never gives `secret:use` or `secret:write`.
 - A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
 
+### State
+
+- Migration 0032 adds the v0.3.0 identity and access tables: `principals`, `users`, `credentials`, `groups`, `group_members`, `service_accounts`, `api_tokens`, `sessions`, `enrolment_codes`, `grants` under row level security, `auth_policy` and `bootstrap`; `namespaces` gains `kind`, `owner`, `max_runs_per_hour`, `max_artifact_bytes`, `max_run_duration` and `allowed_runner_pools`. Nothing reads them yet, and `init` applies it to a v0.2.5 database at the next `docker compose up` with every row kept as it was.
+
 ### Tests
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
