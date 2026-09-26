@@ -442,6 +442,17 @@ func TestATaskTheAgentStoppedUnderIsNotReported(t *testing.T) {
 	if got := c.bus.all(); len(got) != 0 {
 		t.Errorf("a task carried as the agent stopped was reported as %+v", got)
 	}
+	// Its result stays owed, for the agent that comes back, which owes nothing where the record
+	// holds no ending of the key.
+	if owed := c.carrier.Results.Owed(); len(owed) != 1 || owed[0].TaskID != m.TaskID {
+		t.Errorf("a task carried as the agent stopped left %+v owed", owed)
+	}
+	if err := c.carrier.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	if owed, kept := c.carrier.Results.Owed(), c.carrier.Results.Keys(); len(owed) != 0 || len(kept) != 0 {
+		t.Errorf("a task that reached no ending is owed %+v and kept as %v after a restart", owed, kept)
+	}
 }
 
 // refusing is a driver that refuses every delivery with err, as it refuses one of a key another
@@ -491,6 +502,21 @@ func TestADeliveryOfAKeyInFlightLeavesItsTreesAndReportsNothing(t *testing.T) {
 	if _, kept := endings.take(running.Task.ID); !kept {
 		t.Error("a delivery of a key in flight took the ending of the delivery running it")
 	}
+	if owed := results.Owed(); len(owed) != 0 {
+		t.Errorf("a delivery of a key in flight left %+v owed, and it has nothing to report", owed)
+	}
+
+	// The same message delivered twice owes what the delivery running it owes, which is not
+	// this delivery's to take away.
+	if _, err := results.owe(m, "runner-dmz-02"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Carry(t.Context(), m, again); !errors.Is(err, ErrNotReported) {
+		t.Errorf("a second delivery of the message running answered %v", err)
+	}
+	if owed := results.Owed(); len(owed) != 1 || owed[0].TaskID != m.TaskID {
+		t.Errorf("a second delivery of the message running left %+v owed, want what the running delivery owes", owed)
+	}
 }
 
 // A delivery Run refused for a key this host has already ended reports the ending the record
@@ -525,5 +551,203 @@ func TestADeliveryOfAKeyAlreadyEndedReportsTheRecordedEnding(t *testing.T) {
 	}
 	if _, kept := endings.take(a.Task.ID); !kept {
 		t.Error("a delivery of a key already ended took the ending the driver told of another delivery")
+	}
+}
+
+// snapshot copies what a work root holds for a restarted agent to read, the record and the results,
+// into a work root of its own: what the disk would hold had the agent stopped at that moment.
+func snapshot(t *testing.T, root string) string {
+	t.Helper()
+	to := t.TempDir()
+	for _, dir := range []string{driver.KeysDir, ResultsDir} {
+		from := filepath.Join(root, dir)
+		err := filepath.WalkDir(from, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			switch {
+			case d.IsDir():
+				return os.MkdirAll(filepath.Join(to, rel), info.Mode().Perm())
+			case d.Type().IsRegular():
+				b, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(filepath.Join(to, rel), b, info.Mode().Perm())
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	return to
+}
+
+// An agent that stops at any moment of a task's ending leaves its key named to the agent that comes
+// back, and a result that agent publishes. Before the ending is written, the record names the key
+// as taken and nothing is owed. Once it is written, whether the log is still counted as the driver
+// counted it, is being closed, or is closed and its result not yet kept, the restarted agent keeps
+// the result from the record under the dispatch's own task_id, names its key from its first
+// heartbeat and publishes it: what the container left, and the log where it is, truncated since its
+// closing chunk's answer went with the agent, counting no line the store may not hold. The record
+// is then given the same log, so a requeue answered from it says the same.
+func TestAnAgentStoppedAnywhereInATasksEndingLeavesItsKeyNamedAndItsResultToPublish(t *testing.T) {
+	c := carrier(t, func(ctr dockertest.Container) (int, error) {
+		fmt.Fprintln(ctr.Stderr, "reading 412 invoices")
+		return 0, nil
+	})
+	stopped := map[string]string{}
+	c.carrier.atPoint = func(point string) { stopped[point] = snapshot(t, c.root) }
+	// Held first, as the loop holds every key it takes, which is what writes it down as taken.
+	m, first := c.carry(t, func(m *bus.TaskMessage) {
+		if err := c.carrier.Driver.(*driver.Docker).Hold(agk.TaskID(m.IdempotencyKey)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if first.State != agk.TaskSucceeded || first.Log == nil {
+		t.Fatalf("the task was reported as %+v, and it succeeded with a log", first)
+	}
+	if owed := c.carrier.Results.Owed(); len(owed) != 0 {
+		t.Errorf("a task whose result went out is still owed one: %+v", owed)
+	}
+	key := agk.TaskID(m.IdempotencyKey)
+
+	for _, point := range []string{"run", "ran", "closing", "logged"} {
+		t.Run("stopped at "+point, func(t *testing.T) {
+			root, ok := stopped[point]
+			if !ok {
+				t.Fatalf("the carrier never reached %s", point)
+			}
+			d := stepDriver(t, root)
+			b := &published{}
+			results, err := OpenResults(root, "runner-dmz-02", b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			again := &Carrier{Runner: "runner-dmz-02", Driver: d, Results: results, Logs: &fakeLogs{}, Log: func(s string) { t.Log(s) }}
+			if err := again.Recover(); err != nil {
+				t.Fatal(err)
+			}
+			taken, err := d.Dispatched()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owed := results.Owed(); len(owed) != 0 {
+				t.Errorf("the restarted agent still owes %+v", owed)
+			}
+
+			if point == "run" {
+				// Nothing ended: the record names the key as taken, and there is no result.
+				if !slices.Equal(taken, []agk.TaskID{key}) || len(results.Keys()) != 0 {
+					t.Errorf("a key taken and not ended is named as taken by %v and kept by %v, want taken alone", taken, results.Keys())
+				}
+				return
+			}
+			if len(taken) != 0 || !slices.Equal(results.Keys(), []string{m.IdempotencyKey}) {
+				t.Fatalf("a key whose ending was written is named as taken by %v and kept by %v, want kept alone", taken, results.Keys())
+			}
+			if err := results.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := b.all()
+			if len(got) != 1 {
+				t.Fatalf("%d results were published for one task", len(got))
+			}
+			r := got[0]
+			wireSays(t, taskResults(t), r)
+			if r.TaskID != m.TaskID || r.Runner != "runner-dmz-02" || r.State != agk.TaskSucceeded || r.ExitCode == nil || *r.ExitCode != 0 {
+				t.Errorf("the result recovered is %+v", r)
+			}
+			if mustJSON(t, r.Outputs) != mustJSON(t, first.Outputs) || mustJSON(t, r.Artifacts) != mustJSON(t, first.Artifacts) {
+				t.Errorf("the result recovered names %s and %s, and the task left %s and %s",
+					mustJSON(t, r.Outputs), mustJSON(t, r.Artifacts), mustJSON(t, first.Outputs), mustJSON(t, first.Artifacts))
+			}
+			if r.Log == nil || r.Log.URI != first.Log.URI || !r.Log.Truncated || r.Log.Lines != 0 {
+				t.Errorf("the result recovered says of its log %+v, want it at %s, truncated and counting no line", r.Log, first.Log.URI)
+			}
+			recorded, ended, err := d.Ended(key)
+			if err != nil || !ended || recorded.Log == nil {
+				t.Fatalf("the record holds %+v, %t, %v", recorded, ended, err)
+			}
+			if recorded.Log.URI.String() != r.Log.URI || recorded.Log.Lines != r.Log.Lines || recorded.Log.Truncated != r.Log.Truncated {
+				t.Errorf("the record says of the log %+v, and the result said %+v", recorded.Log, r.Log)
+			}
+			if left, _ := os.ReadDir(filepath.Join(root, ResultsDir)); len(left) != 0 {
+				t.Errorf("the results directory still holds %v once the result went out", left)
+			}
+		})
+	}
+}
+
+// endedAs is a record holding one ending, for Recover to read.
+type endedAs struct {
+	refusing
+	e      driver.Ending
+	logged []*driver.EndedLog
+}
+
+func (d *endedAs) Ended(id agk.TaskID) (driver.Ending, bool, error) { return d.e, d.e.Key == id, nil }
+
+func (d *endedAs) Logged(_ agk.TaskID, l *driver.EndedLog) error {
+	d.logged = append(d.logged, l)
+	return nil
+}
+
+// A result a restart keeps addresses a log wherever the record names one, a pull that ended the task
+// included, and wherever a container started, whose log the record was cleared of while it was being
+// closed: truncated, and counting no line the store may not hold. An ending that names neither had
+// no log opened, and its result addresses none and gives the record none.
+func TestARecoveredResultAddressesALogOnlyWhereAContainerStarted(t *testing.T) {
+	m := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
+	started := time.Date(2026, 9, 10, 6, 41, 9, 0, time.UTC)
+	code := 0
+	for name, tc := range map[string]struct {
+		e      driver.Ending
+		logged bool
+	}{
+		"no log opened":     {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskFailed, At: started}, false},
+		"timed out pulling": {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskTimedOut, Log: &driver.EndedLog{Lines: 1}, At: started}, true},
+		"closing":           {driver.Ending{Key: agk.TaskID(m.IdempotencyKey), State: agk.TaskSucceeded, ExitCode: &code, StartedAt: started, FinishedAt: started.Add(time.Second), Outputs: []driver.EndedPort{}, At: started}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &published{}
+			results, err := OpenResults(t.TempDir(), "runner-dmz-02", b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := results.owe(m, "runner-dmz-02"); err != nil {
+				t.Fatal(err)
+			}
+			d := &endedAs{e: tc.e}
+			c := &Carrier{Runner: "runner-dmz-02", Driver: d, Results: results, Logs: &fakeLogs{}}
+			if err := c.Recover(); err != nil {
+				t.Fatal(err)
+			}
+			if err := results.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := b.all()
+			if len(got) != 1 {
+				t.Fatalf("%d results were published", len(got))
+			}
+			if has := got[0].Log != nil; has != tc.logged {
+				t.Errorf("the result recovered says of its log %+v", got[0].Log)
+			}
+			if tc.logged && (!got[0].Log.Truncated || got[0].Log.Lines != 0) {
+				t.Errorf("a log whose close went with the agent is reported %+v", got[0].Log)
+			}
+			if wrote := len(d.logged) > 0; wrote != tc.logged {
+				t.Errorf("the record was given %v", d.logged)
+			}
+		})
 	}
 }

@@ -194,6 +194,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The empty run, step and attempt directories tasks leave on the work root and on the secrets tmpfs are swept once they have held nothing for an hour, at the record's hourly prune and under the lock a task's directory is created under. Only runs the record holds are swept, and the prune keeps a run's record while the run is on the work root; a secrets directory no longer the runner's alone is left alone.
 - A container is given `TRACEPARENT`: the run's trace and the span of its dispatch, `graph.Task.Dispatch` on a server and the key on a laptop. `agk.RunID.Trace` and `agk.TaskSpan` derive both from the identifiers, so the runner, the controller and `agk run --local` name the same trace without the wire carrying it.
 - A `cpu` past what a count of billionths of a core holds is read as the most there is, rather than as whatever the platform makes of the overflow, which on amd64 is below zero.
+- `Docker.Ended` answers the ending the record holds of a key, and takes nothing.
 
 ### Runner
 
@@ -226,6 +227,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A message taken as a drain is ordered is put back with `Again` before it is redeemed, for another runner of the pool at once. A drained runner stays up, idle and reporting `draining`; a revoked one exits 3 once it holds nothing and every kept result is published, or at the 401 that ends its grace.
 - `serve` renews its bus credential at three quarters of its life on a second connection, heard on for stops before anything moves onto it. The connection it replaces stays open for `bus.AckWait` past its last take, and no longer than its credential, so nothing taken on it loses its acknowledgement.
 - `join` takes `/var/lib/agentiik/credential` away, and tells a host whose `runner.env` remains without its key that it is a new runner.
+- A task's dispatch is written down under `<work root>/.results` as owed its result from before it runs until the result is kept. An agent that stops once the key's ending is written and before its result is kept no longer leaves the key named nowhere: the agent that comes back keeps the result from the record under that `task_id`, names the key from its first heartbeat and publishes it, its log reported `truncated` with no line counted.
 
 ### Artifacts
 

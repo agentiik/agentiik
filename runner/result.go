@@ -90,6 +90,16 @@ type Carrier struct {
 	// shipEvery and closeWithin are how often a running task's log is shipped and how long its
 	// closing chunk is waited for, zero being the constants of those names, which a test shortens.
 	shipEvery, closeWithin time.Duration
+
+	// atPoint is told each point of Carry an agent can stop at with something on disk to recover
+	// from, which is where a test takes what the disk holds. Nil tells nobody.
+	atPoint func(point string)
+}
+
+func (c *Carrier) at(point string) {
+	if c.atPoint != nil {
+		c.atPoint(point)
+	}
 }
 
 // ErrNotReported is a task Carry ran and reported nothing for, because nothing about it is this
@@ -125,7 +135,15 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		defer log.abandon()
 		run = withShipment(run, log)
 	}
-	_, err := c.Driver.Run(run, a.Task)
+	// The dispatch is owed its result from before the ending can be written, since the record
+	// stops naming the key as taken the moment it is, and the result names it only once kept.
+	owing, err := c.Results.owe(m, c.Runner)
+	if err != nil {
+		say(err.Error())
+	}
+	c.at("run")
+	_, err = c.Driver.Run(run, a.Task)
+	c.at("ran")
 
 	// Endings is keyed by the task, which is the key, and two deliveries of one key are two
 	// Carries. A Run that refused this delivery, for a key another delivery is running or has
@@ -135,7 +153,11 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 	if errors.Is(err, driver.ErrTaskInFlight) {
 		// Another delivery on this host is running the key, in a container bound to a
 		// tree of the key, and Remove takes every tree of the key: this delivery's goes
-		// with that one's, once it ends.
+		// with that one's, once it ends. What it owes is its own to settle, where it is not
+		// what the delivery running the key owes under the same task_id.
+		if owing {
+			c.Results.settle(m.TaskID)
+		}
 		return fmt.Errorf("%w: task %s is carried by another delivery on this host: %w", ErrNotReported, m.TaskID, err)
 	}
 	if rerr := a.Remove(); rerr != nil {
@@ -168,14 +190,17 @@ func (c *Carrier) Carry(ctx context.Context, m bus.TaskMessage, a *Assembled) er
 		r = resultOf(m, c.Runner, told)
 		if log != nil {
 			c.logged(a.Task.ID, nil)
+			c.at("closing")
 			r.Log = log.finish(told.Log.Truncated)
 			c.logged(a.Task.ID, r.Log)
+			c.at("logged")
 		}
 	case err != nil && ctx.Err() != nil:
 		// The agent is stopping, and the task did not fail: nothing is said of it, the
 		// agent stops naming its key, and the heartbeat's sweep declares it lost, which is
 		// what a runner the control plane stopped hearing from is, requeued where the step
-		// allows it.
+		// allows it. The result stays owed: the agent that comes back keeps one where the
+		// record holds an ending after all, and owes nothing where it holds none.
 		return fmt.Errorf("%w: task %s was stopped with the agent: %w", ErrNotReported, m.TaskID, err)
 	case err != nil:
 		say(fmt.Sprintf("runner: task %s (%s) ran no container: %s", m.TaskID, m.IdempotencyKey, err))
@@ -221,6 +246,73 @@ func (c *Carrier) logged(id agk.TaskID, l *bus.Log) {
 	if err := rec.Logged(id, ended); err != nil && c.Log != nil {
 		c.Log(err.Error() + ": a later report of the key from the record may not say of its log what its result said")
 	}
+}
+
+// endingReader is the host's record read for how one key ended, which is driver.Docker.
+type endingReader interface {
+	Ended(id agk.TaskID) (driver.Ending, bool, error)
+}
+
+// Recover keeps a result for every dispatch an earlier agent on this host owed one to and never kept
+// one for, from what the record says of its key's ending. It is called as the agent starts, before
+// its first heartbeat, so that Keys names each key from that heartbeat on, and the Flush that
+// follows publishes each result.
+//
+// A dispatch whose key the record holds no ending of is owed nothing: the task never reached its
+// ending, the record names the key as taken where it was, and Dispatched lists it for the heartbeat
+// as it lists every key an earlier agent held.
+//
+// Recovered, a result says what EndingOf says of a requeue answered from the record, and of the log,
+// which was being closed when the agent stopped, only what can be said without its closing chunk's
+// answer: where it is, truncated, since what the store holds of it is not known to be whole, and
+// no lines. The wire's lines are what the API holds, and the record counts something else at every
+// point but the last: the driver's own lines until the carrier clears them, none while the close is
+// waited for. Zero never claims a line the store cannot show. The record is then given the same log, so that a requeue of the key
+// answered from it later says what this result said.
+//
+// A record that could not be read leaves the dispatch owed, for the agent after this one, and the
+// error says so.
+func (c *Carrier) Recover() error {
+	rec, ok := c.Driver.(endingReader)
+	if !ok {
+		return nil
+	}
+	var failed []error
+	for _, o := range c.Results.Owed() {
+		key := agk.TaskID(o.IdempotencyKey)
+		e, ended, err := rec.Ended(key)
+		if err != nil {
+			failed = append(failed, fmt.Errorf("runner: the result owed to %s is still owed, since the record of %s could not be read: %w", o.TaskID, key, err))
+			continue
+		}
+		if !ended {
+			c.Results.settle(o.TaskID)
+			continue
+		}
+		r, err := EndingOf(bus.TaskMessage{TaskID: o.TaskID, IdempotencyKey: o.IdempotencyKey}, c.Runner, e)
+		// A log wherever the record names one, a pull that ended the task included, since the
+		// driver writes there why no container ran, and wherever a container started, whose log
+		// the carrier cleared from the record while it was being closed. An ending that names
+		// neither is one the driver opened no log for.
+		if err == nil && c.Logs != nil && (e.Log != nil || !e.StartedAt.IsZero()) {
+			var uri agk.LogURI
+			if uri, err = agk.NewLogURI(key); err == nil {
+				r.Log = &bus.Log{URI: uri.String(), Truncated: true}
+			}
+		}
+		if err != nil {
+			failed = append(failed, fmt.Errorf("runner: the result owed to %s is still owed, since the record of %s says nothing a result can: %w", o.TaskID, key, err))
+			continue
+		}
+		// A result Keep could not write down is still held, and published by the next Flush.
+		if err := c.Results.Keep(r); err != nil {
+			failed = append(failed, err)
+		}
+		if r.Log != nil {
+			c.logged(key, r.Log)
+		}
+	}
+	return errors.Join(failed...)
 }
 
 // resultOf is the result of dispatch m, from the ending the driver told of it.

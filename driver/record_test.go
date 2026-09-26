@@ -1089,3 +1089,35 @@ func TestARunThatWritesNoEndingForgetsTheKeyItTook(t *testing.T) {
 		t.Errorf("after two Runs that wrote no ending the record lists %v, %v, want nothing", got, err)
 	}
 }
+
+// Ended answers the ending the record holds of a key, and nothing for a key never taken or taken
+// and not ended, which it leaves as it found it: a key Ended was asked about is not taken by the
+// asking.
+func TestEndedAnswersTheRecordedEndingAndTakesNothing(t *testing.T) {
+	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
+
+	bricks := &counting{}
+	r := newRunner(t, oneImage(ref, goodManifest), bricks.run(func(string) int { return 0 }))
+	never, taken, ended := stepTask(ref, "never"), stepTask(ref, "taken"), stepTask(ref, "ended")
+	if err := r.Hold(taken.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(t.Context(), ended); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []graph.Task{never, taken} {
+		if e, found, err := r.Ended(task.ID); found || err != nil {
+			t.Errorf("%s: the record answered %+v, %t, %v", task.ID, e, found, err)
+		}
+	}
+	e, found, err := r.Ended(ended.ID)
+	if err != nil || !found || e.Key != ended.ID || e.State != agk.TaskSucceeded {
+		t.Errorf("the ending recorded was answered as %+v, %t, %v", e, found, err)
+	}
+	if got, err := r.Dispatched(); err != nil || len(got) != 1 || got[0] != taken.ID {
+		t.Errorf("asking the record left %v taken, %v, want %s alone", got, err, taken.ID)
+	}
+	if err := r.Hold(never.ID); err != nil {
+		t.Errorf("a key Ended was asked about is refused: %s", err)
+	}
+}
