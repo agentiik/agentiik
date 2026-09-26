@@ -221,9 +221,14 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 			t.Errorf("nats.conf does not say %s:\n%s", want, conf)
 		}
 	}
-	for _, trust := range [][]string{{apiDir, "trust", "agentiik.pem"}, {controllerDir, "trust", "agentiik.pem"}, {runnerDir, "trust", "agentiik.pem"}, {natsDir, "server.pem"}} {
+	for _, trust := range [][]string{{apiDir, "tls", "server.pem"}, {apiDir, "trust", "agentiik.pem"}, {controllerDir, "trust", "agentiik.pem"}, {runnerDir, "trust", "agentiik.pem"}, {natsDir, "server.pem"}} {
 		if d.read(t, trust...) != d.read(t, apiDir, "tls", "server.pem") {
 			t.Errorf("%s is not the certificate", filepath.Join(trust...))
+		}
+		// Readable by everybody, since the runner's, which is root's, is read by the runner
+		// once it has dropped to the agent's account.
+		if info, _ := os.Stat(filepath.Join(append([]string{d.dir}, trust...)...)); info.Mode().Perm() != 0o644 {
+			t.Errorf("%s is mode %#o, want 0644", filepath.Join(trust...), info.Mode().Perm())
 		}
 	}
 }
@@ -298,16 +303,25 @@ func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string][]byte{"server.pem": certPEM, "server.key": keyPEM} {
-		if err := os.WriteFile(filepath.Join(d.dir, apiDir, "tls", name), content, 0o644); err != nil {
+		path := filepath.Join(d.dir, apiDir, "tls", name)
+		os.Remove(path)
+		if err := os.WriteFile(path, content, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		os.Chmod(path, 0o644)
 	}
+	d.given = map[string]bool{}
 	d.files(t, firstRun.Add(2*time.Hour), "other.example.com", "")
 	if d.read(t, apiDir, "tls", "server.pem") != string(certPEM) {
 		t.Error("a certificate naming the host was replaced")
 	}
 	if info, err := os.Stat(filepath.Join(d.dir, apiDir, "tls", "server.key")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("the key put there was left readable by others: %v", info.Mode())
+	}
+	for _, name := range []string{"server.pem", "server.key"} {
+		if !d.given[filepath.Join(d.dir, apiDir, "tls", name)] {
+			t.Errorf("the %s put there was not given to uid %d", name, agent)
+		}
 	}
 
 	// A key that is not the certificate's.
@@ -652,5 +666,53 @@ func TestInitFollowsNoLinkAServicePutInItsVolume(t *testing.T) {
 	}
 	if info, err := os.Lstat(pipe); err != nil || !info.Mode().IsRegular() {
 		t.Errorf("the pipe was not replaced by the password: %v", err)
+	}
+}
+
+// A file init keeps, a secret or a copy, whose mode or owner changed since, is given them back at
+// the next run, since the API refuses a secret anybody else may read.
+func TestInitPutsBackTheModeAndOwnerOfWhatItKeeps(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	kept := [][]string{{apiDir, "master-key"}, {apiDir, "presign-key"}, {controllerDir, "database-password"}, {apiDir, "operator-token.sha256"}}
+	for _, path := range append(kept, []string{runnerDir, "trust", "agentiik.pem"}) {
+		os.Chmod(filepath.Join(append([]string{d.dir}, path...)...), 0o640)
+	}
+	d.given = map[string]bool{}
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	for _, path := range kept {
+		full := filepath.Join(append([]string{d.dir}, path...)...)
+		if info, _ := os.Stat(full); info.Mode().Perm() != 0o600 || !d.given[full] {
+			t.Errorf("%s is left mode %#o, given to uid %d: %v", filepath.Join(path...), info.Mode().Perm(), agent, d.given[full])
+		}
+	}
+	if info, _ := os.Stat(filepath.Join(d.dir, runnerDir, "trust", "agentiik.pem")); info.Mode().Perm() != 0o644 {
+		t.Errorf("the runner's certificate is left mode %#o", info.Mode().Perm())
+	}
+}
+
+// A link in place of the certificate's key, which the API owns, is never followed by root: the
+// file it names keeps its mode, and the link is replaced by a key.
+func TestInitFollowsNoLinkInPlaceOfTheCertificatesKey(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	// The very key, so that a run that followed the link would find the pair whole and keep
+	// it, and give the file the link names the key's mode and owner.
+	elsewhere := filepath.Join(t.TempDir(), "root-only")
+	if err := os.WriteFile(elsewhere, []byte(d.read(t, apiDir, "tls", "server.key")), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(d.dir, apiDir, "tls", "server.key")
+	os.Remove(key)
+	if err := os.Symlink(elsewhere, key); err != nil {
+		t.Fatal(err)
+	}
+	d.given = map[string]bool{}
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	if info, _ := os.Stat(elsewhere); info.Mode().Perm() != 0o400 || d.given[elsewhere] {
+		t.Errorf("the file the link names was changed through it: mode %#o", info.Mode().Perm())
+	}
+	if info, err := os.Lstat(key); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the link was not replaced by a key: %v", err)
 	}
 }

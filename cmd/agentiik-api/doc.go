@@ -80,7 +80,8 @@
 // does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
 // namespace create does; and a join token of the pool default for the runner beside it, issued
 // through the database since the API is not serving yet. Each service is given its own copy of
-// what it reads, owned by uid 65532 where init runs as root.
+// what it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as
+// root, and the runner's certificate, which anybody may read.
 //
 // It is the one program that takes a secret as a value: the operator token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.
