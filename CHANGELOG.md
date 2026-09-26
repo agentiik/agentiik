@@ -2,6 +2,10 @@
 
 The releases of `agentiik`. Every repository carries the same version and is tagged at the same moment, so an entry may say that nothing changed; [Versioning](https://agentiik.github.io/docs#versioning) says why. `0.y.z` promises nothing beyond itself.
 
+## v0.2.2, 2026-09-26
+
+- Nothing changed here. The version moves because every repository carries the same one, which [Versioning](https://agentiik.github.io/docs#versioning) sets out.
+
 ## v0.2.1, 2026-09-26
 
 A server a person can install: the images are published, a runner joins the pool `default` with no label, and namespaces are created from the server. The installations themselves are in `agentiik/deploy` and `agentiik/homebrew-tap`.
