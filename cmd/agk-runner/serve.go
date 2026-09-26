@@ -179,16 +179,28 @@ func joinFirst(ctx context.Context, e env, token runner.Secret, socket string, l
 	}
 	replace := false
 	if joined {
+		// An identity without its key, or a key without runner.env, is one serve can never be
+		// again, since the key is what signs every rotation of the credential: a host holding
+		// a join token joins again rather than being refused at every start.
+		_, kerr := os.Lstat(e.KeyFile)
+		_, eerr := os.Lstat(e.EnvFile)
 		drifted, err := runner.Drifted(e.Lookup, e.EnvFile)
 		switch {
+		case errors.Is(eerr, fs.ErrNotExist):
+			log(e.KeyFile + " is there and " + e.EnvFile + " is not, so this host holds a key and no identity, and it joins again with the join token in " + given + " as a new runner, and the one the key was joined with stays registered until an administrator revokes it")
+			replace = true
+		case errors.Is(kerr, fs.ErrNotExist):
+			log(e.EnvFile + " holds a runner's identity and " + e.KeyFile + ", the key it joined with, is gone, so this host joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
+			replace = true
 		case err != nil:
 			return refuse(err)
 		case len(drifted) == 0:
 			log("this host has joined already, and its environment claims what it joined with, so the join token in " + given + " is not used")
 			return 0, false
+		default:
+			log(strings.Join(drifted, ", ") + " in the environment says otherwise than " + e.EnvFile + ", which this runner joined with, so it joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
+			replace = true
 		}
-		log(strings.Join(drifted, ", ") + " in the environment says otherwise than " + e.EnvFile + ", which this runner joined with, so it joins again with the join token in " + given + " as a new runner, and the one it was stays registered until an administrator revokes it")
-		replace = true
 	}
 
 	j, err := runner.JoinWhenReady(ctx, runner.Joining{

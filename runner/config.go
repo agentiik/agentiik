@@ -282,6 +282,12 @@ func (r *reader) env(name string) (string, bool) {
 func (r *reader) value(name string) (string, bool) {
 	fromEnv, inEnv := r.env(name)
 	fromFile, inFile := r.file[name]
+	// The address is the same one written with trailing slashes or without, since the client
+	// reaches it without them, and Drifted compares it so: a runner that did not join again for
+	// a slash is not one to refuse for it.
+	if name == API && strings.TrimRight(fromEnv, "/") == strings.TrimRight(fromFile, "/") {
+		fromFile = fromEnv
+	}
 	switch {
 	case inEnv && inFile && fromEnv != fromFile && slices.Contains(joinWrites, name):
 		// The one in the file is what this runner joined with, and the API checked it against

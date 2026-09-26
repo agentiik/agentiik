@@ -266,6 +266,13 @@ func (j Joining) settings() (joinSettings, error) {
 			r.file[name], c.kept[name] = v, v
 		}
 	}
+	// The identity is refused in the environment as serve refuses it there, so that no token is
+	// spent on a host whose every start would then be refused.
+	for _, name := range fileOnly {
+		if v, set := lookup(name); set && v != "" {
+			r.refuse(name, "is set in the environment, and a runner's identity is read from "+j.EnvPath+" alone, where join writes it, so serve would refuse every start of the runner this join made: unset it")
+		}
+	}
 	// The command line stands in front of the environment, as a flag given means that value,
 	// and the environment in front of the file join is about to replace.
 	r.lookup = func(name string) (string, bool) {

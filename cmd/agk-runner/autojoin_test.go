@@ -267,3 +267,62 @@ func TestARunnerJoiningAgainClaimsNoneOfWhatItsEnvironmentLeavesUnset(t *testing
 		t.Errorf("the runner joined %d times over two starts, want once", n)
 	}
 }
+
+// The address written with a trailing slash is the one it joined with, whether or not serve holds a
+// join token: neither joins again for it nor refuses it.
+func TestAnAddressWithATrailingSlashIsTheOneTheRunnerJoinedWith(t *testing.T) {
+	for _, token := range []bool{false, true} {
+		h := newHost(t, daemon(t, true), secretsTmpfs)
+		h.set(runner.API, h.api+"/")
+		h.set(runner.Labels, "zone=dmz,arch=amd64")
+		if token {
+			h.withTokenFile(t)
+		}
+		h.serving(t)
+		if n := h.joins.Load(); n != 0 {
+			t.Errorf("with a token %v, the runner joined %d times for a slash", token, n)
+		}
+	}
+}
+
+// An identity set in the environment, which serve refuses, refuses the join before the token is
+// spent, rather than after.
+func TestAnIdentityInTheEnvironmentSpendsNoJoinToken(t *testing.T) {
+	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h.unjoined(t)
+	h.set(runner.RunnerID, "runner-dmz-09")
+	if said := h.refused(t); !strings.Contains(said, runner.RunnerID+" is set in the environment") {
+		t.Errorf("the refusal does not name %s:\n%s", runner.RunnerID, said)
+	}
+}
+
+// A host that lost half its identity, the key or runner.env, joins again with its join token as a
+// new runner rather than being refused at every start.
+func TestAHostThatLostHalfItsIdentityJoinsAgainWithItsJoinToken(t *testing.T) {
+	for name, c := range map[string]struct {
+		lost func(h *host) string
+		said string
+	}{
+		"the key":    {func(h *host) string { return h.e.KeyFile }, "the key it joined with, is gone"},
+		"runner.env": {func(h *host) string { return h.e.EnvFile }, "holds a key and no identity"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t, daemon(t, true), secretsTmpfs)
+			if err := os.Remove(c.lost(h)); err != nil {
+				t.Fatal(err)
+			}
+			h.set(runner.API, h.api)
+			h.set(runner.Labels, "zone=dmz,arch=amd64")
+			h.withTokenFile(t)
+			h.serving(t)
+			if n := h.joins.Load(); n != 1 {
+				t.Errorf("serve joined %d times, want once", n)
+			}
+			for _, want := range []string{c.said, "serving as runner-dmz-03"} {
+				if !strings.Contains(h.err.String(), want) {
+					t.Errorf("the agent's log does not say %q:\n%s", want, h.err)
+				}
+			}
+		})
+	}
+}
