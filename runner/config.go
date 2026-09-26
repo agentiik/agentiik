@@ -202,7 +202,8 @@ func ReadConfig(lookup Lookup, path string) (Config, error) {
 	// A runner that joined claiming no label has no AGK_RUNNER_LABELS in runner.env, and one in
 	// the environment would claim labels the API never checked against its token: labels are
 	// claimed at join, within what the token permits, and never added afterwards.
-	if _, inFile := r.file[Labels]; joined && !inFile {
+	_, identity := r.file[RunnerID]
+	if _, inFile := r.file[Labels]; joined && identity && !inFile {
 		if _, inEnv := r.env(Labels); inEnv {
 			r.refuse(Labels, "is set in the environment, and this runner joined claiming no label, so "+r.path+" carries none: a runner claims labels at join, within what its token permits, so unset it, or join again with --replace and a token that permits them")
 		}
