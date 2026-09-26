@@ -48,14 +48,10 @@ type usernsFloor struct {
 	// Lifted says the operator decided this machine does not need the floor.
 	Lifted bool
 
-	// said and saidSecrets carry the two sentences this machine is worth saying
-	// once. Each is a property of the daemon and the policy rather than of a task, so
-	// neither is repeated per task; a sentence said eight times is a sentence nobody
-	// reads. They differ in when they are due: the floor applies to every container
-	// this daemon will create and is said when it is opened, where a secret landing on
-	// a disk applies only to a task that was given one and waits for the first.
-	said        sync.Once
-	saidSecrets sync.Once
+	// said carries the sentence this machine is worth saying once. It is a property
+	// of the daemon and the policy rather than of a task, so it is not repeated per
+	// task; a sentence said eight times is a sentence nobody reads.
+	said sync.Once
 }
 
 // readUsernsFloor holds one daemon to the floor, or lets it past where the policy says
@@ -122,34 +118,6 @@ func (f *usernsFloor) announce(p Policy, say func(string)) {
 			say("user namespace remapping is off on this daemon and " + because + ", so the floor is lifted: a task's files are owned by a real uid on the host, root inside a container is the host's own root, and a process that escapes a container is that account rather than an unprivileged high-numbered one that maps to no real user.")
 		})
 	}
-}
-
-// announceSecrets says, once, where a secret value lands on a platform with no tmpfs.
-//
-// A secret is meant to be "mounted on tmpfs", and a tmpfs the daemon creates at container
-// start is empty and cannot be pre-populated, so the value is written on this side and
-// bound in. Where this platform has no tmpfs of its own, which is the laptop the floor gets
-// lifted for, it is written into the task's working directory on a real filesystem instead.
-// That is a difference between what the documentation promises and what this machine can
-// do, and it is worth one sentence.
-//
-// It is said at the first task that is actually given a secret, and not when the daemon is
-// opened, because a warning a person meets when they have asked for nothing of the kind is
-// a warning they learn to scroll past. agk validate opens a daemon to read the manifests of
-// the images a workflow names and never writes a value; a run whose steps declare no secret
-// never writes one either. Either of those printing this sentence would spend the only
-// attention it gets on a run it does not apply to.
-//
-// The step that earned it is named first, because a sentence said while a run is narrating
-// itself lands between two lines about some other step, and a reader is owed the one it is
-// actually about.
-func (f *usernsFloor) announceSecrets(p Policy, step agk.Step, say func(string)) {
-	if f == nil || say == nil || p.SecretsDir != "" {
-		return
-	}
-	f.saidSecrets.Do(func() {
-		say(string(step) + " is given a secret and this platform has no tmpfs for the runner to write secret values on, so the value is written into the task's working directory on disk, where it is removed with the container rather than never having been written at all. An operator with a tmpfs names it in " + PolicyPath + ".")
-	})
 }
 
 // confinement is what one daemon confines a container with besides its namespaces and its

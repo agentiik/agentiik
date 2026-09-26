@@ -205,8 +205,6 @@ func TestTheHelperIsWhatAScriptStepPipesInto(t *testing.T) {
 	// Neither Docker Desktop nor the daemon of a CI runner remaps user namespaces, and
 	// these are the machines the floor is lifted for.
 	policy.RequireUsernsRemap = driver.RemapLifted
-	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
 	policy.Helper = binary
 	// The image is the one this machine holds under its tag.

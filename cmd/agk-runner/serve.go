@@ -301,14 +301,15 @@ func loadPolicy(path string, log func(string)) (driver.Policy, error) {
 //
 // A work root on a filesystem mounted noexec binds none. The copy's bind carries the mount's
 // flags, so /agk/bin/agk would be a program no script may run, and every script step that called
-// it would fail on the brick's account for a choice about the host's disk.
+// it would fail on the brick's account for a choice about the host's disk. The helper also fills
+// a task's secrets volume, so a runner left with none refuses a task given a secret, and says so.
 func layHelper(installed, workDir string, host driver.Host, log func(string)) (string, error) {
 	fs, err := host.Filesystem(workDir)
 	if err != nil {
 		return "", fmt.Errorf("%s, the work root, could not be asked what it is mounted as: %w", workDir, err)
 	}
 	if fs.NoExec {
-		log("the work root " + workDir + " is on a filesystem mounted noexec, which a bind of the static helper from it would carry, so a script step finds no " + driver.BinPath + ": name a helper outside it with helper in runner.toml")
+		log("the work root " + workDir + " is on a filesystem mounted noexec, which a bind of the static helper from it would carry, so a script step finds no " + driver.BinPath + " and a task given a secret is refused, since the helper fills its secrets volume: name a helper outside it with helper in runner.toml")
 		return "", nil
 	}
 	path, ok, err := runner.LayHelper(installed, workDir)
@@ -316,7 +317,7 @@ func layHelper(installed, workDir string, host driver.Host, log func(string)) (s
 	case err != nil:
 		return "", err
 	case !ok:
-		log("there is no " + installed + " and runner.toml names no helper, so a script step finds no " + driver.BinPath + ", and reads its inputs with jq instead")
+		log("there is no " + installed + " and runner.toml names no helper, so a script step finds no " + driver.BinPath + ", and reads its inputs with jq instead, and a task given a secret is refused, since the helper fills its secrets volume")
 		return "", nil
 	}
 	log("the static helper " + installed + " is bound read-only at " + driver.BinPath + " for a script step, from its copy " + path + " under the work root, where the daemon finds it in either form")

@@ -119,9 +119,8 @@
 // the driver's work root, one directory per task, created fresh and removed with its
 // container, sits outside the tree. Everything under .agk is readable by every container of
 // the run, because .agk defaults to sitting inside the tree that is bound read-only at
-// /agk/repo, and a task's working directory is where the driver writes that task's secret
-// values on a platform with no tmpfs. Under .agk a step that declares no secret could read
-// one another step was given.
+// /agk/repo, and a task's working directory holds what the driver gave that task. Under .agk a
+// step could read what another step was given.
 //
 // The work root is not per run, and that is the driver's own doing rather than a choice
 // taken here: the driver names a task's directory run/step/attempt beneath its work root,

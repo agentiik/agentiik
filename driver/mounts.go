@@ -35,9 +35,9 @@ const (
 	// ParamsPath is the resolved parameters, read-only.
 	ParamsPath = "/agk/params.json"
 
-	// SecretsDir is the container side of a secret mount, "/agk/secrets/<name>",
-	// which is where a brick manifest may ask for one and nowhere else. The host
-	// side is Policy.SecretsDir, a tmpfs where the platform has one.
+	// SecretsDir is where a task's secret values are, "/agk/secrets/<name>", which is
+	// where a brick manifest may ask for one and nowhere else. It is a tmpfs volume of
+	// the task's own, and no directory of the host.
 	SecretsDir = "/agk/secrets"
 
 	// BinPath is where the static helper a script step may use is mounted:
@@ -70,10 +70,9 @@ type Secrets interface {
 // secretMountRule is where a secret may be asked for, quoted from the manifest rules so
 // that a refusal prints the rule rather than a paraphrase of it. It is the grammar the brick
 // manifest, the task message and the grant redemption all hold a mount to, and it is narrower
-// than one path segment on purpose: the host file is named after the last element of the mount,
-// so /agk/secrets/. named the secrets directory itself, which while still empty was removed and
-// replaced by a file holding the value, and /agk/secrets/.. named its parent, which failed as the
-// platform's fault rather than being refused as the brick's.
+// than one path segment on purpose: the file on the task's secrets volume is named after the
+// last element of the mount, so /agk/secrets/. would name the volume itself and /agk/secrets/..
+// its parent.
 const secretMountRule = `^/agk/secrets/[A-Za-z0-9][A-Za-z0-9._-]*$`
 
 var secretMountPattern = regexp.MustCompile(secretMountRule)
@@ -85,11 +84,17 @@ var secretMountPattern = regexp.MustCompile(secretMountRule)
 // The values are carried out of here because masking is "a literal match against the
 // values the task was given", and this is where a task is given them. Nothing else in
 // the driver redeems a secret, so nothing else could hold the list the masker needs.
+//
+// Secrets are the same values by the file each is written in on the task's secrets volume,
+// which is filled once the working directory is settled and just before the container is
+// created, and hold is what keeps that volume filled until the container has started.
 type given struct {
-	Mounts []docker.Mount
-	Tmpfs  map[string]string
-	Stdin  []byte
-	Values [][]byte
+	Mounts  []docker.Mount
+	Tmpfs   map[string]string
+	Stdin   []byte
+	Values  [][]byte
+	Secrets []secretFile
+	hold    *holder
 }
 
 // prepare writes the host side of the contract under the task's working directory and
@@ -100,7 +105,7 @@ type given struct {
 // and then the two writable paths. Nothing here starts anything or talks to a daemon: it
 // is files on a disk and a slice of mounts, which is why every one of these rules is
 // tested with no Docker in reach.
-func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, h Host, store *artifact.Store, run agk.Run, repo string, secrets Secrets) (*given, error) {
+func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, store *artifact.Store, run agk.Run, repo string, secrets Secrets) (*given, error) {
 	g := &given{Tmpfs: map[string]string{}}
 
 	in, err := brick.WriteInputs(ctx, store, w.In, t.Inputs)
@@ -145,20 +150,11 @@ func prepare(ctx context.Context, t graph.Task, w *workdir, p Policy, h Host, st
 	}
 	g.Mounts = append(g.Mounts, helper...)
 
-	// The secrets directory is held to the floor again before a value is written on
-	// it. New held it when the daemon was opened, and a tmpfs unmounted since leaves a
-	// directory of the same name on whatever was beneath it, which is a disk.
-	if len(t.Secrets) > 0 {
-		if err := readSecretsDir(p, h); err != nil {
-			return nil, &Fault{Step: t.Step, Charge: ChargePlatform, Detail: "no secret value was written: " + strings.TrimPrefix(err.Error(), "driver: "), err: err}
-		}
-	}
-	secretMounts, values, err := writeSecrets(ctx, t, w, secrets)
-	if err != nil {
+	// The values are redeemed here and written nowhere yet: they go on the task's secrets
+	// volume, which Run fills once the working directory is settled.
+	if g.Secrets, g.Values, err = redeemSecrets(ctx, t, secrets); err != nil {
 		return nil, err
 	}
-	g.Mounts = append(g.Mounts, secretMounts...)
-	g.Values = values
 
 	// /agk/out is a bind from the working directory and not a tmpfs. A tmpfs is
 	// unmounted when the container stops, so an output written to one is gone before
@@ -195,11 +191,16 @@ func helperBind(t graph.Task, p Policy) ([]docker.Mount, error) {
 	if p.Helper == "" || !isScript(t) {
 		return nil, nil
 	}
-	info, err := os.Stat(p.Helper)
-	if err != nil || !info.Mode().IsRegular() {
+	if !helperIsFile(p.Helper) {
 		return nil, fault(t.Step, nil, ChargePlatform, "%s is named as the static helper in %s and is not a file on this host: it is mounted read-only at %s for a script step, and a path that is not there would be bound as a directory", p.Helper, PolicyPath, BinPath)
 	}
 	return []docker.Mount{bind(p.Helper, BinPath, true)}, nil
+}
+
+// helperIsFile says whether the helper the policy names is a file on this host.
+func helperIsFile(helper string) bool {
+	info, err := os.Stat(helper)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // bind is one directory or file of the host under one path in the container.
@@ -307,25 +308,22 @@ func inside(repo, rel string) (string, error) {
 	return clean, nil
 }
 
-// writeSecrets asks for the values and lays them down where the manifest asked for them.
+// redeemSecrets asks for the values and names the file each is written in.
 //
 // The value is asked of the task's secret source here, Sources.Secrets where the runner
 // gave one and Config.Secrets otherwise, and never travels on the task message: what a
 // Task carries is "names and mount points and never values". A server runner answers
 // from the task's redemption, which it made before the pull, since it redeems before it
 // acknowledges the task message, and agk run --local from the command line. Each one
-// becomes a file of its own, bound read-only at its mount point, so a brick opens a path
-// and the value is never in an environment "readable by its children" and in "diagnostic
-// dumps".
+// becomes a file of its own on the task's secrets volume, mounted read-only at
+// /agk/secrets, so a brick opens a path and the value is never in an environment
+// "readable by its children" and in "diagnostic dumps".
 //
-// The settings table names the secret mount points in its Tmpfs row, and this is a bind
-// instead, for a reason that is a property of the daemon: a tmpfs the daemon creates at
-// container start is empty and cannot be pre-populated, so a value could not be placed in
-// one before the container's first instruction runs. The host side is the tmpfs instead,
-// Policy.SecretsDir, and where the platform has none the driver says so once. A bind keeps
-// the flags of the mount its source sits on, so a runner, which holds that directory to a
-// tmpfs mounted noexec,nosuid,nodev, gives the brick a secret mount with those flags.
-func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets) ([]docker.Mount, [][]byte, error) {
+// The volume is a tmpfs, which is what the Tmpfs row of the settings table asks of a secret
+// mount point, and it is the task's alone: a tmpfs mount of the container's own is empty when
+// its first instruction runs, and a tmpfs volume is one a container can be given already
+// filled. It is mounted noexec,nosuid,nodev, the flags the row names.
+func redeemSecrets(ctx context.Context, t graph.Task, secrets Secrets) ([]secretFile, [][]byte, error) {
 	if len(t.Secrets) == 0 {
 		return nil, nil, nil
 	}
@@ -333,13 +331,12 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 		return nil, nil, fault(t.Step, nil, ChargePlatform, "%d secrets to redeem and no secret source: a runner redeems at the API the per-task grant the controller issued for that one task and that one secret, and agk run --local reads the command line", len(t.Secrets))
 	}
 
-	// Sorted by name, so that two runs of one step prepare the same mounts in the
-	// same order, which is what makes a created container legible when it is read
-	// twice.
+	// Sorted by name, so that two runs of one step fill the volume in the same order,
+	// which is what makes what they were given legible when it is read twice.
 	wanted := slices.Clone(t.Secrets)
 	slices.SortFunc(wanted, func(a, b graph.SecretMount) int { return strings.Compare(a.Name, b.Name) })
 
-	var mounts []docker.Mount
+	var files []secretFile
 	var values [][]byte
 	seen := map[string]bool{}
 	for _, s := range wanted {
@@ -356,14 +353,10 @@ func writeSecrets(ctx context.Context, t graph.Task, w *workdir, secrets Secrets
 		if err != nil {
 			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s has no value to give the task: a runner has it from the redemption of the per-task grant, made before the image was pulled, and agk run --local from the command line", s.Name)
 		}
-		source := w.secret(target)
-		if err := writeSecret(source, value); err != nil {
-			return nil, nil, fault(t.Step, err, ChargePlatform, "secret %s could not be written where it is bound from", s.Name)
-		}
-		mounts = append(mounts, bind(source, target, true))
+		files = append(files, secretFile{Name: path.Base(target), Value: value})
 		values = append(values, value)
 	}
-	return mounts, values, nil
+	return files, values, nil
 }
 
 // secretTarget is where in the container a secret is mounted: where the manifest said, or
@@ -373,64 +366,6 @@ func secretTarget(s graph.SecretMount) string {
 		return s.Mount
 	}
 	return SecretsDir + "/" + s.Name
-}
-
-// secret is the host file a secret mounted at target is bound from.
-//
-// The file is named by the mount point and not by the secret's own name. The manifest
-// chooses where a value is read from, and two secrets of different names may not collide
-// on the host any more than they may collide in the container.
-func (w *workdir) secret(target string) string {
-	return filepath.Join(w.Secrets, path.Base(target))
-}
-
-// writeSecret puts one value on the disk, or on the tmpfs where the platform has one.
-//
-// It is created private and made readable afterwards rather than being created readable,
-// so that the window in which the file exists with a mode wider than it needs is no
-// window at all. The mode it ends on is readable because the account that reads it is
-// the container's and not this process's.
-func writeSecret(path string, value []byte) error {
-	os.Remove(path)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(value); err != nil {
-		f.Close()
-		os.Remove(path)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(path)
-		return err
-	}
-	return os.Chmod(path, secretMode)
-}
-
-// written is the value writeSecrets put down for one secret, read back for a delivery that
-// adopted the container it was written for, and false where there is none. A nil workdir
-// names nowhere and holds nothing, and a mount off the grammar never had a value: the
-// delivery that met it refused it before it created anything.
-//
-// Lstat and not Stat: a value is a file this runner created under a directory private to
-// it, so a link found under that name is not one, and following it would have the masker
-// read whatever it points at.
-func (w *workdir) written(s graph.SecretMount) ([]byte, bool) {
-	if w == nil {
-		return nil, false
-	}
-	target := secretTarget(s)
-	if !secretMountPattern.MatchString(target) {
-		return nil, false
-	}
-	where := w.secret(target)
-	info, err := os.Lstat(where)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, false
-	}
-	value, err := os.ReadFile(where)
-	return value, err == nil
 }
 
 // writeJSON writes one document of the contract, read-only to the container.

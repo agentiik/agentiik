@@ -13,10 +13,6 @@ import (
 // not that Docker failed.
 var ErrOwnershipCapabilities = errors.New("this daemon remaps user namespaces, and this process does not hold the capabilities a task's directory is owned inside the remapped range with")
 
-// ErrSecretsTmpfsRequired is the refusal of a secrets directory that is not a tmpfs mounted
-// noexec,nosuid,nodev, by a policy that holds the secrets floor.
-var ErrSecretsTmpfsRequired = errors.New("a runner writes secret values on a tmpfs mounted noexec,nosuid,nodev, and its secrets directory is not one")
-
 // agentCapability is one Linux capability, by its bit in the kernel's sets and by the name a
 // systemd unit and a Compose file write it with.
 type agentCapability struct {
@@ -42,12 +38,11 @@ var ownershipCapabilities = []agentCapability{
 	{1, "CAP_DAC_OVERRIDE"},
 }
 
-// Host is what a runner's floors ask of the machine this process runs on rather than of
-// the daemon: the capabilities the process holds, and what the mount a directory sits on
-// is. It is an interface for one reason, that the answers are the kernel's and a test on
-// a fake daemon has to be able to give others: a remapped fake is opened by a test that
-// holds no capability, and a tmpfs mounted noexec,nosuid,nodev is not something a test
-// can mount.
+// Host is what a runner asks of the machine this process runs on rather than of the
+// daemon: the capabilities the process holds, and what the mount a directory sits on is. It
+// is an interface for one reason, that the answers are the kernel's and a test on a fake
+// daemon has to be able to give others: a remapped fake is opened by a test that holds no
+// capability, and a work root mounted noexec is not something a test can mount.
 type Host interface {
 	// Capabilities is this process's effective set, bit n being the capability the
 	// kernel numbers n.
@@ -118,11 +113,11 @@ func executable() string {
 	return "agk-runner"
 }
 
-// runner says whether a policy is a runner's. The seccomp and secrets floors are lifted by
-// no line of runner.toml, only by a caller that is not a runner: agk run --local, agk brick
-// test and agk validate lift both.
+// runner says whether a policy is a runner's. The seccomp floor is lifted by no line of
+// runner.toml, only by a caller that is not a runner: agk run --local, agk brick test and
+// agk validate lift it.
 func (p Policy) runner() bool {
-	return !p.RequireSecretsTmpfs.Lifted() || !p.RequireSeccomp.Lifted()
+	return !p.RequireSeccomp.Lifted()
 }
 
 // capabilityNames writes the three as a unit line writes them, space separated, with the
@@ -135,74 +130,13 @@ func capabilityNames(strip string) string {
 	return strings.Join(names, " ")
 }
 
-// Filesystem is what the kernel says of the mount a directory sits on, as far as a secret
-// value written there is concerned.
+// Filesystem is what the kernel says of the mount a directory sits on, as far as what is
+// bound into a container from there is concerned: a bind keeps the flags of the mount its
+// source sits on.
 type Filesystem struct {
 	Tmpfs    bool
 	ReadOnly bool
 	NoExec   bool
 	NoSUID   bool
 	NoDev    bool
-}
-
-// readSecretsDir holds the secrets directory to the floor, where the policy holds it.
-//
-// It is read when the daemon is opened, so that a runner on a host with no such tmpfs is
-// refused before it takes anything, and again before a value is written, since a tmpfs
-// unmounted under a running runner leaves a directory of the same name on whatever was
-// beneath it, and a value written there has touched a disk.
-func readSecretsDir(p Policy, h Host) error {
-	if p.RequireSecretsTmpfs.Lifted() {
-		return nil
-	}
-	if p.SecretsDir == "" {
-		return fmt.Errorf("driver: %w: the policy names no secrets directory, and without one a value would be written into the task's working directory on disk. %s", ErrSecretsTmpfsRequired, mountOne(p))
-	}
-	fs, err := h.Filesystem(p.SecretsDir)
-	if err != nil {
-		return fmt.Errorf("driver: %w: %s could not be asked what it is: %v. %s", ErrSecretsTmpfsRequired, p.SecretsDir, err, mountOne(p))
-	}
-	return judgeSecretsFilesystem(p, fs)
-}
-
-// judgeSecretsFilesystem is the half of readSecretsDir that reads no disk, so that every
-// answer the kernel can give is held to the floor in a test.
-func judgeSecretsFilesystem(p Policy, fs Filesystem) error {
-	if !fs.Tmpfs {
-		return fmt.Errorf("driver: %w: %s is not on a tmpfs, so a value written there touches a disk somebody has to erase. %s", ErrSecretsTmpfsRequired, p.SecretsDir, mountOne(p))
-	}
-	// A tmpfs the runner may not write to passes every other check and refuses every
-	// task, which is the failure this floor is read at start to prevent. ProtectSystem=
-	// strict in a unit that does not name the directory in ReadWritePaths makes one.
-	if fs.ReadOnly {
-		return fmt.Errorf("driver: %w: %s is a tmpfs this runner may not write to, so every task given a secret would be refused. A systemd unit with ProtectSystem=strict names it in ReadWritePaths. %s", ErrSecretsTmpfsRequired, p.SecretsDir, mountOne(p))
-	}
-	var without []string
-	for _, flag := range []struct {
-		set  bool
-		name string
-	}{{fs.NoExec, "noexec"}, {fs.NoSUID, "nosuid"}, {fs.NoDev, "nodev"}} {
-		if !flag.set {
-			without = append(without, flag.name)
-		}
-	}
-	if len(without) == 0 {
-		return nil
-	}
-	return fmt.Errorf("driver: %w: %s is a tmpfs mounted without %s. A secret is bound into the container from there, and a bind keeps the flags of the mount its source sits on, so these are the flags a brick meets at /agk/secrets/<name>. %s", ErrSecretsTmpfsRequired, p.SecretsDir, andList(without), mountOne(p))
-}
-
-// mountOne says how an operator puts the floor right, naming the file the directory is
-// set in.
-func mountOne(p Policy) string {
-	return "Mount a tmpfs of the runner's own, with a line such as \"tmpfs /run/agentiik/secrets tmpfs noexec,nosuid,nodev,mode=0700,uid=agentiik,gid=agentiik 0 0\" in /etc/fstab, and name it with secrets_dir in " + sourceOrPath(p)
-}
-
-// sourceOrPath is the file the policy was read from, or the one an operator would write
-// it in where none was read.
-func sourceOrPath(p Policy) string {
-	if p.Source != "" {
-		return p.Source
-	}
-	return PolicyPath
 }

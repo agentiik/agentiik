@@ -371,14 +371,16 @@ func serverDriver(t *testing.T, run func(dockertest.Container) (int, error)) (*d
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { daemon.Close() })
-	// The fake daemon does not remap and the test has no tmpfs of its own to name, so both
-	// floors are lifted, the way an operator lifts them on a machine that is not an
-	// installation; neither is what this is about.
+	// The fake daemon does not remap, so the floor is lifted, the way an operator lifts it
+	// on a machine that is not an installation; it is not what this is about. The helper
+	// fills a task's secrets volume, and the fake daemon plays it.
 	policy := driver.DefaultPolicy()
 	policy.RequireUsernsRemap = driver.RemapLifted
-	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	policy.StopGrace = 200 * time.Millisecond
+	policy.Helper = filepath.Join(t.TempDir(), "agk")
+	if err := os.WriteFile(policy.Helper, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	logs := &taskLogs{}
 	d, err := driver.New(driver.Config{
 		Socket:   daemon.Socket(),
@@ -403,11 +405,7 @@ func TestABase64SecretIsMountedAndMaskedInItsDecodedForm(t *testing.T) {
 
 	var mounted []byte
 	d, logs := serverDriver(t, func(c dockertest.Container) (int, error) {
-		m, ok := c.Mount("/agk/secrets/keystore")
-		if !ok {
-			return 1, errors.New("nothing is mounted at /agk/secrets/keystore")
-		}
-		b, err := os.ReadFile(m.Source)
+		b, err := c.ReadFile("/agk/secrets/keystore")
 		if err != nil {
 			return 1, err
 		}

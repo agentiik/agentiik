@@ -4,6 +4,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### Upgrading
+
+- Values a runner before this one wrote under `<secrets_dir>/agentiik` are removed by nothing now; the runner names the path once at start, and the host tmpfs can go once it is empty.
+
 ### API
 
 - `agentiik-api init` prepares an installation from `AGK_*` variables alone and brings it back in line with them at every run, for a Compose `init` service: certificate, keys, bus identity and `nats.conf`, migration, namespace, the operator token's hash, and a join token of the pool `default` for the local runner.
@@ -17,6 +21,18 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk-runner serve` started as root gives the key's directory, the work root and `runner.env`'s directory to `agentiik`, takes the group owning the Docker socket, drops to `agentiik` and starts itself again. It still never serves as root.
 - `serve` given `AGK_RUNNER_JOIN_TOKEN` or `AGK_RUNNER_JOIN_TOKEN_FILE` joins when the host has no identity, waiting up to 5 minutes for an API that does not answer, and joins again as a new runner when its key or `runner.env` is gone, or when `AGK_API`, `AGK_RUNNER_LABELS` or `AGK_RUNNER_NAMESPACES` in its environment differ from what it joined with, an unset one claiming none.
+- A task's secret values reach its container on a tmpfs volume of its own, filled by the static helper and removed with the task, instead of a bind from a host tmpfs: the host prepares nothing for them.
+- `secrets_dir` in `runner.toml` is read and no longer used, and the runner says so once at start.
+- `Sweep` removes the secrets volumes and their holders a runner that died left.
+- A task given a secret on a runner with no helper is refused before anything is pulled.
+
+### Driver
+
+- `Policy.SecretsDir`, `Policy.RequireSecretsTmpfs`, `SecretsFloor` and `ErrSecretsTmpfsRequired` are gone; `LabelSecrets`, `HolderCommand` and `Policy.SecretsDirSkipped` are new.
+
+### agk
+
+- `agk run --local` gives secret values the same tmpfs volume, so on macOS they no longer touch the working directory on disk; a build carrying no helper refuses a step given a secret.
 
 ## v0.2.3, 2026-09-26
 

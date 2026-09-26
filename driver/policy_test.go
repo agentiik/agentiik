@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agentiik/agentiik/internal/dockertest"
 )
 
 // The zero value is the floor. This is the test the enumeration exists for: a Policy
@@ -91,7 +93,7 @@ nproc = { soft = 400, hard = 500 }
 		read any
 	}{
 		{"require_userns_remap", p.RequireUsernsRemap.Lifted(), p.RequireUsernsRemap},
-		{"secrets_dir", p.SecretsDir == "/run/agentiik/secrets", p.SecretsDir},
+		{"secrets_dir", p.SecretsDirSkipped == "/run/agentiik/secrets", p.SecretsDirSkipped},
 		{"stop_grace", p.StopGrace == 30*time.Second, p.StopGrace},
 		{"helper", p.Helper == "/usr/local/lib/agentiik/agk-helper", p.Helper},
 		{"seccomp_profile", p.Seccomp == `{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}`, p.Seccomp},
@@ -135,7 +137,7 @@ func TestLoadPolicyKeepsTheDefaultsOfWhatItDoesNotWrite(t *testing.T) {
 	if p.RequireUsernsRemap.Lifted() {
 		t.Fatalf("a file that says nothing about the floor lifted it")
 	}
-	if p.PidsLimit != want.PidsLimit || p.Ulimits != want.Ulimits || p.StopGrace != want.StopGrace || p.TmpSize != want.TmpSize || p.SecretsDir != want.SecretsDir || p.LogMaxBytes != want.LogMaxBytes {
+	if p.PidsLimit != want.PidsLimit || p.Ulimits != want.Ulimits || p.StopGrace != want.StopGrace || p.TmpSize != want.TmpSize || p.SecretsDirSkipped != "" || p.LogMaxBytes != want.LogMaxBytes {
 		t.Fatalf("one line moved more than its setting: %+v", p)
 	}
 }
@@ -327,8 +329,6 @@ func TestLoadPolicyRefusesAValueOutsideItsSetting(t *testing.T) {
 		body string
 		want string
 	}{
-		{"secrets_dir = \"shm\"\n", `secrets_dir is "shm"`},
-		{"secrets_dir = \"\"\n", `secrets_dir is ""`},
 		{"helper = \"bin/agk\"\n", `helper is "bin/agk"`},
 		{"stop_grace = \"1500ms\"\n", `stop_grace is "1500ms"`},
 		{"stop_grace = \"0s\"\n", `stop_grace is "0s"`},
@@ -582,4 +582,39 @@ func writePolicyFile(t *testing.T, body string) string {
 		t.Fatalf("writing %s: %s", path, err)
 	}
 	return path
+}
+
+// secrets_dir named the host tmpfs a runner once wrote secret values on, and a task's values
+// are on a tmpfs volume of its own now. A file written for the version before this one still
+// starts its runner, and the runner says once that the line can go, naming the file.
+func TestASecretsDirIsReadAndSaidToBeUnused(t *testing.T) {
+	path := writePolicyFile(t, "require_userns_remap = false\nsecrets_dir = \"/run/agentiik/secrets\"\n")
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("a file naming a secrets_dir was refused: %s", err)
+	}
+	if p.SecretsDirSkipped != "/run/agentiik/secrets" {
+		t.Fatalf("the secrets_dir was read as %q, and it is said to be unused by its path", p.SecretsDirSkipped)
+	}
+
+	daemon, err := dockertest.NewDaemon()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	var said []string
+	d, err := New(Config{Socket: daemon.Socket(), Policy: p, WorkRoot: t.TempDir(), Host: holding(0), Announce: func(s string) { said = append(said, s) }})
+	if err != nil {
+		t.Fatalf("a runner whose file names a secrets_dir was refused: %s", err)
+	}
+	d.Close()
+	n := 0
+	for _, s := range said {
+		if strings.Contains(s, path+" names a secrets_dir") && strings.Contains(s, "the line can go") && strings.Contains(s, "/run/agentiik/secrets/agentiik") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the unused secrets_dir was said %d times: %v", n, said)
+	}
 }

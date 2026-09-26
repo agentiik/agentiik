@@ -61,8 +61,8 @@
 //
 // The six the runner section names, GET /containers/{id}/json, POST
 // /containers/{id}/stop, GET /containers/json, GET /containers/{id}/archive, GET /images
-// /{name}/json, POST /images/create, GET /containers/{id}/stats, the network calls, and
-// GET /events.
+// /{name}/json, POST /images/create, GET /containers/{id}/stats, the network and volume
+// calls, and GET /events.
 //
 //	GET  /_ping                          negotiate the version, once per daemon
 //	GET  /info                           SecurityOptions, for userns and the profiles applied
@@ -73,7 +73,7 @@
 //	POST /containers/{id}/attach         hijacked, which is how the envelope reaches stdin
 //	POST /containers/{id}/wait           opened before start, condition=next-exit
 //	GET  /containers/{id}/logs           after the exit, which is why AutoRemove is false
-//	GET  /containers/{id}/archive        /agk/brick.yaml out of the image, /agk/out back
+//	GET  /containers/{id}/archive        /agk/brick.yaml out, /agk/out and /agk/secrets back
 //	GET  /containers/{id}/json           the backstop, and State.StartedAt and FinishedAt
 //	GET  /containers/{id}/stats          sampled while it runs, for the usage block
 //	GET  /containers/json                adoption and the startup sweep, filtered by label
@@ -82,6 +82,9 @@
 //	DELETE /containers/{id}              remove
 //	POST /networks/create                a network per task
 //	DELETE /networks/{id}                remove it with the container
+//	POST /volumes/create                 a tmpfs volume per task given a secret
+//	GET  /volumes                        the startup sweep, filtered by label
+//	DELETE /volumes/{name}               remove it with the container
 //	GET  /events                         a JSON stream, resumed from since
 //
 // # Three daemon behaviours handled here
@@ -119,6 +122,7 @@
 //	events.go     the event stream as newline-delimited JSON, resumed from since
 //	stats.go      a container's statistics, one sample now or a stream of them
 //	network.go    create, list and remove
+//	volume.go     create, list and remove
 //	types.go      the Engine API shapes with their wire json tags
 //	errors.go     Error, and the three questions a caller asks of one
 //

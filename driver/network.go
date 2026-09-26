@@ -221,6 +221,9 @@ const sweepAge = 2 * time.Minute
 // that never removed any. A runner calls it once, when it starts and before it takes any
 // work.
 //
+// The holders and the secrets volumes such a runner left go the same way, sweepSecrets says
+// how.
+//
 // A network is this driver's by its task label and its name, and it is removed only where
 // no container carries its task's label, in any state, this process holds no task of that
 // name, and it is older than sweepAge: a container a later delivery will adopt still needs
@@ -260,7 +263,7 @@ func (d *Docker) Sweep(ctx context.Context) error {
 	if len(removed) > 0 {
 		d.say("an earlier process left task networks on this daemon that no container is on, and they were removed: " + strings.Join(removed, ", "))
 	}
-	return nil
+	return d.sweepSecrets(ctx)
 }
 
 // networkName is what a task's own network is called: derived from the task identifier

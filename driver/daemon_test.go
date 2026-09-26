@@ -63,9 +63,6 @@ func TestAPolicyNobodyFilledInStillRefuses(t *testing.T) {
 func TestALiftedFloorTakesWorkAndSaysSoOnce(t *testing.T) {
 	p := DefaultPolicy()
 	p.RequireUsernsRemap = RemapLifted
-	// Named so that this machine has somewhere to put a secret and the only sentence
-	// under test is the one about the floor.
-	p.SecretsDir = "/dev/shm"
 
 	floor, err := readUsernsFloor(plain(), p)
 	if err != nil {
@@ -116,7 +113,6 @@ func TestALiftedFloorTakesWorkAndSaysSoOnce(t *testing.T) {
 func TestADaemonThatRemapsSaysNothing(t *testing.T) {
 	p := DefaultPolicy()
 	p.RequireUsernsRemap = RemapLifted
-	p.SecretsDir = "/dev/shm"
 
 	floor, err := readUsernsFloor(remapped(), p)
 	if err != nil {
@@ -126,59 +122,6 @@ func TestADaemonThatRemapsSaysNothing(t *testing.T) {
 	floor.announce(p, func(line string) { said = append(said, line) })
 	if len(said) != 0 {
 		t.Fatalf("a hardened daemon announced %v", said)
-	}
-}
-
-// A secret is meant to be mounted on tmpfs, and a platform with none writes the value to
-// a disk instead. That is a difference between what the documentation promises and what
-// this machine can do, so it is said, once, rather than left to be discovered.
-func TestAPlatformWithNoTmpfsSaysWhereASecretLands(t *testing.T) {
-	p := DefaultPolicy()
-	p.SecretsDir = ""
-
-	floor, err := readUsernsFloor(remapped(), p)
-	if err != nil {
-		t.Fatalf("readUsernsFloor: %s", err)
-	}
-	var said []string
-	say := func(line string) { said = append(said, line) }
-	floor.announceSecrets(p, "charge", say)
-	floor.announceSecrets(p, "charge", say)
-	if len(said) != 1 {
-		t.Fatalf("the driver said it %d times: %v", len(said), said)
-	}
-	for _, want := range []string{"tmpfs", "working directory", PolicyPath} {
-		if !strings.Contains(said[0], want) {
-			t.Fatalf("the announcement does not name %q: %s", want, said[0])
-		}
-	}
-}
-
-// Opening a daemon is not a reason to hear about secrets. agk validate opens one to read
-// the manifests of the images a workflow names, and a run whose steps declare no secret
-// writes no value either; a sentence printed on both is one spent where it does not apply.
-func TestOpeningADaemonSaysNothingAboutSecrets(t *testing.T) {
-	p := DefaultPolicy()
-	p.RequireUsernsRemap = RemapLifted
-	p.SecretsDir = ""
-
-	floor, err := readUsernsFloor(plain(), p)
-	if err != nil {
-		t.Fatalf("readUsernsFloor: %s", err)
-	}
-	var said []string
-	floor.announce(p, func(line string) { said = append(said, line) })
-	if len(said) != 1 {
-		t.Fatalf("opening the daemon said %d things: %v", len(said), said)
-	}
-	if strings.Contains(said[0], "tmpfs") {
-		t.Fatalf("opening the daemon named a secret's landing place: %s", said[0])
-	}
-
-	// And the sentence is still there for the task that earns it.
-	floor.announceSecrets(p, "charge", func(line string) { said = append(said, line) })
-	if len(said) != 2 || !strings.Contains(said[1], "tmpfs") {
-		t.Fatalf("the first task with a secret was told %v", said[1:])
 	}
 }
 
@@ -224,7 +167,7 @@ func TestPreparingAWorkingDirectoryOnADaemonThatDoesNotRemapDoesNothing(t *testi
 		t.Fatalf("readUsernsFloor: %s", err)
 	}
 
-	w, err := newWorkdir(t.TempDir(), shardedTask, "")
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -419,7 +362,6 @@ func TestNewRefusesADaemonWithoutSeccompUnlessTheFloorIsLifted(t *testing.T) {
 
 	p := DefaultPolicy()
 	p.RequireSeccomp = SeccompLifted
-	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	var said []string
 	d, err = New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
 	if err != nil {
@@ -453,7 +395,6 @@ func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPolicy: %s", err)
 	}
-	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir()})
 	if err == nil {
 		d.Close()
@@ -470,7 +411,6 @@ func TestNewRefusesACPUCapAboveTheDaemonsCores(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadPolicy: %s", err)
 		}
-		p.RequireSecretsTmpfs = SecretsTmpfsLifted
 		d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir()})
 		if err != nil {
 			t.Fatalf("a cap of %s on a daemon with 2 CPUs was refused: %s", cores, err)
@@ -493,7 +433,6 @@ func TestNewSaysTheHooksDoNotRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPolicy: %s", err)
 	}
-	p.RequireSecretsTmpfs = SecretsTmpfsLifted
 	var said []string
 	d, err := New(Config{Socket: daemon.Socket(), Host: host, Policy: p, WorkRoot: t.TempDir(), Announce: func(s string) { said = append(said, s) }})
 	if err != nil {

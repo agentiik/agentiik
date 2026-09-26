@@ -23,9 +23,9 @@ const DefaultDir = ".agk"
 // The modes the layout is laid down with.
 //
 // Everything but the work root is a run's own record, readable by the person who started
-// it. The work root is private, because a platform with no tmpfs has the driver write a
-// task's secret values into that task's working directory, and the mode of the parents is
-// the whole of what protects a value that is readable by design. That mode is only the
+// it. The work root is private, because a task's working directory holds what that task was
+// given, its envelopes, its parameters and its run context, and the mode of the parents is
+// the whole of what protects files that are readable by design. That mode is only the
 // whole of it because the work root sits outside the tree, which WorkRoot says why of: a
 // bind mount is not obliged to carry a host mode into a container, and on Docker Desktop
 // it does not.
@@ -91,10 +91,9 @@ func (l Layout) Bin() string { return filepath.Join(l.Root, "bin") }
 // It is the one path of this layout that is not under Root, and that is containment rather
 // than tidiness. Root defaults to sitting inside the tree the workflow sits in, and that
 // tree is bound read-only at /agk/repo in every container of the run, so everything under
-// Root is readable by every task while it runs. A task's working directory is where the
-// driver writes that task's secret values on a platform with no tmpfs, announced when the
-// session opens. Under Root, a step that declares no secret could therefore read a value
-// another step was given, at /agk/repo/.agk/work/<run>/<step>/<attempt>/secrets/<name>,
+// Root is readable by every task while it runs. A task's working directory holds what the
+// driver gave that task, its envelopes and its parameters. Under Root, a step could
+// therefore read what another step was given, at /agk/repo/.agk/work/<run>/<step>/<attempt>,
 // whatever the mode of the parents says: a bind mount is not obliged to carry a host mode
 // into a container, and on Docker Desktop a container reads a 0700 directory of the host
 // as its own. The work root is also the one thing here nobody is meant to read, being

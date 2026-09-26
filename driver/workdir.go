@@ -1,7 +1,6 @@
 package driver
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -28,38 +27,24 @@ import (
 const (
 	workdirMode = 0o700
 	outMode     = 0o777
-	// A secret value is read by the container's account, which is not the account
-	// the file was written by, so it is readable and never writable. It sits under
-	// the same private parents, and where the platform has a tmpfs it never reaches
-	// a disk at all.
-	secretMode = 0o444
 )
 
 // workdir is one task's working directory on the host: what the mounts are bound from,
 // "created fresh, owned by an unprivileged account, and removed with the container, so
 // no residue of one namespace survives into the next task on that host".
 //
-// Secrets sits apart from the rest because it is a different filesystem where the
-// platform has one. Everything else is one tree, so removing the task is removing a
-// directory.
+// It is one tree, so removing the task is removing a directory. A task's secret values are
+// not in it: they are on a tmpfs volume of the task's own, which no directory of the host
+// names.
 type workdir struct {
-	Root    string
-	In      string
-	Out     string
-	Run     string
-	Params  string
-	Secrets string
-
-	// secretsOwn says whether Secrets is a directory of this task's own that has to
-	// be removed separately, which it is exactly when it is not inside Root.
-	secretsOwn bool
+	Root   string
+	In     string
+	Out    string
+	Run    string
+	Params string
 }
 
 // newWorkdir creates the directory of one task, fresh.
-//
-// secretsDir is Policy.SecretsDir, the filesystem a secret value may be written on
-// without touching a disk. Empty puts the values under the task's own directory, which is
-// the platform that has no tmpfs and the case the driver announces.
 //
 // The path is the task's identity spelled as directories, run/step/attempt and the shard
 // where there is one, rather than the identifier with its separators replaced. The
@@ -71,29 +56,14 @@ type workdir struct {
 // and creating the container is removed rather than reused, because a half prepared
 // input is worse than no input: the brick would read an envelope from the attempt before
 // this one and never know.
-func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error) {
-	w, err := workdirFor(root, id, secretsDir)
+func newWorkdir(root string, id agk.TaskID) (*workdir, error) {
+	w, err := workdirFor(root, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// The one directory this runner owns under Policy.SecretsDir is claimed before
-	// anything is removed or created beneath it, because everything beneath it is
-	// reached through it and a link left under that name would be followed.
-	if w.secretsOwn {
-		base := filepath.Join(secretsDir, secretsBase)
-		if err := ownedDir(base); err != nil {
-			return nil, fmt.Errorf("driver: task %s: %s is where this runner writes secret values, and %s is shared with everything else on this host: %w", id, base, secretsDir, err)
-		}
-	}
-
 	if err := os.RemoveAll(w.Root); err != nil {
 		return nil, fmt.Errorf("driver: task %s: working directory %s: %w", id, w.Root, err)
-	}
-	if w.secretsOwn {
-		if err := os.RemoveAll(w.Secrets); err != nil {
-			return nil, fmt.Errorf("driver: task %s: secrets directory %s: %w", id, w.Secrets, err)
-		}
 	}
 
 	// A directory that could not be prepared is taken away again, and what could not
@@ -108,7 +78,7 @@ func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 
 	// The parents are created with the work root's own mode, private to the runner,
 	// so that the one permissive directory below sits behind them.
-	for _, dir := range []string{w.Root, w.In, w.Secrets} {
+	for _, dir := range []string{w.Root, w.In} {
 		if err := os.MkdirAll(dir, workdirMode); err != nil {
 			return abandon(dir, err)
 		}
@@ -136,7 +106,7 @@ func newWorkdir(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 func (d *Docker) freshWorkdir(id agk.TaskID) (*workdir, error) {
 	d.keys.mu.Lock()
 	defer d.keys.mu.Unlock()
-	return newWorkdir(d.cfg.WorkRoot, id, d.cfg.Policy.SecretsDir)
+	return newWorkdir(d.cfg.WorkRoot, id)
 }
 
 // workdirFor names the directory of one task without creating or removing anything.
@@ -147,7 +117,7 @@ func (d *Docker) freshWorkdir(id agk.TaskID) (*workdir, error) {
 // account, and removed with the container, so no residue of one namespace survives into
 // the next task on that host". The path is derived from the task identifier and never
 // minted, so the directory a second delivery names is the directory the first prepared.
-func workdirFor(root string, id agk.TaskID, secretsDir string) (*workdir, error) {
+func workdirFor(root string, id agk.TaskID) (*workdir, error) {
 	if root == "" {
 		return nil, fmt.Errorf("driver: no work root: a task's working directory is created under one")
 	}
@@ -161,57 +131,7 @@ func workdirFor(root string, id agk.TaskID, secretsDir string) (*workdir, error)
 	w.Out = filepath.Join(w.Root, "out")
 	w.Run = filepath.Join(w.Root, "run.json")
 	w.Params = filepath.Join(w.Root, "params.json")
-	if secretsDir != "" {
-		w.Secrets = filepath.Join(secretsDir, secretsBase, rel)
-		w.secretsOwn = true
-	} else {
-		w.Secrets = filepath.Join(w.Root, "secrets")
-	}
 	return w, nil
-}
-
-// secretsBase is the one directory this runner owns under Policy.SecretsDir. Every task's
-// values live under it, so it is the single place the ownership of that tree is decided.
-const secretsBase = "agentiik"
-
-// ownedDir makes one directory this process alone may write to, under a path that is
-// shared with everything else on the machine.
-//
-// Policy.SecretsDir is /dev/shm on Linux, and /dev/shm is mode 1777: anything on the host
-// can get there first. A link left under that name would be followed and a secret value
-// written through it, and a directory left group or world writable would leave every
-// value beneath it reachable, since the value itself is readable by design and the mode
-// of its parents is the whole of what protects it. So the directory is created rather
-// than assumed, and one that is already there is checked rather than trusted.
-func ownedDir(path string) error {
-	err := os.Mkdir(path, workdirMode)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	// Lstat and not Stat: a link left under this name is the thing being refused, and
-	// Stat would report whatever it points at rather than the link itself.
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is %s and not a directory of this runner's own", path, modeName(info.Mode()))
-	}
-	// The owner is read rather than left to the chmod below to refuse. A runner on a
-	// remapped daemon holds CAP_FOWNER, and a chmod by a process holding it succeeds on
-	// a directory anybody owns, so a directory made first by another account on the
-	// host would be closed and kept, with that account still its owner and free to open
-	// it again once values are written beneath it.
-	if uid, ok := ownerOf(info); ok && uid != os.Geteuid() {
-		return fmt.Errorf("%s belongs to uid %d, and this runner is uid %d", path, uid, os.Geteuid())
-	}
-	// A chmod closes a directory this runner left open, and fails outright where this
-	// process is not the account that owns it and holds nothing that lets it, which is
-	// the same refusal by another route on a platform whose owner is not read above.
-	return os.Chmod(path, workdirMode)
 }
 
 // modeName says in one word what something that is not a directory is, so that a refusal
@@ -259,30 +179,18 @@ func taskPath(id agk.TaskID) (string, error) {
 // Chowning to a uid that is not your own is a privileged operation, so a runner that
 // finds a remapped daemon is a runner that has to be able to do it.
 func (w *workdir) own(uid, gid int) error {
-	for _, root := range w.trees() {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			// Lchown and not Chown: a symlink in the tree is followed by the
-			// second, which would take the chown outside the directory it is
-			// meant for.
-			return os.Lchown(path, uid, gid)
-		})
+	err := filepath.WalkDir(w.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("driver: the working directory %s could not be given to uid %d and gid %d, which is the base of this daemon's remapped range: %w. A runner on a daemon with userns-remap prepares each task's directory inside that range, and the range itself is the one /etc/subuid gives the daemon's account. A runner that is not root does it with CAP_CHOWN, which its unit grants with AmbientCapabilities", root, uid, gid, err)
+			return err
 		}
+		// Lchown and not Chown: a symlink in the tree is followed by the second, which
+		// would take the chown outside the directory it is meant for.
+		return os.Lchown(path, uid, gid)
+	})
+	if err != nil {
+		return fmt.Errorf("driver: the working directory %s could not be given to uid %d and gid %d, which is the base of this daemon's remapped range: %w. A runner on a daemon with userns-remap prepares each task's directory inside that range, and the range itself is the one /etc/subuid gives the daemon's account. A runner that is not root does it with CAP_CHOWN, which its unit grants with AmbientCapabilities", w.Root, uid, gid, err)
 	}
 	return nil
-}
-
-// trees are the directories that hold the whole of one task on the host: its working
-// directory, and its secrets directory where that is not inside the first.
-func (w *workdir) trees() []string {
-	if w.secretsOwn {
-		return []string{w.Root, w.Secrets}
-	}
-	return []string{w.Root}
 }
 
 // remove takes the task's directory away, which is what "removed with the container"
@@ -292,24 +200,15 @@ func (w *workdir) trees() []string {
 // It is called on every path out of a task, and what it answers never changes what became
 // of the task: the container ran or it did not, whatever is left here. What is left is
 // still the one thing the directory exists not to leave, "residue of one namespace" that
-// survives "into the next task on that host", secret values among it, so a caller says so
-// rather than dropping it. A brick creates files under /agk/out as an account of its own,
-// in directories it may make unreadable, and a runner that cannot remove them is the case
-// this answers for. Every tree is attempted whatever became of the one before it, so that a
-// working directory that could not be removed does not keep the secret values with it.
+// survives "into the next task on that host", so a caller says so rather than dropping it.
+// A brick creates files under /agk/out as an account of its own, in directories it may make
+// unreadable, and a runner that cannot remove them is the case this answers for.
 func (w *workdir) remove() error {
 	if w == nil {
 		return nil
 	}
-	var left []error
-	for _, tree := range w.trees() {
-		// RemoveAll names the path it stopped at, which is what a person goes and
-		// looks at.
-		if err := os.RemoveAll(tree); err != nil {
-			left = append(left, err)
-		}
-	}
-	return errors.Join(left...)
+	// RemoveAll names the path it stopped at, which is what a person goes and looks at.
+	return os.RemoveAll(w.Root)
 }
 
 // emptyKept is how long a run, step or attempt directory a task left empty stays before a
@@ -328,8 +227,8 @@ func (w *workdir) remove() error {
 // anything a host is worse for: what is left is one directory per step run in the last two.
 const emptyKept = time.Hour
 
-// sweep takes away the run, step and attempt directories on the work root, and on the secrets
-// directory where it is apart from it, that tasks left empty before cutoff.
+// sweep takes away the run, step and attempt directories on the work root that tasks left
+// empty before cutoff.
 //
 // It is called with the record's lock held, which is the lock a task's working directory is
 // created under, and that is what makes it safe. MkdirAll finds a parent there and then
@@ -352,48 +251,18 @@ const emptyKept = time.Hour
 // it last changed as the walk found it, before a child the same sweep took away changed it
 // again, so that a run whose last step went empty an hour ago goes in the same sweep as
 // the step.
-//
-// A secrets directory stays while the task directory of the same name is on the work root.
-// Every task has one, and it is empty for a task given no secret, so emptiness alone does
-// not tell a parent from a task that is still running; the working directory, which is
-// never empty while its task runs, does.
-//
-// The secrets directory is swept only while it is still this runner's alone, as ownedDir
-// leaves it. It sits on a filesystem every account on the host can write to, and one that
-// somebody else made or opened could have a link swapped in under a path the walk found,
-// between the walk and the removal, which would take away an empty directory of that
-// name wherever the link points. A task is refused its directory there by ownedDir, and
-// the sweep leaves it alone for the same reason.
-func sweep(root, secretsDir string, cutoff time.Time) {
+func sweep(root string, cutoff time.Time) {
 	if root == "" {
 		return
 	}
-	sweepTree(root, root, cutoff, nil)
-	base := filepath.Join(secretsDir, secretsBase)
-	if secretsDir != "" && stillOwned(base) {
-		sweepTree(root, base, cutoff, func(rel string) bool {
-			_, err := os.Lstat(filepath.Join(root, rel))
-			return !errors.Is(err, fs.ErrNotExist)
-		})
-	}
+	sweepTree(root, cutoff)
 }
 
-// stillOwned says whether a directory is as ownedDir leaves it: a directory and not a link,
-// belonging to this process's account where the platform says, and closed to every other.
-func stillOwned(path string) bool {
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return false
-	}
-	uid, ok := ownerOf(info)
-	return !ok || uid == os.Geteuid()
-}
-
-// sweepTree is sweep over the tree under top, whose runs are the ones the record under root
-// has. held says a directory is to stay whatever it holds.
-func sweepTree(root, top string, cutoff time.Time, held func(rel string) bool) {
-	type empty struct{ path, rel string }
-	var found []empty
+// sweepTree is sweep over the tree under the work root, whose runs are the ones the record
+// under it has.
+func sweepTree(root string, cutoff time.Time) {
+	top := root
+	var found []string
 	filepath.WalkDir(top, func(path string, d fs.DirEntry, err error) error {
 		if path == top {
 			return err
@@ -407,7 +276,7 @@ func sweepTree(root, top string, cutoff time.Time, held func(rel string) bool) {
 			return filepath.SkipDir
 		}
 		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
-			found = append(found, empty{path, rel})
+			found = append(found, path)
 		}
 		if len(parts) == 4 {
 			// A shard's own directory: what is below it is the task's.
@@ -417,10 +286,7 @@ func sweepTree(root, top string, cutoff time.Time, held func(rel string) bool) {
 	})
 	// Deepest first, so that a step goes after the attempts that emptied it.
 	for i := len(found) - 1; i >= 0; i-- {
-		if held != nil && held(found[i].rel) {
-			continue
-		}
-		os.Remove(found[i].path)
+		os.Remove(found[i])
 	}
 }
 

@@ -101,11 +101,10 @@ func brickTest(ctx context.Context, e Env, args []string) int {
 	policy := driver.DefaultPolicy()
 	// The laptop and the CI runner this is typed on are both daemons without the
 	// remapping, and the driver says once what that gives up. The same holds for a
-	// daemon without seccomp, for a secrets directory that is not a tmpfs of the
-	// runner's own, and for a brick named by its tag: a brick test is not a runner.
+	// daemon without seccomp and for a brick named by its tag: a brick test is not a
+	// runner.
 	policy.RequireUsernsRemap = driver.RemapLifted
 	policy.RequireSeccomp = driver.SeccompLifted
-	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
 	policy.RequireDigest = driver.DigestLifted
 
 	// The store is opened for the brick's own name, which is a namespace of one brick: an

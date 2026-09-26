@@ -41,8 +41,6 @@ func realDriver(t *testing.T, images ...string) (*Docker, string) {
 	// Docker Desktop does not offer user namespace remapping, and this is the machine
 	// the floor is lifted for.
 	policy.RequireUsernsRemap = RemapLifted
-	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
 	return realDriverWith(t, policy, images...)
 }
@@ -94,6 +92,37 @@ func realDriverWith(t *testing.T, policy Policy, images ...string) (*Docker, str
 	}
 	t.Cleanup(func() { d.Close() })
 	return d, image
+}
+
+// realHelper builds the static helper for the platform the daemon of this machine runs
+// containers on, as the release builds it, and answers with its path: it is what fills a
+// task's secrets volume, so a real test that gives a task a secret needs it. A job that runs
+// the tests where no toolchain is on the PATH builds it first and names it in
+// AGENTIIK_TEST_HELPER.
+func realHelper(t *testing.T) string {
+	t.Helper()
+	if built := os.Getenv("AGENTIIK_TEST_HELPER"); built != "" {
+		return built
+	}
+	socket, ok := dockertest.Socket()
+	if !ok {
+		dockertest.Unavailable(t, "no Docker daemon on this machine")
+	}
+	daemon, err := Probe(t.Context(), socket)
+	if err != nil {
+		dockertest.Unavailable(t, "the daemon at %s did not answer: %v", socket, err)
+	}
+	arch := map[string]string{"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[daemon.Architecture]
+	if arch == "" {
+		t.Skipf("the daemon reports the architecture %q, and the helper is built for amd64 and arm64", daemon.Architecture)
+	}
+	out := filepath.Join(t.TempDir(), "agk")
+	build := exec.Command("go", "build", "-trimpath", "-o", out, "github.com/agentiik/agentiik/cmd/agk-helper")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the helper for linux/%s: %s\n%s", arch, err, b)
+	}
+	return out
 }
 
 // TestARealContainerRunsAScriptStepEndToEnd is the whole of one task against the daemon:
@@ -361,8 +390,6 @@ seccomp_profile = "`+profile+`"
 	if err != nil {
 		t.Fatalf("LoadPolicy: %s", err)
 	}
-	policy.SecretsDir = ""
-	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
 	d, image := realDriverWith(t, policy)
 
 	task := graph.Task{

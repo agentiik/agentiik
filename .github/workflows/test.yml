@@ -107,8 +107,8 @@ jobs:
 
   # A runner as the page installs one, which the job above cannot be: its daemon does not
   # remap user namespaces, and it runs as an account that holds no capability. Here the
-  # daemon is set to userns-remap, the secret values have a tmpfs mounted noexec,nosuid,nodev,
-  # and the tests run as the runner's own account holding CAP_CHOWN, CAP_FOWNER and
+  # daemon is set to userns-remap, the static helper that fills a task's secrets volume is
+  # built for it, and the tests run as the runner's own account holding CAP_CHOWN, CAP_FOWNER and
   # CAP_DAC_OVERRIDE and nothing else, which is what the systemd unit's AmbientCapabilities
   # and CapabilityBoundingSet give the agent. Only the tests written for that host run here;
   # the rest are the job above's.
@@ -134,12 +134,10 @@ jobs:
           docker pull alpine:3.21
           printf 'FROM alpine:3.21\nUSER 65532:65532\n' | docker build -t agentiik-test/nonroot:3.21 -
 
-      # The tmpfs the runner writes secret values on, with the flags the floor asks for,
-      # owned by the account the tests run as.
-      - name: secrets tmpfs
-        run: |
-          sudo mkdir -p /run/agentiik/secrets
-          sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=0700,uid=$(id -u),gid=$(id -g) tmpfs /run/agentiik/secrets
+      # The helper that fills a task's secrets volume, built here as the account with the
+      # toolchain setup-go installed, since sudo leaves that toolchain off the tests' PATH.
+      - name: helper
+        run: CGO_ENABLED=0 GOOS=linux go build -trimpath -o "$RUNNER_TEMP/agk" ./cmd/agk-helper
 
       # The test binary is built as the account itself, so that the toolchain and its cache
       # are the ones setup-go installed, and then run under setpriv as that same account with
@@ -152,8 +150,8 @@ jobs:
             --inh-caps=-all,$three --ambient-caps=-all,$three --bounding-set=-all,$three \
             env HOME="$HOME" TMPDIR=/tmp DOCKER_HOST=unix:///var/run/docker.sock \
               AGENTIIK_TEST_REQUIRE_DOCKER=1 AGENTIIK_TEST_REQUIRE_USERNS=1 \
-              AGENTIIK_TEST_SECRETS_DIR=/run/agentiik/secrets \
-              sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run "RealRemappedDaemon|RealRunnerHost"' "$RUNNER_TEMP/driver.test"
+              AGENTIIK_TEST_HELPER="$RUNNER_TEMP/agk" \
+              sh -c 'grep ^Cap /proc/self/status && cd driver && "$0" -test.v -test.count=1 -test.run "RealRemappedDaemon"' "$RUNNER_TEMP/driver.test"
 
   # The runner's image, as the page's Compose sample runs it, for both architectures a runner host
   # is: arm64 under QEMU, since a hosted runner is amd64. Each image runs version, and serve, which

@@ -44,7 +44,7 @@ func patience(t *testing.T, d time.Duration) {
 // Given a join token and no identity, serve joins, writing what join writes, then serves as the
 // runner it joined as.
 func TestServeGivenAJoinTokenAndNoIdentityJoinsThenServes(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.set(runner.Labels, "zone=dmz")
 	h.serving(t)
@@ -69,7 +69,7 @@ func TestServeGivenAJoinTokenAndNoIdentityJoinsThenServes(t *testing.T) {
 // A join token given as a value joins as one in a file does, which is how a runner on another
 // machine is given one with nothing written on it first.
 func TestServeJoinsWithAJoinTokenGivenAsAValue(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.set(runner.JoinTokenFile, "")
 	h.set(runner.JoinToken, aToken)
@@ -82,7 +82,7 @@ func TestServeJoinsWithAJoinTokenGivenAsAValue(t *testing.T) {
 // A host that has joined, whose environment claims what it joined with, keeps its identity and
 // spends nothing, whatever join token it is given.
 func TestServeWithAnIdentityItsEnvironmentAgreesWithDoesNotJoin(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.set(runner.API, h.api)
 	h.set(runner.Labels, "zone=dmz,arch=amd64")
 	h.withTokenFile(t)
@@ -100,7 +100,7 @@ func TestServeWithAnIdentityItsEnvironmentAgreesWithDoesNotJoin(t *testing.T) {
 // No setting is read only at the first start: a runner whose environment claims other labels than
 // it joined with joins again with its join token, and serves as the runner that claims them.
 func TestServeJoinsAgainWhenItsEnvironmentClaimsOtherwiseThanItJoinedWith(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	key, err := os.ReadFile(h.e.KeyFile)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestServeJoinsAgainWhenItsEnvironmentClaimsOtherwiseThanItJoinedWith(t *tes
 // With no join token, a runner whose environment names another API than it joined with refuses to
 // serve with the address it joined with, and says a join token would join it again.
 func TestServeWhoseEnvironmentMovedOnWithoutAJoinTokenRefusesAndSaysWhatWouldJoinIt(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.set(runner.API, "https://elsewhere.example.com")
 	said := h.refused(t)
 	for _, want := range []string{runner.API, runner.JoinToken, runner.JoinTokenFile} {
@@ -155,7 +155,7 @@ func TestServeWhoseEnvironmentMovedOnWithoutAJoinTokenRefusesAndSaysWhatWouldJoi
 
 // A host that never joined and has no join token is told both ways to join.
 func TestServeWithNoIdentityAndNoJoinTokenSaysHowToJoin(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.set(runner.JoinTokenFile, "")
 	said := h.refused(t)
@@ -168,7 +168,7 @@ func TestServeWithNoIdentityAndNoJoinTokenSaysHowToJoin(t *testing.T) {
 
 // An API that is not up yet is waited for, and the join asked again.
 func TestServeWaitsForAnAPIThatDoesNotAnswerItsJoinYet(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.unanswered.Store(1)
 	h.serving(t)
@@ -184,7 +184,7 @@ func TestServeWaitsForAnAPIThatDoesNotAnswerItsJoinYet(t *testing.T) {
 // to look.
 func TestServeGivesUpOnAnAPIThatNeverAnswersItsJoin(t *testing.T) {
 	patience(t, 1500*time.Millisecond)
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.unanswered.Store(1000)
 	if code := run(context.Background(), h.e, []string{"serve"}); code != exitRefused {
@@ -205,7 +205,7 @@ func TestServeGivesUpOnAnAPIThatNeverAnswersItsJoin(t *testing.T) {
 
 // A join token the API refuses is refused on the first try: asking again gets the same answer.
 func TestAJoinTokenTheAPIRefusesRefusesTheStartAtOnce(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.joinStatus.Store(401)
 	if code := run(context.Background(), h.e, []string{"serve"}); code != exitRefused {
@@ -228,7 +228,7 @@ func TestNoJoinTokenIsSpentOnAStartRefusedAnyway(t *testing.T) {
 
 // A join token that cannot be read is refused naming the variable, and never repeated.
 func TestAJoinTokenThatCannotBeUsedRefusesTheStart(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	file, _ := h.e.Lookup(runner.JoinTokenFile)
 	if err := os.Chmod(file, 0o644); err != nil {
@@ -247,7 +247,7 @@ func TestAJoinTokenThatCannotBeUsedRefusesTheStart(t *testing.T) {
 // from the runner.env it replaces: kept, it would say otherwise than the environment at the next
 // start, and join again at every one.
 func TestARunnerJoiningAgainClaimsNoneOfWhatItsEnvironmentLeavesUnset(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	text, err := os.ReadFile(h.e.EnvFile)
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestARunnerJoiningAgainClaimsNoneOfWhatItsEnvironmentLeavesUnset(t *testing
 // join token: neither joins again for it nor refuses it.
 func TestAnAddressWithATrailingSlashIsTheOneTheRunnerJoinedWith(t *testing.T) {
 	for _, token := range []bool{false, true} {
-		h := newHost(t, daemon(t, true), secretsTmpfs)
+		h := newHost(t, daemon(t, true), "")
 		h.set(runner.API, h.api+"/")
 		h.set(runner.Labels, "zone=dmz,arch=amd64")
 		if token {
@@ -288,7 +288,7 @@ func TestAnAddressWithATrailingSlashIsTheOneTheRunnerJoinedWith(t *testing.T) {
 // An identity set in the environment, which serve refuses, refuses the join before the token is
 // spent, rather than after.
 func TestAnIdentityInTheEnvironmentSpendsNoJoinToken(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.unjoined(t)
 	h.set(runner.RunnerID, "runner-dmz-09")
 	if said := h.refused(t); !strings.Contains(said, runner.RunnerID+" is set in the environment") {
@@ -307,7 +307,7 @@ func TestAHostThatLostHalfItsIdentityJoinsAgainWithItsJoinToken(t *testing.T) {
 		"runner.env": {func(h *host) string { return h.e.EnvFile }, "holds a key and no identity"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h := newHost(t, daemon(t, true), secretsTmpfs)
+			h := newHost(t, daemon(t, true), "")
 			if err := os.Remove(c.lost(h)); err != nil {
 				t.Fatal(err)
 			}
@@ -331,7 +331,7 @@ func TestAHostThatLostHalfItsIdentityJoinsAgainWithItsJoinToken(t *testing.T) {
 // order, and serves.
 func TestLabelsInAnotherOrderAreTheOnesTheRunnerJoinedWith(t *testing.T) {
 	for _, token := range []bool{false, true} {
-		h := newHost(t, daemon(t, true), secretsTmpfs)
+		h := newHost(t, daemon(t, true), "")
 		h.set(runner.API, h.api)
 		h.set(runner.Labels, "arch=amd64,zone=dmz")
 		if token {
@@ -347,7 +347,7 @@ func TestLabelsInAnotherOrderAreTheOnesTheRunnerJoinedWith(t *testing.T) {
 // A runner given a join token is configured by its environment, and one that names no API is
 // refused, saying so, rather than joined or served with the address the file holds.
 func TestARunnerGivenAJoinTokenAndNoAPIIsRefused(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.withTokenFile(t)
 	if said := h.refused(t); !strings.Contains(said, runner.API+" is not set, and a runner given a join token") {
 		t.Errorf("the refusal does not say why:\n%s", said)

@@ -171,7 +171,7 @@ func newHost(t *testing.T, daemon *dockertest.Daemon, policy string) *host {
 		CredentialFile: filepath.Join(dir, "credential"),
 		// Where the image installs the helper, and nothing there until a test puts one.
 		HelperFile: filepath.Join(dir, "agk-helper"),
-		Host:       installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoExec: true, NoSUID: true, NoDev: true}},
+		Host:       installed{caps: ownership},
 	}
 	return h
 }
@@ -191,29 +191,20 @@ func aHostKey(t *testing.T) []byte {
 }
 
 // installed is the machine an agent installed as the page says finds, whoever runs the test:
-// the three capabilities its unit grants, a secrets directory on a tmpfs mounted
-// noexec,nosuid,nodev, and every other directory, the work root among them, on a plain disk. A
-// test takes one away to see the start refused.
+// the three capabilities its unit grants, and every directory, the work root among them, on a
+// plain disk. A test takes one away to see the start refused.
 type installed struct {
 	caps uint64
-	fs   driver.Filesystem
 	disk driver.Filesystem
 }
 
 func (m installed) Capabilities() (uint64, error) { return m.caps, nil }
-func (m installed) Filesystem(dir string) (driver.Filesystem, error) {
-	if dir == "/run/agentiik/secrets" {
-		return m.fs, nil
-	}
+func (m installed) Filesystem(string) (driver.Filesystem, error) {
 	return m.disk, nil
 }
 
 // ownership is CAP_CHOWN, CAP_DAC_OVERRIDE and CAP_FOWNER, bits 0, 1 and 3 of the kernel's sets.
 const ownership = 1<<0 | 1<<1 | 1<<3
-
-// secretsTmpfs is the line of runner.toml that names the host's secrets tmpfs, which a start
-// that is to say ready needs: without it a secret value would have nowhere to go but a disk.
-const secretsTmpfs = "secrets_dir = \"/run/agentiik/secrets\"\n"
 
 // set adds a variable to the host's environment.
 func (h *host) set(name, value string) {
@@ -342,7 +333,7 @@ func TestNoFlagLiftsTheFloor(t *testing.T) {
 }
 
 func TestRequireUsernsRemapFalseInRunnerTomlIsTheOneWayPastTheFloor(t *testing.T) {
-	h := newHost(t, daemon(t, false), "require_userns_remap = false\n"+secretsTmpfs)
+	h := newHost(t, daemon(t, false), "require_userns_remap = false\n")
 	h.serving(t)
 }
 
@@ -375,7 +366,7 @@ func TestADirectoryAsRunnerTomlRefusesTheStart(t *testing.T) {
 // before systemd is told anything, saying to join again, with the status the unit's
 // RestartPreventExitStatus= names, so that systemd does not start it again.
 func TestACredentialRefusedAtTheHeartbeatEndsTheStartSayingToJoinAgain(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.beat.Store(http.StatusUnauthorized)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -414,7 +405,7 @@ func TestARevokedRunnerHoldingNothingExitsWithTheStatusSystemdDoesNotRestart(t *
 		t.Fatal(err)
 	}
 
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.revoked.Store(true)
 	h.busToken = func(w http.ResponseWriter, r *http.Request) {
 		// What the API mints a revoked runner: results and stops, and no pull.
@@ -446,7 +437,7 @@ func TestARevokedRunnerHoldingNothingExitsWithTheStatusSystemdDoesNotRestart(t *
 // join again before it asks the API anything, with the status that keeps systemd from starting it
 // again.
 func TestAHostWhoseKeyIsGoneIsToldToJoinAgainBeforeAnyRequest(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	if err := os.Remove(h.e.KeyFile); err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +470,7 @@ func TestServeCarriesTheCredentialItRenewedTo(t *testing.T) {
 		}
 	}
 
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	write(h, "runner-dmz-02")
 	h.serving(t)
 	var carried []string
@@ -488,7 +479,7 @@ func TestServeCarriesTheCredentialItRenewedTo(t *testing.T) {
 		t.Errorf("the heartbeats carried %d credentials, want the renewed one alone", len(carried))
 	}
 
-	h = newHost(t, daemon(t, true), secretsTmpfs)
+	h = newHost(t, daemon(t, true), "")
 	write(h, "runner-lan-01")
 	if said := h.refused(t); !strings.Contains(said, h.e.CredentialFile) || strings.Contains(said, renewed) {
 		t.Errorf("a renewed credential of another runner was refused saying:\n%s", said)
@@ -496,7 +487,7 @@ func TestServeCarriesTheCredentialItRenewedTo(t *testing.T) {
 }
 
 func TestServeSaysReadyOnceItsFirstHeartbeatIsAnswered(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.serving(t)
 	for _, want := range []string{"serving as runner-dmz-02 in pool dmz", "2 tasks at once", "declaring memory 16318196Ki and cpu ", "the daemon speaking API"} {
 		if !strings.Contains(h.err.String(), want) {
@@ -525,7 +516,7 @@ func TestServeSweepsTheTaskNetworksAnEarlierAgentLeft(t *testing.T) {
 	}
 	d.Backdate("agk-01JMZ8V1P9C4_invoice_1", time.Hour)
 
-	h := newHost(t, d, secretsTmpfs)
+	h := newHost(t, d, "")
 	h.serving(t)
 	if list, err := cli.NetworkList(t.Context(), nil); err != nil || len(list) != 0 {
 		t.Errorf("the networks after the start are %v, %v", list, err)
@@ -539,24 +530,10 @@ func TestServeSweepsTheTaskNetworksAnEarlierAgentLeft(t *testing.T) {
 // finds a remapped daemon and lacks one refuses its start before the API hears from it, and
 // says which lines of its unit grant them.
 func TestServeRefusesARemappedDaemonWithoutTheThreeCapabilities(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
-	h.e.Host = installed{caps: 1<<0 | 1<<1, fs: h.e.Host.(installed).fs}
+	h := newHost(t, daemon(t, true), "")
+	h.e.Host = installed{caps: 1<<0 | 1<<1}
 	said := h.refused(t)
 	for _, want := range []string{"lacks CAP_FOWNER", "AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE", "CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE"} {
-		if !strings.Contains(said, want) {
-			t.Errorf("the refusal does not say %q:\n%s", want, said)
-		}
-	}
-}
-
-// "A server runner requires its secrets directory to be a tmpfs mounted noexec,nosuid,nodev."
-// One that is a tmpfs without noexec, as /dev/shm is on most distributions, refuses the start
-// and names the file it is set in.
-func TestServeRefusesASecretsDirectoryThatIsNotANoexecTmpfs(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
-	h.e.Host = installed{caps: ownership, fs: driver.Filesystem{Tmpfs: true, NoSUID: true, NoDev: true}}
-	said := h.refused(t)
-	for _, want := range []string{"/run/agentiik/secrets is a tmpfs mounted without noexec.", h.e.PolicyFile} {
 		if !strings.Contains(said, want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, said)
 		}
@@ -606,7 +583,7 @@ func TestAStopBeforeTheStartIsNotFollowedByReady(t *testing.T) {
 }
 
 func TestAStartThatCannotTellSystemdItIsReadyFails(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.set(runner.NotifySocket, filepath.Join(t.TempDir(), "nobody"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -649,7 +626,7 @@ func TestAWorkRootTheAgentCannotCreateRefusesTheStart(t *testing.T) {
 // A runner that cannot say how much it has cannot put back what it has no room for, and join refuses
 // the same host for the same reason.
 func TestAHostWhoseMemoryCannotBeMeasuredRefusesTheStart(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	h.e.MemInfo = filepath.Join(t.TempDir(), "meminfo")
 	if said := h.refused(t); !strings.Contains(said, h.e.MemInfo) {
 		t.Errorf("the refusal does not name %s:\n%s", h.e.MemInfo, said)
@@ -709,7 +686,7 @@ func opened(t *testing.T) func() driver.Config {
 // the installed path is inside the agent's image, where the daemon, which resolves a bind's source
 // on the host, would not find it.
 func TestTheHelperInstalledBesideTheAgentIsBoundFromUnderTheWorkRoot(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +708,7 @@ func TestTheHelperInstalledBesideTheAgentIsBoundFromUnderTheWorkRoot(t *testing.
 
 // A helper runner.toml names is the operator's choice, and taken as written.
 func TestAHelperRunnerTomlNamesIsTakenAsWritten(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs+"helper = \"/opt/agk/agk-linux-amd64\"\n")
+	h := newHost(t, daemon(t, true), "helper = \"/opt/agk/agk-linux-amd64\"\n")
 	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -750,7 +727,7 @@ func TestAHelperRunnerTomlNamesIsTakenAsWritten(t *testing.T) {
 // The driver writes every task's log into the shipment its carrier opens for it, which is what
 // ships the log to the API while the container runs.
 func TestTheDriverWritesEveryTasksLogWhereItIsShipped(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	cfg := opened(t)
 	h.serving(t)
 	if got, ok := cfg().Logs.(runner.TaskLogs); !ok {
@@ -761,7 +738,7 @@ func TestTheDriverWritesEveryTasksLogWhereItIsShipped(t *testing.T) {
 // No helper installed and none named is a runner that binds none, which the page allows: the
 // helper "is a convenience, never a requirement".
 func TestNoHelperInstalledStartsAndSaysScriptsHaveNone(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	cfg := opened(t)
 	h.serving(t)
 	if got := cfg().Policy.Helper; got != "" {
@@ -773,7 +750,7 @@ func TestNoHelperInstalledStartsAndSaysScriptsHaveNone(t *testing.T) {
 }
 
 func TestADirectoryWhereTheHelperIsInstalledRefusesTheStart(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	if err := os.Mkdir(h.e.HelperFile, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -784,7 +761,7 @@ func TestADirectoryWhereTheHelperIsInstalledRefusesTheStart(t *testing.T) {
 
 // A copy bound from a work root mounted noexec is bound noexec, which a script can read and not run.
 func TestAWorkRootMountedNoexecBindsNoHelper(t *testing.T) {
-	h := newHost(t, daemon(t, true), secretsTmpfs)
+	h := newHost(t, daemon(t, true), "")
 	if err := os.WriteFile(h.e.HelperFile, []byte("\x7fELF the helper"), 0o755); err != nil {
 		t.Fatal(err)
 	}

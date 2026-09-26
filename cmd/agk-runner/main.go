@@ -71,8 +71,8 @@ type env struct {
 	Become func(agent runner.Owner, groups []int) error
 
 	// Host is what the driver asks of this machine rather than of the daemon: the
-	// capabilities the agent holds and what its secrets directory is mounted as. Nil is
-	// the kernel's own answers, which is what main gives.
+	// capabilities the agent holds and what its work root is mounted as. Nil is the
+	// kernel's own answers, which is what main gives.
 	Host driver.Host
 }
 

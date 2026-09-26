@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -155,9 +156,8 @@ func (h *held) join(container string, w *watch) bool {
 //
 // Three things happen here rather than once per task: the API version is negotiated, the
 // userns floor, the capabilities it asks of this process, the confinement the daemon
-// applies, the cores it has and the secrets directory are read, and the machine says what
-// it gives up. Each is a fact about the daemon and the policy, and a
-// task that re-read them would be a task that could answer differently from the one
+// applies and the cores it has are read, and the machine says what it gives up. Each is a
+// fact about the daemon and the policy, and a task that re-read them would be a task that could answer differently from the one
 // beside it. The one exception is the daemon changing under this process, which it can
 // only do by restarting: the floors are read again before the first container after the
 // event stream drops, in heldToFloors.
@@ -193,10 +193,6 @@ func New(cfg Config) (*Docker, error) {
 		cli.Close()
 		return nil, err
 	}
-	if err := readSecretsDir(cfg.Policy, cfg.host()); err != nil {
-		cli.Close()
-		return nil, err
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &Docker{
@@ -209,6 +205,9 @@ func New(cfg Config) (*Docker, error) {
 	confined.announce(d.say)
 	if cfg.Policy.HooksSkipped {
 		d.say(sourceOf(cfg.Policy) + " has a [hooks] table, and this runner runs no hook: runner-side hooks arrive in v0.9.0, so nothing in it runs before or after a task.")
+	}
+	if dir := cfg.Policy.SecretsDirSkipped; dir != "" {
+		d.say(sourceOf(cfg.Policy) + " names a secrets_dir, and this runner writes no secret value on the host: a task's values are on a tmpfs volume of its own, which the daemon mounts from memory and removes with the task, so the line can go, and so can the tmpfs once nothing is left under " + filepath.Join(dir, "agentiik") + ", where a runner before this one wrote values and nothing now removes them.")
 	}
 
 	d.wg.Add(1)

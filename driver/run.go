@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -68,14 +69,6 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	// Said here rather than when the daemon was opened, because this is the first
-	// moment it is true of anything: a task with no secret never has a value written
-	// for it, and a person who reads the sentence on a run that declares none learns
-	// to scroll past it.
-	if len(t.Secrets) > 0 {
-		d.currentFloor().announceSecrets(d.cfg.Policy, t.Step, d.say)
-	}
-
 	// The task is held from here at the latest, before anything is pulled or created, so
 	// that a stop arriving while it is being prepared lands on something. That window is
 	// the image pull and it is minutes wide on a cold registry; a stop answered nil inside
@@ -132,6 +125,14 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
+	// A secret reaches the container on a tmpfs volume the static helper fills, so a
+	// driver with no helper cannot give a task one it has still to start. It is refused
+	// here, before anything is pulled or created; a key already ended is answered from the
+	// record above, and a container already running is carried whatever this host has.
+	if len(t.Secrets) > 0 && d.cfg.Policy.Helper == "" && !d.running(ctx, adopted) {
+		return graph.Result{}, fault(t.Step, nil, ChargePlatform, "%d secrets to give the task and no static helper: a secret reaches the container on a tmpfs volume, and the helper at %s is what fills it; a runner lays it out under its work root, and agk run --local carries one for the daemon's platform", len(t.Secrets), BinPath)
+	}
+
 	image, err := d.resolve(ctx, t, adopted == "")
 	if err != nil {
 		var late *pastDeadline
@@ -155,10 +156,12 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		// The directory is named rather than inspected: the path is derived from
 		// the task identifier, so the one this delivery names is the one the first
 		// prepared, and a work root that named nothing is left alone rather than
-		// guessed at.
-		if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
+		// guessed at. The secrets volume is named the same way, and goes once the
+		// container that used it has.
+		if w, err := workdirFor(d.cfg.WorkRoot, t.ID); err == nil {
 			defer d.tidy(t, w)
 		}
+		defer d.removeSecrets(ctx, t)
 		// The network goes after the container, whatever network it was created on:
 		// one a driver that predates the isolation left is removed with it rather
 		// than refused, which would leave the container running on it.
@@ -195,7 +198,7 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 		return graph.Result{}, err
 	}
 
-	given, err := prepare(ctx, t, w, d.cfg.Policy, d.cfg.host(), store, run, repo, d.secrets(ctx))
+	given, err := prepare(ctx, t, w, d.cfg.Policy, store, run, repo, d.secrets(ctx))
 	if err != nil {
 		return graph.Result{}, err
 	}
@@ -212,6 +215,21 @@ func (d *Docker) Run(ctx context.Context, t graph.Task) (graph.Result, error) {
 	}
 	if err := floor.ownWorkdir(w); err != nil {
 		return graph.Result{}, err
+	}
+
+	// The secret values go on the task's secrets volume last of all, just before the
+	// container, since they are held in memory by a container of the runner's own until
+	// the task's container has started. The volume is removed after the container, which
+	// is the order the defers run in.
+	if len(given.Secrets) > 0 {
+		defer d.removeSecrets(ctx, t)
+		hold, mount, err := d.fillSecrets(ctx, t, image.Ref, given.Secrets)
+		if err != nil {
+			return graph.Result{}, err
+		}
+		defer hold.release(ctx)
+		given.Mounts = append(given.Mounts, mount)
+		given.hold = hold
 	}
 
 	// The dispatch is the creation and not the planning, because the deadline runs
@@ -324,6 +342,10 @@ func (d *Docker) carry(ctx context.Context, t graph.Task, store *artifact.Store,
 			}
 			return graph.Result{}, fault(t.Step, ErrContractBroken, ChargePlatform, "the container could not be started: %v", err)
 		}
+		// The container has its secrets volume mounted now, and holds it filled in the
+		// holder's place, so the holder goes: the values are in memory for as long as
+		// this container runs and not a moment longer.
+		given.hold.release(ctx)
 	}
 	// What the container consumes is read from here, while it runs, since its cgroup
 	// and everything counted in it go when it exits.
@@ -563,22 +585,25 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 			"the container adopted for this task has nothing bound at %s, so there is nowhere to collect its outputs from", brick.OutDir))
 	}
 
-	// The masker needs the values the container was given, and the first delivery's
-	// copy of them in memory left with the process that had it. Its files are still in
-	// the task's secrets directory, which is removed only once this returns, and they are
-	// read back, with this delivery's own redemption beside them. Nothing is written:
-	// this is the list the literal match runs against.
-	values, err := d.values(ctx, t)
-	if err != nil {
-		return fail(err)
-	}
-
+	running := in.State.Running || in.State.Restarting
 	dispatched := in.State.StartedAt
 	if dispatched.IsZero() {
 		dispatched = d.now()
 	}
-	if over(in.State) {
-		return d.settle(ctx, t, store, container, image, values, out, dispatched, in.State)
+	if over(in.State) || running {
+		// The masker needs the values the container was given, and the first
+		// delivery's copy of them in memory left with the process that had it. A
+		// running container still has them on its secrets volume, and they are read
+		// back from there, with this delivery's own redemption beside them. Nothing is
+		// written: this is the list the literal match runs against.
+		values, err := d.values(ctx, t, container, running && ownSecretsVolume(t, in.Mounts))
+		if err != nil {
+			return fail(err)
+		}
+		if !running {
+			return d.settle(ctx, t, store, container, image, values, out, dispatched, in.State)
+		}
+		return d.carry(ctx, t, store, container, image, &given{Values: values}, out, dispatched, false, true)
 	}
 	// The envelope of a running container was written on standard input by the delivery
 	// that started it, and its write half was closed after it: a second attach asking
@@ -587,20 +612,35 @@ func (d *Docker) rejoin(ctx context.Context, t graph.Task, store *artifact.Store
 	// created it died before the start, and its standard input stays open until a writer
 	// closes it. It is given its envelope there now, as that delivery would have given
 	// it, or a brick reading standard input waits on it until the deadline.
-	running := in.State.Running || in.State.Restarting
-	g := &given{Values: values}
-	if !running {
-		// A container is confined as the daemon starts it and not as it was created,
-		// so one about to be started for the first time is held to the floors as a
-		// container about to be created is.
-		if _, err := d.heldToFloors(ctx, t.Step); err != nil {
-			return graph.Result{}, err
-		}
-		if g.Stdin, err = stdinBytes(t); err != nil {
-			return graph.Result{}, err
-		}
+	// A container is confined as the daemon starts it and not as it was created, so one
+	// about to be started for the first time is held to the floors as a container about
+	// to be created is.
+	if _, err := d.heldToFloors(ctx, t.Step); err != nil {
+		return graph.Result{}, err
 	}
-	return d.carry(ctx, t, store, container, image, g, out, dispatched, !running, running)
+	g := &given{}
+	if g.Stdin, err = stdinBytes(t); err != nil {
+		return graph.Result{}, err
+	}
+	// Its secrets volume was filled by a holder that went with the delivery that made
+	// it, and a tmpfs volume no container has mounted is empty. It is filled again, with
+	// this delivery's redemption, before the container is started, as the first delivery
+	// would have filled it.
+	if g.Secrets, g.Values, err = redeemSecrets(ctx, t, d.secrets(ctx)); err != nil {
+		return graph.Result{}, err
+	}
+	if len(g.Secrets) > 0 {
+		// The holder the first delivery left, exited when its runner went, is removed
+		// first, so that the volume is held by this delivery's alone.
+		d.removeHolders(ctx, t)
+		hold, _, err := d.fillSecrets(ctx, t, image.Ref, g.Secrets)
+		if err != nil {
+			return graph.Result{}, err
+		}
+		defer hold.release(ctx)
+		g.hold = hold
+	}
+	return d.carry(ctx, t, store, container, image, g, out, dispatched, true, false)
 }
 
 // over says whether a container has run to its end: started once, and neither running nor
@@ -796,30 +836,31 @@ func (d *Docker) repo(ctx context.Context, t graph.Task) (string, error) {
 }
 
 // values are what the masker of an adopted container needs and all it needs: the values
-// the first delivery wrote for the container, where they are still on this host, and the
-// ones this delivery's own source redeems. Nothing is written.
+// the first delivery wrote for the container, where they are still on its secrets volume,
+// and the ones this delivery's own source redeems. Nothing is written.
 //
 // Both, because a secret rotated between the two redemptions leaves the container holding
 // the first value and this delivery the second, and the container can print only the
 // first: masked with the second alone, it would reach the log and the published outputs
-// in the clear. The second is kept for the host that no longer has the first, a tmpfs a
-// restart cleared, where it is the closest to the container's there is.
-func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
+// in the clear. The second is kept for the container that no longer has the first, one
+// that has exited, whose volume the daemon emptied when it let go of it, where it is the
+// closest to the container's there is.
+//
+// The volume is read only while the container runs, and only where it is this task's own
+// secrets volume: a container carrying the task's label may have been started by anything.
+func (d *Docker) values(ctx context.Context, t graph.Task, container string, readable bool) ([][]byte, error) {
 	if len(t.Secrets) == 0 {
 		return nil, nil
 	}
-	// The directory is named from the task identifier rather than read off the
-	// container, as the one Run takes away is: a container carrying the task's label
-	// may have been started by anything, and what is read here is only ever this
-	// runner's own.
-	w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir)
-	if err != nil {
-		w = nil
+	var written map[string][]byte
+	if readable {
+		written = d.written(ctx, container)
 	}
 	var values [][]byte
 	missing := ""
 	for _, s := range t.Secrets {
-		if value, ok := w.written(s); ok {
+		target := secretTarget(s)
+		if value, ok := written[path.Base(target)]; ok && secretMountPattern.MatchString(target) {
 			values = append(values, value)
 		} else if missing == "" {
 			missing = s.Name
@@ -838,7 +879,7 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		// same omission on a delivery that creates its container: the runner's, with
 		// no rule of the brick contract, which no image had a part in.
 		return nil, fault(t.Step, nil, ChargePlatform,
-			"secret %s is no longer where the first delivery wrote it and there is no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", missing)
+			"secret %s is no longer on the volume the first delivery filled and there is no secret source: masking is a literal match against the values the task was given, and a runner gives them with the task it runs", missing)
 	}
 	for _, s := range t.Secrets {
 		value, err := secrets.Value(ctx, s.Name)
@@ -852,6 +893,16 @@ func (d *Docker) values(ctx context.Context, t graph.Task) ([][]byte, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// running says whether an adopted container has started once, so that it needs no secrets
+// volume filled: one that is running holds its own, and one that has exited is collected.
+func (d *Docker) running(ctx context.Context, container string) bool {
+	if container == "" {
+		return false
+	}
+	in, err := d.cli.ContainerInspect(ctx, container)
+	return err == nil && !in.State.StartedAt.IsZero()
 }
 
 // abandon takes away what an earlier delivery of a refused task left: its container, its
@@ -871,7 +922,8 @@ func (d *Docker) abandon(ctx context.Context, t graph.Task) {
 		return
 	}
 	d.removeNetwork(ctx, t, networkOf(t))
-	if w, err := workdirFor(d.cfg.WorkRoot, t.ID, d.cfg.Policy.SecretsDir); err == nil {
+	d.removeSecrets(ctx, t)
+	if w, err := workdirFor(d.cfg.WorkRoot, t.ID); err == nil {
 		d.tidy(t, w)
 	}
 }
@@ -892,7 +944,8 @@ func (d *Docker) removeNetwork(ctx context.Context, t graph.Task, n network) {
 // It is said and not returned, because by the time a directory is removed the task has
 // ended one way or the other and a removal cannot change which. It is said every time and
 // not once, since each is a directory of its own left on this host, and the step is named
-// first for the reason announceSecrets names it.
+// first, because a sentence said while a run narrates itself lands between two lines about
+// some other step.
 func (d *Docker) tidy(t graph.Task, w *workdir) {
 	if err := w.remove(); err != nil {
 		d.say(fmt.Sprintf("%s left files on this host that were not removed with its container, so what task %s was given and what its brick wrote survive into the tasks after it until somebody removes them: %v", t.Step, t.ID, err))

@@ -131,7 +131,7 @@ func counted(n int, one, many string) string {
 
 // serial is one writer two goroutines may write to, which standard error is during a run:
 // the loop narrates every transition, and the driver says its own sentences from inside Run,
-// where a secret lands on a platform with no tmpfs and a log sink that failed. Two Fprintf
+// what the machine gives up and a log sink that failed. Two Fprintf
 // on one writer is a data race, and before it is a race it is two half-lines spliced into
 // one, which is worse than either sentence arriving late.
 //

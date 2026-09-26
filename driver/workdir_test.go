@@ -20,7 +20,7 @@ const shardedTask = agk.TaskID("01JMZ8V1P9C4/invoice/2/3/8")
 // they can share an identity.
 func TestTheWorkingDirectoryIsTheTasksIdentity(t *testing.T) {
 	root := t.TempDir()
-	w, err := newWorkdir(root, shardedTask, "")
+	w, err := newWorkdir(root, shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -30,7 +30,7 @@ func TestTheWorkingDirectoryIsTheTasksIdentity(t *testing.T) {
 	if w.Root != want {
 		t.Fatalf("the working directory is %s, want %s", w.Root, want)
 	}
-	for _, dir := range []string{w.Root, w.In, w.Out, w.Secrets, filepath.Join(w.Out, "ports"), filepath.Join(w.Out, "files")} {
+	for _, dir := range []string{w.Root, w.In, w.Out, filepath.Join(w.Out, "ports"), filepath.Join(w.Out, "files")} {
 		info, err := os.Stat(dir)
 		if err != nil {
 			t.Fatalf("%s: %s", dir, err)
@@ -45,7 +45,7 @@ func TestTheWorkingDirectoryIsTheTasksIdentity(t *testing.T) {
 // same reading AGK_SHARD takes.
 func TestAStepWithNoFanOutHasNoShardSegment(t *testing.T) {
 	root := t.TempDir()
-	w, err := newWorkdir(root, "01JMZ8V1P9C4/invoice/1", "")
+	w, err := newWorkdir(root, "01JMZ8V1P9C4/invoice/1")
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -59,7 +59,7 @@ func TestAStepWithNoFanOutHasNoShardSegment(t *testing.T) {
 // the account its image declares, which this driver never resolves, and /agk/out is
 // where the contract says it writes.
 func TestTheOutputTreeIsWritableByWhateverAccountTheImageDeclares(t *testing.T) {
-	w, err := newWorkdir(t.TempDir(), shardedTask, "")
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -98,7 +98,7 @@ func TestAWorkingDirectoryIsCreatedFresh(t *testing.T) {
 		t.Fatalf("preparing a stale envelope: %s", err)
 	}
 
-	w, err := newWorkdir(root, shardedTask, "")
+	w, err := newWorkdir(root, shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -110,38 +110,15 @@ func TestAWorkingDirectoryIsCreatedFresh(t *testing.T) {
 
 // An identifier that could not have been composed is refused before anything is created.
 func TestAnIdentifierThatIsNotATaskIsRefused(t *testing.T) {
-	if _, err := newWorkdir(t.TempDir(), "not-a-task", ""); err == nil {
+	if _, err := newWorkdir(t.TempDir(), "not-a-task"); err == nil {
 		t.Fatalf("a working directory was created for something that is not a task identifier")
-	}
-}
-
-// Where the platform has a tmpfs, the values live on it and not under the task's own
-// tree, and both are removed with the container.
-func TestSecretsLiveOnTheirOwnFilesystemWhenThereIsOne(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
-	w, err := newWorkdir(root, shardedTask, shm)
-	if err != nil {
-		t.Fatalf("newWorkdir: %s", err)
-	}
-	if !strings.HasPrefix(w.Secrets, shm) {
-		t.Fatalf("the secrets directory is %s, and the tmpfs is %s", w.Secrets, shm)
-	}
-	if _, err := os.Stat(w.Secrets); err != nil {
-		t.Fatalf("the secrets directory was not created: %s", err)
-	}
-
-	w.remove()
-	for _, dir := range []string{w.Root, w.Secrets} {
-		if _, err := os.Stat(dir); !os.IsNotExist(err) {
-			t.Fatalf("%s survived the task: %v", dir, err)
-		}
 	}
 }
 
 // "Removed with the container, so no residue of one namespace survives into the next
 // task on that host."
 func TestRemovingTakesTheWholeTreeAway(t *testing.T) {
-	w, err := newWorkdir(t.TempDir(), shardedTask, "")
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -165,7 +142,7 @@ func TestRemovingTakesTheWholeTreeAway(t *testing.T) {
 // range does on a daemon whose range happens to be this process's own, and it has to
 // work rather than being refused for being a no-op.
 func TestOwnAcceptsTheAccountTheTreeAlreadyHas(t *testing.T) {
-	w, err := newWorkdir(t.TempDir(), shardedTask, "")
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -181,7 +158,7 @@ func TestOwnRefusesWhatItCannotDoAndSaysWhatItTried(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("running as root, where every chown is permitted and there is nothing to refuse")
 	}
-	w, err := newWorkdir(t.TempDir(), shardedTask, "")
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -199,20 +176,15 @@ func TestOwnRefusesWhatItCannotDoAndSaysWhatItTried(t *testing.T) {
 }
 
 // A tree that cannot be removed is reported rather than dropped, naming where the removal
-// stopped, and the secrets directory is removed whatever became of the working directory,
-// so that a brick that left an unreadable directory behind does not keep the values with
-// it. A directory of mode 0500 is what a brick running as another account leaves a runner
-// without CAP_DAC_OVERRIDE.
-func TestARemovalThatFailsSaysWhereAndStillTakesTheSecretsAway(t *testing.T) {
+// stopped. A directory of mode 0500 is what a brick running as another account leaves a
+// runner without CAP_DAC_OVERRIDE.
+func TestARemovalThatFailsSaysWhere(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where every directory can be removed and there is nothing to report")
 	}
-	w, err := newWorkdir(t.TempDir(), shardedTask, t.TempDir())
+	w, err := newWorkdir(t.TempDir(), shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
-	}
-	if err := writeSecret(filepath.Join(w.Secrets, "bearer"), []byte("s3cr3t-value")); err != nil {
-		t.Fatalf("writing the value: %s", err)
 	}
 	locked := filepath.Join(w.Out, "files", "nested")
 	if err := os.MkdirAll(locked, 0o755); err != nil {
@@ -233,21 +205,15 @@ func TestARemovalThatFailsSaysWhereAndStillTakesTheSecretsAway(t *testing.T) {
 	if !strings.Contains(err.Error(), locked) {
 		t.Errorf("the report does not name where the removal stopped, %s: %s", locked, err)
 	}
-	if strings.Contains(err.Error(), "s3cr3t-value") {
-		t.Errorf("the report carries the secret value: %s", err)
-	}
-	if _, err := os.Stat(w.Secrets); !os.IsNotExist(err) {
-		t.Errorf("the secrets directory survived a working directory that could not be removed: %v", err)
-	}
 }
 
 // A task's directory goes with its container and the run, step and attempt directories above
-// it stay, one set per step ever run on the host, on the work root and on the secrets tmpfs.
-// The sweep is what takes them away, and the directories it sweeps under stay.
+// it stay, one set per step ever run on the host. The sweep is what takes them away, and the
+// directory it sweeps under stays.
 func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
+	root := t.TempDir()
 	for _, id := range []agk.TaskID{shardedTask, "01JMZ8V1P9C4/invoice/1", "01JMZ8V1P9C5/pay/1"} {
-		w, err := newWorkdir(root, id, shm)
+		w, err := newWorkdir(root, id)
 		if err != nil {
 			t.Fatalf("newWorkdir: %s", err)
 		}
@@ -260,18 +226,13 @@ func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
 	}
 	record(t, root, "01JMZ8V1P9C4", "01JMZ8V1P9C5")
 
-	sweep(root, shm, time.Now().Add(time.Minute))
+	sweep(root, time.Now().Add(time.Minute))
 
 	if left := tasksUnder(t, root); len(left) > 0 {
 		t.Errorf("the work root still holds %v after the sweep", left)
 	}
-	if left := dirsUnder(t, filepath.Join(shm, secretsBase)); len(left) > 0 {
-		t.Errorf("the secrets directory still holds %v after the sweep", left)
-	}
-	for _, dir := range []string{root, filepath.Join(shm, secretsBase)} {
-		if _, err := os.Stat(dir); err != nil {
-			t.Errorf("%s was taken away with what was under it: %v", dir, err)
-		}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("%s was taken away with what was under it: %v", root, err)
 	}
 }
 
@@ -279,8 +240,8 @@ func TestASweepTakesAwayTheParentsTasksLeftEmpty(t *testing.T) {
 // and on Docker Desktop a path removed and created again is refused as a bind source for about
 // a second after. The bound is what leaves it alone.
 func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
-	w, err := newWorkdir(root, shardedTask, shm)
+	root := t.TempDir()
+	w, err := newWorkdir(root, shardedTask)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}
@@ -289,12 +250,10 @@ func TestASweepLeavesWhatWentEmptyWithinTheBound(t *testing.T) {
 	}
 	record(t, root, "01JMZ8V1P9C4")
 
-	sweep(root, shm, time.Now().Add(-emptyKept))
+	sweep(root, time.Now().Add(-emptyKept))
 
-	for _, dir := range []string{filepath.Dir(w.Root), filepath.Dir(w.Secrets)} {
-		if _, err := os.Stat(dir); err != nil {
-			t.Errorf("%s was taken away, and it went empty within the last %s: %v", dir, emptyKept, err)
-		}
+	if dir := filepath.Dir(w.Root); !exists(dir) {
+		t.Errorf("%s was taken away, and it went empty within the last %s", dir, emptyKept)
 	}
 }
 
@@ -330,32 +289,11 @@ func TestASweepTakesOnlyEmptyDirectoriesATaskCouldHaveLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sweep(root, "", time.Now().Add(time.Minute))
+	sweep(root, time.Now().Add(time.Minute))
 
 	for _, path := range append(stay, residue) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s was taken away: %v", path, err)
-		}
-	}
-}
-
-// A task given no secret has an empty secrets directory for as long as it runs, so emptiness
-// does not tell a parent from a running task there. Its working directory, on the work root,
-// does.
-func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
-	w, err := newWorkdir(root, "01JMZ8V1P9C4/invoice/1", shm)
-	if err != nil {
-		t.Fatalf("newWorkdir: %s", err)
-	}
-	defer w.remove()
-	record(t, root, "01JMZ8V1P9C4")
-
-	sweep(root, shm, time.Now().Add(time.Minute))
-
-	for _, dir := range []string{w.Root, w.In, w.Secrets} {
-		if _, err := os.Stat(dir); err != nil {
-			t.Errorf("%s was taken away from a task that is still running: %v", dir, err)
 		}
 	}
 }
@@ -365,8 +303,8 @@ func TestASweepLeavesTheSecretsDirectoryOfATaskStillRunning(t *testing.T) {
 // of one step are created and removed over and over while a sweep that takes anything empty
 // runs beside them, under the lock ended runs it under, and not one of them is refused.
 func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
-	d := &Docker{cfg: Config{WorkRoot: root, Policy: Policy{SecretsDir: shm}}, keys: &keys{root: root}}
+	root := t.TempDir()
+	d := &Docker{cfg: Config{WorkRoot: root}, keys: &keys{root: root}}
 	record(t, root, "01JMZ8V1P9C4")
 
 	done := make(chan struct{})
@@ -381,7 +319,7 @@ func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
 			default:
 			}
 			d.keys.mu.Lock()
-			sweep(root, shm, time.Now().Add(time.Hour))
+			sweep(root, time.Now().Add(time.Hour))
 			d.keys.mu.Unlock()
 			n++
 		}
@@ -416,32 +354,10 @@ func TestASweepNeverTakesAParentFromUnderASiblingBeingCreated(t *testing.T) {
 	}
 }
 
-// A secrets directory somebody else made, or opened to others, is one a link could be swapped
-// into between the walk and the removal, so the sweep leaves it alone, as ownedDir refuses a
-// task's directory there.
-func TestASweepLeavesASecretsDirectoryThatIsNoLongerTheRunnersAlone(t *testing.T) {
-	root, shm := t.TempDir(), t.TempDir()
-	w, err := newWorkdir(root, shardedTask, shm)
-	if err != nil {
-		t.Fatalf("newWorkdir: %s", err)
-	}
-	if err := w.remove(); err != nil {
-		t.Fatal(err)
-	}
-	record(t, root, "01JMZ8V1P9C4")
-	base := filepath.Join(shm, secretsBase)
-	if err := os.Chmod(base, 0o777); err != nil {
-		t.Fatal(err)
-	}
-
-	sweep(root, shm, time.Now().Add(time.Minute))
-
-	if _, err := os.Stat(filepath.Dir(w.Secrets)); err != nil {
-		t.Errorf("the sweep walked a secrets directory open to every account on the host: %v", err)
-	}
-	if left := tasksUnder(t, root); len(left) > 0 {
-		t.Errorf("the work root still holds %v, and it is the runner's own", left)
-	}
+// exists says whether a path is there.
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // record writes down under the work root that the record has the given runs.
@@ -515,7 +431,7 @@ func TestAnEndingSweepsWhatTasksLeftEmptyLongAgo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.work, "01JMZ8V1P9C3")); !os.IsNotExist(err) {
 		t.Errorf("the run an earlier run left empty %s ago is still on the work root: %v", emptyKept+time.Minute, err)
 	}
-	w, err := workdirFor(r.work, task.ID, "")
+	w, err := workdirFor(r.work, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

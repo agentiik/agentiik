@@ -33,8 +33,6 @@ nproc = { soft = 300, hard = 300 }
 	}
 	// Lifted as realDriver lifts them, for the daemon of a laptop.
 	policy.RequireUsernsRemap = RemapLifted
-	policy.RequireSecretsTmpfs = SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	policy.StopGrace = 2 * time.Second
 	d, image := realDriverWith(t, policy)
 

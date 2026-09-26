@@ -17,6 +17,7 @@ import (
 func TestARealContainerCannotWriteWhatTheContractCallsReadOnly(t *testing.T) {
 	d, image := realDriver(t)
 	d.cfg.Secrets = secretSource{"bearer": "s3cr3t-value"}
+	d.cfg.Policy.Helper = realHelper(t)
 
 	var written strings.Builder
 	d.cfg.Logs = &sinkFor{b: &written}
@@ -89,6 +90,7 @@ func TestARealContainerCannotWriteWhatTheContractCallsReadOnly(t *testing.T) {
 func TestARealContainerReadsItsSecretAndTheLogDoesNot(t *testing.T) {
 	d, image := realDriver(t)
 	d.cfg.Secrets = secretSource{"bearer": "s3cr3t-value"}
+	d.cfg.Policy.Helper = realHelper(t)
 
 	var written strings.Builder
 	d.cfg.Logs = &sinkFor{b: &written}

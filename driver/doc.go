@@ -139,8 +139,8 @@
 // port's envelope to the store. Write the ending down under the work root, after the store
 // has everything it names and before anything is removed, so that no moment passes in which
 // the work is done and the record does not say so, and none in which the record names what
-// the store does not hold. Then remove the container, the network and the working
-// directory, in a defer that runs on every path.
+// the store does not hold. Then remove the container, the network, the secrets volume and
+// the working directory, in a defer that runs on every path.
 //
 // The record is what a container is not. Adoption finds a container that is still
 // there; the record answers for a key whose container was collected and removed, which
@@ -196,16 +196,11 @@
 // daemon does not apply is refused rather than silently ignored. A profile that lets every
 // call through counts as none.
 //
-// A runner's own host is held to two more. A remapped daemon is refused to a process that
+// A runner's own host is held to one more. A remapped daemon is refused to a process that
 // lacks CAP_CHOWN, CAP_FOWNER or CAP_DAC_OVERRIDE, read with capget, since a task's
 // directory is given to the range and re-entered and removed afterwards; the refusal is
-// ErrOwnershipCapabilities and names the unit lines that grant them. The secrets directory
-// must be a tmpfs mounted noexec,nosuid,nodev and writable, read with statfs, since a secret is a bind
-// from there and a bind keeps the flags of its source's mount; otherwise it is
-// ErrSecretsTmpfsRequired, unless Policy.RequireSecretsTmpfs is SecretsTmpfsLifted, which
-// only callers that are not runners set. Config.Host answers both in place of the kernel
-// in a test. The secrets floor is read again before any value is written, since a tmpfs
-// unmounted under a running runner leaves a directory of the same name on a disk.
+// ErrOwnershipCapabilities and names the unit lines that grant them. Config.Host answers in
+// place of the kernel in a test.
 //
 // The floors are read when the daemon is opened, and read again before the first container
 // after the event stream drops, since a daemon can only change its configuration by
@@ -263,11 +258,12 @@
 // is whole before the match runs; a value split across lines is not, which is what the
 // documentation already says of it.
 //
-// An adopted container is masked with the values the first delivery wrote for it, read
-// back from the task's secrets directory before that is removed, beside the ones the
-// adopting delivery redeemed. The documentation names a secret rotated between the two
-// redemptions as a limit of masking, and the value the container holds is on the host all
-// along; only a host that lost it, a tmpfs a restart cleared, is still left with the limit.
+// An adopted container that is still running is masked with the values the first delivery
+// wrote for it, read back off its secrets volume, beside the ones the adopting delivery
+// redeemed. The documentation names a secret rotated between the two redemptions as a limit
+// of masking, and the value the container holds is on its volume for as long as it runs;
+// only a container that has exited, whose volume the daemon emptied as it let go of it, is
+// still left with the limit.
 //
 // /agk/out is a bind mount from the task's working directory and not a tmpfs. A tmpfs is
 // unmounted when the container stops, so an output written to one is gone before anything
@@ -277,15 +273,18 @@
 // directory being created fresh, owned by an unprivileged account and removed with the
 // container.
 //
-// /agk/secrets is a bind mount whose host side is a tmpfs where the platform has one,
-// Policy.SecretsDir, /dev/shm on Linux, which a runner replaces with a tmpfs of its own
-// mounted noexec,nosuid,nodev. A tmpfs the daemon creates at container start is
-// empty and cannot be pre-populated, so a value could not be placed in one before the
-// container's first instruction runs. Where no host tmpfs exists, which is the laptop the
-// userns floor gets lifted for, the values touch the work root instead and the driver says
-// so once, at the first task that is given a secret rather than when the daemon is opened:
-// a run that declares none never writes a value, and a warning met on a run it does not
-// apply to is a warning that gets scrolled past on the run it does.
+// /agk/secrets is a tmpfs volume of the task's own, of the local driver, mounted
+// noexec,nosuid,nodev and read-only, and no directory of the host. A tmpfs mount the daemon
+// creates at container start is empty, so a value could not be placed in one before the
+// container's first instruction runs; a tmpfs volume can be, but it keeps what is written on
+// it only while a container has it mounted, and a value written into a container that has
+// not started is gone before it starts. So a holder, a container of the runner's own running
+// the static helper on the task's image, mounts the volume first and is handed the values on
+// its standard input, and it is removed once the task's container has started and holds the
+// volume in its place. The volume goes with the task, and Sweep removes what a runner that
+// died left. Nothing of a value is written on any disk, the laptop's included: Docker Desktop
+// keeps the volume in its own memory as a Linux daemon does, so a local run is given a tmpfs
+// as a server run is.
 //
 // The shell defaults to three elements, DefaultShell. Without -c there is nothing to hand
 // a command string to.
@@ -314,11 +313,12 @@
 //	config.go     Config and what a Task deliberately does not carry
 //	sources.go    what a runner gives one task in place of Config: its store, its secrets, its tree
 //	policy.go     Policy, DefaultPolicy, LoadPolicy and runner.toml, the three floors as enums
-//	host.go       what the floors ask of the host: three capabilities and a noexec tmpfs
+//	host.go       what the floors ask of the host: three capabilities
 //	daemon.go     hold the floors and the profiles to the daemon, announce what is given up
 //	image.go      resolve and pull by digest, read and cache the manifest, refuse root
 //	workdir.go    created fresh, owned inside the remapped range, removed with the container
-//	mounts.go     brick.WriteInputs, /agk/repo, /agk/run.json, /agk/params.json, /agk/secrets, /agk/bin/agk
+//	mounts.go     brick.WriteInputs, /agk/repo, /agk/run.json, /agk/params.json, /agk/bin/agk, the values
+//	secrets.go    the task's tmpfs volume at /agk/secrets, its holder, and the sweep of both
 //	env.go        the AGK_* table and AGK_PARAM_<NAME>
 //	container.go  the settings every task gets, as HostConfig writes them
 //	network.go    a network per task, none and internal, egress refused

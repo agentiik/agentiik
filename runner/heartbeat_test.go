@@ -341,7 +341,7 @@ func stepDriver(t *testing.T, root string) *driver.Docker {
 	}
 	t.Cleanup(func() { daemon.Close() })
 	d, err := driver.New(driver.Config{
-		Socket: daemon.Socket(), WorkRoot: root, Policy: driver.Policy{SecretsDir: "/run/agentiik/secrets"}, Host: installed{},
+		Socket: daemon.Socket(), WorkRoot: root, Policy: driver.Policy{}, Host: installed{},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -73,7 +73,7 @@ steps:
         for f in $(find /agk/repo -type f 2>/dev/null | head -50); do cat "$f" 2>/dev/null || true; done
 `)
 
-	code, out, errs := runner(t, dir, "run", "--local", "--secret", "billing_api="+secret, "--logs")
+	code, out, errs := runner(t, dir, "run", "--local", "--helper", helperForTheDaemon(t), "--secret", "billing_api="+secret, "--logs")
 	if code != exitSucceeded {
 		t.Fatalf("the exit code is %d, want %d\n%s\n%s", code, exitSucceeded, out, errs)
 	}
@@ -135,7 +135,7 @@ steps:
           "$AGK_RUN_ID" "$AGK_STEP" "$AGK_ATTEMPT" "$token" > /agk/out/ports/out.json
 `)
 
-	code, out, errs := runner(t, dir, "run", "--local", "--secret", "billing_api="+secret, "-o", "json", "--logs")
+	code, out, errs := runner(t, dir, "run", "--local", "--helper", helperForTheDaemon(t), "--secret", "billing_api="+secret, "-o", "json", "--logs")
 	if code != exitSucceeded {
 		t.Fatalf("the exit code is %d, want %d\n%s\n%s", code, exitSucceeded, out, errs)
 	}
@@ -304,6 +304,18 @@ steps:
 	for _, n := range nets {
 		t.Errorf("network %s is still there after run %s: a task gets a network of its own and it goes with the task", n.Name, run)
 	}
+}
+
+// helperForTheDaemon builds the static helper for the daemon of this machine, which is what
+// fills a step's secrets volume: a test binary embeds none.
+func helperForTheDaemon(t *testing.T) string {
+	t.Helper()
+	socket, _ := dockertest.Socket()
+	daemon, err := driver.Probe(t.Context(), socket)
+	if err != nil {
+		dockertest.Unavailable(t, "the daemon did not answer: %v", err)
+	}
+	return theStaticHelper(t, daemon.OSType, daemon.Architecture)
 }
 
 // runIDIn reads the run identifier out of the report, which names it on its last line.

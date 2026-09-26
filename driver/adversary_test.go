@@ -26,12 +26,24 @@ import (
 // does rather than against what it means to do.
 
 // stageFirstDelivery builds the state a runner that died mid task leaves behind: a
-// container carrying the task's label, and the working directory it was given, with the
-// secret value written into it.
+// container carrying the task's label, created and never started, the working directory it
+// was given, and its secrets volume, which the holder that filled it left empty as it went
+// with the runner.
 //
 // It walks the same sequence Run does, which is the point: what a second delivery adopts
 // has to be what the first one actually created.
 func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, root string) {
+	t.Helper()
+	container, root, hold := stageHeld(t, r, task)
+	hold.release(t.Context())
+	return container, root
+}
+
+// stageHeld is stageFirstDelivery with the holder of the secrets volume still holding it,
+// for a test that starts the container as the first delivery would have: with its values
+// on the volume. The holder is released once the container has started, or when the test
+// ends.
+func stageHeld(t *testing.T, r *runner, task graph.Task) (container, root string, hold *holder) {
 	t.Helper()
 	ctx := t.Context()
 
@@ -39,7 +51,7 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("opening the store: %s", err)
 	}
-	w, err := newWorkdir(r.cfg.WorkRoot, task.ID, r.cfg.Policy.SecretsDir)
+	w, err := newWorkdir(r.cfg.WorkRoot, task.ID)
 	if err != nil {
 		t.Fatalf("preparing the working directory: %s", err)
 	}
@@ -51,9 +63,18 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("preparing the repository: %s", err)
 	}
-	given, err := prepare(ctx, task, w, r.cfg.Policy, r.cfg.host(), store, run, repo, r.secrets(ctx))
+	given, err := prepare(ctx, task, w, r.cfg.Policy, store, run, repo, r.secrets(ctx))
 	if err != nil {
 		t.Fatalf("preparing what the container is given: %s", err)
+	}
+	if len(given.Secrets) > 0 {
+		var mount docker.Mount
+		hold, mount, err = r.fillSecrets(ctx, task, task.Image, given.Secrets)
+		if err != nil {
+			t.Fatalf("filling the secrets volume: %s", err)
+		}
+		given.Mounts = append(given.Mounts, mount)
+		t.Cleanup(func() { hold.release(context.Background()) })
 	}
 	entrypoint, cmd := scriptCommand(task, r.cfg.Policy.Shell)
 	config := containerConfig(task, task.Image, "65532:65532", environment(task, deadlineOf(task, time.Now())), entrypoint, cmd)
@@ -65,22 +86,22 @@ func stageFirstDelivery(t *testing.T, r *runner, task graph.Task) (container, ro
 	if err != nil {
 		t.Fatalf("creating the container: %s", err)
 	}
-	return created.ID, w.Root
+	return created.ID, w.Root, hold
 }
 
-// taskWithASecret is one task that is given one secret, so that the working directory it
-// leaves behind has a value in it.
+// taskWithASecret is one task that is given one secret, so that it leaves a secrets volume
+// behind.
 func taskWithASecret(ref string) graph.Task {
 	task := oneTask(ref)
 	task.Secrets = []graph.SecretMount{{Name: "bearer", Mount: "/agk/secrets/bearer"}}
 	return task
 }
 
-// A redelivered task inherits the first delivery's working directory, and that directory
-// holds a secret value redeemed for the attempt before this one. "No residue of one
-// namespace survives into the next task on that host", and a value left on the disk of a
-// runner is exactly that residue.
-func TestAnAdoptedTaskTakesTheFirstDeliverysSecretValueAway(t *testing.T) {
+// A redelivered task inherits the first delivery's secrets volume, which its container was
+// created with. "No residue of one namespace survives into the next task on that host", and a
+// volume left on the daemon is that residue, so the delivery that adopts the container takes
+// it away with the container.
+func TestAnAdoptedTaskTakesTheFirstDeliverysSecretsVolumeAway(t *testing.T) {
 	const ref = "ghcr.io/agentiik/http-request@" + imageDigest
 
 	r := newRunner(t, oneImage(ref, goodManifest), func(c dockertest.Container) (int, error) {
@@ -88,11 +109,11 @@ func TestAnAdoptedTaskTakesTheFirstDeliverysSecretValueAway(t *testing.T) {
 	})
 
 	task := taskWithASecret(ref)
-	container, root := stageFirstDelivery(t, r, task)
+	container, _ := stageFirstDelivery(t, r, task)
 
-	secret := filepath.Join(root, "secrets", "bearer")
-	if _, err := os.Stat(secret); err != nil {
-		t.Fatalf("the first delivery wrote no secret at %s: %s", secret, err)
+	volume := secretsVolume(task.ID)
+	if _, ok := r.daemon.Volume(volume); !ok {
+		t.Fatalf("the first delivery left no secrets volume %s: %v", volume, r.daemon.Volumes())
 	}
 
 	result, err := r.Run(t.Context(), task)
@@ -124,8 +145,8 @@ func TestAnAdoptedTaskTakesTheFirstDeliverysSecretValueAway(t *testing.T) {
 	if !removed {
 		t.Errorf("the adopted container %s was never removed: the daemon was asked to destroy %v", container[:12], r.daemon.Removed())
 	}
-	if _, err := os.Stat(secret); !os.IsNotExist(err) {
-		t.Errorf("the secret value at %s survived the task", secret)
+	if _, ok := r.daemon.Volume(volume); ok {
+		t.Errorf("the secrets volume %s survived the task", volume)
 	}
 }
 
@@ -314,7 +335,7 @@ func TestOnlyTheOutputTreeIsBoundWritable(t *testing.T) {
 	if len(writable) != 1 || writable[0] != "/agk/out" {
 		t.Errorf("the writable binds are %v, and the only writable paths are /agk/out and /tmp", writable)
 	}
-	for _, target := range []string{"/agk/in/in", RepoDir, RunPath, ParamsPath, "/agk/secrets/bearer", "/etc/ssl/certs/internal-ca.pem"} {
+	for _, target := range []string{"/agk/in/in", RepoDir, RunPath, ParamsPath, SecretsDir, "/etc/ssl/certs/internal-ca.pem"} {
 		m, ok := created.Mount(target)
 		if !ok {
 			t.Errorf("nothing is bound at %s", target)
@@ -322,81 +343,6 @@ func TestOnlyTheOutputTreeIsBoundWritable(t *testing.T) {
 		}
 		if !m.ReadOnly {
 			t.Errorf("%s is bound writable", target)
-		}
-	}
-}
-
-// Policy.SecretsDir is /dev/shm on Linux, and /dev/shm is mode 1777: what the runner
-// creates under it is not a path it owns until it has checked, because anything on the
-// machine can get there first. A link left under that name would be followed and a secret
-// value written through it, mode 0444, with the parent chain that was its whole protection
-// belonging to somebody else.
-func TestASecretIsNotWrittenThroughAPathSomebodyElseGotToFirst(t *testing.T) {
-	shared := t.TempDir()
-	if err := os.Chmod(shared, 0o1777); err != nil {
-		t.Fatalf("making the shared directory world writable: %s", err)
-	}
-	elsewhere := t.TempDir()
-	if err := os.Symlink(elsewhere, filepath.Join(shared, secretsBase)); err != nil {
-		t.Fatalf("planting the link: %s", err)
-	}
-
-	id := agk.NewTaskID("01JMZ8V1P9C4", "fetch", 1, agk.Shard{})
-	w, err := newWorkdir(t.TempDir(), id, shared)
-	if err != nil {
-		if !strings.Contains(err.Error(), secretsBase) {
-			t.Fatalf("the refusal does not name what it refused: %s", err)
-		}
-		return
-	}
-	if err := writeSecret(filepath.Join(w.Secrets, "bearer"), []byte("s3cr3t-value")); err != nil {
-		t.Fatalf("writing the value: %s", err)
-	}
-
-	var landed []string
-	filepath.Walk(elsewhere, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			landed = append(landed, path)
-		}
-		return nil
-	})
-	if len(landed) > 0 {
-		t.Errorf("the secret value was written through a path somebody else controls: %v", landed)
-	}
-}
-
-// The same question without a link. A directory already there, group and world writable,
-// is not a directory a secret value may be written under: the value itself is readable by
-// design, and the mode of its parents is the whole of what protects it.
-func TestASecretIsNotWrittenUnderADirectoryAnybodyCanWriteTo(t *testing.T) {
-	shared := t.TempDir()
-	if err := os.Chmod(shared, 0o1777); err != nil {
-		t.Fatalf("making the shared directory world writable: %s", err)
-	}
-	base := filepath.Join(shared, secretsBase)
-	if err := os.Mkdir(base, 0o777); err != nil {
-		t.Fatalf("planting the directory: %s", err)
-	}
-	if err := os.Chmod(base, 0o777); err != nil {
-		t.Fatalf("planting the mode: %s", err)
-	}
-
-	id := agk.NewTaskID("01JMZ8V1P9C4", "fetch", 1, agk.Shard{})
-	w, err := newWorkdir(t.TempDir(), id, shared)
-	if err != nil {
-		return
-	}
-	if err := writeSecret(filepath.Join(w.Secrets, "bearer"), []byte("s3cr3t-value")); err != nil {
-		t.Fatalf("writing the value: %s", err)
-	}
-
-	for dir := w.Secrets; strings.HasPrefix(dir, base); dir = filepath.Dir(dir) {
-		info, err := os.Stat(dir)
-		if err != nil {
-			t.Fatalf("reading %s: %s", dir, err)
-		}
-		if info.Mode().Perm()&0o022 != 0 {
-			t.Errorf("%s is mode %o, and a secret value under it is readable by every account on the host", dir, info.Mode().Perm())
 		}
 	}
 }
@@ -510,7 +456,7 @@ func TestADirectoryLeftBehindIsSaidOnAdoptionAndOnACompletedKey(t *testing.T) {
 	// The key has ended on this host, so a further delivery is refused before anything
 	// is created, and takes away what a directory of that key still holds.
 	os.Chmod(locked, 0o755)
-	w, err := newWorkdir(r.cfg.WorkRoot, task.ID, r.cfg.Policy.SecretsDir)
+	w, err := newWorkdir(r.cfg.WorkRoot, task.ID)
 	if err != nil {
 		t.Fatalf("newWorkdir: %s", err)
 	}

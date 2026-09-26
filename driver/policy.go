@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -88,35 +87,6 @@ const (
 // Lifted says whether the refusal has been lifted.
 func (s SeccompFloor) Lifted() bool { return s == SeccompLifted }
 
-// SecretsFloor says whether a secrets directory that is not a tmpfs mounted
-// noexec,nosuid,nodev is refused.
-//
-// A secret value is written on this side and bound into the container, because a tmpfs the
-// daemon creates at container start is empty and cannot be pre-populated. A bind keeps the
-// flags of the mount its source sits on, so the flags the Tmpfs row promises for a secret
-// mount point are the flags of the host directory, and a runner holds that directory to
-// them rather than trusting whatever /dev/shm happens to be mounted with: on most
-// distributions it is nosuid,nodev and not noexec.
-//
-// It is an enumeration for the reason the other two floors are one, and like the seccomp
-// floor no line of runner.toml lifts it. The callers that are not runners lift it, agk run
-// --local first among them, since a laptop has no such tmpfs and macOS has no tmpfs at
-// all; the driver then says where a value lands instead.
-type SecretsFloor int
-
-const (
-	// SecretsTmpfsRequired refuses a secrets directory that is not a tmpfs mounted
-	// noexec,nosuid,nodev, and an empty one. It is the zero value, so a Policy{} is a
-	// runner's.
-	SecretsTmpfsRequired SecretsFloor = iota
-
-	// SecretsTmpfsLifted takes whatever directory the policy names, and none.
-	SecretsTmpfsLifted
-)
-
-// Lifted says whether the refusal has been lifted.
-func (s SecretsFloor) Lifted() bool { return s == SecretsTmpfsLifted }
-
 // DigestFloor says whether a task's image is held to what a server runs: an image named by
 // digest, and for a step that is not a script step, one carrying /agk/brick.yaml.
 //
@@ -178,10 +148,6 @@ type Policy struct {
 	// RequireSeccomp is the seccomp floor, which no key of the file sets.
 	RequireSeccomp SeccompFloor
 
-	// RequireSecretsTmpfs holds SecretsDir to a tmpfs mounted noexec,nosuid,nodev,
-	// and no key of the file sets it either.
-	RequireSecretsTmpfs SecretsFloor
-
 	// RequireDigest holds a task's image to name@sha256, and a brick's image to its
 	// manifest, and no key of the file sets it either.
 	RequireDigest DigestFloor
@@ -220,17 +186,6 @@ type Policy struct {
 	// a configuration that is not there.
 	Source string
 
-	// SecretsDir is the host directory secret values are written under before they
-	// are bound at /agk/secrets/<name>. It is a tmpfs where the platform has one,
-	// /dev/shm on Linux, because a value that touched a disk is a value somebody has
-	// to erase. Empty means the task's working directory, which is the laptop case
-	// and which the driver says out loud.
-	//
-	// A runner holds it to more than a tmpfs, RequireSecretsTmpfs, and /dev/shm is
-	// mounted without noexec on most distributions, so an installation mounts one of
-	// its own and names it with secrets_dir.
-	SecretsDir string
-
 	// LogMaxBytes and LogMaxLines cap the collected standard error, and standard error
 	// alone: standard output belongs to the result, which has limits of its own. A log
 	// is a diagnostic and not a payload: the cap keeps one runaway task from filling
@@ -267,7 +222,9 @@ type Policy struct {
 	// lucky, with agk items, agk emit and agk attach. It is a convenience, never a
 	// requirement". It is a runner setting because which binary is on this host is a
 	// fact about the host and not about a workflow, and empty is a runner that has
-	// none to offer, which binds nothing.
+	// none to offer, which binds nothing. It is also what fills a task's secrets
+	// volume, in a container of the runner's own, so a runner with none refuses a
+	// task given a secret.
 	Helper string
 
 	// HooksSkipped says the file carries a [hooks] table, which this version reads and
@@ -276,6 +233,13 @@ type Policy struct {
 	// attaches a licence, or a post_task that wipes a scratch disk, is relying on it
 	// having run.
 	HooksSkipped bool
+
+	// SecretsDirSkipped is the secrets_dir the file names, which this version reads and
+	// uses for nothing: a task's secret values are on a tmpfs volume of its own, which no
+	// directory of the host names. The line is still read rather than refused, so that a
+	// file written for the version before this one does not stop its runner, and the
+	// driver says once that it can go, with what the version before left under it.
+	SecretsDirSkipped string
 }
 
 // DefaultPolicy is the runner as it is installed: both floors in place, the documented
@@ -283,10 +247,9 @@ type Policy struct {
 // runner.
 func DefaultPolicy() Policy {
 	return Policy{
-		RequireUsernsRemap:  RemapRequired,
-		RequireSeccomp:      SeccompRequired,
-		RequireSecretsTmpfs: SecretsTmpfsRequired,
-		RequireDigest:       DigestRequired,
+		RequireUsernsRemap: RemapRequired,
+		RequireSeccomp:     SeccompRequired,
+		RequireDigest:      DigestRequired,
 
 		// The daemon's own default for POST /containers/{id}/stop. Taking a
 		// different number here would make the driver's grace and the grace of a
@@ -314,30 +277,12 @@ func DefaultPolicy() Policy {
 		// pages are host memory, which is why this is sized and not left open.
 		TmpSize: 64 << 20,
 
-		SecretsDir: defaultSecretsDir(),
-
 		// A log is read by a person. Four megabytes is the same order as the
 		// largest envelope a port may carry, so the largest thing one task hands
 		// back is the same size whichever way it hands it back.
 		LogMaxBytes: 4 << 20,
 		LogMaxLines: 50000,
 	}
-}
-
-// defaultSecretsDir answers where a secret value may be written without touching a disk.
-//
-// /dev/shm is a tmpfs on every Linux distribution that matters, which is what agk run
-// --local writes on there. It is not what a runner writes on: most distributions mount it
-// without noexec, so a runner is refused it and names a tmpfs of its own with secrets_dir.
-// Elsewhere, and macOS is the case
-// that matters because agk run --local has to work there, there is no equivalent path,
-// so this is empty and the value lands in the task's working directory instead. That is
-// a real difference and the driver announces it rather than pretending otherwise.
-func defaultSecretsDir() string {
-	if runtime.GOOS == "linux" {
-		return "/dev/shm"
-	}
-	return ""
 }
 
 // LoadPolicy reads the runner's configuration file.
@@ -414,6 +359,9 @@ func readPolicy(path string, text []byte) (Policy, error) {
 	// Read off the document rather than the struct: an empty [hooks] decodes into
 	// nothing, and it is still a table somebody wrote.
 	_, p.HooksSkipped = raw["hooks"]
+	if f.SecretsDir != nil {
+		p.SecretsDirSkipped = *f.SecretsDir
+	}
 	return p, nil
 }
 
@@ -469,7 +417,7 @@ type fileUlimit struct {
 // the file has no use for.
 var fileKeys = map[string]string{
 	"require_userns_remap": "true or false",
-	"secrets_dir":          `an absolute path in quotation marks, such as "/run/agentiik/secrets"`,
+	"secrets_dir":          `a path in quotation marks, which this version reads and uses for nothing`,
 	"stop_grace":           `a whole number of seconds written as a duration in quotation marks, such as "10s"`,
 	"helper":               `an absolute path in quotation marks, such as "/usr/local/lib/agentiik/agk-helper"`,
 	"seccomp_profile":      `the absolute path of a JSON seccomp profile in quotation marks, such as "/etc/agentiik/seccomp.json"`,
@@ -497,7 +445,7 @@ var fileKeys = map[string]string{
 
 // keysInOrder is what a refusal of an unknown key lists, in the order the reference
 // table on the page gives them.
-const keysInOrder = "require_userns_remap, secrets_dir, stop_grace, helper, seccomp_profile, apparmor_profile, selinux_label, allow_cap_add, pids_limit, memory_cap, cpu_cap, tmp_size, log_max_bytes, log_max_lines, [ulimits] with nofile and nproc, each a table of soft and hard, and [hooks] with timeout, pre_task and post_task"
+const keysInOrder = "require_userns_remap, stop_grace, helper, seccomp_profile, apparmor_profile, selinux_label, allow_cap_add, pids_limit, memory_cap, cpu_cap, tmp_size, log_max_bytes, log_max_lines, [ulimits] with nofile and nproc, each a table of soft and hard, and [hooks] with timeout, pre_task and post_task"
 
 // notTOML refuses a file the first pass could not read as a document at all.
 func notTOML(path string, err error) error {
@@ -639,7 +587,6 @@ func (f runnerFile) apply(path string, p *Policy) error {
 		value *string
 		into  *string
 	}{
-		{"secrets_dir", f.SecretsDir, &p.SecretsDir},
 		{"helper", f.Helper, &p.Helper},
 	} {
 		if s.value == nil {

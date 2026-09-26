@@ -123,9 +123,12 @@ func carrierWith(t *testing.T, run func(dockertest.Container) (int, error), with
 	t.Cleanup(func() { daemon.Close() })
 	policy := driver.DefaultPolicy()
 	policy.RequireUsernsRemap = driver.RemapLifted
-	policy.RequireSecretsTmpfs = driver.SecretsTmpfsLifted
-	policy.SecretsDir = ""
 	policy.StopGrace = 200 * time.Millisecond
+	// The helper fills a task's secrets volume, and the fake daemon plays it.
+	policy.Helper = filepath.Join(t.TempDir(), "agk")
+	if err := os.WriteFile(policy.Helper, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if with != nil {
 		with(&policy)
 	}

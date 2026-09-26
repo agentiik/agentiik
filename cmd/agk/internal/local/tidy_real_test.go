@@ -18,8 +18,7 @@ import (
 // workflow a hundred times was left with a hundred skeletons of empty directories, in the one
 // directory of the layout that sits outside the working directory and that therefore nobody
 // thinks to look in. A directory nothing clears is also a directory nobody notices has stopped
-// being empty, and this one is where a task's secret values are written on a platform with no
-// tmpfs.
+// being empty.
 
 // oneStepWorkflow is the smallest run there is: one script step that writes one port.
 const oneStepWorkflow = `
