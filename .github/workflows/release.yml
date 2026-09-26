@@ -1,0 +1,263 @@
+# The images an installation pulls, ghcr.io/agentiik/api, controller and runner, built for
+# linux/amd64 and linux/arm64 from the static binaries build/*.Dockerfile say they hold, and pushed
+# with the GITHUB_TOKEN, so that publishing needs no secret of its own.
+#
+#   a v* tag        pushes X.Y.Z, vX.Y.Z and latest
+#   main            pushes dev, the same build as a release, at every commit
+#   another branch  builds everything and pushes to a registry inside the job, never to ghcr.io
+#   dispatch        builds an existing tag again, pushing it only from main and with dry_run off
+#
+# A branch builds the release too, so that a Dockerfile a pull request breaks is found on the pull
+# request and not at the tag, when the version has already been said out loud.
+name: release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing release tag to build again, such as v0.2.1.
+        required: true
+        type: string
+      dry_run:
+        description: Build and check everything, and push nothing to ghcr.io.
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One build of a ref at a time. A newer commit makes the older one's dev and the older one's dry run
+# moot; a tag is never cancelled, since a release pushed halfway is worse than one pushed twice.
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      # Each image is published or not on its own: one that fails does not hold the others back,
+      # and the run is red either way.
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            commands: agentiik-api
+          - image: controller
+            commands: agentiik-controller
+          # The helper goes into the runner's image, where a script step is given it.
+          - image: runner
+            commands: agk-runner agk-helper
+
+    defaults:
+      run:
+        # bash with -eo pipefail, which a step that names no shell does not get.
+        shell: bash
+
+    # The registry a dry run pushes to, so that a branch goes through every step a release does,
+    # the push and the checks of what was pushed included, with nothing leaving the job.
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
+    steps:
+      # What to build and where it goes, decided from the event alone, before anything is checked
+      # out. Only a tag and main publish: a branch, or a dispatch from one, is a dry run whatever
+      # it asks for, since dry_run is a field anybody who can push a branch can untick.
+      - name: plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          case "$EVENT/$REF_TYPE" in
+            push/tag) kind=release tag=$REF_NAME publish=true ;;
+            push/branch)
+              kind=dev tag=
+              if [ "$REF" = refs/heads/main ]; then publish=true; else publish=false; fi ;;
+            workflow_dispatch/*)
+              kind=release tag=$INPUT_TAG
+              if [ "$REF" = refs/heads/main ] && [ "$DRY_RUN" = false ]; then publish=true; else publish=false; fi ;;
+            *) echo "release does not run on $EVENT"; exit 1 ;;
+          esac
+          # A tag is a version and nothing else, since the image is tagged with what follows its v.
+          if [ "$kind" = release ] && ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "$tag is not a release tag vMAJOR.MINOR.PATCH"; exit 1
+          fi
+          if [ "$kind" = release ]; then checkout=refs/tags/$tag; else checkout=$GITHUB_SHA; fi
+          if [ "$publish" = true ]; then registry=ghcr.io/agentiik; else registry=localhost:5000/agentiik; fi
+          echo "$EVENT on $REF: $kind ${tag:-$GITHUB_SHA}, publish=$publish, to $registry"
+          {
+            echo "kind=$kind"
+            echo "tag=$tag"
+            echo "checkout=$checkout"
+            echo "publish=$publish"
+            echo "registry=$registry"
+          } >> "$GITHUB_OUTPUT"
+
+      # With every tag, since the version the binaries record is read from the one on the commit,
+      # and whether this release takes latest from the ones beside it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.plan.outputs.checkout }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # The version go.mod requires, pinned to the minor for the reason test.yml gives.
+          go-version: '1.27'
+
+      # The binaries, built as build/*.Dockerfile and cmd/*/static_test.go build them, into a
+      # context of their own outside the checkout, which a file there would leave dirty.
+      - name: binaries
+        env:
+          COMMANDS: ${{ matrix.commands }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/context"
+          for arch in amd64 arm64; do
+            for cmd in $COMMANDS; do
+              CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags='-s -w' \
+                -o "$RUNNER_TEMP/context/$cmd-linux-$arch" ./cmd/$cmd
+            done
+          done
+          ls -l "$RUNNER_TEMP/context"
+
+      # The version the image is labelled with is the one the binary records, which is what
+      # agk-runner version prints and join sends: the tag at a release, a pseudo-version on main.
+      # A release whose binary records anything but its tag was built from something else.
+      #
+      # latest follows the highest release, and never a pre-release or a patch to an older minor,
+      # which would move it backwards.
+      - name: version
+        id: version
+        env:
+          KIND: ${{ steps.plan.outputs.kind }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          COMMANDS: ${{ matrix.commands }}
+        run: |
+          first=${COMMANDS%% *}
+          recorded=$(go version -m "$RUNNER_TEMP/context/$first-linux-amd64" | awk '$1 == "mod" { print $3; exit }')
+          echo "$first records $recorded"
+          case "$recorded" in
+            v*) ;;
+            *) echo "$first records no version, so the image would say nothing of what it holds"; exit 1 ;;
+          esac
+          if [ "$KIND" = release ]; then
+            if [ "$recorded" != "$TAG" ]; then echo "$first records $recorded, and the tag is $TAG"; exit 1; fi
+            tags="$TAG ${TAG#v}"
+            highest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            if [ "$TAG" = "$highest" ]; then tags="$tags latest"; else echo "$TAG is not the highest release ($highest), so latest stays where it is"; fi
+          else
+            tags=dev
+          fi
+          echo "version ${recorded#v}, tags $tags"
+          {
+            echo "version=${recorded#v}"
+            echo "revision=$(git rev-parse HEAD)"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      # arm64 under QEMU for the one RUN step the api and controller images take from alpine; the
+      # binaries themselves are cross-compiled above. The builder shares the job's network, so a dry
+      # run reaches the registry at localhost.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - uses: docker/login-action@v3
+        if: steps.plan.outputs.publish == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The Dockerfile's labels go on each platform's image. The index carries them too, since
+      # ghcr.io reads a multi-platform package's description and source from the index and not from
+      # the images under it; they are read from the Dockerfile, so that it stays the one place they
+      # are written.
+      #
+      # No provenance attestation: it would add an unknown/unknown entry beside the two platforms,
+      # and what the release attests and signs is v0.8.0's.
+      - name: build and push
+        env:
+          IMAGE: ${{ matrix.image }}
+          REGISTRY: ${{ steps.plan.outputs.registry }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REVISION: ${{ steps.version.outputs.revision }}
+          TAGS: ${{ steps.version.outputs.tags }}
+        run: |
+          dockerfile=build/$IMAGE.Dockerfile
+          label() { sed -n "s/.*org\.opencontainers\.image\.$1=\"\([^\"]*\)\".*/\1/p" "$dockerfile"; }
+          args=()
+          for t in $TAGS; do args+=(-t "$REGISTRY/$IMAGE:$t"); done
+          for key in title description source licenses; do
+            value=$(label $key)
+            test -n "$value" || { echo "$dockerfile has no org.opencontainers.image.$key"; exit 1; }
+            args+=(--annotation "index:org.opencontainers.image.$key=$value")
+          done
+          args+=(--annotation "index:org.opencontainers.image.version=$VERSION")
+          args+=(--annotation "index:org.opencontainers.image.revision=$REVISION")
+          docker buildx build --platform linux/amd64,linux/arm64 -f "$dockerfile" \
+            --build-arg VERSION="$VERSION" --build-arg REVISION="$REVISION" \
+            --provenance=false --metadata-file "$RUNNER_TEMP/metadata.json" \
+            "${args[@]}" --push "$RUNNER_TEMP/context"
+
+      # What was pushed, read back from the registry: one index, both platforms and nothing else,
+      # every tag on that index, and each platform's image labelled with this version and commit.
+      - name: check
+        env:
+          IMAGE: ${{ matrix.image }}
+          REGISTRY: ${{ steps.plan.outputs.registry }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REVISION: ${{ steps.version.outputs.revision }}
+          TAGS: ${{ steps.version.outputs.tags }}
+        run: |
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/metadata.json")
+          case "$digest" in sha256:*) ;; *) echo "the build reported no digest"; exit 1 ;; esac
+          ref=$REGISTRY/$IMAGE@$digest
+          echo "$ref"
+
+          raw=$(docker buildx imagetools inspect --raw "$ref")
+          echo "$raw" | jq .
+          platforms=$(echo "$raw" | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')
+          test "$platforms" = "linux/amd64 linux/arm64" || { echo "$ref holds $platforms"; exit 1; }
+          for key in source version revision licenses; do
+            test -n "$(echo "$raw" | jq -r --arg k "org.opencontainers.image.$key" '.annotations[$k] // empty')" \
+              || { echo "the index carries no org.opencontainers.image.$key"; exit 1; }
+          done
+
+          for t in $TAGS; do
+            got=$(docker buildx imagetools inspect --raw "$REGISTRY/$IMAGE:$t" | sha256sum | cut -d' ' -f1)
+            test "sha256:$got" = "$digest" || { echo "$IMAGE:$t is sha256:$got, not $digest"; exit 1; }
+            echo "$IMAGE:$t -> $digest"
+          done
+
+          for platform in linux/amd64 linux/arm64; do
+            config=$(docker buildx imagetools inspect "$ref" --format "{{json (index .Image \"$platform\")}}")
+            for pair in "version=$VERSION" "revision=$REVISION" "source=https://github.com/agentiik/agentiik"; do
+              want=${pair#*=}
+              got=$(echo "$config" | jq -r --arg k "org.opencontainers.image.${pair%%=*}" '.config.Labels[$k]')
+              test "$got" = "$want" || { echo "$platform is labelled ${pair%%=*} $got, want $want"; exit 1; }
+            done
+            echo "$platform: $(echo "$config" | jq -c '{architecture, user: .config.User}')"
+          done
+
+          echo "### $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ref\`, tagged $TAGS" >> "$GITHUB_STEP_SUMMARY"
