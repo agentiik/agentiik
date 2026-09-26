@@ -48,6 +48,7 @@ const (
 	apiDir        = "api"
 	controllerDir = "controller"
 	natsDir       = "nats"
+	busDir        = "bus"
 	runnerDir     = "runner"
 	objectsDir    = "objects"
 )
@@ -56,11 +57,14 @@ const (
 //
 //	api/           mounted at /agentiik in the API, owned by agent, 0700
 //	  master-key, presign-key, database-password, operator-token.sha256
-//	  bus/          accounts.conf, account.seed, control-plane.creds, as bus-init writes them
+//	  bus/          accounts.conf and account.seed, as bus-init writes them
 //	  tls/          server.pem and server.key, the certificate the API and the bus serve
 //	  trust/        agentiik.pem, the certificate, trusted through SSL_CERT_DIR
 //	controller/    mounted at /agentiik in the controller, owned by agent, 0700
-//	  database-password, bus/control-plane.creds, trust/agentiik.pem
+//	  database-password, trust/agentiik.pem
+//	bus/           mounted at /bus, read and write in the API, read only in the controller,
+//	               owned by agent, 0700
+//	  control-plane.creds, which the API renews itself
 //	nats/          mounted at /nats in the bus, which runs as root, 0700
 //	  nats.conf, accounts.conf, server.pem, server.key, jetstream/
 //	runner/        mounted at /etc/agentiik in the runner, 0755
@@ -69,7 +73,11 @@ const (
 //
 // Each service is given its own copy of what it reads rather than a directory of another's, so
 // that the controller never mounts the one holding the master key, the bus never the one holding
-// the account seed, and the runner nothing of the control plane's but the certificate.
+// the account seed, and the runner nothing of the control plane's but the certificate. The control
+// plane's credential is the one file two services share, in a directory holding nothing else: the
+// API renews it while it runs, and a copy it wrote for the controller in the controller's own
+// directory would be a directory holding the controller's database password that the API writes
+// to. The controller only reads it, and reads nothing of the API's there.
 type layout string
 
 func (l layout) path(parts ...string) string {
@@ -87,10 +95,14 @@ type preparer struct {
 	// since nobody else may give a file away. On the descriptor rather than a path, so that a
 	// link a service put in its own volume is never followed by root.
 	chown func(f *os.File) error
+
+	// device is the file system a directory is on, which tells a volume mounted there from a
+	// directory of init's own container.
+	device func(path string) (uint64, error)
 }
 
 func newPreparer(dir string, now time.Time, out io.Writer) *preparer {
-	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(*os.File) error { return nil }}
+	p := &preparer{dir: layout(dir), now: now, out: out, chown: func(*os.File) error { return nil }, device: deviceOf}
 	if os.Geteuid() == 0 {
 		p.chown = func(f *os.File) error { return f.Chown(agent, agent) }
 	}
@@ -167,8 +179,8 @@ func (p *preparer) directories() error {
 		{p.dir.path(apiDir, "tls"), 0o700, true},
 		{p.dir.path(apiDir, "trust"), 0o755, true},
 		{p.dir.path(controllerDir), 0o700, true},
-		{p.dir.path(controllerDir, "bus"), 0o700, true},
 		{p.dir.path(controllerDir, "trust"), 0o755, true},
+		{p.dir.path(busDir), 0o700, true},
 		{p.dir.path(natsDir), 0o700, false},
 		{p.dir.path(natsDir, "jetstream"), 0o700, false},
 		{p.dir.path(runnerDir), 0o755, false},
@@ -505,63 +517,236 @@ func (p *preparer) operatorToken(token config.Secret) error {
 	return p.write(path, []byte(hex.EncodeToString(sum[:])+"\n"), 0o600, true)
 }
 
-// bus writes the installation's bus identity once, as bus-init does, renews the control plane's
-// credential where it is near its expiry, as bus-credential does, and gives the bus and the
-// controller their copies, with the bus's configuration.
+// bus writes the installation's bus identity once, as bus-init does, gives the control plane its
+// credential where the API and the controller read it, renewing it where it is near its expiry, as
+// the API does while it runs, and gives the bus its copy of the accounts, with its configuration.
 func (p *preparer) bus() error {
+	if err := p.busMounted(); err != nil {
+		return err
+	}
 	dir := p.dir.path(apiDir, "bus")
 	accounts := filepath.Join(dir, bus.AccountsFile)
-	creds := filepath.Join(dir, bus.ControlPlaneFile)
-	switch present := p.busFiles(dir); {
-	case present == 0:
+	switch {
+	case p.busFiles(dir) == 0:
 		if _, err := bus.NewInstallation(dir, p.now.Add(controlPlaneLife)); err != nil {
 			return err
 		}
 		p.say("created the installation's bus identity")
-	case present != 3:
+	case !p.identity(dir):
 		if err := p.repairBus(dir); err != nil {
 			return err
 		}
 	default:
-		// Renewed from when the API starts warning, so that the chore it warns of is done by
-		// the next docker compose up rather than by a person.
-		expires, err := controlPlaneExpiry(creds)
-		if err != nil {
-			return err
-		}
-		if !expires.IsZero() && expires.Sub(p.now) <= credentialWarning {
-			if _, _, err := bus.RenewControlPlane(dir, p.now.Add(controlPlaneLife)); err != nil {
-				return err
-			}
-			p.say("renewed the control plane's bus credential, which expired or was to expire at %s", expires.UTC().Format(time.RFC3339))
-		} else {
-			p.say("kept the installation's bus identity")
-		}
+		p.say("kept the installation's bus identity")
 	}
-	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile, bus.ControlPlaneFile} {
+	if err := p.controlPlane(dir); err != nil {
+		return err
+	}
+	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile} {
 		if err := p.settle(filepath.Join(dir, f), 0o600, true); err != nil {
 			return err
 		}
 	}
-	for _, c := range []struct {
-		from, to string
-		toAgent  bool
-	}{
-		{accounts, p.dir.path(natsDir, bus.AccountsFile), false},
-		{creds, p.dir.path(controllerDir, "bus", bus.ControlPlaneFile), true},
-	} {
-		content, err := readRegular(c.from)
-		if err != nil {
-			return fmt.Errorf("%s could not be read: %w", c.from, err)
-		}
-		if err := p.write(c.to, content, 0o600, c.toAgent); err != nil {
-			return err
-		}
+	content, err := readRegular(accounts)
+	if err != nil {
+		return fmt.Errorf("%s could not be read: %w", accounts, err)
+	}
+	if err := p.write(p.dir.path(natsDir, bus.AccountsFile), content, 0o600, false); err != nil {
+		return err
 	}
 	return p.write(p.dir.path(natsDir, "nats.conf"), []byte(natsConf), 0o644, false)
 }
 
-// busFiles is how many of the three files of the bus identity dir holds.
+// busMounted refuses a bus directory that is no volume of its own where the API's is one, before
+// the control plane's credential is moved there.
+//
+// That is a Compose file from before the bus volume, run with a newer image: init would make the
+// bus directory in its own container, move the credential into it and remove the copies the API and
+// the controller read, and both would refuse to start, the credential gone with init's container.
+// A directory on the file system of AGK_INIT_DIR itself, while the API's is on another, is that.
+// Where every directory is on one file system, as on a host with no volumes, there is nothing to
+// tell, and nothing is refused.
+func (p *preparer) busMounted() error {
+	parent, err := p.device(string(p.dir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir, err)
+	}
+	api, err := p.device(p.dir.path(apiDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(apiDir), err)
+	}
+	shared, err := p.device(p.dir.path(busDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(busDir), err)
+	}
+	if api != parent && shared == parent {
+		return fmt.Errorf("%s is no volume, while %s is one: the Compose file is older than the bus volume, which holds the control plane's bus credential for the API and the controller. Download the current compose.yaml, which mounts it in init, the API and the controller, and run docker compose up -d again; nothing was moved", p.dir.path(busDir), p.dir.path(apiDir))
+	}
+	return nil
+}
+
+// deviceOf is the file system path is on.
+func deviceOf(path string) (uint64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, nil
+	}
+	return uint64(st.Dev), nil
+}
+
+// identity says whether dir holds the account and its seed, which is a whole identity once the
+// control plane's credential lives in the bus directory rather than beside them.
+func (p *preparer) identity(dir string) bool {
+	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile} {
+		if _, err := os.Lstat(filepath.Join(dir, f)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// controlPlane gives the control plane its credential in the bus directory, which the API and the
+// controller both read and the API renews.
+//
+// One in the identity's directory is the newest there is, and is moved to the bus directory: it is
+// where an installation prepared before that directory existed holds it, with a copy in the
+// controller's, and where bus-init, bus-credential and an identity created again write theirs.
+// Both are removed once the bus directory holds it, since a copy nothing renews any longer is a
+// secret left on the disk for nothing, and one a person might name in a setting to find expired.
+// Where there is none anywhere, one is minted under the account. One the bus directory holds is
+// renewed from when the API would warn of it, as the API renews it, so that an installation whose
+// API cannot renew it still has it renewed at the next docker compose up.
+func (p *preparer) controlPlane(identity string) error {
+	creds := p.dir.path(busDir, bus.ControlPlaneFile)
+	if err := p.removeLeftovers(); err != nil {
+		return err
+	}
+	legacy := filepath.Join(identity, bus.ControlPlaneFile)
+	content, err := readRegular(legacy)
+	switch {
+	case err == nil:
+		if err := p.write(creds, content, 0o600, true); err != nil {
+			return err
+		}
+		p.say("moved the control plane's bus credential to %s, which the API and the controller share", filepath.Dir(creds))
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%s could not be read: %w", legacy, err)
+	default:
+		_, err := os.Lstat(creds)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if err := p.mintControlPlane(identity, creds); err != nil {
+				return err
+			}
+			p.say("minted the control plane's bus credential")
+		case err != nil:
+			return fmt.Errorf("%s could not be looked at: %w", creds, err)
+		}
+	}
+	expires, err := controlPlaneExpiry(creds)
+	if err != nil {
+		return err
+	}
+	if !expires.IsZero() && expires.Sub(p.now) <= credentialWarning {
+		if err := p.mintControlPlane(identity, creds); err != nil {
+			return err
+		}
+		p.say("renewed the control plane's bus credential, which expired or was to expire at %s", expires.UTC().Format(time.RFC3339))
+	}
+	if err := p.settle(creds, 0o600, true); err != nil {
+		return err
+	}
+	if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s, which the control plane's bus credential moved from, could not be removed: %w", legacy, err)
+	}
+	return p.removeControllerCopy()
+}
+
+// removeControllerCopy removes the copy of the control plane's credential an installation
+// prepared before the bus directory existed gave the controller, and the directory that held it.
+//
+// Through the controller's directory opened as a root, since the controller may write to its own
+// volume while init runs as root: a link it put in place of the old directory, even between one
+// look and the next, can name nothing outside that volume, and the link itself is what is removed.
+// A directory holding anything else is left, which is not init's.
+func (p *preparer) removeControllerCopy() error {
+	root, err := os.OpenRoot(p.dir.path(controllerDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be opened: %w", p.dir.path(controllerDir), err)
+	}
+	defer root.Close()
+	old := filepath.Join("bus", bus.ControlPlaneFile)
+	info, err := root.Lstat("bus")
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%s could not be looked at: %w", p.dir.path(controllerDir, "bus"), err)
+	case info.IsDir():
+		if err := root.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s, which the control plane's bus credential moved from, could not be removed: %w", p.dir.path(controllerDir, old), err)
+		}
+	}
+	if err := root.Remove("bus"); err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("%s could not be removed: %w", p.dir.path(controllerDir, "bus"), err)
+	}
+	return nil
+}
+
+// removeLeftovers removes what a renewal cut off part way left in the bus directory: the file it
+// writes beside the credential before renaming it over it, which holds a credential as live as the
+// one it was to replace and which nothing else ever removes.
+//
+// Through the directory opened as a root, since the API writes to it while init runs as root: an
+// entry is removed itself, a link included, and nothing it names is followed. A renewal the API is
+// making at this very moment loses its file and fails, and the API tries again the next day.
+func (p *preparer) removeLeftovers() error {
+	root, err := os.OpenRoot(p.dir.path(busDir))
+	if err != nil {
+		return fmt.Errorf("%s could not be opened: %w", p.dir.path(busDir), err)
+	}
+	defer root.Close()
+	d, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("%s could not be read: %w", p.dir.path(busDir), err)
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("%s could not be read: %w", p.dir.path(busDir), err)
+	}
+	removed := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "."+bus.ControlPlaneFile+"-") {
+			continue
+		}
+		if err := root.Remove(e.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s, which a renewal cut off part way left, could not be removed: %w", p.dir.path(busDir, e.Name()), err)
+		}
+		removed++
+	}
+	if removed > 0 {
+		p.say("removed %d file(s) a renewal of the control plane's bus credential cut off part way left in %s", removed, p.dir.path(busDir))
+	}
+	return nil
+}
+
+// mintControlPlane writes at creds a new control plane credential under the account identity holds,
+// valid controlPlaneLife.
+func (p *preparer) mintControlPlane(identity, creds string) error {
+	content, _, err := bus.MintControlPlane(identity, p.now.Add(controlPlaneLife))
+	if err != nil {
+		return err
+	}
+	return p.write(creds, content, 0o600, true)
+}
+
+// busFiles is how many of the three files of the bus identity dir holds, the control plane's
+// credential as bus-init writes it among them.
 func (p *preparer) busFiles(dir string) int {
 	n := 0
 	for _, f := range []string{bus.AccountsFile, bus.AccountSeedFile, bus.ControlPlaneFile} {
@@ -573,23 +758,13 @@ func (p *preparer) busFiles(dir string) int {
 }
 
 // repairBus finishes a bus identity whose creation was cut off part way, by a crash or a power cut
-// between two of its files, which bus.NewInstallation cannot undo.
+// between two of its files, which bus.NewInstallation cannot undo, leaving the account or its seed
+// without the other. A credential missing beside both is no repair: controlPlane mints one.
 //
-// The account and its seed are there and the credential is not: a credential is minted under that
-// account, as bus-credential does. Otherwise, where the bus was never given the accounts, nothing
-// ever trusted what is there, and it is created again. Where the bus was given them, the streams
-// and the tasks on them are under that account, and a new one would lose them without a word, so
-// init refuses and says what a person decides.
+// Where the bus was never given the accounts, nothing ever trusted what is there, and it is created
+// again. Where the bus was given them, the streams and the tasks on them are under that account,
+// and a new one would lose them without a word, so init refuses and says what a person decides.
 func (p *preparer) repairBus(dir string) error {
-	_, accountsErr := os.Lstat(filepath.Join(dir, bus.AccountsFile))
-	_, seedErr := os.Lstat(filepath.Join(dir, bus.AccountSeedFile))
-	if accountsErr == nil && seedErr == nil {
-		if _, _, err := bus.RenewControlPlane(dir, p.now.Add(controlPlaneLife)); err != nil {
-			return err
-		}
-		p.say("minted the control plane's bus credential, which a creation cut off part way had not written")
-		return nil
-	}
 	if _, err := os.Lstat(p.dir.path(natsDir, bus.AccountsFile)); err == nil {
 		return fmt.Errorf("%s holds part of the bus identity, and the bus was given its accounts already: an identity made again is one on which every stream and every task queued is gone, so it is a person's to decide: remove %s and %s to make it again", dir, dir, p.dir.path(natsDir, bus.AccountsFile))
 	}

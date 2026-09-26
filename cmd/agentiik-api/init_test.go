@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"io"
 	"io/fs"
 	"math/big"
@@ -28,6 +29,7 @@ import (
 	"github.com/agentiik/agentiik/internal/token"
 	"github.com/agentiik/agentiik/secret"
 	"github.com/jackc/pgx/v5"
+	natsjwt "github.com/nats-io/jwt/v2"
 )
 
 // agentiik-api init, a step at a time: each run leaves what the settings still say and changes
@@ -120,8 +122,8 @@ func TestInitKeepsWhatItMadeOnASecondRun(t *testing.T) {
 	kept := [][]string{
 		{apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"},
 		{controllerDir, "database-password"}, {apiDir, "operator-token.sha256"},
-		{apiDir, "bus", bus.AccountsFile}, {apiDir, "bus", bus.AccountSeedFile}, {apiDir, "bus", bus.ControlPlaneFile},
-		{controllerDir, "bus", bus.ControlPlaneFile}, {natsDir, bus.AccountsFile},
+		{apiDir, "bus", bus.AccountsFile}, {apiDir, "bus", bus.AccountSeedFile},
+		{busDir, bus.ControlPlaneFile}, {natsDir, bus.AccountsFile},
 		{apiDir, "tls", "server.pem"}, {apiDir, "tls", "server.key"}, {natsDir, "server.pem"}, {natsDir, "server.key"},
 	}
 	before := map[string]string{}
@@ -167,7 +169,7 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 		config.DatabaseURL:          "postgres://agentiik@/agentiik?host=/run/postgresql",
 		config.DatabasePasswordFile: filepath.Join(d.dir, apiDir, "database-password"),
 		config.BusURL:               "tls://agentiik.example.com:4222",
-		config.BusCredentialsFile:   filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile),
+		config.BusCredentialsFile:   filepath.Join(d.dir, busDir, bus.ControlPlaneFile),
 		config.BusAccountSeedFile:   filepath.Join(d.dir, apiDir, "bus", bus.AccountSeedFile),
 		config.ObjectsDir:           filepath.Join(d.dir, objectsDir),
 		config.PublicURL:            "https://agentiik.example.com:8443",
@@ -181,7 +183,6 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 	if _, err := readSettings(func(name string) (string, bool) { v, ok := env[name]; return v, ok }); err != nil {
 		t.Errorf("the API refuses what init wrote:\n%s", err)
 	}
-	env[config.BusCredentialsFile] = filepath.Join(d.dir, controllerDir, "bus", bus.ControlPlaneFile)
 	env[config.DatabasePasswordFile] = filepath.Join(d.dir, controllerDir, "database-password")
 	delete(env, config.MasterKeyFile)
 	delete(env, config.TLSCertFile)
@@ -192,7 +193,7 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 
 	for _, path := range [][]string{
 		{apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"}, {apiDir, "operator-token.sha256"},
-		{apiDir, "tls", "server.key"}, {controllerDir, "database-password"}, {controllerDir, "bus", bus.ControlPlaneFile},
+		{apiDir, "tls", "server.key"}, {controllerDir, "database-password"}, {busDir, bus.ControlPlaneFile},
 		{natsDir, "server.key"}, {natsDir, bus.AccountsFile},
 	} {
 		info, err := os.Stat(filepath.Join(append([]string{d.dir}, path...)...))
@@ -208,7 +209,7 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 	for _, path := range [][]string{
 		{apiDir}, {apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"}, {apiDir, "operator-token.sha256"},
 		{apiDir, "tls", "server.pem"}, {apiDir, "tls", "server.key"}, {apiDir, "bus", bus.AccountSeedFile},
-		{controllerDir, "database-password"}, {controllerDir, "bus", bus.ControlPlaneFile}, {objectsDir},
+		{controllerDir, "database-password"}, {busDir}, {busDir, bus.ControlPlaneFile}, {objectsDir},
 	} {
 		if !d.given[filepath.Join(append([]string{d.dir}, path...)...)] {
 			t.Errorf("%s was not given to uid %d", filepath.Join(path...), agent)
@@ -417,12 +418,12 @@ func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
 	}
 }
 
-// The control plane's credential is renewed once the API would warn of it, under the same account,
-// and the controller is given the renewed one; before that, it is kept.
+// The control plane's credential is renewed once the API would renew it, under the same account, in
+// the one file the API and the controller share; before that, it is kept.
 func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 	d := aPreparedDirectory(t)
 	d.files(t, firstRun, "localhost", "")
-	creds := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
+	creds := filepath.Join(d.dir, busDir, bus.ControlPlaneFile)
 	first, err := controlPlaneExpiry(creds)
 	if err != nil {
 		t.Fatal(err)
@@ -444,11 +445,144 @@ func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 	if renewed.Sub(later) < controlPlaneLife-time.Second || !strings.Contains(d.out.String(), "renewed") {
 		t.Errorf("inside the warning, the credential now expires at %s:\n%s", renewed, d.out.String())
 	}
-	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed {
+	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed || !issuedUnder(t, creds, filepath.Join(d.dir, apiDir, "bus", bus.AccountSeedFile)) {
 		t.Error("renewing changed the account")
 	}
-	if d.read(t, controllerDir, "bus", bus.ControlPlaneFile) != d.read(t, apiDir, "bus", bus.ControlPlaneFile) {
-		t.Error("the controller was not given the renewed credential")
+}
+
+// A Compose file older than the bus volume, run with this init, would have the credential moved
+// into init's own container and removed from where the API and the controller read it: the API's
+// directory being a volume and the bus directory not one is refused, and nothing is moved.
+func TestInitRefusesABusDirectoryThatIsNoVolume(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	old := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
+	if err := os.WriteFile(old, []byte(d.read(t, busDir, bus.ControlPlaneFile)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(d.dir, busDir, bus.ControlPlaneFile))
+	p := d.at(firstRun.Add(time.Hour))
+	p.device = func(path string) (uint64, error) {
+		if path == filepath.Join(d.dir, apiDir) {
+			return 2, nil
+		}
+		return 1, nil
+	}
+	if err := p.bus(); err == nil || !strings.Contains(err.Error(), "compose.yaml") {
+		t.Errorf("a bus directory that is no volume was taken: %v", err)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("the credential was moved all the same: %v", err)
+	}
+}
+
+// A renewal cut off between writing its file and renaming it leaves a live credential beside the
+// real one, which the next run removes, a link in its place among them, without following it.
+func TestInitRemovesWhatARenewalCutOffLeft(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	dir := filepath.Join(d.dir, busDir)
+	creds := d.read(t, busDir, bus.ControlPlaneFile)
+	leftover := filepath.Join(dir, "."+bus.ControlPlaneFile+"-1234")
+	if err := os.WriteFile(leftover, []byte(creds), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "kept")
+	if err := os.WriteFile(elsewhere, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "."+bus.ControlPlaneFile+"-5678")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Fatal(err)
+	}
+	d.out.Reset()
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	for _, gone := range []string{leftover, link} {
+		if _, err := os.Lstat(gone); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is left: %v", gone, err)
+		}
+	}
+	if _, err := os.Stat(elsewhere); err != nil {
+		t.Errorf("the file a leftover link named was removed: %v", err)
+	}
+	if d.read(t, busDir, bus.ControlPlaneFile) != creds || !strings.Contains(d.out.String(), "cut off part way left") {
+		t.Errorf("the credential changed, or the removal was not said:\n%s", d.out.String())
+	}
+}
+
+// issuedUnder says whether the credential in creds was signed by the account whose seed is in seed.
+func issuedUnder(t *testing.T, creds, seed string) bool {
+	t.Helper()
+	content, err := os.ReadFile(creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := natsjwt.ParseDecoratedJWT(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := natsjwt.DecodeUserClaims(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := natsjwt.ParseDecoratedNKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := account.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return claims.Issuer == public
+}
+
+// An installation prepared before the bus directory existed holds the control plane's credential
+// beside the identity, and a copy in the controller's directory. The next run moves it, as it is,
+// to the bus directory the API and the controller share, and removes both, so that no copy is left
+// that nothing renews; the controller's directory keeps the rest of what it holds.
+func TestInitMovesTheControlPlanesCredentialOfAnEarlierLayout(t *testing.T) {
+	d := aPreparedDirectory(t)
+	d.files(t, firstRun, "localhost", "")
+	earlier := d.read(t, busDir, bus.ControlPlaneFile)
+	old := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
+	controllers := filepath.Join(d.dir, controllerDir, "bus")
+	for _, path := range []string{old, filepath.Join(controllers, bus.ControlPlaneFile)} {
+		os.MkdirAll(filepath.Dir(path), 0o700)
+		if err := os.WriteFile(path, []byte(earlier), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.RemoveAll(filepath.Join(d.dir, busDir))
+
+	d.out.Reset()
+	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	if d.read(t, busDir, bus.ControlPlaneFile) != earlier || !strings.Contains(d.out.String(), "moved the control plane's bus credential") {
+		t.Errorf("the credential of the earlier layout was not moved as it was:\n%s", d.out.String())
+	}
+	for _, gone := range []string{old, controllers} {
+		if _, err := os.Lstat(gone); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is left: %v", gone, err)
+		}
+	}
+	if d.read(t, controllerDir, "database-password") != d.read(t, apiDir, "database-password") {
+		t.Error("the controller's directory lost its password")
+	}
+
+	// A link the controller put in place of its old directory, to the bus directory, is removed
+	// itself, and the credential it names is left.
+	if err := os.Symlink(filepath.Join(d.dir, busDir), controllers); err != nil {
+		t.Fatal(err)
+	}
+	d.files(t, firstRun.Add(2*time.Hour), "localhost", "")
+	if _, err := os.Lstat(controllers); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the link is left: %v", err)
+	}
+	if d.read(t, busDir, bus.ControlPlaneFile) != earlier {
+		t.Error("the credential was removed through a link")
 	}
 }
 
@@ -615,13 +749,13 @@ func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
 	dir := filepath.Join(d.dir, apiDir, "bus")
 	seed := d.read(t, apiDir, "bus", bus.AccountSeedFile)
 
-	os.Remove(filepath.Join(dir, bus.ControlPlaneFile))
+	creds := filepath.Join(d.dir, busDir, bus.ControlPlaneFile)
+	os.Remove(creds)
 	d.files(t, firstRun.Add(time.Hour), "localhost", "")
-	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed || d.read(t, controllerDir, "bus", bus.ControlPlaneFile) != d.read(t, apiDir, "bus", bus.ControlPlaneFile) {
-		t.Error("a missing credential was not minted under the same account and given to the controller")
+	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed || !issuedUnder(t, creds, filepath.Join(dir, bus.AccountSeedFile)) {
+		t.Error("a missing credential was not minted under the same account")
 	}
 
-	os.Remove(filepath.Join(dir, bus.ControlPlaneFile))
 	os.Remove(filepath.Join(dir, bus.AccountSeedFile))
 	p := d.at(firstRun.Add(2 * time.Hour))
 	if err := p.bus(); err == nil || !strings.Contains(err.Error(), "the bus was given its accounts") {
@@ -629,8 +763,8 @@ func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
 	}
 	os.Remove(filepath.Join(d.dir, natsDir, bus.AccountsFile))
 	d.files(t, firstRun.Add(3*time.Hour), "localhost", "")
-	if d.read(t, apiDir, "bus", bus.AccountSeedFile) == seed {
-		t.Error("an identity the bus never had was not made again")
+	if d.read(t, apiDir, "bus", bus.AccountSeedFile) == seed || !issuedUnder(t, creds, filepath.Join(dir, bus.AccountSeedFile)) {
+		t.Error("an identity the bus never had was not made again, with the control plane's credential under it")
 	}
 }
 

@@ -55,6 +55,7 @@ func readSettings(lookup config.Lookup) (settings, error) {
 
 // serveVerb is agentiik-api serve.
 func serveVerb(ctx context.Context, lookup config.Lookup, _, stderr io.Writer) int {
+	renewExpired(lookup, time.Now(), stderr)
 	s, err := readSettings(lookup)
 	if err != nil {
 		// One line per setting, each naming its variable, which is how config words them.
@@ -139,7 +140,7 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 
 	watching, stopWatching := context.WithCancel(ctx)
 	defer stopWatching()
-	go watchCredential(watching, expiry(s.Bus), log, time.Now, sleep)
+	go watchCredential(watching, expiry(s.Bus), renewer(in.issuer, s.Bus.CredentialsFile, time.Now), log, time.Now, sleep)
 
 	log.Info("serving", "address", ln.Addr().String(), "tls", s.TLS.Served(), "public_url", s.PublicURL)
 	select {
@@ -161,6 +162,10 @@ func serve(ctx context.Context, s settings, ln net.Listener, log *slog.Logger) e
 type installation struct {
 	router *api.Router
 	close  func()
+
+	// issuer mints with the account seed, a runner's bus credential and the control plane's
+	// renewed one.
+	issuer *bus.Issuer
 
 	// pool is the database the routes are served on, kept for a test to ask what its sessions
 	// are.
@@ -217,7 +222,7 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 		closeAll()
 		return nil, err
 	}
-	return &installation{router: router, close: closeAll, pool: pool}, nil
+	return &installation{router: router, close: closeAll, pool: pool, issuer: issuer}, nil
 }
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,
@@ -287,12 +292,14 @@ func instanceName(pid int) string {
 	return fmt.Sprintf("%s/%d", host, pid)
 }
 
-// credentialWarning is how long before the control plane's bus credential expires the API starts
-// saying so: fourteen days, time enough for somebody to read the warning and renew it.
+// credentialWarning is how long before the control plane's bus credential expires the API renews it,
+// and says so where it cannot: fourteen days, time enough for somebody to read the warning and put
+// right what stops the renewal, or renew it themselves.
 const credentialWarning = 14 * 24 * time.Hour
 
-// credentialRepeat is how often it says so again inside that window, since a warning said once is
-// a warning in a log nobody reads that day.
+// credentialRepeat is how often the API looks at the credential again: at most a day apart, so that
+// one replaced in its file by a shorter one is renewed within the day, and a warning is said again
+// every day it holds, since a warning said once is a warning in a log nobody reads that day.
 const credentialRepeat = 24 * time.Hour
 
 // sleep waits for d, and answers false where ctx was done first.
@@ -331,13 +338,16 @@ func expiry(b config.Bus) func() time.Time {
 	}
 }
 
-// watchCredential says when the control plane's bus credential nears its expiry, and when it
-// passes it, until ctx is done. expiry answers when it expires, from its file, at every wake.
+// watchCredential renews the control plane's bus credential from fourteen days before it expires,
+// looking at it at start and every day after, and says when it cannot, until ctx is done. expiry
+// answers when it expires, from its file, at every wake; renew renews it, and answers when the new
+// one expires, and is nil where nothing may.
 //
-// A credential renewed in its file before the old one expires silences it: the bus drops the API's
-// connection when the old one expires, and the connection comes back with the renewed one, as
-// rereadBus reads it. One renewed only after the old one expired needs a restart, since the
-// connection gave up at the bus's second refusal.
+// A credential renewed in its file before the old one expires is taken with no restart: the bus
+// drops the API's connection when the old one expires, and the connection comes back with the
+// renewed one, as rereadBus reads it, and the controller's likewise. One renewed only after the old
+// one expired needs a restart of the API, since its connection gave up at the bus's second
+// refusal, while the controller, which ended then, takes it at its own restart.
 //
 // The API goes on serving past the expiry, though what it serves narrows. Its bus connection is
 // refused from then on, so a runner pool can no longer be created, since its consumer is made ready
@@ -346,24 +356,39 @@ func expiry(b config.Bus) func() time.Time {
 // heartbeats are still heard. An API that ended would stop both, and the controller's first sweep
 // after a restart would declare lost every task in flight. The controller holds the same
 // credential and ends, so nothing new is dispatched until it is renewed.
-func watchCredential(ctx context.Context, expiry func() time.Time, log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
-	renew := "agentiik-api init, or agentiik-api bus-credential on the directory holding the bus identity, before it expires: the API and the controller take the renewed credential from their files when the bus drops the old one, with no restart"
+func watchCredential(ctx context.Context, expiry func() time.Time, renew func() (time.Time, error), log *slog.Logger, now func() time.Time, wait func(context.Context, time.Duration) bool) {
+	fix := "let the API write to the directory holding the file " + config.BusCredentialsFile + " names, or run agentiik-api init, before it expires: the API and the controller take the renewed credential from their files when the bus drops the old one, with no restart"
 	for {
 		expires := expiry()
 		if expires.IsZero() {
 			return
 		}
 		left := expires.Sub(now())
-		var next time.Duration
+		if left <= credentialWarning && renew != nil {
+			renewed, err := renew()
+			switch {
+			case err == nil && left <= 0:
+				log.Warn("renewed the control plane's bus credential, which had expired already: restart the API, whose bus connection gave up at the bus's refusal, while the controller takes it as it starts again", "expired", expires.UTC().Format(time.RFC3339), "expires", renewed.UTC().Format(time.RFC3339))
+				expires, left = renewed, renewed.Sub(now())
+			case err == nil:
+				log.Info("renewed the control plane's bus credential", "was_to_expire", expires.UTC().Format(time.RFC3339), "expires", renewed.UTC().Format(time.RFC3339))
+				expires, left = renewed, renewed.Sub(now())
+			default:
+				log.Warn("the control plane's bus credential could not be renewed", "error", err)
+			}
+		}
+		next := credentialRepeat
 		switch {
 		case left <= 0:
-			log.Error("the control plane's bus credential has expired, and the bus refuses it: the controller, which holds the same credential, ends, so nothing is dispatched until it is renewed, and no runner pool can be created, while the runners are still given their bus credentials and finish what they hold", "expired", expires.UTC().Format(time.RFC3339), "renew", "agentiik-api init, or agentiik-api bus-credential on the directory holding the bus identity, then restart the API and the controller")
-			return
+			log.Error("the control plane's bus credential has expired, and the bus refuses it: the controller, which holds the same credential, ends, so nothing is dispatched until it is renewed, and no runner pool can be created, while the runners are still given their bus credentials and finish what they hold", "expired", expires.UTC().Format(time.RFC3339), "renew", "let the API write to the directory holding the file "+config.BusCredentialsFile+" names, or run agentiik-api init, then restart the API and the controller")
+			if renew == nil {
+				return
+			}
 		case left <= credentialWarning:
-			log.Warn("the control plane's bus credential expires soon", "expires", expires.UTC().Format(time.RFC3339), "left", left.Round(time.Minute).String(), "renew", renew)
+			log.Warn("the control plane's bus credential expires soon", "expires", expires.UTC().Format(time.RFC3339), "left", left.Round(time.Minute).String(), "renew", fix)
 			next = min(credentialRepeat, left)
 		default:
-			next = left - credentialWarning
+			next = min(credentialRepeat, left-credentialWarning)
 		}
 		if !wait(ctx, next) {
 			return

@@ -339,7 +339,7 @@ const initHost = "127.0.0.1"
 
 // The volumes init prepares, one per service, each named as the Compose file names it and mounted
 // where the Compose file mounts it: in init under /init, and in its service where each says.
-var initVolumes = []string{"api", "controller", "nats", "runner", "objects"}
+var initVolumes = []string{"api", "controller", "bus", "nats", "runner", "objects"}
 
 // initialize runs agentiik-api init from the API's image, as root, as the Compose file's init
 // service runs it, on a volume per service: it makes the certificate, the keys, the database
@@ -362,9 +362,9 @@ func (in *Installation) initialize(ctx context.Context, socket string) {
 		in.volumes[v] = in.volume(ctx, v)
 		args = append(args, "-v", in.volumes[v]+":/init/"+v)
 	}
-	// The API, the controller, the bus and the objects are the installation's, which no runner
-	// sees; the runner's volume is the runner's.
-	in.private = []string{in.volumes["api"], in.volumes["controller"], in.volumes["nats"], in.volumes["objects"], socket}
+	// The API, the controller, the control plane's credential, the bus and the objects are the
+	// installation's, which no runner sees; the runner's volume is the runner's.
+	in.private = []string{in.volumes["api"], in.volumes["controller"], in.volumes["bus"], in.volumes["nats"], in.volumes["objects"], socket}
 
 	name := in.id + "-init"
 	in.undo(func() {
@@ -385,7 +385,7 @@ func (in *Installation) initialize(ctx context.Context, socket string) {
 		{"the presign key", "api/presign-key"},
 		{"the master key", "api/master-key"},
 		{"the application role's password", "api/database-password"},
-		{"the control plane's bus credential", "api/bus/control-plane.creds"},
+		{"the control plane's bus credential", "bus/control-plane.creds"},
 		{"the bus account seed", "api/bus/account.seed"},
 		{"the private key of the bus's certificate", "api/tls/server.key"},
 		{"the operator token's hash", "api/operator-token.sha256"},
@@ -442,7 +442,9 @@ func (in *Installation) bus(ctx context.Context) string {
 
 // serve starts the API and the controller from their images, on what init prepared, as the Compose
 // file does, and the terminator in front of the API. The API is behind that proxy, AGK_PROXY_URL,
-// so it serves plain HTTP on the loopback, and both share the objects volume, which no runner sees.
+// so it serves plain HTTP on the loopback, and both share the objects volume, which no runner sees,
+// and the bus volume, holding the control plane's credential, which the API renews and the
+// controller only reads.
 func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL string) {
 	port := strconv.Itoa(freePort(in.t))
 	in.Requests = &Requests{operator: in.token}
@@ -453,7 +455,7 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.DatabaseURL+"="+applicationURL,
 		"-e", config.DatabasePasswordFile+"=/agentiik/database-password",
 		"-e", config.BusURL+"="+busURL,
-		"-e", config.BusCredentialsFile+"=/agentiik/bus/control-plane.creds",
+		"-e", config.BusCredentialsFile+"=/bus/control-plane.creds",
 		"-e", config.BusAccountSeedFile+"=/agentiik/bus/account.seed",
 		"-e", config.ObjectsDir+"=/objects",
 		"-e", config.PresignKeyFile+"=/agentiik/presign-key",
@@ -462,7 +464,7 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.Listen+"=:"+port,
 		"-e", config.ProxyURL+"="+in.PublicURL,
 		"-e", "SSL_CERT_DIR=/agentiik/trust",
-		"-v", in.volumes["api"]+":/agentiik", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
+		"-v", in.volumes["api"]+":/agentiik", "-v", in.volumes["bus"]+":/bus", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
 		in.apiIm)
 	// The Compose file's health check, run as it runs it, in the API's own container.
 	eventually(in.ctx, in.t, time.Minute, "agentiik-api health said the API is ready", func() error {
@@ -488,10 +490,10 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.DatabaseURL+"="+applicationURL,
 		"-e", config.DatabasePasswordFile+"=/agentiik/database-password",
 		"-e", config.BusURL+"="+busURL,
-		"-e", config.BusCredentialsFile+"=/agentiik/bus/control-plane.creds",
+		"-e", config.BusCredentialsFile+"=/bus/control-plane.creds",
 		"-e", config.ObjectsDir+"=/objects",
 		"-e", "SSL_CERT_DIR=/agentiik/trust",
-		"-v", in.volumes["controller"]+":/agentiik", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
+		"-v", in.volumes["controller"]+":/agentiik", "-v", in.volumes["bus"]+":/bus:ro", "-v", in.volumes["objects"]+":/objects", "-v", socket+":/run/postgresql",
 		in.controllerIm)
 }
 

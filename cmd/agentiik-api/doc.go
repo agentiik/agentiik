@@ -16,8 +16,8 @@
 // seals and reads values, package artifact signs and keeps objects, package bus mints credentials
 // and writes the bus identity, package db provisions the schema and the role, and package
 // internal/config reads the installation's settings. This package opens what they are given and
-// wires them together, and adds two things of its own: the interim operator, and the warning that
-// the control plane's bus credential is running out.
+// wires them together, and adds two things of its own: the interim operator, and the renewal of the
+// control plane's bus credential, with the warning where it cannot renew it.
 //
 // # Why a program apart from the controller
 //
@@ -51,11 +51,17 @@
 // readers resume at another API, and finishes the requests being answered, for up to thirty
 // seconds, then cuts what is left.
 //
-// The control plane's bus credential expires. From fourteen days before, the API says so once a
-// day, and says so again when it has; it goes on serving past it, for the reason watchCredential
-// gives, and still gives runners their bus credentials, but creates no runner pool. One renewed in
-// the file AGK_BUS_CREDENTIALS_FILE names before then is taken with no restart: the bus drops the
-// connection when the old one expires, and the connection comes back with what the file holds then.
+// The control plane's bus credential expires, ninety days after it was minted. The API looks at the
+// file AGK_BUS_CREDENTIALS_FILE names at start and every day after, and from fourteen days before
+// the expiry renews it there with the account seed, in one step, keeping the file's mode and owner.
+// The controller reads the same file, from the same directory mounted read only, so both take the
+// renewed one with no restart: the bus drops each connection when the old one expires, and the
+// connection comes back with what the file holds then. Where the renewal fails, as it does where
+// the directory is read only to the API, the API says why and that the credential is running out,
+// once a day, and tries again the next. One that expired while the API was down is renewed before
+// the settings are read, which would refuse it, so that the API is not left failing at every
+// restart; it goes on serving past the expiry, for the reason watchCredential gives, and still
+// gives runners their bus credentials, but creates no runner pool.
 //
 // # health
 //
@@ -88,14 +94,16 @@
 // AGK_INIT_HOST, ECDSA P-256 and valid 825 days, and makes it again where the host changed or it
 // expired, but never over one a person put there, which it refuses to start on instead; the master
 // key, the presign key and the database password, once; the bus identity, once, as bus-init does,
-// renewing the control plane's credential from when the API would warn of it, and the bus's
-// configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of one it mints and
-// prints once where none is set and none was stored; the migration, as migrate does, as the role
-// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does;
-// and a join token of the pool default for the runner beside it, issued through the database since
-// the API is not serving yet. Each service is given its own copy of what it reads, owned by uid
-// 65532 where init runs as root, but for the bus's, which runs as root, and the runner's
-// certificate, which anybody may read.
+// with the control plane's credential in a directory of its own that the API and the controller
+// share, renewed from when the API would renew it, and moved there from where an earlier init put
+// it; and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of
+// one it mints and prints once where none is set and none was stored; the migration, as migrate
+// does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
+// namespace create does; and a join token of the pool default for the runner beside it, issued
+// through the database since the API is not serving yet. Each service is given its own copy of what
+// it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as root, and
+// the runner's certificate, which anybody may read; the control plane's credential alone is one
+// file for two, since the API renews it while it runs.
 //
 // It is the one program that takes a secret as a value: the operator token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.

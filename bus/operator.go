@@ -217,66 +217,77 @@ func NewInstallation(dir string, until time.Time) (Installation, error) {
 // refused here instead. The directory is held to what private says, and the seed to what every
 // secret's file is held to: a regular file its owner alone may read.
 func RenewControlPlane(dir string, until time.Time) (string, time.Time, error) {
+	creds, expires, err := MintControlPlane(dir, until)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	path := filepath.Join(dir, ControlPlaneFile)
+	if err := replace(dir, path, creds); err != nil {
+		return "", time.Time{}, err
+	}
+	return path, expires, nil
+}
+
+// MintControlPlane is what RenewControlPlane puts in dir, held to every rule it holds dir to, and
+// the instant it expires, for a caller that puts it somewhere else: the file as a NATS credential
+// file holds it, the JWT and the seed. Nothing is written.
+func MintControlPlane(dir string, until time.Time) ([]byte, time.Time, error) {
 	if dir == "" {
-		return "", time.Time{}, errors.New("bus: no directory holding the installation's bus identity")
+		return nil, time.Time{}, errors.New("bus: no directory holding the installation's bus identity")
 	}
 	if until.IsZero() {
-		return "", time.Time{}, errors.New("bus: a control plane credential that never expires, and one that never expires is one a stolen disk still holds")
+		return nil, time.Time{}, errors.New("bus: a control plane credential that never expires, and one that never expires is one a stolen disk still holds")
 	}
 	if !until.After(time.Now()) {
-		return "", time.Time{}, fmt.Errorf("bus: a control plane credential that expired at %s, which the API and the controller refuse to start on", until.UTC().Format(time.RFC3339))
+		return nil, time.Time{}, fmt.Errorf("bus: a control plane credential that expired at %s, which the API and the controller refuse to start on", until.UTC().Format(time.RFC3339))
 	}
 	if err := private(dir, true); err != nil {
-		return "", time.Time{}, err
+		return nil, time.Time{}, err
 	}
 
 	seedPath := filepath.Join(dir, AccountSeedFile)
 	info, err := os.Lstat(seedPath)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", time.Time{}, fmt.Errorf("bus: %s holds no %s, so there is no identity to renew a credential under: an installation's bus identity is created first", dir, AccountSeedFile)
+		return nil, time.Time{}, fmt.Errorf("bus: %s holds no %s, so there is no identity to renew a credential under: an installation's bus identity is created first", dir, AccountSeedFile)
 	case err != nil:
-		return "", time.Time{}, fmt.Errorf("bus: %s could not be looked for: %w", seedPath, err)
+		return nil, time.Time{}, fmt.Errorf("bus: %s could not be looked for: %w", seedPath, err)
 	case !info.Mode().IsRegular():
-		return "", time.Time{}, fmt.Errorf("bus: %s is not a regular file, and the account seed is one", seedPath)
+		return nil, time.Time{}, fmt.Errorf("bus: %s is not a regular file, and the account seed is one", seedPath)
 	case info.Mode().Perm()&0o077 != 0:
-		return "", time.Time{}, fmt.Errorf("bus: %s is mode %#o, and the account seed is readable by its owner alone: chmod 600 it, because a seed anybody on the host can read is an account anybody on the host signs for", seedPath, info.Mode().Perm())
+		return nil, time.Time{}, fmt.Errorf("bus: %s is mode %#o, and the account seed is readable by its owner alone: chmod 600 it, because a seed anybody on the host can read is an account anybody on the host signs for", seedPath, info.Mode().Perm())
 	}
 	content, err := os.ReadFile(seedPath)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("bus: %s could not be read: %w", seedPath, err)
+		return nil, time.Time{}, fmt.Errorf("bus: %s could not be read: %w", seedPath, err)
 	}
 	defer wipe(content)
 	account, err := jwt.ParseDecoratedNKey(content)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("bus: %s holds no seed: %w", seedPath, err)
+		return nil, time.Time{}, fmt.Errorf("bus: %s holds no seed: %w", seedPath, err)
 	}
 	defer account.Wipe()
 	public, err := account.PublicKey()
 	if err != nil || !strings.HasPrefix(public, "A") {
-		return "", time.Time{}, fmt.Errorf("bus: %s holds a seed that is not an account's, and a credential signed by anything else is one no bus trusts", seedPath)
+		return nil, time.Time{}, fmt.Errorf("bus: %s holds a seed that is not an account's, and a credential signed by anything else is one no bus trusts", seedPath)
 	}
 	conf, err := os.ReadFile(filepath.Join(dir, AccountsFile))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("bus: %s could not be read, and it is what says which account the server trusts: %w", filepath.Join(dir, AccountsFile), err)
+		return nil, time.Time{}, fmt.Errorf("bus: %s could not be read, and it is what says which account the server trusts: %w", filepath.Join(dir, AccountsFile), err)
 	}
 	if !strings.Contains(string(conf), strconv.Quote(public)) {
-		return "", time.Time{}, fmt.Errorf("bus: %s holds the seed of %s, and %s does not trust that account, so a credential minted under it is one the server refuses", seedPath, public, AccountsFile)
+		return nil, time.Time{}, fmt.Errorf("bus: %s holds the seed of %s, and %s does not trust that account, so a credential minted under it is one the server refuses", seedPath, public, AccountsFile)
 	}
 
 	control, err := (&Issuer{account: account}).ForControlPlane(controlPlaneName, until)
 	if err != nil {
-		return "", time.Time{}, err
+		return nil, time.Time{}, err
 	}
 	creds, err := jwt.FormatUserConfig(control.JWT, []byte(control.Seed))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("bus: the control plane's credential could not be written out: %w", err)
+		return nil, time.Time{}, fmt.Errorf("bus: the control plane's credential could not be written out: %w", err)
 	}
-	path := filepath.Join(dir, ControlPlaneFile)
-	if err := replace(dir, path, creds); err != nil {
-		return "", time.Time{}, err
-	}
-	return path, control.ExpiresAt, nil
+	return creds, control.ExpiresAt, nil
 }
 
 // private refuses a directory its group or anybody else may write to, and one that is not there
