@@ -462,6 +462,10 @@ const operatorTokenPrefix = "agk_op_"
 
 // operatorToken writes the hash of the operator token and never the token.
 //
+// What it says names no variable, since the one a person sets is not always AGK_OPERATOR_TOKEN: a
+// Compose file hands it on from a variable of its own, and the installation's settings are
+// wherever that file reads them.
+//
 // A token set is hashed at every run, and a hash that differs from it is replaced, so a token
 // changed in .env, or set after one init minted, is the one the API takes at its next start. With
 // none set, the hash stored is kept; where none was ever stored, init mints a token, prints it
@@ -479,16 +483,16 @@ func (p *preparer) operatorToken(token config.Secret) error {
 		sum := sha256.Sum256([]byte(token))
 		hash := hex.EncodeToString(sum[:])
 		if string(stored) == hash {
-			p.say("kept the hash of the operator token %s holds", config.OperatorToken)
+			p.say("kept the hash of the operator token set")
 			return p.settle(path, 0o600, true)
 		}
 		if err := p.write(path, []byte(hash+"\n"), 0o600, true); err != nil {
 			return err
 		}
-		p.say("wrote the hash of the operator token %s holds, which the API takes from its next start", config.OperatorToken)
+		p.say("wrote the hash of the operator token set, which the API takes from its next start")
 		return nil
 	case len(stored) > 0:
-		p.say("kept the hash of the operator token, since %s is not set", config.OperatorToken)
+		p.say("kept the hash of the operator token stored, since none is set")
 		return p.settle(path, 0o600, true)
 	}
 	minted, err := random(24, hex.EncodeToString)
@@ -496,7 +500,7 @@ func (p *preparer) operatorToken(token config.Secret) error {
 		return err
 	}
 	plain := operatorTokenPrefix + strings.TrimSpace(string(minted))
-	p.say("minted an operator token, since %s is not set and none was stored. It is shown this once, and only its hash is kept: keep it, or set %s to a token of your own and run init again.\n\n  %s\n", config.OperatorToken, config.OperatorToken, plain)
+	p.say("minted an operator token, since none is set and none was stored. It is shown this once, and only its hash is kept. To keep it, set it as the operator token where the installation's settings are; to use a token of your own, set that there instead, and run init again.\n\n  %s\n", plain)
 	sum := sha256.Sum256([]byte(plain))
 	return p.write(path, []byte(hex.EncodeToString(sum[:])+"\n"), 0o600, true)
 }

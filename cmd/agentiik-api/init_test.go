@@ -361,6 +361,11 @@ func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
 		t.Fatalf("no token was printed:\n%s", out)
 	}
 	minted := strings.Fields(out[i:])[0]
+	// Named by no variable, since a Compose file sets it through one of its own, and told where
+	// it is kept: in the installation's settings, wherever those are.
+	if strings.Contains(out, config.OperatorToken) || !strings.Contains(out, "shown this once") || !strings.Contains(out, "where the installation's settings are") {
+		t.Errorf("minting the token says:\n%s", out)
+	}
 	if d.read(t, apiDir, "operator-token.sha256") != hashOf(minted) {
 		t.Fatal("the hash stored is not the printed token's")
 	}
