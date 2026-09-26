@@ -107,8 +107,8 @@ func TestJoinAsRootGivesItsFilesToTheAgentsAccount(t *testing.T) {
 	}
 }
 
-// join says which labels the host claims, and a host given no --labels, which is a runner of the
-// pool default, that it claims none and takes the steps naming no runs_on.
+// join says which labels the host claims, and a host given no --labels in a pool other than
+// default, where every step names a label, that it will run none of them.
 func TestJoinSaysWhichLabelsTheHostClaims(t *testing.T) {
 	self := runner.Owner{UID: os.Getuid(), GID: os.Getgid()}
 	j := newJoiner(t, 0, map[string]runner.Owner{"agentiik": self})
@@ -124,8 +124,8 @@ func TestJoinSaysWhichLabelsTheHostClaims(t *testing.T) {
 	if code != exitSucceeded {
 		t.Fatalf("join with no --labels exited %d:\n%s", code, none.err)
 	}
-	if !strings.Contains(none.out.String(), "It claims no label, so it takes only the steps that name no runs_on") {
-		t.Errorf("join with no --labels did not say it claims none:\n%s", none.out)
+	if !strings.Contains(none.out.String(), "It claims no label, and pool dmz sends only steps that name one") {
+		t.Errorf("join with no --labels to pool dmz did not say it will run none of its steps:\n%s", none.out)
 	}
 }
 

@@ -122,9 +122,15 @@ func lookupAccount(name string) (runner.Owner, error) {
 // given is, and until when.
 func said(w io.Writer, j runner.Joined, e env, whom string) {
 	fmt.Fprintf(w, "This host joined pool %s as runner %s.\n", j.Pool, j.Runner)
-	if len(j.Labels) == 0 {
-		fmt.Fprintln(w, "It claims no label, so it takes only the steps that name no runs_on, which go to the pool default.")
-	} else {
+	switch {
+	case len(j.Labels) == 0 && j.Pool == "default":
+		fmt.Fprintln(w, "It claims no label, so it takes the steps that name no runs_on, which go to the pool default.")
+	case len(j.Labels) == 0:
+		// The API takes a claim of no label to any pool, as a subset of what the token permits,
+		// but a step naming no runs_on goes to the pool default, so a runner claiming none
+		// anywhere else is handed only steps it puts back. Most likely --labels was left out.
+		fmt.Fprintf(w, "It claims no label, and pool %s sends only steps that name one, so it will run none of them: if --labels was left out, join again with --replace, --labels and a new token.\n", j.Pool)
+	default:
 		fmt.Fprintf(w, "It claims the labels %s.\n", strings.Join(j.Labels, ","))
 	}
 	fmt.Fprintf(w, "Its key is in %s and its credential in %s, both mode 0600 and owned by %s.\n", e.KeyFile, e.EnvFile, whom)

@@ -270,6 +270,12 @@ func (j Joining) settings() (joinSettings, error) {
 		if v, ok := lookup(name); ok && v != "" {
 			return v, true
 		}
+		// A runner being replaced claims what this join is given and nothing its old
+		// runner.env claimed, so that a host moving to the pool default with a token that
+		// permits no label is not held to the labels of the pool it leaves.
+		if name == Labels && c.identity {
+			return "", false
+		}
 		if slices.Contains(joinWrites, name) {
 			v, ok := there[name]
 			return v, ok

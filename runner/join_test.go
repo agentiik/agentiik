@@ -456,16 +456,7 @@ func TestAJoinIsRefusedBeforeAnythingIsSentWhereItsSettingsAreWrong(t *testing.T
 // naming no runs_on.
 func TestAHostJoinsThePoolDefaultClaimingNoLabel(t *testing.T) {
 	in := anInstallation(t)
-	var token db.JoinToken
-	if err := in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
-		var err error
-		now := time.Now().UTC()
-		token, err = w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	h := aJoiningHost(t, in.url, Secret(token.Clear))
+	h := aJoiningHost(t, in.url, in.defaultToken(t))
 	h.Labels = ""
 
 	joined, err := Join(t.Context(), h)
@@ -492,6 +483,40 @@ func TestAHostJoinsThePoolDefaultClaimingNoLabel(t *testing.T) {
 	runners := in.inventory(t)
 	if len(runners) != 1 || runners[0].Pool != "default" || len(runners[0].Labels) != 0 {
 		t.Errorf("the installation holds %+v", runners)
+	}
+}
+
+// defaultToken is a join token of the pool default, which permits no label.
+func (in installation) defaultToken(t *testing.T) Secret {
+	t.Helper()
+	var token db.JoinToken
+	if err := in.pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		now := time.Now().UTC()
+		token, err = w.IssueJoinToken(ctx, "default", nil, "admin", now, now.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return Secret(token.Clear)
+}
+
+// A runner of a labelled pool replaced by a runner of the pool default claims what the new join is
+// given, which is no label, and not the labels its old runner.env claimed.
+func TestAReplacedRunnerClaimsNoneOfTheLabelsItsOldRunnerEnvClaimed(t *testing.T) {
+	in := anInstallation(t)
+	h := aJoiningHost(t, in.url, in.issue(t, "zone=dmz"))
+	if _, err := Join(t.Context(), h); err != nil {
+		t.Fatal(err)
+	}
+	h.Token, h.Labels, h.Replace = in.defaultToken(t), "", true
+	joined, err := Join(t.Context(), h)
+	if err != nil {
+		t.Fatalf("the host could not be replaced by a runner of the pool default: %s", err)
+	}
+	c, err := ReadConfig(environment(nil), h.EnvPath)
+	if err != nil || joined.Pool != "default" || c.Labels != nil {
+		t.Errorf("the replaced runner is in pool %s claiming %q (%v)", joined.Pool, c.Labels, err)
 	}
 }
 
