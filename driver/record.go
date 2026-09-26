@@ -422,6 +422,22 @@ func (d *Docker) Logged(id agk.TaskID, log *EndedLog) error {
 	return d.keys.write(e)
 }
 
+// Ended answers with the ending the record holds of one key, and false where it holds none: a key
+// never taken, or taken and not ended.
+//
+// It reads and writes nothing else, where Hold would take a key it found not ended. It is how a
+// restarted runner learns how a task ended whose result an earlier agent owed and never kept, the
+// ending having been written down and the agent having stopped before the result was.
+func (d *Docker) Ended(id agk.TaskID) (Ending, bool, error) {
+	d.keys.mu.Lock()
+	defer d.keys.mu.Unlock()
+	e, found, err := d.keys.read(id)
+	if err != nil || !found || !e.State.Terminal() {
+		return Ending{}, false, err
+	}
+	return e, true, nil
+}
+
 // Hold records that this host has taken a task, which is the first thing a runner does with
 // a message it took: before it redeems the grant, before it acknowledges the message, and
 // before it pulls or creates anything. Package bus says why the redemption comes before the

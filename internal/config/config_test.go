@@ -878,7 +878,8 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.OperatorTokenFile,
 			config.EnvPrefixes, config.Listen, config.MaxRequeues, config.TaskCeiling,
 			config.JoinRotation, config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
-			config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint,
+			config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint, config.TLSCertFile,
+			config.TLSKeyFile,
 		},
 	}
 	i := anInstallation(t)

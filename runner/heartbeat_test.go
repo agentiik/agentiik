@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -275,6 +277,59 @@ func TestARestartedRunnerNamesARecordedKeyBeforeRedeemingAnything(t *testing.T) 
 		heard := api.heard()
 		return slices.Equal(heard[len(heard)-1].Tasks, []string{kept.IdempotencyKey})
 	})
+}
+
+// An agent that stopped once a task's ending was written and before its result was kept left the
+// key named nowhere the record lists: the ending took away the entry saying it was taken. The agent
+// that comes back names it all the same, in its first heartbeat, from the result it keeps from the
+// record for the dispatch the earlier agent owed one to, and goes on naming it until the bus has
+// taken the result, which here, the API never handing out a bus credential, is throughout.
+func TestARestartedRunnerNamesAKeyWhoseEndingWasWrittenAndWhoseResultWasNot(t *testing.T) {
+	c := carrier(t, nil)
+	var root string
+	c.carrier.atPoint = func(point string) {
+		if point == "closing" {
+			root = snapshot(t, c.root)
+		}
+	}
+	m, _ := c.carry(t, nil)
+
+	api := newBeats(t, answered)
+	var readies int
+	a := agentOf(t, &readies, api.srv.URL, root)
+	a.every = 50 * time.Millisecond
+	ready := make(chan struct{})
+	a.Ready = func() error { readies++; close(ready); return nil }
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan error, 1)
+	go func() { served <- Serve(ctx, a) }()
+	defer func() {
+		cancel()
+		if err := <-served; err != nil {
+			t.Errorf("serve: %s", err)
+		}
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the agent never said it was ready")
+	}
+	if heard := api.heard(); len(heard) == 0 || !slices.Equal(heard[0].Tasks, []string{m.IdempotencyKey}) {
+		t.Fatalf("the first heartbeat names %v, want the key whose ending was written, %s", heard, m.IdempotencyKey)
+	}
+	eventually(t, "three more heartbeats", func() bool { return len(api.heard()) >= 4 })
+	heard := api.heard()
+	if got := heard[len(heard)-1].Tasks; !slices.Equal(got, []string{m.IdempotencyKey}) {
+		t.Errorf("a later heartbeat names %v, and the result is not published yet", got)
+	}
+	b, err := os.ReadFile(filepath.Join(root, ResultsDir, m.TaskID+".json"))
+	if err != nil {
+		t.Fatalf("no result is kept for the dispatch the earlier agent owed one to: %s", err)
+	}
+	if !bytes.Contains(b, []byte(`"state":"succeeded"`)) {
+		t.Errorf("the result kept is %s", b)
+	}
 }
 
 // stepDriver is a driver on a fake daemon of its own, keeping its record under root.

@@ -309,3 +309,88 @@ func TestAKeptResultOfAnotherRunnerIsTakenAway(t *testing.T) {
 		t.Errorf("%d files are left under the results", len(left))
 	}
 }
+
+// A dispatch is owed its result from before its task runs until the result is kept, and no longer:
+// a restarted agent opens what is still owed, and passes over a dispatch whose result is kept, which
+// is where an agent that stopped between keeping a result and taking the entry away leaves it. An
+// entry of another runner's, as a result of one is, is taken away and said.
+func TestADispatchIsOwedItsResultUntilTheResultIsKept(t *testing.T) {
+	root := t.TempDir()
+	before, err := OpenResults(root, "runner-dmz-02", &published{refuse: errUnreachable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owedStill := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
+	keptSince := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH6", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/render/1"}
+	for _, m := range []bus.TaskMessage{owedStill, keptSince} {
+		if wrote, err := before.owe(m, "runner-dmz-02"); !wrote || err != nil {
+			t.Fatalf("owing %s answered %t, %v", m.TaskID, wrote, err)
+		}
+	}
+	if wrote, err := before.owe(owedStill, "runner-dmz-02"); wrote || err != nil {
+		t.Errorf("a second delivery of a message owed what the first owes answered %t, %v, as if it wrote it", wrote, err)
+	}
+	before.Report(t.Context(), ending(keptSince.TaskID, keptSince.IdempotencyKey))
+	if _, err := os.Stat(filepath.Join(root, ResultsDir, keptSince.TaskID+owedExt)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a dispatch whose result is kept is still written down as owed: %v", err)
+	}
+	// Stopped between the two writes: the result kept, the entry left.
+	if err := os.WriteFile(filepath.Join(root, ResultsDir, keptSince.TaskID+owedExt),
+		[]byte(`{"task_id":"`+keptSince.TaskID+`","idempotency_key":"`+keptSince.IdempotencyKey+`","runner":"runner-dmz-02"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(root, ResultsDir, "01M2AAZ9G62NQXFAFCXKRPJEH7"+owedExt)
+	if err := os.WriteFile(other, []byte(`{"task_id":"01M2AAZ9G62NQXFAFCXKRPJEH7","idempotency_key":"01JMZ8V1P9C4XQ7K2N4D6F8H0A/audit/1","runner":"runner-dmz-01"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := OpenResults(root, "runner-dmz-02", &published{})
+	if err == nil {
+		t.Error("another runner's owed result was taken away without a word")
+	}
+	if owed := after.Owed(); len(owed) != 1 || owed[0] != (Owed{TaskID: owedStill.TaskID, IdempotencyKey: owedStill.IdempotencyKey, Runner: "runner-dmz-02"}) {
+		t.Errorf("the restarted agent owes %+v, want %s alone", owed, owedStill.TaskID)
+	}
+	if !slices.Equal(after.Keys(), []string{keptSince.IdempotencyKey}) {
+		t.Errorf("the restarted agent names %v, want the kept result's key alone", after.Keys())
+	}
+	left, _ := os.ReadDir(filepath.Join(root, ResultsDir))
+	var names []string
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+	if want := []string{owedStill.TaskID + owedExt, keptSince.TaskID + ".json"}; !slices.Equal(names, want) {
+		t.Errorf("the results hold %v, want %v", names, want)
+	}
+}
+
+// A result the bus took owes its dispatch nothing, even where it could not be written down first:
+// an entry left owed would have a restart publish the task again from the record.
+func TestAResultTheBusTookIsOwedNothingWhereItCouldNotBeWrittenDown(t *testing.T) {
+	root := t.TempDir()
+	results, err := OpenResults(root, "runner-dmz-02", &published{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := bus.TaskMessage{TaskID: "01M2AAZ9G62NQXFAFCXKRPJEH5", IdempotencyKey: "01JMZ8V1P9C4XQ7K2N4D6F8H0A/invoice/1"}
+	if _, err := results.owe(m, "runner-dmz-02"); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the result goes, which no rename replaces.
+	in := filepath.Join(root, ResultsDir, m.TaskID+".json")
+	if err := os.MkdirAll(filepath.Join(in, "full"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = results.Report(t.Context(), ending(m.TaskID, m.IdempotencyKey))
+	os.RemoveAll(in)
+	if err != nil {
+		t.Fatalf("a result the bus took answered %v", err)
+	}
+	if owed := results.Owed(); len(owed) != 0 {
+		t.Errorf("a result the bus took left %+v owed", owed)
+	}
+	again, _ := OpenResults(root, "runner-dmz-02", &published{})
+	if owed := again.Owed(); len(owed) != 0 {
+		t.Errorf("a restart finds %+v owed for a result the bus took", owed)
+	}
+}
