@@ -294,8 +294,9 @@ func TestAFloodOfFailedSignInsLeavesTheChainToTheOtherActs(t *testing.T) {
 	if n := len(in.failures(t)); n != 100 {
 		t.Errorf("%d failed sign-ins from %d addresses recorded %d entries", senders*each, senders*each, n)
 	}
-	// A hundred appends of a line each, however slow the machine, take far less than this; a
-	// flood appending one for each of its six hundred would not.
+	// The count is what holds the bound: however long a flood goes on, it appends a hundred entries
+	// in ten minutes and no more, each in a transaction of one statement. The time is a guard that
+	// no grant was held behind anything else, generous enough for a loaded machine.
 	if slowest > 5*time.Second {
 		t.Errorf("a grant beside the flood took %s", slowest)
 	}
@@ -314,5 +315,34 @@ func TestAFloodOfFailedSignInsLeavesTheChainToTheOtherActs(t *testing.T) {
 	}
 	if !slices.Equal(grants, granted) {
 		t.Errorf("the grants in the chain are %q, and %q were written", grants, granted)
+	}
+}
+
+// A first administrator's link the end of the bootstrap revoked is recorded as shut by that end, and
+// one a fresher link replaced before it as replaced, though both are revoked.
+func TestAFirstAdministratorsLinkShutByTheBootstrapsEndIsRecordedSo(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateUser(ctx, db.User{Login: "zed", DisplayName: "Zed", Admin: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replaced := in.enrolCode(t, "zed", db.EnrolmentFirstAdministrator)
+	*in.clock = in.clock.Add(time.Minute)
+	ended := in.enrolCode(t, "zed", db.EnrolmentFirstAdministrator)
+	*in.clock = in.clock.Add(time.Minute)
+	in.endBootstrap(t)
+	if w := in.codeOptions(t, replaced); w.Code != http.StatusUnauthorized {
+		t.Fatalf("the replaced link answered %d %s", w.Code, w.Body)
+	}
+	if w := in.enrolWith(t, ended, "a long enough passphrase"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("the link the bootstrap's end revoked answered %d %s", w.Code, w.Body)
+	}
+	if got := in.failures(t); !slices.Equal(got, []string{
+		"192.0.2.1 zed the code was replaced by a fresher one",
+		"192.0.2.1 zed the code was issued by the bootstrap token, which has ended",
+	}) {
+		t.Errorf("the failed sign-ins recorded are %q", got)
 	}
 }
