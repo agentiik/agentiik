@@ -7,8 +7,8 @@
 // anybody allowed to inspect the process or its container reads. It is a file readable by its
 // owner alone, named by a variable ending _FILE, and a secret written as the value of a variable is
 // refused rather than used. So are PGPASSWORD and PGSSLPASSWORD, which pgx would take one from.
-// One verb is the exception, and says why: agentiik-api init takes the bootstrap token as a value,
-// AGK_OPERATOR_TOKEN, and writes its hash alone.
+// Two verbs are the exception, and say why: agentiik-api init and agentiik-api migrate take the
+// bootstrap token as a value, AGK_OPERATOR_TOKEN, and write its hash alone.
 //
 // # Refusing to start
 //
@@ -43,6 +43,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -79,7 +80,7 @@ const (
 	TaskCeiling                 = "AGK_TASK_CEILING"
 	JoinRotation                = "AGK_JOIN_ROTATION"
 	RevocationGrace             = "AGK_REVOCATION_GRACE"
-	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE" // read by no program since v0.3.0: see ReadAPI
+	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE" // read by migrate alone since v0.3.0: see ReadMigration
 	AuditExportURL              = "AGK_AUDIT_EXPORT_URL"
 	AuditExportTokenFile        = "AGK_AUDIT_EXPORT_TOKEN_FILE"
 	MetricsListen               = "AGK_METRICS_LISTEN"
@@ -354,6 +355,15 @@ type Migration struct {
 	// Application is the role the API and the controller connect as, which migrating creates:
 	// the role AGK_DATABASE_URL names, signing in with what AGK_DATABASE_PASSWORD_FILE holds.
 	Application Database
+
+	// OperatorToken is the bootstrap token, where one is set, which migrate keeps the hash of
+	// in the database as init does. Empty, migrate keeps the hash stored there.
+	OperatorToken Secret
+
+	// OperatorTokenFile is the path AGK_OPERATOR_TOKEN_FILE holds, where a v0.2 installation kept
+	// the SHA-256 of its operator token, and is empty where it is unset. Nothing is read from it
+	// here: OperatorTokenHash reads it, where migrate has a hash to import.
+	OperatorTokenFile string
 }
 
 // ReadAPI reads the API's configuration through lookup, which is os.LookupEnv when nil.
@@ -365,9 +375,10 @@ type Migration struct {
 //
 // It does not read AGK_OPERATOR_TOKEN_FILE, which named the file holding the hash of the v0.2
 // operator token: from v0.3.0 that token is the bootstrap token, and the API reads its hash from the
-// database, where init writes it. A v0.2 Compose file still sets the variable, and it is passed
-// over rather than refused, whatever the file holds and wherever it is not, since an upgrade
-// changes compose.yaml and .env and nothing else.
+// database, where init or migrate writes it. A v0.2 Compose file still sets the variable, and it is
+// passed over rather than refused, whatever the file holds and wherever it is not, since an upgrade
+// changes compose.yaml and .env and nothing else. migrate alone reads the file, once, as
+// ReadMigration says.
 func ReadAPI(lookup Lookup) (API, error) {
 	r := newReader(lookup)
 	var c API
@@ -445,13 +456,58 @@ func ReadController(lookup Lookup) (Controller, error) {
 }
 
 // ReadMigration reads what migrating needs through lookup, which is os.LookupEnv when nil: the
-// role that may change the schema, and the role it creates for the API and the controller.
+// role that may change the schema, the role it creates for the API and the controller, and where
+// the bootstrap token's hash comes from.
+//
+// It takes AGK_OPERATOR_TOKEN as a value, as ReadInit does, because an installation that never
+// runs init, one Homebrew set up or one put together by hand, runs migrate at every start in its
+// place, and the token is set in its settings the way .env sets it for a Compose file.
+//
+// It reads what AGK_OPERATOR_TOKEN_FILE holds and nothing of the file: an installation upgraded
+// from v0.2 without init has its operator token's hash there and nowhere else, which migrate
+// imports once where no token is set and the database keeps no hash, and never reads again. So
+// the file is opened by OperatorTokenHash, at that one moment, rather than at every start, when
+// nothing it holds would be used and a file left to rot would refuse the start for nothing.
 func ReadMigration(lookup Lookup) (Migration, error) {
-	r := newReader(lookup)
+	r := newReader(lookup, OperatorToken)
 	var c Migration
 	c.Admin = r.database(MigrateDatabaseURL, MigrateDatabasePasswordFile, false)
 	c.Application = r.database(DatabaseURL, DatabasePasswordFile, true)
+	c.OperatorToken = r.operatorTokenValue()
+	c.OperatorTokenFile, _ = r.value(OperatorTokenFile)
 	return c, r.err()
+}
+
+// OperatorTokenHash reads the SHA-256 of the v0.2 operator token from the file OperatorTokenFile
+// names, for migrate to import it.
+//
+// It is read as v0.2's API read it, held to every rule of a secret's file and to 64 lowercase
+// hexadecimal characters, so that a file v0.2's API accepted is the one imported and any other is
+// refused, naming the variable. A file that is not there is no refusal, since an installation made
+// from v0.3.0 on may name one it never wrote: it answers nil, as it does where the variable is
+// unset.
+func (m Migration) OperatorTokenHash() ([]byte, error) {
+	if m.OperatorTokenFile == "" {
+		return nil, nil
+	}
+	// A path that is not absolute is refused below rather than looked for here, since it would
+	// be looked for wherever the program was started.
+	if filepath.IsAbs(m.OperatorTokenFile) {
+		if _, err := os.Stat(m.OperatorTokenFile); errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+	}
+	r := newReader(func(name string) (string, bool) {
+		if name == OperatorTokenFile {
+			return m.OperatorTokenFile, true
+		}
+		return "", false
+	})
+	hash := r.hash(OperatorTokenFile, "the v0.2 operator token", "and it names the file a v0.2 installation kept the hash of its operator token in")
+	if err := r.err(); err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(hash)
 }
 
 // ReadNamespace reads what agentiik-api namespace needs through lookup, which is os.LookupEnv when
@@ -494,10 +550,10 @@ const operatorTokenMinBytes = 32
 
 // ReadInit reads what agentiik-api init needs through lookup, which is os.LookupEnv when nil.
 //
-// It is the one reading that takes a secret as a value, AGK_OPERATOR_TOKEN, and it is the decision
-// that the token is written once, by the person, in the file Docker Compose reads its variables
-// from. init hashes it and writes the hash alone, so the plaintext never reaches a disk init
-// writes; every other program still refuses it, the API above all.
+// It takes a secret as a value, AGK_OPERATOR_TOKEN, as ReadMigration alone does besides, and it is
+// the decision that the token is written once, by the person, in the file Docker Compose reads its
+// variables from. init hashes it and writes the hash alone, so the plaintext never reaches a disk
+// init writes; every other program still refuses it, the API above all.
 func ReadInit(lookup Lookup) (Init, error) {
 	r := newReader(lookup, OperatorToken)
 	var c Init
@@ -597,11 +653,11 @@ func newReader(lookup Lookup, valued ...string) *reader {
 			r.refuse(value, fmt.Sprintf("is set, and a secret is never read from the environment, which every process started from this one inherits and anybody who can inspect it reads: write it to a file its owner alone can read, and name that file in %s", file))
 		}
 	}
-	// The bootstrap token has no file to name instead, since init alone reads it, and writes its
-	// hash where the API reads it: set for any other program, it is a secret in an environment
-	// that has no use for it.
+	// The bootstrap token has no file to name instead, since init and migrate alone read it, and
+	// write its hash where the API reads it: set for any other program, it is a secret in an
+	// environment that has no use for it.
 	if _, set := r.value(OperatorToken); set && !slices.Contains(valued, OperatorToken) {
-		r.refuse(OperatorToken, "is set, and it is the bootstrap token, which agentiik-api init alone reads, keeping its hash in the database where the API reads it: a secret is never read from the environment of a program that has no use for it, which every process started from this one inherits and anybody who can inspect it reads")
+		r.refuse(OperatorToken, "is set, and it is the bootstrap token, which agentiik-api init and migrate alone read, keeping its hash in the database where the API reads it: a secret is never read from the environment of a program that has no use for it, which every process started from this one inherits and anybody who can inspect it reads")
 	}
 	for _, libpq := range libpqSecrets {
 		if _, set := r.value(libpq.name); set {

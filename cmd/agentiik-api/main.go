@@ -116,7 +116,7 @@ var inDirectory = map[string]func(dir string, now time.Time, stdout, stderr io.W
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `usage:
   %[1]s serve                 serve every route, the built-in object store and the secret providers
-  %[1]s migrate               apply the migrations, and create the role the API and the controller connect as
+  %[1]s migrate               apply the migrations, create the role the API and the controller connect as, and keep the bootstrap token's hash
   %[1]s init                  prepare an installation, or bring it back in line with its settings: certificate, keys, bus, database, runner's join token
   %[1]s health                exit 0 where the API serving beside it answers, for a health check in its container
   %[1]s bus-init DIR          create the installation's NATS operator and accounts in DIR

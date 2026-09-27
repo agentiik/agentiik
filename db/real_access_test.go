@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -287,6 +288,17 @@ func TestThePolicyAndTheBootstrapTokenAreTheInstallations(t *testing.T) {
 		if start, err = w.Bootstrap(ctx); err != nil {
 			return err
 		}
+		// A v0.2 hash is imported where none is kept, and never over one kept, which a token
+		// set replaces as before.
+		if imported, err := w.ImportBootstrapToken(ctx, valueHash("agk_op_v02")); err != nil || !imported {
+			t.Errorf("the v0.2 hash was imported into no hash as %v, %v", imported, err)
+		}
+		if imported, err := w.ImportBootstrapToken(ctx, valueHash("agk_op_v02_again")); err != nil || imported {
+			t.Errorf("a v0.2 hash was imported over the one kept as %v, %v", imported, err)
+		}
+		if kept, err := w.Bootstrap(ctx); err != nil || !bytes.Equal(kept.TokenHash, valueHash("agk_op_v02")) {
+			t.Errorf("the imported hash reads as %x, %v", kept.TokenHash, err)
+		}
 		for i, c := range []struct {
 			value   string
 			changed bool
@@ -303,6 +315,9 @@ func TestThePolicyAndTheBootstrapTokenAreTheInstallations(t *testing.T) {
 		}
 		if _, err := w.SetBootstrapToken(ctx, valueHash("agk_op_two")); !errors.Is(err, ErrBootstrapEnded) {
 			t.Errorf("the token written again after it ended was answered %v", err)
+		}
+		if imported, err := w.ImportBootstrapToken(ctx, valueHash("agk_op_v02")); err != nil || imported {
+			t.Errorf("a v0.2 hash imported after the token ended was answered %v, %v", imported, err)
 		}
 		ended, err = w.Bootstrap(ctx)
 		return err

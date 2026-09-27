@@ -6,7 +6,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -784,7 +783,7 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 		return fmt.Errorf("the database %s names could not be reached as %s: %w", config.DatabaseURL, m.Application.Role, err)
 	}
 	defer pool.Close()
-	if err := p.bootstrapToken(ctx, pool, bootstrap); err != nil {
+	if err := bootstrapToken(ctx, pool, "init", bootstrap, nil, p.out); err != nil {
 		return err
 	}
 	now := p.now.UTC()
@@ -802,67 +801,6 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 
 // defaultPool is the pool every installation is migrated with, where a step naming no label goes.
 const defaultPool = "default"
-
-// bootstrapToken keeps the SHA-256 of the bootstrap token set in the database, where the API reads
-// it, and never the token. It is the v0.2 operator token under its v0.3.0 name, set where it was.
-//
-// What it says names no variable, since the one a person sets is not always AGK_OPERATOR_TOKEN: a
-// Compose file hands it on from a variable of its own, and the installation's settings are
-// wherever that file reads them.
-//
-// A token set is hashed at every run, and a hash that differs from the one kept replaces it, so a
-// token changed in .env is the one the API takes from its next request, until the first
-// administrator has enrolled. That ends the bootstrap token for good: from then on a token set is
-// ignored, and init says so at every run while one is, which is no error, since the Compose file
-// still requires the line. With none set, the hash kept is kept. Where none is kept either,
-// nobody can create the first administrator, and init says so; it mints none, since a token
-// printed in a log is read by everybody the log reaches.
-//
-// operator-token.sha256, where a v0.2 init wrote the hash, is neither written, nor read, nor
-// removed: the API reads the database, and the file is left as the release before left it.
-func (p *preparer) bootstrapToken(ctx context.Context, pool *db.Pool, token config.Secret) error {
-	var hash []byte
-	if token != "" {
-		sum := sha256.Sum256([]byte(token))
-		hash = sum[:]
-	}
-	var said string
-	err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
-		if hash == nil {
-			kept, err := w.Bootstrap(ctx)
-			switch {
-			case err != nil:
-				return err
-			case kept.Ended():
-			case kept.TokenHash != nil:
-				said = "kept the hash of the bootstrap token stored, since none is set"
-			default:
-				said = "no bootstrap token is set and none is stored, so nobody can create the first administrator: set one where the installation's settings are, and run init again"
-			}
-			return nil
-		}
-		changed, err := w.SetBootstrapToken(ctx, hash)
-		switch {
-		case errors.Is(err, db.ErrBootstrapEnded):
-			said = "ignored the bootstrap token set: it ended when the first administrator enrolled a passkey, and the API refuses it. That is no error, and the line may stay where the installation's settings are"
-			return nil
-		case err != nil:
-			return err
-		case changed:
-			said = "wrote the hash of the bootstrap token set, which the API takes from its next request"
-		default:
-			said = "kept the hash of the bootstrap token set"
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("the bootstrap token's hash could not be kept: %w", err)
-	}
-	if said != "" {
-		p.say("%s", said)
-	}
-	return nil
-}
 
 // write puts data at path in one step, written beside it and renamed over it, with mode, and owned
 // by the agent's account where toAgent is true: a program starting at that moment reads the old
