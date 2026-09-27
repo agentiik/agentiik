@@ -294,6 +294,47 @@ func TestARecoveryCodeReplacesThePasswordAndTheGeneratorBesideIt(t *testing.T) {
 	}
 }
 
+// A user suspended for holding no passkey where passwords were forbidden comes back by a password
+// set from a new user's link or a recovery code once passwords are allowed again: the suspension
+// lifted, recorded beside the password, and the user signed in. Where passwords are still forbidden
+// nothing is set and the suspension stays; one the policy did not make stays whatever is set (dave,
+// above).
+func TestAPasswordSetFromACodeLiftsASuspensionForHoldingNoPasskey(t *testing.T) {
+	in := somePasswords(t)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	in.exec(t, `update users set suspended = true, suspended_for = 'no_passkey' where login in ('erin', 'frank')`)
+	for login, kind := range map[string]string{"erin": db.EnrolmentRecovery, "frank": db.EnrolmentNewUser} {
+		code := in.enrolCode(t, login, kind)
+		in.policy(t, "forbidden", "optional")
+		if w := in.enrolWith(t, code, login+"'s new passphrase"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"password"`) {
+			t.Errorf("%s's %s code where passwords are forbidden answered %d %s", login, kind, w.Code, w.Body)
+		}
+		if got := in.suspended(t); !slices.Contains(got, login+":no_passkey") {
+			t.Errorf("%s's code refused lifted the suspension: %q", login, got)
+		}
+
+		in.policy(t, "allowed", "optional")
+		w := in.enrolWith(t, code, login+"'s new passphrase")
+		var answer api.PasswordEnrolled
+		if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil || w.Code != http.StatusOK || answer.Session != api.SessionFull {
+			t.Fatalf("%s's %s code answered %d %s", login, kind, w.Code, w.Body)
+		}
+		if got := in.suspended(t); slices.Contains(got, login+":no_passkey") {
+			t.Errorf("%s's password left the suspension: %q", login, got)
+		}
+		if code, body := in.me(t, session(t, w)); code != http.StatusOK {
+			t.Errorf("the session %s's password opened answered %d %s", login, code, body)
+		}
+		if n := in.count(t, `select count(*) from audit_log where action = 'credential.enrol' and actor = $1 and detail::jsonb->>'suspension_lifted' = 'no_passkey'`, login); n != 1 {
+			t.Errorf("the lifting of %s's suspension is not recorded", login)
+		}
+	}
+}
+
 // What the enrolment route refuses, and with what: a request from another page 403; a body the
 // schema refuses, a code outside its grammar and a password shorter than twelve characters or longer
 // than 1024 bytes 400; a code nobody issued 401; a password that is the login 422; and passwords

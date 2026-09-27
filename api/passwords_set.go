@@ -32,8 +32,11 @@ import (
 // a password is the one thing to get in with. It is spent by the password it sets, in the
 // transaction that records the password, and the password then opens the session a password opens:
 // full where the policy is met, and enrolling passkeys and nothing else where it requires a
-// passkey, as a password sign-in's would. A suspended user sets a password with a code and opens no
-// session, as a suspended user enrolling a passkey does.
+// passkey, as a password sign-in's would. A user suspended for holding no passkey where passwords
+// were forbidden comes back by it: passwords are allowed again wherever one is set, so the password
+// lifts that suspension, as a passkey enrolled from a code does, and signs them in. A user suspended
+// for another reason sets a password with a code and opens no session, as they would enrolling a
+// passkey.
 //
 // An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
 // token where it has not ended and the session the password opens is a full one: always on an
@@ -302,6 +305,18 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		if err != nil {
 			return err
 		}
+		// Lifted here, before the session is decided, and rolled back with everything else where
+		// what is read below refuses the password: passwords forbidden again, or a code that opens
+		// nothing.
+		lifted := false
+		if user.Suspended && user.SuspendedFor == db.SuspendedNoPasskey {
+			if lifted, err = wide.LiftSuspension(ctx, login, db.SuspendedNoPasskey); err != nil {
+				return err
+			}
+			if lifted {
+				user.Suspended, user.SuspendedFor = false, ""
+			}
+		}
 		signs := !user.Suspended
 		var personal []entry
 		if signs {
@@ -343,6 +358,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 			return err
 		}
 		enrolled := map[string]any{"type": db.CredentialPassword, "replaced": replaced}
+		if lifted {
+			enrolled["suspension_lifted"] = db.SuspendedNoPasskey
+		}
 		var removed []entry
 		if replaced {
 			ended, err := wide.EndSessionsOpenedBy(ctx, login, set.ID, nil, now)
