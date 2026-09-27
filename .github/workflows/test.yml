@@ -97,6 +97,18 @@ jobs:
           # missing has found a broken job rather than a laptop, and fails rather than skips.
           AGENTIIK_TEST_REQUIRE_DOCKER: '1'
 
+      # How long a refusal about something that does not exist takes, against one about something
+      # the caller may not reach: v0.3.0's fact says no timing tells them apart, and the tests that
+      # hold it measure only where AGENTIIK_TEST_TIMING asks them to, since a machine running other
+      # work measures that work. So they run here on their own, once the suite has finished, and
+      # without -race, whose instrumentation would be measured as much as the answers.
+      - name: timing
+        run: go test ./cmd/agentiik-api -count=1 -run 'TakeAsLongToRefuse|CannotEstablishThatItExists$'
+        env:
+          AGENTIIK_TEST_TIMING: '1'
+          AGENTIIK_TEST_DATABASE_URL: postgres://postgres:agk@127.0.0.1:5432/agk
+          AGENTIIK_TEST_BUS_URL: nats://127.0.0.1:4222
+
       # gofmt has no exit code of its own for this: it lists the files it would rewrite
       # and succeeds either way, so the listing is what the job has to check.
       - name: gofmt
