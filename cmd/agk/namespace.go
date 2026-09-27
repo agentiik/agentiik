@@ -145,7 +145,7 @@ func namespaceList(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintln(e.Err, "agk namespace list names no namespace: agk namespace show <name> reads one")
 		return exitUsage
 	}
-	if !oneFormat(e, *output) {
+	if !namespaceFormat(e, *output) {
 		return exitUsage
 	}
 	at, ok := reach(e, *server)
@@ -157,7 +157,7 @@ func namespaceList(ctx context.Context, e Env, args []string) int {
 		return namespaceRefused(e, "", false, err)
 	}
 	if *output == "json" {
-		return indented(e, raw)
+		return indentedAnswer(e, raw)
 	}
 	var listed api.NamespaceList
 	if err := json.Unmarshal(raw, &listed); err != nil {
@@ -256,7 +256,7 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 		return namespaceRefused(e, name, set, err)
 	}
 	if *output == "json" {
-		return indented(e, raw)
+		return indentedAnswer(e, raw)
 	}
 	var now api.Quotas
 	if err := json.Unmarshal(raw, &now); err != nil {
@@ -267,7 +267,8 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// oneNamespace reads the flags and the one namespace a verb is about, and says whether it may go on.
+// oneNamespace reads the flags and the one namespace a verb is about, and says whether it may go
+// on.
 func oneNamespace(e Env, fs *flag.FlagSet, args []string) (string, int, bool) {
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -278,14 +279,14 @@ func oneNamespace(e Env, fs *flag.FlagSet, args []string) (string, int, bool) {
 		return "", exitUsage, false
 	}
 	// Looked up rather than handed in, since its value is only known once the flags are read.
-	if f := fs.Lookup("o"); f != nil && !oneFormat(e, f.Value.String()) {
+	if f := fs.Lookup("o"); f != nil && !namespaceFormat(e, f.Value.String()) {
 		return "", exitUsage, false
 	}
 	return named[0], exitSucceeded, true
 }
 
-// oneFormat refuses an output format other than json, the one there is.
-func oneFormat(e Env, output string) bool {
+// namespaceFormat refuses an output format other than json, the one there is.
+func namespaceFormat(e Env, output string) bool {
 	if output != "" && output != "json" {
 		fmt.Fprintf(e.Err, "-o is %q: json is the one format there is\n", output)
 		return false
@@ -297,7 +298,7 @@ func oneFormat(e Env, output string) bool {
 // says something, or the answer itself with -o json.
 func answered(e Env, raw json.RawMessage, output, did string) int {
 	if output == "json" {
-		return indented(e, raw)
+		return indentedAnswer(e, raw)
 	}
 	var n api.NamespaceRecord
 	if err := json.Unmarshal(raw, &n); err != nil {
@@ -311,8 +312,8 @@ func answered(e Env, raw json.RawMessage, output, did string) int {
 	return exitSucceeded
 }
 
-// indented writes an answer as the installation gave it, indented.
-func indented(e Env, raw json.RawMessage) int {
+// indentedAnswer writes an answer as the installation gave it, indented.
+func indentedAnswer(e Env, raw json.RawMessage) int {
 	var b bytes.Buffer
 	if err := json.Indent(&b, raw, "", "  "); err != nil {
 		fmt.Fprintf(e.Err, "the installation's answer is not JSON: %s\n", err)

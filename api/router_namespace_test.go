@@ -59,8 +59,8 @@ func namespaceRouter(t *testing.T, auth api.Authorizer) *api.Router {
 }
 
 // A namespace's record is answered to an administrator whichever it is, and to anybody else where
-// they hold a grant in it; one they hold nothing in is the 404 of one that is not there, and a caller
-// with no credential is told to present one.
+// they hold a grant in it; one they hold nothing in is the 404 of one that is not there, and a
+// caller with no credential is told to present one.
 func TestANamespaceIsSeenByItsAdministratorAndWhoeverHoldsAGrantInIt(t *testing.T) {
 	rt := namespaceRouter(t, members{})
 	for _, c := range []struct {

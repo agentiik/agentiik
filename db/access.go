@@ -35,8 +35,8 @@ func (n *NS) GrantAccess(ctx context.Context, g access.Grant) error {
 
 // GrantAccess writes a grant in whichever namespace its scope names, as NS.GrantAccess does in its
 // own: for the installation's acts on a namespace, the grant that makes a new namespace's owner one
-// among them, which is written in the transaction that creates the namespace, before any handle on it
-// could be opened.
+// among them, which is written in the transaction that creates the namespace, before any handle on
+// it could be opened.
 func (w *Wide) GrantAccess(ctx context.Context, g access.Grant) error {
 	return grantAccess(ctx, w.tx, g, "")
 }

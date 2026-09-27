@@ -172,8 +172,9 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 // A grant here is one carrying a role. A deny gives nothing, and a namespace where who holds
 // nothing but denies is one it can do nothing in, which it is answered as one it cannot see; a deny
 // beside a role takes nothing from the record either, since a deny names one permission and reading
-// the record is none of them. The bootstrap operator holds no grant, and sees every namespace as the
-// administrator it is while it has not ended; a suspended user, and a login removed since, hold none.
+// the record is none of them. The bootstrap operator holds no grant, and sees every namespace as
+// the administrator it is while it has not ended; a suspended user, and a login removed since, hold
+// none.
 func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error) {
 	if who == "" || who == BootstrapOperator {
 		return nil, nil

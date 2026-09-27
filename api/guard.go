@@ -217,9 +217,9 @@ type OnNamespace struct{}
 
 func (OnNamespace) guards() guard { return guard{scope: Namespace, members: true} }
 
-// Holdings says which namespaces a principal holds a grant in, its own or one of its groups', on the
-// namespace or on a workflow of it: what a route taking OnNamespace answers a caller who does not
-// administer the installation. An Authorizer implements it where it can say.
+// Holdings says which namespaces a principal holds a grant in, its own or one of its groups', on
+// the namespace or on a workflow of it: what a route taking OnNamespace answers a caller who does
+// not administer the installation. An Authorizer implements it where it can say.
 type Holdings interface {
 	HeldIn(ctx context.Context, who Principal) ([]string, error)
 }

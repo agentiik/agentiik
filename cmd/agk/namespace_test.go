@@ -199,8 +199,8 @@ func TestAgkNamespaceOfAnInstallationThatDoesNotAnswerIsNoOutcome(t *testing.T) 
 
 // A change answered with a failure that may pass is no outcome, since a gateway answering after the
 // API committed says nothing of whether the change was made, and the sentence says how to read it
-// back; a refusal is refused. A listing answered 404 says what the installation said, since it names
-// no namespace to be absent.
+// back; a refusal is refused. A listing answered 404 says what the installation said, since it
+// names no namespace to be absent.
 func TestAgkNamespaceTellsNoOutcomeFromARefusal(t *testing.T) {
 	status := atomic.Int64{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

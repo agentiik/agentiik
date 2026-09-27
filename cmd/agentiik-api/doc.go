@@ -115,19 +115,19 @@
 //
 // # namespace
 //
-// namespace create NAME creates a namespace with its built-in identity, NAME/agentiik, and namespace
-// remove NAME removes one that holds no workflow, run, secret, stored object or service account but
-// that identity, refusing one that does and saying what it holds, and refusing a user's personal
-// namespace. An administrator makes the same changes through /api/v1/namespaces, which write through
-// the same store; this verb is for an installation script, and for init, which create a namespace
-// before anybody could ask the API for one. It reads AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE
-// and connects as that role, the one the API connects as, so it runs where the API runs with the
-// API's environment; the name is held to what the API holds a namespace to, reserved words refused.
-// Each change is recorded in the audit log in its own transaction, as namespace.create or
-// namespace.delete by installation, as init's own acts are, the installation itself being no
-// principal a grant names, and a namespace created again is recorded unchanged and left as it was,
-// so that an installation script can run it every time. A namespace it creates has no owner, as one
-// v0.2 made has none.
+// namespace create NAME creates a namespace with its built-in identity, NAME/agentiik, and
+// namespace remove NAME removes one that holds no workflow, run, secret, stored object or service
+// account but that identity, refusing one that does and saying what it holds, and refusing a user's
+// personal namespace. An administrator makes the same changes through /api/v1/namespaces, which
+// write through the same store; this verb is for an installation script, and for init, which create
+// a namespace before anybody could ask the API for one. It reads AGK_DATABASE_URL and
+// AGK_DATABASE_PASSWORD_FILE and connects as that role, the one the API connects as, so it runs
+// where the API runs with the API's environment; the name is held to what the API holds a namespace
+// to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
+// namespace.create or namespace.delete by installation, as init's own acts are, the installation
+// itself being no principal a grant names, and a namespace created again is recorded unchanged and
+// left as it was, so that an installation script can run it every time. A namespace it creates has
+// no owner, as one v0.2 made has none.
 //
 // # bus-init and bus-credential
 //
