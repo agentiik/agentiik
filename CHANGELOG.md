@@ -8,6 +8,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The v0.2.5 operator token is the bootstrap token and goes on working after the upgrade, with nothing to do by hand: `init` keeps its hash in the database from `AGK_OPERATOR_TOKEN`, the API no longer reads `AGK_OPERATOR_TOKEN_FILE`, which a v0.2.5 `compose.yaml` may go on setting, and `operator-token.sha256` is left where it was.
 - The operator token of a server that runs no `init`, Homebrew's or one put together by hand, goes on working too: `agentiik-api migrate` takes `AGK_OPERATOR_TOKEN` as `init` does, and with none set imports, once, the v0.2 hash in the file `AGK_OPERATOR_TOKEN_FILE` names where the database keeps no hash and the bootstrap has not ended; a file that is not there imports nothing, one in another shape or readable by others fails the run.
+- A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 
 ### Access
 
@@ -35,6 +36,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
 - A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it, a display name or admin left out keeping what was recorded, and a display name left out at creation being the login. The bootstrap token creating an administrator is answered a first administrator's link.
 - A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own, and, once the bootstrap token has ended, for the last administrator who can sign in.
+- `GET` and `POST /api/v1/service-accounts` list the service accounts of the namespaces the caller owns, the built-in `NS/agentiik` of each among them, and create one, `NS/NAME`, in one of them, `agentiik` refused; `DELETE /api/v1/service-accounts/{ns}/{name}` removes one with its tokens and grants, the built-in refused with 409. Audited as `service_account.create` and `service_account.delete` in the namespace.
+- `POST /api/v1/auth/tokens` refuses a service account's token minting for that service account with 403, takes an expiry up to a minute past the year as asked, for a client's clock running ahead, and refuses a principal holding 100 live tokens with 409.
+- `init` says so and goes on where a user's login holds the name of the namespace its settings name, rather than failing and keeping every service from starting.
 
 ### State
 
@@ -45,6 +49,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A suspended user's enrolment link still opens its session, and one it opened stays open, since enrolling is how such an account comes back; a credential of theirs opens nothing.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
+- `db.NS.CreateRun` attributes a run of a schedule, a webhook or an event (`agk.TriggerKind.Unattended`) to its namespace's built-in identity, `NS/agentiik`, and refuses one naming anybody else, so that no later trigger attributes its runs to the workflow's last editor.
+- `db.Wide` lists, reads and removes service accounts, refusing the built-in identity with `db.ErrBuiltIn`, gives namespaces their missing built-in identities, and counts a principal's live tokens under a lock on it (`LiveTokens`).
 
 ### Controller
 
@@ -55,6 +61,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
 - A fan-out of ten thousand items is handed its namespace's `max_concurrent_tasks` and no more, and another namespace's run is handed its task on the same sweep.
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
+- A test holds every record a person signs in with or through, credentials, sessions and enrolment codes, refused to a service account; a sign-in path added later joins it.
 
 ### agk
 
@@ -63,6 +70,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
 - `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
 - `agk user create LOGIN [--admin] [--display-name NAME]` sends only what it is given and prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
+- `agk service-account create NS/NAME`, `list [NS]` and `delete NS/NAME`, with `-o json` on create and list. A change answered with a 5xx leaves with 4, a list with 1.
 
 ## v0.2.5, 2026-09-26
 
