@@ -716,10 +716,10 @@ func TestAnActTheAuditLogRefusesLeavesNothing(t *testing.T) {
 	}
 }
 
-// The bootstrap token's end is asked again in the transaction of the act, so that a request
-// authorised a moment before the first administrator enrolled creates nobody and issues no link
-// once it has: here the router is told the token is still the operator's, as it was when a request
-// arriving at that moment was authorised.
+// The bootstrap token's end is asked again in the transaction of every act, so that a request
+// authorised a moment before the first administrator enrolled changes nothing once they have: here
+// the router is told the token is still the operator's, as it was when a request arriving at that
+// moment was authorised.
 func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 	in := somePeople(t)
 	rt, err := api.NewRouter(everything{who: "operator"}, func(*http.Request) (api.Identity, error) {
@@ -738,18 +738,41 @@ func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 		_, err := w.EndBootstrap(ctx, in.now)
 		return err
 	})
-	for _, r := range []struct{ path, body string }{
-		{"/api/v1/users", `{"login":"erin","display_name":"Erin"}`},
-		{"/api/v1/users", `{"login":"dan","display_name":"Dan","admin":true}`},
-		{"/api/v1/users/dan/enrolment", ""},
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateUser(ctx, db.User{Login: "erin", DisplayName: "Erin"}); err != nil {
+			return err
+		}
+		if err := w.CreateGroup(ctx, "old-team"); err != nil {
+			return err
+		}
+		_, err := w.AddMember(ctx, "old-team", "alice")
+		return err
+	})
+	for _, r := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/users", `{"login":"frank","display_name":"Frank"}`},
+		{"POST", "/api/v1/users", `{"login":"dan","display_name":"Dan","admin":true}`},
+		{"POST", "/api/v1/users/dan/enrolment", ""},
+		{"DELETE", "/api/v1/users/erin", ""},
+		{"POST", "/api/v1/groups", `{"name":"team-ops","members":["alice"]}`},
+		{"PUT", "/api/v1/groups/old-team/members/erin", ""},
+		{"DELETE", "/api/v1/groups/old-team/members/alice", ""},
+		{"DELETE", "/api/v1/groups/old-team", ""},
 	} {
-		w := sent(t, rt, "POST", r.path, "operator", r.body)
+		w := sent(t, rt, r.method, r.path, "operator", r.body)
 		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") || w.Header().Get("WWW-Authenticate") != "Bearer" {
-			t.Errorf("%s %s by the operator once the bootstrap ended answered %d: %s", r.path, r.body, w.Code, w.Body)
+			t.Errorf("%s %s %s by the operator once the bootstrap ended answered %d: %s", r.method, r.path, r.body, w.Code, w.Body)
 		}
 	}
-	if n := in.count(t, `select count(*) from users where login = 'erin'`) + in.count(t, `select count(*) from enrolment_codes`); n != 0 {
-		t.Errorf("the ended bootstrap left %d rows behind", n)
+	for q, want := range map[string]int{
+		`select count(*) from users where login in ('frank', 'erin')`: 1,
+		`select count(*) from enrolment_codes`:                        0,
+		`select count(*) from groups`:                                 1,
+		`select count(*) from group_members`:                          1,
+		`select count(*) from audit_log`:                              0,
+	} {
+		if n := in.count(t, q); n != want {
+			t.Errorf("once the bootstrap ended, %s answers %d, want %d", q, n, want)
+		}
 	}
 }
 
@@ -801,5 +824,190 @@ func TestTwoRequestsCreatingOneUserAtOnceMakeOneUserAndOneOpenLink(t *testing.T)
 	}
 	if n := in.count(t, `select count(*) from enrolment_codes where login = 'dan' and revoked_at is null`); n != 1 {
 		t.Errorf("two requests creating dan at once left %d links open", n)
+	}
+}
+
+// waitForLocks waits until n transactions of this test's database wait on a lock, and fails the test
+// after ten seconds.
+func (in people) waitForLocks(t *testing.T, n int) {
+	t.Helper()
+	watcher := dbtest.Superuser(t, in.super)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting int
+		if err := watcher.QueryRow(t.Context(),
+			`select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d transactions wait on a lock, and %d were expected to", waiting, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// An act takes its rows' locks before it appends to the audit log, whose head is one row for the
+// whole installation: a fresh link asked for alice, and dan removed with his personal namespace,
+// while another transaction holds their rows and has yet to append its own entry, wait for it,
+// rather than holding the head that transaction needs and being refused as a deadlock.
+func TestAnActLocksItsRowsBeforeItAppendsToTheAuditLog(t *testing.T) {
+	in := somePeople(t)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateUser(ctx, db.User{Login: "dan", DisplayName: "Dan"}); err != nil {
+			return err
+		}
+		return w.CreateGroup(ctx, "team-finance")
+	})
+	in.exec(t, `insert into namespaces (name, kind, owner) values ('dan', 'personal', 'dan')`)
+
+	for _, r := range []struct {
+		method, path, body, member string
+		want                       int
+	}{
+		{"POST", "/api/v1/users", `{"login":"alice","display_name":"Alice"}`, "alice", http.StatusOK},
+		{"DELETE", "/api/v1/users/dan", "", "dan", http.StatusNoContent},
+	} {
+		answered := make(chan *httptest.ResponseRecorder, 1)
+		err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			// The member's row, held as a membership change holds it until its entry is
+			// appended and it commits.
+			if _, err := w.AddMember(ctx, "team-finance", r.member); err != nil {
+				return err
+			}
+			go func() { answered <- sent(t, in.h, r.method, r.path, in.carol, r.body) }()
+			in.waitForLocks(t, 1)
+			return w.Audit(ctx, audit.Record{Actor: "carol", Action: audit.GroupMemberAdd, Target: "group:team-finance", Result: audit.Done})
+		})
+		if err != nil {
+			t.Errorf("a membership change holding %s's row could not append its entry while %s %s waited: %s", r.member, r.method, r.path, err)
+		}
+		if w := <-answered; w.Code != r.want {
+			t.Errorf("%s %s, waiting on %s's row, answered %d: %s", r.method, r.path, r.member, w.Code, w.Body)
+		}
+	}
+}
+
+// A link asked for a user whose enrolment is committing at that moment waits for it and is refused,
+// rather than issued beside the passkey it made: whether the user holds a credential is read once
+// their row is locked.
+func TestALinkAskedWhileTheUserEnrolsIsRefused(t *testing.T) {
+	in := somePeople(t)
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if err := w.AddCredential(ctx, db.Credential{ID: "cGFzc2tleS1hbGljZQ", Login: "alice", Type: db.CredentialPasskey,
+			PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {
+			return err
+		}
+		go func() { answered <- sent(t, in.h, "POST", "/api/v1/users/alice/enrolment", in.carol, "") }()
+		in.waitForLocks(t, 1)
+		return nil
+	})
+	if w := <-answered; w.Code != http.StatusConflict {
+		t.Errorf("a link asked while alice enrolled answered %d: %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from enrolment_codes where login = 'alice'`); n != 0 {
+		t.Errorf("a link was issued beside alice's passkey: %d", n)
+	}
+}
+
+// Once the bootstrap token has ended, the last administrator who can sign in, not suspended and
+// holding a credential, is not removed, since nothing makes an administrator after that; before it
+// has ended, the token makes another and the removal goes through. Two administrators removing each
+// other at once take turns, and the second finds itself the last.
+func TestTheLastAdministratorWhoCanSignInIsNotRemoved(t *testing.T) {
+	in := somePeople(t)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		for _, u := range []db.User{
+			{Login: "dan", DisplayName: "Dan", Admin: true}, {Login: "erin", DisplayName: "Erin", Admin: true},
+			{Login: "frank", DisplayName: "Frank", Admin: true, Suspended: true}, {Login: "gina", DisplayName: "Gina", Admin: true},
+		} {
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if w := in.ask(t, "DELETE", "/api/v1/users/dan", in.carol, "", nil); w.Code != http.StatusNoContent {
+		t.Errorf("removing dan, the bootstrap token still live, answered %d: %s", w.Code, w.Body)
+	}
+
+	for _, login := range []string{"carol", "frank", "gina"} {
+		in.enrol(t, login)
+	}
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.EndBootstrap(ctx, in.now)
+		return err
+	})
+	gina := in.token(t, "gina", nil, nil)
+
+	// carol and gina remove each other at once, while carol's row is held: one goes, and the
+	// other is then the last who can sign in, frank being suspended and erin holding nothing.
+	holder := dbtest.Superuser(t, in.super)
+	tx, err := holder.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `select from users where login = 'carol' for update`); err != nil {
+		t.Fatal(err)
+	}
+	codes := make(chan int, 2)
+	go func() { codes <- sent(t, in.h, "DELETE", "/api/v1/users/gina", in.carol, "").Code }()
+	go func() { codes <- sent(t, in.h, "DELETE", "/api/v1/users/carol", gina, "").Code }()
+	in.waitForLocks(t, 2)
+	if err := tx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := []int{<-codes, <-codes}
+	slices.Sort(got)
+	if !slices.Equal(got, []int{http.StatusNoContent, http.StatusConflict}) {
+		t.Errorf("two administrators removing each other at once answered %v", got)
+	}
+	var left string
+	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(),
+		`select string_agg(login, ',' order by login) from users where admin and login in ('carol', 'gina')`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	remover := in.carol
+	if left == "gina" {
+		remover = gina
+	}
+	w := in.ask(t, "DELETE", "/api/v1/users/"+left, remover, "", nil)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), left+" is the last administrator who can sign in") {
+		t.Errorf("%s removing themselves, the last who can sign in, answered %d: %s", left, w.Code, w.Body)
+	}
+
+	// Anybody else goes, and an administrator who could sign in counts once enrolled.
+	if w := in.ask(t, "DELETE", "/api/v1/users/frank", remover, "", nil); w.Code != http.StatusNoContent {
+		t.Errorf("removing frank, suspended, answered %d: %s", w.Code, w.Body)
+	}
+	in.enrol(t, "erin")
+	if w := in.ask(t, "DELETE", "/api/v1/users/"+left, remover, "", nil); w.Code != http.StatusNoContent {
+		t.Errorf("%s removing themselves beside erin, enrolled, answered %d: %s", left, w.Code, w.Body)
+	}
+}
+
+// An act of the bootstrap token and the enrolment that ends the token take turns: a user created
+// with the token while the first administrator's enrolment is committing waits for it, and is then
+// refused, rather than reading the token live a moment before it ends and committing after.
+func TestAnActOfTheBootstrapTokenWaitsForTheEnrolmentThatEndsIt(t *testing.T) {
+	in := somePeople(t)
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if _, err := w.EndBootstrap(ctx, in.now); err != nil {
+			return err
+		}
+		go func() {
+			answered <- sent(t, in.h, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","display_name":"Erin"}`)
+		}()
+		in.waitForLocks(t, 1)
+		return nil
+	})
+	if w := <-answered; w.Code != http.StatusUnauthorized {
+		t.Errorf("a user created with the bootstrap token as it ended answered %d: %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from users where login = 'erin'`); n != 0 {
+		t.Error("the bootstrap token created erin as it ended")
 	}
 }

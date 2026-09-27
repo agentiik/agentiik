@@ -130,6 +130,22 @@ func (w *Wide) Bootstrap(ctx context.Context) (Bootstrap, error) {
 	return b, nil
 }
 
+// BootstrapHeld reads it as Bootstrap does, and holds the row until the transaction ends, so that
+// an act of the bootstrap token and the enrolment that ends the token take turns: the act commits
+// while the token is live, or reads that it has ended. Taken after the act's own rows and before
+// its entries in the audit log, which is the order EndBootstrap's caller takes them in.
+func (w *Wide) BootstrapHeld(ctx context.Context) (Bootstrap, error) {
+	var b Bootstrap
+	var enrolled *time.Time
+	if err := w.tx.QueryRow(ctx, `select token_hash, enrolled_at from bootstrap for share`).Scan(&b.TokenHash, &enrolled); err != nil {
+		return Bootstrap{}, fmt.Errorf("db: the bootstrap state could not be read: %w", err)
+	}
+	if enrolled != nil {
+		b.EnrolledAt = *enrolled
+	}
+	return b, nil
+}
+
 // SetBootstrapToken keeps the hash of the bootstrap token, as init does at every run from the
 // token the installation's settings hold, and answers whether it changed. Once the token has
 // ended it is ErrBootstrapEnded, and nothing is written.

@@ -27,7 +27,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
 - `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
 - A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it. The bootstrap token creating an administrator is answered a first administrator's link.
-- A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own.
+- A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own, and, once the bootstrap token has ended, for the last administrator who can sign in.
 
 ### State
 

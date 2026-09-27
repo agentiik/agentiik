@@ -144,6 +144,30 @@ func (w *Wide) SignedIn(ctx context.Context, login string, at time.Time) error {
 	return nil
 }
 
+// Administrator is one of the installation's administrators, and whether they can sign in: not
+// suspended, and holding a credential.
+type Administrator struct {
+	Login   string
+	SignsIn bool
+}
+
+// Administrators answers the installation's administrators, ordered by login, and locks each of
+// their rows until the transaction ends, so that two removals of administrators at once take turns
+// in one order and the second counts what the first left.
+func (w *Wide) Administrators(ctx context.Context) ([]Administrator, error) {
+	rows, err := w.tx.Query(ctx,
+		`select u.login, not u.suspended and exists (select from credentials c where c.login = u.login)
+		   from users u where u.admin order by u.login for update of u`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	admins, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Administrator])
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	return admins, nil
+}
+
 // Group is a named set of users. Its principal is group:Name.
 type Group struct {
 	Name      string

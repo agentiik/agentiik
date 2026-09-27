@@ -226,6 +226,63 @@ func TestGroupsAreListedWithTheirMembersAndWhatAPrincipalOwnsIsFound(t *testing.
 	}
 }
 
+// A first administrator's link and a new user's link are for an account that holds no credential,
+// and a recovery code for one that lost theirs; the administrators are read with whether each can
+// sign in, not suspended and holding a credential.
+func TestALinkEnrolsTheFirstCredentialAndTheAdministratorsSayWhoCanSignIn(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	passkey := Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}
+	var admins []Administrator
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{
+			{Login: "alice", DisplayName: "Alice", Admin: true}, {Login: "bob", DisplayName: "Bob", Admin: true},
+			{Login: "carol", DisplayName: "Carol"}, {Login: "dave", DisplayName: "Dave", Admin: true, Suspended: true},
+		} {
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		if err := w.AddCredential(ctx, passkey); err != nil {
+			return err
+		}
+		dave := passkey
+		dave.ID, dave.Login = "ZGF2ZQ", "dave"
+		if err := w.AddCredential(ctx, dave); err != nil {
+			return err
+		}
+		var err error
+		admins, err = w.Administrators(ctx)
+		return err
+	})
+	want := []Administrator{{Login: "alice", SignsIn: true}, {Login: "bob"}, {Login: "dave"}}
+	if !slices.Equal(admins, want) {
+		t.Errorf("the administrators read as %+v, want %+v", admins, want)
+	}
+
+	for i, kind := range []string{EnrolmentFirstAdministrator, EnrolmentNewUser} {
+		err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+			_, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash("link" + kind), Login: "alice", Kind: kind,
+				IssuedBy: "bob", IssuedAt: now.Add(time.Duration(i) * time.Second), ExpiresAt: now.Add(time.Hour)})
+			return err
+		})
+		if !errors.Is(err, ErrEnrolled) {
+			t.Errorf("a %s link for alice, who holds a passkey, was answered %v", kind, err)
+		}
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if _, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash("recovery"), Login: "alice", Kind: EnrolmentRecovery,
+			IssuedBy: "bob", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Errorf("a recovery code for alice was answered %v", err)
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash("carol"), Login: "carol", Kind: EnrolmentNewUser,
+			IssuedBy: "bob", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Errorf("a link for carol, who holds nothing, was answered %v", err)
+		}
+		return nil
+	})
+}
+
 func TestACredentialIsARowOfItsOwn(t *testing.T) {
 	pool := identity(t)
 	ctx := t.Context()

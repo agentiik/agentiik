@@ -264,6 +264,11 @@ const (
 	EnrolmentRecovery = "recovery"
 )
 
+// ErrEnrolled is a first administrator's link or a new user's link asked for a user who holds a
+// credential already: those links enrol the first passkey of an account that holds none, and a
+// lost one is replaced with a recovery code.
+var ErrEnrolled = errors.New("db: that user holds a credential already")
+
 // ErrNoEnrolmentCode is a code that opens nothing: never issued, used, revoked or expired.
 var ErrNoEnrolmentCode = errors.New("db: no open enrolment code of that value")
 
@@ -286,15 +291,29 @@ type EnrolmentCode struct {
 // link replaces every open one, whoever it was for, and is ErrBootstrapEnded once the first
 // administrator has enrolled.
 //
+// A first administrator's link and a new user's link are for a user who holds no credential yet,
+// and are ErrEnrolled for one who does; a recovery code is for one who lost theirs.
+//
 // The user's row is locked first, and the bootstrap state's for a first administrator's link, so
 // that two issues at once take turns and the second replaces the first rather than failing on it.
+// Whether the user holds a credential is read once the row is locked, so that an enrolment still
+// committing is waited for and seen, rather than answered with a link beside the passkey it made.
 func (w *Wide) IssueEnrolmentCode(ctx context.Context, c EnrolmentCode) (bool, error) {
+	var enrolled bool
 	err := w.tx.QueryRow(ctx, `select login from users where login = $1 for update`, c.Login).Scan(new(string))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("%w: %s", ErrNoPrincipal, c.Login)
 	}
 	if err != nil {
 		return false, fmt.Errorf("db: user %s could not be read: %w", c.Login, err)
+	}
+	if c.Kind != EnrolmentRecovery {
+		if err := w.tx.QueryRow(ctx, `select exists (select from credentials where login = $1)`, c.Login).Scan(&enrolled); err != nil {
+			return false, fmt.Errorf("db: the credentials of %s could not be read: %w", c.Login, err)
+		}
+		if enrolled {
+			return false, fmt.Errorf("%w: %s", ErrEnrolled, c.Login)
+		}
 	}
 	replaced := `login = $1 and kind = $2`
 	if c.Kind == EnrolmentFirstAdministrator {

@@ -32,6 +32,12 @@ import (
 // Each act is recorded in the audit log in its own transaction, as every act is: a user created or
 // removed, an enrolment link issued, a group created or removed, a member added or removed, since
 // each changes who may reach what.
+//
+// Each transaction takes its rows' locks first, the bootstrap state's next, and appends to the audit
+// log last. Appending locks the head of the chain, one row for the whole installation, until the
+// transaction ends, so an act that appended and then waited on a row another act holds, while that
+// act waits on the head to append its own entry, is a deadlock: two administrators, one asking a
+// fresh link for alice and the other putting her in a group, would have had one of them refused.
 
 // EnrolmentLife is how long an enrolment link opens anything: "single use and good for an hour",
 // long enough to send it to its user and short enough that one forgotten in a chat is dead by the
@@ -221,8 +227,8 @@ var (
 	// errOtherwise is a user asked for again with another display name or admin, which is not
 	// the same request made again but a second user under a login already taken.
 	errOtherwise = errors.New("api: that login is a user created otherwise")
-	// errEnrolled is a link asked for a user who holds a credential already.
-	errEnrolled = errors.New("api: that user has enrolled")
+	// errLastAdministrator is the removal of the last administrator who can sign in.
+	errLastAdministrator = errors.New("api: that is the last administrator")
 )
 
 // ownsNamespaces is a principal refused removal while namespaces' records name it as owner.
@@ -236,13 +242,15 @@ func (o *ownsNamespaces) Error() string {
 }
 
 // stillBootstrapping refuses the bootstrap operator once the first administrator has enrolled,
-// asked again in the transaction of the act: the router authorised the request in one of its own,
-// and an enrolment that ended the token since then ends what the token may do here too.
+// asked again in the transaction of the act, after its rows are locked and before it is recorded:
+// the router authorised the request in a transaction of its own, and an enrolment that ended the
+// token since then ends what the token may do here too. The bootstrap state is held until the act
+// commits, so that the enrolment ending it waits for the act rather than landing in between.
 func stillBootstrapping(ctx context.Context, wide *db.Wide, who Principal) error {
 	if who != BootstrapOperator {
 		return nil
 	}
-	b, err := wide.Bootstrap(ctx)
+	b, err := wide.BootstrapHeld(ctx)
 	if err != nil {
 		return err
 	}
@@ -293,7 +301,7 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is already a namespace, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
 	case errors.Is(err, errOtherwise):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another display name or admin: a user is asked for again only as they were created, for a fresh link while they have not enrolled", ask.Login))
-	case errors.Is(err, errEnrolled):
+	case errors.Is(err, db.ErrEnrolled):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user who has enrolled already, and an enrolment link enrols the first passkey of an account that holds none", ask.Login))
 	case errors.Is(err, db.ErrPrincipalExists):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s was created by another request at the same moment: ask again for a fresh link", ask.Login))
@@ -314,9 +322,6 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 	var answer CreatedUser
 	var created bool
 	err := s.pool.Installation(ctx, db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		if err := stillBootstrapping(ctx, wide, who); err != nil {
-			return err
-		}
 		existing, err := wide.User(ctx, ask.Login)
 		switch {
 		case errors.Is(err, db.ErrNoPrincipal):
@@ -328,14 +333,17 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 			return err
 		case existing.DisplayName != ask.DisplayName || existing.Admin != ask.Admin:
 			return errOtherwise
-		default:
-			if err := notEnrolled(ctx, wide, ask.Login); err != nil {
-				return err
-			}
 		}
 		// Read back, since when it was created is the database's to say.
 		user, err := wide.User(ctx, ask.Login)
 		if err != nil {
+			return err
+		}
+		link, issued, err := s.issue(ctx, wide, who, user, now)
+		if err != nil {
+			return err
+		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
 		result := audit.Done
@@ -348,8 +356,7 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		}); err != nil {
 			return err
 		}
-		link, err := s.issue(ctx, wide, who, user, now)
-		if err != nil {
+		if err := wide.Audit(ctx, issued); err != nil {
 			return err
 		}
 		answer = CreatedUser{User: userOf(user), Enrolment: link}
@@ -358,33 +365,22 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 	return answer, created, err
 }
 
-// notEnrolled refuses a link for a user who holds a credential: a link enrols the first passkey of
-// an account that holds none, and a lost one is replaced with a recovery code.
-func notEnrolled(ctx context.Context, wide *db.Wide, login string) error {
-	held, err := wide.CredentialsOf(ctx, login)
-	if err != nil {
-		return err
-	}
-	if len(held) > 0 {
-		return errEnrolled
-	}
-	return nil
-}
-
-// issue issues a link for user, as who, revoking the one it replaces, and records it.
+// issue issues a link for user, as who, revoking the one it replaces, and answers the entry that
+// records it, for its caller to append once every row it locks is locked.
 //
 // A link the bootstrap operator issues for an administrator is a first administrator's, which
 // replaces every first administrator's link still open, whoever it was for, "so that a link made
 // with the bootstrap token for a mistyped login is never left open beside the one used", and ends
-// with the bootstrap token. Any other is a new user's, which replaces that user's open link.
-func (s *UserAPI) issue(ctx context.Context, wide *db.Wide, who Principal, user db.User, now time.Time) (EnrolmentLink, error) {
+// with the bootstrap token. Any other is a new user's, which replaces that user's open link. Either
+// is refused, db.ErrEnrolled, for a user who holds a credential already.
+func (s *UserAPI) issue(ctx context.Context, wide *db.Wide, who Principal, user db.User, now time.Time) (EnrolmentLink, audit.Record, error) {
 	kind := db.EnrolmentNewUser
 	if who == BootstrapOperator && user.Admin {
 		kind = db.EnrolmentFirstAdministrator
 	}
 	code, _, err := token.New(token.Enrol, "")
 	if err != nil {
-		return EnrolmentLink{}, err
+		return EnrolmentLink{}, audit.Record{}, err
 	}
 	hash := sha256.Sum256([]byte(code))
 	expires := now.Add(EnrolmentLife)
@@ -392,17 +388,15 @@ func (s *UserAPI) issue(ctx context.Context, wide *db.Wide, who Principal, user 
 		Hash: hash[:], Login: user.Login, Kind: kind, IssuedBy: string(who), IssuedAt: now, ExpiresAt: expires,
 	})
 	if err != nil {
-		return EnrolmentLink{}, err
+		return EnrolmentLink{}, audit.Record{}, err
 	}
 	// Recorded with who issued it and for whom, and never with its code, which is shown once, in
 	// the answer.
-	if err := wide.Audit(ctx, audit.Record{
+	issued := audit.Record{
 		Actor: string(who), Action: audit.EnrolmentIssue, Target: user.Login, Result: audit.Done,
 		Detail: map[string]any{"kind": kind, "expires_at": expires.UTC().Format(time.RFC3339Nano), "replaced": replaced},
-	}); err != nil {
-		return EnrolmentLink{}, err
 	}
-	return EnrolmentLink{Link: s.enrol + code, ExpiresAt: expires.UTC()}, nil
+	return EnrolmentLink{Link: s.enrol + code, ExpiresAt: expires.UTC()}, issued, nil
 }
 
 // issueEnrolment is POST /api/v1/users/{login}/enrolment: a fresh link for a user who holds no
@@ -420,23 +414,23 @@ func (s *UserAPI) issueEnrolment(w http.ResponseWriter, r *http.Request, who Pri
 	now := s.now().Truncate(time.Microsecond)
 	var link EnrolmentLink
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		if err := stillBootstrapping(ctx, wide, who); err != nil {
-			return err
-		}
 		user, err := wide.User(ctx, login)
 		if err != nil {
 			return err
 		}
-		if err := notEnrolled(ctx, wide, login); err != nil {
+		var issued audit.Record
+		if link, issued, err = s.issue(ctx, wide, who, user, now); err != nil {
 			return err
 		}
-		link, err = s.issue(ctx, wide, who, user, now)
-		return err
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
+		return wide.Audit(ctx, issued)
 	})
 	switch {
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusNotFound, noUser)
-	case errors.Is(err, errEnrolled):
+	case errors.Is(err, db.ErrEnrolled):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s holds a credential already, and an enrolment link enrols the first passkey of an account that holds none: a lost passkey is replaced with a recovery code", login))
 	case errors.Is(err, db.ErrBootstrapEnded):
 		bootstrapEnded(w)
@@ -500,6 +494,11 @@ func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Ta
 // somebody who is gone". Their personal namespace is theirs alone and nobody else's to own, so it
 // goes with them where it is empty, and refuses their removal, saying what it holds, where it is
 // not: what a namespace holds is somebody's work.
+//
+// Refused too, once the bootstrap token has ended, for the last administrator who can sign in, not
+// suspended and holding a credential: nothing else makes an administrator after that, and an
+// installation nobody can administer is the lockout the bootstrap token ends at an enrolment rather
+// than at a creation to avoid. Before it has ended, the token makes another.
 func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
 		fail(w, statusOf(err), err.Error())
@@ -514,6 +513,11 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 		user, err := wide.User(ctx, login)
 		if err != nil {
 			return err
+		}
+		if user.Admin {
+			if err := notTheLastAdministrator(ctx, wide, login); err != nil {
+				return err
+			}
 		}
 		owned, err := wide.NamespacesOwnedBy(ctx, login)
 		if err != nil {
@@ -534,15 +538,20 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 			if err := wide.RemoveNamespace(ctx, login); err != nil {
 				return err
 			}
+		}
+		if err := wide.RemovePrincipal(ctx, login); err != nil {
+			return err
+		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
+		if personal {
 			if err := wide.Audit(ctx, audit.Record{
 				Actor: string(who), Action: audit.NamespaceDelete, Target: login, Result: audit.Done,
 				Detail: map[string]any{"personal": true},
 			}); err != nil {
 				return err
 			}
-		}
-		if err := wide.RemovePrincipal(ctx, login); err != nil {
-			return err
 		}
 		return wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.UserDelete, Target: login, Result: audit.Done,
@@ -556,17 +565,42 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, http.StatusNotFound, noUser)
 	case errors.As(err, &owns):
 		fail(w, http.StatusConflict, owns.Error())
+	case errors.Is(err, errLastAdministrator):
+		fail(w, http.StatusConflict, fmt.Sprintf("%s is the last administrator who can sign in, and an installation with none is one nobody can administer: make another administrator, and let them enrol, first", login))
 	case errors.As(err, &holds):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s was not removed: a user's personal namespace goes with them only once it holds nothing, and %s", login, holds.Held()))
 	case errors.Is(err, db.ErrOwnsNamespace):
 		// A namespace given them as owner after it was looked for, which the table refuses
 		// all the same.
 		fail(w, http.StatusConflict, fmt.Sprintf("%s owns a namespace given them a moment ago, and is not removed while a namespace's record names them as owner", login))
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the user could not be removed")
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// notTheLastAdministrator refuses the removal of login, an administrator, where the bootstrap token
+// has ended and no other administrator can sign in. Every administrator's row is locked first, in
+// one order, so that two administrators removing each other at once take turns and the second
+// finds the first gone.
+func notTheLastAdministrator(ctx context.Context, wide *db.Wide, login string) error {
+	admins, err := wide.Administrators(ctx)
+	if err != nil {
+		return err
+	}
+	b, err := wide.BootstrapHeld(ctx)
+	if err != nil || !b.Ended() {
+		return err
+	}
+	for _, a := range admins {
+		if a.Login != login && a.SignsIn {
+			return nil
+		}
+	}
+	return errLastAdministrator
 }
 
 // NewGroup is a group to create, empty or with its first members: openapi.json's groupCreate.
@@ -643,6 +677,9 @@ func (s *UserAPI) createGroup(w http.ResponseWriter, r *http.Request, who Princi
 		if made, err = wide.Group(ctx, ask.Name); err != nil {
 			return err
 		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
 		// One entry with its first members: a group just created holds no grant, so nobody
 		// gains anything by being put in it here, and what it is created with is in the entry.
 		return wide.Audit(ctx, audit.Record{
@@ -655,6 +692,8 @@ func (s *UserAPI) createGroup(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusConflict, fmt.Sprintf("a group %s exists already, and a group's name is its only identity", ask.Name))
 	case errors.Is(err, db.ErrNoPrincipal) && missing != "":
 		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("members: %s is no user, and a group's members are users, by login", missing))
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the group could not be created")
 	default:
@@ -737,6 +776,9 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 		if err := wide.RemovePrincipal(ctx, principal); err != nil {
 			return err
 		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
 		return wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.GroupDelete, Target: principal, Result: audit.Done,
 			Detail: map[string]any{"members": orEmpty(held.Members)},
@@ -750,6 +792,8 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 		fail(w, http.StatusConflict, owns.Error())
 	case errors.Is(err, db.ErrOwnsNamespace):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s owns a namespace given it a moment ago, and is not removed while a namespace's record names it as owner", principal))
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the group could not be removed")
 	default:
@@ -812,6 +856,9 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		if now, err = wide.Group(ctx, name); err != nil {
 			return err
 		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
+		}
 		result := audit.Done
 		if !changed {
 			result = audit.Unchanged
@@ -827,6 +874,8 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, http.StatusNotFound, noGroup)
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusNotFound, noUser)
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the group's members could not be changed")
 	default:
