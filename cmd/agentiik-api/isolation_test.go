@@ -26,6 +26,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/accesstest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/jackc/pgx/v5"
@@ -361,17 +362,14 @@ func fill(pattern string, named map[string]string) string {
 }
 
 // sameAnswer says how an answer differs from the one absence got, and is empty where it does not:
-// status, headers and body.
+// status, headers and body, as the access suite compares them.
 func sameAnswer(absence, w *httptest.ResponseRecorder) string {
-	switch {
-	case absence.Code != w.Code:
-		return fmt.Sprintf("%d, and absence %d", w.Code, absence.Code)
-	case !maps.EqualFunc(absence.Header(), w.Header(), slices.Equal):
-		return fmt.Sprintf("the headers %v, and absence %v", w.Header(), absence.Header())
-	case !bytes.Equal(absence.Body.Bytes(), w.Body.Bytes()):
-		return fmt.Sprintf("%q, and absence %q", w.Body, absence.Body)
-	}
-	return ""
+	return accesstest.Difference(answerOf(absence), answerOf(w))
+}
+
+// answerOf is what a recorder was answered.
+func answerOf(w *httptest.ResponseRecorder) accesstest.Answer {
+	return accesstest.Answer{Status: w.Code, Header: w.Header(), Body: w.Body.Bytes()}
 }
 
 // "No matching grant means refusal: the same 404 whether the workflow is absent or merely invisible,
@@ -555,10 +553,6 @@ func TestNoAnswerOfAnyRouteCarriesASecretsValue(t *testing.T) {
 	}
 }
 
-// timingVariable asks TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse to run: it measures, and
-// a machine under other load measures noise, so it runs when somebody asks for numbers.
-const timingVariable = "AGENTIIK_TEST_TIMING"
-
 // A principal holding nothing in finance waits as long for the answer about something that does not
 // exist as about something finance holds, on the routes a prober would ask first: asked in turn, so
 // that the two meet the same machine, their medians are within a fifth of each other or 200 µs,
@@ -567,8 +561,8 @@ const timingVariable = "AGENTIIK_TEST_TIMING"
 // take longer than one that does not. Before, a run that was not there was refused in 0.9 ms and one
 // the caller could not read in 1.6 ms, and a listing of finance in 17.6 ms against 1.5 ms.
 func TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse(t *testing.T) {
-	if os.Getenv(timingVariable) == "" {
-		t.Skipf("set %s to measure", timingVariable)
+	if os.Getenv(accesstest.TimingVariable) == "" {
+		t.Skipf("set %s to measure", accesstest.TimingVariable)
 	}
 	x := someTenants(t)
 	for i := range 18 {
@@ -586,30 +580,17 @@ func TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse(t *testing.T) {
 		{"mallory", "POST", "/api/v1/nowhere/workflows/nothing/runs", "/api/v1/finance/workflows/monthly-invoicing/runs"},
 		{"mallory", "DELETE", "/api/v1/auth/tokens/" + ulid.New(), "/api/v1/auth/tokens/" + x.token},
 	} {
-		const rounds = 300
-		took := [2][]time.Duration{}
-		for i := range rounds + 20 {
-			for j, path := range []string{c.absent, c.present} {
-				began := time.Now()
-				x.ask(t.Context(), c.method, path, x.as[c.who], "{}")
-				if i >= 20 {
-					took[j] = append(took[j], time.Since(began))
-				}
-			}
+		ask := func(path string) func() {
+			return func() { x.ask(t.Context(), c.method, path, x.as[c.who], "{}") }
 		}
-		for j := range took {
-			slices.Sort(took[j])
-		}
-		t.Logf("%-22s %-6s %-48s absent %6.0fµs p90 %6.0fµs | present %6.0fµs p90 %6.0fµs", c.who, c.method, c.present,
-			micro(took[0][rounds/2]), micro(took[0][rounds*9/10]), micro(took[1][rounds/2]), micro(took[1][rounds*9/10]))
-		absence, presence := took[0][rounds/2], took[1][rounds/2]
-		if gap, most := (presence - absence).Abs(), max(200*time.Microsecond, absence/5); gap > most {
+		m := accesstest.TakeAsLong(300, ask(c.absent), ask(c.present))
+		t.Logf("%-22s %-6s %-48s %s", c.who, c.method, c.present, m)
+		if !m.Alike() {
+			absence, presence := m.Medians()
 			t.Errorf("as %s, %s %s took %s where what does not exist took %s", c.who, c.method, c.present, presence, absence)
 		}
 	}
 }
-
-func micro(d time.Duration) float64 { return float64(d) / float64(time.Microsecond) }
 
 // "Runner internals. A user never learns which host executed a task beyond its runner name and
 // labels." A task of alice's run ran on finance's runner, which joined with its version and capacity

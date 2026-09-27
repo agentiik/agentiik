@@ -343,7 +343,7 @@ func TestEveryEscapeIsNamed(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, m := range regexp.MustCompile(`Installation\(\s*\w+\s*,\s*(?:db\.)?(\w+)\s*,`).FindAllStringSubmatch(string(body), -1) {
+		for _, m := range regexp.MustCompile(`\bInstallation\(\s*\w+\s*,\s*(?:db\.)?(\w+)\s*,`).FindAllStringSubmatch(string(body), -1) {
 			used[m[1]] = true
 		}
 		return nil
