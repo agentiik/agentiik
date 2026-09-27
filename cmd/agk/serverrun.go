@@ -190,6 +190,12 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 	defer answer.Body.Close()
 	if answer.StatusCode != http.StatusAccepted {
 		r := refusedBy(answer)
+		if r.status == http.StatusTooManyRequests {
+			// A refusal and not an unknown, though it may pass: the namespace has created as
+			// many runs in the last hour as its max_runs_per_hour allows, no run was written,
+			// and the installation says when one more fits.
+			return "", fmt.Errorf("the installation refused the run: %s", r.said)
+		}
 		if passing(r) {
 			// A gateway that timed out in front of an API that had already written the run
 			// answers this too, so it is no outcome rather than a refusal: a person told that

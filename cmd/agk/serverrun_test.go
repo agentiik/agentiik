@@ -473,6 +473,26 @@ func TestAFailureThatMayPassWhileStartingIsNoOutcome(t *testing.T) {
 	}
 }
 
+// A namespace past its max_runs_per_hour is answered 429, and no run was written: a refusal, said
+// in the installation's words, which say when one more fits, and never no outcome.
+func TestARunPastTheRunsAnHourIsRefusedSayingWhenOneMoreFits(t *testing.T) {
+	dir := repository(t)
+	s := &standIn{start: http.StatusTooManyRequests,
+		refusal: `{"error":"namespace finance has created 100 runs in the last 60 minutes, as many as its max_runs_per_hour allows, and one more fits in 42 seconds"}`}
+	url := installationAt(t, s)
+
+	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitRefused {
+		t.Fatalf("a 429 answering the start answered %d: %s", code, errs)
+	}
+	if !strings.Contains(errs, "the installation refused the run: namespace finance has created 100 runs") || !strings.Contains(errs, "one more fits in 42 seconds") {
+		t.Errorf("the 429 is said as %s", errs)
+	}
+	if strings.Contains(errs, "cannot be said") {
+		t.Errorf("a run refused for the quota is said to be unknown: %s", errs)
+	}
+}
+
 // A dispatch lost and requeued, and an attempt failed and retried, between two readings are
 // still narrated: they are rows the current one replaced, and news all the same.
 func TestWhatHappenedBetweenTwoReadingsIsNarrated(t *testing.T) {
