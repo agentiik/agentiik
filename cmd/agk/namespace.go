@@ -47,7 +47,7 @@ func withQuotas(fs *flag.FlagSet) *quotaFlags {
 
 // given answers the quotas the command line set, and whether it set any. A count given is held to
 // what the wire holds it to here, from 1, because the wire's refusal of 0 would otherwise read as a
-// flag nobody passed: a quota is lifted by leaving it out, never by writing it as zero.
+// flag nobody passed: a quota is lifted by naming it, never by writing it as zero.
 func (q *quotaFlags) given() (api.Quotas, bool, error) {
 	var out api.Quotas
 	set := false
@@ -58,7 +58,7 @@ func (q *quotaFlags) given() (api.Quotas, bool, error) {
 		}
 		count := func(n int64) {
 			if n < 1 {
-				err = fmt.Errorf("--%s is %d, and it is a whole number from 1: a quota is lifted by leaving it out", f.Name, n)
+				err = fmt.Errorf("--%s is %d, and it is a whole number from 1: a quota that bounds nothing is left out when a namespace is created, and lifted with --lift afterwards", f.Name, n)
 			}
 		}
 		switch f.Name {
@@ -76,7 +76,7 @@ func (q *quotaFlags) given() (api.Quotas, bool, error) {
 			out.MaxRetentionDays = q.retentionDays
 		case "max-run-duration":
 			if q.runDuration == "" {
-				err = errors.New("--max-run-duration is empty: it is written as a timeout, 24h, and lifted by leaving it out")
+				err = errors.New("--max-run-duration is empty: it is written as a timeout, 24h, and lifted with --lift max_run_duration")
 			}
 			out.MaxRunDuration = q.runDuration
 		case "allowed-runner-pools":
@@ -86,7 +86,7 @@ func (q *quotaFlags) given() (api.Quotas, bool, error) {
 				}
 			}
 			if out.AllowedRunnerPools == nil {
-				err = errors.New("--allowed-runner-pools names no pool: a namespace allowed every pool that accepts it leaves the flag out")
+				err = errors.New("--allowed-runner-pools names no pool: a namespace allowed every pool that accepts it has no such quota, which --lift allowed_runner_pools lifts")
 			}
 		default:
 			return
@@ -218,18 +218,23 @@ func namespaceDelete(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// namespaceQuotas is agk namespace quotas: a namespace's quotas, and with quotas given, the quotas
-// set.
+// namespaceQuotas is agk namespace quotas: a namespace's quotas, and with quotas given or lifted,
+// the quotas set.
 //
-// What is given is the whole set, as PUT /api/v1/namespaces/{ns}/quotas reads it and as a
-// Terraform apply sends it: max_concurrent_tasks and max_retention_days keep their values where
-// they are left out, and each of the other four left out bounds nothing afterwards. The command
-// sends that and nothing more rather than reading the quotas first and changing one, which would
-// be two requests racing another administrator's; and it prints the quotas as they now stand, so
-// that a bound lifted by being left out is seen gone.
+// PUT /api/v1/namespaces/{ns}/quotas reads its body as the whole set, and lifts each of the four
+// optional bounds the body leaves out, as a Terraform apply means it to. A person typing one flag
+// means that one bound, and a command sending it alone would lift the rest without a word, among
+// them allowed_runner_pools, which keeps a namespace's steps off the pools it was not given. So the
+// command reads the quotas first, puts the flags given on top of them, and sends that whole set: a
+// bound nobody named is kept, and one is lifted only by naming it with --lift. Another
+// administrator's change landing between the read and the write is overwritten, which a person
+// setting quotas by hand accepts for a command that never lifts what they did not name; the quotas
+// are printed as they then stand.
 func namespaceQuotas(ctx context.Context, e Env, args []string) int {
-	fs := flags(e, "agk namespace quotas", "agk namespace quotas <name> [--max-... <quota>] [--server <url>] [-o json]\n\n\tWith quotas given, they are the whole set: max_concurrent_tasks and max_retention_days keep\n\ttheir values where left out, and the other four left out bound nothing afterwards.")
+	fs := flags(e, "agk namespace quotas", "agk namespace quotas <name> [--max-... <quota>] [--lift <quota>] [--server <url>] [-o json]\n\n\tThe quotas given are set and the others kept; --lift max_runs_per_hour lifts one, and is\n\trepeated for each. max_concurrent_tasks and max_retention_days always hold a value.")
 	quotas := withQuotas(fs)
+	var lifts lifted
+	fs.Var(&lifts, "lift", "A quota to lift, by its identifier, max_runs_per_hour, max_artifact_bytes, max_run_duration or allowed_runner_pools; repeated for each.")
 	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	name, code, ok := oneNamespace(e, fs, args)
@@ -237,6 +242,9 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 		return code
 	}
 	q, set, err := quotas.given()
+	if err == nil {
+		err = lifts.against(q)
+	}
 	if err != nil {
 		fmt.Fprintln(e.Err, err)
 		return exitUsage
@@ -247,13 +255,19 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 	}
 	path := "/api/v1/namespaces/" + url.PathEscape(name) + "/quotas"
 	var raw json.RawMessage
-	if set {
-		err = at.sendJSON(ctx, http.MethodPut, path, q, http.StatusOK, &raw)
-	} else {
-		err = at.getJSON(ctx, path, &raw)
+	if err := at.getJSON(ctx, path, &raw); err != nil {
+		return namespaceRefused(e, name, false, err)
 	}
-	if err != nil {
-		return namespaceRefused(e, name, set, err)
+	change := set || len(lifts) > 0
+	if change {
+		var now api.Quotas
+		if err := json.Unmarshal(raw, &now); err != nil {
+			fmt.Fprintf(e.Err, "the installation's answer about the quotas of %s could not be read: %s\n", name, err)
+			return exitNoOutcome
+		}
+		if err := at.sendJSON(ctx, http.MethodPut, path, merged(now, q, lifts), http.StatusOK, &raw); err != nil {
+			return namespaceRefused(e, name, true, err)
+		}
 	}
 	if *output == "json" {
 		return indentedAnswer(e, raw)
@@ -265,6 +279,73 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 	}
 	describeQuotas(e.Out, now)
 	return exitSucceeded
+}
+
+// lifted are the quotas --lift names, each by its own identifier, as the wire writes it.
+type lifted []string
+
+func (l *lifted) String() string { return strings.Join(*l, ",") }
+
+func (l *lifted) Set(name string) error {
+	switch name {
+	case "max_runs_per_hour", "max_artifact_bytes", "max_run_duration", "allowed_runner_pools":
+		*l = append(*l, name)
+		return nil
+	case "max_concurrent_tasks", "max_retention_days":
+		return fmt.Errorf("%s always holds a value, 20 or 90 until an administrator sets another, and is set rather than lifted", name)
+	}
+	return fmt.Errorf("%q is not a quota that can be lifted: max_runs_per_hour, max_artifact_bytes, max_run_duration and allowed_runner_pools can", name)
+}
+
+// against refuses a quota both given and lifted, which asks for two things at once.
+func (l lifted) against(given api.Quotas) error {
+	for _, name := range l {
+		set := map[string]bool{
+			"max_runs_per_hour": given.MaxRunsPerHour != 0, "max_artifact_bytes": given.MaxArtifactBytes != 0,
+			"max_run_duration": given.MaxRunDuration != "", "allowed_runner_pools": given.AllowedRunnerPools != nil,
+		}[name]
+		if set {
+			return fmt.Errorf("%s is both given and lifted: a quota is set or lifted, not both", name)
+		}
+	}
+	return nil
+}
+
+// merged is the quotas a namespace holds, with those given set on top and those lifted taken away:
+// the whole set the route is sent, so that what nobody named stays as it was.
+func merged(now, given api.Quotas, lifts lifted) api.Quotas {
+	out := now
+	if given.MaxConcurrentTasks != 0 {
+		out.MaxConcurrentTasks = given.MaxConcurrentTasks
+	}
+	if given.MaxRunsPerHour != 0 {
+		out.MaxRunsPerHour = given.MaxRunsPerHour
+	}
+	if given.MaxArtifactBytes != 0 {
+		out.MaxArtifactBytes = given.MaxArtifactBytes
+	}
+	if given.MaxRetentionDays != 0 {
+		out.MaxRetentionDays = given.MaxRetentionDays
+	}
+	if given.MaxRunDuration != "" {
+		out.MaxRunDuration = given.MaxRunDuration
+	}
+	if given.AllowedRunnerPools != nil {
+		out.AllowedRunnerPools = given.AllowedRunnerPools
+	}
+	for _, name := range lifts {
+		switch name {
+		case "max_runs_per_hour":
+			out.MaxRunsPerHour = 0
+		case "max_artifact_bytes":
+			out.MaxArtifactBytes = 0
+		case "max_run_duration":
+			out.MaxRunDuration = ""
+		case "allowed_runner_pools":
+			out.AllowedRunnerPools = nil
+		}
+	}
+	return out
 }
 
 // oneNamespace reads the flags and the one namespace a verb is about, and says whether it may go

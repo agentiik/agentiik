@@ -51,7 +51,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
-- `agk namespace create`, `list`, `show`, `delete` and `quotas`, the last sending the quotas given as the whole set and printing them as they then stand. A change answered with a 5xx leaves with 4.
+- `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
 
 ## v0.2.5, 2026-09-26
 

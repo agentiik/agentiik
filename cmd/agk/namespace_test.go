@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,11 +132,17 @@ func TestAgkAdministersANamespace(t *testing.T) {
 		t.Errorf("the owner bounding the namespace answered %d: %s", code, errs)
 	}
 
-	// The quotas given are the whole set: max_runs_per_hour and allowed_runner_pools, left out,
-	// bound nothing afterwards, and the two that always hold a value keep theirs.
+	// One quota given is that one set, and every bound nobody named is kept, allowed_runner_pools
+	// among them; a bound goes only where --lift names it.
 	code, out, errs = in.as(t, in.carol, "namespace", "quotas", "team-ops", "--max-concurrent-tasks", "50")
-	if want := "  max_concurrent_tasks  50\n  max_retention_days    90\n"; code != exitSucceeded || out != want {
-		t.Errorf("setting the quotas answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
+	want = "  max_concurrent_tasks  50\n  max_runs_per_hour     500\n  max_retention_days    90\n  allowed_runner_pools  default\n"
+	if code != exitSucceeded || out != want {
+		t.Errorf("setting one quota answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
+	}
+	code, out, errs = in.as(t, in.carol, "namespace", "quotas", "team-ops", "--lift", "allowed_runner_pools", "--lift", "max_runs_per_hour", "--max-run-duration", "4h")
+	want = "  max_concurrent_tasks  50\n  max_retention_days    90\n  max_run_duration      4h\n"
+	if code != exitSucceeded || out != want {
+		t.Errorf("lifting two quotas answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
 	}
 	if code, again, _ := in.as(t, in.alice, "namespace", "quotas", "team-ops"); code != exitSucceeded || again != out {
 		t.Errorf("the quotas read back as %q, and were set to %q", again, out)
@@ -172,6 +180,11 @@ func TestAgkNamespaceRefusesACommandLineThatIsWrong(t *testing.T) {
 		{"namespace", "show", "team-ops", "hr"},
 		{"namespace", "show", "team-ops", "-o", "yaml"},
 		{"namespace", "list", "team-ops"},
+		{"namespace", "quotas", "team-ops", "--lift", "max_concurrent_tasks"},
+		{"namespace", "quotas", "team-ops", "--lift", "max_retention_days"},
+		{"namespace", "quotas", "team-ops", "--lift", "max-runs-per-hour"},
+		{"namespace", "quotas", "team-ops", "--lift", "max_runs_per_hour", "--max-runs-per-hour", "5"},
+		{"namespace", "create", "team-ops", "--owner", "alice", "--lift", "max_runs_per_hour"},
 	} {
 		if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, args...); code != exitUsage {
 			t.Errorf("agk %s answered %d: %s", strings.Join(args, " "), code, errs)
@@ -203,7 +216,13 @@ func TestAgkNamespaceOfAnInstallationThatDoesNotAnswerIsNoOutcome(t *testing.T) 
 // names no namespace to be absent.
 func TestAgkNamespaceTellsNoOutcomeFromARefusal(t *testing.T) {
 	status := atomic.Int64{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// A read is answered, so that the quotas' change, which reads them first, is what meets the
+	// status; the listing below is a read, and is answered the status too.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/quotas") {
+			w.Write([]byte(`{"max_concurrent_tasks":20,"max_retention_days":90}`))
+			return
+		}
 		w.WriteHeader(int(status.Load()))
 		w.Write([]byte(`{"error":"said by the installation"}`))
 	}))
@@ -231,5 +250,62 @@ func TestAgkNamespaceTellsNoOutcomeFromARefusal(t *testing.T) {
 	status.Store(http.StatusNotFound)
 	if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, "namespace", "list"); code != exitRefused || strings.TrimSpace(errs) != "said by the installation" {
 		t.Errorf("a listing answered 404 left with %d: %s", code, errs)
+	}
+}
+
+// agk namespace quotas reads the quotas first and sends the whole set back with the flags given on
+// top and the quotas --lift names taken away, so that the route, which lifts every optional bound
+// its body leaves out, is never sent a set missing one nobody named.
+func TestAgkNamespaceQuotasSendsTheQuotasHeldWithTheFlagsOnTop(t *testing.T) {
+	held := `{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_artifact_bytes":1024,"max_retention_days":90,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]}`
+	var mu sync.Mutex
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/team-ops/quotas" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodPut {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			sent = append(sent, string(body))
+			mu.Unlock()
+			w.Write(body)
+			return
+		}
+		w.Write([]byte(held))
+	}))
+	t.Cleanup(srv.Close)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--max-runs-per-hour", "60"},
+			`{"max_concurrent_tasks":20,"max_runs_per_hour":60,"max_artifact_bytes":1024,"max_retention_days":90,"max_run_duration":"24h","allowed_runner_pools":["default","dmz"]}`},
+		{[]string{"--allowed-runner-pools", "gpu", "--lift", "max_artifact_bytes", "--lift", "max_run_duration"},
+			`{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_retention_days":90,"allowed_runner_pools":["gpu"]}`},
+		{[]string{"--lift", "allowed_runner_pools"},
+			`{"max_concurrent_tasks":20,"max_runs_per_hour":500,"max_artifact_bytes":1024,"max_retention_days":90,"max_run_duration":"24h"}`},
+	} {
+		mu.Lock()
+		sent = nil
+		mu.Unlock()
+		args := append([]string{"namespace", "quotas", "team-ops"}, c.args...)
+		if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, args...); code != exitSucceeded {
+			t.Fatalf("agk %s answered %d: %s", strings.Join(args, " "), code, errs)
+		}
+		mu.Lock()
+		if len(sent) != 1 || sent[0] != c.want {
+			t.Errorf("agk %s sent %q, want the set held with the flags on top, %s", strings.Join(args, " "), sent, c.want)
+		}
+		mu.Unlock()
+	}
+
+	// With nothing given or lifted, nothing is sent.
+	mu.Lock()
+	sent = nil
+	mu.Unlock()
+	if code, out, _ := against(t.Context(), t.TempDir(), srv.URL, "namespace", "quotas", "team-ops"); code != exitSucceeded || !strings.Contains(out, "allowed_runner_pools  default, dmz") || len(sent) != 0 {
+		t.Errorf("reading the quotas answered %d, sent %q:\n%s", code, sent, out)
 	}
 }
