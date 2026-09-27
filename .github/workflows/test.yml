@@ -105,6 +105,154 @@ jobs:
             exit 1
           fi
 
+  # The image that upgrades PostgreSQL's data, on data the official image wrote, each run as the
+  # Compose file of agentiik/deploy runs it: PostgreSQL 17 given a database and rows and stopped,
+  # the image run on the directory holding the cluster, then PostgreSQL 18 started on the result and
+  # asked for the rows, each database's encoding and locale, and the configuration the official image
+  # wrote. The 17 cluster is kept beside it and still starts, and a second run changes nothing. Then
+  # what it must refuse, a PostgreSQL still running on the cluster, and what it must recover from, an
+  # upgrade killed while it had the old server started.
+  postgres-upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # bash with -eo pipefail, which a step that names no shell does not get.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: image
+        run: |
+          docker build -t agentiik-test/postgres-upgrade -f build/postgres-upgrade.Dockerfile build
+          docker pull --quiet postgres:17-alpine
+          docker pull --quiet postgres:18-alpine
+
+          # The Compose file's services as docker run options: the upgrade given the directory holding
+          # the cluster, and PostgreSQL given the cluster, 17 where v0.2.5 mounted it and 18 where the
+          # Compose file of v0.3.0 does.
+          cat > "$RUNNER_TEMP/compose.sh" <<'SH'
+          upgrade() {
+            docker run --rm --network none --userns host --cap-drop ALL \
+              --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
+              -v "$1:/data" agentiik-test/postgres-upgrade
+          }
+          postgres17() {
+            docker run -d --name "$1" --network none --userns host -e POSTGRES_DB=agentiik -e POSTGRES_HOST_AUTH_METHOD=trust \
+              -v "$2:/var/lib/postgresql/data" postgres:17-alpine >/dev/null
+            ready "$1"
+          }
+          postgres18() {
+            docker run -d --name "$1" --network none --userns host -e POSTGRES_DB=agentiik -e POSTGRES_HOST_AUTH_METHOD=trust \
+              -e PGDATA=/var/lib/postgresql -v "$2:/var/lib/postgresql" postgres:18-alpine >/dev/null
+            ready "$1"
+          }
+          # Ready once it answers on TCP, which the official image's first start, on the socket alone,
+          # does not.
+          ready() {
+            for _ in $(seq 60); do
+              if docker exec "$1" pg_isready -q -h 127.0.0.1 -U postgres; then return 0; fi
+              sleep 1
+            done
+            docker logs "$1"
+            return 1
+          }
+          sql() {
+            local c=$1
+            shift
+            docker exec -i "$c" psql -XAtq -v ON_ERROR_STOP=1 -U postgres "$@"
+          }
+          gone() { docker stop "$1" >/dev/null && docker rm "$1" >/dev/null; }
+          rows="select count(*), md5(string_agg(name, ',' order by id)) from runs"
+          locales="select string_agg(datname || ' ' || pg_encoding_to_char(encoding) || ' ' || datcollate || ' ' || datctype || ' ' || datlocprovider::text, ', ' order by datname) from pg_database"
+          SH
+
+      - name: upgrade
+        run: |
+          . "$RUNNER_TEMP/compose.sh"
+          data=$RUNNER_TEMP/upgrade
+          postgres17 pg17 "$data/postgres"
+          sql pg17 -d agentiik <<'SQL'
+          create role agentiik login;
+          create table runs (id bigint generated always as identity primary key, name text not null);
+          insert into runs (name) select 'run ' || g from generate_series(1, 100000) g;
+          create index runs_by_name on runs (name);
+          SQL
+          sql pg17 -d agentiik -c "$rows" > "$RUNNER_TEMP/rows"
+          sql pg17 -c "$locales" > "$RUNNER_TEMP/locales"
+          cat "$RUNNER_TEMP/rows" "$RUNNER_TEMP/locales"
+          gone pg17
+
+          upgrade "$data" | tee "$RUNNER_TEMP/upgrade.log"
+          grep 'postgres is on PostgreSQL 18' "$RUNNER_TEMP/upgrade.log" >/dev/null
+          test "$(ls "$data" | paste -sd ' ')" = 'postgres postgres-17'
+          test "$(sudo cat "$data/postgres/PG_VERSION")" = 18
+          test "$(sudo cat "$data/postgres-17/PG_VERSION")" = 17
+
+          postgres18 pg18 "$data/postgres"
+          version=$(sql pg18 -c 'show server_version_num')
+          echo "PostgreSQL $version"
+          test "$version" -ge 180000 && test "$version" -lt 190000
+          test "$(sql pg18 -d agentiik -c "$rows")" = "$(cat "$RUNNER_TEMP/rows")"
+          test "$(sql pg18 -c "$locales")" = "$(cat "$RUNNER_TEMP/locales")"
+          # What the official image wrote at the first start, which initdb alone does not.
+          test "$(sql pg18 -c 'show listen_addresses')" = '*'
+          test "$(sudo tail -n 1 "$data/postgres/pg_hba.conf")" = 'host all all all trust'
+          gone pg18
+
+          # Run again, as at every docker compose up.
+          upgrade "$data" | tee "$RUNNER_TEMP/again.log"
+          grep 'postgres is on PostgreSQL 18 already: nothing to upgrade' "$RUNNER_TEMP/again.log" >/dev/null
+          test "$(ls "$data" | paste -sd ' ')" = 'postgres postgres-17'
+
+          # The way back: the previous release's PostgreSQL on the cluster kept.
+          postgres17 back "$data/postgres-17"
+          test "$(sql back -d agentiik -c "$rows")" = "$(cat "$RUNNER_TEMP/rows")"
+          gone back
+
+      - name: refuse and recover
+        run: |
+          . "$RUNNER_TEMP/compose.sh"
+          data=$RUNNER_TEMP/refuse
+          postgres17 live "$data/postgres"
+          sql live -d agentiik -c 'create table runs (id int primary key, name text)'
+
+          # PostgreSQL in another container still running on the cluster, whose process this one
+          # cannot see: pg_upgrade would take its postmaster.pid for a dead server's and start a
+          # second server on the same files.
+          if upgrade "$data" 2> "$RUNNER_TEMP/err"; then
+            echo "the image upgraded a cluster PostgreSQL 17 was running on"; exit 1
+          fi
+          cat "$RUNNER_TEMP/err"
+          grep 'holds a postmaster.pid' "$RUNNER_TEMP/err" >/dev/null
+          test "$(ls "$data")" = postgres
+          sql live -d agentiik -c "insert into runs values (1, 'still served')"
+          gone live
+
+          # An upgrade killed while it had the old server started, as pg_upgrade starts it, with a
+          # row written: the next run starts that server once, so that it replays its log, and
+          # upgrades what it holds.
+          docker run -d --name killed --network none --userns host -v "$data:/data" --entrypoint sh agentiik-test/postgres-upgrade -c '
+            mkdir -p -m 700 /tmp/postgres-upgrade && chown postgres /tmp/postgres-upgrade &&
+            su-exec postgres /usr/libexec/postgresql17/pg_ctl -D /data/postgres -w \
+              -o "-p 50432 -c listen_addresses= -c unix_socket_directories=/tmp/postgres-upgrade" start &&
+            su-exec postgres /usr/libexec/postgresql17/psql -h /tmp/postgres-upgrade -p 50432 -U postgres -d agentiik \
+              -c "insert into runs values (2, '"'"'written before the kill'"'"')" &&
+            echo written && sleep 600' >/dev/null
+          for _ in $(seq 60); do
+            if docker logs killed 2>&1 | grep -x written >/dev/null; then break; fi
+            sleep 1
+          done
+          docker kill killed >/dev/null && docker rm killed >/dev/null
+          sudo test -e "$data/postgres/postmaster.pid"
+
+          upgrade "$data" | tee "$RUNNER_TEMP/recover.log"
+          grep 'starting it once to recover' "$RUNNER_TEMP/recover.log" >/dev/null
+          postgres18 recovered "$data/postgres"
+          test "$(sql recovered -d agentiik -c 'select string_agg(name, ', ' order by id) from runs')" = 'still served, written before the kill'
+          gone recovered
+
   # A runner as the page installs one, which the job above cannot be: its daemon does not
   # remap user namespaces, and it runs as an account that holds no capability. Here the
   # daemon is set to userns-remap, the static helper that fills a task's secrets volume is
