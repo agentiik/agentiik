@@ -69,6 +69,9 @@ type command struct {
 // writes it.
 var commands = []command{
 	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
+	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
+	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
+	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},
 	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation has no route yet that says who a token belongs to", withPrincipals)},
 	{"namespace create", "Creates a namespace with its owner and its quotas. Administrator only.", namespaceCreate},
 	{"namespace list", "Lists the namespaces the caller holds a grant in, and every one for an administrator.", namespaceList},
