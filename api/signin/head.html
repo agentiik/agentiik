@@ -1,0 +1,15 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{.Title}}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/page.css">
+{{- if .Scripts}}
+<script src="assets/codec.js" defer></script>
+<script src="assets/page.js" defer></script>
+{{- end}}
+</head>
+{{- end}}
