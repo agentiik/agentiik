@@ -197,9 +197,9 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // ended, recorded as bootstrap.end: a session a password opened while the policy required a passkey
 // only enrolled and left the token going, and once the policy relaxes it is full from its next
 // request, from which its holder administers. Ended at no sign-in or enrolment of theirs, the token
-// would go on beside the administrator it made for as long as that session did. The session's row is
-// kept open first, the bootstrap state taken next and the audit log appended to last, the order every
-// act ending the token takes them in.
+// would go on beside the administrator it made for as long as that session did. It ends in a
+// transaction after the request's, taking its locks as every act ending the token does
+// (endBootstrapAtSession).
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
 		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
@@ -209,6 +209,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 	hash := sha256.Sum256([]byte(value))
 	now := p.now()
 	as := Identity{Refused: noSession}
+	ending := false
 	err := p.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		s, err := w.SessionByHash(ctx, hash[:], now)
 		if errors.Is(err, db.ErrNoSession) {
@@ -217,28 +218,9 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		if err != nil {
 			return err
 		}
-		enrolling := len(s.EnrolmentCode) > 0
-		switch {
-		case s.CredentialType == db.CredentialPassword:
-			policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
-			if err != nil {
-				return err
-			}
-			if policy.passwordsForbidden {
-				return nil
-			}
-			enrolling = policy.enrolling()
-		case s.CredentialType == db.CredentialPasskey && s.BackupEligible:
-			// A synced passkey signs nobody in where device_bound_only applies, and what it
-			// opened before the policy came to say so goes with it; a device-bound one's
-			// sessions need no policy read.
-			policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
-			if err != nil {
-				return err
-			}
-			if policy.deviceBoundOnly {
-				return nil
-			}
+		opens, enrolling, err := p.sessionOpens(ctx, w, s, now)
+		if err != nil || !opens {
+			return err
 		}
 		ends := s.CreatedAt.Add(SessionLifetime)
 		until := now.Add(SessionIdle)
@@ -256,9 +238,11 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			}
 		}
 		if s.Admin && !enrolling {
-			if err := endBootstrapAtSession(ctx, w, s, now); err != nil {
+			b, err := w.Bootstrap(ctx)
+			if err != nil {
 				return err
 			}
+			ending = !b.Ended()
 		}
 		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0, ProvedAt: s.CreatedAt}
 		return nil
@@ -266,25 +250,77 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 	if err != nil {
 		return Identity{}, err
 	}
+	if ending {
+		if err := p.endBootstrapAtSession(r.Context(), string(as.Principal), hash[:], now); err != nil {
+			return Identity{}, err
+		}
+	}
 	return as, nil
 }
 
-// endBootstrapAtSession ends the bootstrap token at a request of s, an administrator's full session,
-// where it has not ended, and records the end, in the transaction w is. The state is read before it
-// is written, so that the requests of every session once the token has ended write nothing; two
-// first requests at the same moment take turns on its row, and the second ends nothing.
-func endBootstrapAtSession(ctx context.Context, w *db.Wide, s db.Session, now time.Time) error {
-	b, err := w.Bootstrap(ctx)
-	if err != nil || b.Ended() {
-		return err
+// sessionOpens says whether s opens anything at now, and whether it may only enrol, read from the
+// credential that opened it and the policy that applies to its account now: see identifySession.
+func (p *Principals) sessionOpens(ctx context.Context, w *db.Wide, s db.Session, now time.Time) (opens, enrolling bool, err error) {
+	enrolling = len(s.EnrolmentCode) > 0
+	switch {
+	case s.CredentialType == db.CredentialPassword:
+		policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
+		if err != nil || policy.passwordsForbidden {
+			return false, false, err
+		}
+		enrolling = policy.enrolling()
+	case s.CredentialType == db.CredentialPasskey && s.BackupEligible:
+		// A synced passkey signs nobody in where device_bound_only applies, and what it opened
+		// before the policy came to say so goes with it; a device-bound one's sessions need no
+		// policy read.
+		policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
+		if err != nil || policy.deviceBoundOnly {
+			return false, false, err
+		}
 	}
-	ended, err := w.EndBootstrap(ctx, now)
-	if err != nil || !ended {
-		return err
-	}
-	return w.Audit(ctx, audit.Record{
-		Actor: s.Login, Action: audit.BootstrapEnd, Target: string(BootstrapOperator), Result: audit.Done,
-		Detail: map[string]any{"first_administrator": s.Login, "credential": s.Credential},
+	return true, enrolling, nil
+}
+
+// endBootstrapAtSession ends the bootstrap token at a request of login's session, the one whose
+// identifier hashes to hash, where the request found it an administrator's full session and the
+// token live, and records the end.
+//
+// In a transaction of its own, after the request's, and in the order every act ending the token
+// takes its locks: the user's row first (HoldUser), then the bootstrap state, then the audit log. What
+// the request read is read again under the user's row, since what it read was held by nothing: an
+// administrator removed, suspended, or given a role where their way in is refused, at the same
+// moment, is seen here or waits, and never ends the token beside the lockout it would leave. The
+// session's row, which the request may have kept open, is not held here, so that a removal holding
+// the bootstrap state and waiting on the session through its user never waits on this. Two first
+// requests at the same moment take turns on the user's row, and the second ends nothing.
+func (p *Principals) endBootstrapAtSession(ctx context.Context, login string, hash []byte, now time.Time) error {
+	return p.pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+		user, err := w.HoldUser(ctx, login)
+		if errors.Is(err, db.ErrNoPrincipal) {
+			return nil
+		}
+		if err != nil || !user.Admin || user.Suspended {
+			return err
+		}
+		s, err := w.SessionByHash(ctx, hash, now)
+		if errors.Is(err, db.ErrNoSession) || (err == nil && s.Login != login) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		opens, enrolling, err := p.sessionOpens(ctx, w, s, now)
+		if err != nil || !opens || enrolling {
+			return err
+		}
+		ended, err := w.EndBootstrap(ctx, now)
+		if err != nil || !ended {
+			return err
+		}
+		return w.Audit(ctx, audit.Record{
+			Actor: login, Action: audit.BootstrapEnd, Target: string(BootstrapOperator), Result: audit.Done,
+			Detail: map[string]any{"first_administrator": login, "credential": s.Credential},
+		})
 	})
 }
 

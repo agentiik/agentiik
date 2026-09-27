@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/totp"
 )
 
@@ -417,6 +418,66 @@ func TestAnAdministratorsSessionComingToBeFullEndsTheBootstrapAtItsFirstRequest(
 	}
 	me("alice", http.StatusOK)
 	if n := in.count(t, `select count(*) from audit_log where action = 'bootstrap.end'`); n != 1 {
+		t.Errorf("the bootstrap is recorded as ended %d times", n)
+	}
+}
+
+// A session's request ends the bootstrap token under its user's row, as every act ending it does, and
+// reads again there what it read: alice suspended by a transaction holding her row while her first
+// full request is under way is seen once it commits, and the token is not ended beside the
+// installation's one administrator, suspended. Deterministic: the suspension commits only once the
+// request has answered, or waits on her row.
+func TestASessionEndsTheBootstrapUnderItsUsersRow(t *testing.T) {
+	in := someCeremonies(t)
+	w := in.call(t, "POST", "/api/v1/auth/password/enrol", fmt.Sprintf(`{"code":%q,"password":"a password of her own"}`, in.user(t, "alice", true)), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("alice setting a password answered %d %s", w.Code, w.Body)
+	}
+	alice := session(t, w)
+	bound := false
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.SetInstallationPolicy(ctx, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2}, *in.clock)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.WithoutCancel(t.Context()))
+	if _, err := holder.Exec(t.Context(), `update users set suspended = true where login = 'alice'`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answered <- in.call(t, "GET", "/api/v1/me", "", "", alice) }()
+	var got *httptest.ResponseRecorder
+	for deadline := time.Now().Add(10 * time.Second); got == nil; {
+		select {
+		case got = <-answered:
+			continue
+		default:
+		}
+		if in.count(t, `select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("alice's request neither answered nor waited on a lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := holder.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		got = <-answered
+	}
+	if got.Code != http.StatusOK && got.Code != http.StatusUnauthorized {
+		t.Errorf("alice's request answered %d %s", got.Code, got.Body)
+	}
+	if n := in.count(t, `select count(*) from bootstrap where enrolled_at is not null`); n != 0 {
+		t.Error("the bootstrap ended beside its one administrator, suspended at the same moment")
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'bootstrap.end'`); n != 0 {
 		t.Errorf("the bootstrap is recorded as ended %d times", n)
 	}
 }
