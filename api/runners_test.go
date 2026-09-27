@@ -100,9 +100,11 @@ func aBeat(runner string, holding ...agk.TaskID) api.Beat {
 	}
 }
 
-// The whole of what a machine does: joins, and then says it is there.
+// The whole of what a machine does: joins, and then says it is there. The join is recorded as
+// runner.join on the installation by whoever issued the token, with the runner, its pool and the
+// labels it claimed.
 func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
-	h, pool := withRunners(t)
+	h, pool, super := runnersOn(t, everything{who: "admin"})
 	token := issue(t, pool, []string{"zone=dmz", "arch=amd64"})
 
 	w, answer := call(t, h, "POST", "/api/v1/runners", "", aMachine(token.Clear, "zone=dmz"))
@@ -116,6 +118,14 @@ func TestAMachineJoinsAndThenSaysItIsThere(t *testing.T) {
 	}
 	if answer["rotate_by"] == nil {
 		t.Error("the answer does not say when the credential stops being accepted")
+	}
+	var recorded string
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select string_agg(concat_ws(' ', actor, action, target, coalesce(namespace, '-'), result, detail), '; ') from audit_log`).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if want := "admin runner.join " + runner + ` - done {"labels":["zone=dmz"],"pool":"dmz"}`; recorded != want {
+		t.Errorf("the join is recorded as\n%s\nwant\n%s", recorded, want)
 	}
 
 	// Registration is the one route outside both hooks, and it needed no credential.
@@ -148,7 +158,7 @@ func TestARunnerRouteRefusesAnythingButARunner(t *testing.T) {
 // thing, because a machine that gets a different answer for each is a machine somebody is using
 // to find out which tokens exist.
 func TestEveryWayAJoinFailsAnswersTheSameThing(t *testing.T) {
-	h, pool := withRunners(t)
+	h, pool, super := runnersOn(t, everything{who: "admin"})
 	token := issue(t, pool, []string{"zone=dmz"})
 
 	// Spend it.
@@ -176,6 +186,14 @@ func TestEveryWayAJoinFailsAnswersTheSameThing(t *testing.T) {
 		if bodies[i] != bodies[0] {
 			t.Errorf("the answers differ:\n%s\n%s", bodies[0], bodies[i])
 		}
+	}
+	// A join refused lets nothing in, and records nothing.
+	var joins int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(), `select count(*) from audit_log where action = 'runner.join'`).Scan(&joins); err != nil {
+		t.Fatal(err)
+	}
+	if joins != 1 {
+		t.Errorf("one join and three refused are recorded as %d joins", joins)
 	}
 }
 

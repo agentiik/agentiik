@@ -111,6 +111,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/auth/exchange` trades that code and the verifier whose SHA-256 is its challenge for a 90-day API token of whoever signed in, audited as `api_token.create` with the credential that signed in. The code is spent by the first exchange its schema accepts; one used, lapsed, of another verifier, of an account suspended or removed since or of a password set anew since is one 401, one a password minted where the policy now requires a passkey or forbids passwords, or a synced passkey where `device_bound_only` now applies, a 403, and a principal at 100 live tokens a 409.
 - An exchange refused once it holds to its schema is recorded as `signin.fail` with its reason, by the address it came from, about the account the code names, or `an unknown exchange code`, within the bound the sign-ins share; one refused after its verifier answered is recorded whatever the bound says.
 - A deny of `grant:manage` on a workflow is refused with 422, since it would take from whoever it names the permission that revokes it: nobody locks a namespace's owners out of a workflow.
+- A machine joining a pool is recorded as `runner.join` on the installation, by whoever issued its join token, `installation` for the one `init` issues, with the runner, its pool and its labels.
 
 ### State
 
