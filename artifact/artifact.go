@@ -89,14 +89,14 @@ type Objects interface {
 // them, and whose logs it purges once their run's retention has run out.
 //
 // Objects stays three methods wide, since nothing that reads or writes an object has any business
-// deleting one, and a runner's store never does. Remove answers nil for a key that is absent, which
-// a purge that died after deleting and before recording it leaves, and it removes nothing but the
-// object: a directory a key made is removed with its last object only below the key's first two
-// segments, <namespace>/sha256 or <namespace>/logs, since other objects arrive under those at any
-// moment.
+// deleting one, and a runner's store never does. Remove answers whether it deleted the object, and
+// no error for a key that is absent, which a purge that died after deleting and before recording it
+// leaves, so that what was deleted is counted once. It removes nothing but the object: a directory
+// a key made is removed with its last object only below the key's first two segments,
+// <namespace>/sha256 or <namespace>/logs, since other objects arrive under those at any moment.
 type Removable interface {
 	Objects
-	Remove(ctx context.Context, key string) error
+	Remove(ctx context.Context, key string) (bool, error)
 }
 
 // defaultMediaType is what an artifact is written as when the caller names no media

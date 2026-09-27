@@ -52,7 +52,8 @@ func collectable(t *testing.T, pool *Pool, conn *pgx.Conn, name, digest string) 
 func uploading(t *testing.T, pool *Pool, digest string) {
 	t.Helper()
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-		return ns.Uploading(ctx, digest, time.Now().Add(time.Hour))
+		_, err := ns.Uploading(ctx, digest, time.Now().Add(time.Hour))
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,8 @@ func TestAWriteOfAnObjectBeingDeletedWaitsForTheDeletion(t *testing.T) {
 	recorded := make(chan error, 1)
 	go func() {
 		recorded <- pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
-			return ns.Uploading(ctx, d, time.Now().Add(time.Hour))
+			_, err := ns.Uploading(ctx, d, time.Now().Add(time.Hour))
+			return err
 		})
 	}()
 	select {
@@ -536,5 +538,95 @@ func TestAnInstallationOfV025PurgesWhatItHeld(t *testing.T) {
 	}
 	if !slices.Equal(purged, []string{old}) {
 		t.Errorf("the purges took the runs %q, and only %s had run out", purged, old)
+	}
+}
+
+// The artifact purge waits on no row a decision holds: a decision takes its run's row, then the
+// objects it counts, then writes its artifacts again, so a purge holding an artifact and waiting
+// on either would deadlock with it. A reference whose run or object is held is left for the next
+// pass, and one whose run and object are free is retired meanwhile.
+func TestTheArtifactPurgeWaitsOnNothingADecisionHolds(t *testing.T) {
+	pool, super := opened(t)
+	conn := superuser(t, super)
+	held, free := digestOf("e"), digestOf("f")
+	for name, d := range map[string]string{"held.bin": held} {
+		if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			_, err := ns.WriteArtifact(ctx, Reference{URI: uri(financeRun, "archive", "out", name), Digest: d, Size: 5, For: time.Hour})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pool.In(t.Context(), "team-ops", func(ctx context.Context, ns *NS) error {
+		_, err := ns.WriteArtifact(ctx, Reference{URI: uri(opsRun, "archive", "out", "free.bin"), Digest: free, Size: 5, For: time.Hour})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), `update artifacts set expires_at = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, holding := range []string{
+		`select 1 from runs where id = '` + financeRun + `' for update`,
+		`select 1 from artifact_objects where digest = 'sha256:` + held + `' for update`,
+	} {
+		decision, err := conn.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decision.Exec(t.Context(), holding); err != nil {
+			t.Fatal(err)
+		}
+		waiting, stop := context.WithTimeout(t.Context(), 5*time.Second)
+		n, err := pool.ExpireArtifacts(waiting, 0)
+		stop()
+		if err != nil {
+			t.Fatalf("with %s held, the purge failed: %v", holding, err)
+		}
+		if err := decision.Rollback(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if got := refsOf(t, pool, "finance", held); got != 1 {
+			t.Errorf("with %s held, the purge lowered the held object's count to %d", holding, got)
+		}
+		if holding == `select 1 from runs where id = '`+financeRun+`' for update` && n != 1 {
+			t.Errorf("with finance's run held, the purge retired %d references, and team-ops's was free", n)
+		}
+	}
+	if n, err := pool.ExpireArtifacts(t.Context(), 0); err != nil || n != 1 {
+		t.Errorf("once nothing was held the purge retired %d: %v", n, err)
+	}
+}
+
+// The confirmation waits on no object a writer holds either: the row is left claimed, and the next
+// sweep claims it again and removes it.
+func TestTheConfirmationPassesByAnObjectAWriterHolds(t *testing.T) {
+	pool, super := opened(t)
+	conn := superuser(t, super)
+	d := digestOf("7")
+	collectable(t, pool, conn, "held.bin", d)
+	claimed, err := pool.Collectable(t.Context(), 0, 0)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("the collector claimed %q: %v", keysOf(claimed), err)
+	}
+	writer, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Exec(t.Context(), `select 1 from artifact_objects where digest = 'sha256:`+d+`' for update`); err != nil {
+		t.Fatal(err)
+	}
+	waiting, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	n, err := pool.Collected(waiting, claimed)
+	stop()
+	if err != nil || n != 0 {
+		t.Fatalf("with the object held, the confirmation removed %d: %v", n, err)
+	}
+	if err := writer.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := pool.Collected(t.Context(), claimed); err != nil || n != 1 {
+		t.Errorf("once nothing held it, the confirmation removed %d: %v", n, err)
 	}
 }

@@ -278,7 +278,8 @@ func TestAnObjectBeingWrittenOrNamedStays(t *testing.T) {
 	in.pass(t, p)
 	digest := strings.TrimPrefix(written, "finance/sha256/")
 	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-		return ns.Uploading(ctx, digest, time.Now().Add(time.Hour))
+		_, err := ns.Uploading(ctx, digest, time.Now().Add(time.Hour))
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +354,7 @@ type blocking struct {
 	once    sync.Once
 }
 
-func (b *blocking) Remove(ctx context.Context, key string) error {
+func (b *blocking) Remove(ctx context.Context, key string) (bool, error) {
 	b.once.Do(func() { close(b.entered) })
 	<-b.release
 	return b.Removable.Remove(ctx, key)
@@ -387,7 +388,7 @@ func TestAPassInTheMiddleOfDeletingHoldsUpNothingElse(t *testing.T) {
 	other := in.run(t)
 	digest, _ := in.put(t, "another run's bytes")
 	if err := in.pool.In(ctx, "finance", func(ctx context.Context, ns *db.NS) error {
-		if err := ns.Uploading(ctx, digest, time.Now().Add(time.Hour)); err != nil {
+		if _, err := ns.Uploading(ctx, digest, time.Now().Add(time.Hour)); err != nil {
 			return err
 		}
 		_, err := ns.WriteArtifact(ctx, db.Reference{
@@ -446,9 +447,9 @@ type failing struct {
 	refuse map[string]bool
 }
 
-func (f failing) Remove(ctx context.Context, key string) error {
+func (f failing) Remove(ctx context.Context, key string) (bool, error) {
 	if f.refuse[key] {
-		return errors.New("the disk said no")
+		return false, errors.New("the disk said no")
 	}
 	return f.Removable.Remove(ctx, key)
 }
@@ -475,13 +476,13 @@ func TestAPassThatDiedHalfwayIsFinishedByTheNext(t *testing.T) {
 	if claimed, err := in.pool.Collectable(t.Context(), 0, 0); err != nil || len(claimed) != 3 {
 		t.Fatalf("the collector claimed %d objects: %v", len(claimed), err)
 	}
-	if err := in.store.Remove(t.Context(), keys[0]); err != nil {
+	if _, err := in.store.Remove(t.Context(), keys[0]); err != nil {
 		t.Fatal(err)
 	}
 	if logs, err := in.pool.ExpiredLogs(t.Context(), 0); err != nil || len(logs) != 1 || len(logs[0].Keys) != 3 {
 		t.Fatalf("the log purge claimed %+v: %v", logs, err)
 	}
-	if err := in.store.Remove(t.Context(), chunks[0]); err != nil {
+	if _, err := in.store.Remove(t.Context(), chunks[0]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -491,7 +492,8 @@ func TestAPassThatDiedHalfwayIsFinishedByTheNext(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "the disk said no") {
 		t.Fatalf("a pass on a store refusing deletions said %v", err)
 	}
-	if want := (purge.Purged{Objects: 2, Bytes: int64(len("bytes 0") + len("bytes 1"))}); got != want {
+	// The object the pass that died deleted is not counted again.
+	if want := (purge.Purged{Objects: 1, Bytes: int64(len("bytes 1"))}); got != want {
 		t.Errorf("the pass on a refusing store removed %+v, want %+v", got, want)
 	}
 	if in.held(t, keys[1]) || !in.held(t, keys[2]) || in.held(t, chunks[1]) || !in.held(t, chunks[2]) {

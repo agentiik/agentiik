@@ -20,6 +20,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/version"
 )
@@ -491,8 +492,8 @@ func TestAWritePastMaxArtifactBytesIsAnswered507(t *testing.T) {
 }
 
 // Every write is recorded as under way before its bytes are read, in a namespace with no quota as in
-// one with, for as long as its room would last, so that the collector leaves its object alone until
-// the result that references it has been heard.
+// one with, until the collection's grace past its policy, so that the collector leaves its object
+// alone until the result that references it has been heard.
 func TestEveryWriteIsKeptFromTheCollectorWhileItLasts(t *testing.T) {
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
@@ -528,8 +529,22 @@ func TestEveryWriteIsKeptFromTheCollectorWhileItLasts(t *testing.T) {
 		`select bytes, until from artifact_uploads where namespace = 'team-ops' and digest = 'sha256:' || $1`, digest).Scan(&held, &lasts); err != nil {
 		t.Fatalf("no write of the object is recorded: %s", err)
 	}
-	if held != 0 || !lasts.Equal(until.Add(15*time.Minute)) {
-		t.Errorf("the write is recorded holding %d bytes until %s, want nothing held until %s", held, lasts, until.Add(15*time.Minute))
+	if held != 0 || !lasts.Equal(until.Add(db.DefaultGrace)) {
+		t.Errorf("the write is recorded holding %d bytes until %s, want nothing held until %s", held, lasts, until.Add(db.DefaultGrace))
+	}
+
+	// A write whose bytes are refused leaves nothing to keep from the collector.
+	refused := digestOf([]byte("what the key names"))
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("team-ops", refused), "other bytes"); w.Code != http.StatusBadRequest {
+		t.Fatalf("bytes that are not their key's object answered %d", w.Code)
+	}
+	var left int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from artifact_uploads where digest = 'sha256:' || $1`, refused).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("a write whose bytes were refused left %d rows", left)
 	}
 }
 

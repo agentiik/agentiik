@@ -216,33 +216,59 @@ func (n *NS) MakeRoom(ctx context.Context, u Upload) (Room, error) {
 	return Room{namespace: n.namespace, id: id, digest: stored, bound: bound, held: true}, nil
 }
 
-// Uploading holds an object back from the collector while it is written, in every namespace,
-// with max_artifact_bytes or without: its bytes are read after this commits, and a write lasts
-// until a quarter of an hour after until, as the room MakeRoom makes does.
+// Writing is one write Uploading recorded, for NotWritten to let go of where its bytes never
+// arrived.
+type Writing struct {
+	namespace, id string
+}
+
+// Uploading holds an object back from the collector while it is written, in every namespace, with
+// max_artifact_bytes or without: the caller reads its bytes once this has committed.
 //
-// A runner writes an object before the controller hears of the result that references it, and
-// the object may be one whose count reached zero a day before: the collector would take it from
-// under the write, and nothing could write the bytes again. So the write is recorded as a row of
+// A runner writes an object before the controller hears of the result that references it, and the
+// object may be one whose count reached zero a day before: the collector would take it from under
+// the write, and nothing could write the bytes again. So the write is recorded as a row of
 // artifact_uploads counting no byte against any quota, which the collector passes by, and the
-// object's row is held while it is, so that a collector deleting the object's bytes at that
-// moment finishes first and the write comes after it. Package db's purge.go sets out the rest.
-func (n *NS) Uploading(ctx context.Context, digest string, until time.Time) error {
+// object's row is held while it is, so that a collector deleting the object's bytes at that moment
+// finishes first and the write comes after it. The row lasts the grace past until, the policy or
+// the URL's expiry, as a count at zero keeps an object for the grace: a result heard as late as
+// that, after an outage of the controller past the task's deadline, still finds its bytes, and an
+// object is collected only once nothing, a reference or a write, has held it for the grace.
+// Package db's purge.go sets out the rest.
+func (n *NS) Uploading(ctx context.Context, digest string, until time.Time) (Writing, error) {
 	if !hexDigest.MatchString(digest) {
-		return fmt.Errorf("db: %q is not a digest", digest)
+		return Writing{}, fmt.Errorf("db: %q is not a digest", digest)
 	}
 	stored := "sha256:" + digest
 	if _, err := n.tx.Exec(ctx,
 		`select 1 from artifact_objects where namespace = $1 and digest = $2 for key share`,
 		n.namespace, stored); err != nil {
-		return fmt.Errorf("db: %s could not be held against the collector: %w", stored, err)
+		return Writing{}, fmt.Errorf("db: %s could not be held against the collector: %w", stored, err)
 	}
 	// Not where the namespace is not there, which holds no object a collector could take, and whose
 	// writes MakeRoom refuses nothing either.
+	w := Writing{namespace: n.namespace, id: ulid.New()}
 	if _, err := n.tx.Exec(ctx,
 		`insert into artifact_uploads (namespace, id, digest, bytes, until)
 		 select $1, $2, $3, 0, $4 where exists (select 1 from namespaces where name = $1)`,
-		n.namespace, ulid.New(), stored, until.UTC().Add(uploadGrace)); err != nil {
-		return fmt.Errorf("db: the write of %s could not be recorded: %w", stored, err)
+		w.namespace, w.id, stored, until.UTC().Add(DefaultGrace)); err != nil {
+		return Writing{}, fmt.Errorf("db: the write of %s could not be recorded: %w", stored, err)
+	}
+	return w, nil
+}
+
+// NotWritten lets go of a write whose bytes never arrived, which there is nothing of to keep from
+// the collector, so that a writer refused its bytes leaves no row behind it for a day.
+func (n *NS) NotWritten(ctx context.Context, w Writing) error {
+	if w.id == "" {
+		return nil
+	}
+	if w.namespace != n.namespace {
+		return fmt.Errorf("db: a write recorded in namespace %s let go of in %s", w.namespace, n.namespace)
+	}
+	if _, err := n.tx.Exec(ctx,
+		`delete from artifact_uploads where namespace = $1 and id = $2`, w.namespace, w.id); err != nil {
+		return fmt.Errorf("db: the write %s could not be let go of: %w", w.id, err)
 	}
 	return nil
 }

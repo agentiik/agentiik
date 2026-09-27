@@ -137,7 +137,7 @@ func TestDirRefusesAKeyThatLeavesItsRoot(t *testing.T) {
 			if _, err := objects.Open(t.Context(), key); err == nil {
 				t.Errorf("Open: accepted %q", key)
 			}
-			if err := objects.Remove(t.Context(), key); err == nil {
+			if _, err := objects.Remove(t.Context(), key); err == nil {
 				t.Errorf("Remove: accepted %q", key)
 			}
 		})
@@ -166,29 +166,29 @@ func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
 		return err == nil
 	}
 
-	if err := objects.Remove(t.Context(), artifactKey); err != nil {
-		t.Fatal(err)
+	if removed, err := objects.Remove(t.Context(), artifactKey); err != nil || !removed {
+		t.Fatalf("removing an object answered %t, %v", removed, err)
 	}
 	if exists(artifactKey) || !exists("acme/sha256") {
 		t.Errorf("after removing the only artifact: the object held %t, acme/sha256 held %t", exists(artifactKey), exists("acme/sha256"))
 	}
-	if err := objects.Remove(t.Context(), artifactKey); err != nil {
-		t.Errorf("removing an object already gone: %v", err)
+	if removed, err := objects.Remove(t.Context(), artifactKey); err != nil || removed {
+		t.Errorf("removing an object already gone answered %t, %v", removed, err)
 	}
 
-	if err := objects.Remove(t.Context(), logs[0]); err != nil {
+	if _, err := objects.Remove(t.Context(), logs[0]); err != nil {
 		t.Fatal(err)
 	}
 	if exists(logs[0]) || !exists("acme/logs/run-1/task-a/dispatch-1") {
 		t.Error("removing one chunk of two took the other's directory, or left the chunk")
 	}
-	if err := objects.Remove(t.Context(), logs[1]); err != nil {
+	if _, err := objects.Remove(t.Context(), logs[1]); err != nil {
 		t.Fatal(err)
 	}
 	if exists("acme/logs/run-1/task-a") || !exists("acme/logs/run-1/task-b/dispatch-1") {
 		t.Error("removing a task's last chunk left its directories, or took another task's")
 	}
-	if err := objects.Remove(t.Context(), logs[2]); err != nil {
+	if _, err := objects.Remove(t.Context(), logs[2]); err != nil {
 		t.Fatal(err)
 	}
 	if exists("acme/logs/run-1") || !exists("acme/logs") {

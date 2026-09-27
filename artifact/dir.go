@@ -114,16 +114,19 @@ func (d dir) Put(ctx context.Context, key string, r io.Reader) (err error) {
 // once its run's retention has run out, which is the only time its objects are removed, and the
 // namespace's sha256 directory, which every artifact and envelope of the namespace is written to,
 // is one of the two segments kept.
-func (d dir) Remove(ctx context.Context, key string) error {
+func (d dir) Remove(ctx context.Context, key string) (bool, error) {
 	p, err := d.path(key)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("artifact: object %s: %w", key, err)
+	removed := true
+	if err := os.Remove(p); errors.Is(err, fs.ErrNotExist) {
+		removed = false
+	} else if err != nil {
+		return false, fmt.Errorf("artifact: object %s: %w", key, err)
 	}
 	for parent := path.Dir(key); strings.Count(parent, "/") >= 2; parent = path.Dir(parent) {
 		err := os.Remove(filepath.Join(d.root, filepath.FromSlash(parent)))
@@ -133,7 +136,7 @@ func (d dir) Remove(ctx context.Context, key string) error {
 			break
 		}
 	}
-	return nil
+	return removed, nil
 }
 
 func (d dir) Open(ctx context.Context, key string) (io.ReadCloser, error) {

@@ -229,9 +229,11 @@ func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, bo
 	}
 }
 
-// heldRoom is room made for one write, and the namespace it is settled in.
+// heldRoom is room made for one write, the write as recorded, and the namespace both are settled
+// in, which is empty where nothing was recorded.
 type heldRoom struct {
 	db.Room
+	writing   db.Writing
 	namespace string
 }
 
@@ -251,20 +253,21 @@ func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, unti
 		length = most
 	}
 	var room db.Room
+	var writing db.Writing
 	err := s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
 		// Recorded as under way first, whatever the quota, so that the collector leaves the
 		// object alone until the result that references it has been heard.
-		if err := ns.Uploading(ctx, digest, until); err != nil {
+		var err error
+		if writing, err = ns.Uploading(ctx, digest, until); err != nil {
 			return err
 		}
-		var err error
 		room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until})
 		return err
 	})
 	if err != nil {
 		return heldRoom{}, err
 	}
-	return heldRoom{Room: room, namespace: namespace}, nil
+	return heldRoom{Room: room, writing: writing, namespace: namespace}, nil
 }
 
 // lowerHex is 64 lowercase hexadecimal characters, the one way a key writes a digest, which is
@@ -274,16 +277,20 @@ func lowerHex(digest string) bool {
 }
 
 // settle counts a stored object at its size, or gives back the room made for one that was not
-// stored. Settled whether or not the request is still there, since a writer that went once its
-// bytes were in, or halfway, leaves room to count or to give back all the same; a settlement that
-// fails leaves the room as it was made, which lapses with the policy.
+// stored and lets go of its write, which leaves nothing to keep from the collector. Settled whether
+// or not the request is still there, since a writer that went once its bytes were in, or halfway,
+// leaves room to count or to give back all the same; a settlement that fails leaves the room and
+// the write as they were made, which lapse with the policy.
 func (s *ObjectAPI) settle(ctx context.Context, room heldRoom, counted *within, stored error) {
-	if !room.Held() {
+	if room.namespace == "" || (stored == nil && !room.Held()) {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
 	s.pool.In(ctx, room.namespace, func(ctx context.Context, ns *db.NS) error {
 		if stored != nil {
+			if err := ns.NotWritten(ctx, room.writing); err != nil {
+				return err
+			}
 			return ns.Unwritten(ctx, room.Room)
 		}
 		return ns.Stored(ctx, room.Room, counted.read)

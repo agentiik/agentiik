@@ -29,7 +29,8 @@
 // # What is deleted, and when
 //
 // An object is deleted from the store only once its count has sat at zero for the grace, no live
-// artifact names it, and no write of it is under way: package db's purge.go sets out the claim,
+// artifact names it, and no write of it has held it within the grace, which a result heard late
+// still finds its bytes by: package db's purge.go sets out the claim,
 // the deletion under a lock and the confirmation, and why a crash between any two of them leaves
 // nothing that the next pass does not finish. A log's objects are deleted once its run's retention
 // has run out, since nothing is added to a log past it. Each deletion is recorded only once the
@@ -220,7 +221,7 @@ func (p *Purger) logs(ctx context.Context, out *Purged) (bool, error) {
 		deleted := make([]string, 0, len(due[i].Keys))
 		for _, key := range due[i].Keys {
 			keys++
-			if err := p.Objects.Remove(ctx, key); err != nil {
+			if _, err := p.Objects.Remove(ctx, key); err != nil {
 				refused = append(refused, err)
 				continue
 			}
@@ -256,19 +257,21 @@ func (p *Purger) uploads(ctx context.Context, out *Purged) (bool, error) {
 // collect claims objects nothing references, deletes them from the store and records it.
 //
 // What the store deleted is recorded even where it refused others, which are left claimed for the
-// next pass.
+// next pass. An object is counted where this pass deleted its bytes, and not where they were gone
+// already: a pass that died after deleting them, or another controller's at the same moment, has.
 func (p *Purger) collect(ctx context.Context, out *Purged) (bool, error) {
 	claimed, err := p.Pool.Collectable(ctx, p.Grace, p.batch())
 	if err != nil || len(claimed) == 0 {
 		return false, err
 	}
 	gone, refused := p.Pool.Collecting(ctx, claimed, func(ctx context.Context, o db.Object) error {
-		return p.Objects.Remove(ctx, o.Key)
+		removed, err := p.Objects.Remove(ctx, o.Key)
+		if removed {
+			out.Objects++
+			out.Bytes += o.Size
+		}
+		return err
 	})
-	for _, o := range gone {
-		out.Objects++
-		out.Bytes += o.Size
-	}
 	if _, err := p.Pool.Collected(ctx, gone); err != nil {
 		return false, errors.Join(refused, err)
 	}
