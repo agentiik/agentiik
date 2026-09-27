@@ -711,6 +711,22 @@ func TestAPublicURLIsKeptWithNoSlashAtItsEnd(t *testing.T) {
 	}
 }
 
+// Behind the proxy AGK_PROXY_URL names the API is proxied, the proxy's URL being the public one, and
+// not otherwise: the one reading under which a request's client address comes from a header.
+func TestTheAPIIsProxiedWhereAProxyIsNamed(t *testing.T) {
+	i := anInstallation(t)
+	api, err := config.ReadAPI(theAPI.environment(i))
+	if err != nil || api.Proxied {
+		t.Errorf("with no proxy named the API is proxied %v: %v", api.Proxied, err)
+	}
+	i.env[config.ProxyURL] = "https://proxy.example.com/"
+	i.env[config.Listen] = ":8443"
+	api, err = config.ReadAPI(theAPI.environment(i))
+	if err != nil || !api.Proxied || api.PublicURL != "https://proxy.example.com" {
+		t.Errorf("behind a proxy the API is proxied %v on %s: %v", api.Proxied, api.PublicURL, err)
+	}
+}
+
 // "A secret is only ever a file named by an _FILE variable, never a value in the environment."
 // A secret written as a value is refused wherever it is written, by every program whether or not
 // it reads that secret, and the refusal never repeats it.
