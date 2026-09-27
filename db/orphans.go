@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // Orphans: the files of the store no row names.
@@ -15,25 +14,28 @@ import (
 // write them again, as with any object collected. So the caller walks the store, and hands the
 // collection each file that no row of artifact_objects names, no live artifact names, no write
 // holds and no envelope of a run still under way names, once its bytes are older than the grace,
-// as a row counting nothing and collectable since the file was written. From there it is an object
-// like any other: claimed, deleted under a lock on its row and confirmed, a writer referencing it
-// again in between being told to write the bytes again.
+// as a row counting nothing and collectable from that moment. From there it is an object like any
+// other: claimed a grace later, deleted under a lock on its row and confirmed, a writer referencing
+// it again in between being told to write the bytes again.
 //
-// The row is written, and committed, before anything is deleted, which is what makes the
-// collection's protocol apply to it: a write records itself against the object's row, and a write
-// that could not see the row would not be held off by it.
+// The row is written, and committed, a grace before anything is deleted, which is what makes the
+// collection's protocol apply to it. A write records itself against the object's row, holding it,
+// and a write that began before the row was there held nothing, and was not seen either if it had
+// not committed yet: its bytes could be written in the moment between the deletion's look and the
+// deletion. A grace later it has long committed, and holds the object for as long as a write does.
 //
-// A namespace with a run whose files v0.2 left unrecorded is left alone: those files are named by
-// no row until init or migrate records them, and would be taken for orphans.
+// A namespace with a finished run whose files are still to be recorded is left alone: those files
+// are named by no row until they are, and would be taken for orphans.
 
 // Sweepable answers the namespaces whose objects an orphan sweep may walk, in name order: every
-// namespace but those with a run whose artifact files are still to be recorded.
+// namespace but those with a finished run whose artifact files are still to be recorded.
 func (p *Pool) Sweepable(ctx context.Context) ([]string, error) {
 	var out []string
 	err := p.Installation(ctx, Collect, func(ctx context.Context, w *Wide) error {
 		rows, err := w.tx.Query(ctx, `
 			select n.name from namespaces n
-			where not exists (select 1 from artifacts_unrecorded u where u.namespace = n.name)
+			where not exists (select 1 from runs r
+			                  where r.namespace = n.name and r.finished_at is not null and not r.files_recorded)
 			order by n.name`)
 		if err != nil {
 			return err
@@ -57,18 +59,19 @@ func (p *Pool) Sweepable(ctx context.Context) ([]string, error) {
 
 // orphanOf is what keeps a file of namespace $1 whose digest is g.digest, the bare hexadecimal,
 // from being taken for an orphan: a row counting it, a live artifact naming it, a write holding it,
-// and a run of the namespace whose files are still to be recorded.
+// and a finished run of the namespace whose files are still to be recorded.
 const orphanOf = `not exists (select 1 from artifact_objects o
 	                  where o.namespace = $1 and o.digest = 'sha256:' || g.digest)
 	    and not exists (select 1 from artifacts a
 	                    where a.namespace = $1 and a.digest = 'sha256:' || g.digest and a.status = 'live')
 	    and not exists (select 1 from artifact_uploads u
 	                    where u.namespace = $1 and u.digest = 'sha256:' || g.digest and u.until > now())
-	    and not exists (select 1 from artifacts_unrecorded r where r.namespace = $1)`
+	    and not exists (select 1 from runs r
+	                    where r.namespace = $1 and r.finished_at is not null and not r.files_recorded)`
 
 // Unnamed answers which of digests, bare hexadecimal digests of objects of namespace, nothing in
 // the database holds: no row counts it, no live artifact names it and no write holds it, in a
-// namespace with no run whose files are still to be recorded.
+// namespace with no finished run whose files are still to be recorded.
 //
 // It is the look before the envelopes are read, which only a few files ever need, and decides
 // nothing: Orphaned asks all of it again as it writes.
@@ -143,14 +146,10 @@ type Orphan struct {
 	Digest string
 
 	Size int64
-
-	// Written is when its bytes were written, which the collection's grace runs from.
-	Written time.Time
 }
 
 // Orphaned hands orphans of namespace to the collection, each as a row of artifact_objects that
-// counts nothing and has been collectable since its file was written, and answers how many it
-// handed over.
+// counts nothing and is collectable from now, and answers how many it handed over.
 //
 // Each is asked again what Unnamed asked, in the statement that writes its row, and one that
 // something holds now is passed by: a write that began since, a reference recorded since, a run of
@@ -161,7 +160,6 @@ func (p *Pool) Orphaned(ctx context.Context, namespace string, orphans []Orphan)
 	}
 	digests := make([]string, len(orphans))
 	sizes := make([]int64, len(orphans))
-	written := make([]time.Time, len(orphans))
 	for i, o := range orphans {
 		if !hexDigest.MatchString(o.Digest) {
 			return 0, fmt.Errorf("db: %q is not a digest", o.Digest)
@@ -169,17 +167,17 @@ func (p *Pool) Orphaned(ctx context.Context, namespace string, orphans []Orphan)
 		if o.Size < 0 {
 			return 0, fmt.Errorf("db: an object of %d bytes", o.Size)
 		}
-		digests[i], sizes[i], written[i] = o.Digest, o.Size, o.Written
+		digests[i], sizes[i] = o.Digest, o.Size
 	}
 	var handed int
 	err := p.Installation(ctx, Collect, func(ctx context.Context, w *Wide) error {
 		tag, err := w.tx.Exec(ctx, `
 			insert into artifact_objects (namespace, digest, size_bytes, media_type, refs, collectable_at)
-			select $1, 'sha256:' || g.digest, g.size, 'application/octet-stream', 0, least(g.written, now())
-			from unnest($2::text[], $3::bigint[], $4::timestamptz[]) as g(digest, size, written)
+			select $1, 'sha256:' || g.digest, g.size, 'application/octet-stream', 0, now()
+			from unnest($2::text[], $3::bigint[]) as g(digest, size)
 			where `+orphanOf+`
 			order by g.digest
-			on conflict (namespace, digest) do nothing`, namespace, digests, sizes, written)
+			on conflict (namespace, digest) do nothing`, namespace, digests, sizes)
 		if err != nil {
 			return err
 		}

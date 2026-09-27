@@ -2,31 +2,47 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The artifact files v0.2 left unrecorded.
 //
 // v0.2 recorded a reference only for an output its workflow gave a retain, so the files of every
 // other output are named by the envelopes their steps published and by no row: nothing counts
-// them, nothing expires them, and the collection never reaches them. Migration 0039 lists the runs
-// v0.2 finished, and init and migrate record their files as a controller of this release records
-// them when a run finishes, an artifact of the run for every file its steps published, expiring
-// the namespace's max_retention_days after the run finished, as migration 0038 dates the run's
-// envelopes and logs. From there the purges retire and collect them as any other.
+// them, nothing expires them, and the collection never reaches them. A decision of this release
+// records every file its run's steps have published and sets runs.files_recorded, so a finished run
+// that has it unset was finished by a controller that did not, which migration 0039 sets out.
+// init, migrate and the controller that leads record their files as a decision would have, an
+// artifact of the run for every file its steps published, expiring the namespace's
+// max_retention_days after the run finished, as migration 0038 dates the run's envelopes and logs,
+// which a run finished after that migration is given here too. From there the purges retire and
+// collect them as any other.
 //
 // Package db does not reach the object store, where the envelopes are, so it is two calls:
 // UnrecordedRuns answers the runs and the envelopes their steps published, the caller reads the
-// files those name, and RecordUnrecorded records them and forgets the runs in one transaction. A
-// run is recorded whole or not at all, and a caller cut short between two batches leaves the runs
-// it did not reach for its next run, which records nothing twice: a reference already there is
-// left as it is and counted once.
+// files those name, and RecordUnrecorded records them and sets the run's column in one
+// transaction. A run is recorded whole or not at all, and a caller cut short between two batches
+// leaves the runs it did not reach for its next call, which records nothing twice: a reference
+// already there is left as it is and counted once.
 
-// Unrecorded is one run v0.2 finished whose artifact files are still to be recorded.
+// recordingWaits is the longest RecordUnrecorded waits for a lock. It takes the rows it records
+// only where nobody holds them, but writing an object's row may meet a writer creating the same
+// row at that moment, a decision counting the same bytes, which it can only wait for, and the
+// decision may be waiting for an object this holds. Past this it lets the decision go first and
+// leaves its runs for a later call, rather than wait the second PostgreSQL takes to see a deadlock
+// and end one of the two, which may be the decision.
+const recordingWaits = "200ms"
+
+// lockNotAvailable is PostgreSQL's code for a lock not taken within lock_timeout.
+const lockNotAvailable = "55P03"
+
+// Unrecorded is one finished run whose artifact files are still to be recorded.
 type Unrecorded struct {
 	Namespace string
 	Run       agk.RunID
@@ -52,13 +68,15 @@ func (p *Pool) UnrecordedRuns(ctx context.Context, after Unrecorded, batch int) 
 	var out []Unrecorded
 	err = p.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
 		out = nil
-		query := `select namespace, run_id from artifacts_unrecorded
-			order by namespace, run_id limit $1`
+		query := `select namespace, id from runs
+			where finished_at is not null and not files_recorded
+			order by namespace, id limit $1`
 		args := []any{batch}
 		if after.Namespace != "" {
-			query = `select namespace, run_id from artifacts_unrecorded
-				where (namespace, run_id) > ($2::text, $3::text)
-				order by namespace, run_id limit $1`
+			query = `select namespace, id from runs
+				where finished_at is not null and not files_recorded
+				  and (namespace, id) > ($2::text, $3::text)
+				order by namespace, id limit $1`
 			args = append(args, after.Namespace, string(after.Run))
 		}
 		runs, err := pairsOf(ctx, w.tx, query, args...)
@@ -93,7 +111,7 @@ func (p *Pool) UnrecordedRuns(ctx context.Context, after Unrecorded, batch int) 
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("db: the runs whose artifact files v0.2 left unrecorded could not be read: %w", err)
+		return nil, fmt.Errorf("db: the runs whose artifact files are still to be recorded could not be read: %w", err)
 	}
 	return out, nil
 }
@@ -120,8 +138,9 @@ type Recorded struct {
 }
 
 // RecordUnrecorded records the files of each run as its artifacts, expiring its namespace's
-// max_retention_days after it finished, and forgets that the run was waiting for it, all in one
-// transaction.
+// max_retention_days after it finished, and sets the run's files_recorded, all in one
+// transaction. A run given no expiry, as one a v0.2 controller finished after migration 0038 is,
+// is given the same, for its envelopes and logs.
 //
 // A file is recorded under the URI its envelope names, as a decision records it, where that URI is
 // of the run itself and of one of its steps: a file of another run is recorded, if at all, by that
@@ -130,10 +149,12 @@ type Recorded struct {
 // given, and a run recorded twice is counted once.
 //
 // An object is counted up by the references written, under a lock on its row, as a decision
-// counts it. It waits on nothing: a run another call is recording is passed by, and so is a file
-// whose object a writer holds at that moment, its run being left waiting, whole, for a later call;
-// a decision holds its objects while it writes its artifacts, and a recording that waited for it
-// could wait on a decision waiting on it. A file whose object is being collected is not recorded,
+// counts it. It waits on nothing it can pass by: a run another call is recording is passed by, and
+// so is a file whose object a writer holds at that moment, its run being left waiting, whole, for a
+// later call; a decision holds its objects while it writes its artifacts, and a recording that
+// waited for it could wait on a decision waiting on it. What it cannot pass by, a writer creating
+// an object's row as this does, it waits for recordingWaits at the most, and leaves the whole
+// batch for a later call past it. A file whose object is being collected is not recorded,
 // since its bytes may be gone by now, nor one whose size is not its object's: a reference that
 // named no bytes would be answered as an artifact nobody can fetch.
 func (p *Pool) RecordUnrecorded(ctx context.Context, runs []Recording) (Recorded, error) {
@@ -141,17 +162,23 @@ func (p *Pool) RecordUnrecorded(ctx context.Context, runs []Recording) (Recorded
 		return Recorded{}, nil
 	}
 	var out Recorded
+	var taken pairs
 	err := p.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
 		out = Recorded{}
+		if _, err := w.tx.Exec(ctx, `select set_config('lock_timeout', $1, true)`, recordingWaits); err != nil {
+			return err
+		}
 		var asked pairs
 		for _, r := range runs {
 			asked = append(asked, [2]string{r.Namespace, string(r.Run)})
 		}
-		taken, err := pairsOf(ctx, w.tx, `
-			select u.namespace, u.run_id from artifacts_unrecorded u
-			join unnest($1::text[], $2::text[]) as g(namespace, run_id)
-			  on u.namespace = g.namespace and u.run_id = g.run_id
-			for update of u skip locked`, asked.first(), asked.second())
+		var err error
+		taken, err = pairsOf(ctx, w.tx, `
+			select r.namespace, r.id from runs r
+			join unnest($1::text[], $2::text[]) as g(namespace, id)
+			  on r.namespace = g.namespace and r.id = g.id
+			where r.finished_at is not null and not r.files_recorded
+			for update of r skip locked`, asked.first(), asked.second())
 		if err != nil || len(taken) == 0 {
 			return err
 		}
@@ -338,17 +365,23 @@ func (p *Pool) RecordUnrecorded(ctx context.Context, runs []Recording) (Recorded
 		}
 		if len(doneRuns) > 0 {
 			if _, err := w.tx.Exec(ctx, `
-				delete from artifacts_unrecorded u
-				using unnest($1::text[], $2::text[]) as g(namespace, run_id)
-				where u.namespace = g.namespace and u.run_id = g.run_id`, doneNamespaces, doneRuns); err != nil {
+				update runs r
+				set files_recorded = true,
+				    expires_at = coalesce(r.expires_at, r.finished_at + n.max_retention_days * interval '1 day')
+				from unnest($1::text[], $2::text[]) as g(namespace, id), namespaces n
+				where r.namespace = g.namespace and r.id = g.id and n.name = r.namespace`, doneNamespaces, doneRuns); err != nil {
 				return err
 			}
 		}
 		out.Runs = len(doneRuns)
 		return nil
 	})
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == lockNotAvailable {
+		return Recorded{Left: len(taken)}, nil
+	}
 	if err != nil {
-		return Recorded{}, fmt.Errorf("db: the artifact files v0.2 left unrecorded could not be recorded: %w", err)
+		return Recorded{}, fmt.Errorf("db: the artifact files still to be recorded could not be recorded: %w", err)
 	}
 	return out, nil
 }

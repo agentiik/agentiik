@@ -164,9 +164,11 @@ func (s *v025Store) refs(what string) int {
 
 // A v0.2.5 installation upgraded by init: the files v0.2.5 left unrecorded are recorded from the
 // envelopes of the runs it finished, each expiring 30 days after its run finished, and a second init
-// records nothing again. The purges then retire what has run out, the orphan is collected in the
-// first pass, and what was retired is collected once the grace has passed, while the run finished
-// yesterday keeps its files and the run still going keeps the file its shard's envelope names.
+// records nothing again. The run still going when init ran is then finished by the v0.2.5
+// controller, in the moments the upgrade takes to replace it, and its files are recorded by the
+// first pass of this release's controller. The purges retire what has run out and hand the orphan
+// to the collection, and once the grace has passed the old run's file, its envelope and the orphan
+// are collected, while the runs finished since keep theirs.
 func TestTheFilesV025LeftAreRecordedByInitAndCollectedInTime(t *testing.T) {
 	database := freshDatabase(t)
 	ctx := t.Context()
@@ -209,6 +211,13 @@ func TestTheFilesV025LeftAreRecordedByInitAndCollectedInTime(t *testing.T) {
 		}
 	}
 
+	// The v0.2.5 controller, still deciding, publishes the shard's envelope and finishes the run
+	// still going, recording nothing of its file.
+	s.exec(
+		`update steps set state = 'succeeded', ports = jsonb_build_object('out', jsonb_build_object('digest', 'sha256:' || substr(o.digest, 8), 'size', o.size_bytes, 'items', 1))
+		 from artifact_objects o where steps.run_id = '01JMZ8V1P9C4XQ7K2N4D6F8H0C' and 'finance/sha256/' || substr(o.digest, 8) = '`+s.keys["envelope of 01JMZ8V1P9C4XQ7K2N4D6F8H0C"]+`'`,
+		`update runs set state = 'succeeded', finished_at = now() where id = '01JMZ8V1P9C4XQ7K2N4D6F8H0C'`)
+
 	application := database.Application
 	application.Password = config.Secret(strings.TrimSpace(d.read(t, apiDir, "database-password")))
 	pool, err := db.Open(ctx, application.ConnString())
@@ -221,8 +230,11 @@ func TestTheFilesV025LeftAreRecordedByInitAndCollectedInTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Artifacts != 1 || first.Runs != 1 || first.Orphans != 1 || first.Objects != 1 {
-		t.Errorf("the first pass after the upgrade removed %+v, and the old run's file, its envelope and the orphan were due", first)
+	if want := (purge.Purged{Artifacts: 1, Runs: 1, Recorded: 1, Orphans: 1}); first != want {
+		t.Errorf("the first pass after the upgrade removed %+v, want %+v: the old run's file retired, its envelopes let go of, the run finished during the upgrade recorded and the orphan handed over", first, want)
+	}
+	if n := s.refs("live"); n != 1 {
+		t.Errorf("the file of the run finished during the upgrade is counted %d times", n)
 	}
 	if _, err := admin.Exec(ctx, `update artifact_objects set collectable_at = now() - interval '2 days' where collectable_at is not null`); err != nil {
 		t.Fatal(err)
@@ -231,8 +243,8 @@ func TestTheFilesV025LeftAreRecordedByInitAndCollectedInTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Objects != 2 {
-		t.Errorf("the pass past the grace collected %d objects, and the old run's file and its envelope were due", second.Objects)
+	if second.Objects != 3 {
+		t.Errorf("the pass past the grace collected %d objects, and the old run's file, its envelope and the orphan were due", second.Objects)
 	}
 	want := map[string]bool{
 		"old": false, "envelope of 01JMZ8V1P9C4XQ7K2N4D6F8H0A": false, "orphan": false,
@@ -255,7 +267,7 @@ func TestMigrateRecordsTheFilesV025LeftWhereItIsGivenTheStore(t *testing.T) {
 	s := aV025Store(t, b.admin, dir)
 
 	out := b.migrated(theToken, "")
-	if !strings.Contains(out, "recorded none of the artifact files of the runs v0.2 finished, since AGK_OBJECTS_DIR is not set") {
+	if !strings.Contains(out, "recorded none of the artifact files of the runs v0.2 finished, since AGK_OBJECTS_DIR is not set: the controller that leads records them") {
 		t.Errorf("migrate with no object store said:\n%s", out)
 	}
 	if n := s.refs("old"); n != -1 {
@@ -277,5 +289,50 @@ func TestMigrateRecordsTheFilesV025LeftWhereItIsGivenTheStore(t *testing.T) {
 	}
 	if out := b.migrated(theToken, ""); strings.Contains(out, "artifact files") {
 		t.Errorf("once they are recorded, migrate with no object store said:\n%s", out)
+	}
+}
+
+// An envelope the store will not give back fails no init, which would keep every service of the
+// installation from starting over one file: init says which run it left and goes on, and a later
+// init, once the file reads, records it.
+func TestInitGoesOnPastAnEnvelopeItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode, and the test takes a file's reading away with its mode")
+	}
+	database := freshDatabase(t)
+	ctx := t.Context()
+	admin, err := pgx.Connect(ctx, database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(ctx))
+	d := aPreparedDirectory(t)
+	s := aV025Store(t, admin, filepath.Join(d.dir, objectsDir))
+	envelope := filepath.Join(d.dir, objectsDir, filepath.FromSlash(s.keys["envelope of 01JMZ8V1P9C4XQ7K2N4D6F8H0A"]))
+	if err := os.Chmod(envelope, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "finance", OperatorToken: theToken,
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	if err := initialize(ctx, c, d.at(time.Now().UTC())); err != nil {
+		t.Fatalf("init failed over an envelope it could not read: %s\n%s", err, d.out.String())
+	}
+	if said := d.out.String(); !strings.Contains(said, "recorded the artifact files of 1 run v0.2 finished as 1 artifact") ||
+		!strings.Contains(said, "left the artifact files of 1 run v0.2 finished unrecorded, since the store would not give back an envelope of theirs") {
+		t.Errorf("init said:\n%s", said)
+	}
+
+	if err := os.Chmod(envelope, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	d.out.Reset()
+	if err := initialize(ctx, c, d.at(time.Now().UTC())); err != nil {
+		t.Fatalf("init failed: %s\n%s", err, d.out.String())
+	}
+	if !strings.Contains(d.out.String(), "recorded the artifact files of 1 run v0.2 finished as 1 artifact") || s.refs("old") != 1 {
+		t.Errorf("once the envelope read, init said:\n%s", d.out.String())
 	}
 }

@@ -16,11 +16,11 @@ import (
 )
 
 // Backfill: the files of the runs v0.2 finished, which v0.2 recorded no reference for, recorded
-// from the envelopes their steps published, as migration 0039 lists those runs.
+// from the envelopes their steps published.
 
-// v02 is a run of finance as v0.2 left it: finished age ago, its step archive having published on
-// port out an envelope naming files, whose bytes are in the store and which nothing counts, and
-// waiting for them to be recorded. It answers the run and the envelope's digest.
+// v02 is a run of finance as a v0.2 controller left it: finished age ago, its step archive having
+// published on port out an envelope naming files, whose bytes are in the store and which nothing
+// counts, and its files not recorded. It answers the run and the envelope's digest.
 func (in *installation) v02(t *testing.T, age time.Duration, files ...file) (agk.RunID, string) {
 	t.Helper()
 	run := in.run(t)
@@ -31,8 +31,7 @@ func (in *installation) v02(t *testing.T, age time.Duration, files ...file) (agk
 	in.exec(t,
 		fmt.Sprintf(`update runs set state = 'succeeded', finished_at = now() - interval '%d seconds',
 		               expires_at = now() - interval '%d seconds' + interval '90 days' where id = '%s'`, int(age.Seconds()), int(age.Seconds()), run),
-		fmt.Sprintf(`update steps set ports = '{"out": {"digest": "sha256:%s", "size": %d, "items": 1}}' where run_id = '%s'`, envelope, size, run),
-		`insert into artifacts_unrecorded (namespace, run_id) values ('finance', '`+string(run)+`')`)
+		fmt.Sprintf(`update steps set ports = '{"out": {"digest": "sha256:%s", "size": %d, "items": 1}}' where run_id = '%s'`, envelope, size, run))
 	return run, envelope
 }
 
@@ -50,8 +49,9 @@ func (in *installation) refs(t *testing.T, content string) int {
 
 // Every file the published envelopes name is recorded as an artifact of its run, expiring the
 // namespace's max_retention_days after the run finished, and counted once; a reference v0.2 wrote,
-// for an output given a retain, is left with its own expiry and count; the run is waited for no
-// longer; and a second Backfill records nothing and counts nothing again.
+// for an output given a retain, is left with its own expiry and count; the run says its files are
+// recorded, and is given the same expiry where a controller finishing it after migration 0038 gave
+// it none; and a second Backfill records nothing and counts nothing again.
 func TestBackfillRecordsWhatV02LeftAndNothingTwice(t *testing.T) {
 	in := withInstallation(t)
 	run, _ := in.v02(t, 10*24*time.Hour, file{"invoices.csv", "invoices"}, file{"totals.json", "totals"}, file{"kept.zip", "kept"})
@@ -71,6 +71,7 @@ func TestBackfillRecordsWhatV02LeftAndNothingTwice(t *testing.T) {
 		return at
 	}
 	before := kept()
+	in.exec(t, `update runs set expires_at = null where id = '`+string(run)+`'`)
 
 	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
 	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 2}) {
@@ -89,8 +90,8 @@ func TestBackfillRecordsWhatV02LeftAndNothingTwice(t *testing.T) {
 			t.Errorf("the object %q is counted %d times", content, n)
 		}
 	}
-	if n := in.count(t, `select count(*) from artifacts_unrecorded`); n != 0 {
-		t.Errorf("%d runs are still waiting to be recorded", n)
+	if n := in.count(t, `select count(*) from runs where files_recorded and expires_at = finished_at + interval '90 days'`); n != 1 {
+		t.Error("the run does not say its files are recorded, or was given no expiry")
 	}
 
 	if got, err := purge.Backfill(t.Context(), in.pool, in.store, 0); err != nil || got != (purge.Backfilled{}) {
@@ -138,8 +139,7 @@ func TestBackfillRecordsOnlyWhatARunsStepsPublished(t *testing.T) {
 		fmt.Sprintf(`update steps set ports = '{"out": {"digest": "sha256:%s", "size": %d, "items": 1}, "gone": {"digest": "sha256:%s", "size": 3, "items": 0}}' where run_id = '%s'`, envelope, size, strings.Repeat("0", 64), run),
 		fmt.Sprintf(`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs) values ('finance', 'sha256:%s', 99, 'application/octet-stream', 1)`, resized),
 		fmt.Sprintf(`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs, collectable_at, collecting_at)
-		             values ('finance', 'sha256:%s', 5, 'application/octet-stream', 0, now() - interval '2 days', now())`, going),
-		`insert into artifacts_unrecorded (namespace, run_id) values ('finance', '`+string(run)+`')`)
+		             values ('finance', 'sha256:%s', 5, 'application/octet-stream', 0, now() - interval '2 days', now())`, going))
 
 	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
 	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1, Unread: 1}) {
@@ -154,28 +154,29 @@ func TestBackfillRecordsOnlyWhatARunsStepsPublished(t *testing.T) {
 	if in.refs(t, "resized") != 1 || in.refs(t, "going") != 0 {
 		t.Error("an object whose size disagrees, or that is being collected, was counted")
 	}
-	if n := in.count(t, `select count(*) from artifacts_unrecorded`); n != 0 {
-		t.Error("the run is still waited for")
+	if n := in.count(t, `select count(*) from runs where id = '`+string(run)+`' and files_recorded`); n != 1 {
+		t.Error("the run does not say its files are recorded")
 	}
 }
 
-// refusing is a store whose objects under one namespace's keys cannot be read for a while, as a
-// disk that stopped answering.
-type refusing struct {
+// cancelling is a store that stops its caller at one key, as a program stopped mid-way is.
+type cancelling struct {
 	artifact.Removable
-	refuse map[string]bool
+	at     string
+	cancel context.CancelFunc
 }
 
-func (r refusing) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	if r.refuse[key] {
-		return nil, errors.New("the disk did not answer")
+func (c cancelling) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	if key == c.at {
+		c.cancel()
+		return nil, ctx.Err()
 	}
-	return r.Removable.Open(ctx, key)
+	return c.Removable.Open(ctx, key)
 }
 
-// Backfill goes a batch of runs at a time, each batch its own transaction: one cut short by an
-// envelope the store would not read keeps what the batches before it recorded, and the next
-// Backfill records the rest, counting nothing twice.
+// Backfill goes a batch of runs at a time, each batch its own transaction: one stopped in its
+// second batch keeps what the first recorded, and the next Backfill records the rest, counting
+// nothing twice.
 func TestBackfillGoesABatchAtATimeAndACutLosesNothing(t *testing.T) {
 	in := withInstallation(t)
 	var envelopes []string
@@ -184,14 +185,16 @@ func TestBackfillGoesABatchAtATimeAndACutLosesNothing(t *testing.T) {
 		envelopes = append(envelopes, envelope)
 	}
 	// The runs are taken in the order of their identifiers, which is the order they were made in.
-	broken := refusing{Removable: in.store, refuse: map[string]bool{artifact.Key("finance", envelopes[3]): true}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stopped := cancelling{Removable: in.store, at: artifact.Key("finance", envelopes[3]), cancel: cancel}
 
-	got, err := purge.Backfill(t.Context(), in.pool, broken, 2)
-	if err == nil || got.Runs != 2 || got.Artifacts != 2 {
-		t.Fatalf("a Backfill cut short in its second batch recorded %+v and said %v", got, err)
+	got, err := purge.Backfill(ctx, in.pool, stopped, 2)
+	if !errors.Is(err, context.Canceled) || got.Runs != 2 || got.Artifacts != 2 {
+		t.Fatalf("a Backfill stopped in its second batch recorded %+v and said %v", got, err)
 	}
-	if n := in.count(t, `select count(*) from artifacts_unrecorded`); n != 3 {
-		t.Errorf("%d runs are waiting, and the three past the first batch should be", n)
+	if n := in.count(t, `select count(*) from runs where not files_recorded`); n != 3 {
+		t.Errorf("%d runs are still to be recorded, and the three past the first batch should be", n)
 	}
 
 	got, err = purge.Backfill(t.Context(), in.pool, in.store, 2)
@@ -202,6 +205,27 @@ func TestBackfillGoesABatchAtATimeAndACutLosesNothing(t *testing.T) {
 		if n := in.refs(t, fmt.Sprintf("output %d", i)); n != 1 {
 			t.Errorf("output %d is counted %d times", i, n)
 		}
+	}
+}
+
+// A run with an envelope the store will not give back is left waiting, whole, and said, rather
+// than ending Backfill, which would keep init failing and every service with it; the other runs
+// are recorded, and a Backfill once the store answers records it.
+func TestBackfillLeavesARunWhoseEnvelopeTheStoreWillNotGiveBack(t *testing.T) {
+	in := withInstallation(t)
+	_, broken := in.v02(t, 24*time.Hour, file{"out.bin", "behind a disk that does not answer"})
+	in.v02(t, 24*time.Hour, file{"out.bin", "readable"})
+
+	store := refusing{Walkable: in.store.(artifact.Walkable), refuse: map[string]bool{artifact.Key("finance", broken): true}}
+	got, err := purge.Backfill(t.Context(), in.pool, store, 0)
+	if err != nil || got.Runs != 1 || got.Unreadable != 1 || got.Trouble == nil || !strings.Contains(got.Trouble.Error(), "the disk did not answer") {
+		t.Fatalf("with one envelope unreadable, Backfill recorded %+v: %v", got, err)
+	}
+	if in.refs(t, "behind a disk that does not answer") != -1 {
+		t.Error("a file of the run left waiting was recorded")
+	}
+	if got, err := purge.Backfill(t.Context(), in.pool, in.store, 0); err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1}) {
+		t.Errorf("once the store answered, Backfill recorded %+v: %v", got, err)
 	}
 }
 
@@ -238,5 +262,41 @@ func TestBackfillLeavesARunWhoseObjectAWriterHolds(t *testing.T) {
 	}
 	if in.refs(t, "bytes a decision is counting") != 2 || in.refs(t, "bytes nobody else has") != 1 {
 		t.Error("the objects are not counted by the references recorded")
+	}
+}
+
+// A writer creating the row of an object a run names, as a decision counting the same bytes for
+// the first time does, is waited for a moment and no longer: the run is left waiting rather than
+// the recording holding what the decision may need next, and a Backfill once the writer is done
+// records it.
+func TestBackfillWaitsOnlyAMomentForAWriterCreatingAnObject(t *testing.T) {
+	in := withInstallation(t)
+	in.v02(t, 24*time.Hour, file{"new.bin", "bytes a decision counts for the first time"})
+	digest, _ := in.put(t, "bytes a decision counts for the first time")
+
+	writer, err := in.conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(t.Context())
+	if _, err := writer.Exec(t.Context(), `insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+	                                       values ('finance', 'sha256:'||$1, 42, 'application/octet-stream', 1)`, digest); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	began := time.Now()
+	got, err := purge.Backfill(ctx, in.pool, in.store, 0)
+	if err != nil || got != (purge.Backfilled{Left: 1}) || time.Since(began) > 10*time.Second {
+		t.Fatalf("with a writer creating the object's row, Backfill recorded %+v in %s: %v", got, time.Since(began), err)
+	}
+	if err := writer.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := purge.Backfill(t.Context(), in.pool, in.store, 0); err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1}) {
+		t.Errorf("once the writer was done, Backfill recorded %+v: %v", got, err)
+	}
+	if n := in.refs(t, "bytes a decision counts for the first time"); n != 2 {
+		t.Errorf("the object is counted %d times, by the writer and the recording", n)
 	}
 }

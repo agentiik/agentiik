@@ -501,11 +501,13 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		return err
 	}
 
+	// files_recorded says that every file the run's steps have published has a row of artifacts,
+	// which the artifacts written below this make true: migration 0039 says who reads it.
 	tag, err := w.tx.Exec(ctx,
 		`update runs
 		 set evaluation = $4, seq = $5, state = $6,
 		     started_at = coalesce(started_at, $7), finished_at = $8,
-		     wake_at = $9, expires_at = $10, outputs = $11
+		     wake_at = $9, expires_at = $10, outputs = $11, files_recorded = true
 		 where namespace = $1 and id = $2 and seq = $3`,
 		d.Namespace, string(d.Run), d.Was,
 		d.Document, d.Seq, d.State.String(),

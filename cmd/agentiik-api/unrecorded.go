@@ -17,9 +17,12 @@ import (
 // nothing would ever expire or collect those. init and migrate call it at every run, after the
 // migrations, as they give the built-in identities, and a run finding nothing left says nothing.
 //
-// objects is empty where migrate runs with no AGK_OBJECTS_DIR, and nothing is recorded then. It
-// says so while a run is left, since the collection takes no file that no row names in a namespace
-// whose runs are still to be recorded, and a migrate given the API's settings records them.
+// What it cannot record, a run whose objects a writer held or whose envelope the store would not
+// give back, it says and leaves for the next run and for the controller's passes, rather than fail:
+// a failed init keeps every service of the installation from starting, and those files are safe
+// where they are, since the collection takes no file that no row names in their namespaces until
+// they are recorded. objects is empty where migrate runs with no AGK_OBJECTS_DIR, and nothing is
+// recorded then; it says so while a run is left, and the controller records them in its passes.
 func unrecordedArtifacts(ctx context.Context, pool *db.Pool, objects, verb string, out io.Writer) error {
 	if objects == "" {
 		left, err := pool.UnrecordedRuns(ctx, db.Unrecorded{}, 1)
@@ -27,7 +30,7 @@ func unrecordedArtifacts(ctx context.Context, pool *db.Pool, objects, verb strin
 			return err
 		}
 		if len(left) > 0 {
-			fmt.Fprintf(out, "recorded none of the artifact files of the runs v0.2 finished, since %s is not set: %s records them where it is given the API's settings, and until then the collection takes no file that no row names in their namespaces\n", config.ObjectsDir, verb)
+			fmt.Fprintf(out, "recorded none of the artifact files of the runs v0.2 finished, since %s is not set: the controller that leads records them in its passes, as %s does where it is given the API's settings\n", config.ObjectsDir, verb)
 		}
 		return nil
 	}
@@ -36,10 +39,13 @@ func unrecordedArtifacts(ctx context.Context, pool *db.Pool, objects, verb strin
 		fmt.Fprintf(out, "recorded the artifact files of %s v0.2 finished as %s, each expiring its namespace's max_retention_days after its run finished, so that the purges expire and collect them\n", counted(done.Runs, "run", "runs"), counted(done.Artifacts, "artifact", "artifacts"))
 	}
 	if done.Unread > 0 {
-		fmt.Fprintf(out, "read %s of the runs v0.2 finished as nothing, gone from the store or no envelope: what they name is recorded by nothing, and the collection takes it once it is a day old\n", counted(done.Unread, "envelope", "envelopes"))
+		fmt.Fprintf(out, "read %s of the runs v0.2 finished as nothing, gone from the store or no envelope: what they name is recorded by nothing, and the collection takes it in its time\n", counted(done.Unread, "envelope", "envelopes"))
 	}
 	if done.Left > 0 {
-		fmt.Fprintf(out, "left the artifact files of %s v0.2 finished unrecorded, since a writer held their objects: the next %s records them, and until then the collection takes no file that no row names in their namespaces\n", counted(done.Left, "run", "runs"), verb)
+		fmt.Fprintf(out, "left the artifact files of %s v0.2 finished unrecorded, since a writer held their objects: the controller that leads records them in its passes\n", counted(done.Left, "run", "runs"))
+	}
+	if done.Unreadable > 0 {
+		fmt.Fprintf(out, "left the artifact files of %s v0.2 finished unrecorded, since the store would not give back an envelope of theirs, and until it does the collection takes no file that no row names in their namespaces: %s\n", counted(done.Unreadable, "run", "runs"), done.Trouble)
 	}
 	if err != nil {
 		return fmt.Errorf("the artifact files of the runs v0.2 finished could not all be recorded, and the next %s records the rest: %w", verb, err)

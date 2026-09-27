@@ -246,8 +246,6 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a namespace is writing into the store, and what it holds, counted against its own
 		// quota.
 		"artifact_uploads": true, "artifact_room": true,
-		// The runs of a namespace whose artifact files v0.2 left unrecorded.
-		"artifacts_unrecorded": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace

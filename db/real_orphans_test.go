@@ -6,13 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/jackc/pgx/v5"
 )
 
 // What holds a file of the store against the orphan sweep, against a real PostgreSQL: a row
-// counting it, a live artifact naming it, a write under way, and a run of its namespace waiting for
-// its v0.2 files to be recorded. Each is asked again in the statement that hands a file over, so
-// that one arriving after the first look still holds it.
+// counting it, a live artifact naming it, a write under way, and a finished run of its namespace
+// whose files are still to be recorded. Each is asked again in the statement that hands a file
+// over, so that one arriving after the first look still holds it; and a file handed over is
+// collectable from then, a grace before it is collected.
 func TestAnOrphanIsHandedOverOnlyWhereNothingHoldsIt(t *testing.T) {
 	pool, super := opened(t)
 	ctx := t.Context()
@@ -42,7 +44,7 @@ func TestAnOrphanIsHandedOverOnlyWhereNothingHoldsIt(t *testing.T) {
 	all := []string{free, counted, named, written}
 	var orphans []Orphan
 	for _, d := range all {
-		orphans = append(orphans, Orphan{Digest: d, Size: 1, Written: time.Now().Add(-48 * time.Hour).Truncate(time.Second)})
+		orphans = append(orphans, Orphan{Digest: d, Size: 1})
 	}
 
 	if got, err := pool.Unnamed(ctx, "finance", all); err != nil || !slices.Equal(got, []string{free}) {
@@ -52,17 +54,18 @@ func TestAnOrphanIsHandedOverOnlyWhereNothingHoldsIt(t *testing.T) {
 		t.Fatalf("the namespaces to sweep are %v: %v", got, err)
 	}
 
-	// A run of the namespace waiting for its v0.2 files, found after the first look.
-	if _, err := conn.Exec(ctx, `insert into artifacts_unrecorded (namespace, run_id) values ('finance', $1)`, financeRun); err != nil {
+	// A run of the namespace finished by a controller that recorded none of its files, found after
+	// the first look.
+	if _, err := conn.Exec(ctx, `update runs set state = 'succeeded', started_at = now(), finished_at = now() where id = $1`, financeRun); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := pool.Orphaned(ctx, "finance", orphans); err != nil || n != 0 {
-		t.Errorf("with a run of the namespace waiting for its v0.2 files, %d orphans were handed over: %v", n, err)
+		t.Errorf("with a finished run of the namespace whose files are not recorded, %d orphans were handed over: %v", n, err)
 	}
 	if got, err := pool.Sweepable(ctx); err != nil || slices.Contains(got, "finance") {
-		t.Errorf("with a run waiting for its v0.2 files, the namespaces to sweep are %v: %v", got, err)
+		t.Errorf("with a finished run whose files are not recorded, the namespaces to sweep are %v: %v", got, err)
 	}
-	if _, err := conn.Exec(ctx, `delete from artifacts_unrecorded`); err != nil {
+	if _, err := conn.Exec(ctx, `update runs set files_recorded = true`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,14 +73,55 @@ func TestAnOrphanIsHandedOverOnlyWhereNothingHoldsIt(t *testing.T) {
 		t.Fatalf("%d orphans were handed over, and only the one nothing holds should be: %v", n, err)
 	}
 	var refs int
-	var collectable time.Time
-	if err := conn.QueryRow(ctx, `select refs, collectable_at from artifact_objects where digest = 'sha256:' || $1`, free).Scan(&refs, &collectable); err != nil {
+	var since time.Duration
+	if err := conn.QueryRow(ctx, `select refs, extract(epoch from now() - collectable_at)::bigint * 1000000000 from artifact_objects where digest = 'sha256:' || $1`, free).Scan(&refs, &since); err != nil {
 		t.Fatal(err)
 	}
-	if refs != 0 || !collectable.Equal(orphans[0].Written) {
-		t.Errorf("the orphan was handed over counted %d, collectable from %s, and it was written %s", refs, collectable, orphans[0].Written)
+	if refs != 0 || since < 0 || since > time.Minute {
+		t.Errorf("the orphan was handed over counted %d, collectable for %s, and it should be from the moment it was handed over", refs, since)
 	}
 	if n, err := pool.Orphaned(ctx, "finance", orphans); err != nil || n != 0 {
 		t.Errorf("handed over again, %d orphans were: %v", n, err)
+	}
+}
+
+// A run a controller of this release decides says its files are recorded, since every decision
+// writes a reference for every file its steps have published; one finished by a controller that
+// does not, as v0.2's, is still to be recorded.
+func TestADecisionSaysItsRunsFilesAreRecorded(t *testing.T) {
+	pool, super := opened(t)
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	unrecorded := func() []Unrecorded {
+		t.Helper()
+		runs, err := pool.UnrecordedRuns(ctx, Unrecorded{}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runs
+	}
+
+	if _, err := conn.Exec(ctx, `update runs set state = 'succeeded', started_at = now(), finished_at = now() where id = $1`, financeRun); err != nil {
+		t.Fatal(err)
+	}
+	if runs := unrecorded(); len(runs) != 1 || runs[0].Run != financeRun {
+		t.Fatalf("a run finished by a controller that records nothing is not to be recorded: %v", runs)
+	}
+	finished := time.Now().UTC()
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		return w.SaveDecision(ctx, Decision{
+			Namespace: "finance", Run: financeRun, Was: 0, Seq: 1,
+			Document: []byte(`{"version":1}`), State: agk.Succeeded,
+			StartedAt: finished.Add(-time.Hour), FinishedAt: finished,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runs := unrecorded(); len(runs) != 0 {
+		t.Errorf("a run a decision of this release finished is still to be recorded: %v", runs)
 	}
 }

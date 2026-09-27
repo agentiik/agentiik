@@ -111,9 +111,11 @@
 // workflow gave no retain, so each file the envelopes those runs' steps published name is recorded
 // as an artifact of its run, expiring the namespace's max_retention_days after the run finished,
 // for the purges to expire and collect, a batch of runs a transaction, as purge.Backfill does. A
-// migrate cut short leaves the rest for the next, and one finding nothing left says nothing. With
-// AGK_OBJECTS_DIR unset it records none, and says so while runs are left, since the collection
-// takes no file that no row names in their namespaces until they are recorded.
+// migrate cut short leaves the rest for the next, and one finding nothing left says nothing. What
+// it cannot record, a run whose objects a writer holds or whose envelope the store will not give
+// back, it says and leaves, rather than fail, and so does it all where AGK_OBJECTS_DIR is unset:
+// the controller that leads records what is left in its passes, and until then the collection
+// takes no file that no row names in their namespaces.
 //
 // # init
 //

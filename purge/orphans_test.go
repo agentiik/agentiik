@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,8 +21,8 @@ import (
 )
 
 // The orphan sweep: a file of the store no row names is handed to the collection once it is older
-// than the grace, unless a write holds it or a run still under way names it, and nothing but the
-// objects of a namespace's sha256 directory is ever looked at.
+// than the grace, unless a write holds it or a run still under way names it, and collected a grace
+// later; and nothing but the objects of a namespace's sha256 directory is ever looked at.
 
 // age dates the file under key age ago, as a file written then is dated.
 func (in *installation) age(t *testing.T, key string, age time.Duration) {
@@ -72,27 +74,76 @@ func (in *installation) working(t *testing.T, run agk.RunID, digest string, size
 	            where id = '%s'`, digest, size, run))
 }
 
-// An orphan older than the grace is handed to the collection and deleted in the pass that finds it,
-// counted as an orphan and as an object; one written within the grace stays, since its writer may
-// be about to record it; and a pass after that finds nothing.
+// An orphan older than the grace is handed to the collection, and deleted a grace later, counted as
+// an orphan when it is handed over and as an object when it goes; one written within the grace
+// stays, since its writer may be about to record it; and a pass after that finds nothing.
 func TestAnOrphanOlderThanTheGraceGoesAndAYoungerOneStays(t *testing.T) {
 	in := withInstallation(t)
 	_, old := in.aged(t, "an attempt that failed", 25*time.Hour)
 	_, young := in.aged(t, "a write about to be recorded", 23*time.Hour)
 
 	p := in.purger(0, 0)
-	want := purge.Purged{Orphans: 1, Objects: 1, Bytes: int64(len("an attempt that failed"))}
-	if got := in.pass(t, p); got != want {
-		t.Fatalf("the pass removed %+v, want %+v", got, want)
+	if got, want := in.pass(t, p), (purge.Purged{Orphans: 1}); got != want {
+		t.Fatalf("the pass that found the orphan removed %+v, want %+v", got, want)
+	}
+	if !in.held(t, old) {
+		t.Fatal("the orphan went in the pass that found it, before the grace a write that could not see it is given")
+	}
+	in.past(t)
+	if got, want := in.pass(t, p), (purge.Purged{Objects: 1, Bytes: int64(len("an attempt that failed"))}); got != want {
+		t.Fatalf("the pass a grace later removed %+v, want %+v", got, want)
 	}
 	if in.held(t, old) || !in.held(t, young) {
-		t.Errorf("after the pass the orphan past the grace is held %t, the one within it %t", in.held(t, old), in.held(t, young))
+		t.Errorf("a grace later the orphan is held %t, the file written within the grace %t", in.held(t, old), in.held(t, young))
 	}
 	if n := in.count(t, `select count(*) from artifact_objects`); n != 0 {
 		t.Errorf("%d rows are left in artifact_objects, and the orphan's row goes with its bytes", n)
 	}
 	if got := in.pass(t, p); got.Removed() {
 		t.Errorf("a pass after it removed %+v", got)
+	}
+}
+
+// A write of an orphan's bytes that began before the orphan was handed over, and could neither see
+// its row nor be seen, has committed by the time the orphan is collectable, and holds it; the bytes
+// it wrote stay.
+func TestAWriteBegunBeforeAnOrphanWasHandedOverKeepsIt(t *testing.T) {
+	in := withInstallation(t)
+	digest, key := in.aged(t, "the same bytes as yesterday's attempt", 48*time.Hour)
+
+	recorded, commit := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(commit) }) }
+	// Let go of the write whichever way the test ends, since a pool closing waits on its
+	// connection.
+	defer release()
+	done := make(chan error, 1)
+	go func() {
+		done <- in.pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
+			if _, err := ns.Uploading(ctx, digest, time.Now().Add(time.Hour)); err != nil {
+				return err
+			}
+			close(recorded)
+			<-commit
+			return nil
+		})
+	}()
+	<-recorded
+
+	p := in.purger(0, 0)
+	if got := in.pass(t, p); got.Orphans != 1 || got.Objects != 0 || !in.held(t, key) {
+		t.Fatalf("with a write under way that it cannot see, the pass removed %+v, and the file is held %t", got, in.held(t, key))
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := in.store.Put(t.Context(), key, strings.NewReader("the same bytes as yesterday's attempt")); err != nil {
+		t.Fatal(err)
+	}
+	in.past(t)
+	if got := in.pass(t, p); got.Objects != 0 || !in.held(t, key) {
+		t.Errorf("a grace later, with the write held, the pass removed %+v, and the file is held %t", got, in.held(t, key))
 	}
 }
 
@@ -109,12 +160,16 @@ func TestAnOrphanAWriteHoldsStays(t *testing.T) {
 	}
 
 	p := in.purger(0, 0)
-	if got := in.pass(t, p); got.Orphans != 0 || !in.held(t, key) {
-		t.Fatalf("a file a write holds: the pass removed %+v, and it is held %t", got, in.held(t, key))
+	if got := in.pass(t, p); got.Orphans != 0 {
+		t.Fatalf("a file a write holds: the pass removed %+v", got)
 	}
 	in.exec(t, `update artifact_uploads set until = now() - interval '1 second'`)
-	if got := in.pass(t, p); got.Uploads != 1 || got.Orphans != 1 || got.Objects != 1 || in.held(t, key) {
-		t.Errorf("once the write lapsed the pass removed %+v, and the file is held %t", got, in.held(t, key))
+	if got := in.pass(t, p); got.Uploads != 1 || got.Orphans != 1 {
+		t.Errorf("once the write lapsed the pass removed %+v", got)
+	}
+	in.past(t)
+	if got := in.pass(t, p); got.Objects != 1 || in.held(t, key) {
+		t.Errorf("a grace later the pass removed %+v, and the file is held %t", got, in.held(t, key))
 	}
 }
 
@@ -124,18 +179,23 @@ func TestAnOrphanAWriteHoldsStays(t *testing.T) {
 func TestAFileARunUnderWayNamesStays(t *testing.T) {
 	in := withInstallation(t)
 	run := in.run(t)
-	shard, key := in.aged(t, "a shard's output", 48*time.Hour)
+	_, key := in.aged(t, "a shard's output", 48*time.Hour)
 	envelope, size := in.named(t, run, file{"out.bin", "a shard's output"})
 	in.working(t, run, envelope, size)
 	in.age(t, artifact.Key("finance", envelope), 48*time.Hour)
 
 	p := in.purger(0, 0)
-	if got := in.pass(t, p); got.Orphans != 0 || !in.held(t, key) {
-		t.Fatalf("the file a run under way names: the pass removed %+v, and it is held %t", got, in.held(t, key))
+	if got := in.pass(t, p); got.Orphans != 0 {
+		t.Fatalf("the file a run under way names: the pass removed %+v", got)
 	}
 	in.finish(t, run, false)
-	if got := in.pass(t, p); got.Orphans != 1 || in.held(t, key) || !in.held(t, artifact.Key("finance", envelope)) {
-		t.Errorf("once its run finished the pass removed %+v; the file %s is held %t, its envelope %t", got, shard, in.held(t, key), in.held(t, artifact.Key("finance", envelope)))
+	if got := in.pass(t, p); got.Orphans != 1 {
+		t.Fatalf("once its run finished the pass removed %+v", got)
+	}
+	in.past(t)
+	in.pass(t, p)
+	if in.held(t, key) || !in.held(t, artifact.Key("finance", envelope)) {
+		t.Errorf("a grace later the file is held %t, its envelope %t", in.held(t, key), in.held(t, artifact.Key("finance", envelope)))
 	}
 }
 
@@ -177,8 +237,12 @@ func TestTheSweepTouchesNothingButObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := in.pass(t, in.purger(0, 0)); got.Removed() {
-		t.Errorf("the pass removed %+v", got)
+	p := in.purger(0, 0)
+	for range 2 {
+		if got := in.pass(t, p); got.Removed() {
+			t.Errorf("the pass removed %+v", got)
+		}
+		in.past(t)
 	}
 	for _, key := range kept {
 		if !in.held(t, key) {
@@ -206,37 +270,23 @@ func (o *opening) Walk(namespace string) (artifact.Walk, error) {
 // round, and a round begins again once the last has ended.
 func TestTheStoreIsWalkedABatchAtATime(t *testing.T) {
 	in := withInstallation(t)
-	var keys []string
 	for i := range 5 {
-		_, key := in.aged(t, fmt.Sprintf("orphan %d", i), 48*time.Hour)
-		keys = append(keys, key)
-	}
-	left := func() int {
-		n := 0
-		for _, key := range keys {
-			if in.held(t, key) {
-				n++
-			}
-		}
-		return n
+		in.aged(t, fmt.Sprintf("orphan %d", i), 48*time.Hour)
 	}
 
 	p := in.purger(2, 1)
 	store := &opening{Walkable: in.store.(artifact.Walkable)}
 	p.Objects = store
-	for i, want := range []struct{ removed, left int }{{2, 3}, {2, 1}, {1, 0}} {
-		if got := in.pass(t, p); got.Orphans != want.removed || got.Objects != want.removed {
-			t.Errorf("pass %d removed %+v, and %d orphans were due", i+1, got, want.removed)
+	for i, want := range []int{2, 2, 1, 0} {
+		if got := in.pass(t, p); got.Orphans != want {
+			t.Errorf("pass %d handed over %d orphans, want %d", i+1, got.Orphans, want)
 		}
-		if n := left(); n != want.left {
-			t.Fatalf("after pass %d, %d orphans are left, want %d", i+1, n, want.left)
-		}
-	}
-	if got := in.pass(t, p); got.Removed() {
-		t.Errorf("the pass after the store was walked through removed %+v", got)
 	}
 	if store.opened != 1 {
 		t.Errorf("the namespace was walked from its start %d times in one round", store.opened)
+	}
+	if n := in.count(t, `select count(*) from artifact_objects where refs = 0`); n != 5 {
+		t.Errorf("%d orphans were handed over in the round, and the store holds 5", n)
 	}
 	in.pass(t, p)
 	if store.opened != 2 {
@@ -244,29 +294,51 @@ func TestTheStoreIsWalkedABatchAtATime(t *testing.T) {
 	}
 }
 
-// A namespace whose runs of v0.2 still wait for their files to be recorded is not swept, since
-// those files are named by no row until they are.
-func TestANamespaceWaitingForItsV02FilesIsNotSwept(t *testing.T) {
+// refusing is a store whose objects under some keys cannot be read for a while, as a disk that
+// stopped answering.
+type refusing struct {
+	artifact.Walkable
+	refuse map[string]bool
+}
+
+func (r refusing) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	if r.refuse[key] {
+		return nil, errors.New("the disk did not answer")
+	}
+	return r.Walkable.Open(ctx, key)
+}
+
+// A file of a run v0.2 finished, which no row names until its files are recorded, is recorded by
+// the pass rather than taken for an orphan; and while a run of the namespace cannot be recorded,
+// its envelope unreadable, no file of the namespace is taken for one, and the pass says why.
+func TestAFileOfARunStillToBeRecordedIsNeverAnOrphan(t *testing.T) {
 	in := withInstallation(t)
-	run := in.run(t)
-	in.finish(t, run, false)
-	in.exec(t, `insert into artifacts_unrecorded (namespace, run_id) values ('finance', '`+string(run)+`')`)
-	_, key := in.aged(t, "a v0.2 file not recorded yet", 30*24*time.Hour)
+	_, envelope := in.v02(t, 24*time.Hour, file{"out.bin", "a file v0.2 recorded nothing for"})
+	_, key := in.put(t, "a file v0.2 recorded nothing for")
+	in.age(t, key, 48*time.Hour)
+	_, orphan := in.aged(t, "an attempt that failed", 48*time.Hour)
 
 	p := in.purger(0, 0)
-	if got := in.pass(t, p); got.Orphans != 0 || !in.held(t, key) {
-		t.Fatalf("a file of a namespace waiting for its v0.2 files: the pass removed %+v, and it is held %t", got, in.held(t, key))
+	p.Objects = refusing{Walkable: in.store.(artifact.Walkable), refuse: map[string]bool{artifact.Key("finance", envelope): true}}
+	got, err := p.Pass(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "the files v0.2 left") || got.Orphans != 0 {
+		t.Fatalf("with the run's envelope unreadable, the pass removed %+v and said %v", got, err)
 	}
-	in.exec(t, `delete from artifacts_unrecorded`)
-	if got := in.pass(t, p); got.Orphans != 1 || in.held(t, key) {
-		t.Errorf("once recorded, the pass removed %+v, and the file is held %t", got, in.held(t, key))
+	p.Objects = in.store
+	if got := in.pass(t, p); got.Recorded != 1 || got.Orphans != 1 {
+		t.Fatalf("once the envelope reads, the pass removed %+v, and the run was to be recorded and the orphan handed over", got)
+	}
+	in.past(t)
+	in.pass(t, p)
+	if !in.held(t, key) || in.held(t, orphan) {
+		t.Errorf("a grace later the recorded file is held %t, the orphan %t", in.held(t, key), in.held(t, orphan))
 	}
 }
 
-// A pass cut short after handing an orphan to the collection and before collecting it, by a
-// controller that stopped leading, leaves a row the next leader's pass collects; and an orphan
-// referenced in between, by a result heard at last, stays.
-func TestAnOrphanHandedOverIsFinishedByTheNextPass(t *testing.T) {
+// A pass cut short after handing an orphan to the collection, by a controller that stopped leading,
+// leaves a row the next leader's pass collects in its time; and an orphan referenced in between, by
+// a result heard at last, stays.
+func TestAnOrphanHandedOverIsFinishedByTheNextLeader(t *testing.T) {
 	in := withInstallation(t)
 	_, first := in.aged(t, "handed over, then collected", 48*time.Hour)
 	second, kept := in.aged(t, "handed over, then referenced", 48*time.Hour)
@@ -277,17 +349,17 @@ func TestAnOrphanHandedOverIsFinishedByTheNextPass(t *testing.T) {
 		calls++
 		// The purges before the sweep each make one call on a store with nothing else to do, and
 		// the sweep one a namespace and one more: the collection's is refused.
-		if calls > 7 {
+		if calls > 8 {
 			return errors.New("another controller leads")
 		}
 		return nil
 	}
 	got, err := p.Pass(t.Context())
-	if err == nil || got.Orphans != 2 || got.Objects != 0 {
+	if err == nil || got.Orphans != 2 {
 		t.Fatalf("the pass cut short removed %+v and said %v", got, err)
 	}
-	if !in.held(t, first) || !in.held(t, kept) || in.count(t, `select count(*) from artifact_objects where refs = 0 and collectable_at is not null`) != 2 {
-		t.Fatal("the orphans handed over are not left as rows the collection takes, with their bytes")
+	if in.count(t, `select count(*) from artifact_objects where refs = 0 and collectable_at is not null`) != 2 {
+		t.Fatal("the orphans handed over are not left as rows the collection takes")
 	}
 
 	run := in.run(t)
@@ -301,6 +373,7 @@ func TestAnOrphanHandedOverIsFinishedByTheNextPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	in.past(t)
 	next := in.purger(0, 0)
 	if got := in.pass(t, next); got.Orphans != 0 || got.Objects != 1 || in.held(t, first) || !in.held(t, kept) {
 		t.Errorf("the next leader's pass removed %+v; the first orphan is held %t, the one referenced since %t", got, in.held(t, first), in.held(t, kept))

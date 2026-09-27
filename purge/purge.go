@@ -43,14 +43,16 @@
 // pass also walks the store, a batch of entries a call, a namespace's sha256 directory at a time
 // and never its logs, and hands the collection each file that no row names, no live artifact
 // names, no write holds and no envelope of a run still under way names, once its bytes are older
-// than the grace; the collection deletes it as any other. A round of the whole store may take many
-// passes, each going on from where the last stopped. A namespace whose v0.2 runs still wait for
-// their files to be recorded is not walked, since those files would be taken for orphans.
+// than the grace; the collection deletes it a grace later, as any other. A round of the whole store
+// may take many passes, each going on from where the last stopped. A namespace with a finished run
+// whose files are still to be recorded is not walked, since those files would be taken for
+// orphans.
 //
 // # What v0.2 left
 //
 // Backfill records the files v0.2 recorded nothing for, from the envelopes of the runs it finished,
-// and is what init and migrate call: see its comment.
+// and is what init and migrate call: see its comment. A pass records what they left, a batch of
+// runs a call, before the orphan sweep.
 package purge
 
 import (
@@ -103,6 +105,10 @@ type Purged struct {
 	// Uploads are the writes whose room had lapsed that were forgotten.
 	Uploads int
 
+	// Recorded are the finished runs whose artifact files were recorded, which v0.2 had left
+	// unrecorded: see Backfill.
+	Recorded int
+
 	// Orphans are the files of the store no row named that were handed to the collection, which
 	// deletes them among the Objects.
 	Orphans int
@@ -146,8 +152,10 @@ type Purger struct {
 	Passed  func(Purged)
 	Trouble func(error)
 
-	// walking is where the orphan sweep stands in the store, kept from one pass to the next.
-	walking walking
+	// recording is the run the recording of what v0.2 left stopped at, and walking where the
+	// orphan sweep stands in the store, both kept from one pass to the next.
+	recording db.Unrecorded
+	walking   walking
 }
 
 // Run passes at once and every Every after, until ctx is done.
@@ -175,8 +183,8 @@ func (p *Purger) Run(ctx context.Context) {
 	}
 }
 
-// Pass runs each purge in turn, then the orphan sweep and the collection, and answers what it
-// removed. A Purger passes once at a time.
+// Pass runs each purge in turn, then records what v0.2 left, then the orphan sweep and the
+// collection, and answers what it removed. A Purger passes once at a time.
 //
 // A purge that fails is said in the error and ends that purge's part of the pass, and the next
 // one goes on: an object store refusing to delete a log is no reason to leave references past
@@ -197,6 +205,7 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		{"the log purge", p.logs},
 		{"the log purge", p.logsGone},
 		{"the purge of lapsed writes", p.uploads},
+		{"the recording of the files v0.2 left", p.backfill},
 		{"the orphan sweep", p.orphans},
 		{"the collection", p.collect},
 	} {

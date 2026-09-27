@@ -48,8 +48,10 @@ func (w *walking) stop() {
 // are older than the grace. It answers full while the round has more to walk.
 //
 // Only a store that can be walked has orphans found in it, which the built-in one can. The logs
-// are never walked, and nothing is deleted here: the collection, which comes next in the pass,
-// deletes what it was handed, under the same locks and fences as any other object.
+// are never walked, and nothing is deleted here: the collection deletes what it was handed a grace
+// later, under the same locks and fences as any other object, a write that began before the
+// orphan was handed over having committed and holding it by then, as package db's orphans.go sets
+// out.
 func (p *Purger) orphans(ctx context.Context, out *Purged) (bool, error) {
 	store, ok := p.Objects.(artifact.Walkable)
 	if !ok {
@@ -126,8 +128,7 @@ func (p *Purger) adopt(ctx context.Context, namespace string, found []artifact.S
 		if named[d] {
 			continue
 		}
-		s := old[d]
-		orphans = append(orphans, db.Orphan{Digest: d, Size: s.Size, Written: s.Written})
+		orphans = append(orphans, db.Orphan{Digest: d, Size: old[d].Size})
 	}
 	return p.Pool.Orphaned(ctx, namespace, orphans)
 }

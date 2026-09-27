@@ -88,12 +88,13 @@
 // at a time rather than in one transaction. One controller at a time, asking the fence before
 // every call: a call a controller began before it lost its term still finishes, and every sweep is
 // safe to have done twice, but two controllers purging side by side would do all of it twice. A
-// pass also walks the object store, a batch of entries a call, going on from where the last pass
-// stopped, and hands the collection each file no row names, no write holds and no envelope of a
-// run under way names, once it is older than the grace: the outputs of attempts that failed or
-// were lost, and what v0.2 left. A pass that removed something says what in one line, and what
-// each pass removed is counted in the metrics; one that failed says why, holds nothing up, and is
-// taken up again by the next.
+// pass also records the artifact files of the finished runs init and migrate left unrecorded, and
+// walks the object store, a batch of entries a call, going on from where the last pass stopped,
+// handing the collection each file no row names, no write holds and no envelope of a run under
+// way names, once it is older than the grace, for it to be deleted a grace later: the outputs of
+// attempts that failed or were lost, and what v0.2 left. A pass that removed or recorded something
+// says what in one line, and what each pass removed is counted in the metrics; one that failed
+// says why, holds nothing up, and is taken up again by the next.
 //
 // # Metrics
 //

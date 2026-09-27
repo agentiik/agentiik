@@ -87,16 +87,16 @@ func (in *installation) run(t *testing.T) agk.RunID {
 	return id
 }
 
-// finish ends a run, and puts its retention a minute in the past where expired, a day ahead
-// otherwise.
+// finish ends a run as a decision of this release ends one, its files recorded, and puts its
+// retention a minute in the past where expired, a day ahead otherwise.
 func (in *installation) finish(t *testing.T, run agk.RunID, expired bool) {
 	t.Helper()
 	expires := "now() + interval '1 day'"
 	if expired {
 		expires = "now() - interval '1 minute'"
 	}
-	in.exec(t, `update runs set state = 'succeeded', finished_at = now() - interval '1 day', expires_at = `+expires+`
-	            where id = '`+string(run)+`'`)
+	in.exec(t, `update runs set state = 'succeeded', finished_at = now() - interval '1 day', expires_at = `+expires+`,
+	            files_recorded = true where id = '`+string(run)+`'`)
 }
 
 // put writes content to the store and answers its digest and key.
