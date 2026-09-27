@@ -71,7 +71,7 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 	}
 	fmt.Fprintln(e.Out, made.Enrolment.Link)
 	if made.User.Admin && !strings.HasPrefix(at.token, apiTokenPrefix) {
-		fmt.Fprintf(e.Out, "the bootstrap token works until %s has enrolled; then sign in as %s with agk login\n", login, login)
+		fmt.Fprintf(e.Out, "the bootstrap token works until %s has signed in; then sign in as %s with agk login\n", login, login)
 	}
 	return exitSucceeded
 }

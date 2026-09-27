@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -306,7 +307,12 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 			}
 			return wide.IssueChallenge(ctx, issued)
 		})
-		if err != nil {
+		var full *db.TooManyChallenges
+		switch {
+		case errors.As(err, &full):
+			tooManyCeremonies(w, full, now)
+			return
+		case err != nil:
 			fail(w, http.StatusInternalServerError, "the sign-in could not be started")
 			return
 		}
@@ -398,7 +404,10 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 		o.AuthenticatorSelection.UserVerification = verification(policy.userVerification)
 		return nil
 	})
+	var full *db.TooManyChallenges
 	switch {
+	case errors.As(err, &full):
+		tooManyCeremonies(w, full, now)
 	case ask.coded && (errors.Is(err, db.ErrNoEnrolmentCode) || errors.Is(err, db.ErrNoPrincipal)):
 		// A code that opens nothing, or whose user was removed between the code being read and
 		// the challenge being issued, which took the code with them: a sign-in refused, since a
@@ -416,6 +425,17 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 	default:
 		shownOnce(w, http.StatusOK, CeremonyOptions{Ceremony: ask.Ceremony, Options: o})
 	}
+}
+
+// tooManyCeremonies answers a ceremony refused because the installation keeps as many challenges
+// open as it may, db.ChallengesLive: 503 with Retry-After, the whole seconds until the oldest
+// lapses, rounded up, since a client asking again a moment early is refused again. Nothing was
+// written, and nothing is recorded: the ceremony did not start, and what refused it is the
+// installation's load rather than anybody's credential.
+func tooManyCeremonies(w http.ResponseWriter, full *db.TooManyChallenges, now time.Time) {
+	wait := max(full.FreeAt.Sub(now), time.Second)
+	w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+	fail(w, http.StatusServiceUnavailable, fmt.Sprintf("the installation has %d passkey ceremonies under way, as many as it keeps at once, and starts another once the oldest lapses, within %d minutes: try again then", db.ChallengesLive, int(db.ChallengeLife/time.Minute)))
 }
 
 // registrar is who a registration with no code is for: the user whose session the request

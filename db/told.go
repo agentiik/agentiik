@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
@@ -20,16 +21,19 @@ import (
 // "An administrator holds no implicit run:read_data. Reading another namespace's payloads means
 // granting themselves access first, which is audited and notifies the namespace's owner: a
 // notification in the owner's GET /api/v1/me, because an owner does not read the audit log, and the
-// people whose data it is should hear of it from the installation itself." The second kind, a
-// sign-in refused for a passkey's signature counter, is written by the passkey ceremonies, and read
-// here as the first is. The third, the break-glass path used, is told to every administrator, so
-// that the one way to a recovery code that no administrator vouches for is never taken silently.
+// people whose data it is should hear of it from the installation itself." So are a grant an
+// administrator writes there by the installation's power and a user an administrator puts in a group
+// holding a role there, each told with the act and who did it. The second kind, a sign-in refused for
+// a passkey's signature counter, is written by the passkey ceremonies, and read here as the first is.
+// The third, the break-glass path used, is told to every administrator, so that the one way to a
+// recovery code that no administrator vouches for is never taken silently.
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
-	// AdminAccessWidened is an administrator having written a grant in a namespace by the
-	// installation's power, or widened their own access there, giving a role to it or taking a
-	// deny from it, told to the namespace's owners.
+	// AdminAccessWidened is an administrator having widened access in a namespace: written a
+	// grant there by the installation's power, put somebody in a group holding a role there, or
+	// widened their own access there, giving a role to it or taking a deny from it. Told to the
+	// namespace's owners, with the act and who did it.
 	AdminAccessWidened = "admin_access_widened"
 
 	// PasskeyCounterRefused is a sign-in refused because a passkey's signature counter did not
@@ -40,6 +44,56 @@ const (
 	// agentiik-api recover, told to every administrator, the one recovered included.
 	BreakGlassRecovery = "break_glass_recovery"
 )
+
+// The acts an AdminAccessWidened notification tells, as the wire's $defs/notification names them.
+const (
+	// ActGranted is a grant or a deny an administrator wrote by the installation's power, or a
+	// role they gave their own access.
+	ActGranted = "granted"
+	// ActDenyLifted is a deny an administrator revoked from their own access.
+	ActDenyLifted = "deny_lifted"
+	// ActJoinedGroup is a user an administrator put in a group holding a role in the namespace,
+	// themselves or somebody else.
+	ActJoinedGroup = "joined_group"
+	// ActLeftGroup is an administrator taking themselves out of a group whose deny applied in the
+	// namespace.
+	ActLeftGroup = "left_group"
+	// ActGroupRemoved is an administrator removing a group they were in, whose deny applied in the
+	// namespace.
+	ActGroupRemoved = "group_removed"
+)
+
+// Widening is what an administrator did in a namespace that its owners are told of.
+type Widening struct {
+	// Grant is the grant written, the deny revoked, or the group's grant or deny a membership
+	// brought or took away, kept whole rather than referred to, since it may be revoked before its
+	// reader comes to read it, and what they are told is what was done.
+	Grant access.Grant
+
+	// Act is what was done, one of the Act constants, and By who did it, left out of those told,
+	// since telling somebody what they have just done tells them nothing.
+	Act string
+	By  string
+
+	// Member is the user put in the group, on ActJoinedGroup alone.
+	Member string
+
+	// At is when it was done, from which the 90 days it is kept are counted.
+	At time.Time
+}
+
+// check refuses a widening the table would refuse, before any row is written for it.
+func (what Widening) check() error {
+	switch {
+	case what.By == "":
+		return errors.New("db: a widening nobody did")
+	case !slices.Contains([]string{ActGranted, ActDenyLifted, ActJoinedGroup, ActLeftGroup, ActGroupRemoved}, what.Act):
+		return fmt.Errorf("db: a widening whose act is %q, and it is granted, deny_lifted, joined_group, left_group or group_removed", what.Act)
+	case (what.Member != "") != (what.Act == ActJoinedGroup):
+		return fmt.Errorf("db: a widening names the member put in a group where its act is joined_group, and only there, and this one's act is %s", what.Act)
+	}
+	return nil
+}
 
 // NotificationKept is how long a notification is kept from when it was written: "long enough to
 // reach someone back from leave, and bounded so that GET /api/v1/me does not grow for ever".
@@ -58,51 +112,55 @@ type Notification struct {
 	// At is when it happened, from which the 90 days it is kept are counted.
 	At time.Time
 
-	// Namespace and Grant are where an administrator widened their own access, and the grant as
-	// it was written, or the deny they revoked as it was, on AdminAccessWidened alone. It is kept
-	// whole rather than referred to, since it may be revoked before its reader comes to read it,
-	// and what they are told is what was done.
+	// Namespace, Grant, Act and By are where an administrator widened access, the grant as
+	// Widening keeps it, what they did and who they are, on AdminAccessWidened alone.
 	Namespace string
 	Grant     *access.Grant
+	Act       string
+	By        string
 
 	// Credential is the passkey whose assertion was refused, by its credential ID, on
 	// PasskeyCounterRefused alone.
 	Credential string
 
 	// Login is the administrator the break-glass path issued a recovery code, on
-	// BreakGlassRecovery alone, named rather than referred to, so that removing the account leaves
-	// what the others were told.
+	// BreakGlassRecovery, and the user put in a group, on AdminAccessWidened by ActJoinedGroup,
+	// named rather than referred to, so that removing the account leaves what the others were told.
 	Login string
 }
 
-// TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote in this
-// namespace by the installation's power or for their own access, or the deny g they took from
-// their own access, to each of the namespace's owners but actor, and answers who was told, by
-// name. What was done is told by when: a grant told at its granted_at was written then, and a deny
-// told later was taken away then.
+// TellOwners writes AdminAccessWidened, about what an administrator did in this namespace, to each
+// of the namespace's owners but the one who did it, and answers who was told, by name.
 //
 // "The owner told is the principal the namespace's record names. A namespace from before v0.3.0
 // names none: it becomes shared ... and every principal holding the owner role on it is told
-// instead", by a grant on the namespace, not expired at at, a deny beside it leaving the role held.
-// A group among them is told as each of its members, since a group reads nothing: one row for each,
-// so that one member dismissing it dismisses it for nobody else. A service account holding the role
-// is told as itself, since its token reads GET /api/v1/me as a user's does. actor is left out,
-// since telling somebody what they have just done tells them nothing.
+// instead", by a grant on the namespace, not expired at what.At, a deny beside it leaving the role
+// held. A group among them is told as each of its members, since a group reads nothing: one row for
+// each, so that one member dismissing it dismisses it for nobody else. A service account holding
+// the role is told as itself, since its token reads GET /api/v1/me as a user's does. Where that
+// reached nobody before the act, no owner on the record and nobody holding the role, or only a group
+// with no members, every administrator is told as well, suspended ones included, since each may be
+// the one who comes back to read it: an act that makes an owner of a namespace nobody owned, the
+// administrator themselves among others, is not told only to the owner it made. An administrator's
+// act goes untold only where they are the one owner there.
 //
-// It is written in the transaction that writes the grant, so that no administrator's grant commits
-// untold, and before the audit entry that records it, which is the last statement of the
-// transaction.
-func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at time.Time) ([]string, error) {
-	return tellOwners(ctx, n.tx, n.namespace, g, actor, at)
+// It is written in the transaction of the act, so that no act commits untold, and before the audit
+// entry that records it, which is the last statement of the transaction.
+func (n *NS) TellOwners(ctx context.Context, what Widening) ([]string, error) {
+	return tellOwners(ctx, n.tx, n.namespace, what)
 }
 
-// TellOwners writes what NS.TellOwners does, about g in the namespace its scope names, for a grant
+// TellOwners writes what NS.TellOwners does, in the namespace the grant's scope names, for a grant
 // the installation's handle writes, as Wide.GrantAccess does.
-func (w *Wide) TellOwners(ctx context.Context, g access.Grant, actor string, at time.Time) ([]string, error) {
-	return tellOwners(ctx, w.tx, g.Scope.Namespace, g, actor, at)
+func (w *Wide) TellOwners(ctx context.Context, what Widening) ([]string, error) {
+	return tellOwners(ctx, w.tx, what.Grant.Scope.Namespace, what)
 }
 
-func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, g access.Grant, actor string, at time.Time) ([]string, error) {
+func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, what Widening) ([]string, error) {
+	if err := what.check(); err != nil {
+		return nil, err
+	}
+	g := what.Grant
 	grant, err := json.Marshal(g)
 	if err != nil {
 		return nil, fmt.Errorf("db: grant %s could not be written into a notification: %w", g.ID, err)
@@ -122,6 +180,12 @@ func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, g access.Grant
 	if len(names) == 0 {
 		return []string{}, nil
 	}
+	// The grant this act wrote, which was not there before it: a grant granted, and no other, since
+	// a deny lifted or a membership changed wrote none.
+	written := ""
+	if what.Act == ActGranted {
+		written = g.ID
+	}
 	rows, err := tx.Query(ctx, `
 		with record as (select owner from namespaces where name = $1),
 		owners as (
@@ -138,13 +202,40 @@ func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, g access.Grant
 		  select m.login from owners o
 		    join groups g on g.principal = o.principal
 		    join group_members m on m.group_name = g.name
+		),
+		-- Who was told as the namespace stood before the act: without the grant just written,
+		-- and without the member just put in the group whose grant it is. An act that makes
+		-- somebody an owner of a namespace nobody owned is one the administrators hear of, since
+		-- the owner it made may be the one who acted.
+		owners_before as (
+		  select owner as principal from record where owner is not null
+		  union
+		  select principal from grants
+		   where namespace = $1 and workflow is null and role = 'owner' and id::text <> $4::text
+		     and (expires_at is null or expires_at > $2)
+		     and not exists (select from record where owner is not null)
+		),
+		told_before as (
+		  select principal from owners_before where principal not like 'group:%'
+		  union
+		  select m.login from owners_before o
+		    join groups g on g.principal = o.principal
+		    join group_members m on m.group_name = g.name
+		   where not (g.principal = $5::text and m.login = $6::text)
+		),
+		-- Nobody to tell before the act, and the administrators are told as well; the one who
+		-- acted among the owners is somebody, and leaves nobody else to tell.
+		readers as (
+		  select principal from told
+		  union
+		  select login from users where admin and not exists (select from told_before)
 		)
 		-- Each held for key share as the principal its notification refers to, in one order, so
 		-- that one removed since the owners were read, whose removal this waits for, is told
 		-- nothing rather than failing the act.
-		select p.id from principals p join told t on t.principal = p.id
+		select p.id from principals p join readers r on r.principal = p.id
 		 where p.id <> $3 order by p.id for key share of p`,
-		namespace, at, actor)
+		namespace, what.At, what.By, written, g.Principal, what.Member)
 	if err != nil {
 		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", namespace, err)
 	}
@@ -154,9 +245,9 @@ func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, g access.Grant
 	}
 	for _, recipient := range told {
 		if _, err := tx.Exec(ctx,
-			`insert into notifications (id, recipient, kind, at, namespace, access_grant)
-			 values ($1, $2, $3, $4, $5, $6)`,
-			ulid.New(), recipient, AdminAccessWidened, at, namespace, grant); err != nil {
+			`insert into notifications (id, recipient, kind, at, namespace, access_grant, act, acted_by, login)
+			 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			ulid.New(), recipient, AdminAccessWidened, what.At, namespace, grant, what.Act, what.By, nilIfEmpty(what.Member)); err != nil {
 			return nil, fmt.Errorf("db: %s could not be told of grant %s: %w", recipient, g.ID, err)
 		}
 	}
@@ -202,8 +293,8 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 		return nil, fmt.Errorf("db: the notifications of %s past their days could not be removed: %w", recipient, err)
 	}
 	rows, err := w.tx.Query(ctx, `
-		select id, recipient, kind, at, coalesce(namespace, ''), access_grant, coalesce(credential, ''),
-		       coalesce(login, '')
+		select id, recipient, kind, at, coalesce(namespace, ''), access_grant, coalesce(act, ''),
+		       coalesce(acted_by, ''), coalesce(credential, ''), coalesce(login, '')
 		  from notifications where recipient = $1
 		 order by at desc, id desc`, recipient)
 	if err != nil {
@@ -212,7 +303,7 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 	told, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Notification, error) {
 		var t Notification
 		var grant []byte
-		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Credential, &t.Login); err != nil {
+		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Act, &t.By, &t.Credential, &t.Login); err != nil {
 			return Notification{}, err
 		}
 		if grant != nil {
@@ -246,9 +337,9 @@ func (w *Wide) DismissNotification(ctx context.Context, recipient, id string, no
 
 // TellOwnersIn writes AdminAccessWidened in namespace, as NS.TellOwners writes it in its handle's,
 // from a transaction across the installation: a group's membership reaches every namespace its
-// grants and denies are in, and an administrator putting themselves in a group, or taking
-// themselves out of one, widens their own access in each of those that gives them something, or
-// took something from them.
-func (w *Wide) TellOwnersIn(ctx context.Context, namespace string, g access.Grant, actor string, at time.Time) ([]string, error) {
-	return (&NS{tx: w.tx, namespace: namespace}).TellOwners(ctx, g, actor, at)
+// grants and denies are in, and an administrator putting somebody in a group widens access in each
+// of those where it holds a role, as taking themselves out of one, or removing one they are in,
+// widens their own in each of those where it holds a deny.
+func (w *Wide) TellOwnersIn(ctx context.Context, namespace string, what Widening) ([]string, error) {
+	return (&NS{tx: w.tx, namespace: namespace}).TellOwners(ctx, what)
 }

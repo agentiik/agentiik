@@ -146,9 +146,9 @@ func TestATableReadAcrossTheInstallationShowsOneNamespaceItsOwnRows(t *testing.T
 		`insert into principals (id, kind) values ('finance/nightly', 'service_account'), ('team-ops/nightly', 'service_account')`,
 		`insert into service_accounts (namespace, name, created_by) values ('finance', 'nightly', 'alice'), ('team-ops', 'nightly', 'alice')`,
 		`insert into auth_policy (namespace, min_passkeys) values ('finance', 3), ('team-ops', 3)`,
-		`insert into notifications (id, recipient, kind, at, namespace, access_grant) values
-		   ('01M2AAAAAAAAAAAAAAAAAAAAA1', 'alice', 'admin_access_widened', now(), 'finance', '{}'),
-		   ('01M2AAAAAAAAAAAAAAAAAAAAA2', 'alice', 'admin_access_widened', now(), 'team-ops', '{}')`,
+		`insert into notifications (id, recipient, kind, at, namespace, access_grant, act, acted_by) values
+		   ('01M2AAAAAAAAAAAAAAAAAAAAA1', 'alice', 'admin_access_widened', now(), 'finance', '{}', 'granted', 'carol'),
+		   ('01M2AAAAAAAAAAAAAAAAAAAAA2', 'alice', 'admin_access_widened', now(), 'team-ops', '{}', 'granted', 'carol')`,
 		`insert into notifications (id, recipient, kind, at, credential) values
 		   ('01M2AAAAAAAAAAAAAAAAAAAAA3', 'alice', 'passkey_counter_refused', now(), 'c3ZIeQ')`,
 		`insert into audit_log (actor, action, namespace, target, result, detail) values
@@ -197,8 +197,8 @@ func TestATableReadAcrossTheInstallationShowsOneNamespaceItsOwnRows(t *testing.T
 	for _, c := range []struct{ what, stmt string }{
 		{"an audit entry", `insert into audit_log (actor, action, namespace, target, result, detail)
 			values ('alice', 'run.cancel', 'team-ops', 'r4', 'done', '{}')`},
-		{"a notification", `insert into notifications (id, recipient, kind, at, namespace, access_grant)
-			values ('01M2AAAAAAAAAAAAAAAAAAAAA4', 'alice', 'admin_access_widened', now(), 'team-ops', '{}')`},
+		{"a notification", `insert into notifications (id, recipient, kind, at, namespace, access_grant, act, acted_by)
+			values ('01M2AAAAAAAAAAAAAAAAAAAAA4', 'alice', 'admin_access_widened', now(), 'team-ops', '{}', 'granted', 'carol')`},
 		{"a namespace's policy", `update auth_policy set min_passkeys = 4 where namespace = 'team-ops'`},
 		{"a service account", `update service_accounts set created_by = 'mallory' where namespace = 'team-ops'`},
 	} {

@@ -52,14 +52,51 @@ type Challenge struct {
 // one, so that the sweep outruns what lapses, since every challenge lapses once and is issued once.
 const lapsedSwept = 16
 
+// ChallengesLive is how many challenges may be open at once across the installation. Anybody may
+// start a ceremony, and each keeps a row for five minutes, so without a bound whoever can send
+// requests fills the table as fast as they send them. Ten thousand is far more ceremonies than an
+// installation's people start in five minutes, and a table that small is read and swept in no time.
+// The bound is the installation's alone, with none per address: what it keeps is the table, which a
+// flood from many addresses fills as surely as one from one.
+const ChallengesLive = 10_000
+
+// TooManyChallenges is a challenge refused because ChallengesLive challenges are open. FreeAt is
+// when the oldest of them lapses, the first moment another fits.
+type TooManyChallenges struct {
+	FreeAt time.Time
+}
+
+func (e *TooManyChallenges) Error() string {
+	return fmt.Sprintf("db: %d challenges are open, as many as the installation keeps, until %s", ChallengesLive, e.FreeAt.UTC().Format(time.RFC3339))
+}
+
 // IssueChallenge keeps a challenge until it is taken or its minutes pass, and removes some of those
 // whose minutes passed before c was issued, so that the table holds what the last few minutes of
-// ceremonies started and little older.
+// ceremonies started and little older. Where ChallengesLive are open as c is issued, it writes
+// nothing and is *TooManyChallenges.
+//
+// The open challenges are counted in the order they lapse, and no further than the bound, so that
+// a refusal reads ChallengesLive entries of the index and no more, and learns from the first when
+// one lapses. Two ceremonies started at once may both count one under the bound and both be kept,
+// so the table may hold a few more than it, as many as there are transactions starting a ceremony
+// at the same moment, which the API's connections bound: the bound is there to keep a flood from
+// filling the table, which a handful over it does not.
 //
 // The removal skips a row another transaction holds rather than waiting for it: two ceremonies
 // started at once each find the same lapsed rows, and one waiting on the other's removal, or the
 // two taking them in two orders, would make ceremonies anybody may start wait on each other.
 func (w *Wide) IssueChallenge(ctx context.Context, c Challenge) error {
+	var open int
+	var first *time.Time
+	if err := w.tx.QueryRow(ctx,
+		`select count(*), min(expires_at) from
+		   (select expires_at from webauthn_challenges where expires_at > $1 order by expires_at limit $2) o`,
+		c.IssuedAt, ChallengesLive).Scan(&open, &first); err != nil {
+		return fmt.Errorf("db: the open challenges could not be counted: %w", err)
+	}
+	if open >= ChallengesLive && first != nil {
+		return &TooManyChallenges{FreeAt: *first}
+	}
 	if _, err := w.tx.Exec(ctx,
 		`delete from webauthn_challenges
 		  where challenge in (select challenge from webauthn_challenges where expires_at <= $1

@@ -162,6 +162,9 @@ const (
 
 	// A grant that is not there, or not at this scope, or not the caller's to revoke.
 	noSuchGrant = "no such grant here, or not yours"
+
+	// A deny of grant:manage written on a workflow.
+	workflowGrantManageDenied = "a deny of grant:manage on a workflow is refused: it takes from whoever it names the permission that revokes it there, and nobody locks a namespace's owners out of a workflow"
 )
 
 // grantLocksOut is a grant that would leave no administrator able to sign in, in namespace.
@@ -242,6 +245,13 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// A deny of grant:manage on a workflow takes from whoever it names the one permission that
+	// revokes it there, a namespace's owners included, so that only an administrator could lift
+	// it: nobody locks a namespace's owners out of one of its workflows.
+	if at.Workflow != "" && g.Deny == access.GrantManage {
+		fail(w, http.StatusUnprocessableEntity, workflowGrantManageDenied)
+		return
+	}
 	if q.ExpiresAt != nil {
 		ends := q.ExpiresAt.UTC().Truncate(time.Microsecond)
 		if !ends.After(now) {
@@ -282,7 +292,7 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 		}
 		detail := grantDetail(g)
 		if Administering(r) || (g.Role != "" && own(g.Principal)) {
-			told, err := wide.TellOwners(ctx, g, string(who), now)
+			told, err := wide.TellOwners(ctx, db.Widening{Grant: g, Act: db.ActGranted, By: string(who), At: now})
 			if err != nil {
 				return err
 			}
@@ -390,7 +400,9 @@ func (s *SharingAPI) revoke(w http.ResponseWriter, r *http.Request, who Principa
 		}
 		detail := grantDetail(gone)
 		if gone.Deny != "" && own(gone.Principal) {
-			told, err := n.TellOwners(ctx, gone, string(who), s.now().UTC().Truncate(time.Microsecond))
+			told, err := n.TellOwners(ctx, db.Widening{
+				Grant: gone, Act: db.ActDenyLifted, By: string(who), At: s.now().UTC().Truncate(time.Microsecond),
+			})
 			if err != nil {
 				return err
 			}

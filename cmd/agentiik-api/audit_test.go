@@ -55,7 +55,6 @@ var recordsNothing = map[string]string{
 	"POST /api/v1/me/totp":                 "a TOTP generator started counts for nothing until POST /api/v1/me/totp/confirm enrols it, which is recorded",
 	"POST /api/v1/auth/sign-out":           "a session is no credential: a sign-out ends one and gives nobody anything",
 	"DELETE /api/v1/me/notifications/{id}": "a notification is its reader's copy of an act the log recorded, and dismissing it changes no access",
-	"POST /api/v1/runners":                 "a machine joining with a join token, whose issue join_token.issue recorded, and which the inventory keeps with when it joined",
 	"POST /api/v1/runners/heartbeat":       "a runner's own traffic under its credential, which no principal does",
 	"POST /api/v1/runners/rotate":          "a runner's own traffic under its credential, which no principal does",
 	"POST /api/v1/tasks/redeem":            "a runner's own traffic under its credential, which no principal does",
@@ -492,8 +491,9 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	w = s.ask("POST /api/v1/runner-pools/{pool}/join-tokens", "/api/v1/runner-pools/dmz/join-tokens", carol, api.Issue{Labels: []string{"zone=dmz"}}, http.StatusCreated)
 	issued := s.answer(w)["join_token"].(map[string]any)
 	s.holds("POST /api/v1/runner-pools/{pool}/join-tokens", "join_token.issue carol "+issued["id"].(string)+" - done")
-	joined := s.act("POST /api/v1/runners", "/api/v1/runners", actor{}, aMachine(issued["token"].(string)), http.StatusCreated)
+	joined := s.ask("POST /api/v1/runners", "/api/v1/runners", actor{}, aMachine(issued["token"].(string)), http.StatusCreated)
 	runner := s.answer(joined)["runner"].(string)
+	s.holds("POST /api/v1/runners", "runner.join carol "+runner+" - done")
 	s.act("POST /api/v1/runners/{runner}/drain", "/api/v1/runners/"+runner+"/drain", carol, `{"reason":"moving racks"}`, http.StatusOK,
 		"runner.drain carol "+runner+" - done")
 	s.act("POST /api/v1/runners/{runner}/revoke", "/api/v1/runners/"+runner+"/revoke", carol, `{"reason":"moved"}`, http.StatusOK,

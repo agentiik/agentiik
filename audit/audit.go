@@ -42,8 +42,8 @@ import (
 )
 
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
-// cancellation, secret write, runner policy change, runner drain and revocation, and namespace
-// changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
+// cancellation, secret write, runner policy change, a runner joining, its drain and revocation, and
+// namespace changes; and from v0.3.0 the identity and access events: users, their credentials, enrolment
 // links and recovery codes, the sign-ins that succeed and fail, groups and their members, service
 // accounts, API tokens, grants and denies, the authentication policy and the end of the bootstrap.
 // Approval arrives with the wait step in v0.8.0.
@@ -63,6 +63,10 @@ const (
 	// which lets one machine into a pool with a set of labels.
 	RunnerPoolCreate = "runner_pool.create"
 	JoinTokenIssue   = "join_token.issue"
+	// RunnerJoin is a machine joining a pool with a join token, POST /api/v1/runners, recorded on
+	// the installation by whoever issued the token, since the machine is no principal and the
+	// token is how somebody let it in, with the runner as its target and its pool and labels.
+	RunnerJoin = "runner.join"
 	// RunnerDrain and RunnerRevoke are POST /api/v1/runners/{runner}/drain and /revoke.
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
@@ -77,8 +81,9 @@ const (
 	// recorded in its namespace with whom, where and what. The first written is a namespace's
 	// owner's, which its creation writes. GrantDelete is one revoked, recorded as it was. Either,
 	// where the namespace's owners were told of it, an administrator's grant or a widening of their
-	// own access, names who was told as notified; so do GroupMemberAdd, GroupMemberRemove and
-	// GroupDelete where an administrator widened their own access by one, by namespace.
+	// own access, names who was told as notified; so do GroupMemberAdd where a user was put in a
+	// group holding a role, and GroupMemberRemove and GroupDelete where an administrator widened
+	// their own access by one, by namespace.
 	GrantCreate = "grant.create"
 	GrantDelete = "grant.delete"
 
