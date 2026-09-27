@@ -409,7 +409,7 @@ func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners
 		return
 	}
 	h(w, r, Caller{
-		Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners, standings: standings,
+		Principal: as.Principal, Token: as.Token, ProvedAt: as.ProvedAt, scope: as.Scope, owners: owners, standings: standings,
 		allow: func(ctx context.Context, what Permission, over Target) (bool, error) {
 			return rt.allow(ctx, as, what, over)
 		},

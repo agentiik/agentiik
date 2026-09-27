@@ -414,8 +414,10 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // runner's own routes by the runner credential alone, and the object store by the signature in the
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
 // namespace it owns", which no permission names, and so are the service accounts, "of the namespaces
-// the caller owns", and GET /api/v1/me with the caller's notifications. Sharing takes grant:manage
-// at its scope, and writing a grant an administrator too.
+// the caller owns", and GET /api/v1/me with the caller's notifications, and so are the caller's
+// credentials. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
+// The installation's authentication policy is read by whoever is signed in and a namespace's by
+// whoever reads its record, and "PUT is an administrator's" for both.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -517,6 +519,12 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/me/totp":                                           own,
 		"POST /api/v1/me/totp/confirm":                                   own,
 		"DELETE /api/v1/me/totp":                                         own,
+		"GET /api/v1/me/credentials":                                     own,
+		"DELETE /api/v1/me/credentials/{id}":                             own,
+		"GET /api/v1/auth/policy":                                        own,
+		"PUT /api/v1/auth/policy":                                        administrator,
+		"GET /api/v1/{namespace}/auth/policy":                            members,
+		"PUT /api/v1/{namespace}/auth/policy":                            administrator,
 		"POST /api/v1/auth/sign-out":                                     public,
 		"GET /auth/sign-in":                                              public,
 		"GET /auth/enrol":                                                public,

@@ -31,7 +31,8 @@ import (
 // address; hashing waits its turn; and a TOTP code is accepted one step either side and never twice.
 
 // passwordsOf is an installation serving the password sign-in, the passkey ceremonies, GET
-// /api/v1/me and the API tokens on https://agentiik.example.com, on a clock the test moves. alice
+// /api/v1/me, the API tokens, the authentication policy and the caller's credentials on
+// https://agentiik.example.com, on a clock the test moves. alice
 // holds a password; bob a password and a TOTP generator; carol a password and a passkey; dave, who
 // is suspended, a password; and erin nothing. alice holds a grant in finance.
 type passwordsOf struct {
@@ -108,6 +109,12 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewCredentials(rt, api.CredentialOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt
@@ -306,11 +313,13 @@ func TestAPasswordOpensAFullSessionWhereThePolicyIsMet(t *testing.T) {
 }
 
 // Where a passkey is required, the defaults, a password opens a session that enrols passkeys and
-// nothing else for an account holding none: it reads nothing and mints no token, as a session an
-// enrolment link opened, and is told apart from one by not being opened by a code. A passkey
-// registered from it lifts the confinement at the next request, with no second sign-in; an account
-// holding a passkey signs in to a full session from the start.
-func TestAPasswordOpensASessionThatOnlyEnrolsUntilAPasskeyIsHeld(t *testing.T) {
+// nothing else until its account holds min_passkeys the policy accepts: it reads nothing and mints
+// no token, as a session an enrolment link opened, and is told apart from one by not being opened by
+// a code. A first passkey registered from it leaves it confined, one of the two min_passkeys asks
+// for; the second takes the password, recorded as credential.remove, and the session it opened goes
+// with it, since the account signs in with its passkeys from then on. An account holding one passkey
+// of two signs in to a session that only enrols, and with min_passkeys at one to a full one.
+func TestAPasswordOpensASessionThatOnlyEnrolsUntilMinPasskeysAreHeld(t *testing.T) {
 	in := somePasswords(t)
 	c := in.signedIn(t, "alice", api.SessionEnrolment)
 
@@ -330,20 +339,34 @@ func TestAPasswordOpensASessionThatOnlyEnrolsUntilAPasskeyIsHeld(t *testing.T) {
 		t.Errorf("%d sign-ins to a session that only enrols are recorded", n)
 	}
 
-	// The registration ceremony, from that session, with no code.
+	// The registration ceremony, from that session, with no code, on two devices.
 	ceremonies := ceremonies{pool: in.pool, super: in.super, clock: in.clock, h: in.h}
-	browser := newBrowser()
-	made, _, err := browser.Create(ceremonies.options(t, `{"ceremony":"registration"}`, c))
-	if err != nil {
-		t.Fatal(err)
+	for i, label := range []string{"phone", "laptop"} {
+		made, _, err := newBrowser().Create(ceremonies.options(t, `{"ceremony":"registration"}`, c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := ceremonies.verify(t, "registration", made, label, "", c); w.Code != http.StatusOK {
+			t.Fatalf("registering a passkey from the session answered %d %s", w.Code, w.Body)
+		}
+		code, body := in.me(t, c)
+		if i == 0 && code != http.StatusForbidden {
+			t.Errorf("once alice holds one passkey of two, GET /api/v1/me with the same session answered %d %s", code, body)
+		}
+		if i == 1 && code != http.StatusUnauthorized {
+			t.Errorf("once alice holds two passkeys of two, the session her password opened answered %d %s", code, body)
+		}
 	}
-	if w := ceremonies.verify(t, "registration", made, "phone", "", c); w.Code != http.StatusOK {
-		t.Fatalf("registering a passkey from the session answered %d %s", w.Code, w.Body)
+	if n := in.count(t, `select count(*) from credentials where login = 'alice' and type = 'password'`); n != 0 {
+		t.Errorf("alice still holds her password beside two passkeys")
 	}
-	if code, body := in.me(t, c); code != http.StatusOK {
-		t.Errorf("once alice holds a passkey, GET /api/v1/me with the same session answered %d %s", code, body)
+	if n := in.count(t, `select count(*) from audit_log where action = 'credential.remove' and actor = 'alice' and target = 'alice-password'
+	                       and detail::jsonb->>'reason' like 'the account holds min_passkeys%'`); n != 1 {
+		t.Errorf("%d removals of alice's password are recorded", n)
 	}
 
+	in.signedIn(t, "carol", api.SessionEnrolment)
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", MinPasskeys: 1})
 	in.signedIn(t, "carol", api.SessionFull)
 }
 
@@ -801,9 +824,10 @@ func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
 
 // Where device_bound_only applies, a synced passkey signs nobody in, so it does not meet a passkey
 // required either: a password opens a session that only enrols for an account holding no other,
-// and a full one once it holds a device-bound one.
+// and a full one once it holds a device-bound one, min_passkeys being one here.
 func TestASyncedPasskeyDoesNotMeetARequiredOneWhereOnlyDeviceBoundCount(t *testing.T) {
 	in := somePasswords(t)
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", MinPasskeys: 1})
 	bound := true
 	in.tighten(t, db.AuthPolicy{DeviceBoundOnly: &bound})
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {

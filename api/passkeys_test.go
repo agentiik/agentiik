@@ -27,8 +27,8 @@ import (
 // ceremony owes.
 
 // ceremonies is an installation with no user yet, its bootstrap token set, serving the user routes,
-// the passkey ceremonies and the password routes on https://agentiik.example.com, on a clock the
-// test moves.
+// the passkey ceremonies, the password routes and the authentication policy on
+// https://agentiik.example.com, on a clock the test moves.
 type ceremonies struct {
 	pool      *db.Pool
 	super     string
@@ -74,6 +74,9 @@ func ceremoniesOn(t *testing.T, publicURL string) ceremonies {
 		Pool: pool, PublicURL: publicURL, Identify: p.Identify, Now: clock,
 		Trouble: func(err error) { t.Errorf("trouble: %s", err) },
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt

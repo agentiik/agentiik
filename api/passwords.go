@@ -43,15 +43,16 @@ import (
 // # The session
 //
 // A password opens a session, recorded as opened by the password, which is full where the account's
-// policy is satisfied and enrols passkeys and nothing else where the policy requires a passkey the
-// account does not hold yet: "enrols passkeys, nothing else: cannot read a workflow, start a run or
-// mint a token". Which of the two is not written anywhere: it is derived at every request from the
-// credential that opened the session and the policy that applies then (Principals.identifySession),
-// so that a policy changed, or a first passkey enrolled from the session, applies from the next
-// request. The answer says which it was when the session opened.
+// policy is satisfied and enrols passkeys and nothing else where the policy requires a passkey and
+// the account holds fewer than min_passkeys the policy accepts: "enrols passkeys, nothing else:
+// cannot read a workflow, start a run or mint a token". Which of the two is not written anywhere: it
+// is derived at every request from the credential that opened the session and the policy that
+// applies then (Principals.identifySession), so that a policy changed applies from the next request.
+// The answer says which it was when the session opened.
 //
 // A registration from such a session is what it is for, and the passkey ceremonies read it themselves
-// for that; it opens no other session, and the one it was made from is full from the next request.
+// for that; it opens no other session. The passkey that brings the account to min_passkeys takes the
+// password, and the session with it: the account signs in with its passkeys from then on (policy.go).
 // Setting the password that opened it is the one other thing it may do (passwords_set.go), which
 // reads it itself as well. A sign-in is a sign-in, so the first one gives the user their personal
 // namespace whatever the session may do.
@@ -155,9 +156,6 @@ const (
 	// hashingBusy is a sign-in that waited too long for its turn to hash.
 	hashingBusy = "this installation is checking too many passwords at once to check this one in time: try again in a moment"
 )
-
-// passwordSetting is the setting passwordsForbidden names.
-const passwordSetting = "password"
 
 // NewPasswords registers the password sign-in on a router.
 func NewPasswords(rt *Router, o PasswordOptions) (*PasswordAPI, error) {
@@ -265,62 +263,6 @@ type SignedIn struct {
 	Session string `json:"session"`
 }
 
-// passwordPolicy is what the policy that applies to one account says of passwords and of the
-// passkeys that stand for them: whether passwords are forbidden, whether a passkey is required,
-// whether it must be device-bound, and how many the password may be removed beside, each the
-// stricter of the installation's and that of every namespace the account holds a grant in.
-type passwordPolicy struct {
-	forbidden       bool
-	passkeyRequired bool
-	deviceBoundOnly bool
-	minPasskeys     int
-}
-
-// passkeys counts the passkeys among held the policy accepts, a synced one counting for nothing
-// where device_bound_only applies, since it signs nobody in there.
-func (p passwordPolicy) passkeys(held []db.Credential) int {
-	n := 0
-	for _, c := range held {
-		if c.Type == db.CredentialPasskey && !(p.deviceBoundOnly && c.BackupEligible) {
-			n++
-		}
-	}
-	return n
-}
-
-// enrolling says whether a session a password opened for an account holding held may only enrol:
-// where a passkey is required and it holds none the policy accepts, since the password would
-// otherwise be the way round the requirement.
-func (p passwordPolicy) enrolling(held []db.Credential) bool {
-	return p.passkeyRequired && p.passkeys(held) == 0
-}
-
-// passwordPolicyOf is the policy that applies to login's password. On an installation addressed by
-// an IP address, where a browser runs no passkey ceremony, it is passwords allowed and no passkey
-// required, whatever the stored policy says, as the page says the API applies it there.
-func passwordPolicyOf(ctx context.Context, wide *db.Wide, login string, now time.Time, ipAddressed bool) (passwordPolicy, error) {
-	if ipAddressed {
-		return passwordPolicy{}, nil
-	}
-	installation, tightening, err := policiesOf(ctx, wide, login, now)
-	if err != nil {
-		return passwordPolicy{}, err
-	}
-	p := passwordPolicy{
-		forbidden:       installation.Password == "forbidden",
-		passkeyRequired: installation.Passkey == "required",
-		deviceBoundOnly: installation.DeviceBoundOnly != nil && *installation.DeviceBoundOnly,
-		minPasskeys:     installation.MinPasskeys,
-	}
-	for _, tightened := range tightening {
-		p.forbidden = p.forbidden || tightened.Password == "forbidden"
-		p.passkeyRequired = p.passkeyRequired || tightened.Passkey == "required"
-		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
-		p.minPasskeys = max(p.minPasskeys, tightened.MinPasskeys)
-	}
-	return p, nil
-}
-
 // account is what a password sign-in reads of the account a login names: whether a user holds it,
 // their credentials, their password and their TOTP generator among them where they hold one, and the
 // policy that applies to them.
@@ -330,7 +272,7 @@ type account struct {
 	held     []db.Credential
 	password db.Credential
 	totp     db.Credential
-	policy   passwordPolicy
+	policy   accountPolicy
 }
 
 // readAccount reads it, the user as user reads them, first: db.Wide.User, or HoldUser to hold their
@@ -347,7 +289,7 @@ func (s *PasswordAPI) readAccount(ctx context.Context, wide *db.Wide, login stri
 	default:
 		a.exists = true
 	}
-	if a.policy, err = passwordPolicyOf(ctx, wide, login, now, s.ipAddressed); err != nil || !a.exists {
+	if a.policy, err = policyFor(ctx, wide, login, now, s.ipAddressed); err != nil || !a.exists {
 		return a, err
 	}
 	if a.held, err = wide.CredentialsOf(ctx, login); err != nil {
@@ -431,7 +373,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		fail(w, http.StatusInternalServerError, "the sign-in could not be checked")
 		return
 	}
-	if a.policy.forbidden {
+	if a.policy.passwordsForbidden {
 		asked = true
 		s.refuse(r, ask.Login, address, "passwords are forbidden by the policy that applies to the account", now)
 		failSetting(w, http.StatusForbidden, passwordsForbidden, passwordSetting)
@@ -512,7 +454,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 			return &refusal{reason: "the account was removed"}
 		case held.user.Suspended:
 			return &refusal{reason: "the account is suspended"}
-		case held.policy.forbidden:
+		case held.policy.passwordsForbidden:
 			return errForbidden
 		case held.password.ID != a.password.ID || held.password.PasswordHash != a.password.PasswordHash:
 			return &refusal{reason: "the password was changed or removed during the sign-in"}
