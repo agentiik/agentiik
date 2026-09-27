@@ -234,7 +234,17 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go d.run(l, run, c)
+	// A daemon answers a start once the container's process is running, so this one
+	// answers once the goroutine standing in for that process is about to call the
+	// test's function. Answered sooner, a container killed and started again at once
+	// could have its second run's function called before its first run's, each then
+	// standing in for the other: the killed run's late return would end the next.
+	calling := make(chan struct{})
+	go func() {
+		close(calling)
+		d.run(l, run, c)
+	}()
+	<-calling
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -158,6 +158,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds every record a person signs in with or through, credentials, sessions and enrolment codes, refused to a service account; a sign-in path added later joins it.
 - The tests, CI and `e2e` run PostgreSQL 18, and a job upgrades with `postgres-upgrade` a cluster the official 17 image wrote, starts 18 on it, and checks what it refuses and what it recovers from.
 - A test holds that no file the module ships, the migrations and what `//go:embed` carries included, imports a mail package, requires a module for mail, or holds an SMTP transport, `sendmail`, a `mailto:` link, the word email or a mail provider's name.
+- The fake Docker daemon answers a start once the function standing in for the container's process is being called, as a daemon answers once the process runs, so a container killed and started again at once no longer has its second run's function called before its first's.
 
 ### agk
 
