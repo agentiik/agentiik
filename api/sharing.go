@@ -35,11 +35,11 @@ import (
 // Revoking is effective "from the next request and the next run creation", which nothing here has
 // to do: Principals reads a principal's grants at every request.
 //
-// A grant carrying a role brings who it names under the namespace's authentication policy, so it is
-// written in a transaction of the installation's, which reads who can sign in across every
-// namespace, and refused where it would leave no administrator able to, as a policy changed is
-// (keepAnAdministrator): the only administrator given a role where passwords are forbidden would
-// find the one they sign in with refused at their next sign-in.
+// A grant carrying a role brings who it names under the namespace's authentication policy, so a grant
+// is written in a transaction of the installation's, which reads who can sign in across every
+// namespace, and one carrying a role is refused where it would leave no administrator able to, as a
+// policy changed is (keepAnAdministrator): the only administrator given a role where passwords are
+// forbidden would find the one they sign in with refused at their next sign-in.
 
 // GrantRequest is a grant or a deny to write at the scope the route names: openapi.json's
 // grantCreate, one principal and exactly one of a role and a denied permission, with an optional

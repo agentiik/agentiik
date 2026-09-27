@@ -227,7 +227,9 @@ const (
 	// bootstrap state. A token, a session or a passkey names its principal before any namespace is
 	// in question, and administering them is the installation's business rather than a namespace's. A user's first sign-in creates their personal namespace
 	// in the same transaction, so that no session opens without it and none is made for a sign-in
-	// that failed.
+	// that failed. A grant is written through it too, since whether an administrator can still
+	// sign in once a role it gives applies is read from their grants in every namespace, in the
+	// transaction that writes it.
 	Identity Reason = "who a request is from, and the principals and credentials that say so"
 
 	// Authorisation is what one principal holds across the namespaces: the grants of a principal
