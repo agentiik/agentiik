@@ -30,9 +30,9 @@ import (
 //
 // A code is agkcode_ and 256 bits, kept as its SHA-256, single use and good for a minute, and bound
 // to the challenge it was minted against and to who signed in with which credential. The exchange
-// takes it before anything else, so that a code is spent by its first presentation whatever that
-// presentation carries, and a code, a verifier or a principal that does not hold is one 401 with one
-// sentence, as a token that opens nothing is.
+// takes it once the request holds to its schema and before anything else, so that a code is spent
+// by the first presentation the schema accepts, whatever verifier it carries, and a code, a verifier
+// or a principal that does not hold is one 401 with one sentence, as a token that opens nothing is.
 //
 // What the exchange mints is decided when it is asked, as what a session may do is decided at each
 // request: a code a password minted where the policy has since come to require a passkey the

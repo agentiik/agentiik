@@ -43,16 +43,23 @@ func pkce(t *testing.T) (verifier, challenge string) {
 	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// exchanging is passwordsOf serving the exchange too.
+// exchanging is passwordsOf serving the exchange too, where passkeys are optional.
 func exchanging(t *testing.T) passwordsOf {
 	t.Helper()
-	in := somePasswords(t)
+	in := exchangingAt(t, "https://agentiik.example.com")
+	in.policy(t, "allowed", "optional")
+	return in
+}
+
+// exchangingAt is passwordsOf on publicURL, serving the exchange too.
+func exchangingAt(t *testing.T, publicURL string) passwordsOf {
+	t.Helper()
+	in := passwordsAt(t, publicURL, false)
 	if _, err := api.NewExchange(in.h.(*api.Router), api.ExchangeOptions{
 		Pool: in.pool, PublicURL: in.origin, Now: func() time.Time { return *in.clock },
 	}); err != nil {
 		t.Fatal(err)
 	}
-	in.policy(t, "allowed", "optional")
 	return in
 }
 
@@ -150,9 +157,10 @@ func TestAPasswordSignInForAgkLoginHandsItACodeTradedForAToken(t *testing.T) {
 	}
 }
 
-// A code is spent by its first presentation, whatever it carries: presented with a verifier that is
-// not the one its challenge was made of, it opens nothing, and nor does it afterwards with the right
-// one, so that whoever saw it on the way cannot try again, and agk, told so, signs in again.
+// A code is spent by the first presentation the schema accepts, whatever verifier it carries:
+// presented with one that is not the one its challenge was made of, it opens nothing, and nor does
+// it afterwards with the right one, so that whoever saw it on the way cannot try again, and agk,
+// told so, signs in again.
 func TestACodeIsSpentByAVerifierThatIsNotItsOwn(t *testing.T) {
 	in := exchanging(t)
 	code, verifier := in.handedOff(t, "alice")
@@ -301,6 +309,18 @@ func TestAPolicyChangedSinceTheSignInDecidesWhatTheCodeMints(t *testing.T) {
 	}
 }
 
+// On an installation addressed by an IP address, where no passkey can be used, a password is how
+// agk login signs in: the policy is applied with passwords allowed and no passkey required, as the
+// sign-in applied it, whatever the stored policy says, and the code mints a token.
+func TestAnInstallationAddressedByAnIPAddressTradesAPasswordsCode(t *testing.T) {
+	in := exchangingAt(t, "https://192.0.2.10")
+	in.policy(t, "allowed", "required")
+	code, verifier := in.handedOff(t, "alice")
+	if got := issued(t, exchange(t, in.h, code, verifier, "x")); got.APIToken.Principal != "alice" {
+		t.Errorf("the code minted %+v", got.APIToken)
+	}
+}
+
 // A password sign-in whose session may only enrol hands agk login no code: its answer carries no
 // redirect_to and nothing is kept, since such a session "cannot mint a token".
 func TestASessionThatMayOnlyEnrolIsHandedNoCode(t *testing.T) {
@@ -432,6 +452,66 @@ func TestAPasskeySignInForAgkLoginHandsItACode(t *testing.T) {
 	token := issued(t, sent(t, in.h, "POST", "/api/v1/auth/exchange", "", string(body)))
 	if token.APIToken.Principal != "alice" {
 		t.Errorf("the code minted %+v", token.APIToken)
+	}
+
+	// terminal is held to its grammar here as on the password route, before anything is verified
+	// or kept.
+	for _, handedOn := range []map[string]string{
+		{"redirect_uri": "http://localhost:53682/callback", "code_challenge": challenge},
+		{"redirect_uri": "http://evil.example/callback", "code_challenge": challenge},
+		{"redirect_uri": loopback, "code_challenge": "short"},
+	} {
+		got, err := browser.Get(in.options(t, `{"ceremony":"assertion"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		asserting, _ := json.Marshal(map[string]any{"ceremony": "assertion", "credential": got, "terminal": handedOn})
+		if w := in.call(t, "POST", "/api/v1/auth/passkey/verify", string(asserting), ""); w.Code != http.StatusBadRequest {
+			t.Errorf("a passkey sign-in with terminal %v answered %d %s", handedOn, w.Code, w.Body)
+		}
+	}
+	if n := in.count(t, `select count(*) from exchange_codes`); n != 0 {
+		t.Errorf("%d codes are kept once the one minted was traded and the others refused", n)
+	}
+}
+
+// A code a synced passkey minted mints no token once device_bound_only applies to its account, as
+// the session beside it opens nothing from then on: a 403 naming the setting, as the sign-in would
+// be answered.
+func TestACodeASyncedPasskeyMintedIsHeldToDeviceBoundOnly(t *testing.T) {
+	in := someCeremonies(t)
+	if _, err := api.NewExchange(in.h.(*api.Router), api.ExchangeOptions{Pool: in.pool, PublicURL: publicOrigin, Now: func() time.Time { return *in.clock }}); err != nil {
+		t.Fatal(err)
+	}
+	synced := newBrowser()
+	synced.BackupEligible, synced.BackedUp = true, true
+	if w := in.enrol(t, synced, in.user(t, "bob", false), ""); w.Code != http.StatusOK {
+		t.Fatalf("the registration answered %d %s", w.Code, w.Body)
+	}
+	// signedIn signs bob in for agk login, and answers what agk would trade.
+	signedIn := func() string {
+		t.Helper()
+		verifier, challenge := pkce(t)
+		got, err := synced.Get(in.options(t, `{"ceremony":"assertion"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		asserting, _ := json.Marshal(map[string]any{"ceremony": "assertion", "credential": got,
+			"terminal": map[string]string{"redirect_uri": loopback, "code_challenge": challenge}})
+		w := in.call(t, "POST", "/api/v1/auth/passkey/verify", string(asserting), "")
+		var verified api.Verified
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &verified) != nil {
+			t.Fatalf("the sign-in answered %d %s", w.Code, w.Body)
+		}
+		body, _ := json.Marshal(map[string]string{"code": strings.TrimPrefix(verified.RedirectTo, loopback+"?code="), "code_verifier": verifier})
+		return string(body)
+	}
+	issued(t, sent(t, in.h, "POST", "/api/v1/auth/exchange", "", signedIn()))
+
+	traded := signedIn()
+	in.exec(t, `update auth_policy set device_bound_only = true where namespace is null`)
+	if w := sent(t, in.h, "POST", "/api/v1/auth/exchange", "", traded); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"device_bound_only"`) {
+		t.Errorf("a synced passkey's code once device_bound_only applies answered %d %s", w.Code, w.Body)
 	}
 }
 
