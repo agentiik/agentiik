@@ -52,7 +52,8 @@ import (
 // checked against.
 type Ceremony struct {
 	// RPID is the Relying Party Identifier: the host of AGK_PUBLIC_URL, or of AGK_PROXY_URL behind
-	// a proxy. The authenticator data carries its SHA-256.
+	// a proxy, in lower case as a browser writes a host. The authenticator data carries its
+	// SHA-256, so the options and this ceremony name it with the same bytes.
 	RPID string
 
 	// Origin is the origin of the sign-in page, as a browser serializes it: scheme and host, and

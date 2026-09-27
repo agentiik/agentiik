@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math/big"
+	"slices"
 )
 
 // Algorithm is a COSE algorithm identifier (§5.8.5), the number a credential public key names its
@@ -133,6 +134,9 @@ func parsePublicKey(v any) (publicKey, error) {
 		if !ok || len(x) != ed25519.PublicKeySize {
 			return publicKey{}, fmt.Errorf("webauthn: an EdDSA key is not a byte string of %d bytes", ed25519.PublicKeySize)
 		}
+		if err := checkEd25519(x); err != nil {
+			return publicKey{}, err
+		}
 		k.ed25519 = ed25519.PublicKey(x)
 	case RS256:
 		if kty != ktyRSA {
@@ -144,6 +148,11 @@ func parsePublicKey(v any) (publicKey, error) {
 		}
 		if bits := n.BitLen(); bits < minRSABits || bits > maxRSABits {
 			return publicKey{}, fmt.Errorf("webauthn: an RSA key of %d bits is refused: one is %d bits at least and %d at most", bits, minRSABits, maxRSABits)
+		}
+		// A modulus is the product of two odd primes. crypto/rsa refuses an even one when it
+		// verifies, and refusing it here keeps it from being stored.
+		if n.Bit(0) == 0 {
+			return publicKey{}, fmt.Errorf("webauthn: the RSA modulus is even, which no RSA key's is")
 		}
 		e, err := unsigned(m, labelE, "exponent")
 		if err != nil {
@@ -159,6 +168,58 @@ func parsePublicKey(v any) (publicKey, error) {
 		return publicKey{}, fmt.Errorf("webauthn: the credential public key is for %s, which is not one this installation verifies (ES256, EdDSA or RS256)", k.alg)
 	}
 	return k, nil
+}
+
+// Ed25519's field prime 2^255 - 19, its constant d = -121665/121666 (RFC 8032 §5.1), and the y
+// of the points of order 8.
+var (
+	ed25519P  = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	ed25519D  = new(big.Int).Mod(new(big.Int).Mul(big.NewInt(-121665), new(big.Int).ModInverse(big.NewInt(121666), ed25519P)), ed25519P)
+	ed25519Y8 = func() *big.Int {
+		y, _ := new(big.Int).SetString("2707385501144840649318225287225658788936804267575313519463743609750303402022", 10)
+		return y
+	}()
+)
+
+// checkEd25519 refuses an Ed25519 public key that is not a point of the curve, or is one of the
+// eight points of small order.
+//
+// crypto/ed25519 checks neither before it verifies. A key that is no point fails every signature,
+// so a registration would store a credential nobody could ever use. A key of small order is worse:
+// a signature made with no private key at all verifies against it, for any message, so once such a
+// key is stored anybody who knows the credential ID signs in with it. Only whoever answered the
+// registration chooses the key, but that is an authenticator, a client or an extension, and none
+// of them is the user's to vouch for.
+//
+// The key is decoded as RFC 8032 §5.1.3 does: y little-endian with the sign of x in the top bit,
+// refused where it is not below p, and x recovered from x² = (y² - 1) / (d·y² + 1), which must be
+// a square. The eight points of small order have y 1, p - 1, 0, y8 or p - y8; x is zero only for
+// y 1 and p - 1, which covers the step that refuses x zero with its sign bit set.
+func checkEd25519(key []byte) error {
+	le := slices.Clone(key)
+	le[31] &= 0x7f
+	slices.Reverse(le)
+	y := new(big.Int).SetBytes(le)
+	p := ed25519P
+	if y.Cmp(p) >= 0 {
+		return fmt.Errorf("webauthn: the EdDSA key is not written in its canonical form")
+	}
+	for _, small := range []*big.Int{big.NewInt(0), big.NewInt(1), new(big.Int).Sub(p, big.NewInt(1)), ed25519Y8, new(big.Int).Sub(p, ed25519Y8)} {
+		if y.Cmp(small) == 0 {
+			return fmt.Errorf("webauthn: the EdDSA key is a point of small order, against which a signature verifies with no private key")
+		}
+	}
+	y2 := new(big.Int).Mul(y, y)
+	u := new(big.Int).Sub(y2, big.NewInt(1))
+	v := new(big.Int).Add(new(big.Int).Mul(ed25519D, y2), big.NewInt(1))
+	v.Mod(v, p)
+	// d·y² + 1 is never zero: -1/d is not a square modulo p.
+	x2 := u.Mul(u, v.ModInverse(v, p))
+	x2.Mod(x2, p)
+	if big.Jacobi(x2, p) != 1 {
+		return fmt.Errorf("webauthn: the EdDSA key is not a point on Ed25519")
+	}
+	return nil
 }
 
 // unsigned reads an RSA parameter, a byte string holding an unsigned big-endian integer in the

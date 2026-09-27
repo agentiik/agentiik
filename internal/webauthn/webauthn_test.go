@@ -3,6 +3,7 @@ package webauthn
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -367,6 +368,11 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 			r.statement = pairs{{"alg", -7}, {"sig", []byte{1}}}
 		}, `the attestation format "packed" is not accepted`},
 		{"the format None", ES256, func(r *registration) { r.format = "None" }, `the attestation format "None" is not accepted`},
+		{"a compound attestation, the deepest there is", ES256, func(r *registration) {
+			r.format = "compound"
+			packed := pairs{{"fmt", "packed"}, {"attStmt", pairs{{"alg", -7}, {"sig", []byte{1}}, {"x5c", []any{[]byte{1}, []byte{2}}}}}}
+			r.statement = []any{packed, packed}
+		}, `the attestation format "compound" is not accepted`},
 		{"a none statement that is not empty", ES256, func(r *registration) { r.statement = pairs{{"sig", []byte{1}}} }, "empty map"},
 		{"a none statement that is an array", ES256, func(r *registration) { r.statement = []any{} }, "empty map"},
 		{"no statement", ES256, func(r *registration) { r.statement = absent{} }, "empty map"},
@@ -448,6 +454,18 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 		{"an EdDSA key of key type EC2", EdDSA, func(r *registration) { withLabel(r, labelKty, ktyEC2) }, "an EdDSA key is of key type 2"},
 		{"an EdDSA key on X25519", EdDSA, func(r *registration) { withLabel(r, labelCrv, 4) }, "not on the curve 6 (Ed25519)"},
 		{"an EdDSA key of 31 bytes", EdDSA, func(r *registration) { withLabel(r, labelX, make([]byte, 31)) }, "not a byte string of 32 bytes"},
+		{"an EdDSA key of order 1", EdDSA, func(r *registration) { withLabel(r, labelX, h("01"+strings.Repeat("00", 31))) }, "small order"},
+		{"an EdDSA key of order 2", EdDSA, func(r *registration) { withLabel(r, labelX, h("ec"+strings.Repeat("ff", 30)+"7f")) }, "small order"},
+		{"an EdDSA key of order 4", EdDSA, func(r *registration) { withLabel(r, labelX, make([]byte, 32)) }, "small order"},
+		{"an EdDSA key of order 4, the other sign", EdDSA, func(r *registration) { withLabel(r, labelX, h(strings.Repeat("00", 31)+"80")) }, "small order"},
+		{"an EdDSA key of order 8", EdDSA, func(r *registration) {
+			withLabel(r, labelX, h("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"))
+		}, "small order"},
+		{"an EdDSA key of order 8, the other y", EdDSA, func(r *registration) {
+			withLabel(r, labelX, h("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"))
+		}, "small order"},
+		{"an EdDSA key that is no point", EdDSA, func(r *registration) { withLabel(r, labelX, h("02"+strings.Repeat("00", 31))) }, "not a point on Ed25519"},
+		{"an EdDSA key with y past the field", EdDSA, func(r *registration) { withLabel(r, labelX, h("ed"+strings.Repeat("ff", 30)+"7f")) }, "canonical form"},
 		{"an RS256 key of key type EC2", RS256, func(r *registration) { withLabel(r, labelKty, ktyEC2) }, "an RS256 key is of key type 2"},
 		{"an RS256 key of 2047 bits", RS256, func(r *registration) {
 			withLabel(r, labelN, append([]byte{0x7f}, make([]byte, 255)...))
@@ -455,6 +473,9 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 		{"an RS256 key of 8200 bits", RS256, func(r *registration) {
 			withLabel(r, labelN, append([]byte{0xff}, make([]byte, 1024)...))
 		}, "RSA key of 8200 bits is refused"},
+		{"an even RS256 modulus", RS256, func(r *registration) {
+			withLabel(r, labelN, append([]byte{0x80}, make([]byte, 255)...))
+		}, "modulus is even"},
 		{"an RS256 modulus with a leading zero", RS256, func(r *registration) {
 			withLabel(r, labelN, append([]byte{0}, labelValue(r, labelN).([]byte)...))
 		}, "modulus is written with a leading zero"},
@@ -534,6 +555,9 @@ func TestAnAssertionRefusesWhatItIsThereToRefuse(t *testing.T) {
 		{"a stored key with a byte after it", ES256, func(s *assertion) {
 			s.stored.PublicKey = append(slices.Clone(s.stored.PublicKey), 0)
 		}, "stored public key cannot be read"},
+		{"a stored EdDSA key of small order", EdDSA, func(s *assertion) {
+			s.stored.PublicKey = enc(pairs{{labelKty, ktyOKP}, {labelAlg, EdDSA}, {labelCrv, crvEd25519}, {labelX, identity}})
+		}, "small order"},
 		{"a stored key of an algorithm not verified", ES256, func(s *assertion) {
 			s.stored.PublicKey = enc(pairs{{labelKty, ktyEC2}, {labelAlg, -35}})
 		}, "not one this installation verifies"},
@@ -587,6 +611,20 @@ func TestAnAssertionRefusesWhatItIsThereToRefuse(t *testing.T) {
 			_, err := s.verify(t)
 			wantRefused(t, err, c.want)
 		})
+	}
+}
+
+// identity is the Ed25519 point of order 1, the neutral element, as a public key.
+var identity = h("01" + strings.Repeat("00", 31))
+
+// Why a key of small order is refused: against the neutral element, crypto/ed25519 takes a
+// signature nobody made, whatever the message.
+func TestAKeyOfSmallOrderWouldTakeASignatureNobodyMade(t *testing.T) {
+	forged := h("01" + strings.Repeat("00", 63))
+	for _, message := range []string{"sign in", "another challenge"} {
+		if !ed25519.Verify(identity, []byte(message), forged) {
+			t.Fatal("crypto/ed25519 refused the forgery, and the check this test explains has no reason left")
+		}
 	}
 }
 
