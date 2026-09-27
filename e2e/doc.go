@@ -5,7 +5,8 @@
 //	PostgreSQL          postgres:17-alpine, reached on its socket alone
 //	init                agentiik-api init from the API's image, as root, on a volume per service:
 //	                    the certificate, the keys, the bus identity and nats.conf, the migration,
-//	                    the namespace, the operator token's hash and a join token of the pool default
+//	                    the namespace, the bootstrap token's hash, in the database, and a join
+//	                    token of the pool default
 //	the bus             nats:2-alpine, on the nats.conf init wrote, on the host's network
 //	the API             agentiik-api serve from its image, behind a TLS terminator the test runs,
 //	                    which is AGK_PROXY_URL and the installation's public URL; agentiik-api health
@@ -65,7 +66,7 @@
 //
 // # What the smoke test holds
 //
-// A one-step workflow pushed and started with the operator token runs to succeeded, and each runner
+// A one-step workflow pushed and started with the bootstrap token runs to succeeded, and each runner
 // holds AGK_API, its runner.env and its key, and no database URL, store credential, bus credential
 // at rest or repository, leaves no secrets volume on its daemon, and reaches objects only through
 // presigned URLs and the signed upload policy. That is the first half of the fact v0.2.0 holds;

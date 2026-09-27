@@ -4,6 +4,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### Upgrading
+
+- The v0.2.5 operator token is the bootstrap token and goes on working after the upgrade, with nothing to do by hand: `init` keeps its hash in the database from `AGK_OPERATOR_TOKEN`, the API no longer reads `AGK_OPERATOR_TOKEN_FILE`, which a v0.2.5 `compose.yaml` may go on setting, and `operator-token.sha256` is left where it was and read by nothing.
+
 ### Access
 
 - Package `access` resolves permissions with no database, bus or HTTP behind it, so the API and the controller share one rule. `api.Permission` and the nine are its own, under the same names.
@@ -12,17 +16,22 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
 - A push of a version naming a secret is refused with 403 unless the pusher holds `secret:use` in the namespace, and a deny of it on the workflow counts; running the version takes `workflow:run` alone. A route declares such a second permission as `api.Needs.Also`, and its handler asks it with `api.HoldsAlso`.
 - Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward, where it is not zero on both sides, is `ErrPossibleClone`, for the caller to decide on.
+- Every request is authorised from the database by `api.Principals`: a bearer token is found by its SHA-256 among the live API tokens, its use recorded, and a route is allowed what the grants of the principal and its groups give, intersected by the router with the token's scope (`access.TokenScope`, carried in `api.Identity`). The installation is an administrator's `grant:manage`, through a token with no scope alone, with no implicit `run:read_data` anywhere.
+- The bootstrap token is an administrator owning every namespace, writing as `operator` as the v0.2 operator did, until the first administrator has enrolled; from then on it is a 401 that says so. The interim operator is gone.
+
+### API
+
+- `init` keeps the bootstrap token's hash in the database at every run, a changed token replacing it, says at every run that the token set is ignored once the bootstrap has ended, and mints none: with none set and none kept it says that nobody can create the first administrator.
+- `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
+- A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
+- A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
 
 ### State
 
 - Migration 0032 adds the identity and access tables and a namespace's kind, owner and four new quotas; `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
+- Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
-
-### API
-
-- A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
-- A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
 
 ### Controller
 
@@ -32,11 +41,12 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
 - A fan-out of ten thousand items is handed its namespace's `max_concurrent_tasks` and no more, and another namespace's run is handed its task on the same sweep.
+- A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
 
 ### agk
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
-
+- `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
 
 ## v0.2.5, 2026-09-26
 

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/agk"
 )
 
@@ -25,13 +26,14 @@ import (
 // authorised, which is the oldest way to lose an access check that is otherwise correct.
 type Handler func(w http.ResponseWriter, r *http.Request, who Principal, over Target)
 
-// Identify says who is asking, from the request alone.
+// Identify says who is asking, from the request alone, and what the credential they presented
+// narrows them to.
 //
 // It answers the empty principal for a caller it does not recognise rather than an error, because
 // an unauthenticated caller is not a failure: it is a caller who gets what an unauthenticated
 // caller gets, which is "Deny by default at the API". An error is for a credential that could not
 // be checked, which is a 500.
-type Identify func(r *http.Request) (Principal, error)
+type Identify func(r *http.Request) (Identity, error)
 
 // Router is the API's surface.
 //
@@ -394,19 +396,19 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		return
 	}
 
-	who, err := rt.identify(r)
+	as, err := rt.identify(r)
 	if err != nil {
 		// A credential that could not be checked is not a credential that failed. Saying
 		// no here would tell a caller their token is bad when the database is down.
 		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
 		return
 	}
+	who := as.Principal
 	if who == "" {
 		// "An unauthenticated caller: Deny by default at the API." It is a 401 rather than
 		// the scope's own answer, because a caller with no credential has learned nothing
 		// about what exists by being told to present one.
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		refuse(w, http.StatusUnauthorized, "this request carries no credential")
+		unauthenticated(w, as)
 		return
 	}
 
@@ -443,7 +445,14 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		target = of
 	}
 
-	allowed, err := rt.auth.Allow(r.Context(), who, g.permission, target)
+	// What the authorizer is asked about: the installation for a route at that scope, whatever
+	// its path names, so that "installation" is one question with one answer, and the target
+	// the path resolved to at any other.
+	asked := target
+	if g.scope == Installation {
+		asked = Target{}
+	}
+	allowed, err := rt.allow(r.Context(), as, g.permission, asked)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
 		return
@@ -463,7 +472,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		if over.Namespace != authorised {
 			return false, fmt.Errorf("api: a route authorised in namespace %q asked what it may reveal in %q, which it was not authorised in", authorised, over.Namespace)
 		}
-		return rt.auth.Allow(ctx, who, g.reveals, over)
+		return rt.allow(ctx, as, g.reveals, over)
 	})))
 	// Set on every route for the same reason, and asked over the target the route was
 	// authorised against and no other, since what a request carries is judged where it goes.
@@ -471,17 +480,18 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		if g.also == "" {
 			return false, nil
 		}
-		return rt.auth.Allow(ctx, who, g.also, target)
+		return rt.allow(ctx, as, g.also, asked)
 	}))
-	asked := r
+	request := r
 	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
 		// The credential first, since a token revoked or a session ended while its holder's
-		// grants remain is access lost too, then the permission.
-		again, err := rt.identify(asked.WithContext(ctx))
-		if err != nil || again != who {
+		// grants remain is access lost too, then the permission, through what the credential
+		// narrows it to as it reads now.
+		again, err := rt.identify(request.WithContext(ctx))
+		if err != nil || again.Principal != who {
 			return false, err
 		}
-		return rt.auth.Allow(ctx, who, g.permission, target)
+		return rt.allow(ctx, again, g.permission, asked)
 	}))
 	h(w, r, who, target)
 }
@@ -489,14 +499,14 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 // serveAcross is the hook every route taking Across passes through: the caller is identified as on
 // any other route, and the handler is given what it may ask about them rather than an answer.
 func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h AcrossHandler) {
-	who, err := rt.identify(r)
+	as, err := rt.identify(r)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
 		return
 	}
+	who := as.Principal
 	if who == "" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		refuse(w, http.StatusUnauthorized, "this request carries no credential")
+		unauthenticated(w, as)
 		return
 	}
 	var within Target
@@ -516,8 +526,30 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 		case within.Namespace != "" && over.Namespace != within.Namespace:
 			return false, fmt.Errorf("api: a route answering across namespace %q asked about %q, which its path does not name", within.Namespace, over.Namespace)
 		}
-		return rt.auth.Allow(ctx, who, g.permission, over)
+		return rt.allow(ctx, as, g.permission, over)
 	})
+}
+
+// allow is the one place the router asks the authorizer: what the principal holds over the target,
+// intersected with what its credential narrows it to. The narrowing is asked first, and a token
+// that does not keep the permission there is refused without a question the principal's grants
+// would have answered yes to, since "a scope can only narrow".
+func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over Target) (bool, error) {
+	if !as.Scope.Keeps(what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}) {
+		return false, nil
+	}
+	return rt.auth.Allow(ctx, as.Principal, what, over)
+}
+
+// unauthenticated answers a caller nobody was identified as: with what its identification said
+// where a credential came and opened nothing, and otherwise with the absence of one.
+func unauthenticated(w http.ResponseWriter, as Identity) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	why := as.Refused
+	if why == "" {
+		why = "this request carries no credential"
+	}
+	refuse(w, http.StatusUnauthorized, why)
 }
 
 // deny answers a refusal in the shape the scope calls for.
@@ -539,8 +571,8 @@ func refuse(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	// Written by hand rather than marshalled, because the only variable is a constant
-	// string this package chose and a refusal that failed to encode would be worse than one
-	// that is plain.
+	// string this package chose, the sentence Principals refuses a token with among them, and a
+	// refusal that failed to encode would be worse than one that is plain.
 	fmt.Fprintf(w, "{\"error\":%q}\n", message)
 }
 

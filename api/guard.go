@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/agentiik/agentiik/access"
 )
 
 // What a route needs before its handler runs.
@@ -248,12 +250,31 @@ type ForRunner struct{}
 
 func (ForRunner) guards() guard { return guard{runner: true} }
 
-// Principal is who is asking.
+// Principal is who is asking, written as a grant, the API, agk and the audit log write it: a login,
+// NS/NAME for a service account, and operator for the bootstrap token, as the v0.2 operator was
+// written on every row it left. The empty one is nobody: an unauthenticated caller gets "Deny by
+// default at the API".
 //
-// It is a string here and a row in v0.3.0. What matters at this milestone is that every route
-// has one or is explicitly public, and that the empty one is nobody: an unauthenticated caller
-// gets "Deny by default at the API".
+// It is the string alone, which is what a handler records as who did something, and what the
+// Authorizer is asked about. What a principal holds is its grants' to say, read when it is asked,
+// and never something a request carries.
 type Principal string
+
+// Identity is who a request is from, as the credential it presented says.
+//
+// Beside the principal it carries what that credential narrows the principal to, which is a token's
+// scope and nothing for any other credential, because "on every request its rights are the
+// principal's intersected with both": the router intersects every answer it asks the Authorizer
+// for with it, so that no route, and no handler asking what it may reveal, can reach past it.
+//
+// For nobody, it may carry the sentence a refusal says instead of that no credential came, for a
+// credential that came and opens nothing: what a caller can do about it, and nothing about which
+// credentials exist.
+type Identity struct {
+	Principal Principal
+	Scope     access.TokenScope
+	Refused   string
+}
 
 // Target is what is being asked about, resolved from the request before anything is authorised.
 //
@@ -268,9 +289,11 @@ type Target struct {
 
 // Authorizer answers whether one principal holds one permission over one target.
 //
-// This is the seam v0.3.0 fills: grants, roles, groups and the union recomputed per request all
-// live behind it. What this milestone fixes is the question, and that the answer is asked once
-// per request by the router rather than anywhere else.
+// Grants, roles, groups and the union recomputed per request all live behind it, and Principals is
+// the installation's. The question is asked by the router rather than anywhere else, about the
+// principal alone: what its credential narrows it to is the router's to intersect, since only the
+// router saw the credential. A target naming no namespace is the installation, which is what a
+// route taking Needs at Installation scope is asked about whatever its path names.
 //
 // An error is not a refusal. A refusal is (false, nil) and means the caller may not; an error
 // means the question could not be answered, which is a 500 and not a 404, because telling a

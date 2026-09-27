@@ -30,6 +30,7 @@ func TestAFreshInstallationTakesARunnerOfThePoolDefaultClaimingNoLabel(t *testin
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	bootstrapped(t, database.Application)
 	if err := namespace(t.Context(), database.Application, "create", "finance", io.Discard); err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func anInstallation(t *testing.T) installation {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Principal, error) { return "", nil })
+	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Identity, error) { return server.Identity{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

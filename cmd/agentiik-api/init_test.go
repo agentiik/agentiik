@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/bus"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/token"
 	"github.com/agentiik/agentiik/secret"
@@ -67,7 +68,7 @@ func (d *prepared) at(now time.Time) *preparer {
 }
 
 // files runs every step that needs no database, as initialize does before it migrates.
-func (d *prepared) files(t *testing.T, now time.Time, host string, operator config.Secret) {
+func (d *prepared) files(t *testing.T, now time.Time, host string) {
 	t.Helper()
 	p := d.at(now)
 	if err := p.directories(); err != nil {
@@ -77,9 +78,6 @@ func (d *prepared) files(t *testing.T, now time.Time, host string, operator conf
 		t.Fatal(err)
 	}
 	if _, err := p.secrets(); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.operatorToken(operator); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.bus(); err != nil {
@@ -118,10 +116,10 @@ var firstRun = time.Now().UTC().Truncate(time.Second)
 // where the host is the same, byte for byte.
 func TestInitKeepsWhatItMadeOnASecondRun(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "agentiik.example.com", "")
+	d.files(t, firstRun, "agentiik.example.com")
 	kept := [][]string{
 		{apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"},
-		{controllerDir, "database-password"}, {apiDir, "operator-token.sha256"},
+		{controllerDir, "database-password"},
 		{apiDir, "bus", bus.AccountsFile}, {apiDir, "bus", bus.AccountSeedFile},
 		{busDir, bus.ControlPlaneFile}, {natsDir, bus.AccountsFile},
 		{apiDir, "tls", "server.pem"}, {apiDir, "tls", "server.key"}, {natsDir, "server.pem"}, {natsDir, "server.key"},
@@ -131,13 +129,13 @@ func TestInitKeepsWhatItMadeOnASecondRun(t *testing.T) {
 		before[filepath.Join(path...)] = d.read(t, path...)
 	}
 	d.out.Reset()
-	d.files(t, firstRun.Add(time.Hour), "agentiik.example.com", "")
+	d.files(t, firstRun.Add(time.Hour), "agentiik.example.com")
 	for _, path := range kept {
 		if d.read(t, path...) != before[filepath.Join(path...)] {
 			t.Errorf("the second run changed %s", filepath.Join(path...))
 		}
 	}
-	for _, said := range []string{"kept the certificate", "kept the master key", "kept the hash of the operator token", "kept the installation's bus identity"} {
+	for _, said := range []string{"kept the certificate", "kept the master key", "kept the installation's bus identity"} {
 		if !strings.Contains(d.out.String(), said) {
 			t.Errorf("the second run did not say it %s:\n%s", said, d.out.String())
 		}
@@ -149,7 +147,7 @@ func TestInitKeepsWhatItMadeOnASecondRun(t *testing.T) {
 // is where its service reads it.
 func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "agentiik.example.com", "")
+	d.files(t, firstRun, "agentiik.example.com")
 
 	if _, err := secret.ParseMaster([]byte(d.read(t, apiDir, "master-key"))); err != nil {
 		t.Errorf("the master key is not one the API parses: %s", err)
@@ -175,7 +173,6 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 		config.PublicURL:            "https://agentiik.example.com:8443",
 		config.PresignKeyFile:       filepath.Join(d.dir, apiDir, "presign-key"),
 		config.MasterKeyFile:        filepath.Join(d.dir, apiDir, "master-key"),
-		config.OperatorTokenFile:    filepath.Join(d.dir, apiDir, "operator-token.sha256"),
 		config.Listen:               ":8443",
 		config.TLSCertFile:          filepath.Join(d.dir, apiDir, "tls", "server.pem"),
 		config.TLSKeyFile:           filepath.Join(d.dir, apiDir, "tls", "server.key"),
@@ -192,7 +189,7 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 	}
 
 	for _, path := range [][]string{
-		{apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"}, {apiDir, "operator-token.sha256"},
+		{apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"},
 		{apiDir, "tls", "server.key"}, {controllerDir, "database-password"}, {busDir, bus.ControlPlaneFile},
 		{natsDir, "server.key"}, {natsDir, bus.AccountsFile},
 	} {
@@ -207,7 +204,7 @@ func TestInitWritesEachSecretAsItsReaderTakesIt(t *testing.T) {
 	// Given to the agent's account: what the API and the controller read. Not given: what the
 	// bus reads, since it runs as root, and what the runner's join writes beside.
 	for _, path := range [][]string{
-		{apiDir}, {apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"}, {apiDir, "operator-token.sha256"},
+		{apiDir}, {apiDir, "master-key"}, {apiDir, "presign-key"}, {apiDir, "database-password"},
 		{apiDir, "tls", "server.pem"}, {apiDir, "tls", "server.key"}, {apiDir, "bus", bus.AccountSeedFile},
 		{controllerDir, "database-password"}, {busDir}, {busDir, bus.ControlPlaneFile}, {objectsDir},
 	} {
@@ -248,7 +245,7 @@ func TestInitMakesACertificateForTheHost(t *testing.T) {
 		"localhost":            {"localhost", "127.0.0.1"},
 	} {
 		d := aPreparedDirectory(t)
-		d.files(t, firstRun, host, "")
+		d.files(t, firstRun, host)
 		c := d.leaf(t)
 		var got []string
 		got = append(got, c.DNSNames...)
@@ -275,11 +272,11 @@ func TestInitMakesACertificateForTheHost(t *testing.T) {
 // certificate made; one from elsewhere that still names the host is kept.
 func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "agentiik.example.com", "")
+	d.files(t, firstRun, "agentiik.example.com")
 	first := d.read(t, apiDir, "tls", "server.pem")
 
 	d.out.Reset()
-	d.files(t, firstRun.Add(time.Hour), "other.example.com", "")
+	d.files(t, firstRun.Add(time.Hour), "other.example.com")
 	if d.read(t, apiDir, "tls", "server.pem") == first || d.leaf(t).VerifyHostname("other.example.com") != nil {
 		t.Fatal("a new host kept the certificate of the old one")
 	}
@@ -298,7 +295,7 @@ func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 	second := d.read(t, apiDir, "tls", "server.pem")
 	expiry := d.leaf(t).NotAfter
 	d.out.Reset()
-	d.files(t, expiry, "other.example.com", "")
+	d.files(t, expiry, "other.example.com")
 	if d.read(t, apiDir, "tls", "server.pem") == second || !strings.Contains(d.out.String(), "expired at") {
 		t.Errorf("an expired certificate was kept:\n%s", d.out.String())
 	}
@@ -317,7 +314,7 @@ func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 		os.Chmod(path, 0o644)
 	}
 	d.given = map[string]bool{}
-	d.files(t, firstRun.Add(2*time.Hour), "other.example.com", "")
+	d.files(t, firstRun.Add(2*time.Hour), "other.example.com")
 	if d.read(t, apiDir, "tls", "server.pem") != string(certPEM) {
 		t.Error("a certificate naming the host was replaced")
 	}
@@ -339,82 +336,9 @@ func TestInitReplacesTheCertificateWhereItNoLongerServes(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.out.Reset()
-	d.files(t, firstRun.Add(3*time.Hour), "other.example.com", "")
+	d.files(t, firstRun.Add(3*time.Hour), "other.example.com")
 	if _, err := tls.X509KeyPair([]byte(d.read(t, apiDir, "tls", "server.pem")), []byte(d.read(t, apiDir, "tls", "server.key"))); err != nil {
 		t.Errorf("a certificate whose key is another's was kept: %s", err)
-	}
-}
-
-func hashOf(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:]) + "\n"
-}
-
-// With no token set and none stored, init mints one, prints it once and stores its hash; later
-// runs with none set keep that hash and print no token; a token set replaces the hash, and so does
-// a token changed.
-func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
-	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
-	out := d.out.String()
-	i := strings.Index(out, operatorTokenPrefix)
-	if i < 0 {
-		t.Fatalf("no token was printed:\n%s", out)
-	}
-	minted := strings.Fields(out[i:])[0]
-	// Named by no variable, since a Compose file sets it through one of its own, and told where
-	// it is kept: in the installation's settings, wherever those are.
-	if strings.Contains(out, config.OperatorToken) || !strings.Contains(out, "shown this once") || !strings.Contains(out, "where the installation's settings are") {
-		t.Errorf("minting the token says:\n%s", out)
-	}
-	if d.read(t, apiDir, "operator-token.sha256") != hashOf(minted) {
-		t.Fatal("the hash stored is not the printed token's")
-	}
-	if _, err := newOperator(strings.TrimSpace(d.read(t, apiDir, "operator-token.sha256"))); err != nil {
-		t.Errorf("the API refuses the hash: %s", err)
-	}
-	for _, name := range []string{"api", "controller", "runner", "nats"} {
-		filepath.WalkDir(filepath.Join(d.dir, name), func(path string, e fs.DirEntry, err error) error {
-			if err == nil && !e.IsDir() {
-				if content, _ := os.ReadFile(path); bytes.Contains(content, []byte(minted)) {
-					t.Errorf("%s holds the token", path)
-				}
-			}
-			return nil
-		})
-	}
-
-	d.out.Reset()
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
-	if strings.Contains(d.out.String(), operatorTokenPrefix) || d.read(t, apiDir, "operator-token.sha256") != hashOf(minted) {
-		t.Errorf("a run with no token set did not keep the hash, or printed a token:\n%s", d.out.String())
-	}
-
-	// Nor does any other run, whatever it did with the hash.
-	said := d.out.String()
-	chosen := config.Secret("a-token-of-my-own-at-least-32-characters")
-	d.out.Reset()
-	d.files(t, firstRun.Add(2*time.Hour), "localhost", chosen)
-	said += d.out.String()
-	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(chosen)) || strings.Contains(d.out.String(), string(chosen)) {
-		t.Errorf("a token set after a minted one did not replace its hash, or was printed:\n%s", d.out.String())
-	}
-	changed := config.Secret("another-token-of-my-own-32-characters")
-	d.out.Reset()
-	d.files(t, firstRun.Add(3*time.Hour), "localhost", changed)
-	d.files(t, firstRun.Add(3*time.Hour+time.Minute), "localhost", changed)
-	said += d.out.String()
-	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(changed)) {
-		t.Error("a token changed did not replace the hash")
-	}
-	d.out.Reset()
-	d.files(t, firstRun.Add(4*time.Hour), "localhost", "")
-	if d.read(t, apiDir, "operator-token.sha256") != hashOf(string(changed)) || strings.Contains(d.out.String(), operatorTokenPrefix) {
-		t.Error("unsetting the token minted another, rather than keeping the hash of the last one set")
-	}
-	said += d.out.String()
-	if strings.Contains(said, config.OperatorToken) {
-		t.Errorf("init names %s, which is not the variable a Compose user sets:\n%s", config.OperatorToken, said)
 	}
 }
 
@@ -422,7 +346,7 @@ func TestInitKeepsTheOperatorTokensHashAndNeverTheToken(t *testing.T) {
 // the one file the API and the controller share; before that, it is kept.
 func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	creds := filepath.Join(d.dir, busDir, bus.ControlPlaneFile)
 	first, err := controlPlaneExpiry(creds)
 	if err != nil {
@@ -430,14 +354,14 @@ func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 	}
 	seed := d.read(t, apiDir, "bus", bus.AccountSeedFile)
 
-	d.files(t, first.Add(-credentialWarning-time.Hour), "localhost", "")
+	d.files(t, first.Add(-credentialWarning-time.Hour), "localhost")
 	if kept, _ := controlPlaneExpiry(creds); !kept.Equal(first) {
 		t.Fatalf("the credential was renewed %s before it expires", credentialWarning+time.Hour)
 	}
 
 	later := first.Add(-credentialWarning + time.Hour)
 	d.out.Reset()
-	d.files(t, later, "localhost", "")
+	d.files(t, later, "localhost")
 	renewed, err := controlPlaneExpiry(creds)
 	if err != nil {
 		t.Fatal(err)
@@ -455,7 +379,7 @@ func TestInitRenewsTheControlPlanesCredentialBeforeItExpires(t *testing.T) {
 // directory being a volume and the bus directory not one is refused, and nothing is moved.
 func TestInitRefusesABusDirectoryThatIsNoVolume(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	old := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
 	if err := os.WriteFile(old, []byte(d.read(t, busDir, bus.ControlPlaneFile)), 0o600); err != nil {
 		t.Fatal(err)
@@ -480,7 +404,7 @@ func TestInitRefusesABusDirectoryThatIsNoVolume(t *testing.T) {
 // real one, which the next run removes, a link in its place among them, without following it.
 func TestInitRemovesWhatARenewalCutOffLeft(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	dir := filepath.Join(d.dir, busDir)
 	creds := d.read(t, busDir, bus.ControlPlaneFile)
 	leftover := filepath.Join(dir, "."+bus.ControlPlaneFile+"-1234")
@@ -496,7 +420,7 @@ func TestInitRemovesWhatARenewalCutOffLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.out.Reset()
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(time.Hour), "localhost")
 	for _, gone := range []string{leftover, link} {
 		if _, err := os.Lstat(gone); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s is left: %v", gone, err)
@@ -546,7 +470,7 @@ func issuedUnder(t *testing.T, creds, seed string) bool {
 // that nothing renews; the controller's directory keeps the rest of what it holds.
 func TestInitMovesTheControlPlanesCredentialOfAnEarlierLayout(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	earlier := d.read(t, busDir, bus.ControlPlaneFile)
 	old := filepath.Join(d.dir, apiDir, "bus", bus.ControlPlaneFile)
 	controllers := filepath.Join(d.dir, controllerDir, "bus")
@@ -559,7 +483,7 @@ func TestInitMovesTheControlPlanesCredentialOfAnEarlierLayout(t *testing.T) {
 	os.RemoveAll(filepath.Join(d.dir, busDir))
 
 	d.out.Reset()
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(time.Hour), "localhost")
 	if d.read(t, busDir, bus.ControlPlaneFile) != earlier || !strings.Contains(d.out.String(), "moved the control plane's bus credential") {
 		t.Errorf("the credential of the earlier layout was not moved as it was:\n%s", d.out.String())
 	}
@@ -577,7 +501,7 @@ func TestInitMovesTheControlPlanesCredentialOfAnEarlierLayout(t *testing.T) {
 	if err := os.Symlink(filepath.Join(d.dir, busDir), controllers); err != nil {
 		t.Fatal(err)
 	}
-	d.files(t, firstRun.Add(2*time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(2*time.Hour), "localhost")
 	if _, err := os.Lstat(controllers); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the link is left: %v", err)
 	}
@@ -595,7 +519,7 @@ func TestInitClosesTheDirectoriesItIsGiven(t *testing.T) {
 		}
 		os.Chmod(filepath.Join(d.dir, name), 0o777)
 	}
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	for _, name := range []string{apiDir, natsDir, objectsDir} {
 		if info, _ := os.Stat(filepath.Join(d.dir, name)); info.Mode().Perm() != 0o700 {
 			t.Errorf("%s is left mode %#o", name, info.Mode().Perm())
@@ -674,13 +598,13 @@ func TestInitMigratesCreatesTheNamespaceAndIssuesAJoinTokenAtEveryRun(t *testing
 		}
 		return pool, by, expires, at != nil
 	}
-	if pool, by, expires, redeemed := joinToken(firstToken); pool != "default" || by != "operator" || !expires.Equal(firstRun.Add(time.Hour)) || redeemed {
+	if pool, by, expires, redeemed := joinToken(firstToken); pool != "default" || by != "installation" || !expires.Equal(firstRun.Add(time.Hour)) || redeemed {
 		t.Errorf("the join token is of %s, by %s, until %s, redeemed %v", pool, by, expires, redeemed)
 	}
 	if !exists(t, admin, "demo") {
 		t.Error("the namespace was not created")
 	}
-	if got := audited(t, admin); !slices.Contains(got, "operator namespace.create demo done") || !strings.HasPrefix(got[len(got)-1], "operator join_token.issue ") {
+	if got := audited(t, admin); !slices.Contains(got, "installation namespace.create demo done") || !strings.HasPrefix(got[len(got)-1], "installation join_token.issue ") {
 		t.Errorf("the audit log holds %q", got)
 	}
 
@@ -710,6 +634,119 @@ func TestInitMigratesCreatesTheNamespaceAndIssuesAJoinTokenAtEveryRun(t *testing
 	}
 }
 
+// Against a database: init keeps the SHA-256 of the bootstrap token where the API reads it, at
+// every run, and never the token. A token changed replaces the hash, a run with none set keeps it,
+// and a run with none set and none kept says that nobody can create the first administrator, and
+// mints none. Once the first administrator has enrolled, a token set is ignored, the run says so
+// and succeeds, and no hash comes back. The file a v0.2 init kept the operator token's hash in is
+// neither written nor removed.
+func TestInitKeepsTheBootstrapTokensHashInTheDatabase(t *testing.T) {
+	database := freshDatabase(t)
+	d := aPreparedDirectory(t)
+	left := filepath.Join(d.dir, apiDir, "operator-token.sha256")
+	if err := os.MkdirAll(filepath.Dir(left), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(left, []byte(strings.Repeat("ab", 32)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "demo",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	var said strings.Builder
+	initAt := func(token config.Secret, at time.Time) string {
+		t.Helper()
+		d.out.Reset()
+		c.OperatorToken = token
+		if err := initialize(t.Context(), c, d.at(at)); err != nil {
+			t.Fatalf("%s\n%s", err, d.out.String())
+		}
+		said.WriteString(d.out.String())
+		return d.out.String()
+	}
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(t.Context()))
+	kept := func() []byte {
+		t.Helper()
+		var hash []byte
+		if err := admin.QueryRow(t.Context(), `select token_hash from bootstrap`).Scan(&hash); err != nil {
+			t.Fatal(err)
+		}
+		return hash
+	}
+	hashOf := func(token config.Secret) []byte {
+		sum := sha256.Sum256([]byte(token))
+		return sum[:]
+	}
+
+	if out := initAt("", firstRun); kept() != nil || !strings.Contains(out, "nobody can create the first administrator") {
+		t.Errorf("with no token set and none kept, init kept %x and said:\n%s", kept(), out)
+	}
+	chosen := config.Secret("a-token-of-my-own-at-least-32-characters")
+	if out := initAt(chosen, firstRun.Add(time.Minute)); !bytes.Equal(kept(), hashOf(chosen)) || !strings.Contains(out, "wrote the hash of the bootstrap token set") {
+		t.Errorf("a token set was not kept, or not said to be:\n%s", out)
+	}
+	if out := initAt(chosen, firstRun.Add(2*time.Minute)); !bytes.Equal(kept(), hashOf(chosen)) || !strings.Contains(out, "kept the hash of the bootstrap token set") {
+		t.Errorf("the same token set again was not kept:\n%s", out)
+	}
+	changed := config.Secret("another-token-of-my-own-32-characters")
+	if out := initAt(changed, firstRun.Add(3*time.Minute)); !bytes.Equal(kept(), hashOf(changed)) || !strings.Contains(out, "wrote the hash") {
+		t.Errorf("a token changed did not replace the hash:\n%s", out)
+	}
+	if out := initAt("", firstRun.Add(4*time.Minute)); !bytes.Equal(kept(), hashOf(changed)) || !strings.Contains(out, "kept the hash of the bootstrap token stored") {
+		t.Errorf("a run with no token set did not keep the hash of the last one set:\n%s", out)
+	}
+
+	// The first administrator enrols, which ends the token. The API's role signs in with the
+	// password init made for it.
+	application := database.Application
+	application.Password = config.Secret(strings.TrimSpace(d.read(t, apiDir, "database-password")))
+	pool, err := db.Open(t.Context(), application.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.EndBootstrap(ctx, firstRun.Add(5*time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, token := range []config.Secret{changed, chosen} {
+		if out := initAt(token, firstRun.Add(time.Duration(6+i)*time.Minute)); kept() != nil || !strings.Contains(out, "ignored the bootstrap token set") || !strings.Contains(out, "no error") {
+			t.Errorf("once the bootstrap ended, a token set was kept as %x, or not said to be ignored:\n%s", kept(), out)
+		}
+	}
+	if out := initAt("", firstRun.Add(8*time.Minute)); strings.Contains(out, "bootstrap token") || strings.Contains(out, "administrator") {
+		t.Errorf("once the bootstrap ended, a run with no token set said:\n%s", out)
+	}
+
+	for _, token := range []config.Secret{chosen, changed} {
+		if strings.Contains(said.String(), string(token)) {
+			t.Errorf("init printed the token %s", token)
+		}
+	}
+	if strings.Contains(said.String(), config.OperatorToken) {
+		t.Errorf("init names %s, which is not the variable a Compose user sets:\n%s", config.OperatorToken, said.String())
+	}
+	if content, err := os.ReadFile(left); err != nil || string(content) != strings.Repeat("ab", 32)+"\n" {
+		t.Errorf("the hash a v0.2 init left was changed or removed: %q, %v", content, err)
+	}
+	filepath.WalkDir(d.dir, func(path string, e fs.DirEntry, err error) error {
+		if err == nil && !e.IsDir() {
+			if content, _ := os.ReadFile(path); bytes.Contains(content, []byte(chosen)) || bytes.Contains(content, []byte(changed)) ||
+				bytes.Contains(content, []byte(hex.EncodeToString(hashOf(changed)))) {
+				t.Errorf("%s holds the token or its hash", path)
+			}
+		}
+		return nil
+	})
+}
+
 // init goes through run, as its Compose service calls it.
 func TestInitIsAVerb(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -721,37 +758,17 @@ func TestInitIsAVerb(t *testing.T) {
 	}
 }
 
-// A token init mints is printed, and its hash kept, only by a run that got to the end: one printed
-// by a run that failed would be in the log of a container the next run replaces.
-func TestInitPrintsAMintedTokenOnlyOnceTheRunSucceeds(t *testing.T) {
-	d := aPreparedDirectory(t)
-	c := config.Init{
-		Dir: d.dir, Host: "localhost", Namespace: "demo",
-		Admin:       config.Database{URL: "postgres://postgres@/agentiik?host=" + filepath.Join(d.dir, "no-socket"), Role: "postgres"},
-		Application: config.Database{URL: "postgres://agentiik@/agentiik?host=" + filepath.Join(d.dir, "no-socket"), Role: "agentiik"},
-	}
-	if err := initialize(t.Context(), c, d.at(firstRun)); err == nil {
-		t.Fatal("a run with no database reached succeeded")
-	}
-	if strings.Contains(d.out.String(), operatorTokenPrefix) {
-		t.Errorf("a run that failed printed a token:\n%s", d.out.String())
-	}
-	if _, err := os.Stat(filepath.Join(d.dir, apiDir, "operator-token.sha256")); err == nil {
-		t.Error("a run that failed kept a token's hash")
-	}
-}
-
 // A bus identity whose creation was cut off part way is finished where the bus never had it, and
 // refused where it did.
 func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	dir := filepath.Join(d.dir, apiDir, "bus")
 	seed := d.read(t, apiDir, "bus", bus.AccountSeedFile)
 
 	creds := filepath.Join(d.dir, busDir, bus.ControlPlaneFile)
 	os.Remove(creds)
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(time.Hour), "localhost")
 	if d.read(t, apiDir, "bus", bus.AccountSeedFile) != seed || !issuedUnder(t, creds, filepath.Join(dir, bus.AccountSeedFile)) {
 		t.Error("a missing credential was not minted under the same account")
 	}
@@ -762,7 +779,7 @@ func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
 		t.Errorf("an identity the bus had was made again: %v", err)
 	}
 	os.Remove(filepath.Join(d.dir, natsDir, bus.AccountsFile))
-	d.files(t, firstRun.Add(3*time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(3*time.Hour), "localhost")
 	if d.read(t, apiDir, "bus", bus.AccountSeedFile) == seed || !issuedUnder(t, creds, filepath.Join(dir, bus.AccountSeedFile)) {
 		t.Error("an identity the bus never had was not made again, with the control plane's credential under it")
 	}
@@ -772,7 +789,7 @@ func TestInitFinishesABusIdentityCutOffPartWay(t *testing.T) {
 // followed or waited on.
 func TestInitFollowsNoLinkAServicePutInItsVolume(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	elsewhere := filepath.Join(t.TempDir(), "superuser-password")
 	if err := os.WriteFile(elsewhere, []byte("SUPERUSER-SECRET\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -827,13 +844,13 @@ func TestInitFollowsNoLinkAServicePutInItsVolume(t *testing.T) {
 // the next run, since the API refuses a secret anybody else may read.
 func TestInitPutsBackTheModeAndOwnerOfWhatItKeeps(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
-	kept := [][]string{{apiDir, "master-key"}, {apiDir, "presign-key"}, {controllerDir, "database-password"}, {apiDir, "operator-token.sha256"}}
+	d.files(t, firstRun, "localhost")
+	kept := [][]string{{apiDir, "master-key"}, {apiDir, "presign-key"}, {controllerDir, "database-password"}}
 	for _, path := range append(kept, []string{runnerDir, "trust", "agentiik.pem"}) {
 		os.Chmod(filepath.Join(append([]string{d.dir}, path...)...), 0o640)
 	}
 	d.given = map[string]bool{}
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(time.Hour), "localhost")
 	for _, path := range kept {
 		full := filepath.Join(append([]string{d.dir}, path...)...)
 		if info, _ := os.Stat(full); info.Mode().Perm() != 0o600 || !d.given[full] {
@@ -849,7 +866,7 @@ func TestInitPutsBackTheModeAndOwnerOfWhatItKeeps(t *testing.T) {
 // file it names keeps its mode, and the link is replaced by a key.
 func TestInitFollowsNoLinkInPlaceOfTheCertificatesKey(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "localhost", "")
+	d.files(t, firstRun, "localhost")
 	// The very key, so that a run that followed the link would find the pair whole and keep
 	// it, and give the file the link names the key's mode and owner.
 	elsewhere := filepath.Join(t.TempDir(), "root-only")
@@ -862,7 +879,7 @@ func TestInitFollowsNoLinkInPlaceOfTheCertificatesKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.given = map[string]bool{}
-	d.files(t, firstRun.Add(time.Hour), "localhost", "")
+	d.files(t, firstRun.Add(time.Hour), "localhost")
 	if info, _ := os.Stat(elsewhere); info.Mode().Perm() != 0o400 || d.given[elsewhere] {
 		t.Errorf("the file the link names was changed through it: mode %#o", info.Mode().Perm())
 	}
@@ -926,14 +943,14 @@ func (d *prepared) put(t *testing.T, certPEM, keyPEM []byte) {
 // One init issued, or setup before it, is replaced.
 func TestInitReplacesOnlyACertificateItIssued(t *testing.T) {
 	d := aPreparedDirectory(t)
-	d.files(t, firstRun, "agentiik.example.com", "")
+	d.files(t, firstRun, "agentiik.example.com")
 	if !slices.Contains(d.leaf(t).Subject.Organization, issuer) {
 		t.Fatalf("the certificate init issued is not marked as init's: %v", d.leaf(t).Subject)
 	}
 
 	theirs, theirKey := aCertificate(t, "agentiik.example.com", firstRun.Add(-time.Hour), firstRun.Add(90*24*time.Hour), true)
 	d.put(t, theirs, theirKey)
-	d.files(t, firstRun.Add(time.Hour), "agentiik.example.com", "")
+	d.files(t, firstRun.Add(time.Hour), "agentiik.example.com")
 	if d.read(t, apiDir, "tls", "server.pem") != string(theirs) {
 		t.Fatal("a certificate from an authority, naming the host, was not kept")
 	}
@@ -963,7 +980,7 @@ func TestInitReplacesOnlyACertificateItIssued(t *testing.T) {
 	setups, setupKey := aCertificate(t, "agentiik.example.com", firstRun.Add(-time.Hour), firstRun.Add(825*24*time.Hour), false)
 	d.put(t, setups, setupKey)
 	d.out.Reset()
-	d.files(t, firstRun.Add(2*time.Hour), "other.example.com", "")
+	d.files(t, firstRun.Add(2*time.Hour), "other.example.com")
 	if d.read(t, apiDir, "tls", "server.pem") == string(setups) || d.leaf(t).VerifyHostname("other.example.com") != nil {
 		t.Errorf("a certificate setup issued, for another host, was not replaced:\n%s", d.out.String())
 	}

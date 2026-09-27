@@ -33,13 +33,13 @@ func (h holder) Allow(_ context.Context, who api.Principal, what api.Permission,
 	return who == h.who && what == h.what && over == h.over, nil
 }
 
-// bearer reads a principal out of the header, which is what v0.3.0 replaces with something that
-// checks a credential.
-func bearer(r *http.Request) (api.Principal, error) {
+// bearer reads a principal out of the header, checking nothing, which is what the router looks
+// like from a test of the routes rather than of a credential: Principals is what checks one.
+func bearer(r *http.Request) (api.Identity, error) {
 	if r.Header.Get("X-Broken") != "" {
-		return "", context.DeadlineExceeded
+		return api.Identity{}, context.DeadlineExceeded
 	}
-	return api.Principal(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), nil
+	return api.Identity{Principal: api.Principal(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))}, nil
 }
 
 func router(t *testing.T, auth api.Authorizer) *api.Router {

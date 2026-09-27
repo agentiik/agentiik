@@ -7,8 +7,8 @@
 // anybody allowed to inspect the process or its container reads. It is a file readable by its
 // owner alone, named by a variable ending _FILE, and a secret written as the value of a variable is
 // refused rather than used. So are PGPASSWORD and PGSSLPASSWORD, which pgx would take one from.
-// One verb is the exception, and says why: agentiik-api init takes the operator token as a value
-// and writes its hash alone.
+// One verb is the exception, and says why: agentiik-api init takes the bootstrap token as a value,
+// AGK_OPERATOR_TOKEN, and writes its hash alone.
 //
 // # Refusing to start
 //
@@ -79,7 +79,7 @@ const (
 	TaskCeiling                 = "AGK_TASK_CEILING"
 	JoinRotation                = "AGK_JOIN_ROTATION"
 	RevocationGrace             = "AGK_REVOCATION_GRACE"
-	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE"
+	OperatorTokenFile           = "AGK_OPERATOR_TOKEN_FILE" // read by no program since v0.3.0: see ReadAPI
 	AuditExportURL              = "AGK_AUDIT_EXPORT_URL"
 	AuditExportTokenFile        = "AGK_AUDIT_EXPORT_TOKEN_FILE"
 	MetricsListen               = "AGK_METRICS_LISTEN"
@@ -99,8 +99,7 @@ const (
 // whether or not it reads the file.
 var secretFiles = []string{
 	DatabasePasswordFile, MigrateDatabasePasswordFile, BusCredentialsFile, BusAccountSeedFile,
-	PresignKeyFile, MasterKeyFile, OperatorTokenFile, AuditExportTokenFile, MetricsTokenFile,
-	TLSKeyFile,
+	PresignKeyFile, MasterKeyFile, AuditExportTokenFile, MetricsTokenFile, TLSKeyFile,
 }
 
 // libpqSecrets are the variables pgx takes a secret from wherever the URL gives none, as libpq
@@ -304,9 +303,6 @@ type API struct {
 
 	JoinRotation    time.Duration
 	RevocationGrace time.Duration
-
-	// OperatorToken is the SHA-256 of the interim operator token, in lowercase hexadecimal.
-	OperatorToken string
 }
 
 // Controller is what agentiik-controller reads.
@@ -366,6 +362,12 @@ type Migration struct {
 // it, and nothing but the environment tells the API the controller's ceiling. An API given none
 // while the controller's is longer would refuse, an hour after a revocation, the results of tasks
 // the controller still lets run, so the two programs are given the same ceiling.
+//
+// It does not read AGK_OPERATOR_TOKEN_FILE, which named the file holding the hash of the v0.2
+// operator token: from v0.3.0 that token is the bootstrap token, and the API reads its hash from the
+// database, where init writes it. A v0.2 Compose file still sets the variable, and it is passed
+// over rather than refused, whatever the file holds and wherever it is not, since an upgrade
+// changes compose.yaml and .env and nothing else.
 func ReadAPI(lookup Lookup) (API, error) {
 	r := newReader(lookup)
 	var c API
@@ -395,7 +397,6 @@ func ReadAPI(lookup Lookup) (API, error) {
 	// revoked runner was running when it was revoked has the whole of its time to report.
 	c.RevocationGrace = r.duration(RevocationGrace, r.taskCeiling(), "how long a revoked runner's results are still taken",
 		"revoking a runner never destroys work already done: a grace of no time refuses the results of what it is finishing")
-	c.OperatorToken = r.operatorToken()
 	return c, r.err()
 }
 
@@ -474,9 +475,9 @@ type Init struct {
 	// Namespace is the namespace init creates, where it does not exist yet.
 	Namespace string
 
-	// OperatorToken is the interim operator's token, where one is set, which init keeps the
-	// hash of and nothing else. Empty, init keeps the hash it stored, or mints a token where it
-	// stored none.
+	// OperatorToken is the bootstrap token, the v0.2 operator token under its v0.3.0 name,
+	// where one is set, which init keeps the hash of and nothing else, in the database. Empty,
+	// init keeps the hash stored there.
 	OperatorToken Secret
 
 	// Admin is the role that applies the migrations. Application is the role the API and the
@@ -485,9 +486,10 @@ type Init struct {
 	Admin, Application Database
 }
 
-// operatorTokenMinBytes is the shortest operator token init takes: 128 bits, as openssl rand -hex 16
-// writes them, since the token is every permission at every scope and is guessed at over the
-// network by anybody who reaches the API.
+// operatorTokenMinBytes is the shortest bootstrap token init takes: 128 bits, as openssl rand -hex 16
+// writes them, since the token administers the installation and owns every namespace until the
+// first administrator has enrolled, and is guessed at over the network by anybody who reaches the
+// API.
 const operatorTokenMinBytes = 32
 
 // ReadInit reads what agentiik-api init needs through lookup, which is os.LookupEnv when nil.
@@ -549,7 +551,7 @@ func dnsName(v string) bool {
 	return true
 }
 
-// operatorTokenValue is the operator token set as a value, or empty where it is unset.
+// operatorTokenValue is the bootstrap token set as a value, or empty where it is unset.
 //
 // Held to what a bearer token may be, the characters RFC 6750 allows, since the token is sent in
 // an Authorization header and one holding anything else would not reach the API as it was written,
@@ -560,7 +562,7 @@ func (r *reader) operatorTokenValue() Secret {
 		return ""
 	}
 	if len(v) < operatorTokenMinBytes {
-		r.refuse(OperatorToken, fmt.Sprintf("is %d characters, and the operator token is %d or more, as openssl rand -hex %d writes one: it allows everything, to whoever guesses it", len(v), operatorTokenMinBytes, operatorTokenMinBytes/2))
+		r.refuse(OperatorToken, fmt.Sprintf("is %d characters, and the bootstrap token is %d or more, as openssl rand -hex %d writes one: until the first administrator has enrolled it administers the installation and owns every namespace, for whoever guesses it", len(v), operatorTokenMinBytes, operatorTokenMinBytes/2))
 		return ""
 	}
 	body := strings.TrimRight(v, "=")
@@ -594,6 +596,12 @@ func newReader(lookup Lookup, valued ...string) *reader {
 		if _, set := r.value(value); set {
 			r.refuse(value, fmt.Sprintf("is set, and a secret is never read from the environment, which every process started from this one inherits and anybody who can inspect it reads: write it to a file its owner alone can read, and name that file in %s", file))
 		}
+	}
+	// The bootstrap token has no file to name instead, since init alone reads it, and writes its
+	// hash where the API reads it: set for any other program, it is a secret in an environment
+	// that has no use for it.
+	if _, set := r.value(OperatorToken); set && !slices.Contains(valued, OperatorToken) {
+		r.refuse(OperatorToken, "is set, and it is the bootstrap token, which agentiik-api init alone reads, keeping its hash in the database where the API reads it: a secret is never read from the environment of a program that has no use for it, which every process started from this one inherits and anybody who can inspect it reads")
 	}
 	for _, libpq := range libpqSecrets {
 		if _, set := r.value(libpq.name); set {
@@ -1157,15 +1165,6 @@ func (r *reader) presignKey() Secret {
 		return ""
 	}
 	return Secret(key)
-}
-
-// operatorToken reads the hash of the interim operator token.
-//
-// The hash and never the token, as every credential of the installation is kept: "stored hashed,
-// shown once at creation". A file holding the token itself is refused, since it is a working
-// credential at rest on the server.
-func (r *reader) operatorToken() string {
-	return r.hash(OperatorTokenFile, "the operator token", "and it names the file holding the hash of the operator token, without which every request is refused")
 }
 
 // hash reads the SHA-256 of a token from the file name names, which what the token is and why the

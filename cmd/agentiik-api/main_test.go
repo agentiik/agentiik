@@ -57,12 +57,13 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 	}
 }
 
-// With nothing configured, serve and migrate refuse their start and name every setting they need.
+// With nothing configured, serve and migrate refuse their start and name every setting they need,
+// and serve no longer the operator token's file, which it reads nothing from since v0.3.0.
 func TestServeAndMigrateNameEverySettingTheyNeed(t *testing.T) {
 	for verb, variables := range map[string][]string{
 		"serve": {
 			config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile,
-			config.ObjectsDir, config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.OperatorTokenFile,
+			config.ObjectsDir, config.PublicURL, config.PresignKeyFile, config.MasterKeyFile,
 		},
 		"migrate": {config.MigrateDatabaseURL, config.DatabaseURL},
 	} {
@@ -75,8 +76,33 @@ func TestServeAndMigrateNameEverySettingTheyNeed(t *testing.T) {
 				t.Errorf("%s's refusal does not name %s:\n%s", verb, variable, stderr.String())
 			}
 		}
+		if strings.Contains(stderr.String(), config.OperatorTokenFile) {
+			t.Errorf("%s's refusal names %s, which it reads nothing from:\n%s", verb, config.OperatorTokenFile, stderr.String())
+		}
 	}
 }
+
+// The v0.2.5 Compose file still names the operator token's file, where init wrote the hash of the
+// operator token, and an upgrade changes compose.yaml and .env and nothing else, so that file is
+// passed over as though it were not named: not there at all, as it is on an installation init
+// prepared from v0.3.0 on, or holding a hash nobody checks any more.
+func TestServeStartsWithTheOperatorTokensFileNamedAndPassesItOver(t *testing.T) {
+	for what, content := range map[string]*string{"not there": nil, "a v0.2.5 hash": ptr(strings.Repeat("ab", 32) + "\n"), "anything": ptr("not a hash")} {
+		env := configured(t)
+		path := filepath.Join(env.dir, "operator-token.sha256")
+		if content != nil {
+			if err := os.WriteFile(path, []byte(*content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		env.set(config.OperatorTokenFile, path)
+		if _, err := readSettings(env.lookup); err != nil {
+			t.Errorf("with the operator token's file %s, serve's settings were refused: %s", what, err)
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // The master key and the env prefixes are read by internal/config and finished here, since only
 // the API may parse the one and check the other. A key or a prefix it cannot use refuses the start
@@ -299,7 +325,6 @@ func configured(t *testing.T) *environment {
 	env.set(config.PublicURL, "https://agentiik.example.com")
 	env.write(t, config.PresignKeyFile, base64.StdEncoding.EncodeToString(key)+"\n")
 	env.write(t, config.MasterKeyFile, string(master.Write()))
-	env.write(t, config.OperatorTokenFile, theHash+"\n")
 	return env
 }
 

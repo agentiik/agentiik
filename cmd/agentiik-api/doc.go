@@ -16,8 +16,8 @@
 // seals and reads values, package artifact signs and keeps objects, package bus mints credentials
 // and writes the bus identity, package db provisions the schema and the role, and package
 // internal/config reads the installation's settings. This package opens what they are given and
-// wires them together, and adds two things of its own: the interim operator, and the renewal of the
-// control plane's bus credential, with the warning where it cannot renew it.
+// wires them together, and adds one thing of its own: the renewal of the control plane's bus
+// credential, with the warning where it cannot renew it.
 //
 // # Why a program apart from the controller
 //
@@ -34,8 +34,9 @@
 // bus with the control plane's credential, which creates the streams and every runner pool's
 // consumer, and serves every route built so far on AGK_LISTEN: runs and versions, cancelling a run,
 // a step's log stream, the secret declarations, the runners, their pools and join tokens, the bus
-// credential, and the built-in object store at /objects on AGK_PUBLIC_URL. It takes no argument,
-// since a flag would be a second way to say what the environment says.
+// credential, and the built-in object store at /objects on AGK_PUBLIC_URL, each request identified
+// and authorised by api.Principals from what the database holds. It takes no argument, since a flag
+// would be a second way to say what the environment says.
 //
 // It serves plain HTTP, to the TLS terminator in front on a network only the terminator reaches,
 // unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its key: then it serves TLS
@@ -73,12 +74,15 @@
 // for up to five seconds. Any answer is ready, since serve answers nothing until the database, the
 // bus and every route are open; health.go says why that is enough.
 //
-// # The interim operator
+// # The bootstrap token
 //
-// A v0.2.0 installation has no principals, so it has one operator: a token whose SHA-256 is in the
-// file AGK_OPERATOR_TOKEN_FILE names, identified as one principal allowed every permission at every
-// scope, and everyone else denied. Both halves are in operator.go, so that v0.3.0's bootstrap token
-// deletes them in one place. Package api's default stays api.DenyAll.
+// The v0.2 operator token is the bootstrap token from v0.3.0, under the setting that named it,
+// AGK_OPERATOR_TOKEN, which init reads and keeps the SHA-256 of in the database. api.Principals
+// takes it as the bootstrap operator, written operator as the v0.2 operator was, an administrator
+// owning every namespace, until the first administrator has enrolled a passkey; from then on it is
+// refused, and init says at every run that the line is ignored. AGK_OPERATOR_TOKEN_FILE, which
+// named the file a v0.2 init kept the hash in, is read by no program: a v0.2 Compose file still
+// sets it, and serve starts as though it did not.
 //
 // # migrate
 //
@@ -96,16 +100,17 @@
 // key, the presign key and the database password, once; the bus identity, once, as bus-init does,
 // with the control plane's credential in a directory of its own that the API and the controller
 // share, renewed from when the API would renew it, and moved there from where an earlier init put
-// it; and the bus's configuration; the hash of the operator token AGK_OPERATOR_TOKEN holds, or of
-// one it mints and prints once where none is set and none was stored; the migration, as migrate
-// does, as the role AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as
-// namespace create does; and a join token of the pool default for the runner beside it, issued
-// through the database since the API is not serving yet. Each service is given its own copy of what
-// it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as root, and
-// the runner's certificate, which anybody may read; the control plane's credential alone is one
-// file for two, since the API renews it while it runs.
+// it; and the bus's configuration; the migration, as migrate does, as the role
+// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does;
+// the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
+// administrator has enrolled, saying so where none is set and none is kept, and minting none; and a
+// join token of the pool default for the runner beside it, issued through the database since the
+// API is not serving yet. Each service is given its own copy of what it reads, owned by uid 65532
+// where init runs as root, but for the bus's, which runs as root, and the runner's certificate,
+// which anybody may read; the control plane's credential alone is one file for two, since the API
+// renews it while it runs.
 //
-// It is the one program that takes a secret as a value: the operator token, which a person sets
+// It is the one program that takes a secret as a value: the bootstrap token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.
 //
 // # namespace
@@ -114,10 +119,11 @@
 // workflow, run or secret, refusing one that does and saying what it holds. v0.2.0 has no route
 // that makes either change, so this verb stands in for v0.3.0's until they do. It reads
 // AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE and connects as that role, the one the API
-// connects as, so it runs where the API runs with the API's environment; the name is held to what the API holds a namespace
-// to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
-// namespace.create or namespace.delete by the operator, and a namespace created again is recorded
-// unchanged and left as it was, so that an installation script can run it every time.
+// connects as, so it runs where the API runs with the API's environment; the name is held to what
+// the API holds a namespace to, reserved words refused. Each change is recorded in the audit log in
+// its own transaction, as namespace.create or namespace.delete by installation, as init's own acts
+// are, the installation itself being no principal a grant names, and a namespace created again is
+// recorded unchanged and left as it was, so that an installation script can run it every time.
 //
 // # bus-init and bus-credential
 //

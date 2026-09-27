@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -158,7 +159,8 @@ func Stand(t testing.TB) *Installation {
 
 	ctx := in.ctx
 	in.token = "agk_op_" + randomHex(24)
-	in.held = append(in.held, heldValue{"the operator token", in.token})
+	hash := sha256.Sum256([]byte(in.token))
+	in.held = append(in.held, heldValue{"the bootstrap token", in.token}, heldValue{"the bootstrap token's hash", hex.EncodeToString(hash[:])})
 	ca := in.certificates()
 	in.client = &http.Client{Timeout: time.Minute, Transport: &http.Transport{TLSClientConfig: ca.clientConfig()}}
 	in.build(ctx)
@@ -343,9 +345,9 @@ var initVolumes = []string{"api", "controller", "bus", "nats", "runner", "object
 
 // initialize runs agentiik-api init from the API's image, as root, as the Compose file's init
 // service runs it, on a volume per service: it makes the certificate, the keys, the database
-// password, the bus identity and the bus's configuration, migrates, creates the namespace, writes
-// the operator token's hash and a join token of the pool default. Everything it writes that no
-// runner may hold is read back, as root, to be looked for in what the runners hold.
+// password, the bus identity and the bus's configuration, migrates, creates the namespace, keeps the
+// bootstrap token's hash in the database and writes a join token of the pool default. Everything it
+// writes that no runner may hold is read back, as root, to be looked for in what the runners hold.
 func (in *Installation) initialize(ctx context.Context, socket string) {
 	in.volumes = map[string]string{}
 	args := []string{"run", "--name", in.id + "-init", "--label", in.label(),
@@ -378,7 +380,7 @@ func (in *Installation) initialize(ctx context.Context, socket string) {
 		in.t.Fatalf("agentiik-api init: %s\n%s", err, out)
 	}
 	if strings.Contains(out, in.token) {
-		in.t.Fatalf("agentiik-api init printed the operator token it was given:\n%s", out)
+		in.t.Fatalf("agentiik-api init printed the bootstrap token it was given:\n%s", out)
 	}
 
 	for _, f := range []struct{ what, path string }{
@@ -388,7 +390,6 @@ func (in *Installation) initialize(ctx context.Context, socket string) {
 		{"the control plane's bus credential", "bus/control-plane.creds"},
 		{"the bus account seed", "api/bus/account.seed"},
 		{"the private key of the bus's certificate", "api/tls/server.key"},
-		{"the operator token's hash", "api/operator-token.sha256"},
 	} {
 		in.held = append(in.held, heldValue{f.what, in.read(ctx, f.path)})
 	}
@@ -460,7 +461,6 @@ func (in *Installation) serve(ctx context.Context, ca authority, socket, busURL 
 		"-e", config.ObjectsDir+"=/objects",
 		"-e", config.PresignKeyFile+"=/agentiik/presign-key",
 		"-e", config.MasterKeyFile+"=/agentiik/master-key",
-		"-e", config.OperatorTokenFile+"=/agentiik/operator-token.sha256",
 		"-e", config.Listen+"=:"+port,
 		"-e", config.ProxyURL+"="+in.PublicURL,
 		"-e", "SSL_CERT_DIR=/agentiik/trust",

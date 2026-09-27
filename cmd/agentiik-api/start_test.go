@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,10 +43,11 @@ import (
 )
 
 // An installation as a person makes one, against a real PostgreSQL and a real NATS: migrate a
-// database nobody prepared, create the bus identity with bus-init, start a NATS server on the
-// configuration it wrote, and serve. Then the operator pushes, starts a run and makes a pool, a
-// machine joins it, heartbeats and gets a bus credential the server takes, and nobody without the
-// token gets anywhere.
+// database nobody prepared, keep the bootstrap token's hash as init does, create the bus identity
+// with bus-init, start a NATS server on the configuration it wrote, and serve. Then the bootstrap
+// token, the v0.2 operator's, pushes, starts a run and makes a pool, a machine joins it,
+// heartbeats and gets a bus credential the server takes, and nobody without the token gets
+// anywhere.
 //
 // serve is handed its settings rather than reading them, because the test's database and bus
 // speak plaintext and config.ReadAPI refuses both, as it should: what reading refuses is
@@ -106,6 +106,7 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 	if strings.Contains(out.String(), "applied 0") || !strings.Contains(out.String(), "already applied") {
 		t.Errorf("migrating again said:\n%s", out.String())
 	}
+	bootstrapped(t, database.Application)
 
 	// A namespace, which v0.2.0 has no route to create, so namespace create does.
 	out.Reset()
@@ -163,7 +164,7 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 		t.Fatalf("the operator's run answered %d: %v", code, answer)
 	}
 	runID, _ := answer["run"].(string)
-	if code, answer := c.do("GET", "/api/v1/finance/runs/"+runID, theToken, nil); code != http.StatusOK || answer["triggered_by"] != string(theOperator) {
+	if code, answer := c.do("GET", "/api/v1/finance/runs/"+runID, theToken, nil); code != http.StatusOK || answer["triggered_by"] != string(api.BootstrapOperator) {
 		t.Errorf("reading the run answered %d: %v", code, answer)
 	}
 	if code, _ := c.do("POST", "/api/v1/runs/"+runID+"/cancel", "", nil); code != http.StatusUnauthorized {
@@ -260,6 +261,7 @@ func TestARunnerKeepsTheBusOnceTheControlPlanesCredentialHasExpired(t *testing.T
 	if err := migrate(t.Context(), database, &out); err != nil {
 		t.Fatalf("migrating failed: %s\n%s", err, out.String())
 	}
+	bootstrapped(t, database.Application)
 	dir := filepath.Join(t.TempDir(), "bus")
 	var stderr bytes.Buffer
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, &stderr); code != exitStopped {
@@ -347,6 +349,7 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	bootstrapped(t, database.Application)
 	dir := filepath.Join(t.TempDir(), "bus")
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
 		t.Fatal("bus-init failed")
@@ -394,10 +397,21 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 	}
 }
 
-// Every route built so far is served, and each stands behind the guard its constructor gave it: an
-// installation that left one constructor out would answer a runner, a pool or an object with the
-// mux's 404, which a test of the routes alone would never see.
-func TestServeRegistersEveryRouteBuiltSoFar(t *testing.T) {
+// Every route built so far is served, and each stands behind the permission the page's API table
+// names for it, at the scope it names it at: an installation that left one constructor out would
+// answer a runner, a pool or an object with the mux's 404, which a test of the routes alone would
+// never see, and one whose guard drifted from the page would grant what the page does not.
+//
+// The page's words, route by route: the administration routes are "Administrator only", and drain
+// and revoke "require grant:manage at installation scope", which is what an administrator holds
+// there; a secret's declarations take workflow:read at namespace scope and writing one
+// secret:write there; a push workflow:write, and secret:use where it names a secret; starting a run
+// and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
+// being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
+// an artifact run:read_data. Registration is authenticated by the join token in its body, the
+// runner's own routes by the runner credential alone, and the object store by the signature in the
+// URL or the form.
+func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
@@ -412,47 +426,64 @@ func TestServeRegistersEveryRouteBuiltSoFar(t *testing.T) {
 	}
 	defer in.close()
 
-	var got []string
+	administrator := api.Route{Permission: api.GrantManage, Scope: api.Installation}
+	runner := api.Route{Runner: true}
+	public := api.Route{Public: true}
+	onRun := func(p, reveals api.Permission) api.Route {
+		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
+	}
+	want := map[string]api.Route{
+		"GET /api/v1/runner-pools":                                       administrator,
+		"POST /api/v1/runner-pools":                                      administrator,
+		"POST /api/v1/runner-pools/{pool}/join-tokens":                   administrator,
+		"GET /api/v1/runners":                                            administrator,
+		"POST /api/v1/runners/{runner}/drain":                            administrator,
+		"POST /api/v1/runners/{runner}/revoke":                           administrator,
+		"POST /api/v1/runners":                                           public,
+		"POST /api/v1/runners/heartbeat":                                 runner,
+		"POST /api/v1/runners/rotate":                                    runner,
+		"POST /api/v1/tasks/redeem":                                      runner,
+		"POST /api/v1/tasks/logs":                                        runner,
+		"POST /api/v1/bus/token":                                         runner,
+		"GET /api/v1/runs":                                               {Permission: api.RunRead, Scope: api.Workflow, Across: true},
+		"GET /api/v1/{namespace}/runs":                                   {Permission: api.RunRead, Scope: api.Workflow, Across: true},
+		"GET /api/v1/runs/{run}":                                         onRun(api.RunRead, api.RunReadData),
+		"GET /api/v1/{namespace}/runs/{run}":                             onRun(api.RunRead, api.RunReadData),
+		"GET /api/v1/runs/{run}/steps/{step}/logs":                       onRun(api.RunRead, ""),
+		"POST /api/v1/runs/{run}/cancel":                                 onRun(api.WorkflowRun, ""),
+		"GET /api/v1/runs/{run}/outputs/{name}":                          onRun(api.RunReadData, ""),
+		"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}":             onRun(api.RunReadData, ""),
+		"GET /api/v1/runs/{run}/steps/{step}/inputs/{port}":              onRun(api.RunReadData, ""),
+		"GET /api/v1/artifacts/{uri}":                                    onRun(api.RunReadData, ""),
+		"GET /api/v1/{namespace}/secrets":                                {Permission: api.WorkflowRead, Scope: api.Namespace},
+		"GET /api/v1/{namespace}/secrets/{name}":                         {Permission: api.WorkflowRead, Scope: api.Namespace},
+		"PUT /api/v1/{namespace}/secrets/{name}":                         {Permission: api.SecretWrite, Scope: api.Namespace},
+		"DELETE /api/v1/{namespace}/secrets/{name}":                      {Permission: api.SecretWrite, Scope: api.Namespace},
+		"POST /api/v1/{namespace}/workflows/{workflow}/runs":             {Permission: api.WorkflowRun, Scope: api.Workflow},
+		"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": {Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse},
+		"GET /objects/{key...}":                                          public,
+		"PUT /objects/{key...}":                                          public,
+		"POST /objects/{namespace}":                                      public,
+	}
+	served := map[string]bool{}
 	for _, r := range in.router.Routes() {
-		got = append(got, r.Method+" "+r.Pattern)
+		name := r.Method + " " + r.Pattern
+		served[name] = true
+		w, listed := want[name]
+		if !listed {
+			t.Errorf("serve registers %s, which this test does not hold to the page", name)
+			continue
+		}
+		got := r
+		got.Method, got.Pattern, got.Why = "", "", ""
+		if got != w {
+			t.Errorf("%s stands behind %+v, and the page names %+v", name, got, w)
+		}
 	}
-	want := []string{
-		"GET /api/v1/runner-pools",
-		"POST /api/v1/runner-pools",
-		"POST /api/v1/runner-pools/{pool}/join-tokens",
-		"GET /api/v1/runners",
-		"POST /api/v1/runners",
-		"POST /api/v1/runners/heartbeat",
-		"POST /api/v1/runners/rotate",
-		"POST /api/v1/runners/{runner}/drain",
-		"POST /api/v1/runners/{runner}/revoke",
-		"POST /api/v1/tasks/redeem",
-		"POST /api/v1/tasks/logs",
-		"POST /api/v1/bus/token",
-		"GET /api/v1/runs",
-		"GET /api/v1/runs/{run}",
-		"GET /api/v1/runs/{run}/outputs/{name}",
-		"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}",
-		"GET /api/v1/runs/{run}/steps/{step}/inputs/{port}",
-		"GET /api/v1/runs/{run}/steps/{step}/logs",
-		"POST /api/v1/runs/{run}/cancel",
-		"GET /api/v1/artifacts/{uri}",
-		"GET /api/v1/{namespace}/runs",
-		"GET /api/v1/{namespace}/runs/{run}",
-		"GET /api/v1/{namespace}/secrets",
-		"DELETE /api/v1/{namespace}/secrets/{name}",
-		"GET /api/v1/{namespace}/secrets/{name}",
-		"PUT /api/v1/{namespace}/secrets/{name}",
-		"POST /api/v1/{namespace}/workflows/{workflow}/runs",
-		"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
-		"GET /objects/{key...}",
-		"PUT /objects/{key...}",
-		"POST /objects/{namespace}",
-	}
-	slices.Sort(got)
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("serve registers\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	for name := range want {
+		if !served[name] {
+			t.Errorf("serve does not register %s", name)
+		}
 	}
 }
 
@@ -621,7 +652,6 @@ func (c instanceConfig) settings() (settings, error) {
 		Listen:          c.Listen,
 		JoinRotation:    config.DefaultJoinRotation,
 		RevocationGrace: config.DefaultTaskCeiling,
-		OperatorToken:   theHash,
 	}
 	return settings{API: api, keys: keys}, nil
 }

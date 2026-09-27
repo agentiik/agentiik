@@ -12,10 +12,12 @@ import (
 	"github.com/agentiik/agentiik/internal/config"
 )
 
-// namespaceActor is who an audit entry of this verb names. v0.2.0 has one principal, the
-// operator, and the verb runs where the API runs, as whoever holds the installation's database
-// settings, which is that operator.
-const namespaceActor = "operator"
+// namespaceActor is who an audit entry of this verb names, and of init's own acts: installation,
+// the installation itself, as the author of the pool default is written. The verb runs where the
+// API runs, as whoever holds the installation's database settings, which is no principal a grant
+// names; and operator names the bootstrap token from v0.3.0, which an act of init's is not, before
+// the first administrator has enrolled or after.
+const namespaceActor = "installation"
 
 // namespaceVerb is agentiik-api namespace create NAME and agentiik-api namespace remove NAME.
 func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name string, stdout, stderr io.Writer) int {

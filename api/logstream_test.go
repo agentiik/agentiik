@@ -42,9 +42,9 @@ func (s *switchable) Allow(_ context.Context, who api.Principal, _ api.Permissio
 	return who == "alice" && !s.off.Load(), nil
 }
 
-func (s *switchable) identify(r *http.Request) (api.Principal, error) {
+func (s *switchable) identify(r *http.Request) (api.Identity, error) {
 	if s.revoked.Load() {
-		return "", nil
+		return api.Identity{}, nil
 	}
 	return bearer(r)
 }

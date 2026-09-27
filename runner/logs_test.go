@@ -487,8 +487,8 @@ func aLogAPI(t *testing.T) *logAPI {
 	pool, super := dbtest.Open(t)
 	in := &logAPI{pool: pool, conn: dbtest.Superuser(t, super), dir: t.TempDir()}
 	in.objects = artifact.Dir(in.dir)
-	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Principal, error) {
-		return "", errors.New("this installation speaks to runners and to nobody else")
+	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Identity, error) {
+		return server.Identity{}, errors.New("this installation speaks to runners and to nobody else")
 	})
 	if err != nil {
 		t.Fatal(err)
