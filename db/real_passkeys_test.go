@@ -235,3 +235,33 @@ func TestTheBootstrapStateHeldToBeEndedIsHeldAgainstALink(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Only a user registers a passkey, and so only a user signs in with one: a service account holds
+// API tokens and nothing else, so it is given no passkey, no handle and no registration's challenge.
+func TestAServiceAccountHoldsNoPasskey(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if _, err := w.CreateNamespace(ctx, Namespace{Name: "finance"}); err != nil {
+			return err
+		}
+		return w.CreateServiceAccount(ctx, ServiceAccount{Namespace: "finance", Name: "nightly", CreatedBy: "carol"})
+	})
+	for what, fn := range map[string]func(context.Context, *Wide) error{
+		"a passkey": func(ctx context.Context, w *Wide) error {
+			return w.AddCredential(ctx, Credential{ID: "a-passkey", Login: "finance/nightly", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)})
+		},
+		"a handle": func(ctx context.Context, w *Wide) error {
+			_, err := w.PasskeyHandle(ctx, "finance/nightly", bytes.Repeat([]byte{1}, 32))
+			return err
+		},
+		"a registration's challenge": func(ctx context.Context, w *Wide) error {
+			return w.IssueChallenge(ctx, Challenge{Value: bytes.Repeat([]byte{1}, 32), Ceremony: CeremonyRegistration,
+				Login: "finance/nightly", IssuedAt: now, ExpiresAt: now.Add(ChallengeLife)})
+		},
+	} {
+		if err := pool.Installation(t.Context(), Identity, fn); !errors.Is(err, ErrNoPrincipal) {
+			t.Errorf("%s for the service account finance/nightly was answered %v", what, err)
+		}
+	}
+}
