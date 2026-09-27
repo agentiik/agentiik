@@ -44,7 +44,8 @@
 // Two more, user and group, are an administrator's, and the bootstrap token's until the first
 // administrator has enrolled:
 //
-//	agk user          create, printing the enrolment link, list, show and delete
+//	agk user          create, printing the enrolment link, recover, printing a recovery code's,
+//	                  list, show and delete
 //	agk group         create, list, show, delete, and add and remove one member
 //
 // Three say who may do what, as whoever holds grant:manage on a namespace or a workflow, or
