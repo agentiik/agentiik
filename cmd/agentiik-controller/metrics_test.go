@@ -101,6 +101,11 @@ func TestTheLeaderAnswersEveryFigureAndTheStandbyThatItStandsBy(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// And finance held to 5,000 bytes of live artifacts, beside the tasks it always bounds.
+	if _, err := conn.Exec(t.Context(), `update namespaces set max_artifact_bytes = 5000 where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+
 	b := withInstallationBus(t)
 	js := b.streams(t)
 	credential := b.controlPlane(t, "agentiik-controller")
@@ -144,14 +149,23 @@ func TestTheLeaderAnswersEveryFigureAndTheStandbyThatItStandsBy(t *testing.T) {
 			`agentiik_runner_slots{pool="default",runner="runner-1"} 4`,
 			`agentiik_runner_tasks{pool="default",runner="runner-1"} 0`,
 			`agentiik_runner_ready{pool="default",runner="runner-1"} 1`,
+			`agentiik_quota_used{namespace="finance",quota="max_concurrent_tasks"} 1`,
+			`agentiik_quota_limit{namespace="finance",quota="max_concurrent_tasks"} 20`,
+			`agentiik_quota_used{namespace="finance",quota="max_runs_per_hour"} 1`,
+			`agentiik_quota_used{namespace="finance",quota="max_artifact_bytes"} 0`,
+			`agentiik_quota_limit{namespace="finance",quota="max_artifact_bytes"} 5000`,
 		)
 	}, both...)
+	// A quota the namespace does not set has nothing to be held against.
+	if strings.Contains(body, `agentiik_quota_limit{namespace="finance",quota="max_runs_per_hour"}`) {
+		t.Errorf("the leader reported a max_runs_per_hour finance does not set:\n%s", body)
+	}
 
 	status, body := scrape(t, standby, scrapeToken)
 	if status != http.StatusOK || !has(body, `agentiik_controller_leading 0`) {
 		t.Fatalf("the standby answered %d:\n%s", status, body)
 	}
-	for _, figure := range []string{"agentiik_queue_depth{", "agentiik_runner_slots{", "agentiik_tasks_dispatched_total{"} {
+	for _, figure := range []string{"agentiik_queue_depth{", "agentiik_runner_slots{", "agentiik_tasks_dispatched_total{", "agentiik_quota_used{"} {
 		if strings.Contains(body, figure) {
 			t.Errorf("the standby reported %s, which is the leader's to report:\n%s", figure, body)
 		}

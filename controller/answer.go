@@ -298,6 +298,7 @@ func (co *Core) Answer(ctx context.Context, a Answer) error {
 			Steps:  steps, Tasks: tasks,
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
+			Retain:    runRetain(g),
 		}); err != nil || !bind {
 			return err
 		}

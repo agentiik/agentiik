@@ -509,7 +509,7 @@ func TestAFinishedRunIsNotSwept(t *testing.T) {
 		return w.SaveDecision(ctx, Decision{
 			Namespace: "finance", Run: theRun, Was: 0, Seq: 1,
 			Document: json.RawMessage(`{"version":1}`), State: agk.Succeeded,
-			StartedAt: now.Add(-time.Hour), FinishedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour),
+			StartedAt: now.Add(-time.Hour), FinishedAt: now, Retain: 7 * 24 * time.Hour,
 			Outputs: map[string]any{"invoices": "sha256:aaa"},
 		})
 	}); err != nil {
@@ -528,6 +528,57 @@ func TestAFinishedRunIsNotSwept(t *testing.T) {
 	}
 	if expires == nil {
 		t.Error("a finished run has no expiry, and the envelope and log purges both wait on one")
+	}
+}
+
+// "Envelopes and logs ... live by the workflow's defaults.retain, resolved to one date when the run
+// finishes", capped by the namespace's max_retention_days, which bounds a workflow that declares
+// none as well: a run that asks for less keeps what it asked for.
+func TestAFinishedRunKeepsItsEnvelopesWithinTheNamespaceCeiling(t *testing.T) {
+	pool, super := created(t)
+	conn, err := pgx.Connect(t.Context(), super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	if _, err := conn.Exec(t.Context(), `update namespaces set max_retention_days = 30 where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+
+	const day = 24 * time.Hour
+	finished := time.Now().UTC().Truncate(time.Millisecond)
+	for _, c := range []struct {
+		name         string
+		retain, want time.Duration
+	}{
+		{"asking-for-less", 7 * day, 7 * day},
+		{"asking-for-more", 90 * day, 30 * day},
+		{"asking-for-nothing", 0, 30 * day},
+	} {
+		r := aRun()
+		r.ID = agk.NewRunID()
+		var expires time.Time
+		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {
+			return ns.CreateRun(ctx, r)
+		})
+		if err == nil {
+			err = pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
+				if err := w.SaveDecision(ctx, Decision{
+					Namespace: "finance", Run: r.ID, Was: 0, Seq: 1,
+					Document: json.RawMessage(`{"version":1}`), State: agk.Succeeded,
+					StartedAt: finished.Add(-time.Hour), FinishedAt: finished, Retain: c.retain,
+				}); err != nil {
+					return err
+				}
+				return w.tx.QueryRow(ctx, `select expires_at from runs where id = $1`, string(r.ID)).Scan(&expires)
+			})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := expires.Sub(finished); got != c.want {
+			t.Errorf("%s: a run keeping its envelopes for %s under a ceiling of 30 days keeps them %s after it finished", c.name, c.retain, got)
+		}
 	}
 }
 

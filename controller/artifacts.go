@@ -38,15 +38,12 @@ func artifactsOf(g *graph.Graph, s *graph.State) []db.Reference {
 	for _, name := range sortedSteps(s) {
 		st := s.Steps[name]
 		for _, port := range sortedPorts(st.Ports) {
+			// A workflow that declared no default and no retention on this output
+			// still has its artifacts recorded, with no duration, which keeps them
+			// as long as the namespace allows. Left unrecorded, they would be bytes
+			// nothing expires, nothing collects and max_artifact_bytes stops counting
+			// once their upload lapses.
 			retain := retainOf(wf, name, port)
-			if retain.For <= 0 {
-				// A workflow that declared no default and no retention on this
-				// output. The namespace caps what a workflow asks for and does not
-				// supply what it never asked for, so there is nothing to record: an
-				// artifact with no declared life is one the language has not let
-				// anybody write.
-				continue
-			}
 			for _, item := range st.Ports[port].Items {
 				for _, f := range item.Files {
 					out = append(out, db.Reference{
@@ -80,4 +77,15 @@ func retainOf(wf *graph.Workflow, step agk.Step, port agk.Port) graph.Retain {
 		return *wf.Defaults.Retain
 	}
 	return graph.Retain{}
+}
+
+// runRetain is how long a run's envelopes and logs are kept once it has finished: "Envelopes and
+// logs are not declared one at a time the way an output is, so they live by the workflow's
+// defaults.retain". Zero where the workflow declares none, which the database resolves, as it caps
+// every retention, to the namespace's max_retention_days.
+func runRetain(g *graph.Graph) time.Duration {
+	if g == nil || g.Workflow() == nil || g.Workflow().Defaults.Retain == nil {
+		return 0
+	}
+	return time.Duration(g.Workflow().Defaults.Retain.For)
 }

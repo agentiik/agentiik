@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -8,8 +9,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/db"
 )
 
 // The object routes, which are the built-in store's whole surface.
@@ -22,18 +27,22 @@ import (
 // ObjectAPI serves what a presigned URL names.
 type ObjectAPI struct {
 	signed *artifact.Signed
+
+	// pool is where a write is held to its namespace's max_artifact_bytes, and nil holds none to
+	// it: a store with no database behind it, which only a test builds.
+	pool *db.Pool
 }
 
 // NewObjects registers the object routes: the GET and the PUT a presigned URL does, and the POST a
-// policy does.
-func NewObjects(rt *Router, signed *artifact.Signed) (*ObjectAPI, error) {
+// policy does. Every write is held to its namespace's max_artifact_bytes through pool.
+func NewObjects(rt *Router, signed *artifact.Signed, pool *db.Pool) (*ObjectAPI, error) {
 	switch {
 	case rt == nil:
 		return nil, errors.New("api: no router")
 	case signed == nil:
 		return nil, errors.New("api: no presigner, and an object route that signed nothing would serve every object to anybody")
 	}
-	s := &ObjectAPI{signed: signed}
+	s := &ObjectAPI{signed: signed, pool: pool}
 
 	// The one sentence that puts these outside the authorisation hook. It is long because
 	// the guard demands it be, and it is the right demand: this is the fourth public route
@@ -76,7 +85,7 @@ func (s *ObjectAPI) object(w http.ResponseWriter, r *http.Request, _ Principal, 
 	case http.MethodGet:
 		s.fetch(w, r, key)
 	case http.MethodPut:
-		s.store(w, r, key, r.Body)
+		s.store(w, r, key, r.Body, signedUntil(r.URL.Query()))
 	}
 }
 
@@ -128,7 +137,7 @@ func (s *ObjectAPI) post(w http.ResponseWriter, r *http.Request, _ Principal, ov
 			return
 		}
 		body.lifted = true
-		s.store(w, r, key, part)
+		s.store(w, r, key, part, signedUntil(fields))
 		return
 	}
 }
@@ -177,18 +186,127 @@ func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
 	io.Copy(w, rc)
 }
 
-func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, body io.Reader) {
-	err := s.signed.Store(r.Context(), key, body)
+// store writes one object, held to its namespace's max_artifact_bytes: room is made for it before
+// its bytes are read and settled once they are stored or refused, and an object that would take the
+// namespace past the quota is answered 507 with nothing stored, before any of it is read where its
+// request states its length and as soon as it outgrows its room where it does not. until is when
+// the policy or the URL it is written with expires, which the room lapses after.
+//
+// The room is made at the length of the request, which is the most the object may be: a form's
+// length counts its fields and its boundaries as well, a few hundred bytes more than the file, and
+// a request of no stated length is given the room left, up to artifact_max_bytes. The object is held
+// to that room as it arrives, and counted at its size once it is in.
+func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, body io.Reader, until time.Time) {
+	room, err := s.makeRoom(r.Context(), key, r.ContentLength, until)
+	var none *db.NoRoom
+	switch {
+	case errors.As(err, &none):
+		nothing(w, http.StatusInsufficientStorage)
+		return
+	case err != nil:
+		nothing(w, http.StatusInternalServerError)
+		return
+	}
+	counted := &within{r: body, left: -1}
+	if room.Held() {
+		counted.left = room.Bound()
+	}
+	err = s.signed.Store(r.Context(), key, counted)
+	s.settle(r.Context(), room, counted, err)
 	switch {
 	case errors.Is(err, artifact.ErrWrongDigest):
 		nothing(w, http.StatusBadRequest)
 	case errors.Is(err, artifact.ErrTooLarge):
 		nothing(w, http.StatusRequestEntityTooLarge)
+	case errors.Is(err, artifact.ErrNoRoom):
+		nothing(w, http.StatusInsufficientStorage)
 	case err != nil:
 		nothing(w, http.StatusInternalServerError)
 	default:
 		w.WriteHeader(http.StatusCreated)
 	}
+}
+
+// heldRoom is room made for one write, and the namespace it is settled in.
+type heldRoom struct {
+	db.Room
+	namespace string
+}
+
+// makeRoom makes room for the object key names, of up to length bytes where length is not
+// negative, in its namespace. Nothing is held where the store has no database behind it, or where
+// the key is not one an object is written under, which the store then refuses by itself.
+func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, until time.Time) (heldRoom, error) {
+	namespace, digest, ok := strings.Cut(key, "/sha256/")
+	if s.pool == nil || !ok || !lowerHex(digest) || until.IsZero() {
+		return heldRoom{}, nil
+	}
+	// A length past artifact_max_bytes is an object the store refuses whatever the room, so it is
+	// not given more room than that.
+	most := s.signed.Limits().ArtifactMaxBytes
+	if most > 0 && length > most {
+		length = most
+	}
+	var room db.Room
+	err := s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+		var err error
+		room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until})
+		return err
+	})
+	if err != nil {
+		return heldRoom{}, err
+	}
+	return heldRoom{Room: room, namespace: namespace}, nil
+}
+
+// lowerHex is 64 lowercase hexadecimal characters, the one way a key writes a digest, which is
+// what room is counted by.
+func lowerHex(digest string) bool {
+	return len(digest) == 64 && strings.Trim(digest, "0123456789abcdef") == ""
+}
+
+// settle counts a stored object at its size, or gives back the room made for one that was not
+// stored. Settled whether or not the request is still there, since a writer that went once its
+// bytes were in, or halfway, leaves room to count or to give back all the same; a settlement that
+// fails leaves the room as it was made, which lapses with the policy.
+func (s *ObjectAPI) settle(ctx context.Context, room heldRoom, counted *within, stored error) {
+	if !room.Held() {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	s.pool.In(ctx, room.namespace, func(ctx context.Context, ns *db.NS) error {
+		if stored != nil {
+			return ns.Unwritten(ctx, room.Room)
+		}
+		return ns.Stored(ctx, room.Room, counted.read)
+	})
+}
+
+// within counts what is read of an object, and refuses it past left bytes where left is not
+// negative: the room made for it, which the store then writes nothing of.
+type within struct {
+	r    io.Reader
+	left int64
+	read int64
+}
+
+func (c *within) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.read += int64(n)
+	if c.left >= 0 && c.read > c.left {
+		return n, artifact.ErrNoRoom
+	}
+	return n, err
+}
+
+// signedUntil is when a signed request stops being worth anything, read from the fields or the
+// query its signature was checked over, and the zero time where there is none to read.
+func signedUntil(signed url.Values) time.Time {
+	expires, err := strconv.ParseInt(signed.Get("expires"), 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(expires, 0).UTC()
 }
 
 // nothing answers with a status and no body. There is nothing worth writing: the caller is a

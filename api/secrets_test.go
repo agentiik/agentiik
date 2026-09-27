@@ -598,7 +598,7 @@ func TestNoRouteButRedemptionReadsASecretValue(t *testing.T) {
 	if _, err := api.NewRunners(rt, api.RunnerOptions{Pool: g.pool, Objects: g.objects, URLs: g.signed, Secrets: store}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, g.signed); err != nil {
+	if _, err := api.NewObjects(rt, g.signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := api.NewDeclarations(rt, api.DeclarationOptions{Pool: g.pool}); err != nil {

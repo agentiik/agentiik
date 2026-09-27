@@ -23,7 +23,7 @@ func decidedAs(t *testing.T, pool *Pool, state agk.RunState, now time.Time, task
 		WakeAt: now.Add(time.Hour), Tasks: tasks,
 	}
 	if state.Terminal() {
-		d.FinishedAt, d.WakeAt, d.ExpiresAt = now, time.Time{}, now.Add(7*24*time.Hour)
+		d.FinishedAt, d.WakeAt, d.Retain = now, time.Time{}, 7*24*time.Hour
 	}
 	if err := pool.Installation(t.Context(), ControllerSweep, func(ctx context.Context, w *Wide) error {
 		return w.SaveDecision(ctx, d)

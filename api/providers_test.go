@@ -48,7 +48,7 @@ func TestARedemptionReadsSecretsFromTwoProviders(t *testing.T) {
 	if _, err := api.NewRunners(rt, runners); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, g.signed); err != nil {
+	if _, err := api.NewObjects(rt, g.signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := api.NewDeclarations(rt, declarations); err != nil {

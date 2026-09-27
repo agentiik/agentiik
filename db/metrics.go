@@ -60,3 +60,62 @@ func (w *Wide) Occupancy(ctx context.Context, now time.Time) ([]Occupancy, error
 	}
 	return out, rows.Err()
 }
+
+// Consumption is one namespace as the quota metrics read it: what it holds against each quota that
+// counts something, and the quota where it sets one.
+type Consumption struct {
+	Namespace string
+
+	// Tasks is what max_concurrent_tasks counts, as Slots counts it: tasks handed out, or on
+	// their way to a runner, and not yet over.
+	Tasks int64
+
+	// RunsLastHour is what max_runs_per_hour counts: the runs created in the last 60 minutes.
+	RunsLastHour int64
+
+	// ArtifactBytes is what max_artifact_bytes counts, as MakeRoom counts it: the bytes of its
+	// live artifacts, each digest once, and of the uploads not yet referenced.
+	ArtifactBytes int64
+
+	// The quotas, zero where the namespace sets none. max_concurrent_tasks always holds one.
+	MaxConcurrentTasks int64
+	MaxRunsPerHour     int64
+	MaxArtifactBytes   int64
+}
+
+// Consumption reads every namespace, in name order, with what it holds against its quotas.
+//
+// Each count is read namespace by namespace, through the index its quota is counted with where it
+// is enforced, so a scrape reads what is in flight, the last hour's runs and the live artifacts,
+// never the history.
+func (w *Wide) Consumption(ctx context.Context) ([]Consumption, error) {
+	rows, err := w.tx.Query(ctx, `
+		select n.name, t.n, r.n, b.bytes,
+		       n.max_concurrent_tasks, coalesce(n.max_runs_per_hour, 0), coalesce(n.max_artifact_bytes, 0)
+		from namespaces n
+		cross join lateral (
+		  select count(*) as n from tasks
+		  where namespace = n.name and state in ('pending', 'dispatched', 'running', 'publishing')
+		    and published_at is not null) t
+		cross join lateral (
+		  select count(*) as n from runs
+		  where namespace = n.name and created_at > now() - interval '60 minutes') r
+		cross join lateral (
+		  select coalesce(sum(bytes), 0)::bigint as bytes
+		  from (`+heldBytes(` and namespace = n.name`, ` and namespace = n.name`)+`) h) b
+		order by n.name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: what the namespaces hold against their quotas could not be read: %w", err)
+	}
+	defer rows.Close()
+	var out []Consumption
+	for rows.Next() {
+		var c Consumption
+		if err := rows.Scan(&c.Namespace, &c.Tasks, &c.RunsLastHour, &c.ArtifactBytes,
+			&c.MaxConcurrentTasks, &c.MaxRunsPerHour, &c.MaxArtifactBytes); err != nil {
+			return nil, fmt.Errorf("db: what the namespaces hold against their quotas could not be read: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

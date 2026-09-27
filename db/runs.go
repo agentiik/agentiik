@@ -317,6 +317,11 @@ type Evaluation struct {
 	// CreatedAt is when the run was created, by the database's clock: where its end-to-end
 	// latency runs from, a wait for its concurrency group included.
 	CreatedAt time.Time
+
+	// MaxRunDuration is its namespace's max_run_duration, written as a timeout is, and empty
+	// where the namespace sets none. Read with the run, since every pass is decided under the
+	// bound that holds when it is taken.
+	MaxRunDuration string
 }
 
 // Run reads one run for deciding.
@@ -335,10 +340,11 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	var wake, cancel *time.Time
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
-		        cancel_requested_at, xmin::text, created_at
+		        cancel_requested_at, xmin::text, created_at,
+		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), '')
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt)
+			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -391,9 +397,12 @@ type Decision struct {
 	// "nothing waits on the clock".
 	WakeAt time.Time
 
-	// ExpiresAt is when this run's envelopes and logs may be purged, set when it finishes
-	// from the retention the workflow declared, capped by the namespace.
-	ExpiresAt time.Time
+	// Retain is the workflow's defaults.retain, how long its envelopes and logs are kept once
+	// it has finished, and zero where it declares none. "Envelopes and logs are not declared one
+	// at a time the way an output is, so they live by the workflow's defaults.retain, resolved to
+	// one date when the run finishes": SaveDecision resolves it, capped by the namespace's
+	// max_retention_days, which also bounds a workflow that declares none.
+	Retain time.Duration
 
 	// Outputs are the run's declared outputs as digests, written when it succeeds.
 	Outputs map[string]any
@@ -474,6 +483,10 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	if err != nil {
 		return fmt.Errorf("db: the outputs of run %s could not be written: %w", d.Run, err)
 	}
+	expires, err := runExpiry(ctx, w.tx, d)
+	if err != nil {
+		return err
+	}
 
 	// Read before the row is overwritten, because the diff the counts move by is against
 	// what this run referenced a moment ago and the update below is what replaces it. The
@@ -497,7 +510,7 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		d.Namespace, string(d.Run), d.Was,
 		d.Document, d.Seq, d.State.String(),
 		nilIfZero(d.StartedAt), nilIfZero(d.FinishedAt),
-		nilIfZero(d.WakeAt), nilIfZero(d.ExpiresAt), outputs)
+		nilIfZero(d.WakeAt), nilIfZero(expires), outputs)
 	if err != nil {
 		return fmt.Errorf("db: run %s could not be decided: %w", d.Run, err)
 	}
@@ -551,6 +564,31 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		}
 	}
 	return w.emit(ctx, d.Namespace, d.Run, before, d.State, startedBy)
+}
+
+// runExpiry is when a finished run's envelopes and logs may be purged, and the zero time for a run
+// that has not finished: "a run that has not finished has nothing to purge".
+//
+// The retention the workflow declared, capped by the namespace's max_retention_days, which is read
+// here rather than trusted from the caller, as an artifact's is: "retain is capped by the namespace
+// quota and cannot exceed it; a workflow may always ask for less". A workflow that declares none is
+// kept as long as the namespace allows, since the ceiling is what bounds what nobody asked for.
+func runExpiry(ctx context.Context, tx pgx.Tx, d Decision) (time.Time, error) {
+	if d.FinishedAt.IsZero() {
+		return time.Time{}, nil
+	}
+	if d.Retain < 0 {
+		return time.Time{}, fmt.Errorf("db: run %s keeps its envelopes and logs for %s", d.Run, d.Retain)
+	}
+	days, err := retentionCeiling(ctx, tx, d.Namespace)
+	if err != nil {
+		return time.Time{}, err
+	}
+	keep := time.Duration(days) * 24 * time.Hour
+	if d.Retain > 0 && d.Retain < keep {
+		keep = d.Retain
+	}
+	return d.FinishedAt.Add(keep), nil
 }
 
 // Rewake sets the moment a run is due again, where nothing has written the run since it was read
