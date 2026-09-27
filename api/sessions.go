@@ -23,12 +23,11 @@ import (
 // OpenSession opens one, for the sign-in routes to call once a passkey or a password has proved who
 // is there; Principals.Identify reads it back on every request, beside the bearer token.
 //
-// No route ends a session its holder asks to end: the page names no sign-out, so none is served.
-// A session ends idle, at its lifetime, with its credential, while its user is suspended, and, for
-// one a link opened, with the link or the one replacing it; db.Wide.RevokeSessions is what a
-// sign-out would call. The identifier is 256 bits from the operating system's
-// generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the table
-// opens nothing to whoever reads it.
+// A session ends when its holder signs out, POST /api/v1/auth/sign-out, which the sign-in page
+// offers; idle, at its lifetime, with its credential, while its user is suspended, and, for one a
+// link opened, with the link or the one replacing it. The identifier is 256 bits from the operating
+// system's generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the
+// table opens nothing to whoever reads it.
 
 // SessionCookie is the cookie a session travels in, as the OpenAPI document's session scheme names
 // it. The __Host- prefix makes a browser refuse the cookie unless it is Secure, set for the whole
@@ -80,6 +79,9 @@ const (
 	// bearer token beside a browser's session, or two sessions, is a client confused about which
 	// it means.
 	oneCredential = "this request carries more than one credential, a bearer token beside a session cookie or two session cookies, and a request is answered as one principal: send the one meant"
+
+	// tokenSignsNothingOut is a sign-out presenting a bearer token, which is no session.
+	tokenSignsNothingOut = "a sign-out ends the session a browser's cookie carries, and this request carries a bearer token: a token is revoked with DELETE /api/v1/auth/tokens/{id}"
 )
 
 // OpenedBy is what opens a session, one of the two: a credential of its user, named by its
@@ -214,6 +216,40 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		return Identity{}, err
 	}
 	return as, nil
+}
+
+// endSession ends the session a request carries, as a sign-out asks at, and answers the status and
+// the sentence it is refused with, a zero status where it is not.
+//
+// It carries one session and nothing else: a bearer token is no session, and two credentials are
+// refused as they are everywhere. It comes from the public URL's origin, whatever it carries, since
+// ending a session changes something: a page of another host of the same site could otherwise sign
+// a browser out. A session that opens nothing now, idle, revoked or its user's suspended, is
+// ended all the same, and a request carrying none ends nothing: either way the browser is signed
+// out, which is what was asked, and its cookie is cleared.
+func (p *Principals) endSession(r *http.Request, now time.Time) (int, string, error) {
+	// What a request carries is refused first, since refusing it changes nothing, so that a script
+	// presenting a token, with no Origin header, is told how a token is revoked.
+	_, bearer := bearerOf(r)
+	values := p.sessionsOf(r)
+	switch {
+	case (bearer && len(values) > 0) || len(values) > 1:
+		return http.StatusBadRequest, oneCredential, nil
+	case bearer:
+		return http.StatusBadRequest, tokenSignsNothingOut, nil
+	}
+	if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
+		return http.StatusForbidden, crossOrigin, nil
+	}
+	if len(values) == 0 {
+		return 0, "", nil
+	}
+	hash := sha256.Sum256([]byte(values[0]))
+	err := p.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.EndSession(ctx, hash[:], now)
+		return err
+	})
+	return 0, "", err
 }
 
 // safe says whether a method only reads, which a request of another origin may carry a session on:
