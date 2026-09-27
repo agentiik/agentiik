@@ -2,7 +2,7 @@
 // checkout builds, in the images build/*.Dockerfile describes, each started the way the Compose file
 // of github.com/agentiik/deploy starts it, with nothing faked between them.
 //
-//	PostgreSQL          postgres:17-alpine, reached on its socket alone
+//	PostgreSQL          postgres:18-alpine, reached on its socket alone
 //	init                agentiik-api init from the API's image, as root, on a volume per service:
 //	                    the certificate, the keys, the bus identity and nats.conf, the migration,
 //	                    the namespace, the bootstrap token's hash, in the database, and a join
@@ -36,7 +36,7 @@
 //
 //	AGENTIIK_E2E=1 go test ./e2e -count=1 -v -timeout 25m
 //
-// It pulls postgres:17-alpine, nats:2-alpine, registry:2, docker:29-dind and alpine:3.21 the first
+// It pulls postgres:18-alpine, nats:2-alpine, registry:2, docker:29-dind and alpine:3.21 the first
 // time, builds the programs and the three images, and takes a few minutes. It starts two Docker
 // daemons, which is heavy for a laptop: the job is what runs it on every push.
 //
