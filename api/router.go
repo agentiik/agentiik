@@ -378,8 +378,8 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 // other route, a request with no credential is refused, and the handler is given who asks.
 //
 // It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
-// enrolment-only session, once sessions are served, "enrols passkeys and nothing else", and is
-// refused here, where openapi.json answers it 403 on each of them.
+// enrolment-only session "enrols passkeys and nothing else", and is refused by rt.identify, which
+// confined makes of the router's Identify, with the 403 openapi.json answers it on each of them.
 func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {

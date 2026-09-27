@@ -22,7 +22,12 @@ import (
 //
 // OpenSession opens one, for the sign-in routes to call once a passkey or a password has proved who
 // is there, or once an enrolment link has been opened; Principals.Identify reads it back on every
-// request, beside the bearer token. The identifier is 256 bits from the operating system's
+// request, beside the bearer token.
+//
+// No route ends a session its holder asks to end: the page names no sign-out, so none is served.
+// A session ends idle, at its lifetime, with its credential, while its user is suspended, and, for
+// one a link opened, with the link or the one replacing it; db.Wide.RevokeSessions is what a
+// sign-out would call. The identifier is 256 bits from the operating system's
 // generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the table
 // opens nothing to whoever reads it.
 
@@ -58,7 +63,7 @@ const sessionBytes = 32
 // The sentences a session refused is answered with.
 const (
 	// noSession is a session that opens nothing, one sentence for every reason, as noToken is.
-	noSession = "that session opens nothing: it is no session this installation opened, or it was revoked, has ended or was left idle too long, or its holder is suspended. Sign in again"
+	noSession = "that session opens nothing: it is no session this installation opened, or it was revoked, has ended or was left idle too long, or its holder is suspended. Sign in again, or open a fresh enrolment link"
 
 	// crossOrigin is a request changing something that a session carries from another origin.
 	// SameSite=Lax keeps another site's page from carrying the cookie on a POST, a PUT or a
@@ -105,7 +110,8 @@ type OpenedBy struct {
 //
 // A suspended user opens none with a credential, which is db.ErrSessionRefused, and opens one with
 // an enrolment code all the same, since "enrolling is how an account suspended for having no
-// passkey comes back"; a code revoked, past its hour or that opened a session already opens none.
+// passkey comes back"; a code revoked, past its hour, spent before now or that opened a session
+// already opens none.
 func OpenSession(ctx context.Context, w *db.Wide, login string, by OpenedBy, now time.Time) (*http.Cookie, error) {
 	if (by.Credential == "") == (len(by.EnrolmentCode) == 0) {
 		return nil, errors.New("api: a session is opened by a credential or by an enrolment code, one of the two")
