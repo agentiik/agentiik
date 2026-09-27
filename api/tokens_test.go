@@ -645,8 +645,9 @@ func (in *tokened) tokenOf(t *testing.T, who string) string {
 
 // A principal holds a hundred live tokens at most: the next is refused with 409 and nothing is
 // minted or recorded, one revoked or expired makes room again, and a service account is held to the
-// same hundred, whoever mints for it. Mints racing for the last place are counted one after the
-// other, and one of them takes it.
+// same hundred, whoever mints for it. Five mints racing for the last place leave a hundred: that
+// they are counted one after the other is db.Wide.LiveTokens's lock, whose own test holds it, and
+// this one holds the route to taking it before it mints.
 func TestAPrincipalHoldsAHundredLiveTokensAtMost(t *testing.T) {
 	in := tokenedInstallation(t)
 	alice := in.values["alice"]

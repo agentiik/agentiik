@@ -298,17 +298,20 @@ func TestLiveTokensAreCountedOneMintAtATime(t *testing.T) {
 			return err
 		})
 	}()
+	// The first transaction is let go whatever the second did, so that a count taken without
+	// the lock fails the test rather than leaving the first holding its connection for good.
 	select {
 	case live := <-second:
-		t.Fatalf("a second count answered %d while the first transaction held the principal", live)
+		t.Errorf("a second count answered %d while the first transaction held the principal", live)
+		close(release)
 	case <-time.After(300 * time.Millisecond):
+		close(release)
+		if live := <-second; live != 2 {
+			t.Errorf("the second count is %d once the first minted one more", live)
+		}
 	}
-	close(release)
 	if err := <-first; err != nil {
 		t.Fatal(err)
-	}
-	if live := <-second; live != 2 {
-		t.Errorf("the second count is %d once the first minted one more", live)
 	}
 	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
 		_, err := w.LiveTokens(ctx, "finance/nobody", now)

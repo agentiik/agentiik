@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -270,5 +271,38 @@ func TestServiceAccountActsAreRecordedInTheirNamespace(t *testing.T) {
 	}
 	if got := in.accounts(t, in.values["alice"]); !slices.Equal(got, []string{"bob/agentiik", "finance/agentiik", "finance/deploy", "finance/nightly"}) {
 		t.Errorf("acts the audit log refused left %q", got)
+	}
+}
+
+// A service account created or removed with the bootstrap token while the first administrator's
+// enrolment is committing waits for it, and is then refused as the token's next request would be,
+// rather than read the token live a moment before it ends and commit after.
+func TestAServiceAccountActOfTheBootstrapTokenWaitsForTheEnrolmentThatEndsIt(t *testing.T) {
+	for _, act := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/service-accounts", `{"namespace":"finance","name":"late"}`},
+		{"DELETE", "/api/v1/service-accounts/finance/nightly", ""},
+	} {
+		in := withBuiltIns(t)
+		answered := make(chan *httptest.ResponseRecorder, 1)
+		if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			if _, err := w.EndBootstrap(ctx, in.at); err != nil {
+				return err
+			}
+			go func() { answered <- in.ask(t, act.method, act.path, in.bootstrap, act.body) }()
+			return waitForLocks(t, in.super, 1)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if w := <-answered; w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s with the bootstrap token as it ended was answered %d: %s", act.method, act.path, w.Code, w.Body)
+		}
+		var accounts int
+		if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(),
+			`select count(*) from service_accounts where namespace = 'finance' and name in ('late', 'nightly')`).Scan(&accounts); err != nil {
+			t.Fatal(err)
+		}
+		if accounts != 1 {
+			t.Errorf("%s %s with the bootstrap token as it ended left finance with %d of late and nightly", act.method, act.path, accounts)
+		}
 	}
 }

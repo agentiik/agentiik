@@ -904,7 +904,14 @@ func TestTwoRequestsCreatingOneUserAtOnceMakeOneUserAndOneOpenLink(t *testing.T)
 // pool waits for at cleanup, for as long as the test binary is allowed to run.
 func (in people) waitForLocks(t *testing.T, n int) error {
 	t.Helper()
-	watcher := dbtest.Superuser(t, in.super)
+	return waitForLocks(t, in.super, n)
+}
+
+// waitForLocks waits until n transactions of the test's database, which super reaches, wait on a
+// lock, and answers an error if they have not within ten seconds.
+func waitForLocks(t *testing.T, super string, n int) error {
+	t.Helper()
+	watcher := dbtest.Superuser(t, super)
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		var waiting int
 		if err := watcher.QueryRow(t.Context(),
