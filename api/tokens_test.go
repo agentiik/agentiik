@@ -331,6 +331,7 @@ func TestAScopeOnlyNarrowsAndANarrowedTokenMintsNone(t *testing.T) {
 		`{"scope":{"permissions":["run:read"],"every":true}}`: "not a field of it",
 		`{"scope":{"within":["finance","finance"]}}`:          "twice",
 		`{"scope":"finance"}`:                                 "an object",
+		`{"device_label":"a\u0000b"}`:                         "U+0000",
 		`{"device_label":""}`:                                 "device_label is empty",
 		`{"device_label":"` + strings.Repeat("é", 257) + `"}`: "at most 256",
 		`{"priority":"high"}`:                                 "not a field of it",

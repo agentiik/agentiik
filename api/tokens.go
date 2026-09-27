@@ -98,6 +98,11 @@ func (q *TokenRequest) field(b *body, name string) error {
 			return errors.New("device_label is empty: it says which machine or which script the token is for, and a token with none leaves it out")
 		case utf8.RuneCountInString(q.DeviceLabel) > deviceLabelMax:
 			return fmt.Errorf("device_label is %d characters, and it is at most %d, to be listed beside the token", utf8.RuneCountInString(q.DeviceLabel), deviceLabelMax)
+		case strings.ContainsRune(q.DeviceLabel, 0):
+			// PostgreSQL holds no U+0000 in text, so a label holding one would be refused by
+			// the database, as a failure of the API's own, rather than here, in front of
+			// whoever sent it.
+			return errors.New("device_label holds U+0000, which no label is written with and the installation cannot keep")
 		}
 		return nil
 	case "expires_at":
