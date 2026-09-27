@@ -39,7 +39,10 @@ var byteOrderMark = []byte("\xef\xbb\xbf")
 // It is parsed with encoding/json/v2, which refuses a member written twice and invalid UTF-8, and
 // matches member names exactly, where encoding/json keeps the last of two "challenge" members and
 // reads "Challenge" as one. A browser writes neither, so client data that has either was not
-// written by one, and which of its readings is checked is not a question worth leaving open.
+// written by one, and which of its readings is checked is not a question worth leaving open. In
+// Go 1.27 the package sits behind the jsonv2 experiment, on by default: a build that turns the
+// experiment off fails to compile this file rather than reading client data another way, and the
+// tests hold the two behaviours relied on here.
 func checkClientData(raw []byte, typ string, c Ceremony) error {
 	if len(raw) > maxInput {
 		return fmt.Errorf("webauthn: the client data is %d bytes, more than the %d read", len(raw), maxInput)

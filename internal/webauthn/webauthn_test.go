@@ -258,11 +258,12 @@ var clientDataRefusals = []struct {
 		other[0] ^= 1
 		return clientDataJSON(typ, other, origin)
 	}, "another challenge"},
+	// The same bytes, spelled with the padding §3 leaves out, or in the standard alphabet, which
+	// differs from base64url in the challenge's first character (testChallenge).
 	{"with the challenge padded", func(typ string, ch []byte, origin string) []byte {
-		return fmt.Appendf(nil, `{"type":%q,"challenge":%q,"origin":%q}`, typ, base64.URLEncoding.EncodeToString(ch[:31]), origin)
+		return fmt.Appendf(nil, `{"type":%q,"challenge":%q,"origin":%q}`, typ, base64.URLEncoding.EncodeToString(ch), origin)
 	}, "another challenge"},
 	{"with the challenge in standard base64", func(typ string, ch []byte, origin string) []byte {
-		ch = bytes.Repeat([]byte{0xfb}, 32)
 		return fmt.Appendf(nil, `{"type":%q,"challenge":%q,"origin":%q}`, typ, base64.RawStdEncoding.EncodeToString(ch), origin)
 	}, "another challenge"},
 	{"from another origin", func(typ string, ch []byte, _ string) []byte {
@@ -352,7 +353,7 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 			r.object = func(ad []byte) []byte {
 				return append(enc(pairs{{"fmt", "none"}, {"attStmt", pairs{}}, {"authData", ad}}), 0)
 			}
-		}, "follow the item"},
+		}, "left after the item"},
 		{"an attestation object that is an array", ES256, func(r *registration) {
 			r.object = func(ad []byte) []byte { return enc([]any{"none", pairs{}, ad}) }
 		}, "is not a map"},
@@ -401,7 +402,7 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 				ad[32] &^= flagAT
 				return enc(pairs{{"fmt", "none"}, {"attStmt", pairs{}}, {"authData", ad}})
 			}
-		}, "follow the authenticator data"},
+		}, "left after the authenticator data"},
 		{"an empty credential ID", ES256, func(r *registration) { r.data.id = nil }, "credential ID is empty"},
 		{"a credential ID of 1024 bytes", ES256, func(r *registration) { r.data.id = make([]byte, 1024) }, "longer than the 1023"},
 		{"a credential ID longer than the data", ES256, func(r *registration) {
@@ -414,7 +415,7 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 			}
 		}, "ends inside its attested credential data"},
 		{"no public key", ES256, func(r *registration) { r.data.publicKey = nil }, "public key cannot be read"},
-		{"a byte after the public key", ES256, func(r *registration) { r.data.trailing = []byte{0} }, "1 bytes follow the authenticator data"},
+		{"a byte after the public key", ES256, func(r *registration) { r.data.trailing = []byte{0} }, "1 byte is left after the authenticator data"},
 		{"extensions flagged and absent", ES256, func(r *registration) { r.data.flags |= flagED }, "extensions of the authenticator data cannot be read"},
 		{"extensions that are not a map", ES256, func(r *registration) {
 			r.data.flags |= flagED
@@ -428,7 +429,7 @@ func TestARegistrationRefusesWhatItIsThereToRefuse(t *testing.T) {
 			r.data.flags |= flagED
 			r.data.extensions = enc(pairs{{"credProtect", 1}})
 			r.data.trailing = []byte{0}
-		}, "follow the authenticator data"},
+		}, "left after the authenticator data"},
 
 		{"a public key that is not a map", ES256, func(r *registration) { r.data.publicKey = enc([]any{2, -7}) }, "not a map"},
 		{"a public key with no algorithm", ES256, func(r *registration) {
@@ -580,7 +581,7 @@ func TestAnAssertionRefusesWhatItIsThereToRefuse(t *testing.T) {
 			s.data.id = s.stored.ID
 			s.data.publicKey = s.stored.PublicKey
 		}, "carries attested credential data"},
-		{"a byte after the authenticator data", ES256, func(s *assertion) { s.data.trailing = []byte{0} }, "1 bytes follow the authenticator data"},
+		{"a byte after the authenticator data", ES256, func(s *assertion) { s.data.trailing = []byte{0} }, "1 byte is left after the authenticator data"},
 		{"extensions flagged and absent", ES256, func(s *assertion) { s.data.flags |= flagED }, "extensions of the authenticator data cannot be read"},
 
 		{"an ES256 signature with a bit flipped", ES256, func(s *assertion) { s.tamper = flipLast }, "signature does not verify"},

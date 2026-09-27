@@ -108,7 +108,7 @@ func parseAuthenticatorData(b []byte) (authenticatorData, error) {
 	}
 
 	if len(rest) != 0 {
-		return authenticatorData{}, fmt.Errorf("webauthn: %d bytes follow the authenticator data", len(rest))
+		return authenticatorData{}, fmt.Errorf("webauthn: %s after the authenticator data", bytesLeft(len(rest)))
 	}
 	return ad, nil
 }

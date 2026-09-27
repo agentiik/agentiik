@@ -6,7 +6,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Access
 
-- Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward is `ErrPossibleClone`, for the caller to decide on.
+- Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward, where it is not zero on both sides, is `ErrPossibleClone`, for the caller to decide on.
 
 ## v0.2.5, 2026-09-26
 

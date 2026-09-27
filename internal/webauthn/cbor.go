@@ -57,7 +57,7 @@ func decodeCBOR(b []byte) (any, error) {
 		return nil, err
 	}
 	if n != len(b) {
-		return nil, fmt.Errorf("cbor: %d bytes follow the item", len(b)-n)
+		return nil, fmt.Errorf("cbor: %s after the item", bytesLeft(len(b)-n))
 	}
 	return v, nil
 }
@@ -66,8 +66,8 @@ func decodeCBOR(b []byte) (any, error) {
 // data needs it: the credential public key is followed by the extensions, and where one ends is
 // known only by reading it.
 //
-// An integer is an int64, a byte string a []byte of its own, text a string, an array an []any and
-// a map a map[any]any whose keys are int64 or string.
+// An integer is an int64, a byte string a []byte of its own, text a string, true and false a bool,
+// an array an []any and a map a map[any]any whose keys are int64 or string.
 func decodeCBORPrefix(b []byte) (any, int, error) {
 	if len(b) > maxInput {
 		return nil, 0, fmt.Errorf("cbor: the input is %d bytes, more than the %d read", len(b), maxInput)
@@ -78,6 +78,14 @@ func decodeCBORPrefix(b []byte) (any, int, error) {
 		return nil, 0, err
 	}
 	return v, d.off, nil
+}
+
+// bytesLeft says how many bytes are left over, as a refusal names them.
+func bytesLeft(n int) string {
+	if n == 1 {
+		return "1 byte is left"
+	}
+	return fmt.Sprintf("%d bytes are left", n)
 }
 
 type decoder struct {

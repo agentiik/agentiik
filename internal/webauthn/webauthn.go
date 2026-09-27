@@ -34,8 +34,9 @@
 //   - the challenge: random, 16 bytes at least (§13.4.3), kept when the options are issued and
 //     accepted once, which is what stops a response being replayed;
 //   - at registration, that no user holds the credential ID already (§7.1 step 26);
-//   - at assertion, finding the record by the credential ID the browser returned, and that it
-//     belongs to the user the response's user handle names (§7.2 steps 5 and 6);
+//   - at assertion, finding the record by the credential ID the browser returned, that it is one
+//     of the credentials the options listed where they listed any (§7.2 step 5), and that it
+//     belongs to the user the response's user handle names (§7.2 step 6);
 //   - the policy: device_bound_only reads Credential.BackupEligible, and what a possible clone
 //     means is decided on ErrPossibleClone;
 //   - storing the record a registration returns, and the one an assertion returns in its place.

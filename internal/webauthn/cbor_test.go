@@ -122,7 +122,8 @@ func TestTheDecoderRefusesEverythingElse(t *testing.T) {
 		{"an array key", "a1 80 00", "only integers and text"},
 		{"a boolean key", "a1 f5 00", "only integers and text"},
 
-		{"a byte after the item", "00 00", "1 bytes follow the item"},
+		{"a byte after the item", "00 00", "1 byte is left after the item"},
+		{"bytes after the item", "00 00 00", "2 bytes are left after the item"},
 		{"six levels of arrays", "81 81 81 81 81 81 00", "nest deeper than 5"},
 		{"six levels of maps", "a1 00 a1 00 a1 00 a1 00 a1 00 a1 00 00", "nest deeper than 5"},
 	} {

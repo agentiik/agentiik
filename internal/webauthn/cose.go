@@ -161,7 +161,7 @@ func parsePublicKey(v any) (publicKey, error) {
 		// The exponent crypto/rsa verifies with: odd, at least 3, and within 31 bits. Refusing
 		// another here keeps a registration from storing a key no assertion could ever pass.
 		if !e.IsInt64() || e.Int64() < 3 || e.Int64() > 1<<31-1 || e.Bit(0) == 0 {
-			return publicKey{}, fmt.Errorf("webauthn: the RSA exponent %s is refused: it is odd, 3 at least, and within 31 bits", e)
+			return publicKey{}, fmt.Errorf("webauthn: the RSA exponent %s is refused: one is odd, 3 at least and within 31 bits", e)
 		}
 		k.rsa = &rsa.PublicKey{N: n, E: int(e.Int64())}
 	default:

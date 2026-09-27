@@ -24,18 +24,22 @@ import (
 // parts a test can change one at a time, which is how every check is shown to refuse the one thing
 // it is there for.
 
-// The Relying Party of the tests, and a challenge of the length the API issues.
+// The Relying Party of the tests.
 const (
 	testRPID   = "agentiik.example.com"
 	testOrigin = "https://agentiik.example.com"
 )
 
+// testChallenge is 32 random bytes, the first of them 0xfb, whose base64 is "+" in the standard
+// alphabet and "-" in base64url, so that a challenge written in the wrong alphabet never passes
+// for the right one by chance, and a padded one carries its "=" (32 bytes are not a multiple of 3).
 func testChallenge(t testing.TB) []byte {
 	t.Helper()
 	c := make([]byte, 32)
 	if _, err := rand.Read(c); err != nil {
 		t.Fatal(err)
 	}
+	c[0] = 0xfb
 	return c
 }
 
