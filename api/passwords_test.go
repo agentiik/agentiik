@@ -850,17 +850,18 @@ func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
 
 // Where a passkey is required, a password's session enrols passkeys and nothing else whatever the
 // account holds beside it: carol, holding a password beside two device-bound passkeys, is confined
-// as alice, holding none, is, and so is a password a recovery code sets, which "authorises only
-// enrolling a new passkey" there. Where passkeys are optional, each opens a full session.
+// as alice, holding none, is, and so is a password a recovery code sets beside one passkey, which
+// "authorises only enrolling a new passkey" there; beside two, the code sets none, since it could
+// only ever enrol (TestAPasswordThatCouldOnlyEnrolIsNotSet). Where passkeys are optional, each opens
+// a full session.
 func TestAPasswordOnlyEnrolsWhereAPasskeyIsRequiredWhateverTheAccountHolds(t *testing.T) {
 	in := somePasswords(t)
 	in.passkeyed(t, "carol", "carol-passkey-2", false)
 	in.signedIn(t, "carol", api.SessionEnrolment)
 	in.signedIn(t, "alice", api.SessionEnrolment)
 	in.passkeyed(t, "erin", "erin-1", false)
-	in.passkeyed(t, "erin", "erin-2", false)
 	if w := in.enrolWith(t, in.enrolCode(t, "erin", db.EnrolmentRecovery), "erin's own passphrase"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"session":"enrolment"`) {
-		t.Errorf("a password erin set from a recovery code beside two passkeys answered %d %s", w.Code, w.Body)
+		t.Errorf("a password erin set from a recovery code beside one passkey answered %d %s", w.Code, w.Body)
 	}
 	in.policy(t, "allowed", "optional")
 	in.signedIn(t, "carol", api.SessionFull)
