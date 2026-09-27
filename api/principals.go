@@ -34,7 +34,7 @@ const BootstrapOperator Principal = "operator"
 // second only once the bootstrap token has ended, which is when a token that stopped working is most
 // likely that one: the line stays in the installation's settings, and a script still presents it.
 const (
-	noToken = "that token opens nothing: it is not one this installation issued, or it was revoked or has expired"
+	noToken = "that token opens nothing: it is no API token this installation issued, or it was revoked or has expired, or its holder is suspended"
 
 	noTokenSinceTheBootstrap = noToken + ". If it is the bootstrap token, that ended when the first administrator enrolled a passkey: sign in with agk login, or use a service account's token"
 )
