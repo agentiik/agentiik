@@ -44,7 +44,7 @@ import (
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
 // cancellation, secret write, runner policy change, runner drain and revocation, and namespace
 // changes; and from v0.3.0 the identity and access events, of which users, their enrolment links,
-// groups, API tokens and the passkey ceremonies are here so far. Approval arrives with the wait
+// groups, service accounts, API tokens and the passkey ceremonies are here so far. Approval arrives with the wait
 // step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
@@ -92,6 +92,13 @@ const (
 	GroupDelete       = "group.delete"
 	GroupMemberAdd    = "group_member.add"
 	GroupMemberRemove = "group_member.remove"
+	// ServiceAccountCreate and ServiceAccountDelete are a service account created in a namespace
+	// and removed with its tokens and grants, recorded in that namespace, since a service account
+	// is a principal that holds tokens. A namespace's built-in identity is created with the
+	// namespace, in its namespace.create, save where a namespace made before v0.3.0 is given one,
+	// which is recorded as a creation by installation.
+	ServiceAccountCreate = "service_account.create"
+	ServiceAccountDelete = "service_account.delete"
 )
 
 // The API token events of v0.3.0's identity and access events: a token minted, POST

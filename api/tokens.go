@@ -37,10 +37,21 @@ import (
 // a credential for good and every one is renewed by someone who still means it". Both are counted
 // on the calendar in UTC from the moment the token is minted; the table holds the year to 8808
 // hours, which a year counted any way never reaches.
+//
+// An expiry asked for is taken up to tokenSkew past the year, as asked: a client computing "a year
+// from now" on a clock that runs a little ahead of the installation's would otherwise be refused
+// the year it may have, and a minute more on a year is no credential for good.
 const (
 	tokenDefaultDays = 90
 	tokenMostYears   = 1
+	tokenSkew        = time.Minute
 )
+
+// tokensMost is how many live tokens one principal may hold, neither revoked nor expired: enough
+// for every machine and script a person or a service account is used from, and few enough that a
+// script minting one at every run, and never revoking it, is stopped before the listing of its
+// principal's tokens is too long to read, rather than a year of them later.
+const tokensMost = 100
 
 // deviceLabelMax is how long a device label may be, in characters, as the wire's apiToken holds it:
 // enough to say which machine or which script, short enough to list.
@@ -63,6 +74,15 @@ const (
 
 	// A token the caller may not revoke answers what one that does not exist answers.
 	noSuchToken = "no such token, or not yours"
+
+	// The built-in identity is the installation's own for the runs nobody started: a token of it
+	// would let whoever holds the token act as those runs do, with the grants an owner gave them
+	// for that alone, and outlive that person's access by up to a year.
+	builtInMintsNothing = "principal %s is the namespace's built-in identity, the installation's unattended identity, to which the runs nobody started there are attributed, and no token is minted for it: a script is given a service account of its own"
+
+	// A service account's token renews nothing of its own: "every one is renewed by someone who
+	// still means it", and a token that minted its successor would be a credential for good.
+	selfRenewal = "a service account's token mints no token for that service account, since every token is renewed by someone who still means it: an owner of its namespace mints the next one, with agk token create --for"
 )
 
 // TokenRequest is what POST /api/v1/auth/tokens reads, openapi.json's tokenRequest. Every member is
@@ -280,11 +300,18 @@ func NewTokens(rt *Router, o TokenOptions) (*TokenAPI, error) {
 	return t, nil
 }
 
+// errTokensMost is a principal holding tokensMost live tokens already.
+var errTokensMost = errors.New("api: that principal holds as many live tokens as one may")
+
 // mint answers a token for the caller or for a service account of a namespace it owns, shown this
 // once, and records it in the audit log in the transaction that writes it.
 //
 // What the caller presented is judged before the body is read, since no body changes it: a
-// narrowed token mints nothing, and neither does the bootstrap token.
+// narrowed token mints nothing, and neither does the bootstrap token. A service account's token
+// mints none for that service account, whose tokens an owner of its namespace renews, nobody mints
+// one for a namespace's built-in identity, which is the installation's own, and nobody is
+// minted a token past tokensMost live ones, counted under a lock on the principal so that two
+// mints at once cannot both take the last place.
 func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 	switch {
 	case caller.Principal == BootstrapOperator:
@@ -316,7 +343,7 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		}
 		// Another principal is a service account of a namespace the caller owns, or nobody the
 		// caller may mint for, whichever it is: one sentence for the absent and the hidden.
-		namespace, _, account := strings.Cut(q.Principal, "/")
+		namespace, name, account := strings.Cut(q.Principal, "/")
 		owned, err := caller.Owned(r.Context())
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "what the caller owns could not be read")
@@ -326,7 +353,17 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("principal %s is neither you nor a service account of a namespace you own", q.Principal))
 			return
 		}
+		// Asked once the namespace is known to be the caller's, so that whoever does not own it
+		// is answered as for any other service account of it.
+		if name == db.BuiltIn {
+			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf(builtInMintsNothing, q.Principal))
+			return
+		}
 		holder = q.Principal
+	}
+	if holder == string(caller.Principal) && strings.Contains(holder, "/") {
+		fail(w, http.StatusForbidden, selfRenewal)
+		return
 	}
 
 	// Read off one clock, to the microsecond PostgreSQL keeps, so that the expiry answered is the
@@ -339,7 +376,7 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		case !expires.After(now):
 			fail(w, http.StatusUnprocessableEntity, "expires_at has already passed: a token expires after it is minted")
 			return
-		case expires.After(now.AddDate(tokenMostYears, 0, 0)):
+		case expires.After(now.AddDate(tokenMostYears, 0, 0).Add(tokenSkew)):
 			fail(w, http.StatusUnprocessableEntity, "expires_at is more than a year away, and a token expires within a year, so that none is a credential for good")
 			return
 		}
@@ -358,6 +395,13 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 	}
 	issued := listedToken(row)
 	err = t.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		live, err := wide.LiveTokens(ctx, holder, now)
+		if err != nil {
+			return err
+		}
+		if live >= tokensMost {
+			return errTokensMost
+		}
 		if err := wide.MintToken(ctx, row); err != nil {
 			return err
 		}
@@ -377,6 +421,9 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 	switch {
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("principal %s names nobody", holder))
+		return
+	case errors.Is(err, errTokensMost):
+		fail(w, http.StatusConflict, fmt.Sprintf("%s holds %d live tokens, the most one principal may hold: revoke one no longer used, with agk token revoke, and mint again", holder, tokensMost))
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the token could not be minted")

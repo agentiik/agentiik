@@ -27,7 +27,8 @@ import (
 // it with TOKEN=$(agk token create ...), and says on standard error what it minted and that this is
 // the one time it is shown. agk token list prints one line a token, and agk token revoke takes the
 // identifier the list prints. -o json writes the installation's answer as it gave it. A refusal is
-// the installation's own sentence, exit 1; an installation that did not answer is exit 4.
+// the installation's own sentence, exit 1; an installation that did not answer is exit 4, and so is
+// a token minted or revoked answered with a 5xx, since whether it was cannot be told from that.
 
 // tokenCreate is agk token create [--for NS/NAME] [--expires 30d] [--scope ...] [--label TEXT].
 func tokenCreate(ctx context.Context, e Env, args []string) int {
@@ -69,7 +70,7 @@ func tokenCreate(ctx context.Context, e Env, args []string) int {
 
 	var raw json.RawMessage
 	if err := at.tokenRequest(ctx, http.MethodPost, "/api/v1/auth/tokens", q, http.StatusCreated, &raw); err != nil {
-		return tokenRefused(e, err, "")
+		return tokenRefused(e, err, "", "whether a token was minted cannot be told from it: agk token list shows the tokens minted, and one whose value never came back is revoked there")
 	}
 	if *output == "json" {
 		return tokenJSON(e, raw)
@@ -107,7 +108,7 @@ func tokenList(ctx context.Context, e Env, args []string) int {
 	}
 	var raw json.RawMessage
 	if err := at.tokenRequest(ctx, http.MethodGet, "/api/v1/auth/tokens", nil, http.StatusOK, &raw); err != nil {
-		return tokenRefused(e, err, "")
+		return tokenRefused(e, err, "", "")
 	}
 	if *output == "json" {
 		return tokenJSON(e, raw)
@@ -160,7 +161,7 @@ func tokenRevoke(ctx context.Context, e Env, args []string) int {
 	}
 	id := named[0]
 	if err := at.tokenRequest(ctx, http.MethodDelete, "/api/v1/auth/tokens/"+url.PathEscape(id), nil, http.StatusNoContent, nil); err != nil {
-		return tokenRefused(e, err, id)
+		return tokenRefused(e, err, id, "whether token "+id+" was revoked cannot be told from it: agk token list reads it back, and revoking it again is answered the same whether it was or not")
 	}
 	fmt.Fprintf(e.Out, "revoked token %s: it opens nothing from its next request\n", id)
 	return exitSucceeded
@@ -291,11 +292,18 @@ func (r remote) tokenRequest(ctx context.Context, method, path string, body any,
 }
 
 // tokenRefused says why the installation said no, in its own sentence, and leaves with the code for
-// it: no answer at all is no outcome, and anything the installation said is a refusal.
-func tokenRefused(e Env, err error, id string) int {
+// it: no answer at all is no outcome, and anything the installation said is a refusal, but for a
+// change answered with a 5xx. That change may have been made before the answer failed, a gateway
+// answering for an API that had already committed, and a script told exit 1, "refused, and nothing
+// ran", would believe a token revoked was still live, or mint another beside one minted. So it is
+// no outcome, and unknown says how to tell; a read answered so changed nothing, and has none.
+func tokenRefused(e Env, err error, id, unknown string) int {
 	switch status := statusOf(err); {
 	case errors.Is(err, errUnreachable):
 		fmt.Fprintln(e.Err, err)
+		return exitNoOutcome
+	case unknown != "" && status >= 500:
+		fmt.Fprintf(e.Err, "the installation answered %d, %s, and %s\n", status, err, unknown)
 		return exitNoOutcome
 	case status == http.StatusUnauthorized:
 		fmt.Fprintf(e.Err, "the installation did not accept the credential in %s: %s\n", tokenVariable, err)

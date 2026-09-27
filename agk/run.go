@@ -166,6 +166,16 @@ var triggerKinds = [...]string{
 	TriggerWorkflow:  "workflow",
 }
 
+// Unattended says whether a run of this kind is started with nobody asking for it at that moment: a
+// schedule coming round, a webhook arriving or an event published. Such a run is attributed to its
+// namespace's built-in identity, NS/agentiik, and "not to the person who last edited the workflow.
+// So a schedule survives its author leaving, and revoking that person's access does not silently
+// stop production." Every other kind is somebody asking, whom the run is attributed to: a person at
+// a client, an MCP client's principal, a Terraform token's.
+func (t TriggerKind) Unattended() bool {
+	return t == TriggerSchedule || t == TriggerWebhook || t == TriggerEvent
+}
+
 // String names the trigger kind.
 func (t TriggerKind) String() string {
 	if t < 0 || int(t) >= len(triggerKinds) {

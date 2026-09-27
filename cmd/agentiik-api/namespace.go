@@ -41,6 +41,13 @@ func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name strin
 	return exitStopped
 }
 
+// loginHoldsName is a namespace not created because a user's login is its name.
+type loginHoldsName string
+
+func (name loginHoldsName) Error() string {
+	return fmt.Sprintf("%s is a user's login, and logins and namespace names share one name space, so no namespace %s was created", string(name), string(name))
+}
+
 // namespace creates or removes one namespace, as the role the API connects as, and records it in
 // the audit log in the same transaction. It says what it did.
 //
@@ -83,7 +90,7 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 	case errors.Is(err, api.ErrPersonalNamespace):
 		return fmt.Errorf("%s, so it was not removed", api.PersonalRefusal(name))
 	case errors.Is(err, db.ErrNameTaken):
-		return fmt.Errorf("%s is a user's login, and logins and namespace names share one name space, so no namespace %s was created", name, name)
+		return loginHoldsName(name)
 	case errors.As(err, &holds):
 		return fmt.Errorf("%s, so it was not removed", holds.Held())
 	case err != nil:
@@ -96,6 +103,40 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 		fmt.Fprintf(stdout, "created namespace %s\n", name)
 	default:
 		fmt.Fprintf(stdout, "namespace %s already exists, and was left as it was\n", name)
+	}
+	return nil
+}
+
+// builtInIdentities gives every namespace that has no built-in identity, NS/agentiik, its own, as
+// the role the API connects as, and records each in the audit log, in the namespace, by
+// installation. It says which it gave one, and nothing where none lacked it.
+//
+// A namespace is created with its built-in identity from v0.3.0, so the ones that lack it are those
+// v0.2 made, which an upgrade keeps: init and migrate run this at every run, since one of the two
+// runs wherever an installation is upgraded, and the runs nobody started there are attributed to
+// that identity. Nothing is granted to it.
+func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) error {
+	var given []string
+	err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		if given, err = w.GiveBuiltInIdentities(ctx); err != nil {
+			return err
+		}
+		for _, name := range given {
+			if err := w.AuditIn(ctx, name, audit.Record{
+				Actor: namespaceActor, Action: audit.ServiceAccountCreate, Target: name + "/" + db.BuiltIn, Result: audit.Done,
+				Detail: map[string]any{"built_in": true},
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("the namespaces made before v0.3.0 could not be given their built-in identities: %w", err)
+	}
+	for _, name := range given {
+		fmt.Fprintf(stdout, "gave namespace %s its built-in identity, %s/%s, which holds no grant until an owner gives it one\n", name, name, db.BuiltIn)
 	}
 	return nil
 }

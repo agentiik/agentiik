@@ -12,6 +12,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The v0.2.5 operator token is the bootstrap token and goes on working after the upgrade, with nothing to do by hand: `init` keeps its hash in the database from `AGK_OPERATOR_TOKEN`, the API no longer reads `AGK_OPERATOR_TOKEN_FILE`, which a v0.2.5 `compose.yaml` may go on setting, and `operator-token.sha256` is left where it was.
 - The operator token of a server that runs no `init`, Homebrew's or one put together by hand, goes on working too: `agentiik-api migrate` takes `AGK_OPERATOR_TOKEN` as `init` does, and with none set imports, once, the v0.2 hash in the file `AGK_OPERATOR_TOKEN_FILE` names where the database keeps no hash and the bootstrap has not ended; a file that is not there imports nothing, one in another shape or readable by others fails the run.
+- A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 
 ### Access
 
@@ -32,7 +33,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### API
 
-- `POST /api/v1/auth/tokens` mints an API token, `agktoken_` and 256 bits shown once and kept as its SHA-256, for the caller or a service account of a namespace it owns, expiring in 90 days unless asked otherwise and within a year, narrowed by an optional scope; a narrowed token and the bootstrap token mint none. Audited as `api_token.create`.
+- `POST /api/v1/auth/tokens` mints an API token, `agktoken_` and 256 bits shown once and kept as its SHA-256, for the caller or a service account of a namespace it owns, expiring in 90 days unless asked otherwise and within a year, a minute more taken as asked for a client's clock running ahead, narrowed by an optional scope; a narrowed token, the bootstrap token and a service account's token asking for that service account mint none (403), none is minted for a namespace's built-in `NS/agentiik` (422), and a principal holding 100 live tokens is refused another (409). Audited as `api_token.create`.
 - `GET /api/v1/auth/tokens` lists the tokens still accepted, the caller's and its service accounts', with last use and label, a narrowed token itself alone, and `DELETE /api/v1/auth/tokens/{id}` revokes one from its next request, audited as `api_token.revoke`. A service account's token is audited in its namespace, a user's on the installation.
 - `init` keeps the bootstrap token's hash in the database at every run, a changed token replacing it, says at every run that the token set is ignored once the bootstrap has ended, and mints none: with none set and none kept it says that nobody can create the first administrator.
 - `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
@@ -43,6 +44,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
 - A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it, a display name or admin left out keeping what was recorded, and a display name left out at creation being the login. The bootstrap token creating an administrator is answered a first administrator's link.
 - A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own, and, once the bootstrap token has ended, for the last administrator who can sign in.
+- `GET` and `POST /api/v1/service-accounts` list the service accounts of the namespaces the caller owns, the built-in `NS/agentiik` of each among them, and create one, `NS/NAME`, in one of them, `agentiik` refused; `DELETE /api/v1/service-accounts/{ns}/{name}` removes one with its tokens and grants, the built-in refused with 409. Audited as `service_account.create` and `service_account.delete` in the namespace.
+- `init` says so and goes on where a user's login holds the name of the namespace its settings name, rather than failing and keeping every service from starting.
 - `/api/v1/{ns}/grants` and `/api/v1/{ns}/workflows/{name}/grants` list, write and revoke grants and denies behind `grant:manage` at that scope, and an administrator writes one in any namespace; audited as `grant.create` and `grant.delete`. A workflow's list shows its namespace's grants too, each with its scope; a grant is revoked at the scope it was written at; a principal that does not exist, or a service account of a namespace its writer does not see, is 422.
 - A grant an administrator writes by the installation's power, and an administrator widening their own access, a role given to themselves, a group they are in or a service account of a namespace they own, or a deny taken from one, tell each of the namespace's owners, `admin_access_widened`, or every holder of its owner role where its record names none.
 - `GET /api/v1/me` answers the caller's record, groups, permissions per namespace and per workflow where they differ, narrowed by its token, and its notifications, kept 90 days; `DELETE /api/v1/me/notifications/{id}` dismisses one. A narrowed token reads and dismisses none.
@@ -60,6 +63,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A suspended user's enrolment link still opens its session, and one it opened stays open, since enrolling is how such an account comes back; a credential of theirs opens nothing.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
+- `db.NS.CreateRun` attributes a run of a schedule, a webhook or an event (`agk.TriggerKind.Unattended`) to its namespace's built-in identity, `NS/agentiik`, and refuses one naming anybody else, so that no later trigger attributes its runs to the workflow's last editor.
+- `db.Wide` lists, reads and removes service accounts, refusing the built-in identity with `db.ErrBuiltIn`, gives namespaces their missing built-in identities, and counts a principal's live tokens under a lock on it (`LiveTokens`).
 - A fresh enrolment link ends the sessions every earlier link of its kind opened, spent or not, and a code spent before a session opens opens none.
 - Migration 0034 adds `notifications`, one row per reader: `db.NS.TellOwners` writes them in the grant's transaction, `db.Wide.NotificationsOf` reads a reader's and removes those past 90 days, `db.Wide.DismissNotification` removes one.
 - `db.NS.AccessGrantsAt` lists what applies at a scope, `db.NS.RevokeAccess` revokes a grant at the scope it was written at and answers it, and `db.NS.Present` tells a namespace or a workflow that is not there.
@@ -76,14 +81,16 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds that no keyword of `workflow.schema.json`, and no field of a parsed workflow or of its graph, confers access.
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
 - Package `internal/webauthn/webauthntest` is a software authenticator answering the API's options as a browser would, held to `internal/webauthn` by its tests.
+- A test holds every record a person signs in with or through, credentials, sessions and enrolment codes, refused to a service account; a sign-in path added later joins it.
 
 ### agk
 
-- `agk token create [--for NS/NAME] [--expires 30d] [--scope ...] [--label TEXT]` prints the token alone on standard output, and `agk token list` and `agk token revoke ID` list and revoke, with `-o json` on create and list.
+- `agk token create [--for NS/NAME] [--expires 30d] [--scope ...] [--label TEXT]` prints the token alone on standard output, and `agk token list` and `agk token revoke ID` list and revoke, with `-o json` on create and list. A mint or a revocation answered with a 5xx leaves with 4 and says how to read it back.
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login` says which route it waits for, rather than naming an interim operator that is gone.
 - `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
 - `agk user create LOGIN [--admin] [--display-name NAME]` sends only what it is given and prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
+- `agk service-account create NS/NAME`, `list [NS]` and `delete NS/NAME`, with `-o json` on create and list. A change answered with a 5xx leaves with 4, a list with 1.
 - `agk share NS[/WORKFLOW] --user L|--group G|--service-account NS/N --role R|--deny P [--expires D]` and `agk share NS[/WORKFLOW] --revoke ID`, `agk grants NS[/WORKFLOW]`, one grant a line with its scope and what it gives there, and `agk whoami [NS[/WORKFLOW]]`, with what the installation tells where it names no scope.
 
 ## v0.2.5, 2026-09-26

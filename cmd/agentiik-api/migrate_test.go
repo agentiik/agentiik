@@ -169,6 +169,35 @@ func TestMigrateImportsTheV02OperatorTokensHashOnAnUpgradedDatabase(t *testing.T
 	}
 }
 
+// A v0.2.5 installation that never ran init has namespaces with no built-in identity, and migrate
+// gives each its own, once, in the run that upgrades it, recorded in the namespace.
+func TestMigrateGivesTheNamespacesOfV02TheirBuiltInIdentityOnce(t *testing.T) {
+	b := aBootstrapState(t)
+	if _, err := db.MigrateThrough(t.Context(), b.admin, v025); err != nil {
+		t.Fatalf("the database could not be migrated as v0.2.5 migrated it: %s", err)
+	}
+	if _, err := b.admin.Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
+		t.Fatal(err)
+	}
+	out := b.migrated(theToken, "")
+	for _, ns := range []string{"finance", "team-ops"} {
+		if !strings.Contains(out, "gave namespace "+ns+" its built-in identity, "+ns+"/agentiik") {
+			t.Errorf("migrate said:\n%s", out)
+		}
+	}
+	var entries int
+	if err := b.admin.QueryRow(t.Context(),
+		`select count(*) from audit_log where action = 'service_account.create' and actor = 'installation' and target = namespace || '/agentiik'`).Scan(&entries); err != nil {
+		t.Fatal(err)
+	}
+	if entries != 2 {
+		t.Errorf("%d built-in identities given are recorded in their namespace", entries)
+	}
+	if out := b.migrated(theToken, ""); strings.Contains(out, "built-in identity") {
+		t.Errorf("a second run said:\n%s", out)
+	}
+}
+
 // A hash kept is the installation's, from a token set since or from init, and the v0.2 file never
 // replaces it. Once the bootstrap has ended, nothing is imported, nothing is said, and the file is
 // not read at all.

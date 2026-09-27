@@ -73,7 +73,8 @@ func TestAnInstallationOfV025KeepsItsOperatorTokenThroughTheUpgrade(t *testing.T
 	if err := initialize(ctx, c, d.at(time.Now().UTC())); err != nil {
 		t.Fatalf("init refused the installation v0.2.5 left: %s\n%s", err, d.out.String())
 	}
-	if !strings.Contains(d.out.String(), "applied 0032_") || !strings.Contains(d.out.String(), "wrote the hash of the bootstrap token set") {
+	if !strings.Contains(d.out.String(), "applied 0032_") || !strings.Contains(d.out.String(), "wrote the hash of the bootstrap token set") ||
+		!strings.Contains(d.out.String(), "gave namespace finance its built-in identity, finance/agentiik") {
 		t.Errorf("init said:\n%s", d.out.String())
 	}
 

@@ -14,12 +14,17 @@ import (
 // max_runs_per_hour, against a real PostgreSQL: "the runs created in the last 60 minutes, a sliding
 // count", counted wherever a run is created and whatever started it.
 
-// runOf is a new run of finance's workflow, started the way kind starts one.
+// runOf is a new run of finance's workflow, started the way kind starts one: asked for by alice, or
+// by nobody for a kind nobody asks for.
 func runOf(kind agk.TriggerKind) NewRun {
-	return NewRun{
+	r := NewRun{
 		ID: agk.NewRunID(), Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 		Trigger: kind, TriggeredBy: "alice", Steps: []agk.Step{"normalize"},
 	}
+	if kind.Unattended() {
+		r.TriggeredBy = ""
+	}
+	return r
 }
 
 // createIn creates one run in a namespace, in a transaction of its own.
@@ -34,7 +39,7 @@ func createIn(t *testing.T, pool *Pool, namespace string, r NewRun) error {
 func ofTeamOps() NewRun {
 	return NewRun{
 		ID: agk.NewRunID(), Workflow: "nightly", Commit: "b1c2d3e",
-		Trigger: agk.TriggerSchedule, TriggeredBy: "cron", Steps: []agk.Step{"normalize"},
+		Trigger: agk.TriggerSchedule, Steps: []agk.Step{"normalize"},
 	}
 }
 

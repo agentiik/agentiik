@@ -412,8 +412,9 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
 // runner's own routes by the runner credential alone, and the object store by the signature in the
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
-// namespace it owns", which no permission names, and so is GET /api/v1/me with the caller's
-// notifications. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
+// namespace it owns", which no permission names, and so are the service accounts, "of the namespaces
+// the caller owns", and GET /api/v1/me with the caller's notifications. Sharing takes grant:manage
+// at its scope, and writing a grant an administrator too.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -472,6 +473,9 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/auth/tokens":                                       own,
 		"GET /api/v1/auth/tokens":                                        own,
 		"DELETE /api/v1/auth/tokens/{id}":                                own,
+		"GET /api/v1/service-accounts":                                   own,
+		"POST /api/v1/service-accounts":                                  own,
+		"DELETE /api/v1/service-accounts/{ns}/{name}":                    own,
 		"GET /api/v1/runs":                                               {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/{namespace}/runs":                                   {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/runs/{run}":                                         onRun(api.RunRead, api.RunReadData),

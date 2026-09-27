@@ -37,6 +37,10 @@ type NewRun struct {
 	Workflow string
 	Commit   string
 
+	// Trigger is what started it, and TriggeredBy who asked for it, where somebody did. A run
+	// of a kind nobody asks for, a schedule, a webhook or an event (agk.TriggerKind.Unattended),
+	// is attributed to its namespace's built-in identity, NS/agentiik, which CreateRun writes: a
+	// trigger creating one leaves TriggeredBy empty, and one naming anybody else is refused.
 	Trigger     agk.TriggerKind
 	TriggeredBy string
 
@@ -109,6 +113,10 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	if len(inputs) == 0 {
 		inputs = json.RawMessage(`{}`)
 	}
+	by, err := n.attributed(r)
+	if err != nil {
+		return err
+	}
 	if err := n.withinRunsPerHour(ctx); err != nil {
 		return err
 	}
@@ -117,7 +125,7 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by, inputs)
 		 values ($1, $2, $3, $4, 'queued', $5, $6, $7)`,
 		n.namespace, string(r.ID), r.Workflow, r.Commit,
-		r.Trigger.String(), nilIfEmpty(r.TriggeredBy), inputs); err != nil {
+		r.Trigger.String(), nilIfEmpty(by), inputs); err != nil {
 		return fmt.Errorf("db: run %s could not be created: %w", r.ID, err)
 	}
 
@@ -135,6 +143,22 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		return fmt.Errorf("db: the steps of run %s could not be created: %w", r.ID, err)
 	}
 	return nil
+}
+
+// attributed is who a run is attributed to, its triggered_by: whoever asked for it, and for a run
+// nobody asked for, a schedule, a webhook or an event, the namespace's built-in identity. Held here,
+// where every run is created whatever started it, so that a trigger added later cannot attribute
+// its runs to the person who last edited the workflow: it names nobody, and a name it writes other
+// than the built-in identity's is refused.
+func (n *NS) attributed(r NewRun) (string, error) {
+	if !r.Trigger.Unattended() {
+		return r.TriggeredBy, nil
+	}
+	builtIn := n.namespace + "/" + BuiltIn
+	if r.TriggeredBy != "" && r.TriggeredBy != builtIn {
+		return "", fmt.Errorf("db: run %s, of trigger kind %s, is attributed to %s, its namespace's built-in identity, and not to %s: a run nobody asked for is nobody's but the namespace's", r.ID, r.Trigger, builtIn, r.TriggeredBy)
+	}
+	return builtIn, nil
 }
 
 // withinRunsPerHour refuses one more run where the namespace has created max_runs_per_hour of them

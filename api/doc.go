@@ -53,13 +53,16 @@
 // # A caller's own credentials
 //
 // The API token routes answer about their caller: "an API token for the caller or a service account
-// of a namespace it owns", and the listing and revocation of those. No permission names that, since
-// holding a credential is none of the nine, so each takes Own, and its handler is given a Caller:
-// who asks, the token presented, whether its scope narrows it, and the namespaces it owns, which
-// Principals says as Owners. A token narrowed by a scope mints none and reaches no credential but
-// itself, and the bootstrap token mints none, its one lasting use being the first administrator:
-// each is refused with 403, since the caller is known and nothing about the installation is hidden
-// from them by saying so.
+// of a namespace it owns", and the listing and revocation of those; and so do the service account
+// routes, "the service accounts of the namespaces the caller owns, and a new one in one of them",
+// and the removal of one. No permission names that, since holding a credential or owning a
+// namespace is none of the nine, so each takes Own, and its handler is given a Caller: who asks,
+// the token presented, whether its scope narrows it, and the namespaces it owns, which Principals
+// says as Owners. A token narrowed by a scope mints none and reaches no credential but itself, the
+// bootstrap token mints none, its one lasting use being the first administrator, and a service
+// account's token mints none for that service account, whose next token someone who still means it
+// mints: each is refused with 403, since the caller is known and nothing about the installation is
+// hidden from them by saying so.
 //
 // GET /api/v1/me is the caller's own as well: who it is, its groups, what its grants resolve to at
 // each scope, narrowed by its credential, which the router computes as Caller.Effective from what

@@ -26,7 +26,8 @@ import (
 // use and device label", "expires after 90 days unless asked otherwise, and after a year at most",
 // and a scope that "can only narrow".
 
-// tokened is an installation for the token routes, on a clock the test moves.
+// tokened is an installation for the token routes and the service account routes, on a clock the
+// test moves.
 //
 // finance holds monthly-invoicing, and hr holds nothing. alice owns finance, and bob's personal
 // namespace, which bob shares with her as owner; bob edits finance and owns monthly-invoicing alone,
@@ -141,6 +142,9 @@ func tokenedInstallation(t *testing.T) *tokened {
 		t.Fatal(err)
 	}
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewServiceAccounts(rt, api.ServiceAccountOptions{Pool: pool}); err != nil {
 		t.Fatal(err)
 	}
 	// A route needing grant:manage in a namespace, to see what a minted token opens.
@@ -261,7 +265,9 @@ func TestATokenIsMintedShownOnceAndKeptAsItsHash(t *testing.T) {
 }
 
 // A token expires 90 days after it is minted unless asked otherwise, and a year after at most: a
-// year to the second is taken, a second past it refused, and so is an expiry already passed.
+// year to the second is taken, and so is a minute past it, as asked, which a client's clock running
+// ahead of the installation's asks for when it means a year; a second past that is refused, and so
+// is an expiry already passed.
 func TestATokenExpiresInNinetyDaysAndAYearAtMost(t *testing.T) {
 	in := tokenedInstallation(t)
 	alice := in.values["alice"]
@@ -272,11 +278,15 @@ func TestATokenExpiresInNinetyDaysAndAYearAtMost(t *testing.T) {
 	if got := in.mint(t, alice, `{"expires_at":"`+year.Format(time.RFC3339)+`"}`).APIToken; !got.ExpiresAt.Equal(year) {
 		t.Errorf("a token asked to last a year expires at %s", got.ExpiresAt)
 	}
+	ahead := year.Add(time.Minute)
+	if got := in.mint(t, alice, `{"expires_at":"`+ahead.Format(time.RFC3339)+`"}`).APIToken; !got.ExpiresAt.Equal(ahead) {
+		t.Errorf("a token asked to last a year and a minute expires at %s", got.ExpiresAt)
+	}
 	for expires, status := range map[string]int{
-		year.Add(time.Second).Format(time.RFC3339): http.StatusUnprocessableEntity,
-		in.at.Format(time.RFC3339):                 http.StatusUnprocessableEntity,
-		in.at.Add(-time.Hour).Format(time.RFC3339): http.StatusUnprocessableEntity,
-		in.at.Add(time.Hour).Format("2006-01-02"):  http.StatusBadRequest,
+		ahead.Add(time.Second).Format(time.RFC3339): http.StatusUnprocessableEntity,
+		in.at.Format(time.RFC3339):                  http.StatusUnprocessableEntity,
+		in.at.Add(-time.Hour).Format(time.RFC3339):  http.StatusUnprocessableEntity,
+		in.at.Add(time.Hour).Format("2006-01-02"):   http.StatusBadRequest,
 		"": http.StatusBadRequest,
 		in.at.Add(time.Hour).Format(time.RFC3339Nano): http.StatusCreated,
 	} {
@@ -359,7 +369,8 @@ func TestAScopeOnlyNarrowsAndANarrowedTokenMintsNone(t *testing.T) {
 // A token is minted for the caller, or for a service account of a namespace it owns, through a grant
 // of its own or of a group's and whatever a deny beside it takes; for anybody else it is refused
 // with one sentence whether they exist or not, the user a personal namespace owned is named after
-// included, and a group is not a holder at all.
+// included, and a group is not a holder at all. A service account's token mints none for that
+// service account, named or left out: its next token is minted by someone who still means it.
 func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T) {
 	in := tokenedInstallation(t)
 	for _, c := range []struct {
@@ -369,8 +380,6 @@ func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T)
 		{"erin", "hr/sync"},
 		{"dave", "hr/sync"},
 		{"alice", "alice"},
-		{"finance/nightly", "finance/nightly"},
-		{"finance/nightly", ""},
 	} {
 		body := `{}`
 		if c.principal != "" {
@@ -406,11 +415,15 @@ func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T)
 		{"alice", "operator", http.StatusBadRequest, "operator"},
 		{"alice", "Finance/nightly", http.StatusBadRequest, "names no service account"},
 		{"alice", "", http.StatusBadRequest, "principal is empty"},
+		{"finance/nightly", "finance/nightly", http.StatusForbidden, "mints no token for that service account"},
 	} {
 		w := in.ask(t, "POST", "/api/v1/auth/tokens", in.values[c.who], `{"principal":"`+c.principal+`"}`)
 		if w.Code != c.status || !strings.Contains(w.Body.String(), c.says) {
 			t.Errorf("%s minting for %s was answered %d, want %d saying %q: %s", c.who, c.principal, w.Code, c.status, c.says, w.Body)
 		}
+	}
+	if w := in.ask(t, "POST", "/api/v1/auth/tokens", in.values["finance/nightly"], `{}`); w.Code != http.StatusForbidden {
+		t.Errorf("finance/nightly minting a token of its own was answered %d: %s", w.Code, w.Body)
 	}
 }
 
@@ -628,4 +641,93 @@ func (in *tokened) tokenOf(t *testing.T, who string) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// A principal holds a hundred live tokens at most: the next is refused with 409 and nothing is
+// minted or recorded, one revoked or expired makes room again, and a service account is held to the
+// same hundred, whoever mints for it. Five mints racing for the last place leave a hundred: that
+// they are counted one after the other is db.Wide.LiveTokens's lock, whose own test holds it, and
+// this one holds the route to taking it before it mints.
+func TestAPrincipalHoldsAHundredLiveTokensAtMost(t *testing.T) {
+	in := tokenedInstallation(t)
+	alice := in.values["alice"]
+	eightDays := `{"expires_at":"` + in.at.Add(8*24*time.Hour).Format(time.RFC3339) + `"}`
+	// alice holds the one she was seeded with, which expires in a week.
+	var last api.IssuedToken
+	for range 99 {
+		last = in.mint(t, alice, eightDays)
+	}
+	w := in.ask(t, "POST", "/api/v1/auth/tokens", alice, `{}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alice holds 100 live tokens") {
+		t.Fatalf("a hundred and first token was answered %d: %s", w.Code, w.Body)
+	}
+	before := len(audited(t, in.pool))
+	if w := in.ask(t, "DELETE", "/api/v1/auth/tokens/"+last.APIToken.ID, alice, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("revoking was answered %d", w.Code)
+	}
+	kept := in.mint(t, alice, eightDays)
+	if w := in.ask(t, "POST", "/api/v1/auth/tokens", alice, `{}`); w.Code != http.StatusConflict {
+		t.Errorf("a token past the hundred, once one was revoked and one minted in its place, was answered %d", w.Code)
+	}
+	if got := len(audited(t, in.pool)); got != before+2 {
+		t.Errorf("the audit log grew by %d entries over a revocation, a mint and a refusal", got-before)
+	}
+	// A week on, the seeded one has expired and makes room.
+	in.at = in.at.Add(7 * 24 * time.Hour)
+	in.mint(t, kept.Token, `{}`)
+
+	// finance/nightly's seeded token has expired too; alice fills it to a hundred, with the last
+	// place raced for.
+	for range 99 {
+		in.mint(t, kept.Token, `{"principal":"finance/nightly"}`)
+	}
+	codes := make(chan int, 5)
+	for range 5 {
+		go func() {
+			codes <- in.ask(t, "POST", "/api/v1/auth/tokens", kept.Token, `{"principal":"finance/nightly"}`).Code
+		}()
+	}
+	minted := 0
+	for range 5 {
+		switch code := <-codes; code {
+		case http.StatusCreated:
+			minted++
+		case http.StatusConflict:
+		default:
+			t.Errorf("a token racing for the last place was answered %d", code)
+		}
+	}
+	var live int
+	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(),
+		`select count(*) from api_tokens where principal = 'finance/nightly' and revoked_at is null and expires_at > $1`, in.at).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if minted != 1 || live != 100 {
+		t.Errorf("%d of five mints racing for the last place were minted, and finance/nightly holds %d live tokens", minted, live)
+	}
+}
+
+// No token is minted for a namespace's built-in identity, whose grants are what the runs nobody
+// started may do there: its owner is told why with 422, anybody else is answered as for any service
+// account of a namespace they do not own, and nothing is minted or recorded.
+func TestNoTokenIsMintedForANamespacesBuiltInIdentity(t *testing.T) {
+	in := withBuiltIns(t)
+	for _, c := range []struct {
+		who, says string
+	}{
+		{"alice", "principal finance/agentiik is the namespace's built-in identity, the installation's unattended identity"},
+		{"bob", "principal finance/agentiik is neither you nor a service account of a namespace you own"},
+	} {
+		w := in.ask(t, "POST", "/api/v1/auth/tokens", in.values[c.who], `{"principal":"finance/agentiik"}`)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s minting for finance/agentiik was answered %d: %s", c.who, w.Code, w.Body)
+		}
+	}
+	var minted int
+	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(), `select count(*) from api_tokens where principal like '%/agentiik'`).Scan(&minted); err != nil {
+		t.Fatal(err)
+	}
+	if minted != 0 || len(audited(t, in.pool)) != 0 {
+		t.Errorf("refusals minted %d tokens for a built-in identity and recorded %d entries", minted, len(audited(t, in.pool)))
+	}
 }
