@@ -349,3 +349,47 @@ func TestWhatChangesWhileAPasswordOrAGeneratorIsSetIsCheckedAgain(t *testing.T) 
 		t.Error("the change that met another undid it")
 	}
 }
+
+// A generator the session enrolled itself does not start the account's count again: its right code
+// gives back its own attempt and no other, so that guesses at the password from a session are held
+// to the count whatever generator it enrols and removes between them.
+func TestRemovingAGeneratorStartsNoCountAgain(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	c := in.signedIn(t, "alice", api.SessionFull)
+	_, secret := in.started(t, c)
+	now := totp.StepAt(*in.clock)
+	if w := in.call(t, "POST", "/api/v1/me/totp/confirm", fmt.Sprintf(`{"totp":%q}`, totp.Code(secret, now)), c); w.Code != http.StatusOK {
+		t.Fatalf("confirming the generator answered %d %s", w.Code, w.Body)
+	}
+	guess := func() int {
+		t.Helper()
+		return in.call(t, "PUT", "/api/v1/me/password", `{"password":"a long enough passphrase","current_password":"a guess"}`, c).Code
+	}
+	for range 9 {
+		if code := guess(); code != http.StatusForbidden {
+			t.Fatalf("a guess answered %d", code)
+		}
+	}
+	*in.clock = in.clock.Add(totp.Step)
+	if w := in.call(t, "DELETE", "/api/v1/me/totp", fmt.Sprintf(`{"totp":%q}`, totp.Code(secret, now+1)), c); w.Code != http.StatusNoContent {
+		t.Fatalf("removing the generator answered %d %s", w.Code, w.Body)
+	}
+	if code := guess(); code != http.StatusForbidden {
+		t.Errorf("the tenth guess answered %d", code)
+	}
+	if code := guess(); code != http.StatusTooManyRequests {
+		t.Errorf("the eleventh guess, after a generator removed, answered %d", code)
+	}
+}
+
+// An installation addressed by an IPv6 address names the login alone as the generator's account,
+// since the Key Uri Format allows no colon in it.
+func TestAGeneratorsAccountHoldsNoColon(t *testing.T) {
+	in := passwordsAt(t, "https://[2001:db8::1]", false)
+	c := in.signedIn(t, "alice", api.SessionFull)
+	started, _ := in.started(t, c)
+	if !strings.HasPrefix(started.URI, "otpauth://totp/Agentiik:alice?") {
+		t.Errorf("the URI is %s", started.URI)
+	}
+}

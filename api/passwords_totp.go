@@ -106,13 +106,15 @@ var base32Secret = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // otpauth is the Key Uri Format of a generator: the issuer and the account, login@host, so that two
 // installations' generators are told apart in one application, and every parameter at the value
-// every application assumes, written all the same for those that read them.
+// every application assumes, written all the same for those that read them. The format allows no
+// colon in the account, which it reads as the one between the issuer and the account, so an
+// installation addressed by an IPv6 address names the login alone.
 func (s *PasswordAPI) otpauth(login string, secret []byte) string {
-	host := s.host
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]"
+	account := login + "@" + s.host
+	if strings.Contains(s.host, ":") {
+		account = login
 	}
-	label := totpIssuer + ":" + url.PathEscape(login+"@"+host)
+	label := totpIssuer + ":" + url.PathEscape(account)
 	q := url.Values{
 		"secret":    {base32Secret.EncodeToString(secret)},
 		"issuer":    {totpIssuer},
@@ -408,7 +410,10 @@ func (s *PasswordAPI) removeTOTP(w http.ResponseWriter, r *http.Request, caller 
 		s.attempts.forgive(login, address, now)
 		fail(w, http.StatusInternalServerError, "the TOTP generator could not be removed")
 	default:
-		s.attempts.signedIn(login, address, now)
+		// A right code gives back its own attempt and no other: the generator may be one whoever
+		// holds the session enrolled, whose codes would otherwise start the account's count again
+		// between guesses at its password.
+		s.attempts.forgive(login, address, now)
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusNoContent)
 	}
