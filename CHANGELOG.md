@@ -12,6 +12,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
 - A push of a version naming a secret is refused with 403 unless the pusher holds `secret:use` in the namespace, and a deny of it on the workflow counts; running the version takes `workflow:run` alone. A route declares such a second permission as `api.Needs.Also`, and its handler asks it with `api.HoldsAlso`.
 
+### State
+
+- Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
+
 ### Tests
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
