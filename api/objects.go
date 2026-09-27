@@ -193,9 +193,8 @@ func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
 //
 // The room is made at the length of the request, which is the most the object may be: a form's
 // length counts its fields and its boundaries as well, a few hundred bytes more than the file, and
-// a request of no stated length is given whatever room is left, since nothing else bounds it where
-// artifact_max_bytes is off. The object is held to that room as it arrives, and counted at its size
-// once it is in.
+// a request of no stated length is given the room left, up to artifact_max_bytes. The object is held
+// to that room as it arrives, and counted at its size once it is in.
 func (s *ObjectAPI) store(w http.ResponseWriter, r *http.Request, key string, body io.Reader, until time.Time) {
 	room, err := s.makeRoom(r.Context(), key, r.ContentLength, until)
 	var none *db.NoRoom
@@ -241,14 +240,16 @@ func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, unti
 	if s.pool == nil || !ok || !lowerHex(digest) || until.IsZero() {
 		return heldRoom{}, nil
 	}
-	bound := length
-	if most := s.signed.Limits().ArtifactMaxBytes; most > 0 && (bound < 0 || bound > most) {
-		bound = most
+	// A length past artifact_max_bytes is an object the store refuses whatever the room, so it is
+	// not given more room than that.
+	most := s.signed.Limits().ArtifactMaxBytes
+	if most > 0 && length > most {
+		length = most
 	}
 	var room db.Room
 	err := s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
 		var err error
-		room, err = ns.MakeRoom(ctx, digest, bound, until)
+		room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until})
 		return err
 	})
 	if err != nil {

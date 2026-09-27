@@ -490,14 +490,49 @@ func TestAWritePastMaxArtifactBytesIsAnswered507(t *testing.T) {
 	}
 }
 
-// A write of no stated length, where artifact_max_bytes is off, is given whatever room is left and
-// held to it as its bytes arrive: past it, nothing is stored and the write is answered 507.
+// A write of no stated length is given the room left, up to artifact_max_bytes, and held to it as
+// its bytes arrive: past it, nothing is stored and the write is answered 507.
 func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {
 	pool, super := dbtest.Open(t)
 	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
-		`insert into namespaces (name, max_artifact_bytes) values ('finance', 1000)`); err != nil {
+		`insert into namespaces (name, max_artifact_bytes) values ('finance', 1000), ('legal', 1000)`); err != nil {
 		t.Fatal(err)
 	}
+	unstated := func(h http.Handler, signed *artifact.Signed, namespace, content string) int {
+		t.Helper()
+		key := artifact.Key(namespace, digestOf([]byte(content)))
+		url, err := signed.Presign(t.Context(), "PUT", key, "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A reader net/http cannot measure, so the request states no length.
+		r := httptest.NewRequest("PUT", url, io.MultiReader(strings.NewReader(content)))
+		if r.ContentLength != -1 {
+			t.Fatalf("the request states a length of %d", r.ContentLength)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	// Under the default artifact_max_bytes, 5 GiB, one byte fits a namespace of 1,000.
+	defaulted, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, defaulted, pool); err != nil {
+		t.Fatal(err)
+	}
+	if code := unstated(rt, defaulted, "legal", "a"); code != http.StatusCreated {
+		t.Errorf("one byte of no stated length, under the default artifact_max_bytes, answered %d", code)
+	}
+
 	// artifact_max_bytes off, which is what leaves the room left as the only bound.
 	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
 		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
@@ -506,7 +541,7 @@ func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	rt, err = api.NewRouter(api.DenyAll{}, bearer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,22 +557,10 @@ func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {
 		{1000, http.StatusCreated},
 	} {
 		content := strings.Repeat("a", c.size)
-		key := artifact.Key("finance", digestOf([]byte(content)))
-		url, err := signed.Presign(t.Context(), "PUT", key, "01JMZ8W4K2R7Q0E3N5T9", until)
-		if err != nil {
-			t.Fatal(err)
+		if code := unstated(rt, signed, "finance", content); code != c.want {
+			t.Errorf("%d bytes of no stated length with 1,000 left answered %d, want %d", c.size, code, c.want)
 		}
-		// A reader net/http cannot measure, so the request states no length.
-		r := httptest.NewRequest("PUT", url, io.MultiReader(strings.NewReader(content)))
-		if r.ContentLength != -1 {
-			t.Fatalf("the request states a length of %d", r.ContentLength)
-		}
-		w := httptest.NewRecorder()
-		rt.ServeHTTP(w, r)
-		if w.Code != c.want {
-			t.Errorf("%d bytes of no stated length with 1,000 left answered %d, want %d", c.size, w.Code, c.want)
-		}
-		get, err := signed.Presign(t.Context(), "GET", key, "01JMZ8W4K2R7Q0E3N5T9", until)
+		get, err := signed.Presign(t.Context(), "GET", artifact.Key("finance", digestOf([]byte(content))), "01JMZ8W4K2R7Q0E3N5T9", until)
 		if err != nil {
 			t.Fatal(err)
 		}

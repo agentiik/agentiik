@@ -243,8 +243,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"secret_values": true, "task_logs": true, "task_log_chunks": true, "task_log_objects": true,
 		// What a namespace grants is not another's to read.
 		"grants": true,
-		// What a namespace is writing into the store, counted against its own quota.
-		"artifact_uploads": true,
+		// What a namespace is writing into the store, and what it holds, counted against its own
+		// quota.
+		"artifact_uploads": true, "artifact_room": true,
 	}
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace

@@ -279,12 +279,19 @@ func TestANamespaceOfV025IsHeldToNoBoundItNeverSet(t *testing.T) {
 	}
 	defer other.Close(ctx)
 	err = pool.In(ctx, "finance", func(ctx context.Context, ns *NS) error {
-		room, err := ns.MakeRoom(ctx, digestOf("b"), huge, time.Now().Add(time.Hour))
+		room, err := ns.MakeRoom(ctx, Upload{Digest: digestOf("b"), Length: huge, Until: time.Now().Add(time.Hour)})
 		if err != nil || room.Held() {
 			t.Errorf("a terabyte more in a namespace v0.2.5 made answered %+v, %v", room, err)
 		}
-		// Nothing was locked either: while the write's transaction is open, another takes the
-		// namespace's row at once.
+		// Nothing was locked either, since there is no room to lock: while the write's
+		// transaction is open, the namespace has no row of room and its row is another's at once.
+		var rooms int
+		if err := ns.tx.QueryRow(ctx, `select count(*) from artifact_room`).Scan(&rooms); err != nil {
+			return err
+		}
+		if rooms != 0 {
+			t.Errorf("a write the namespace bounds nothing of made it %d rows of room", rooms)
+		}
 		if _, err := other.Exec(ctx, `select 1 from namespaces where name = 'finance' for update nowait`); err != nil {
 			t.Errorf("a write the namespace bounds nothing of held its row: %s", err)
 		}
