@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
@@ -36,11 +37,11 @@ import (
 //
 // # The path off passwords
 //
-// Where a passkey is required, a session a password opened enrols passkeys and nothing else until
+// Where a passkey is required, a session a password opened enrols passkeys and nothing else, until
 // the account holds min_passkeys passkeys the policy accepts; the passkey that brings it there
 // deletes the password, the hash and the TOTP generator beside it as rows, since the password was a
 // way to the passkeys and they are held now ("holds min_passkeys: password hash deleted, not
-// disabled"). Forbidding passwords deletes every password it reaches in the transaction that forbids
+// disabled"). A password found beside them all the same opens a session that only enrols. Forbidding passwords deletes every password it reaches in the transaction that forbids
 // them, and suspends each account it reaches that holds no passkey the policy accepts, "rather than
 // leaving it reachable by a password the policy says no longer exists", recording why; a passkey
 // enrolled from an enrolment link or a recovery code lifts that suspension and no other (passkeys.go).
@@ -89,11 +90,14 @@ func (p accountPolicy) passkeys(held []db.Credential) int {
 	return n
 }
 
-// enrolling says whether a session a password opened for an account holding held may only enrol:
-// where a passkey is required and the account holds fewer than min_passkeys the policy accepts,
-// since the password is then the way to them rather than a way round them.
-func (p accountPolicy) enrolling(held []db.Credential) bool {
-	return p.passkeyRequired && p.passkeys(held) < p.minPasskeys
+// enrolling says whether a session a password opened may only enrol: wherever a passkey is
+// required, since the password is then the way to the passkeys and never a way round them. It enrols
+// until the account holds min_passkeys the policy accepts, when the passkey that brings it there
+// takes the password, and the session with it; a password found beside them, set since or held when
+// the policy came to require a passkey, gives no more than that, rather than the full session its
+// holder's passkeys give.
+func (p accountPolicy) enrolling() bool {
+	return p.passkeyRequired
 }
 
 // offPasswords says whether the policy takes the account off passwords: it forbids them, or it
@@ -299,6 +303,10 @@ type PolicyAPI struct {
 	pool        *db.Pool
 	now         func() time.Time
 	ipAddressed bool
+
+	// checked is run between a change's checks and the transaction that writes it, where a test
+	// changes what was checked. Nil outside tests.
+	checked func()
 }
 
 // The sentences setting a policy is refused with.
@@ -306,8 +314,8 @@ const (
 	// forbiddenByIP is passwords forbidden on an installation addressed by an IP address.
 	forbiddenByIP = "this installation is addressed by an IP address, where no passkey ceremony runs and a password is the one way in: a policy forbidding passwords would leave nobody able to sign in, and is refused until the installation is addressed by a name"
 
-	// lockedOut is passwords forbidden where it would suspend every administrator who can sign in.
-	lockedOut = "forbidding passwords would suspend every administrator who can sign in, since none of them holds a passkey the policy accepts, and leave nobody to administer this installation: enrol a passkey first"
+	// lockedOut is a policy under which no administrator who could sign in before it still can.
+	lockedOut = "this policy would leave no administrator able to sign in, since none of those who can now holds a passkey it accepts or a password it allows, and nobody to administer this installation: enrol a passkey it accepts first"
 )
 
 // NewPolicies registers the policy routes on a router: reading the installation's is anybody's who
@@ -366,15 +374,95 @@ func (s *PolicyAPI) installation(w http.ResponseWriter, r *http.Request, _ Calle
 	write(w, http.StatusOK, policyOf(p))
 }
 
-// errLockedOut is a policy that would leave no administrator able to sign in.
-var errLockedOut = errors.New(lockedOut)
+// errLockedOut is a policy that would leave no administrator able to sign in, and the setting that
+// would: password where it forbids passwords, and device_bound_only otherwise, since the other
+// settings take no credential away from anybody.
+type errLockedOut struct{ setting string }
+
+func (e *errLockedOut) Error() string { return lockedOut }
+
+// takesAway is the setting a change from was to set takes a way in away by, as errLockedOut names it.
+func takesAway(forbids bool) string {
+	if forbids {
+		return passwordSetting
+	}
+	return deviceBoundOnly
+}
+
+// administratorsSigningIn answers the logins of the installation's administrators who can sign in
+// under the policy as it stands in the transaction wide is: not suspended, and holding a passkey the
+// policy that applies to them accepts, where a passkey signs anybody in, or a password where it
+// allows passwords. Every administrator's row is held first, in the order of their logins
+// (db.Wide.Administrators), as every act that counts them takes them, so that two acts that could
+// each take the last one away take turns.
+//
+// Nothing here knows whether a passkey was registered with user verification, which is not
+// recorded: a policy coming to require it is not counted as taking anything away.
+func administratorsSigningIn(ctx context.Context, wide *db.Wide, now time.Time, ipAddressed bool) ([]string, error) {
+	admins, err := wide.Administrators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var signing []string
+	for _, a := range admins {
+		user, err := wide.User(ctx, a.Login)
+		if err != nil {
+			return nil, err
+		}
+		if user.Suspended {
+			continue
+		}
+		policy, err := policyFor(ctx, wide, a.Login, now, ipAddressed)
+		if err != nil {
+			return nil, err
+		}
+		held, err := wide.CredentialsOf(ctx, a.Login)
+		if err != nil {
+			return nil, err
+		}
+		password := slices.ContainsFunc(held, func(c db.Credential) bool { return c.Type == db.CredentialPassword })
+		if (!ipAddressed && policy.passkeys(held) > 0) || (!policy.passwordsForbidden && password) {
+			signing = append(signing, a.Login)
+		}
+	}
+	return signing, nil
+}
+
+// guarding runs change, which writes a policy in the transaction wide is, and refuses it with
+// errLockedOut naming setting where, once the bootstrap token has ended, it would leave no
+// administrator able to sign in of those who could before it: the installation would have nobody to
+// administer it, as the removal of the last administrator who can sign in is refused. The bootstrap
+// token, while it lasts, administers it and makes another.
+func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, setting string, change func() error) error {
+	before, err := administratorsSigningIn(ctx, wide, now, s.ipAddressed)
+	if err != nil {
+		return err
+	}
+	if err := change(); err != nil {
+		return err
+	}
+	after, err := administratorsSigningIn(ctx, wide, now, s.ipAddressed)
+	if err != nil {
+		return err
+	}
+	bootstrap, err := wide.Bootstrap(ctx)
+	if err != nil {
+		return err
+	}
+	if bootstrap.Ended() && len(before) > 0 && len(after) == 0 {
+		return &errLockedOut{setting: setting}
+	}
+	return nil
+}
 
 // setInstallation is PUT /api/v1/auth/policy: the installation's policy, whole, a setting left out
 // at its default.
 //
 // Where it forbids passwords that were allowed, every password goes in the same transaction and
-// every account holding no passkey the policy accepts is suspended, unless that would leave no
-// administrator able to sign in once the bootstrap token has ended, which refuses the whole change.
+// every account holding no passkey the policy accepts is suspended. A change that would leave no
+// administrator able to sign in once the bootstrap token has ended is refused whole, whichever
+// setting would: forbidding passwords, or refusing the synced passkeys they hold (guarding). The
+// bootstrap token's change is refused once the bootstrap has ended, as its every act is.
 func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var ask AuthPolicy
 	if err := readObject(r, &ask, smallMaxBytes, "the authentication policy"); err != nil {
@@ -387,31 +475,44 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 		return
 	}
 	now := s.now().Truncate(time.Microsecond)
+	if s.checked != nil {
+		s.checked()
+	}
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		was, err := wide.InstallationPolicy(ctx)
 		if err != nil {
 			return err
 		}
-		if err := wide.SetInstallationPolicy(ctx, set.stored(), now); err != nil {
-			return err
-		}
 		detail := map[string]any{"policy": set, "was": policyOf(was)}
-		if set.Password == "forbidden" && was.Password != "forbidden" {
+		forbids := set.Password == "forbidden" && was.Password != "forbidden"
+		if err := s.guarding(ctx, wide, now, takesAway(forbids), func() error {
+			if err := wide.SetInstallationPolicy(ctx, set.stored(), now); err != nil {
+				return err
+			}
+			if !forbids {
+				return nil
+			}
 			logins, err := wide.Logins(ctx)
 			if err != nil {
 				return err
 			}
-			if err := s.forbidPasswords(ctx, wide, logins, now, detail); err != nil {
-				return err
-			}
+			return s.forbidPasswords(ctx, wide, logins, now, detail)
+		}); err != nil {
+			return err
+		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
 		}
 		return wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.PolicyChange, Target: "installation", Result: audit.Done, Detail: detail,
 		})
 	})
+	var locked *errLockedOut
 	switch {
-	case errors.Is(err, errLockedOut):
-		failSetting(w, http.StatusConflict, lockedOut, passwordSetting)
+	case errors.As(err, &locked):
+		failSetting(w, http.StatusConflict, lockedOut, locked.setting)
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the authentication policy could not be set")
 	default:
@@ -476,6 +577,9 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 		return
 	}
 	now := s.now().Truncate(time.Microsecond)
+	if s.checked != nil {
+		s.checked()
+	}
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		if _, err := wide.NamespaceNamed(ctx, name); err != nil {
 			return err
@@ -491,31 +595,41 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 		if err != nil {
 			return err
 		}
-		if err := wide.SetNamespacePolicy(ctx, name, ask.stored(), now); err != nil {
-			return err
-		}
 		detail := map[string]any{"policy": ask, "was": policyOf(was)}
-		if ask.Password == "forbidden" && was.Password != "forbidden" && installation.Password != "forbidden" {
+		forbids := ask.Password == "forbidden" && was.Password != "forbidden" && installation.Password != "forbidden"
+		if err := s.guarding(ctx, wide, now, takesAway(forbids), func() error {
+			if err := wide.SetNamespacePolicy(ctx, name, ask.stored(), now); err != nil {
+				return err
+			}
+			if !forbids {
+				return nil
+			}
 			logins, err := wide.UsersUnderPolicy(ctx, name, now)
 			if err != nil {
 				return err
 			}
-			if err := s.forbidPasswords(ctx, wide, logins, now, detail); err != nil {
-				return err
-			}
+			return s.forbidPasswords(ctx, wide, logins, now, detail)
+		}); err != nil {
+			return err
+		}
+		if err := stillBootstrapping(ctx, wide, who); err != nil {
+			return err
 		}
 		return wide.AuditIn(ctx, name, audit.Record{
 			Actor: string(who), Action: audit.PolicyChange, Target: name, Result: audit.Done, Detail: detail,
 		})
 	})
 	var loose *loosened
+	var locked *errLockedOut
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 	case errors.As(err, &loose):
 		failSetting(w, http.StatusConflict, loose.Error(), loose.setting)
-	case errors.Is(err, errLockedOut):
-		failSetting(w, http.StatusConflict, lockedOut, passwordSetting)
+	case errors.As(err, &locked):
+		failSetting(w, http.StatusConflict, lockedOut, locked.setting)
+	case errors.Is(err, db.ErrBootstrapEnded):
+		bootstrapEnded(w)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the namespace's authentication policy could not be set")
 	default:
@@ -533,26 +647,8 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 // Each account's row is held before its credentials are read, as every act on an account holds it,
 // so that a passkey registered at the same moment is seen or waits, and an account is never
 // suspended beside the passkey that would have kept it in. The accounts are taken in the order of
-// their logins, the order the administrators are read in.
-//
-// Once the bootstrap token has ended, a change that would take every administrator who could sign in
-// before it and leave none is errLockedOut: the installation would have nobody to administer it, as
-// the removal of the last administrator who can sign in is refused.
+// their logins, the order the administrators are read in, whose rows guarding holds already.
 func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins []string, now time.Time, detail map[string]any) error {
-	signingIn := func() (int, error) {
-		admins, err := wide.Administrators(ctx)
-		n := 0
-		for _, a := range admins {
-			if a.SignsIn {
-				n++
-			}
-		}
-		return n, err
-	}
-	before, err := signingIn()
-	if err != nil {
-		return err
-	}
 	deleted, suspended := []string{}, []string{}
 	for _, login := range logins {
 		user, err := wide.HoldUser(ctx, login)
@@ -591,17 +687,6 @@ func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins [
 			}
 			suspended = append(suspended, login)
 		}
-	}
-	bootstrap, err := wide.Bootstrap(ctx)
-	if err != nil {
-		return err
-	}
-	after, err := signingIn()
-	if err != nil {
-		return err
-	}
-	if bootstrap.Ended() && before > 0 && after == 0 {
-		return errLockedOut
 	}
 	detail["passwords_deleted"], detail["suspended"] = deleted, suspended
 	return nil

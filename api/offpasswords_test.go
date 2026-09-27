@@ -231,3 +231,78 @@ func TestAGeneratorAsksForARecentSignIn(t *testing.T) {
 		t.Errorf("a generator confirmed nine minutes after its start answered %d %s", w.Code, w.Body)
 	}
 }
+
+// A synced passkey is refused where device_bound_only comes to apply while it is verified, read
+// again under the user's row: nothing is written, and a suspension for having no passkey is not
+// lifted by a passkey that signs nobody in.
+func TestAPolicyChangedWhileAPasskeyIsVerifiedIsTheOneItMeets(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	in.exec(t, `update users set suspended = true, suspended_for = 'no_passkey' where login = 'erin'`)
+	code := in.enrolCode(t, "erin", db.EnrolmentRecovery)
+	ceremonies := ceremonies{pool: in.pool, super: in.super, clock: in.clock, h: in.h}
+	browser := newBrowser()
+	browser.BackupEligible = true
+	made, _, err := browser.Create(ceremonies.options(t, fmt.Sprintf(`{"ceremony":"registration","code":%q}`, code)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := true
+	api.BetweenVerifyAndRegister(in.passkeys, func() {
+		in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2})
+	})
+	if w := ceremonies.verify(t, "registration", made, "", ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"device_bound_only"`) {
+		t.Errorf("a synced passkey the policy came to refuse answered %d %s", w.Code, w.Body)
+	}
+	if got := in.suspended(t); !slices.Contains(got, "erin:no_passkey") {
+		t.Errorf("the suspended accounts are %q", got)
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'erin'`); n != 0 {
+		t.Errorf("erin holds %d credentials", n)
+	}
+}
+
+// A passkey registered from a session is not written for an account suspended while it was
+// verified, since a suspended account enrols with a code alone.
+func TestAPasskeyFromASessionIsNotWrittenForAnAccountSuspendedMeanwhile(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	c := in.passkeyed(t, "carol", "carol-passkey", false)
+	ceremonies := ceremonies{pool: in.pool, super: in.super, clock: in.clock, h: in.h}
+	made, _, err := newBrowser().Create(ceremonies.options(t, `{"ceremony":"registration"}`, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.BetweenVerifyAndRegister(in.passkeys, func() {
+		in.exec(t, `update users set suspended = true, suspended_for = 'no_passkey' where login = 'carol'`)
+	})
+	if w := ceremonies.verify(t, "registration", made, "", "", c); w.Code != http.StatusUnauthorized {
+		t.Errorf("a passkey from the session of carol, suspended meanwhile, answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'carol' and type = 'passkey'`); n != 1 {
+		t.Errorf("carol holds %d passkeys, and held one", n)
+	}
+}
+
+// The bootstrap token's change of the policy is refused where the first administrator's enrolment
+// ended the bootstrap while it was checked, as every act of the token is, and writes nothing.
+func TestTheBootstrapTokensPolicyChangeMeetsItsEnd(t *testing.T) {
+	in := someCeremonies(t)
+	first := in.user(t, "alice", true)
+	once := false
+	api.BetweenIdentifyAndSetPolicy(in.policies, func() {
+		if once {
+			return
+		}
+		once = true
+		if w := in.enrol(t, newBrowser(), first, ""); w.Code != http.StatusOK {
+			t.Fatalf("alice's enrolment answered %d %s", w.Code, w.Body)
+		}
+	})
+	if w := in.bearer(t, "PUT", "/api/v1/auth/policy", in.bootstrap, `{"passkey":"optional"}`); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "bootstrap token") {
+		t.Errorf("the bootstrap token's change answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from auth_policy where namespace is null and passkey = 'required'`); n != 1 {
+		t.Error("the bootstrap token's change was written after the bootstrap ended")
+	}
+}

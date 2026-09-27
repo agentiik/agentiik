@@ -31,8 +31,8 @@ import (
 // an administrator gives somebody to get in with, and on an installation addressed by an IP address
 // a password is the one thing to get in with. It is spent by the password it sets, in the
 // transaction that records the password, and the password then opens the session a password opens:
-// full where the policy is met, and enrolling passkeys and nothing else where it requires a passkey
-// and the account holds fewer than min_passkeys, as a password sign-in's would. A suspended user sets a password with a
+// full where the policy is met, and enrolling passkeys and nothing else where it requires a passkey,
+// as a password sign-in's would. A suspended user sets a password with a
 // code and opens no session, as a suspended user enrolling a passkey does.
 //
 // An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
@@ -351,7 +351,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 			Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": set.ID},
 		}})
 		kind := SessionFull
-		if held.policy.enrolling(held.held) {
+		if held.policy.enrolling() {
 			kind = SessionEnrolment
 		}
 		// The bootstrap ends where the first administrator can sign in to a full session, and

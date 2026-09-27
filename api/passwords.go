@@ -43,8 +43,8 @@ import (
 // # The session
 //
 // A password opens a session, recorded as opened by the password, which is full where the account's
-// policy is satisfied and enrols passkeys and nothing else where the policy requires a passkey and
-// the account holds fewer than min_passkeys the policy accepts: "enrols passkeys, nothing else:
+// policy is satisfied and enrols passkeys and nothing else where the policy requires a passkey, which
+// the account's passkeys are the way past and its password never is: "enrols passkeys, nothing else:
 // cannot read a workflow, start a run or mint a token". Which of the two is not written anywhere: it
 // is derived at every request from the credential that opened the session and the policy that
 // applies then (Principals.identifySession), so that a policy changed applies from the next request.
@@ -376,6 +376,9 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 	if a.policy.passwordsForbidden {
 		asked = true
 		s.refuse(r, ask.Login, address, "passwords are forbidden by the policy that applies to the account", now)
+		if a.password.ID != "" {
+			s.passwordGoes(r, ask.Login, now)
+		}
 		failSetting(w, http.StatusForbidden, passwordsForbidden, passwordSetting)
 		return
 	}
@@ -469,6 +472,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 	case errors.Is(err, errForbidden):
 		guessed = true
 		s.refuse(r, ask.Login, address, "passwords were forbidden by the policy that applies to the account during the sign-in", now)
+		s.passwordGoes(r, ask.Login, now)
 		failSetting(w, http.StatusForbidden, passwordsForbidden, passwordSetting)
 		return
 	case errors.As(err, &refusedFor):
@@ -494,6 +498,45 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 func (s *PasswordAPI) betweenChecks() {
 	if s.checked != nil {
 		s.checked()
+	}
+}
+
+// forbiddenGoes is why a password goes when a sign-in finds passwords forbidden to its account.
+const forbiddenGoes = "passwords are forbidden by the policy that applies to the account, and a sign-in found one"
+
+// passwordGoes deletes login's password, and the TOTP generator beside it, where a sign-in found
+// passwords forbidden to them and a password still held. Forbidding passwords deletes those it
+// reaches when it comes to forbid them; an account that came under a namespace forbidding them
+// since, by a grant or a group, still holds one, which goes the first time it is offered rather
+// than signing in again once that grant has ended: "forbidden deletes the stored hash".
+//
+// In a transaction of its own, the refusal having written nothing, under the user's row with the
+// policy read again, and recorded as credential.remove by the installation, whose policy it is. What
+// goes wrong is the installation's trouble, the refusal being answered all the same.
+func (s *PasswordAPI) passwordGoes(r *http.Request, login string, now time.Time) {
+	err := s.pool.Installation(context.WithoutCancel(r.Context()), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		a, err := s.readAccount(ctx, wide, login, now, wide.HoldUser)
+		if err != nil || !a.exists || !a.policy.passwordsForbidden || a.password.ID == "" {
+			return err
+		}
+		// The TOTP generator goes with the password's row, as the table holds it.
+		if err := wide.RemoveCredential(ctx, login, a.password.ID); err != nil {
+			return err
+		}
+		entries := []entry{{record: audit.Record{
+			Actor: installationActor, Action: audit.CredentialRemove, Target: a.password.ID, Result: audit.Done,
+			Detail: map[string]any{"type": db.CredentialPassword, "login": login, "reason": forbiddenGoes},
+		}}}
+		if a.totp.ID != "" {
+			entries = append(entries, entry{record: audit.Record{
+				Actor: installationActor, Action: audit.CredentialRemove, Target: a.totp.ID, Result: audit.Done,
+				Detail: map[string]any{"type": db.CredentialTOTP, "login": login, "reason": "removed with the password it stood beside"},
+			}})
+		}
+		return appendEntries(ctx, wide, entries)
+	})
+	if err != nil {
+		s.report(fmt.Errorf("the password of %s, which the policy forbids, could not be deleted: %w", login, err))
 	}
 }
 
@@ -523,7 +566,7 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 		return nil, SignedIn{}, err
 	}
 	kind := SessionFull
-	if a.policy.enrolling(a.held) {
+	if a.policy.enrolling() {
 		kind = SessionEnrolment
 	}
 	signedIn.record.Detail["session"] = kind

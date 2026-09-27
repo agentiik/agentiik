@@ -35,6 +35,7 @@ type ceremonies struct {
 	clock     *time.Time
 	h         http.Handler
 	bootstrap string
+	policies  *api.PolicyAPI
 }
 
 func someCeremonies(t *testing.T) ceremonies {
@@ -76,7 +77,7 @@ func ceremoniesOn(t *testing.T, publicURL string) ceremonies {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+	if in.policies, err = api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt

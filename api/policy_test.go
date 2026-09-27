@@ -275,7 +275,7 @@ func TestForbiddingPasswordsLeavesAnAdministratorWhoCanSignIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := in.bearing(t, "PUT", "/api/v1/auth/policy", alice, `{"password":"forbidden"}`)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"password"`) || !strings.Contains(w.Body.String(), "every administrator who can sign in") {
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"password"`) || !strings.Contains(w.Body.String(), "no administrator able to sign in") {
 		t.Fatalf("forbidding the one administrator's password answered %d %s", w.Code, w.Body)
 	}
 	if n := in.count(t, `select count(*) from credentials where type = 'password'`); n != 4 {
@@ -453,5 +453,98 @@ func TestANamespaceForbiddingPasswordsTakesThemFromWhoHoldsAGrantInIt(t *testing
 	deleted, _ := json.Marshal(changes[0]["passwords_deleted"])
 	if len(changes) != 1 || changes[0]["_namespace"] != "finance" || string(deleted) != `["alice","bob"]` {
 		t.Errorf("the change is recorded as %v", changes)
+	}
+}
+
+// endBootstrap ends the bootstrap token, as the first administrator's enrolment does.
+func (in passwordsOf) endBootstrap(t *testing.T) {
+	t.Helper()
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.EndBootstrap(ctx, *in.clock)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Refusing synced passkeys takes a way in from whoever holds nothing else: where it would leave no
+// administrator able to sign in once the bootstrap token has ended, the installation's policy and a
+// namespace's are refused naming device_bound_only, and changed not at all; beside an administrator
+// holding a device-bound passkey, they are not.
+func TestRefusingEveryAdministratorsSyncedPasskeyIsRefused(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "erin")
+	in.passkeyed(t, "erin", "erin-synced", true)
+	in.endBootstrap(t)
+	erin := in.token(t, "erin", nil, nil)
+	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, n *db.NS) error {
+		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "erin", Scope: access.Scope{Namespace: "finance"}, Role: access.Viewer, GrantedBy: "carol"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/auth/policy", "/api/v1/finance/auth/policy"} {
+		w := in.bearing(t, "PUT", path, erin, `{"device_bound_only":true}`)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"device_bound_only"`) || !strings.Contains(w.Body.String(), "no administrator able to sign in") {
+			t.Errorf("refusing erin's one synced passkey at %s answered %d %s", path, w.Code, w.Body)
+		}
+	}
+	if n := in.count(t, `select count(*) from auth_policy where device_bound_only`); n != 0 {
+		t.Error("a policy refused was written")
+	}
+	in.administrator(t, "carol")
+	if w := in.bearing(t, "PUT", "/api/v1/auth/policy", erin, `{"device_bound_only":true}`); w.Code != http.StatusOK {
+		t.Errorf("beside carol, refusing synced passkeys answered %d %s", w.Code, w.Body)
+	}
+}
+
+// The last administrator who can sign in is counted as the policy that applies to them says: an
+// administrator holding only a synced passkey where device_bound_only applies signs nobody in, and
+// the one other administrator is not removed beside them.
+func TestRemovingAnAdministratorCountsWhomTheirPolicyLetsSignIn(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "carol")
+	in.administrator(t, "erin")
+	in.passkeyed(t, "erin", "erin-synced", true)
+	in.endBootstrap(t)
+	bound := true
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 1})
+	carol := in.token(t, "carol", nil, nil)
+	if w := in.bearing(t, "DELETE", "/api/v1/users/carol", carol, ""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "last administrator who can sign in") {
+		t.Errorf("removing carol beside erin, whose one passkey is synced, answered %d %s", w.Code, w.Body)
+	}
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", MinPasskeys: 1})
+	if w := in.bearing(t, "DELETE", "/api/v1/users/carol", carol, ""); w.Code != http.StatusNoContent {
+		t.Errorf("removing carol beside erin, synced passkeys accepted, answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A password an account came to hold beside a namespace forbidding passwords, by a grant given it
+// since, is refused at the sign-in that offers it and goes then, recorded as the installation's act,
+// rather than signing in again once the grant has ended.
+func TestAPasswordASignInFindsForbiddenGoes(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	in.tighten(t, db.AuthPolicy{Password: "forbidden"})
+	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, n *db.NS) error {
+		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "carol", Scope: access.Scope{Namespace: "finance"}, Role: access.Viewer, GrantedBy: "alice"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if in.hashHeld(t, "carol") == "" {
+		t.Fatal("carol's password went with the grant, which this test does not ask of it")
+	}
+	if w := in.as(t, "carol", ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"password"`) {
+		t.Fatalf("carol's password answered %d %s", w.Code, w.Body)
+	}
+	if in.hashHeld(t, "carol") != "" {
+		t.Error("carol's password, forbidden, outlived the sign-in that found it")
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'credential.remove' and actor = 'installation'
+	                       and target = 'carol-password' and detail::jsonb->>'login' = 'carol'`); n != 1 {
+		t.Error("the password's removal is not recorded")
+	}
+	in.exec(t, `delete from grants where principal = 'carol'`)
+	if w := in.as(t, "carol", ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("carol's password, once her grant ended, answered %d %s", w.Code, w.Body)
 	}
 }

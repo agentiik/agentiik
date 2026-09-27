@@ -31,7 +31,7 @@ import (
 // address; hashing waits its turn; and a TOTP code is accepted one step either side and never twice.
 
 // passwordsOf is an installation serving the password sign-in, the passkey ceremonies, GET
-// /api/v1/me, the API tokens, the authentication policy and the caller's credentials on
+// /api/v1/me, the API tokens, the authentication policy, the caller's credentials and the users on
 // https://agentiik.example.com, on a clock the test moves. alice
 // holds a password; bob a password and a TOTP generator; carol a password and a passkey; dave, who
 // is suspended, a password; and erin nothing. alice holds a grant in finance.
@@ -42,6 +42,8 @@ type passwordsOf struct {
 	clock     *time.Time
 	h         http.Handler
 	passwords *api.PasswordAPI
+	passkeys  *api.PasskeyAPI
+	policies  *api.PolicyAPI
 	p         *api.Principals
 	totp      *secret.TOTP
 	trouble   *[]error
@@ -90,7 +92,7 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	signIns := api.NewSignIns(proxied)
-	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
+	if in.passkeys, err = api.NewPasskeys(rt, api.PasskeyOptions{
 		Pool: pool, PublicURL: publicURL, Identify: in.p.Identify, Now: clock, SignIns: signIns,
 	}); err != nil {
 		t.Fatal(err)
@@ -111,10 +113,13 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+	if in.policies, err = api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := api.NewCredentials(rt, api.CredentialOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt
@@ -318,7 +323,8 @@ func TestAPasswordOpensAFullSessionWhereThePolicyIsMet(t *testing.T) {
 // a code. A first passkey registered from it leaves it confined, one of the two min_passkeys asks
 // for; the second takes the password, recorded as credential.remove, and the session it opened goes
 // with it, since the account signs in with its passkeys from then on. An account holding one passkey
-// of two signs in to a session that only enrols, and with min_passkeys at one to a full one.
+// of two signs in to a session that only enrols, and so does one holding one of one, while a passkey
+// is required; where passkeys are optional, to a full one.
 func TestAPasswordOpensASessionThatOnlyEnrolsUntilMinPasskeysAreHeld(t *testing.T) {
 	in := somePasswords(t)
 	c := in.signedIn(t, "alice", api.SessionEnrolment)
@@ -367,6 +373,8 @@ func TestAPasswordOpensASessionThatOnlyEnrolsUntilMinPasskeysAreHeld(t *testing.
 
 	in.signedIn(t, "carol", api.SessionEnrolment)
 	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", MinPasskeys: 1})
+	in.signedIn(t, "carol", api.SessionEnrolment)
+	in.policy(t, "allowed", "optional")
 	in.signedIn(t, "carol", api.SessionFull)
 }
 
@@ -407,6 +415,13 @@ func TestAPolicyChangedAppliesToAPasswordsSessionAtTheNextRequest(t *testing.T) 
 	if code, body := in.me(t, passkeys); code != http.StatusOK {
 		t.Errorf("with passwords forbidden, carol's passkey's session answered %d %s", code, body)
 	}
+}
+
+// hold gives login back the password whose hash is held, where a test took it and needs it again.
+func (in passwordsOf) hold(t *testing.T, login, held string) {
+	t.Helper()
+	in.exec(t, `insert into credentials (id, login, type, password_hash) values ('`+login+`-password', '`+login+`', 'password', '`+held+`')
+	            on conflict (id) do update set password_hash = excluded.password_hash`)
 }
 
 // opening opens a session of login as the sign-in routes do, at the test's clock.
@@ -647,6 +662,7 @@ func TestAttemptsAreCountedForEachLoginAndEachAddress(t *testing.T) {
 // not a wrong password, and is given back to its address as well.
 func TestAnAttemptThatComparedNothingIsGivenBack(t *testing.T) {
 	in := somePasswords(t)
+	held := in.hashHeld(t, "alice")
 	in.policy(t, "forbidden", "optional")
 	for range 12 {
 		if w := in.as(t, "alice", ""); w.Code != http.StatusForbidden {
@@ -654,6 +670,9 @@ func TestAnAttemptThatComparedNothingIsGivenBack(t *testing.T) {
 		}
 	}
 	in.policy(t, "allowed", "optional")
+	// The first refusal took the password it found forbidden, which is put back: what this test
+	// counts is the attempts.
+	in.hold(t, "alice", held)
 	hold := api.Hashing(in.passwords, 1, 20*time.Millisecond)
 	done := hold()
 	for range 12 {
@@ -822,39 +841,53 @@ func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
 	}
 }
 
-// Where device_bound_only applies, a synced passkey signs nobody in, so it does not meet a passkey
-// required either: a password opens a session that only enrols for an account holding no other,
-// and a full one once it holds a device-bound one, min_passkeys being one here.
-func TestASyncedPasskeyDoesNotMeetARequiredOneWhereOnlyDeviceBoundCount(t *testing.T) {
+// Where a passkey is required, a password's session enrols passkeys and nothing else whatever the
+// account holds beside it: carol, holding a password beside two device-bound passkeys, is confined
+// as alice, holding none, is, and so is a password a recovery code sets, which "authorises only
+// enrolling a new passkey" there. Where passkeys are optional, each opens a full session.
+func TestAPasswordOnlyEnrolsWhereAPasskeyIsRequiredWhateverTheAccountHolds(t *testing.T) {
 	in := somePasswords(t)
-	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", MinPasskeys: 1})
+	in.passkeyed(t, "carol", "carol-passkey-2", false)
+	in.signedIn(t, "carol", api.SessionEnrolment)
+	in.signedIn(t, "alice", api.SessionEnrolment)
+	in.passkeyed(t, "erin", "erin-1", false)
+	in.passkeyed(t, "erin", "erin-2", false)
+	if w := in.enrolWith(t, in.enrolCode(t, "erin", db.EnrolmentRecovery), "erin's own passphrase"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"session":"enrolment"`) {
+		t.Errorf("a password erin set from a recovery code beside two passkeys answered %d %s", w.Code, w.Body)
+	}
+	in.policy(t, "allowed", "optional")
+	in.signedIn(t, "carol", api.SessionFull)
+	in.signedIn(t, "alice", api.SessionFull)
+}
+
+// Where device_bound_only applies, a synced passkey counts for none of min_passkeys: alice, holding
+// two synced passkeys and a password, keeps the password when she registers her first device-bound
+// passkey from the session it opens, and loses it with the second.
+func TestASyncedPasskeyCountsForNoneOfMinPasskeysWhereOnlyDeviceBoundOnesDo(t *testing.T) {
+	in := somePasswords(t)
 	bound := true
 	in.tighten(t, db.AuthPolicy{DeviceBoundOnly: &bound})
-	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.AddCredential(ctx, db.Credential{ID: "alice-synced", Login: "alice", Type: db.CredentialPasskey,
-			PublicKey: []byte{1}, AAGUID: make([]byte, 16), BackupEligible: true, BackupState: true})
-	}); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"alice-synced-1", "alice-synced-2"} {
+		if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			return w.AddCredential(ctx, db.Credential{ID: id, Login: "alice", Type: db.CredentialPasskey,
+				PublicKey: []byte{1}, AAGUID: make([]byte, 16), BackupEligible: true, BackupState: true})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	c := in.signedIn(t, "alice", api.SessionEnrolment)
-	if code, _ := in.me(t, c); code != http.StatusForbidden {
-		t.Errorf("alice's session, her one passkey synced, read her record: %d", code)
+	if w := in.registered(t, c); w.Code != http.StatusOK {
+		t.Fatalf("alice's first device-bound passkey answered %d %s", w.Code, w.Body)
 	}
-	in.tighten(t, db.AuthPolicy{})
-	if code, _ := in.me(t, c); code != http.StatusOK {
-		t.Errorf("with synced passkeys accepted again, alice's session answered %d", code)
+	if in.hashHeld(t, "alice") == "" {
+		t.Error("alice's password went with one device-bound passkey beside two synced ones, and min_passkeys is 2")
 	}
-	in.tighten(t, db.AuthPolicy{DeviceBoundOnly: &bound})
-	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		return w.AddCredential(ctx, db.Credential{ID: "alice-bound", Login: "alice", Type: db.CredentialPasskey,
-			PublicKey: []byte{2}, AAGUID: make([]byte, 16)})
-	}); err != nil {
-		t.Fatal(err)
+	if w := in.registered(t, c); w.Code != http.StatusOK {
+		t.Fatalf("alice's second device-bound passkey answered %d %s", w.Code, w.Body)
 	}
-	if code, _ := in.me(t, c); code != http.StatusOK {
-		t.Errorf("once alice holds a device-bound passkey, her session answered %d", code)
+	if in.hashHeld(t, "alice") != "" {
+		t.Error("alice's password outlived her second device-bound passkey")
 	}
-	in.signedIn(t, "alice", api.SessionFull)
 }
 
 // What was checked is checked again under the user's row before anybody is signed in: passwords
@@ -863,6 +896,7 @@ func TestASyncedPasskeyDoesNotMeetARequiredOneWhereOnlyDeviceBoundCount(t *testi
 func TestWhatChangesDuringASignInIsCheckedAgain(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
+	held := in.hashHeld(t, "alice")
 	for _, c := range []struct {
 		name   string
 		change func()
@@ -902,8 +936,12 @@ func TestWhatChangesDuringASignInIsCheckedAgain(t *testing.T) {
 		if got := in.failures(t); len(got) == 0 || !strings.HasSuffix(got[len(got)-1], c.reason) {
 			t.Errorf("%s during alice's sign-in is recorded as %q", c.name, got)
 		}
+		if c.status == http.StatusForbidden && in.hashHeld(t, "alice") != "" {
+			t.Errorf("%s during alice's sign-in left her the password it found forbidden", c.name)
+		}
 		in.policy(t, "allowed", "optional")
 		in.exec(t, `delete from credentials where id = 'alice-totp'`)
+		in.hold(t, "alice", held)
 	}
 	if n := in.count(t, `select count(*) from sessions where login = 'alice'`); n != 0 {
 		t.Errorf("%d sessions of alice were opened", n)

@@ -93,8 +93,8 @@ const (
 // session a code opened, which would register a passkey without spending it.
 //
 // A session a password opened may only enrol as well, where the policy that applies to its account
-// requires a passkey and the account holds fewer than min_passkeys the policy accepts, as the OpenAPI
-// document's sessionKind says of a passkey not held yet (policy.go). That is
+// requires a passkey, as the OpenAPI document's sessionKind says of a passkey not held yet: the
+// passkey that brings the account to min_passkeys takes the password (policy.go). That is
 // read from the credential the session records, at every request, and never written: see
 // identifySession.
 type OpenedBy struct {
@@ -185,8 +185,8 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // What a session a password opened may do is read from the policy that applies to its account now,
 // so that a policy changed applies from the next request, as do passkeys enrolled from the session:
 // nothing where passwords are forbidden, since the policy says no password exists any more and
-// whatever one opened goes with it; enrolling alone where a passkey is required and the account holds
-// fewer than min_passkeys the policy accepts; and whatever the user's grants allow otherwise. Such a
+// whatever one opened goes with it; enrolling alone where a passkey is required, which the account's
+// passkeys, not its password, are the way past; and whatever the user's grants allow otherwise. Such a
 // session is enrolling without having been opened by a code, which the registration ceremony tells
 // apart: it registers from it. A session a synced passkey opened opens nothing where
 // device_bound_only applies, read the same way.
@@ -217,11 +217,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			if policy.passwordsForbidden {
 				return nil
 			}
-			held, err := w.CredentialsOf(ctx, s.Login)
-			if err != nil {
-				return err
-			}
-			enrolling = policy.enrolling(held)
+			enrolling = policy.enrolling()
 		case s.CredentialType == db.CredentialPasskey && s.BackupEligible:
 			// A synced passkey signs nobody in where device_bound_only applies, and what it
 			// opened before the policy came to say so goes with it; a device-bound one's

@@ -532,8 +532,8 @@ type Principal string
 // OpenedByCode says it is one an enrolment code opened, which no route opens since the code travels
 // in the registration's options instead, and which the ceremony refuses as well: it would register a
 // passkey without spending its code. The other, a session a password opened where the policy
-// requires a passkey and the account holds fewer than min_passkeys, is Enrolling without
-// OpenedByCode, and registers a passkey, and sets its password, as any session of its user does.
+// requires a passkey, is Enrolling without OpenedByCode, and registers a passkey, and sets its
+// password, as any session of its user does.
 type Identity struct {
 	Principal    Principal
 	Scope        access.TokenScope

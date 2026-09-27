@@ -96,6 +96,10 @@ type PasskeyAPI struct {
 	rpID, origin, unavailable string
 
 	signIns *SignIns
+
+	// checked is run between a registration's verification and the transaction that writes it,
+	// where a test changes what was checked. Nil outside tests.
+	checked func()
 }
 
 // The bytes a ceremony mints: a challenge and a user handle are each 32 random bytes, 256 bits,
@@ -522,6 +526,9 @@ func challengeOf(clientData []byte) []byte {
 	return c
 }
 
+// errSynced is a synced passkey the policy came to refuse while its registration was verified.
+var errSynced = errors.New("api: the passkey is synced and device_bound_only applies")
+
 // refusal is a ceremony refused for a reason the request could not have been answered otherwise
 // for, rather than for a failure of the API's own.
 type refusal struct {
@@ -605,6 +612,9 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 
 	id := b64.EncodeToString(made.ID)
 	address := s.signIns.addressOf(r)
+	if s.checked != nil {
+		s.checked()
+	}
 	var answer Verified
 	var cookie *http.Cookie
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -620,12 +630,28 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 			return err
 		}
 		coded := took.EnrolmentCode != nil
+		// A session was read before the user's row was held, and a suspension since, forbidding
+		// passwords to an account holding no passkey, ended it: a suspended user enrols with a
+		// code alone.
+		if !coded && user.Suspended {
+			return &refusal{reason: "the user was suspended"}
+		}
+		// The policy read again under the user's row, since a synced passkey refused only by a
+		// policy read before it would be written beside a policy refusing it, and lift a
+		// suspension with a passkey that signs nobody in.
+		applies, err := policyFor(ctx, wide, user.Login, now, false)
+		if err != nil {
+			return err
+		}
+		if applies.deviceBoundOnly && made.BackupEligible {
+			return errSynced
+		}
 		// A suspended user enrols with a code, since "enrolling is how an account suspended
 		// for having no passkey comes back": a suspension made for having none is lifted by the
-		// passkey, which the policy accepts since it was not refused above, and the user is then
-		// signed in as any other; one made for another reason is not the passkey's to lift, and
-		// its user opens no session while it lasts. The code is spent below, and a code that
-		// opens nothing rolls the lifting back with everything else.
+		// passkey, which the policy accepts, and the user is then signed in as any other; one
+		// made for another reason is not the passkey's to lift, and its user opens no session
+		// while it lasts. The code is spent below, and a code that opens nothing rolls the
+		// lifting back with everything else.
 		lifted := false
 		if coded && user.Suspended && user.SuspendedFor == db.SuspendedNoPasskey {
 			if lifted, err = wide.LiftSuspension(ctx, user.Login, db.SuspendedNoPasskey); err != nil {
@@ -731,9 +757,13 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 	})
 	var refusedFor *refusal
 	switch {
+	case errors.Is(err, errSynced):
+		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
+		return
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode), errors.Is(err, db.ErrCredentialExists):
 		// A code spent, lapsed or replaced since the options were issued, a passkey registered
-		// already, or a user removed: nothing was written, and the ceremony starts again.
+		// already, or a user removed or suspended: nothing was written, and the ceremony starts
+		// again.
 		refused()
 		return
 	case err != nil:
