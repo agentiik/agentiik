@@ -9,7 +9,8 @@ import (
 )
 
 // What agk whoami says of each thing the installation tells: a grant an administrator wrote, a deny
-// they took from their own access, told after it was written, and a passkey refused.
+// they took from their own access, told after it was written, a passkey refused, and the break-glass
+// path used.
 func TestWhoamiSaysWhatItIsTold(t *testing.T) {
 	at := time.Date(2026, 9, 27, 14, 0, 0, 0, time.UTC)
 	ends := at.Add(24 * time.Hour)
@@ -29,6 +30,8 @@ func TestWhoamiSaysWhatItIsTold(t *testing.T) {
 			"told 01D at 2026-09-27T14:00:00Z: carol, an administrator, granted a deny of run:read_data on finance to alice"},
 		{api.Notification{ID: "01C", Kind: "passkey_counter_refused", At: at, Credential: "aVBob25l"},
 			"told 01C at 2026-09-27T14:00:00Z: a sign-in with your passkey aVBob25l was refused because its signature counter did not move forward, as a copy of it would; remove it if the other copy is not yours"},
+		{api.Notification{ID: "01E", Kind: "break_glass_recovery", At: at, Login: "carol"},
+			"told 01E at 2026-09-27T14:00:00Z: agentiik-api recover, run on the installation's host, issued carol, an administrator, a recovery code"},
 	} {
 		if got := noticeLine(c.told); got != c.want {
 			t.Errorf("agk whoami says\n%s\nwant\n%s", got, c.want)

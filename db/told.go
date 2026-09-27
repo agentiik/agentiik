@@ -22,7 +22,8 @@ import (
 // notification in the owner's GET /api/v1/me, because an owner does not read the audit log, and the
 // people whose data it is should hear of it from the installation itself." The second kind, a
 // sign-in refused for a passkey's signature counter, is written by the passkey ceremonies, and read
-// here as the first is.
+// here as the first is. The third, the break-glass path used, is told to every administrator, so
+// that the one way to a recovery code that no administrator vouches for is never taken silently.
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
@@ -34,6 +35,10 @@ const (
 	// PasskeyCounterRefused is a sign-in refused because a passkey's signature counter did not
 	// move forward, told to the passkey's user.
 	PasskeyCounterRefused = "passkey_counter_refused"
+
+	// BreakGlassRecovery is a recovery code issued to an administrator by the break-glass path,
+	// agentiik-api recover, told to every administrator, the one recovered included.
+	BreakGlassRecovery = "break_glass_recovery"
 )
 
 // NotificationKept is how long a notification is kept from when it was written: "long enough to
@@ -63,6 +68,11 @@ type Notification struct {
 	// Credential is the passkey whose assertion was refused, by its credential ID, on
 	// PasskeyCounterRefused alone.
 	Credential string
+
+	// Login is the administrator the break-glass path issued a recovery code, on
+	// BreakGlassRecovery alone, named rather than referred to, so that removing the account leaves
+	// what the others were told.
+	Login string
 }
 
 // TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote in this
@@ -124,6 +134,35 @@ func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at ti
 	return told, nil
 }
 
+// TellAdministrators writes BreakGlassRecovery, about the recovery code the break-glass path issued
+// the administrator login at at, to every administrator, login among them, and answers who was
+// told, by login. Every one, suspended or holding no credential included, since each may be the one
+// who comes back to read it, and the one recovered first of all: if they did not ask for it, whoever
+// holds the host did.
+//
+// It is written in the transaction that issues the code, so that no break-glass code commits untold,
+// after the code's row and before the audit entry: the code's row takes the recovered user's, and
+// each notification its recipient's principal, which is the order removing an administrator takes
+// them in, every administrator's user row before the principal it deletes.
+func (w *Wide) TellAdministrators(ctx context.Context, login string, at time.Time) ([]string, error) {
+	rows, err := w.tx.Query(ctx, `select login from users where admin order by login`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	told, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	for _, recipient := range told {
+		if _, err := w.tx.Exec(ctx,
+			`insert into notifications (id, recipient, kind, at, login) values ($1, $2, $3, $4, $5)`,
+			ulid.New(), recipient, BreakGlassRecovery, at, login); err != nil {
+			return nil, fmt.Errorf("db: %s could not be told of the recovery of %s: %w", recipient, login, err)
+		}
+	}
+	return told, nil
+}
+
 // NotificationsOf answers what recipient is told as of now, newest first, and removes what it was
 // told more than NotificationKept before now, which is kept no longer. Removed where it is read
 // rather than by a sweep of its own: a notification nobody reads costs a row until its reader asks,
@@ -134,7 +173,8 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 		return nil, fmt.Errorf("db: the notifications of %s past their days could not be removed: %w", recipient, err)
 	}
 	rows, err := w.tx.Query(ctx, `
-		select id, recipient, kind, at, coalesce(namespace, ''), access_grant, coalesce(credential, '')
+		select id, recipient, kind, at, coalesce(namespace, ''), access_grant, coalesce(credential, ''),
+		       coalesce(login, '')
 		  from notifications where recipient = $1
 		 order by at desc, id desc`, recipient)
 	if err != nil {
@@ -143,7 +183,7 @@ func (w *Wide) NotificationsOf(ctx context.Context, recipient string, now time.T
 	told, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Notification, error) {
 		var t Notification
 		var grant []byte
-		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Credential); err != nil {
+		if err := row.Scan(&t.ID, &t.Recipient, &t.Kind, &t.At, &t.Namespace, &grant, &t.Credential, &t.Login); err != nil {
 			return Notification{}, err
 		}
 		if grant != nil {

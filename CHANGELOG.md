@@ -84,6 +84,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `GET /api/v1/runs/{id}` answers `reason` for a run the controller cancelled at creation, its principal no longer holding `workflow:run`.
 - `POST /api/v1/users/{login}/recovery` issues a user a recovery code, whatever they hold, shown once with the link to `/auth/enrol` that carries it, single use and good for an hour, revoking their open one; it enrols a passkey, or a password where the policy allows passwords. Audited as `enrolment.issue` of the kind `recovery`, by the administrator for the user; their own account is a 403, a service account a 404. The bootstrap token's open nothing once it has ended.
 - `agentiik-api recover LOGIN`, the break-glass path, taking no credential, issues an administrator a recovery code from the API's database settings and public URL and prints its link once; recorded as `enrolment.issue` by `installation`, and refused for a user who is not an administrator.
+- The break-glass path is told to every administrator, the one recovered included: a `break_glass_recovery` notification in `GET /api/v1/me` naming the account as `login`, and when, the `enrolment.issue` entry naming who was told.
 - A first administrator's or a new user's link opens nothing once its user holds a credential, however it came, so that one left open beside a recovery code that enrolled them is a 401.
 - `GET /api/v1/auth/policy` answers the installation's authentication policy, every setting written, to any authenticated caller but a session that may only enrol, and `PUT` replaces it whole, a setting left out at its default, an administrator's alone. Audited as `policy.change` with the policy as it was.
 - `GET /api/v1/{ns}/auth/policy` answers what a namespace tightens to an administrator and to whoever holds a grant in it, and `PUT` replaces it, an administrator's alone, a setting looser than the installation's refused with 409 naming it and `{}` tightening nothing. Audited as `policy.change` in the namespace.
@@ -131,6 +132,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Pool.Sweepable`, `Unnamed`, `LiveEnvelopes` and `Orphaned` find the files of the store no row names, in a namespace with no finished run still to be recorded, and hand them to the collection as rows counting nothing, collectable from then.
 - `db.Wide.EnrolmentCodeByHash` and `db.Wide.UseEnrolmentCode` answer no recovery code the bootstrap token issued once it has ended, and no first administrator's or new user's link whose user holds a credential; `db.Wide.SpentFirstAdministratorLink` is gone.
 - Migration 0042 adds `users.suspended_for`, why the policy suspended an account: `db.Wide.Suspend` writes it, `db.Wide.LiftSuspension` lifts a suspension made for that reason alone, and `db.Wide.UsersUnderPolicy` answers who holds a role in a namespace. `db.Session.BackupEligible` says whether a synced passkey opened a session. `db.Wide.HoldUser` and `db.Wide.Administrators` hold a user's row as a reference to it does not wait on, so that a membership written with two users never deadlocks with an act holding every user.
+- Migration 0043 adds `notifications.login` and the kind `break_glass_recovery`, which `db.Wide.TellAdministrators` writes to every administrator.
 
 ### Artifacts
 
@@ -173,6 +175,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk share NS[/WORKFLOW] --user L|--group G|--service-account NS/N --role R|--deny P [--expires D]` and `agk share NS[/WORKFLOW] --revoke ID`, `agk grants NS[/WORKFLOW]`, one grant a line with its scope and what it gives there, and `agk whoami [NS[/WORKFLOW]]`, with what the installation tells where it names no scope.
 - `agk status` says why a run refused at creation was cancelled, `cancelled: ` and its reason, and `agk run` ends its report with it.
 - `agk user recover LOGIN` prints the link of a recovery code for a user, and refuses the caller's own account and a service account in the installation's words.
+- `agk whoami` says when `agentiik-api recover` issued an administrator a recovery code.
 
 ## v0.2.5, 2026-09-26
 

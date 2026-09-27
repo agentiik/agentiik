@@ -58,8 +58,9 @@ type ServiceAccount struct {
 }
 
 // Notification is one thing the installation tells the caller, $defs/notification: an
-// administrator having widened their own access in a namespace, with where and the grant, or a
-// sign-in refused for a passkey's signature counter, with the passkey.
+// administrator having widened their own access in a namespace, with where and the grant; a sign-in
+// refused for a passkey's signature counter, with the passkey; or the break-glass path having issued
+// an administrator a recovery code, with whose account.
 type Notification struct {
 	ID         string        `json:"id"`
 	Kind       string        `json:"kind"`
@@ -67,6 +68,7 @@ type Notification struct {
 	Namespace  string        `json:"namespace,omitempty"`
 	Grant      *access.Grant `json:"grant,omitempty"`
 	Credential string        `json:"credential,omitempty"`
+	Login      string        `json:"login,omitempty"`
 }
 
 // MeOptions are what the routes about the caller are given.
@@ -219,7 +221,7 @@ const noSuchNotification = "no such notification, or not yours"
 
 // notificationOf is a notification as the wire writes it, its instants in UTC.
 func notificationOf(t db.Notification) Notification {
-	told := Notification{ID: t.ID, Kind: t.Kind, At: t.At.UTC(), Namespace: t.Namespace, Credential: t.Credential}
+	told := Notification{ID: t.ID, Kind: t.Kind, At: t.At.UTC(), Namespace: t.Namespace, Credential: t.Credential, Login: t.Login}
 	if t.Grant != nil {
 		g := answeredGrant(*t.Grant)
 		told.Grant = &g

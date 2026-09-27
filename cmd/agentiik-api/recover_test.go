@@ -15,10 +15,11 @@ import (
 var recoveryLink = regexp.MustCompile(`(?m)^https://agentiik\.example\.com/auth/enrol#(agkenrol_[A-Za-z0-9_-]{43,})$`)
 
 // The break-glass path: recover issues an administrator a recovery code with no credential, as the
-// installation, prints the link that carries it once, and records it as enrolment.issue by
-// installation; the code is kept as its SHA-256, of the kind recovery, good for an hour. Run again,
-// it prints another, and the one before opens nothing. A user who is not an administrator, and a
-// login no user has, are refused, and nothing is issued or recorded for either.
+// installation, prints the link that carries it once, records it as enrolment.issue by installation,
+// and tells every administrator, saying so; the code is kept as its SHA-256, of the kind recovery,
+// good for an hour. Run again, it prints another, and the one before opens nothing. A user who is
+// not an administrator, and a login no user has, are refused, and nothing is issued, recorded or
+// told for either.
 func TestRecoverIssuesAnAdministratorARecoveryCodeWithNoCredential(t *testing.T) {
 	database, admin := namespaced(t)
 	for _, stmt := range []string{
@@ -39,7 +40,8 @@ func TestRecoverIssuesAnAdministratorARecoveryCodeWithNoCredential(t *testing.T)
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	m := recoveryLink.FindStringSubmatch(out.String())
 	if len(lines) != 2 || m == nil || lines[1] != m[0] ||
-		!strings.HasPrefix(lines[0], "carol, an administrator, may open this link once, before "+now.Add(time.Hour).Format("15:04 UTC")+", ") {
+		!strings.HasPrefix(lines[0], "carol, an administrator, may open this link once, before "+now.Add(time.Hour).Format("15:04 UTC")+", ") ||
+		!strings.Contains(lines[0], "every administrator is told of this one in agk whoami") {
 		t.Fatalf("recover printed:\n%s", out.String())
 	}
 	sum := sha256.Sum256([]byte(m[1]))
@@ -69,6 +71,11 @@ func TestRecoverIssuesAnAdministratorARecoveryCodeWithNoCredential(t *testing.T)
 		if err := recoverAdministrator(t.Context(), c, login, now, &out); err == nil || !strings.Contains(err.Error(), says) || out.Len() > 0 {
 			t.Errorf("recovering %s answered %v, printed %q", login, err, out.String())
 		}
+	}
+	var told, untold int
+	if err := admin.QueryRow(t.Context(), `select count(*) filter (where recipient = 'carol' and kind = 'break_glass_recovery' and login = 'carol'),
+		count(*) filter (where recipient <> 'carol') from notifications`).Scan(&told, &untold); err != nil || told != 2 || untold != 0 {
+		t.Errorf("carol is told of her recovery %d times and others %d, %v", told, untold, err)
 	}
 	want := []string{"installation enrolment.issue carol done", "installation enrolment.issue carol done"}
 	if got := audited(t, admin); strings.Join(got, "\n") != strings.Join(want, "\n") {
