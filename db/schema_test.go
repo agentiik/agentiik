@@ -261,6 +261,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		"principals": true, "users": true, "groups": true, "group_members": true,
 		"service_accounts": true, "credentials": true, "api_tokens": true, "sessions": true,
 		"enrolment_codes": true, "auth_policy": true, "bootstrap": true,
+		// What a principal is told is read where it asks who it is, across every namespace, and a
+		// passkey's refusal names none.
+		"notifications": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)
