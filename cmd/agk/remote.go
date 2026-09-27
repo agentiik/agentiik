@@ -35,11 +35,17 @@ type remote struct {
 }
 
 // reach reads which installation a command talks to, --server where it was given, AGENTIIK_SERVER
-// where it was not, and the installation agk login last signed in to where neither names one, and
-// the credential: AGENTIIK_TOKEN where it is set, and
-// otherwise the token agk login stored for that installation in the local profile, so that a
-// script's token set in its environment is never passed over for a person's. It answers false once
-// it has said what is missing, and the command leaves with exitUsage.
+// where it was not, and the installation agk login last signed in to where neither names one; and
+// the credential: AGENTIIK_TOKEN where it is set, and otherwise the token agk login stored for that
+// installation in the local profile, so that a script's token set in its environment is never passed
+// over for a person's. It answers false once it has said what is missing, and the command leaves
+// with exitUsage.
+//
+// AGENTIIK_TOKEN goes to the installation --server or AGENTIIK_SERVER names, and never to the one
+// the profile remembers: a shell holding one installation's service account token, with no address
+// set, would otherwise send it to whichever installation its person last signed in to, another one
+// as likely as not. Where only the profile names the installation and AGENTIIK_TOKEN is set, the
+// command is refused, saying which to set.
 //
 // An address that would carry the credential in plaintext is refused before anything is sent:
 // "nothing reaches the API in plaintext", and the credential is a bearer token that opens
@@ -47,11 +53,15 @@ type remote struct {
 // http is taken for a loopback address alone, as a runner takes it for AGK_API, since that is
 // a test server or a tunnel on this machine and never a network.
 func reach(e Env, server string) (remote, bool) {
-	where, ok := installationOf(e, server)
+	where, remembered, ok := installationOf(e, server)
 	if !ok {
 		return remote{}, false
 	}
 	token, kept := e.getenv(tokenVariable), false
+	if remembered && token != "" {
+		fmt.Fprintf(e.Err, "%s is set here, and no --server or %s names the installation it is for: agk sends it to none, the one agk login last signed in to included. Pass --server or set %s, or unset %s for agk to present the token agk login kept\n", tokenVariable, serverVariable, serverVariable, tokenVariable)
+		return remote{}, false
+	}
 	if token == "" {
 		stored, found, err := profileToken(e, where)
 		if err != nil {
@@ -86,10 +96,11 @@ func (e Env) presentsKept() bool { return e.getenv(tokenVariable) == "" }
 
 // installationOf reads which installation a command talks to, --server where it was given,
 // AGENTIIK_SERVER where it was not, and the installation agk login last signed in to, as the local
-// profile keeps it, where neither names one; and answers false once it has said what is wrong with
-// it. A profile agk cannot read is said as the credential's would be, rather than taken for none.
-func installationOf(e Env, server string) (string, bool) {
-	where := server
+// profile keeps it, where neither names one, which remembered says; and answers false once it has
+// said what is wrong with it. A profile agk cannot read is said as the credential's would be, rather
+// than taken for none.
+func installationOf(e Env, server string) (where string, remembered, ok bool) {
+	where = server
 	if where == "" {
 		where = e.getenv(serverVariable)
 	}
@@ -97,19 +108,19 @@ func installationOf(e Env, server string) (string, bool) {
 		last, err := lastSignedIn(e)
 		if err != nil {
 			fmt.Fprintf(e.Err, "%s\n", err)
-			return "", false
+			return "", false, false
 		}
-		where = last
+		where, remembered = last, last != ""
 	}
 	if where == "" {
 		fmt.Fprintf(e.Err, "no installation to talk to: pass --server or set %s, or sign in once with agk login --server, which agk then talks to\n", serverVariable)
-		return "", false
+		return "", false, false
 	}
 	if err := checkAddress(where); err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
-		return "", false
+		return "", false, false
 	}
-	return where, true
+	return where, remembered, true
 }
 
 // checkAddress refuses an installation address the credential cannot be sent to.

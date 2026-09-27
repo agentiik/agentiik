@@ -366,6 +366,19 @@ func TestAgkTalksToTheInstallationLastSignedInTo(t *testing.T) {
 	if _, got, _ := presented("token", "list", "--server", in.URL); got != p.kept(t).Installations[in.URL].Token {
 		t.Errorf("--server naming the first presented %q to it", got)
 	}
+	// AGENTIIK_TOKEN is sent where an address is named for it, and never to the installation the
+	// profile remembers, which it may not be for.
+	p.env[tokenVariable] = "agktoken_production_service_account"
+	if code, first, second := presented("token", "list"); code != exitUsage || first != "" || second != "" {
+		t.Errorf("with AGENTIIK_TOKEN and no address, agk left with %d presenting %q and %q", code, first, second)
+	}
+	if code, _, errs := p.agk(t, "token", "list"); !strings.Contains(errs, "AGENTIIK_TOKEN is set here, and no --server or AGENTIIK_SERVER names the installation it is for") {
+		t.Errorf("with AGENTIIK_TOKEN and no address, agk left with %d: %s", code, errs)
+	}
+	if _, got, _ := presented("token", "list", "--server", in.URL); got != "agktoken_production_service_account" {
+		t.Errorf("with AGENTIIK_TOKEN and --server, agk presented %q", got)
+	}
+	delete(p.env, tokenVariable)
 	p.env[serverVariable] = in.URL
 	if _, got, _ := presented("token", "list"); got != p.kept(t).Installations[in.URL].Token {
 		t.Errorf("AGENTIIK_SERVER naming the first presented %q to it", got)

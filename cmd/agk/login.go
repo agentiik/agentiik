@@ -90,7 +90,7 @@ func login(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "--label: %s\n", err)
 		return exitUsage
 	}
-	where, ok := installationOf(e, *server)
+	where, _, ok := installationOf(e, *server)
 	if !ok {
 		return exitUsage
 	}
@@ -236,7 +236,7 @@ func logout(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "agk logout names nothing after it, and was given %q: the installation is --server\n", named[0])
 		return exitUsage
 	}
-	where, ok := installationOf(e, *server)
+	where, _, ok := installationOf(e, *server)
 	if !ok {
 		return exitUsage
 	}
