@@ -517,17 +517,18 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 		file string
 		data pageData
 	}{
-		"sign-in":          {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld"}},
-		"sign-in-password": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
-		"sign-in-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld",
+		"sign-in":          {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld"}},
+		"sign-in-password": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered"}},
+		"sign-in-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld",
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
-		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered",
+		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered",
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
-		"sign-in-ip":        {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
-		"enrol":             {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld"}},
-		"enrol-ip":          {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "withheld"}},
-		"enrol-password":    {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
-		"enrol-ip-password": {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
+		"sign-in-ip":           {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered", Own: "offered"}},
+		"sign-in-own-withheld": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "withheld"}},
+		"enrol":                {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld"}},
+		"enrol-ip":             {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "withheld", Own: "withheld"}},
+		"enrol-password":       {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered"}},
+		"enrol-ip-password":    {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered", Own: "offered"}},
 	} {
 		var b bytes.Buffer
 		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {

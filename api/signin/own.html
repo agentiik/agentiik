@@ -35,3 +35,26 @@
 </div>
 </section>
 {{end}}
+{{define "credentials"}}
+<section id="credentials" hidden>
+<h2>How you sign in</h2>
+<p class="note">What this account signs in with. A passkey is synced where its provider may copy it off the device, and device-bound where it may not. Enrol a new passkey before removing an old one: the installation keeps as many as its policy asks for.</p>
+<ul id="credential-list" class="credentials"></ul>
+</section>
+{{end}}
+{{define "again"}}
+<section id="again" hidden>
+<h2>Sign in again</h2>
+<p class="note">Adding a way in takes a sign-in in the last 10 minutes, so that a session left open is not enough to add one. Sign in again, then try once more.</p>
+<button type="button" id="again-passkey">Sign in again with a passkey</button>
+<form id="again-password" method="post" hidden>
+<label for="again-login">Login</label>
+<input id="again-login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="again-secret">Password</label>
+<input id="again-secret" name="password" type="password" autocomplete="current-password" required>
+<label for="again-totp">One-time code <span class="hint">only if your account has one</span></label>
+<input id="again-totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+<button type="submit" id="again-password-button">Sign in again with the password</button>
+</form>
+</section>
+{{end}}

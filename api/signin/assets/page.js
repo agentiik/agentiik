@@ -1,6 +1,8 @@
 // The sign-in and enrolment page: the two passkey ceremonies, the password fallback where the
 // installation offers it, a password set from an enrolment code or from a session and a one-time
-// code generator enrolled beside it, who this browser is signed in as, and signing out. codec.js,
+// code generator enrolled beside it, the credentials a signed-in account holds and their removal,
+// a sign-in again where adding a way in asks for a recent one, who this browser is signed in as,
+// and signing out. codec.js,
 // loaded before it, converts what a browser without WebAuthn Level 3's JSON methods cannot, and
 // qr.js draws a generator's key as a QR code.
 //
@@ -39,8 +41,8 @@
   }
 
   // call sends one request to the API, whose routes are under api/v1 beside the page's own
-  // directory, and answers its status, its JSON, null where it carries none, and the seconds its
-  // Retry-After gives, null where it gives none.
+  // directory, and answers its status, its JSON, null where it carries none, the seconds its
+  // Retry-After gives, null where it gives none, and its WWW-Authenticate, null where it has none.
   async function call(method, path, body) {
     const init = { method, credentials: "same-origin", cache: "no-store", headers: {} };
     if (body !== undefined) {
@@ -60,7 +62,10 @@
       answer = null;
     }
     const after = Number.parseInt(response.headers.get("Retry-After"), 10);
-    return { status: response.status, answer, retryAfter: Number.isFinite(after) ? after : null };
+    return {
+      status: response.status, answer, retryAfter: Number.isFinite(after) ? after : null,
+      authenticate: response.headers.get("WWW-Authenticate"),
+    };
   }
 
   // wait says, for a person, how long Retry-After asks them to wait, in whole minutes rounded up,
@@ -192,6 +197,13 @@
     return r.status === 403 && !!r.answer && r.answer.setting === "password";
   }
 
+  // stale says whether an answer refused adding a way in for want of a recent sign-in, which it says
+  // by the challenge RFC 9470 names rather than by its sentence: the page then asks for a sign-in
+  // again.
+  function stale(r) {
+    return r.status === 403 && /\binsufficient_user_authentication\b/.test(r.authenticate || "");
+  }
+
   // refusedAfter is an answer's sentence, and where it refused too many attempts, how long it asks
   // to wait.
   function refusedAfter(r) {
@@ -243,14 +255,169 @@
     container.appendChild(svg);
   }
 
+  // againSection is the sign-in asked for again, on both pages, where adding a way in, a first
+  // password, a generator or a passkey registered from the session, found the session signed in to
+  // longer ago than the API accepts: a passkey where a ceremony can run, and the password where the
+  // account is offered one. A sign-in opens a session of its own, which the browser keeps in place of
+  // the one before; done is what the page does once it has, and the person then tries again.
+  function againSection(done) {
+    const passkeys = !unavailable();
+    let passwords = main.dataset.own === "offered";
+
+    function over(r) {
+      $("again-secret").value = "";
+      $("again-totp").value = "";
+      show("again", false);
+      say("Signed in again as " + r.answer.login + ". Try once more.");
+      return done();
+    }
+
+    $("again-passkey").addEventListener("click", busy($("again-passkey"), async () => {
+      const started = await call("POST", "auth/passkey/options", { ceremony: "assertion" });
+      if (started.status !== 200) {
+        problem(refusal(started));
+        return;
+      }
+      let credential;
+      try {
+        credential = await navigator.credentials.get({ publicKey: requestOptions(started.answer.options) });
+      } catch (e) {
+        problem(ceremonyProblem(e));
+        return;
+      }
+      if (!credential) {
+        problem("No passkey was offered. Try again, on this device or on a phone nearby.");
+        return;
+      }
+      const verified = await call("POST", "auth/passkey/verify", { ceremony: "assertion", credential: credentialJSON(credential) });
+      if (verified.status !== 200) {
+        problem(refusal(verified));
+        return;
+      }
+      await over(verified);
+    }));
+
+    $("again-password").addEventListener("submit", busy($("again-password-button"), async () => {
+      const body = { login: $("again-login").value.trim(), password: $("again-secret").value };
+      const totp = $("again-totp").value.trim();
+      if (totp) {
+        body.totp = totp;
+      }
+      $("again-secret").value = "";
+      $("again-totp").value = "";
+      const r = await call("POST", "auth/login", body);
+      if (forbidden(r)) {
+        passwords = false;
+        show("again-password", false);
+        problem(refusal(r));
+        return;
+      }
+      if (r.status !== 200) {
+        problem(refusedAfter(r));
+        return;
+      }
+      await over(r);
+    }));
+
+    // ask shows the sign-in again, after the refusal that asked for it, and answers true where r is
+    // that refusal.
+    function ask(r) {
+      if (!stale(r)) {
+        return false;
+      }
+      say("");
+      problem(refusal(r));
+      show("again-passkey", passkeys);
+      show("again-password", passwords);
+      show("again", true);
+      return true;
+    }
+
+    return { ask };
+  }
+
+  // day is the date an instant the API wrote falls on, as the API writes it, in UTC.
+  function day(instant) {
+    return typeof instant === "string" ? instant.slice(0, 10) : "";
+  }
+
+  // describe says what one credential is, for its holder: a passkey by its label and its kind, the
+  // password and a generator by what they are, each with when it came and when it was last used.
+  function describe(c) {
+    const used = c.last_used_at ? ", last used " + day(c.last_used_at) : ", not used yet";
+    switch (c.type) {
+      case "passkey":
+        return (c.label ? "“" + c.label + "”, a " : "A ") + c.kind + " passkey, enrolled " + day(c.created_at) + used;
+      case "password":
+        return "The password, set " + day(c.created_at) + used;
+      case "totp":
+        return "A one-time code generator, enrolled " + day(c.created_at) + used + ". It goes with the password, or with a code it shows below";
+    }
+    return "A credential of a kind this page does not know, enrolled " + day(c.created_at);
+  }
+
+  // credentialsSection is the list of what a signed-in account signs in with, on both pages, for a
+  // full session, which GET /api/v1/me/credentials answers, each passkey and the password with the
+  // button that removes it: the API refuses one the policy's minimum keeps, saying why, and the
+  // generator is removed with a code it shows, in the section below. changed is what the page does
+  // once the session may have changed: a credential removed ends the sessions it opened.
+  function credentialsSection(changed) {
+    async function render(login) {
+      const list = $("credential-list");
+      if (!login) {
+        list.replaceChildren();
+        show("credentials", false);
+        return;
+      }
+      let r;
+      try {
+        r = await call("GET", "me/credentials");
+      } catch (e) {
+        r = { status: 0 };
+      }
+      if (r.status !== 200 || !r.answer || !Array.isArray(r.answer.credentials)) {
+        list.replaceChildren();
+        show("credentials", false);
+        return;
+      }
+      list.replaceChildren();
+      for (const c of r.answer.credentials) {
+        const item = document.createElement("li");
+        const what = document.createElement("span");
+        what.textContent = describe(c);
+        item.appendChild(what);
+        if (c.type === "passkey" || c.type === "password") {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "quiet";
+          remove.textContent = "Remove";
+          remove.addEventListener("click", busy(remove, async () => {
+            const removed = await call("DELETE", "me/credentials/" + encodeURIComponent(c.id));
+            if (removed.status !== 204) {
+              problem(refusal(removed));
+              return;
+            }
+            say(c.type === "password" ? "The password is removed, with the one-time code generator beside it where there was one." : "The passkey is removed.");
+            await changed();
+          }));
+          item.appendChild(remove);
+        }
+        list.appendChild(item);
+      }
+      show("credentials", true);
+    }
+    return { render };
+  }
+
   // ownSection is the section a signed-in browser sets its password and its one-time code generator
-  // in, on both pages, where the installation offers passwords: the password set or changed, the
+  // in, on both pages, where passwords are offered to its account: the password set or changed, the
   // current one asked for where the account holds one, and removed; a generator started, its key
   // shown once as text and as a QR code, and turned on with a code it shows; and removed with one. A
   // session that may only enrol sets its password and nothing else. Once the API has refused this
-  // account a password, the section is not offered again. changed is what the page does once the
-  // session may have changed: removing the password ends the sessions it opened.
-  function ownSection(offered, changed) {
+  // account a password, the section is not offered again, and where adding a way in asks for a
+  // recent sign-in, again asks for one. changed is what the page does once the session may have
+  // changed: removing the password ends the sessions it opened.
+  function ownSection(offered, changed, again) {
     let withdrawn = false;
     let login = null;
 
@@ -285,12 +452,12 @@
 
     $("change-password").addEventListener("submit", busy($("change-password-button"), async () => {
       const password = $("changed-password").value;
-      const again = $("changed-password-again").value;
+      const repeated = $("changed-password-again").value;
       const current = $("current-password").value;
       for (const id of ["changed-password", "changed-password-again", "current-password"]) {
         $(id).value = "";
       }
-      if (password !== again) {
+      if (password !== repeated) {
         problem("The two passwords differ. Type the same one in both fields.");
         return;
       }
@@ -300,7 +467,7 @@
       }
       say("Setting your password…");
       const r = await call("PUT", "me/password", body);
-      if (withdraw(r)) {
+      if (withdraw(r) || again.ask(r)) {
         return;
       }
       if (r.status !== 200) {
@@ -324,7 +491,7 @@
 
     $("totp-start").addEventListener("click", busy($("totp-start"), async () => {
       const r = await call("POST", "me/totp");
-      if (withdraw(r)) {
+      if (withdraw(r) || again.ask(r)) {
         return;
       }
       if (r.status !== 200 || !r.answer || typeof r.answer.uri !== "string") {
@@ -343,7 +510,7 @@
       const code = $("totp-code").value.trim();
       $("totp-code").value = "";
       const r = await call("POST", "me/totp/confirm", { totp: code });
-      if (withdraw(r)) {
+      if (withdraw(r) || again.ask(r)) {
         return;
       }
       if (r.status !== 200) {
@@ -395,17 +562,22 @@
     // agk login's included, since such a session mints no token. Once a sign-in or a sign-out on the
     // page has said who that is, settled keeps the page's first question from answering over it;
     // once the API has refused this account a password, withdrawn keeps the form from coming back.
-    // Whoever is signed in is offered the section setting their password, where passwords are.
+    // Whoever is signed in is offered the section setting their password, where passwords are
+    // offered to their account, and a full session the list of what it signs in with.
     let settled = false;
     let withdrawn = false;
-    const own = ownSection(offered, async () => {
+    const changed = async () => {
       const now = await signedIn();
       settled = true;
       render(now);
-    });
+    };
+    const again = againSection(changed);
+    const credentials = credentialsSection(changed);
+    const own = ownSection(main.dataset.own === "offered", changed, again);
     function render(login) {
       showSignedIn(login);
       own.render(login);
+      credentials.render(login);
       show("enrolling", login === "");
       const signing = login !== "" && (!login || !!handOff);
       show("passkey", signing && !why);
@@ -547,11 +719,15 @@
     let spent = false;
     let withdrawn = false;
     let current = null;
-    const own = ownSection(offered, async () => render(await signedIn()));
+    const changed = async () => render(await signedIn());
+    const again = againSection(changed);
+    const credentials = credentialsSection(changed);
+    const own = ownSection(main.dataset.own === "offered", changed, again);
     function render(login) {
       current = login;
       showSignedIn(login);
       own.render(login);
+      credentials.render(login);
       const coded = !!linked || (login === null && !spent);
       const password = offered && !withdrawn && coded;
       show("code-field", coded && !linked && (passkeys || password));
@@ -627,6 +803,9 @@
       const label = $("label").value.trim();
       say("Waiting for your authenticator…");
       const started = await call("POST", "auth/passkey/options", asked);
+      if (again.ask(started)) {
+        return;
+      }
       if (started.status !== 200) {
         say("");
         problem(refusal(started));
@@ -650,6 +829,9 @@
         body.label = label;
       }
       const verified = await call("POST", "auth/passkey/verify", body);
+      if (again.ask(verified)) {
+        return;
+      }
       if (verified.status !== 200) {
         say("");
         problem(refusal(verified));
@@ -664,7 +846,14 @@
       $("enrolled-what").textContent = "Enrolled " + named + "a " + (passkey.kind || "new") + " passkey, for " + verified.answer.login + ".";
       show("enrolled", true);
       say("");
+      const before = current;
       render(await signedIn());
+      if (!code && before !== null && current === null) {
+        // Registered from a session a password opened, which went with the password: the
+        // passkeys held now are what the installation asks for, and the password was the way
+        // to them.
+        say("Your password is removed, now that you hold the passkeys the installation asks for, and this browser's session went with it: sign in with a passkey from now on.");
+      }
       if (current !== null) {
         $("intro").textContent = "To enrol another, on another device or on a phone nearby:";
       }
@@ -673,7 +862,7 @@
 
     $("set-password").addEventListener("submit", busy($("set-password-button"), async () => {
       const password = $("new-password").value;
-      const again = $("new-password-again").value;
+      const repeated = $("new-password-again").value;
       $("new-password").value = "";
       $("new-password-again").value = "";
       const code = codeAsked();
@@ -684,7 +873,7 @@
         problem("Setting a password takes the recovery code an administrator gave you, or the link it came in.");
         return;
       }
-      if (password !== again) {
+      if (password !== repeated) {
         problem("The two passwords differ. Type the same one in both fields.");
         return;
       }

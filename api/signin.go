@@ -184,8 +184,9 @@ type pageData struct {
 	Scripts bool
 
 	// Passkeys is available, or unavailable where the installation is addressed by an IP address;
-	// Password is offered or withheld.
-	Passkeys, Password string
+	// Password is offered or withheld, to whoever opens the page, and Own is the same to the
+	// account whose session the browser carries, as the policy that applies to it says.
+	Passkeys, Password, Own string
 
 	// Redirect and Challenge are what agk login opened the sign-in page with, where it did.
 	Redirect, Challenge string
@@ -211,7 +212,7 @@ func (s *SignInAPI) signInPage(w http.ResponseWriter, r *http.Request, _ Princip
 		})
 		return
 	}
-	offered, err := s.passwordOffered(r.Context())
+	offered, own, err := s.passwordOffered(r)
 	if err != nil {
 		s.page(w, http.StatusInternalServerError, "refused.html", pageData{
 			Title: "Cannot sign in", Reason: "The page could not read the installation's authentication policy.",
@@ -219,12 +220,8 @@ func (s *SignInAPI) signInPage(w http.ResponseWriter, r *http.Request, _ Princip
 		})
 		return
 	}
-	password := "withheld"
-	if offered {
-		password = "offered"
-	}
 	s.page(w, http.StatusOK, "sign-in.html", pageData{
-		Title: "Sign in to Agentiik", Scripts: true, Passkeys: s.passkeys(), Password: password,
+		Title: "Sign in to Agentiik", Scripts: true, Passkeys: s.passkeys(), Password: offering(offered), Own: offering(own),
 		Redirect: handOff.RedirectURI, Challenge: handOff.CodeChallenge,
 	})
 }
@@ -234,7 +231,7 @@ func (s *SignInAPI) signInPage(w http.ResponseWriter, r *http.Request, _ Princip
 // or to the password it sets, which the page offers beside the passkey where the policy lets
 // passwords in, and in its place on an installation addressed by an IP address.
 func (s *SignInAPI) enrolPage(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
-	offered, err := s.passwordOffered(r.Context())
+	offered, own, err := s.passwordOffered(r)
 	if err != nil {
 		s.page(w, http.StatusInternalServerError, "refused.html", pageData{
 			Title: "Cannot enrol", Reason: "The page could not read the installation's authentication policy.",
@@ -242,7 +239,7 @@ func (s *SignInAPI) enrolPage(w http.ResponseWriter, r *http.Request, _ Principa
 		})
 		return
 	}
-	data := pageData{Title: "Enrol a passkey", Scripts: true, Passkeys: s.passkeys(), Password: "withheld"}
+	data := pageData{Title: "Enrol a passkey", Scripts: true, Passkeys: s.passkeys(), Password: "withheld", Own: offering(own)}
 	if offered {
 		data.Password = "offered"
 		if s.ipAddressed {
@@ -293,27 +290,52 @@ func pageHeaders(h http.Header) {
 	h.Set("X-Content-Type-Options", "nosniff")
 }
 
-// passwordOffered says whether the page offers the password forms: where the password routes are
-// served and the policy lets passwords in. On an installation addressed by an IP address the policy
-// the API applies lets them in, whatever the stored one says; elsewhere the installation's policy
-// says, read at each page so that a change applies from the next one. A namespace's policy may forbid
-// them to the accounts holding a grant in it, which a page served before anybody signs in cannot
-// know: the routes refuse such an account with a 403 naming the setting, and the page then takes
-// the form away.
-func (s *SignInAPI) passwordOffered(ctx context.Context) (bool, error) {
+// passwordOffered says whether the page offers the password forms, to whoever opens it and to the
+// account whose session the request carries: where the password routes are served and the policy
+// that applies lets passwords in, read at each page so that a change applies from the next one. To
+// whoever opens it, that is the installation's policy, which the policy of nobody in particular is;
+// to a signed-in account, its own, which a namespace it holds a grant in may tighten to forbid them.
+// On an installation addressed by an IP address, either lets them in, whatever is stored. A sign-in
+// made on the page after it was served is under a policy the page could not know: the routes refuse
+// such an account with a 403 naming the setting, and the page then takes the form away.
+func (s *SignInAPI) passwordOffered(r *http.Request) (anybody, own bool, err error) {
 	if !s.passwords {
-		return false, nil
+		return false, false, nil
 	}
-	if s.ipAddressed {
-		return true, nil
+	// The session is read as every route reads it, and kept open as a request of its holder's.
+	as, err := s.sessions.Identify(r)
+	if err != nil {
+		return false, false, err
 	}
-	var policy db.AuthPolicy
-	err := s.pool.Installation(ctx, db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		var err error
-		policy, err = wide.InstallationPolicy(ctx)
-		return err
+	login := ""
+	if as.Principal != "" && as.Token == "" && as.Principal != BootstrapOperator {
+		login = string(as.Principal)
+	}
+	now := s.now()
+	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		policy, err := policyFor(ctx, wide, "", now, s.ipAddressed)
+		if err != nil {
+			return err
+		}
+		anybody, own = !policy.passwordsForbidden, !policy.passwordsForbidden
+		if login == "" {
+			return nil
+		}
+		if policy, err = policyFor(ctx, wide, login, now, s.ipAddressed); err != nil {
+			return err
+		}
+		own = !policy.passwordsForbidden
+		return nil
 	})
-	return err == nil && policy.Password != "forbidden", err
+	return anybody, own, err
+}
+
+// offering is whether the page offers a form, as its data attributes write it.
+func offering(offered bool) string {
+	if offered {
+		return "offered"
+	}
+	return "withheld"
 }
 
 // TerminalSignIn is openapi.json's terminalSignIn: what agk login opened the sign-in page with, the
