@@ -58,7 +58,9 @@ func Prefix(namespace string) string {
 //     the forward slash, and the namespace is its first segment. An implementation
 //     must not widen a lookup beyond the exact key it was given, and must not offer a
 //     caller any way to enumerate across keys: an existence check that reaches past
-//     its namespace is the one thing the scoping rule forbids.
+//     its namespace is the one thing the scoping rule forbids. The one listing there
+//     is, Walkable, lists one namespace's objects for the collector, and is no part of
+//     Objects.
 //   - An object is immutable, because its key is the digest of its bytes. A key that
 //     is held holds those bytes for as long as it exists: Put of a key already held
 //     may skip the write, and must never replace what is there with different bytes.

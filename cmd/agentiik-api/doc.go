@@ -107,7 +107,8 @@
 // nothing of it.
 //
 // And it records the artifact files of the runs v0.2 finished, as init does, where AGK_OBJECTS_DIR
-// is set, as it is among the API's settings: v0.2 recorded no reference for a file of an output its
+// is set, as it is among the API's settings, and names a directory it can read, which is all it
+// asks of it, writing nothing there: v0.2 recorded no reference for a file of an output its
 // workflow gave no retain, so each file the envelopes those runs' steps published name is recorded
 // as an artifact of its run, expiring the namespace's max_retention_days after the run finished,
 // for the purges to expire and collect, a batch of runs a transaction, as purge.Backfill does. A

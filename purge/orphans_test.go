@@ -83,8 +83,8 @@ func TestAnOrphanOlderThanTheGraceGoesAndAYoungerOneStays(t *testing.T) {
 	_, young := in.aged(t, "a write about to be recorded", 23*time.Hour)
 
 	p := in.purger(0, 0)
-	if got, want := in.pass(t, p), (purge.Purged{Orphans: 1}); got != want {
-		t.Fatalf("the pass that found the orphan removed %+v, want %+v", got, want)
+	if got, want := in.pass(t, p), (purge.Purged{Orphans: 1}); got != want || !got.Removed() {
+		t.Fatalf("the pass that found the orphan removed %+v, want %+v, which says it removed something", got, want)
 	}
 	if !in.held(t, old) {
 		t.Fatal("the orphan went in the pass that found it, before the grace a write that could not see it is given")
@@ -377,5 +377,47 @@ func TestAnOrphanHandedOverIsFinishedByTheNextLeader(t *testing.T) {
 	next := in.purger(0, 0)
 	if got := in.pass(t, next); got.Orphans != 0 || got.Objects != 1 || in.held(t, first) || !in.held(t, kept) {
 		t.Errorf("the next leader's pass removed %+v; the first orphan is held %t, the one referenced since %t", got, in.held(t, first), in.held(t, kept))
+	}
+}
+
+// failingWalk is a store one namespace of which cannot be walked.
+type failingWalk struct {
+	artifact.Walkable
+	namespace string
+}
+
+func (f failingWalk) Walk(namespace string) (artifact.Walk, error) {
+	if namespace == f.namespace {
+		return nil, errors.New("the directory cannot be listed")
+	}
+	return f.Walkable.Walk(namespace)
+}
+
+// A namespace whose objects cannot be walked is said, and the round goes on to the next at the
+// next pass rather than stopping there; the round after tries the first again.
+func TestANamespaceThatCannotBeWalkedHoldsUpNoOther(t *testing.T) {
+	in := withInstallation(t)
+	in.exec(t, `insert into namespaces (name) values ('team-ops')`)
+	stuck := artifact.Key("finance", fmt.Sprintf("%064x", 1))
+	walked := artifact.Key("team-ops", fmt.Sprintf("%064x", 2))
+	for _, key := range []string{stuck, walked} {
+		if err := in.store.Put(t.Context(), key, strings.NewReader("an orphan")); err != nil {
+			t.Fatal(err)
+		}
+		in.age(t, key, 48*time.Hour)
+	}
+
+	p := in.purger(0, 0)
+	p.Objects = failingWalk{Walkable: in.store.(artifact.Walkable), namespace: "finance"}
+	got, err := p.Pass(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "namespace finance could not be walked") || got.Orphans != 0 {
+		t.Fatalf("with finance unwalkable, the pass removed %+v and said %v", got, err)
+	}
+	if got := in.pass(t, p); got.Orphans != 1 || in.count(t, `select count(*) from artifact_objects where namespace = 'team-ops'`) != 1 {
+		t.Errorf("the pass after it handed over %d orphans, and the one of the namespace after finance was due", got.Orphans)
+	}
+	p.Objects = in.store
+	if got := in.pass(t, p); got.Orphans != 1 || in.count(t, `select count(*) from artifact_objects where namespace = 'finance'`) != 1 {
+		t.Errorf("the next round, finance walkable again, handed over %d orphans", got.Orphans)
 	}
 }

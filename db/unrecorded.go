@@ -66,7 +66,7 @@ func (p *Pool) UnrecordedRuns(ctx context.Context, after Unrecorded, batch int) 
 		return nil, err
 	}
 	var out []Unrecorded
-	err = p.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
+	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
 		out = nil
 		query := `select namespace, id from runs
 			where finished_at is not null and not files_recorded
@@ -163,7 +163,7 @@ func (p *Pool) RecordUnrecorded(ctx context.Context, runs []Recording) (Recorded
 	}
 	var out Recorded
 	var taken pairs
-	err := p.Installation(ctx, SchemaUpgrade, func(ctx context.Context, w *Wide) error {
+	err := p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
 		out = Recorded{}
 		if _, err := w.tx.Exec(ctx, `select set_config('lock_timeout', $1, true)`, recordingWaits); err != nil {
 			return err

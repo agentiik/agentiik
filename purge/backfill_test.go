@@ -300,3 +300,43 @@ func TestBackfillWaitsOnlyAMomentForAWriterCreatingAnObject(t *testing.T) {
 		t.Errorf("the object is counted %d times, by the writer and the recording", n)
 	}
 }
+
+// A writer that lets go of an object in the moments a Backfill waits between two rounds is gone
+// by the next, which records the run it had left.
+func TestBackfillRecordsARunOnceAWriterLetsGoOfItsObject(t *testing.T) {
+	in := withInstallation(t)
+	in.v02(t, 24*time.Hour, file{"shared.bin", "bytes a decision is counting"})
+	digest, _ := in.put(t, "bytes a decision is counting")
+	in.exec(t, `insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+	            values ('finance', 'sha256:`+digest+`', 28, 'application/octet-stream', 1)`)
+
+	writer, err := in.conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Exec(t.Context(), `select 1 from artifact_objects where digest = 'sha256:'||$1 for update`, digest); err != nil {
+		t.Fatal(err)
+	}
+	let := time.AfterFunc(300*time.Millisecond, func() { writer.Rollback(context.Background()) })
+	defer let.Stop()
+	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
+	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1}) {
+		t.Errorf("with a writer letting go within a round's pause, Backfill recorded %+v: %v", got, err)
+	}
+}
+
+// A pass records a batch of runs a call and calls again while the batch comes back full, up to its
+// bound of calls, leaving the rest to the next pass.
+func TestAPassRecordsABatchOfRunsACall(t *testing.T) {
+	in := withInstallation(t)
+	for i := range 5 {
+		in.v02(t, 24*time.Hour, file{"out.bin", fmt.Sprintf("output %d", i)})
+	}
+	p := in.purger(2, 2)
+	if got := in.pass(t, p); got.Recorded != 4 {
+		t.Errorf("a pass of two calls of two runs recorded %d runs", got.Recorded)
+	}
+	if got := in.pass(t, p); got.Recorded != 1 {
+		t.Errorf("the next pass recorded %d runs, and one was left", got.Recorded)
+	}
+}

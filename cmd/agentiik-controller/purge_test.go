@@ -223,4 +223,10 @@ func TestAPassSaysWhatItRemovedAndOnlyThat(t *testing.T) {
 	if said := log.String(); strings.Count(said, "the purges removed what had run out") != 1 || !strings.Contains(said, "objects=2 bytes=10") {
 		t.Errorf("a pass that collected two objects said:\n%s", said)
 	}
+	var recorded output
+	p = purger(nil, t.TempDir(), nil, db.Term{}, newCounted(nil, logger(io.Discard)), logger(&recorded))
+	p.Passed(purge.Purged{Recorded: 3})
+	if said := recorded.String(); strings.Contains(said, "removed") || !strings.Contains(said, "left unrecorded") || !strings.Contains(said, "runs=3") {
+		t.Errorf("a pass that recorded the files of three runs and removed nothing said:\n%s", said)
+	}
 }

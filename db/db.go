@@ -156,7 +156,9 @@ const (
 	ControllerSweep Reason = "the controller's sweep"
 
 	// Purge is one of the three sweeps, over envelopes, artifacts or logs, each
-	// against its declared retention.
+	// against its declared retention, and the recording of the artifact files a v0.2
+	// controller left unrecorded, which gives the artifact purge its dates: a run is
+	// finished in whichever namespace, and so is the recording.
 	Purge Reason = "a retention purge"
 
 	// Collect is the garbage collector, over objects whose reference count reached

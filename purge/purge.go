@@ -128,7 +128,8 @@ type Purger struct {
 	Pool *db.Pool
 
 	// Objects is the built-in store, AGK_OBJECTS_DIR, which the logs and the collected objects
-	// are deleted from.
+	// are deleted from, and which is walked for orphans and read for the envelopes naming the
+	// files still to be recorded, where it is Walkable.
 	Objects artifact.Removable
 
 	// Leading answers nil while this process may purge, and is asked before every call, which a
