@@ -69,9 +69,13 @@ const (
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 	NamespaceUpdate = "namespace.update"
-	// GrantCreate is a grant or a deny written. The first written is a namespace's owner's, which
-	// its creation writes.
+	// GrantCreate is a grant or a deny written, at POST /api/v1/{ns}/grants or on one workflow,
+	// recorded in its namespace with whom, where and what. The first written is a namespace's
+	// owner's, which its creation writes. GrantDelete is one revoked, recorded as it was. Either,
+	// where the namespace's owners were told of it, an administrator's grant or a widening of their
+	// own access, names who was told as notified.
 	GrantCreate = "grant.create"
+	GrantDelete = "grant.delete"
 
 	// UserCreate and UserDelete are a user created, POST /api/v1/users, and removed with what
 	// they held, DELETE /api/v1/users/{login}. EnrolmentIssue is an enrolment link issued, with

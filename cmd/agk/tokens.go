@@ -52,7 +52,7 @@ func tokenCreate(ctx context.Context, e Env, args []string) int {
 	}
 	q := api.TokenRequest{Principal: *holder, DeviceLabel: *label}
 	if *expires != "" {
-		at, err := expiryOf(*expires, e.now())
+		at, err := expiryOf(*expires, e.now(), tokenEnds)
 		if err != nil {
 			fmt.Fprintf(e.Err, "--expires: %s\n", err)
 			return exitUsage
@@ -193,10 +193,14 @@ func (s *scopeEntries) Set(v string) error {
 
 var _ flag.Value = (*scopeEntries)(nil)
 
+// tokenEnds is what an expiry of no time is refused with, for a token.
+const tokenEnds = "a token expires after it is minted"
+
 // expiryOf reads --expires: a number of days, 30d, a duration Go reads, 12h, or an instant in RFC
 // 3339. A length is counted from now, on this machine's clock, and the installation holds the
-// instant it comes to to a year after it mints the token.
-func expiryOf(written string, now time.Time) (time.Time, error) {
+// instant it comes to to its own rule, a token's to within a year of its minting. ends says, for a
+// length of no time at all, why it is refused: what expires, and after what.
+func expiryOf(written string, now time.Time, ends string) (time.Time, error) {
 	if at, err := time.Parse(time.RFC3339, written); err == nil {
 		return at, nil
 	}
@@ -210,9 +214,9 @@ func expiryOf(written string, now time.Time) (time.Time, error) {
 		// it round to some other length the token would then be minted with.
 		switch {
 		case n < 1:
-			return time.Time{}, fmt.Errorf("%q is no time at all: a token expires after it is minted", written)
+			return time.Time{}, fmt.Errorf("%q is no time at all: %s", written, ends)
 		case n > int(math.MaxInt64/int64(24*time.Hour)):
-			return time.Time{}, fmt.Errorf("%q is more days than a length holds, and a token lasts a year at most", written)
+			return time.Time{}, fmt.Errorf("%q is more days than a length holds: write the instant it ends instead", written)
 		}
 		length = time.Duration(n) * 24 * time.Hour
 	} else {
@@ -222,7 +226,7 @@ func expiryOf(written string, now time.Time) (time.Time, error) {
 		}
 	}
 	if length <= 0 {
-		return time.Time{}, fmt.Errorf("%q is no time at all: a token expires after it is minted", written)
+		return time.Time{}, fmt.Errorf("%q is no time at all: %s", written, ends)
 	}
 	return now.UTC().Add(length).Truncate(time.Second), nil
 }

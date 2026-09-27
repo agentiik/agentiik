@@ -26,6 +26,17 @@
 // route was written then. They are the page's own nine, held to it by a test, and they live in
 // package access, which resolves them from grants, with their names kept here for the routes.
 //
+// # The console's session
+//
+// A browser presents a session rather than a token: an opaque identifier in the __Host- cookie
+// OpenSession sets, which Principals reads beside the bearer token once AcceptSessions has named
+// the public URL. It ends twelve hours idle and thirty days after it opened. A request changing
+// something that a session carries comes from the public URL's origin or is a 403, since
+// SameSite=Lax leaves the other hosts of the same site free to send the cookie. A session an
+// enrolment code opened enrols passkeys and nothing else, and the router refuses it on every route
+// it authorises by who asks with a 403, which hides nothing: what is refused is the credential,
+// whatever the route names. A request carrying a bearer token and a session is a 400.
+//
 // # Absent and forbidden answer the same thing
 //
 // "An inaccessible workflow answering the same 404 as an absent one, so that probing yields
@@ -52,4 +63,21 @@
 // account's token mints none for that service account, whose next token someone who still means it
 // mints: each is refused with 403, since the caller is known and nothing about the installation is
 // hidden from them by saying so.
+//
+// GET /api/v1/me is the caller's own as well: who it is, its groups, what its grants resolve to at
+// each scope, narrowed by its credential, which the router computes as Caller.Effective from what
+// the authorizer says as Standings, and the notifications the installation tells it.
+//
+// # Sharing
+//
+// The grant routes take grant:manage at the scope they name. An administrator writes a grant as
+// well, holding nothing there: "an administrator may create a grant in any namespace, for anybody,
+// as a power of the installation rather than through grant:manage there", which a route declares as
+// Needs.OrAdministrator, the router asks as it asks every administrator's route, and its handler
+// learns of through Administering, since "the namespace's owner is told of each". Listing and
+// revoking are not the power's: "in a namespace, an administrator holds what their grants give". An
+// administrator widening their own access, by a role given or a deny taken away, is told the same
+// way however they came to share. A grant may name a service account of another namespace only
+// where its writer sees that namespace, which the router hands the handler as Sees on a route
+// declaring Needs.Seeing, so that the answer never says whether another namespace exists.
 package api

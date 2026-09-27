@@ -106,8 +106,14 @@ type Route struct {
 	// calls for it, where it declares one.
 	Also Permission
 
-	// Own is set where the route answers about its caller's own credentials and those of the
-	// service accounts of the namespaces it owns, and needs no permission: see Own.
+	// OrAdministrator is set where an administrator reaches the route as well, whatever they hold
+	// at its scope, and Seeing where its handler is given Sees: see Needs.
+	OrAdministrator bool
+	Seeing          bool
+
+	// Own is set where the route answers about its caller itself, its own credentials and those
+	// of the service accounts of the namespaces it owns, or who it is, and needs no permission:
+	// see Own.
 	Own bool
 }
 
@@ -126,8 +132,24 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 	holdings, _ := auth.(Holdings)
 	return &Router{
 		mux: http.NewServeMux(), namespaced: http.NewServeMux(), words: map[string]bool{},
-		auth: auth, identify: identify, holdings: holdings,
+		auth: auth, identify: confined(identify), holdings: holdings,
 	}, nil
+}
+
+// confined is identify with a session that may only enrol a passkey refused, as a 403 saying so:
+// such a session "enrols passkeys and nothing else: it cannot read a workflow, start a run or mint
+// a token". The router identifies every caller it authorises through it, whatever the route and
+// whichever hook serves it, so that no route reaches such a session by being written without the
+// check; the registration ceremony, the one thing it may do, is not a route the router authorises
+// by who asks.
+func confined(identify Identify) Identify {
+	return func(r *http.Request) (Identity, error) {
+		as, err := identify(r)
+		if err == nil && as.Enrolling {
+			return Identity{Refused: enrolsOnly, RefusedAs: http.StatusForbidden}, nil
+		}
+		return as, err
+	}
 }
 
 // ServeRunners says what a runner credential is checked against. Without it, a route taking
@@ -237,6 +259,12 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		}
 		guard.within = strings.Contains(pattern, "{namespace}")
 	}
+	if guard.seeing && rt.holdings == nil {
+		return fmt.Errorf("api: %s %s is handed what its caller sees of the namespaces, and the authorizer does not say who holds a grant where", method, pattern)
+	}
+	if guard.administered && guard.scope == Installation {
+		return fmt.Errorf("api: %s %s is an administrator's already, at the installation, and says an administrator reaches it as well", method, pattern)
+	}
 	if !guard.public && !guard.run && !guard.members {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
 			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
@@ -277,6 +305,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		Permission: guard.permission, Scope: guard.scope,
 		Public: guard.public, OfRun: guard.run, Members: guard.members, Why: guard.why,
 		Reveals: guard.reveals, Also: guard.also,
+		OrAdministrator: guard.administered, Seeing: guard.seeing,
 	})
 	return nil
 }
@@ -320,7 +349,8 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 	}
 }
 
-// HandleOwn registers one route about its caller's own credentials and what it owns.
+// HandleOwn registers one route about its caller itself: its own credentials and what it owns, or
+// who it is.
 //
 // Separate from Handle for the reason HandleAcross is: the handler is given a Caller in place of a
 // target, since what it answers is the caller's own and there is nothing in its path to authorise.
@@ -342,8 +372,9 @@ func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
 	if !ok {
 		return fmt.Errorf("api: %s %s answers about the service accounts of the namespaces its caller owns, and the authorizer does not say who owns what", method, pattern)
 	}
+	standings, _ := rt.auth.(Standings)
 	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
-		rt.serveOwn(w, r, owners, h)
+		rt.serveOwn(w, r, owners, standings, h)
 	}); err != nil {
 		return err
 	}
@@ -365,9 +396,9 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 // other route, a request with no credential is refused, and the handler is given who asks.
 //
 // It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
-// enrolment-only session, once sessions are served, "enrols passkeys and nothing else", and is
-// refused here, where openapi.json answers it 403 on each of them.
-func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
+// enrolment-only session "enrols passkeys and nothing else", and is refused by rt.identify, which
+// confined makes of the router's Identify, with the 403 openapi.json answers it on each of them.
+func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, standings Standings, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
@@ -377,7 +408,12 @@ func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners
 		unauthenticated(w, as)
 		return
 	}
-	h(w, r, Caller{Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners})
+	h(w, r, Caller{
+		Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners, standings: standings,
+		allow: func(ctx context.Context, what Permission, over Target) (bool, error) {
+			return rt.allow(ctx, as, what, over)
+		},
+	})
 }
 
 // AcrossHandler is a route answering across the installation or one namespace, given who asks,
@@ -541,13 +577,13 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	}
 	// A route taking OnNamespace asks who sees which namespace instead of a permission, and
 	// refuses one naming a namespace its caller does not see.
-	var allowed bool
+	var allowed, administering bool
 	sees := seesNothing
 	if g.members {
 		sees, err = rt.seeing(r.Context(), as)
 		allowed = err == nil && (!g.within || sees(target.Namespace))
 	} else {
-		allowed, err = rt.allow(r.Context(), as, g.permission, asked)
+		allowed, administering, err = rt.admits(r.Context(), as, g, asked)
 	}
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
@@ -557,9 +593,17 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		rt.deny(w, g.scope)
 		return
 	}
-	// Set on every route, seeing nothing where the route does not take OnNamespace, for the
-	// reason the questions below are.
+	if g.seeing {
+		if sees, err = rt.seeing(r.Context(), as); err != nil {
+			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+			return
+		}
+	}
+	// Set on every route, seeing nothing where the route neither takes OnNamespace nor declares
+	// Needs.Seeing, and administering nowhere a route does not let an administrator through by
+	// the power alone, for the reason the questions below are.
 	r = r.WithContext(context.WithValue(r.Context(), seesKey{}, sees))
+	r = r.WithContext(context.WithValue(r.Context(), administeringKey{}, administering))
 	// Set on every route, to a question answered false where the route declares none, so that a
 	// request built from this one and served again, as a facade over the API would serve one,
 	// asks what its own route declared rather than what this one did.
@@ -594,7 +638,8 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			sees, err := rt.seeing(ctx, again)
 			return err == nil && (!g.within || sees(target.Namespace)), err
 		}
-		return rt.allow(ctx, again, g.permission, asked)
+		allowed, _, err := rt.admits(ctx, again, g, asked)
+		return allowed, err
 	}))
 	h(w, r, who, target)
 }
@@ -644,6 +689,28 @@ func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over 
 	return rt.auth.Allow(ctx, as.Principal, what, over)
 }
 
+// admits is whether a route taking Needs lets the caller through, and whether it did so by an
+// administrator's power alone: the permission it needs over the target, and for a route an
+// administrator reaches as well, the administrator's power where the permission is not held, asked
+// as every administrator's route asks it. The power reaches a target a grant could name and nothing
+// else, since a path naming a namespace no grant could name is the absence it is to everybody, and
+// its handler would be handed a name the database cannot hold.
+func (rt *Router) admits(ctx context.Context, as Identity, g guard, over Target) (allowed, administering bool, err error) {
+	allowed, err = rt.allow(ctx, as, g.permission, over)
+	if err != nil || allowed || !g.administered || !grantable(over) {
+		return allowed, false, err
+	}
+	allowed, err = rt.allow(ctx, as, GrantManage, Target{})
+	return allowed, allowed, err
+}
+
+// grantable says whether a grant's scope could name the target: a namespace, or a workflow of one,
+// each on its grammar.
+func grantable(over Target) bool {
+	_, err := access.ParseScope(access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}.String())
+	return over.Namespace != "" && err == nil
+}
+
 // seeing is what a caller sees of the namespaces' records: every one where it administers the
 // installation through a credential that carries the power, which is asked as grant:manage there is
 // for any other administrator's route, and otherwise the namespaces it holds a grant in that its
@@ -667,9 +734,15 @@ func (rt *Router) seeing(ctx context.Context, as Identity) (func(string) bool, e
 	}, nil
 }
 
-// unauthenticated answers a caller nobody was identified as: with what its identification said
-// where a credential came and opened nothing, and otherwise with the absence of one.
+// unauthenticated answers a caller nobody was identified as: with the status and the sentence its
+// identification said where a credential came that this request may not carry, which no other
+// credential would put right and so asks for none; with what it said where a credential came and
+// opened nothing; and otherwise with the absence of one.
 func unauthenticated(w http.ResponseWriter, as Identity) {
+	if as.RefusedAs != 0 {
+		refuse(w, as.RefusedAs, as.Refused)
+		return
+	}
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	why := as.Refused
 	if why == "" {

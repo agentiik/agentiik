@@ -146,15 +146,65 @@ func TestTheGrantsThatApplyAreTheOnesAskedFor(t *testing.T) {
 		}
 	}
 
-	// Revoked in its own namespace, and not from another's handle, which cannot see it.
-	err := pool.In(ctx, "team-ops", func(ctx context.Context, n *NS) error { return n.RevokeAccess(ctx, "01JQ3M8E") })
-	if !errors.Is(err, ErrNoAccessGrant) {
-		t.Errorf("team-ops revoked a grant of finance, answered %v", err)
+	// Revoked in its own namespace, and not from another's handle, which cannot see it; at the
+	// scope it was written at, and not at the other.
+	revoke := func(namespace, workflow, id string) (access.Grant, error) {
+		var revoked access.Grant
+		err := pool.In(ctx, namespace, func(ctx context.Context, n *NS) error {
+			var err error
+			revoked, err = n.RevokeAccess(ctx, workflow, id)
+			return err
+		})
+		return revoked, err
 	}
-	in("finance", func(ctx context.Context, n *NS) error { return n.RevokeAccess(ctx, "01JQ3M8E") })
-	err = pool.In(ctx, "finance", func(ctx context.Context, n *NS) error { return n.RevokeAccess(ctx, "01JQ3M8E") })
-	if !errors.Is(err, ErrNoAccessGrant) {
+	for what, c := range map[string]struct{ namespace, workflow, id string }{
+		"from team-ops":                         {"team-ops", "", "01JQ3M8E"},
+		"a namespace's grant on a workflow":     {"finance", "monthly-invoicing", "01JQ3M8E"},
+		"a workflow's grant on its namespace":   {"finance", "", "01JQ3M8B"},
+		"a workflow's grant on another of them": {"finance", "payroll", "01JQ3M8B"},
+	} {
+		if _, err := revoke(c.namespace, c.workflow, c.id); !errors.Is(err, ErrNoAccessGrant) {
+			t.Errorf("revoking %s was answered %v", what, err)
+		}
+	}
+	if revoked, err := revoke("finance", "", "01JQ3M8E"); err != nil || revoked.Principal != "bob" || revoked.Role != access.Owner || revoked.Scope != finance {
+		t.Errorf("revoking bob's grant answered %+v, %v", revoked, err)
+	}
+	if revoked, err := revoke("finance", "monthly-invoicing", "01JQ3M8C"); err != nil || revoked.Deny != access.RunReadData || revoked.Scope != invoicing {
+		t.Errorf("revoking alice's deny answered %+v, %v", revoked, err)
+	}
+	if _, err := revoke("finance", "", "01JQ3M8E"); !errors.Is(err, ErrNoAccessGrant) {
 		t.Errorf("a grant revoked twice was answered %v", err)
+	}
+
+	// Listed at a scope, each with the scope it was written at and none expired, the namespace's
+	// first; a namespace or a workflow that is not there told from one holding nothing.
+	in("finance", func(ctx context.Context, n *NS) error {
+		at, err := n.AccessGrantsAt(ctx, "monthly-invoicing", now)
+		if err != nil {
+			return err
+		}
+		var got []string
+		for _, g := range at {
+			got = append(got, g.ID+" "+g.Scope.String())
+		}
+		if want := []string{"01JQ3M8A finance", "01JQ3M8B finance/monthly-invoicing"}; !slices.Equal(got, want) {
+			t.Errorf("the grants that apply to monthly-invoicing are %q, want %q", got, want)
+		}
+		if at, err := n.AccessGrantsAt(ctx, "", now); err != nil || len(at) != 1 || at[0].ID != "01JQ3M8A" {
+			t.Errorf("the grants on finance are %+v, %v", at, err)
+		}
+		if _, err := n.AccessGrantsAt(ctx, "nightly", now); !errors.Is(err, ErrNoWorkflow) {
+			t.Errorf("the grants on a workflow that is not there were answered %v", err)
+		}
+		return nil
+	})
+	err := pool.In(ctx, "nowhere", func(ctx context.Context, n *NS) error {
+		_, err := n.AccessGrantsAt(ctx, "", now)
+		return err
+	})
+	if !errors.Is(err, ErrNoNamespace) {
+		t.Errorf("the grants of a namespace that is not there were answered %v", err)
 	}
 }
 

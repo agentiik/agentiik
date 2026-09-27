@@ -60,19 +60,19 @@ type command struct {
 // commands is the table of #command-line, in the order the documentation writes it, with
 // each effect in the documentation's own words.
 //
-// Four of these reach an installation for principals it does not hold until v0.3.0, and brick
-// init for templates released elsewhere, and each refuses naming what is missing, because a verb
-// the documentation lists and the binary does not know is a binary that looks broken.
+// One of these reaches an installation for a sign-in it does not serve yet, and brick init for
+// templates released elsewhere, and each refuses naming what is missing, because a verb the
+// documentation lists and the binary does not know is a binary that looks broken.
 //
 // The row for agk run is added by run.go, the file that implements it beside
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
-	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
+	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withSignIn)},
 	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
 	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
 	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},
-	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation has no route yet that says who a token belongs to", withPrincipals)},
+	{"whoami", "Prints the current principal, its groups and its effective permissions, everywhere or on a given namespace or workflow.", whoami},
 	{"user create", "Creates a user, --admin for an administrator, and prints the enrolment link.", userCreate},
 	{"user list", "Lists the users of an installation.", userList},
 	{"user show", "Shows one user: display name, whether an administrator or suspended, when created and last signed in.", userShow},
@@ -94,8 +94,8 @@ var commands = []command{
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},
-	{"share", "Grants or revokes access.", absent("share", "an installation has no route yet to grant or revoke access", withPrincipals)},
-	{"grants", "Shows who can do what on a workflow, and which scope each permission comes from.", absent("grants", "an installation has no route yet to list its grants", withPrincipals)},
+	{"share", "Grants or revokes access to a namespace or a workflow.", shareVerb},
+	{"grants", "Shows who can do what on a namespace or a workflow, and which scope each permission comes from.", grantsVerb},
 	{"logs", "Follows the logs of a run.", logs},
 	{"status", "Shows how a run on an installation stands: its state, each step's, the envelope digests and what failed.", status},
 	{"brick init", "Scaffolds a brick in a chosen language, with its manifest and test harness.", absent("brick init", "there are no brick templates here", "They are released from agentiik/bricks")},

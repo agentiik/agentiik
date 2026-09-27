@@ -57,9 +57,10 @@ const tokensMost = 100
 // enough to say which machine or which script, short enough to list.
 const deviceLabelMax = 256
 
-// tokenIDForm is the alphabet a token's identifier is written in, the wire's ulid. An identifier
-// outside it names no token, and is answered as the absence it is before the database is asked.
-var tokenIDForm = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{1,255}$`)
+// ulidForm is the alphabet an identifier the engine mints is written in, the wire's ulid: a
+// token's, a grant's or a notification's. An identifier outside it names nothing, and is answered
+// as the absence it is before the database is asked.
+var ulidForm = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{1,255}$`)
 
 // The refusals of the token routes that say something of their own.
 const (
@@ -457,7 +458,7 @@ func (t *TokenAPI) list(w http.ResponseWriter, r *http.Request, caller Caller) {
 // that does not exist.
 func (t *TokenAPI) revoke(w http.ResponseWriter, r *http.Request, caller Caller) {
 	id := r.PathValue("id")
-	if !tokenIDForm.MatchString(id) {
+	if !ulidForm.MatchString(id) {
 		fail(w, http.StatusNotFound, noSuchToken)
 		return
 	}

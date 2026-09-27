@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
@@ -112,16 +111,8 @@ func (n *NewServiceAccount) field(b *body, name string) error {
 	return unknown(name)
 }
 
-// ServiceAccount is a service account as the routes answer one, $defs/serviceAccount. CreatedBy is
-// empty on the built-in identity, which nobody created.
-type ServiceAccount struct {
-	Kind      string    `json:"kind"`
-	Namespace string    `json:"namespace"`
-	Name      string    `json:"name"`
-	CreatedBy string    `json:"created_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
+// serviceAccountOf is a stored service account as the routes answer one, ServiceAccount, which GET
+// /api/v1/me answers too.
 func serviceAccountOf(s db.ServiceAccount) ServiceAccount {
 	return ServiceAccount{
 		Kind: db.KindServiceAccount, Namespace: s.Namespace, Name: s.Name, CreatedBy: s.CreatedBy,

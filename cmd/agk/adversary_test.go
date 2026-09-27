@@ -39,9 +39,13 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 		"group create": true, "group list": true, "group show": true, "group delete": true,
 		"group add": true, "group remove": true,
 	}
-	// And the token verbs, which mint, list and revoke API tokens on an installation, and the
-	// service account verbs, which create, list and remove what the tokens are minted for.
-	for _, verb := range []string{"token create", "token list", "token revoke", "service-account create", "service-account list", "service-account delete"} {
+	// And the token verbs, which mint, list and revoke API tokens on an installation, the service
+	// account verbs, which create, list and remove what the tokens are minted for, and the verbs
+	// that say who may do what, since grants could be written and read.
+	for _, verb := range []string{
+		"token create", "token list", "token revoke", "service-account create", "service-account list",
+		"service-account delete", "share", "grants", "whoami",
+	} {
 		built[verb] = true
 	}
 	for _, c := range commands {
