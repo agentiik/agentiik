@@ -118,12 +118,12 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 		Name:   "agentiik_quota_used",
 		Help:   "What a namespace holds against a quota, named by its identifier: tasks in flight for max_concurrent_tasks, runs created in the last 60 minutes for max_runs_per_hour, bytes of live artifacts and uploads for max_artifact_bytes. Over agentiik_quota_limit, how full it is.",
 		Labels: []string{"namespace", "quota"},
-		Fold:   true,
+		FoldBy: "namespace",
 	}, metrics.Desc{
 		Name:   "agentiik_quota_limit",
 		Help:   "The quota a namespace sets, named by its identifier, for each of the three agentiik_quota_used counts that it bounds. A quota the namespace does not set has no series.",
 		Labels: []string{"namespace", "quota"},
-		Fold:   true,
+		FoldBy: "namespace",
 	})
 	return c
 }
