@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing/fstest"
@@ -22,6 +23,7 @@ import (
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -118,8 +120,9 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		guard   Guard
 		handler Handler
 	}{
+		// And secret:use where the version names a secret, which only the push can tell.
 		{"PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}",
-			Needs{Permission: WorkflowWrite, Scope: Workflow}, s.push},
+			Needs{Permission: WorkflowWrite, Scope: Workflow, Also: SecretUse}, s.push},
 		{"POST", "/api/v1/{namespace}/workflows/{workflow}/runs",
 			Needs{Permission: WorkflowRun, Scope: Workflow}, s.start},
 		// The run by the path a Location names it by, authorised over its own workflow
@@ -429,6 +432,28 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// A version naming a secret is accepted only from a caller holding secret:use: "secret:use is
+	// checked when a version is pushed, against whoever pushes it, and never when the workflow
+	// runs". Writing a secret's name into a workflow is what sends its value into a container, so
+	// whoever writes it answers for it, and whoever runs the version later needs workflow:run
+	// alone. The permission comes from the namespace's grants only, and is asked over this
+	// workflow so that a deny of it here refuses as a deny does anywhere. A 403 rather than the
+	// 404 of a refused route, since the caller holds workflow:write here and learns nothing.
+	if named := secretsNamed(g.Workflow()); len(named) > 0 {
+		held, err := HoldsAlso(r)(r.Context())
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "the push could not be authorised")
+			return
+		}
+		if !held {
+			noun := "the secret"
+			if len(named) > 1 {
+				noun = "the secrets"
+			}
+			fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(named, ", "), over.Workflow, over.Namespace))
+			return
+		}
+	}
 	// And so is a declaration no run of it could be bound against: an input's schema that does
 	// not compile, or names a file the commit does not carry. Every run of the version is bound
 	// against it, so a version that holds one is a version nothing can start.
@@ -514,6 +539,19 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 		recorded = map[string]string{}
 	}
 	write(w, http.StatusOK, Pushed{Namespace: over.Namespace, Workflow: over.Workflow, Commit: commit, Images: recorded})
+}
+
+// secretsNamed are the secrets a workflow names, sorted: its secrets block, and every one a step
+// mounts. A step may mount only what the block names, which loading the workflow holds, so the
+// steps add nothing today; they are read all the same, since this is what a push is authorised
+// by and a secret it missed would be one nobody answered for.
+func secretsNamed(wf *graph.Workflow) []string {
+	named := slices.Clone(wf.Secrets)
+	for _, st := range wf.Steps {
+		named = append(named, st.Secrets...)
+	}
+	slices.Sort(named)
+	return slices.Compact(named)
 }
 
 // pushedTree is the tree a push carries, as the fs.FS an input's schema resolves a reference
@@ -913,10 +951,11 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 //
 // It says nothing of how the run stands, and its status is the same whether the run is going or
 // has ended. The route is guarded by workflow:run, and a run's state is what run:read guards: "See
-// run state, per-step state, timings and log lines". operator holds the one and not the other, as
-// does anybody denied run:read, and an answer saying how the run stood, or a status that changed
-// once it had ended, would hand them what GET refuses them, at any moment and with no side effect
-// on a run that has ended. Somebody holding both reads the state where run:read guards it.
+// run state, per-step state, timings and log lines". A token narrowed to workflow:run holds the one
+// and not the other, as does anybody denied run:read, and an answer saying how the run stood, or a
+// status that changed once it had ended, would hand them what GET refuses them, at any moment and
+// with no side effect on a run that has ended. Somebody holding both reads the state where run:read
+// guards it.
 //
 // Asking again is asking once, and asking about a run that has ended changes nothing: "a
 // principal asking twice, or asking about a run that finished while they were asking, has got
