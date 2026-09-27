@@ -64,8 +64,8 @@ func createSecond(t *testing.T, pool *db.Pool) {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: second, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
 			Trigger: agk.TriggerSchedule,
-			Inputs: json.RawMessage(`{"orders": []}`),
-			Steps:  []agk.Step{"normalize"},
+			Inputs:  json.RawMessage(`{"orders": []}`),
+			Steps:   []agk.Step{"normalize"},
 		})
 	})
 	if err != nil {
