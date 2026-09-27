@@ -101,7 +101,7 @@ func namespaceCreate(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk namespace create", "agk namespace create <name> --owner <user or group:NAME> [--max-... <quota>] [--server <url>] [-o json]")
 	owner := fs.String("owner", "", "Who owns it: a login, or group:NAME. Required: the owner holds the owner role on it and is told when an administrator widens their own access in it.")
 	quotas := withQuotas(fs)
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	name, code, ok := oneNamespace(e, fs, args)
 	if !ok {
@@ -135,7 +135,7 @@ func namespaceCreate(ctx context.Context, e Env, args []string) int {
 // caller holds a grant in for anybody else.
 func namespaceList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk namespace list", "agk namespace list [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -181,7 +181,7 @@ func namespaceList(ctx context.Context, e Env, args []string) int {
 // namespaceShow is agk namespace show: one namespace, its kind, its owner and its quotas.
 func namespaceShow(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk namespace show", "agk namespace show <name> [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	name, code, ok := oneNamespace(e, fs, args)
 	if !ok {
@@ -202,7 +202,7 @@ func namespaceShow(ctx context.Context, e Env, args []string) int {
 // identity, which the installation refuses otherwise, saying what it holds.
 func namespaceDelete(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk namespace delete", "agk namespace delete <name> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	name, code, ok := oneNamespace(e, fs, args)
 	if !ok {
 		return code
@@ -235,7 +235,7 @@ func namespaceQuotas(ctx context.Context, e Env, args []string) int {
 	quotas := withQuotas(fs)
 	var lifts lifted
 	fs.Var(&lifts, "lift", "A quota to lift, by its identifier, max_runs_per_hour, max_artifact_bytes, max_run_duration or allowed_runner_pools; repeated for each.")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	name, code, ok := oneNamespace(e, fs, args)
 	if !ok {

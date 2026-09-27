@@ -32,16 +32,20 @@ import (
 // a password is the one thing to get in with. It is spent by the password it sets, in the
 // transaction that records the password, and the password then opens the session a password opens:
 // full where the policy is met, and enrolling passkeys and nothing else where it requires a
-// passkey, as a password sign-in's would. A suspended user sets a password with a code and opens no
-// session, as a suspended user enrolling a passkey does.
+// passkey, as a password sign-in's would. A user suspended for holding no passkey where passwords
+// were forbidden comes back by it: passwords are allowed again wherever one is set, so the password
+// lifts that suspension, as a passkey enrolled from a code does, and signs them in. A user suspended
+// for another reason sets a password with a code and opens no session, as they would enrolling a
+// passkey.
 //
 // An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
 // token where it has not ended and the session the password opens is a full one: always on an
 // installation addressed by an IP address, and where the policy requires no passkey. Where it
 // requires one, the bootstrap stays until the administrator registers a passkey, from the session
 // the password opened or a later one, which ends it then (passkeys.go), or until the password signs
-// them in to a full session, the policy relaxed since (passwords.go): ended at the password, it
-// would leave the installation to somebody who can do nothing but enrol.
+// them in to a full session, or a session it opened is full at a request, the policy relaxed since
+// (passwords.go, sessions.go): ended at the password, it would leave the installation to somebody
+// who can do nothing but enrol.
 //
 // A code sets the password in place of one held, which only a recovery code can meet, since the
 // other two are issued to a user holding no credential; the TOTP generator beside the old password
@@ -68,6 +72,10 @@ import (
 // address, where no passkey signs anybody in and the password is the one credential that does. It
 // takes the TOTP generator beside it, and the sessions it opened, the one it is removed from among
 // them where that one was.
+//
+// Where the policy requires a passkey and the account holds the min_passkeys passkeys it accepts, a
+// password is set from neither and the request is a 409 naming passkey: every session it opened
+// would only enrol, with nothing left to enrol for, and the next passkey would take it.
 //
 // A bearer token sets and removes nothing: a token that leaked would otherwise be a way to a
 // credential that outlives it, and these routes are the sign-in page's, where a browser's session is.
@@ -96,6 +104,13 @@ const (
 	// passwordsForbiddenToSet is a password set where the policy that applies to the account
 	// forbids them, answered naming the setting.
 	passwordsForbiddenToSet = "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey"
+
+	// passwordOnlyEnrols is a password set from a session where the policy that applies to the
+	// account requires a passkey and the account holds the min_passkeys passkeys it accepts,
+	// answered naming the setting; codeOnlyEnrols is the same from an enrolment code, whose holder
+	// has likely lost the passkeys the account holds, and registers one with the code instead.
+	passwordOnlyEnrols = "the authentication policy that applies to this account requires a passkey, and the account holds the passkeys it asks for already: a password could only ever open a session that enrols one, and none is set. Sign in with a passkey"
+	codeOnlyEnrols     = "the authentication policy that applies to this account requires a passkey, and the account holds the passkeys it asks for already: a password could only ever open a session that enrols one, and none is set. Register a passkey with this code instead"
 
 	// credentialsFromASession is a password or a TOTP generator set or removed with a bearer
 	// token.
@@ -255,6 +270,10 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		signedIn("passwords are forbidden by the policy that applies to the account")
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 	}
+	onlyEnrols := func() {
+		signedIn("the policy requires a passkey and the account holds the passkeys it asks for, beside which a password could only ever enrol")
+		failSetting(w, http.StatusConflict, codeOnlyEnrols, passkeySetting)
+	}
 
 	var a account
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -279,6 +298,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	case a.policy.passwordsForbidden:
 		forbidden()
 		return
+	case a.policy.enrolledPast(a.held):
+		onlyEnrols()
+		return
 	}
 	login = a.user.Login
 	if err := notTheLogin("password", ask.Password, login); err != nil {
@@ -301,6 +323,18 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		}
 		if err != nil {
 			return err
+		}
+		// Lifted here, before the session is decided, and rolled back with everything else where
+		// what is read below refuses the password: passwords forbidden again, or a code that opens
+		// nothing.
+		lifted := false
+		if user.Suspended && user.SuspendedFor == db.SuspendedNoPasskey {
+			if lifted, err = wide.LiftSuspension(ctx, login, db.SuspendedNoPasskey); err != nil {
+				return err
+			}
+			if lifted {
+				user.Suspended, user.SuspendedFor = false, ""
+			}
 		}
 		signs := !user.Suspended
 		var personal []entry
@@ -335,11 +369,17 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		if held.policy.passwordsForbidden {
 			return errForbidden
 		}
+		if held.policy.enrolledPast(held.held) {
+			return errOnlyEnrols
+		}
 		set, replaced, err := wide.SetPassword(ctx, login, ulid.New(), hash, now)
 		if err != nil {
 			return err
 		}
 		enrolled := map[string]any{"type": db.CredentialPassword, "replaced": replaced}
+		if lifted {
+			enrolled["suspension_lifted"] = db.SuspendedNoPasskey
+		}
 		var removed []entry
 		if replaced {
 			ended, err := wide.EndSessionsOpenedBy(ctx, login, set.ID, nil, now)
@@ -399,6 +439,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	case errors.Is(err, errForbidden):
 		forbidden()
 		return
+	case errors.Is(err, errOnlyEnrols):
+		onlyEnrols()
+		return
 	case errors.As(err, &refusedFor):
 		// A user removed, or a bootstrap ended: nothing was written.
 		refused(refusedFor.reason)
@@ -416,6 +459,11 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	}
 	shownOnce(w, http.StatusOK, answer)
 }
+
+// errOnlyEnrols is a password set, in the transaction that would record it, where the policy requires
+// a passkey and the account holds the passkeys it asks for, as a passkey registered since the account
+// was read may have brought it to.
+var errOnlyEnrols = errors.New("api: a password here would only enrol")
 
 // hash hashes a password set, in its turn, and answers false where it has answered the request
 // already: 503 where no turn came in time, 500 where the hash could not be made.
@@ -555,6 +603,9 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 	case a.policy.passwordsForbidden:
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
+	case a.policy.enrolledPast(a.held):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		return
 	case a.password.ID != "" && !ask.current:
 		fail(w, http.StatusBadRequest, "current_password: this account holds a password, and setting another takes the current one")
 		return
@@ -614,6 +665,8 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 			return db.ErrNoPrincipal
 		case held.policy.passwordsForbidden:
 			return errForbidden
+		case held.policy.enrolledPast(held.held):
+			return errOnlyEnrols
 		case held.password.ID != a.password.ID || held.password.PasswordHash != a.password.PasswordHash:
 			return &refusal{reason: passwordChanged}
 		}
@@ -635,6 +688,8 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 	switch {
 	case errors.Is(err, errForbidden):
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
+	case errors.Is(err, errOnlyEnrols):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrCredentialExists):
 		fail(w, http.StatusConflict, passwordChanged)
 	case errors.Is(err, db.ErrNoPrincipal):

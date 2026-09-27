@@ -67,7 +67,7 @@ const logEventMaxBytes = 8 << 20
 
 func logs(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk logs", "agk logs <run> [<step>...] [--server <url>]")
-	server := fs.String("server", "", "The installation the run is on. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation the run is on. "+serverDefault)
 	named, code, ok := positional(fs, args)
 	if !ok {
 		return code

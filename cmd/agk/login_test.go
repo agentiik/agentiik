@@ -320,6 +320,97 @@ func TestSigningInAgainReplacesTheTokenKeptAndRevokesIt(t *testing.T) {
 	}
 }
 
+// agk login remembers the installation it signed in to, and agk talks to it wherever neither
+// --server nor AGENTIIK_SERVER names one, as agk login says: signing in to another moves it there,
+// either of the two names another over it, agk logout signs out of it and leaves it remembered, and
+// agk login with no address signs in to it again. A profile agk cannot use is said where it would
+// have named the installation, exit 2.
+func TestAgkTalksToTheInstallationLastSignedInTo(t *testing.T) {
+	in, other := anInstallationSigningIn(t), anInstallationSigningIn(t)
+	p, _ := signingIn(t, in)
+	code, _, errs := p.agk(t, "login", "--server", in.URL)
+	if code != exitSucceeded || !strings.Contains(errs, "agk talks to "+in.URL+" from now on, wherever neither --server nor AGENTIIK_SERVER names another installation") {
+		t.Fatalf("agk login left with %d: %s", code, errs)
+	}
+	if got := p.kept(t).LastSignedIn; got != in.URL {
+		t.Errorf("the profile remembers %q as signed in to last", got)
+	}
+	// presented is the credential each installation was presented by agk run with args.
+	presented := func(args ...string) (int, string, string) {
+		t.Helper()
+		for _, at := range []*signInStandIn{in, other} {
+			at.mu.Lock()
+			at.presented = nil
+			at.mu.Unlock()
+		}
+		code, _, _ := p.agk(t, args...)
+		first := func(at *signInStandIn) string {
+			if len(at.presented) == 0 {
+				return ""
+			}
+			return at.presented[0]
+		}
+		return code, first(in), first(other)
+	}
+	if code, got, elsewhere := presented("token", "list"); code != exitSucceeded || got != p.kept(t).Installations[in.URL].Token || elsewhere != "" {
+		t.Errorf("with no address agk left with %d presenting %q, and %q to the other", code, got, elsewhere)
+	}
+
+	p.browse = func(page string) error { other.signedIn(t, page); return nil }
+	if code, _, errs := p.agk(t, "login", "--server", other.URL); code != exitSucceeded {
+		t.Fatalf("agk login to the other left with %d: %s", code, errs)
+	}
+	if code, first, got := presented("token", "list"); code != exitSucceeded || got != p.kept(t).Installations[other.URL].Token || first != "" {
+		t.Errorf("once signed in to the other, agk left with %d presenting %q to it and %q to the first", code, got, first)
+	}
+	if _, got, _ := presented("token", "list", "--server", in.URL); got != p.kept(t).Installations[in.URL].Token {
+		t.Errorf("--server naming the first presented %q to it", got)
+	}
+	// AGENTIIK_TOKEN is sent where an address is named for it, and never to the installation the
+	// profile remembers, which it may not be for.
+	p.env[tokenVariable] = "agktoken_production_service_account"
+	if code, first, second := presented("token", "list"); code != exitUsage || first != "" || second != "" {
+		t.Errorf("with AGENTIIK_TOKEN and no address, agk left with %d presenting %q and %q", code, first, second)
+	}
+	if code, _, errs := p.agk(t, "token", "list"); !strings.Contains(errs, "AGENTIIK_TOKEN is set here, and no --server or AGENTIIK_SERVER names the installation it is for") {
+		t.Errorf("with AGENTIIK_TOKEN and no address, agk left with %d: %s", code, errs)
+	}
+	if _, got, _ := presented("token", "list", "--server", in.URL); got != "agktoken_production_service_account" {
+		t.Errorf("with AGENTIIK_TOKEN and --server, agk presented %q", got)
+	}
+	delete(p.env, tokenVariable)
+	p.env[serverVariable] = in.URL
+	if _, got, _ := presented("token", "list"); got != p.kept(t).Installations[in.URL].Token {
+		t.Errorf("AGENTIIK_SERVER naming the first presented %q to it", got)
+	}
+	if code, _, errs := p.agk(t, "login", "--server", other.URL); code != exitSucceeded || !strings.Contains(errs, "AGENTIIK_SERVER names another installation here, which agk talks to rather than "+other.URL+": unset it, or pass --server "+other.URL) {
+		t.Errorf("agk login beside AGENTIIK_SERVER naming another left with %d: %s", code, errs)
+	}
+	delete(p.env, serverVariable)
+
+	if code, out, errs := p.agk(t, "logout"); code != exitSucceeded || !strings.Contains(out, "signed out of "+other.URL) {
+		t.Errorf("agk logout with no address left with %d, printing %q: %s", code, out, errs)
+	}
+	if kept := p.kept(t); kept.LastSignedIn != other.URL || kept.Installations[other.URL].Token != "" || kept.Installations[in.URL].Token == "" {
+		t.Errorf("once signed out the profile keeps %+v", kept)
+	}
+	if code, _, errs := p.agk(t, "token", "list"); code != exitUsage || !strings.Contains(errs, "no credential: sign in with agk login") {
+		t.Errorf("signed out, agk left with %d: %s", code, errs)
+	}
+	if code, out, errs := p.agk(t, "login"); code != exitSucceeded || !strings.HasPrefix(out, "signed in to "+other.URL+" as alice") {
+		t.Errorf("agk login with no address left with %d, printing %q: %s", code, out, errs)
+	}
+
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(p.config, profileDir, profileFile), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if code, _, errs := p.agk(t, "token", "list"); code != exitUsage || !strings.Contains(errs, "chmod 600") {
+			t.Errorf("with a profile others may read and no address, agk left with %d: %s", code, errs)
+		}
+	}
+}
+
 // Where no browser opens, agk login says why and prints the page for the person to open, with what
 // to do where their browser is on another machine: forward the loopback port it listens on, or
 // take a token made elsewhere in AGENTIIK_TOKEN. It goes on waiting all the same.

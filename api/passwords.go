@@ -61,7 +61,7 @@ import (
 // the enrolment that first gives an administrator one does: a password set while the policy required
 // a passkey opened a session that only enrols and left the token going, and once the policy no
 // longer requires one, the next sign-in of that password ends it. A session opened before, full from
-// the same moment, ends nothing by itself: a sign-in or an enrolment is what ends the token.
+// the same moment, ends it at its first request (sessions.go).
 //
 // # Setting one
 //

@@ -141,12 +141,12 @@ func (w *Wide) Logins(ctx context.Context) ([]string, error) {
 	return logins, nil
 }
 
-// ErrBootstrapEnded is the bootstrap token asked for after the first administrator enrolled,
+// ErrBootstrapEnded is the bootstrap token asked for after the first administrator signed in,
 // which ended it for good.
-var ErrBootstrapEnded = errors.New("db: the bootstrap token ended when the first administrator enrolled")
+var ErrBootstrapEnded = errors.New("db: the bootstrap token ended when the first administrator signed in")
 
 // Bootstrap is the bootstrap token's state: the SHA-256 of the token while it works, and when the
-// first administrator's enrolment ended it.
+// first administrator's enrolment or sign-in ended it.
 type Bootstrap struct {
 	TokenHash  []byte
 	EnrolledAt time.Time
@@ -239,14 +239,14 @@ func (w *Wide) ImportBootstrapToken(ctx context.Context, hash []byte) (bool, err
 }
 
 // EndBootstrap ends the bootstrap token at the first administrator's enrolment, or at their first
-// password sign-in to a full session where their enrolment opened none, forgetting its hash, and
-// answers whether this was the end of it: a second enrolment or sign-in ends nothing more. Every
-// first administrator's link still open is revoked with it, and the session each opened, since a
-// link made with the token is the token's reach and ends where it does. The recovery codes the
-// token issued end with it too, and are not revoked here but read as ended (openCode), so that the
-// end takes the row of no code another transaction may hold while it waits on the bootstrap state.
-// A new user's link it issued stays open, as the link that user was created with, so that a user
-// created before the end enrols after it.
+// password sign-in to a full session, or the first request of one, where their enrolment opened
+// none, forgetting its hash, and answers whether this was the end of it: a second enrolment,
+// sign-in or request ends nothing more. Every first administrator's link still open is revoked with
+// it, and the session each opened, since a link made with the token is the token's reach and ends
+// where it does. The recovery codes the token issued end with it too, and are not revoked here but
+// read as ended (openCode), so that the end takes the row of no code another transaction may hold
+// while it waits on the bootstrap state. A new user's link it issued stays open, as the link that
+// user was created with, so that a user created before the end enrols after it.
 func (w *Wide) EndBootstrap(ctx context.Context, at time.Time) (bool, error) {
 	tag, err := w.tx.Exec(ctx,
 		`update bootstrap set enrolled_at = $1, token_hash = null where enrolled_at is null`, at)

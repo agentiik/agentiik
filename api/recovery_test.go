@@ -147,7 +147,7 @@ func TestTheBootstrapTokenIssuesRecoveryCodesThatEndWithIt(t *testing.T) {
 	if _, err := in.openCode(t, by.Code); err != nil {
 		t.Errorf("an administrator's recovery code was answered %v once the bootstrap token ended", err)
 	}
-	if w := in.ask(t, "POST", "/api/v1/users/alice/recovery", in.bootstrap, "", nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") {
+	if w := in.ask(t, "POST", "/api/v1/users/alice/recovery", in.bootstrap, "", nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") {
 		t.Errorf("the ended bootstrap token issuing a recovery code answered %d %s", w.Code, w.Body)
 	}
 }
@@ -513,7 +513,7 @@ func TestTheBootstrapsEndAndARecoveryCodeItIssuesTakeTurns(t *testing.T) {
 	if w := <-enrolment; w.Code != http.StatusOK {
 		t.Errorf("the first administrator's enrolment answered %d %s", w.Code, w.Body)
 	}
-	if w := <-issue; w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") {
+	if w := <-issue; w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") {
 		t.Errorf("the recovery code the bootstrap token asked for as it ended answered %d %s", w.Code, w.Body)
 	}
 	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", fmt.Sprintf(`{"ceremony":"registration","code":%q}`, before.Code), ""); w.Code != http.StatusUnauthorized {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -32,6 +34,12 @@ import (
 //
 // Revoking is effective "from the next request and the next run creation", which nothing here has
 // to do: Principals reads a principal's grants at every request.
+//
+// A grant carrying a role brings who it names under the namespace's authentication policy, so a grant
+// is written in a transaction of the installation's, which reads who can sign in across every
+// namespace, and one carrying a role is refused where it would leave no administrator able to, as a
+// policy changed is (keepAnAdministrator): the only administrator given a role where passwords are
+// forbidden would find the one they sign in with refused at their next sign-in.
 
 // GrantRequest is a grant or a deny to write at the scope the route names: openapi.json's
 // grantCreate, one principal and exactly one of a role and a denied permission, with an optional
@@ -90,14 +98,20 @@ type GrantList struct {
 type SharingOptions struct {
 	Pool *db.Pool
 
+	// PublicURL is AGK_PUBLIC_URL, or AGK_PROXY_URL behind a proxy: a host that is an IP address
+	// is an installation where no passkey signs anybody in and passwords are always allowed, which
+	// whether an administrator can sign in once a grant applies depends on. Empty is a name.
+	PublicURL string
+
 	// Now is the clock grants are written and expire by, the wall clock where it is nil.
 	Now func() time.Time
 }
 
 // SharingAPI serves the grant routes.
 type SharingAPI struct {
-	pool *db.Pool
-	now  func() time.Time
+	pool        *db.Pool
+	now         func() time.Time
+	ipAddressed bool
 }
 
 // NewSharing registers the grant routes on a router. The router's authorizer has to say where a
@@ -114,6 +128,9 @@ func NewSharing(rt *Router, o SharingOptions) (*SharingAPI, error) {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &SharingAPI{pool: o.Pool, now: o.Now}
+	if u, err := url.Parse(o.PublicURL); err == nil {
+		s.ipAddressed = net.ParseIP(u.Hostname()) != nil
+	}
 	manage := func(at Scope, writes bool) Needs {
 		return Needs{Permission: GrantManage, Scope: at, OrAdministrator: writes, Seeing: writes}
 	}
@@ -146,6 +163,11 @@ const (
 	// A grant that is not there, or not at this scope, or not the caller's to revoke.
 	noSuchGrant = "no such grant here, or not yours"
 )
+
+// grantLocksOut is a grant that would leave no administrator able to sign in, in namespace.
+func grantLocksOut(namespace string) string {
+	return fmt.Sprintf("this grant would leave no administrator able to sign in: it brings those who can now under the authentication policy of %s, which accepts none of the passkeys or passwords they hold, and nobody would be left to administer this installation. Enrol a passkey that policy accepts first", namespace)
+}
 
 // namesNobody is the refusal of a grant to a principal that does not exist, or to a service account
 // of a namespace its writer does not see: one sentence for the absent and the hidden.
@@ -195,7 +217,9 @@ func (s *SharingAPI) list(w http.ResponseWriter, r *http.Request, _ Principal, o
 
 // create is POST .../grants: one grant or one deny at the route's scope, audited as grant.create in
 // the transaction that writes it, and told to the namespace's owners where an administrator wrote
-// it by the installation's power, or where it gives a role to an administrator's own access.
+// it by the installation's power, or where it gives a role to an administrator's own access. A role
+// that would leave no administrator able to sign in, once the bootstrap token has ended, is a 409
+// naming the setting that takes their way in, and nothing is written.
 func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	at, ok := scopeAt(w, over)
 	if !ok {
@@ -240,31 +264,44 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 		return
 	}
 
-	err = s.pool.In(r.Context(), at.Namespace, func(ctx context.Context, n *db.NS) error {
-		if err := n.Present(ctx, at.Workflow); err != nil {
+	// The installation's handle rather than the namespace's, since who can sign in once a role
+	// applies is read from their grants in every namespace; what is written is the namespace's
+	// alone, the grant, its notifications and its entry, as through In. A deny brings nobody
+	// under a policy, which reads roles alone, and is written unguarded.
+	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		if err := wide.Present(ctx, at.Namespace, at.Workflow); err != nil {
 			return err
 		}
-		if err := n.GrantAccess(ctx, g); err != nil {
+		write := func() error { return wide.GrantAccess(ctx, g) }
+		if g.Role != "" {
+			if err := keepAnAdministrator(ctx, wide, now, s.ipAddressed, write); err != nil {
+				return err
+			}
+		} else if err := write(); err != nil {
 			return err
 		}
 		detail := grantDetail(g)
 		if Administering(r) || (g.Role != "" && own(g.Principal)) {
-			told, err := n.TellOwners(ctx, g, string(who), now)
+			told, err := wide.TellOwners(ctx, g, string(who), now)
 			if err != nil {
 				return err
 			}
 			detail["notified"] = told
 		}
-		return n.Audit(ctx, audit.Record{
+		return wide.AuditIn(ctx, at.Namespace, audit.Record{
 			Actor: string(who), Action: audit.GrantCreate, Target: g.ID, Result: audit.Done, Detail: detail,
 		})
 	})
+	var locked *errLockedOut
 	switch {
 	case errors.Is(err, db.ErrNoNamespace), errors.Is(err, db.ErrNoWorkflow):
 		fail(w, http.StatusNotFound, noSuchScope)
 		return
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusUnprocessableEntity, namesNobody(g.Principal))
+		return
+	case errors.As(err, &locked):
+		failSetting(w, http.StatusConflict, grantLocksOut(at.Namespace), locked.setting)
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the grant could not be written")

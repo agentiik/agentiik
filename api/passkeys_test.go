@@ -338,7 +338,7 @@ func TestTheFirstAdministratorEnrolsFromTheLinkAndSignsInWithThePasskey(t *testi
 	first := session(t, w)
 
 	// The bootstrap token ended with the enrolment, and the session opened is a full one.
-	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "ended when the first administrator enrolled") {
+	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "ended when the first administrator signed in") {
 		t.Errorf("the bootstrap token after the first administrator enrolled answered %d %s", w.Code, w.Body)
 	}
 	listing := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/users", nil)

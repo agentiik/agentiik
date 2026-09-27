@@ -666,7 +666,7 @@ func (r *reader) operatorTokenValue() Secret {
 		return ""
 	}
 	if len(v) < operatorTokenMinBytes {
-		r.refuse(OperatorToken, fmt.Sprintf("is %d characters, and the bootstrap token is %d or more, as openssl rand -hex %d writes one: until the first administrator has enrolled it administers the installation and owns every namespace, for whoever guesses it", len(v), operatorTokenMinBytes, operatorTokenMinBytes/2))
+		r.refuse(OperatorToken, fmt.Sprintf("is %d characters, and the bootstrap token is %d or more, as openssl rand -hex %d writes one: until the first administrator has signed in it administers the installation and owns every namespace, for whoever guesses it", len(v), operatorTokenMinBytes, operatorTokenMinBytes/2))
 		return ""
 	}
 	body := strings.TrimRight(v, "=")

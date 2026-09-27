@@ -321,7 +321,7 @@ func TestAgkSaysWhyAUserOrGroupVerbCameToNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin"); code != exitRefused || !strings.Contains(errs, "first administrator enrolled") {
+	if code, _, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin"); code != exitRefused || !strings.Contains(errs, "first administrator signed in") {
 		t.Errorf("the ended bootstrap token creating dan left with %d: %s", code, errs)
 	}
 }

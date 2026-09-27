@@ -38,7 +38,7 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user create", "agk user create <login> [--admin] [--display-name <name>] [--server <url>]")
 	admin := fs.Bool("admin", false, "Makes the user an administrator. The first administrator is created this way with the bootstrap token.")
 	display := fs.String("display-name", "", "The name people read in the console and in the sharing panel. A user created without one reads as their login, and one asked for again keeps theirs.")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user create names one login, the name the user signs in as")
 	if !ok {
 		return code
@@ -81,7 +81,7 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 // installation sends it nowhere.
 func userRecover(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user recover", "agk user recover <login> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user recover names one login, the user's who lost what signs them in")
 	if !ok {
 		return code
@@ -109,7 +109,7 @@ func userRecover(ctx context.Context, e Env, args []string) int {
 // userList is agk user list: every user, by login.
 func userList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user list", "agk user list [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	at, _, code, ok := administering(e, fs, args, server, 0, "agk user list names no user: it lists them all")
 	if !ok {
@@ -150,7 +150,7 @@ func userList(ctx context.Context, e Env, args []string) int {
 // userShow is agk user show LOGIN: one user, and never a credential.
 func userShow(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user show", "agk user show <login> [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user show names one login")
 	if !ok {
@@ -191,7 +191,7 @@ func userShow(ctx context.Context, e Env, args []string) int {
 // userDelete is agk user delete LOGIN: the user and everything they hold.
 func userDelete(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user delete", "agk user delete <login> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user delete names one login")
 	if !ok {
 		return code
@@ -207,7 +207,7 @@ func userDelete(ctx context.Context, e Env, args []string) int {
 // groupCreate is agk group create NAME [LOGIN...]: a group, empty or with its first members.
 func groupCreate(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk group create", "agk group create <group> [<login>...] [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, -1, "agk group create names the group, and then its first members by login, if any")
 	if !ok {
 		return code
@@ -223,7 +223,7 @@ func groupCreate(ctx context.Context, e Env, args []string) int {
 // groupList is agk group list: every group, with its members.
 func groupList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk group list", "agk group list [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	at, _, code, ok := administering(e, fs, args, server, 0, "agk group list names no group: it lists them all")
 	if !ok {
@@ -263,7 +263,7 @@ func groupList(ctx context.Context, e Env, args []string) int {
 // groupShow is agk group show NAME: one group and its members.
 func groupShow(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk group show", "agk group show <group> [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk group show names one group")
 	if !ok {
@@ -291,7 +291,7 @@ func groupShow(ctx context.Context, e Env, args []string) int {
 // groupDelete is agk group delete NAME: the group, its memberships and its grants; the users stay.
 func groupDelete(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk group delete", "agk group delete <group> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk group delete names one group")
 	if !ok {
 		return code
@@ -320,7 +320,7 @@ func membership(ctx context.Context, e Env, args []string, in bool) int {
 		verb, method, done = "remove", http.MethodDelete, "is not in"
 	}
 	fs := flags(e, "agk group "+verb, "agk group "+verb+" <group> <login> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	at, named, code, ok := administering(e, fs, args, server, 2, "agk group "+verb+" names the group, then the member by login")
 	if !ok {
 		return code
@@ -439,7 +439,7 @@ func administrationRefused(e Env, err error, what, name string) int {
 		if e.presentsKept() {
 			held = "the token agk login kept"
 		}
-		said += fmt.Sprintf(": users and groups are an administrator's to manage, and %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has enrolled", held)
+		said += fmt.Sprintf(": users and groups are an administrator's to manage, and %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has signed in", held)
 	case http.StatusNotFound:
 		switch what {
 		case "":

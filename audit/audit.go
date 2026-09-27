@@ -124,16 +124,18 @@ const (
 // with the reason where the policy took it: a password its account no longer needs once it holds
 // min_passkeys, or one a policy came to forbid. EnrolmentUse is the enrolment link or recovery code
 // a registration or a password spent. BootstrapEnd is the bootstrap token ended by the enrolment, or
-// the password sign-in, that first gives an administrator a full session, recorded once and for good.
-// SigninSucceed is a session opened, by an assertion, by a password, or by the registration or the
-// password an enrolment link started. SigninFail is a sign-in refused, with the reason, in a
-// transaction of its own since the sign-in it records committed nothing: an assertion, a password,
-// or an enrolment link or a recovery code presented to register a passkey or set a password. Its
-// actor is the address the request came from, since nobody was identified, and its target the
-// account the passkey names, or the credential ID presented where it names none; the login a password
-// sign-in named; or the account a code was issued for, or "an unknown enrolment code" where no code
-// of its value is kept. Those anybody can send are bounded, ten from one address and a hundred in all
-// in ten minutes, and the next entry says how many went unrecorded.
+// the password sign-in, that first gives an administrator a full session, or by the first request of
+// one that has come to be full, recorded once and for good. SigninSucceed is a session opened, by an
+// assertion, by a password, or by the registration or the password an enrolment link started.
+// SigninFail is a sign-in refused, with the reason, in a transaction of its own since the sign-in it
+// records committed nothing: an assertion, a password, an enrolment link or a recovery code presented
+// to register a passkey or set a password, or agk login's code presented at the exchange. Its actor
+// is the address the request came from, since nobody was identified, and its target the account the
+// passkey names, or the credential ID presented where it names none; the login a password sign-in
+// named; the account a code was issued for, or "an unknown enrolment code" where no code of its value
+// is kept; or the account agk login's code was minted for, or "an unknown exchange code". Those
+// anybody can send are bounded, ten from one address and a hundred in all in ten minutes, and the
+// next entry says how many went unrecorded.
 const (
 	CredentialEnrol  = "credential.enrol"
 	CredentialRemove = "credential.remove"

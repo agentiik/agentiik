@@ -27,7 +27,7 @@ import (
 
 func status(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk status", "agk status <run> [--server <url>] [-o json] [-v]")
-	server := fs.String("server", "", "The installation the run is on. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation the run is on. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	verbose := fs.Bool("v", false, "Lists every task, and not only the ones that failed.")
 	named, code, ok := positional(fs, args)

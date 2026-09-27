@@ -294,6 +294,47 @@ func TestARecoveryCodeReplacesThePasswordAndTheGeneratorBesideIt(t *testing.T) {
 	}
 }
 
+// A user suspended for holding no passkey where passwords were forbidden comes back by a password
+// set from a new user's link or a recovery code once passwords are allowed again: the suspension
+// lifted, recorded beside the password, and the user signed in. Where passwords are still forbidden
+// nothing is set and the suspension stays; one the policy did not make stays whatever is set (dave,
+// above).
+func TestAPasswordSetFromACodeLiftsASuspensionForHoldingNoPasskey(t *testing.T) {
+	in := somePasswords(t)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	in.exec(t, `update users set suspended = true, suspended_for = 'no_passkey' where login in ('erin', 'frank')`)
+	for login, kind := range map[string]string{"erin": db.EnrolmentRecovery, "frank": db.EnrolmentNewUser} {
+		code := in.enrolCode(t, login, kind)
+		in.policy(t, "forbidden", "optional")
+		if w := in.enrolWith(t, code, login+"'s new passphrase"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"password"`) {
+			t.Errorf("%s's %s code where passwords are forbidden answered %d %s", login, kind, w.Code, w.Body)
+		}
+		if got := in.suspended(t); !slices.Contains(got, login+":no_passkey") {
+			t.Errorf("%s's code refused lifted the suspension: %q", login, got)
+		}
+
+		in.policy(t, "allowed", "optional")
+		w := in.enrolWith(t, code, login+"'s new passphrase")
+		var answer api.PasswordEnrolled
+		if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil || w.Code != http.StatusOK || answer.Session != api.SessionFull {
+			t.Fatalf("%s's %s code answered %d %s", login, kind, w.Code, w.Body)
+		}
+		if got := in.suspended(t); slices.Contains(got, login+":no_passkey") {
+			t.Errorf("%s's password left the suspension: %q", login, got)
+		}
+		if code, body := in.me(t, session(t, w)); code != http.StatusOK {
+			t.Errorf("the session %s's password opened answered %d %s", login, code, body)
+		}
+		if n := in.count(t, `select count(*) from audit_log where action = 'credential.enrol' and actor = $1 and detail::jsonb->>'suspension_lifted' = 'no_passkey'`, login); n != 1 {
+			t.Errorf("the lifting of %s's suspension is not recorded", login)
+		}
+	}
+}
+
 // What the enrolment route refuses, and with what: a request from another page 403; a body the
 // schema refuses, a code outside its grammar and a password shorter than twelve characters or longer
 // than 1024 bytes 400; a code nobody issued 401; a password that is the login 422; and passwords
@@ -389,6 +430,73 @@ func TestANamespaceForbiddingPasswordsForbidsSettingOne(t *testing.T) {
 	}
 	if w := in.call(t, "PUT", "/api/v1/me/password", fmt.Sprintf(body, thePasswords["carol"]), carol); w.Code != http.StatusOK {
 		t.Errorf("carol, holding none, answered %d %s", w.Code, w.Body)
+	}
+}
+
+// Where a passkey is required, a password is set neither from a session nor from a code for an
+// account holding the min_passkeys passkeys the policy accepts, since it could only ever open a
+// session that enrols, with nothing left to enrol: 409 naming passkey, nothing set and the code not
+// spent. A synced passkey where device_bound_only refuses it is not counted, and where no passkey is
+// required a password is set whatever the account holds.
+func TestAPasswordThatCouldOnlyEnrolIsNotSet(t *testing.T) {
+	in := somePasswords(t)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateUser(ctx, db.User{Login: "frank", DisplayName: "Frank"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	in.passkeyed(t, "frank", "frank-synced", true)
+	frank := in.passkeyed(t, "frank", "frank-bound", false)
+	const body = `{"password":"frank's first passphrase"}`
+	refused := func(w *httptest.ResponseRecorder, what string) {
+		t.Helper()
+		advice := "Sign in with a passkey"
+		if strings.Contains(what, "code") {
+			advice = "Register a passkey with this code instead"
+		}
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"passkey"`) || !strings.Contains(w.Body.String(), "only ever open a session that enrols one, and none is set. "+advice) {
+			t.Errorf("%s answered %d %s", what, w.Code, w.Body)
+		}
+		if in.hashHeld(t, "frank") != "" {
+			t.Fatalf("%s set a password", what)
+		}
+	}
+
+	refused(in.call(t, "PUT", "/api/v1/me/password", body, frank), "frank's session, holding two passkeys")
+	code := in.enrolCode(t, "frank", db.EnrolmentRecovery)
+	refused(in.enrolWith(t, code, "frank's first passphrase"), "frank's recovery code")
+	if n := in.count(t, `select count(*) from enrolment_codes where login = 'frank' and used_at is null and revoked_at is null`); n != 1 {
+		t.Error("the recovery code refused was spent")
+	}
+	// A code refused is a sign-in refused, recorded as every other is.
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and target = 'frank' and detail::jsonb->>'code' = 'recovery'
+	                       and detail::jsonb->>'reason' like '%could only ever enrol'`); n != 1 {
+		t.Errorf("the recovery code refused is recorded %d times as a sign-in refused", n)
+	}
+
+	bound := true
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2})
+	// Counted again in the transaction that would set it: a passkey registered once the account
+	// was read brings it to min_passkeys.
+	for _, what := range []string{"frank's session", "frank's recovery code"} {
+		api.BetweenChecksAndSignIn(in.passwords, func() {
+			api.BetweenChecksAndSignIn(in.passwords, nil)
+			in.passkeyed(t, "frank", "frank-meanwhile", false)
+		})
+		if what == "frank's session" {
+			refused(in.call(t, "PUT", "/api/v1/me/password", body, frank), what+", a passkey registered meanwhile")
+		} else {
+			refused(in.enrolWith(t, code, "frank's first passphrase"), what+", a passkey registered meanwhile")
+		}
+		in.exec(t, `delete from credentials where id = 'frank-meanwhile'`)
+	}
+	if w := in.call(t, "PUT", "/api/v1/me/password", body, frank); w.Code != http.StatusOK || !in.matches(t, "frank", "frank's first passphrase") {
+		t.Errorf("frank's session, holding one passkey the policy accepts, answered %d %s", w.Code, w.Body)
+	}
+	in.exec(t, `delete from credentials where login = 'frank' and type = 'password'`)
+	in.policy(t, "allowed", "optional")
+	if w := in.enrolWith(t, code, "frank's second passphrase"); w.Code != http.StatusOK || !in.matches(t, "frank", "frank's second passphrase") {
+		t.Errorf("frank's recovery code where no passkey is required answered %d %s", w.Code, w.Body)
 	}
 }
 

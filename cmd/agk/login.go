@@ -72,7 +72,7 @@ var loginCode = regexp.MustCompile(`^agkcode_[A-Za-z0-9_-]{43,}$`)
 // login is agk login [--server URL] [--label TEXT].
 func login(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk login", "agk login [--server <url>] [--label <text>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	label := fs.String("label", "", "What the token is for, listed beside it so that the one on a lost machine can be revoked. Defaults to agk on this machine's name.")
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -90,7 +90,7 @@ func login(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "--label: %s\n", err)
 		return exitUsage
 	}
-	where, ok := installationOf(e, *server)
+	where, _, ok := installationOf(e, *server)
 	if !ok {
 		return exitUsage
 	}
@@ -159,6 +159,7 @@ func login(ctx context.Context, e Env, args []string) int {
 		p.Installations[key] = storedToken{
 			Token: issued.Token, ID: issued.APIToken.ID, Principal: issued.APIToken.Principal, ExpiresAt: issued.APIToken.ExpiresAt,
 		}
+		p.LastSignedIn = key
 		if err = writeProfile(path, p); err == nil {
 			replace(ctx, e, base, replaced)
 		}
@@ -171,8 +172,12 @@ func login(ctx context.Context, e Env, args []string) int {
 	if e.getenv(tokenVariable) != "" {
 		fmt.Fprintf(e.Err, "%s is set here, and agk presents it rather than the token kept: unset it for agk to present the one agk login kept\n", tokenVariable)
 	}
-	if set := e.getenv(serverVariable); set == "" || installationKey(set) != installationKey(where) {
-		fmt.Fprintf(e.Err, "agk reaches %s with --server %s, or with %s=%s set\n", base, base, serverVariable, base)
+	// The address AGENTIIK_SERVER holds is not repeated, since it may carry a user and a password.
+	switch set := e.getenv(serverVariable); {
+	case set == "":
+		fmt.Fprintf(e.Err, "agk talks to %s from now on, wherever neither --server nor %s names another installation\n", base, serverVariable)
+	case installationKey(set) != installationKey(where):
+		fmt.Fprintf(e.Err, "%s names another installation here, which agk talks to rather than %s: unset it, or pass --server %s\n", serverVariable, base, base)
 	}
 	return exitSucceeded
 }
@@ -222,7 +227,7 @@ func unkept(ctx context.Context, e Env, base string, issued api.IssuedToken, why
 // logout is agk logout [--server URL].
 func logout(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk logout", "agk logout [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	named, code, ok := positional(fs, args)
 	if !ok {
 		return code
@@ -231,7 +236,7 @@ func logout(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "agk logout names nothing after it, and was given %q: the installation is --server\n", named[0])
 		return exitUsage
 	}
-	where, ok := installationOf(e, *server)
+	where, _, ok := installationOf(e, *server)
 	if !ok {
 		return exitUsage
 	}

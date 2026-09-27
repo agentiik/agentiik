@@ -31,8 +31,8 @@ import (
 // address; hashing waits its turn; and a TOTP code is accepted one step either side and never twice.
 
 // passwordsOf is an installation serving the password sign-in, the passkey ceremonies, GET
-// /api/v1/me, the API tokens, the authentication policy, the caller's credentials and the users on
-// https://agentiik.example.com, on a clock the test moves. alice holds a password; bob a password
+// /api/v1/me, the API tokens, the authentication policy, the caller's credentials, the users and the
+// grants on https://agentiik.example.com, on a clock the test moves. alice holds a password; bob a password
 // and a TOTP generator; carol a password and a passkey; dave, who is suspended, a password; and
 // erin nothing. alice holds a grant in finance.
 type passwordsOf struct {
@@ -47,6 +47,9 @@ type passwordsOf struct {
 	p         *api.Principals
 	totp      *secret.TOTP
 	trouble   *[]error
+
+	// signIns is what the sign-in routes share, as serve shares it, which the exchange is given.
+	signIns *api.SignIns
 }
 
 // thePasswords are the passwords the users of passwordsOf hold.
@@ -92,6 +95,7 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	signIns := api.NewSignIns(proxied)
+	in.signIns = signIns
 	if in.passkeys, err = api.NewPasskeys(rt, api.PasskeyOptions{
 		Pool: pool, PublicURL: publicURL, Identify: in.p.Identify, Now: clock, SignIns: signIns,
 	}); err != nil {
@@ -120,6 +124,9 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt
@@ -843,17 +850,18 @@ func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
 
 // Where a passkey is required, a password's session enrols passkeys and nothing else whatever the
 // account holds beside it: carol, holding a password beside two device-bound passkeys, is confined
-// as alice, holding none, is, and so is a password a recovery code sets, which "authorises only
-// enrolling a new passkey" there. Where passkeys are optional, each opens a full session.
+// as alice, holding none, is, and so is a password a recovery code sets beside one passkey, which
+// "authorises only enrolling a new passkey" there; beside two, the code sets none, since it could
+// only ever enrol (TestAPasswordThatCouldOnlyEnrolIsNotSet). Where passkeys are optional, each opens
+// a full session.
 func TestAPasswordOnlyEnrolsWhereAPasskeyIsRequiredWhateverTheAccountHolds(t *testing.T) {
 	in := somePasswords(t)
 	in.passkeyed(t, "carol", "carol-passkey-2", false)
 	in.signedIn(t, "carol", api.SessionEnrolment)
 	in.signedIn(t, "alice", api.SessionEnrolment)
 	in.passkeyed(t, "erin", "erin-1", false)
-	in.passkeyed(t, "erin", "erin-2", false)
 	if w := in.enrolWith(t, in.enrolCode(t, "erin", db.EnrolmentRecovery), "erin's own passphrase"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"session":"enrolment"`) {
-		t.Errorf("a password erin set from a recovery code beside two passkeys answered %d %s", w.Code, w.Body)
+		t.Errorf("a password erin set from a recovery code beside one passkey answered %d %s", w.Code, w.Body)
 	}
 	in.policy(t, "allowed", "optional")
 	in.signedIn(t, "carol", api.SessionFull)

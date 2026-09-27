@@ -20,12 +20,13 @@ import (
 // Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
 // it has been read and counted (passwords.go), and every sign-in an enrolment code or a recovery
 // code was refused: the code presented to start a registration or to set a password, and a
-// registration it started refused (refuseCode). An assertion refused before its signature verified
-// is anybody's to send: an answer to options they asked for themselves, signed with a key of their
-// own, or with none; and so is any password sign-in, with any login and any password, and any code.
-// Unbounded, that is a row in the audit log for every request anybody cares to make, each append
-// waiting its turn at the head of the one chain every act of the installation appends to, and each
-// kept for good and exported. So what such refusals append is
+// registration it started refused (refuseCode); and every exchange of agk login's code refused once
+// it holds to its schema (exchange.go). An assertion refused before its signature verified is
+// anybody's to send: an answer to options they asked for themselves, signed with a key of their
+// own, or with none; and so is any password sign-in, with any login and any password, any code, and
+// any exchange code with any verifier. Unbounded, that is a row in the audit log for every request
+// anybody cares to make, each append waiting its turn at the head of the one chain every act of the
+// installation appends to, and each kept for good and exported. So what such refusals append is
 // bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
 // failuresRecordedAll from every address together, so that a sender with many addresses is held
 // too. Past either, a refusal is answered as every other is, and counted, and the next entry

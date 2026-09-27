@@ -74,7 +74,7 @@ func (co *Core) refusal(ctx context.Context, e db.Evaluation) (refused, error) {
 			}
 			// While it lasts it holds what an owner holds, workflow:run among it.
 			if bootstrap.Ended() {
-				why = both(fmt.Sprintf("%s: the bootstrap token ended at %s, when the first administrator enrolled a passkey", lacks, instant(bootstrap.EnrolledAt)))
+				why = both(fmt.Sprintf("%s: the bootstrap token ended at %s, when the first administrator signed in", lacks, instant(bootstrap.EnrolledAt)))
 			}
 			return nil
 		}

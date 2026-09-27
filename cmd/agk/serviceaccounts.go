@@ -27,7 +27,7 @@ import (
 // serviceAccountCreate is agk service-account create NS/NAME.
 func serviceAccountCreate(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk service-account create", "agk service-account create <ns>/<name> [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	namespace, name, code, ok := oneServiceAccount(e, fs, args, "agk service-account create")
 	if !ok {
@@ -55,7 +55,7 @@ func serviceAccountCreate(ctx context.Context, e Env, args []string) int {
 // caller owns, or of the one named, the built-in identity of each among them.
 func serviceAccountList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk service-account list", "agk service-account list [<ns>] [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := jsonFlag(fs)
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -134,7 +134,7 @@ func serviceAccountList(ctx context.Context, e Env, args []string) int {
 // and its grants.
 func serviceAccountDelete(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk service-account delete", "agk service-account delete <ns>/<name> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	namespace, name, code, ok := oneServiceAccount(e, fs, args, "agk service-account delete")
 	if !ok {
 		return code

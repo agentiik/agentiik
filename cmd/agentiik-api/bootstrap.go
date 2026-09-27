@@ -23,7 +23,7 @@ import (
 //
 // A token set is hashed at every run, and a hash that differs from the one kept replaces it, so a
 // token changed in .env is the one the API takes from its next request, until the first
-// administrator has enrolled. That ends the bootstrap token for good: from then on a token set is
+// administrator has signed in. That ends the bootstrap token for good: from then on a token set is
 // ignored, and it says so at every run while one is, which is no error, since the Compose file
 // still requires the line. With none set, the hash kept is kept. Where none is kept either,
 // nobody can create the first administrator, and it says so; it mints none, since a token printed
@@ -86,7 +86,7 @@ func bootstrapToken(ctx context.Context, pool *db.Pool, verb string, token confi
 		changed, err := w.SetBootstrapToken(ctx, hash)
 		switch {
 		case errors.Is(err, db.ErrBootstrapEnded):
-			said = append(said, "ignored the bootstrap token set: it ended when the first administrator enrolled a passkey, and the API refuses it. That is no error, and the line may stay where the installation's settings are")
+			said = append(said, "ignored the bootstrap token set: it ended when the first administrator signed in, and the API refuses it. That is no error, and the line may stay where the installation's settings are")
 			return nil
 		case err != nil:
 			return err

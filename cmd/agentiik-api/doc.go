@@ -80,11 +80,11 @@
 // The v0.2 operator token is the bootstrap token from v0.3.0, under the setting that named it,
 // AGK_OPERATOR_TOKEN, which init reads, and migrate where no init runs, and keeps the SHA-256 of in
 // the database. api.Principals takes it as the bootstrap operator, written operator as the v0.2
-// operator was, an administrator owning every namespace, until the first administrator has enrolled
-// a passkey; from then on it is refused, and init and migrate say at every run that the line is
-// ignored. AGK_OPERATOR_TOKEN_FILE, which named the file a v0.2 installation kept the hash in, is
-// read by migrate alone, to import that hash once: a v0.2 Compose file still sets it, and serve
-// starts as though it did not.
+// operator was, an administrator owning every namespace, until the first administrator has signed
+// in; from then on it is refused, and init and migrate say at every run that the line is ignored.
+// AGK_OPERATOR_TOKEN_FILE, which named the file a v0.2 installation kept the hash in, is read by
+// migrate alone, to import that hash once: a v0.2 Compose file still sets it, and serve starts as
+// though it did not.
 //
 // # migrate
 //
@@ -135,7 +135,7 @@
 // service from starting over a name somebody else holds; the built-in identity of every namespace
 // that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
 // envelopes in the object store's directory, as migrate records them; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
-// administrator has enrolled, saying so where none is set and none is kept, and minting none; and a
+// administrator has signed in, saying so where none is set and none is kept, and minting none; and a
 // join token of the pool default for the runner beside it, issued through the database since the
 // API is not serving yet. Each service is given its own copy of what it reads, owned by uid 65532
 // where init runs as root, but for the bus's, which runs as root, and the runner's certificate,

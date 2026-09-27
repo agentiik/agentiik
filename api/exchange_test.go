@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,8 @@ func exchangingAt(t *testing.T, publicURL string) passwordsOf {
 	t.Helper()
 	in := passwordsAt(t, publicURL, false)
 	if _, err := api.NewExchange(in.h.(*api.Router), api.ExchangeOptions{
-		Pool: in.pool, PublicURL: in.origin, Now: func() time.Time { return *in.clock },
+		Pool: in.pool, PublicURL: in.origin, SignIns: in.signIns, Now: func() time.Time { return *in.clock },
+		Trouble: func(err error) { t.Errorf("trouble: %s", err) },
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +335,85 @@ func TestASessionThatMayOnlyEnrolIsHandedNoCode(t *testing.T) {
 	}
 	if n := in.count(t, `select count(*) from exchange_codes`); n != 0 {
 		t.Errorf("%d codes were kept for a session that may only enrol", n)
+	}
+}
+
+// An exchange refused once it holds to its schema is recorded as signin.fail, by the address it came
+// from, with why: about the account the code was minted for, with the credential that signed in, or
+// about an unknown exchange code where it names none, the code itself written nowhere. Refusals anybody may
+// send are held to the bound the sign-in routes share, ten from one address in ten minutes, a
+// password sign-in refused counted among them; one made after the verifier answered the code is
+// recorded whatever the bound says, and counts those left out before it.
+func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
+	in := exchanging(t)
+	const unknown = "192.0.2.1 an unknown exchange code"
+	never := func(i int) string {
+		raw := make([]byte, 32)
+		raw[0] = byte(i)
+		return "agkcode_" + base64.RawURLEncoding.EncodeToString(raw)
+	}
+	stranger, _ := pkce(t)
+	if w := exchange(t, in.h, never(0), stranger, "x"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a code never minted answered %d %s", w.Code, w.Body)
+	}
+	code, verifier := in.handedOff(t, "alice")
+	if w := exchange(t, in.h, code, stranger, "x"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a code with another verifier answered %d %s", w.Code, w.Body)
+	}
+	if w := exchange(t, in.h, code, verifier, "x"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a code spent answered %d %s", w.Code, w.Body)
+	}
+	code, verifier = in.handedOff(t, "alice")
+	in.policy(t, "forbidden", "optional")
+	if w := exchange(t, in.h, code, verifier, "x"); w.Code != http.StatusForbidden {
+		t.Fatalf("a code traded once passwords are forbidden answered %d %s", w.Code, w.Body)
+	}
+	const (
+		noCode    = " no code of that value is live: used already, past its minute, or never issued"
+		forbidden = "192.0.2.1 alice passwords are forbidden by the policy that applies to the account"
+	)
+	want := []string{
+		unknown + noCode,
+		"192.0.2.1 alice the verifier does not answer the challenge the code was minted against",
+		unknown + noCode,
+		forbidden,
+	}
+	if got := in.failures(t); !slices.Equal(got, want) {
+		t.Fatalf("the failures recorded are\n%q\nwant\n%q", got, want)
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and detail::jsonb->>'credential_type' = 'exchange_code' and detail::jsonb->>'address' = '192.0.2.1'`); n != 4 {
+		t.Errorf("%d failures say they are an exchange's from 192.0.2.1, of four", n)
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and target = 'alice' and detail::jsonb->>'credential' = 'alice-password'`); n != 2 {
+		t.Errorf("%d failures about alice name the password she signed in with, of two", n)
+	}
+
+	// Three recorded against 192.0.2.1's ten: seven more are, and the eighth is not, nor a password
+	// sign-in refused from there.
+	for i := 1; i <= 8; i++ {
+		if w := exchange(t, in.h, never(i), stranger, "x"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("a code never minted answered %d %s", w.Code, w.Body)
+		}
+	}
+	if w := in.login(t, `{"login":"zoe","password":"whatever zoe's is"}`, "192.0.2.1:1234"); w.Code != http.StatusForbidden {
+		t.Fatalf("a password sign-in where passwords are forbidden answered %d %s", w.Code, w.Body)
+	}
+	if got := in.failures(t); len(got) != 11 || got[10] != unknown+noCode {
+		t.Fatalf("past the bound the failures recorded are %q", got)
+	}
+	in.policy(t, "allowed", "optional")
+	code, verifier = in.handedOff(t, "alice")
+	in.policy(t, "allowed", "required")
+	if w := exchange(t, in.h, code, verifier, "x"); w.Code != http.StatusForbidden {
+		t.Fatalf("a code traded once a passkey is required answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and target = 'alice'
+	                       and detail::jsonb->>'reason' = 'the sign-in was a password''s where the policy requires a passkey, and may only enrol'
+	                       and detail::jsonb->>'unrecorded' = '2'`); n != 1 {
+		t.Errorf("the refusal after the verifier answered is not recorded counting the two left out: %q", in.failures(t))
+	}
+	if n := in.count(t, `select count(*) from audit_log where detail like '%agkcode_%' or target like '%agkcode_%'`); n != 0 {
+		t.Error("a code is written in the audit log")
 	}
 }
 

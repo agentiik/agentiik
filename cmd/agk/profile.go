@@ -14,7 +14,9 @@ import (
 )
 
 // The local profile: the API token agk login stored for each installation, which agk presents to
-// that installation wherever AGENTIIK_TOKEN is not set.
+// that installation wherever AGENTIIK_TOKEN is not set, and the installation it last signed in to,
+// which agk talks to wherever neither --server nor AGENTIIK_SERVER names one, so that agk login
+// --server once is followed by agk verbs with no address.
 //
 // It is one file, profile.json, in a directory agentiik of the user's configuration directory,
 // os.UserConfigDir: ~/.config/agentiik on Linux, where XDG_CONFIG_HOME moves it, and
@@ -40,6 +42,11 @@ const (
 type profile struct {
 	// Installations are the tokens agk login stored, by installation address.
 	Installations map[string]storedToken `json:"installations"`
+
+	// LastSignedIn is the installation agk login last signed in to, by the address its entry is
+	// kept under. agk logout leaves it, since signing out is not signing in anywhere else: agk
+	// login with no address then signs in to it again.
+	LastSignedIn string `json:"last_signed_in,omitempty"`
 }
 
 // storedToken is one installation's entry: the token, and what agk login was answered of it, for
@@ -169,6 +176,21 @@ func writeProfile(path string, p profile) error {
 		return fmt.Errorf("the local profile %s could not be written: %w", path, err)
 	}
 	return nil
+}
+
+// lastSignedIn is the installation agk login last signed in to, as the profile keeps it, and empty
+// where it keeps none or this agk keeps no profile. A profile agk cannot read is its error, which
+// says what to do.
+func lastSignedIn(e Env) (string, error) {
+	path, kept, err := profilePath(e)
+	if err != nil || !kept {
+		return "", nil
+	}
+	p, err := readProfile(path)
+	if err != nil {
+		return "", err
+	}
+	return p.LastSignedIn, nil
 }
 
 // profileToken is the token agk login stored for the installation where, and false where it stored
