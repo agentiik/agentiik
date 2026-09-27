@@ -555,16 +555,18 @@ func TestNoAnswerOfAnyRouteCarriesASecretsValue(t *testing.T) {
 	}
 }
 
-// timingVariable asks TestHowLongAbsenceAndInvisibilityTake to run: it measures, and a machine
-// under other load measures noise, so it runs when somebody asks for numbers.
+// timingVariable asks TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse to run: it measures, and
+// a machine under other load measures noise, so it runs when somebody asks for numbers.
 const timingVariable = "AGENTIIK_TEST_TIMING"
 
-// How long a principal holding nothing in finance waits for the answer about something that does
-// not exist and about something finance holds, on the routes a prober would ask first, interleaved
-// so that the two meet the same machine: the medians and the ninetieth percentiles are logged.
-// finance holds twenty workflows here, since a listing asking about each of them is where a namespace
-// that exists would take longer than one that does not.
-func TestHowLongAbsenceAndInvisibilityTake(t *testing.T) {
+// A principal holding nothing in finance waits as long for the answer about something that does not
+// exist as about something finance holds, on the routes a prober would ask first: asked in turn, so
+// that the two meet the same machine, their medians are within a fifth of each other or 200 µs,
+// whichever is more, and the medians and the ninetieth percentiles are logged. finance holds twenty
+// workflows here, since a listing asking about each of them is where a namespace that exists would
+// take longer than one that does not. Before, a run that was not there was refused in 0.9 ms and one
+// the caller could not read in 1.6 ms, and a listing of finance in 17.6 ms against 1.5 ms.
+func TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse(t *testing.T) {
 	if os.Getenv(timingVariable) == "" {
 		t.Skipf("set %s to measure", timingVariable)
 	}
@@ -600,6 +602,10 @@ func TestHowLongAbsenceAndInvisibilityTake(t *testing.T) {
 		}
 		t.Logf("%-22s %-6s %-48s absent %6.0fµs p90 %6.0fµs | present %6.0fµs p90 %6.0fµs", c.who, c.method, c.present,
 			micro(took[0][rounds/2]), micro(took[0][rounds*9/10]), micro(took[1][rounds/2]), micro(took[1][rounds*9/10]))
+		absence, presence := took[0][rounds/2], took[1][rounds/2]
+		if gap, most := (presence - absence).Abs(), max(200*time.Microsecond, absence/5); gap > most {
+			t.Errorf("as %s, %s %s took %s where what does not exist took %s", c.who, c.method, c.present, presence, absence)
+		}
 	}
 }
 
@@ -607,10 +613,10 @@ func micro(d time.Duration) float64 { return float64(d) / float64(time.Microseco
 
 // "Runner internals. A user never learns which host executed a task beyond its runner name and
 // labels." A task of alice's run ran on finance's runner, which joined with its version and capacity
-// and reported its state since, and the run as its owner reads it, by either route, in the listing and
-// in its step's log stream, names the runner by its identifier and says nothing else of it: no
-// version, no architecture, no capacity, no key, no address, and each task carries the fields the
-// page's run view names and no other.
+// and reported its state since. The run as its owner reads it, by either route, names the runner of
+// the task by its identifier and says nothing else of it: no version, no architecture, no capacity,
+// no key, no address, and each task carries the fields the page's run view names and no other. The
+// listings and the step's log stream name no runner at all.
 func TestARunViewNamesItsRunnerAndNothingOfItsHost(t *testing.T) {
 	x := someTenants(t)
 	beat := api.Beat{Runner: x.runner, AgentVersion: runnerVersion, State: "ready", Concurrency: 3, Tasks: []agk.TaskID{}, SentAt: time.Now()}

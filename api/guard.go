@@ -104,9 +104,10 @@ func (n Needs) guards() guard {
 // router asks which namespace and workflow the run is of, and asks the authorizer about those.
 //
 // A path may name the namespace as well, as /api/v1/{ns}/runs/{id} does, the path a Location names
-// a run by. The router then answers a run of another namespace as absent before it asks anything,
-// so that the path cannot name a namespace the caller holds beside a run of one they do not. It
-// may not name a workflow: no route needs one, and every check a path can dodge is one too many.
+// a run by. The router then answers a run of another namespace as absent before it asks anything
+// about the namespace it is in, so that the path cannot name a namespace the caller holds beside a
+// run of one they do not. It may not name a workflow: no route needs one, and every check a path can
+// dodge is one too many.
 type OnRun struct {
 	Permission Permission
 

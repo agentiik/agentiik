@@ -70,9 +70,10 @@ func narrowed(t *testing.T, rt *api.Router, method, path, as, keeps, within stri
 // principal holds: a permission the token leaves out, a workflow outside what it reaches, and the
 // installation for a token reaching some namespaces. Absent and forbidden stay the same 404 in a
 // namespace, and the installation's refusal a 403. The authorizer is asked what it is asked when the
-// token keeps the permission, one question about the same target, so that a refusal by the token
-// takes as long as one by the grants: answered sooner, it told a token's holder which targets outside
-// its reach exist.
+// token keeps the permission, one question about the same target: a run that is not there is refused
+// after a question about a stand-in, which may be outside the token's reach, so a refusal by the token
+// that asked nothing was answered sooner than an absence, and told the token's holder which runs
+// outside its reach exist.
 func TestTheRouterRefusesWhatATokenDoesNotKeep(t *testing.T) {
 	auth := &recording{}
 	rt, err := api.NewRouter(auth, scoped)

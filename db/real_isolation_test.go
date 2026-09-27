@@ -19,10 +19,14 @@ const namespacePolicy = `((namespace = agentiik_namespace()) OR agentiik_install
 
 // Every table naming a namespace, by a column of that name or by a reference to namespaces, has row
 // level security enabled and forced, the owner included, and one policy for every command whose
-// reading and writing halves are both the namespace's predicate. There is no list of tables here
-// that may stand outside it: a table read across the installation is read through the installation's
-// door, which the predicate's second arm opens, so no table needs to be exempt, and one that is is a
-// table whose rows a handle on one namespace reads for every namespace.
+// reading and writing halves are both the namespace's predicate. No such table may stand outside it:
+// a table read across the installation is read through the installation's door, which the
+// predicate's second arm opens, so none needs to be exempt, and one that is is a table whose rows a
+// handle on one namespace reads for every namespace.
+//
+// A table naming namespaces as a list, the ones a pool or a runner accepts or a token reaches, is the
+// installation's and says so here, with why: it belongs to no one namespace for a policy to keep it
+// to, and a column of such names added anywhere else fails this test until somebody decides.
 func TestEveryTableNamingANamespaceIsBehindItsPolicy(t *testing.T) {
 	super, _ := database(t)
 	ctx := t.Context()
@@ -72,6 +76,36 @@ func TestEveryTableNamingANamespaceIsBehindItsPolicy(t *testing.T) {
 			t.Errorf("%s names no namespace in the catalog, and this test expects it to", want)
 		}
 	}
+	// The columns of namespace names and scopes outside a table under the policy, and why each is.
+	decided := map[string]string{
+		"runner_pools.accepted_namespaces": "a pool serves the namespaces it accepts, and its inventory is an administrator's",
+		"runners.accepted_namespaces":      "a runner serves the namespaces it accepts, and its inventory is an administrator's",
+		"api_tokens.scope_within":          "a token names its principal before any namespace is in question, and may reach several",
+	}
+	named, err := conn.Query(ctx, `
+		select c.relname || '.' || a.attname
+		  from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+		  join pg_type ty on ty.oid = a.atttypid
+		 where n.nspname = current_schema() and c.relkind in ('r', 'p') and a.attnum > 0 and not a.attisdropped
+		   and ty.typname in ('namespace_name', '_namespace_name', 'grant_scope', '_grant_scope')
+		   and not c.relforcerowsecurity
+		 order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns, err := pgx.CollectRows(named, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range columns {
+		if decided[column] == "" {
+			t.Errorf("%s names namespaces in a table outside the namespace's policy, and nobody decided why", column)
+		}
+	}
+	if len(columns) != len(decided) {
+		t.Errorf("the columns naming namespaces outside the policy are %v, and this test decided about %d", columns, len(decided))
+	}
+
 	whole := "* true " + namespacePolicy + " " + namespacePolicy
 	for _, tb := range tables {
 		switch {

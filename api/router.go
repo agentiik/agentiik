@@ -541,7 +541,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			// A URI that does not parse names no run, and is refused as the absence it is.
 			u, err := agk.ParseURI(r.PathValue("uri"))
 			if err != nil {
-				rt.deny(w, g.scope)
+				rt.denyAfterAsking(r.Context(), w, as, g, target)
 				return
 			}
 			run = string(u.Run)
@@ -819,13 +819,17 @@ var standIn = Target{Namespace: "absent", Workflow: "absent"}
 // path names, once the authorizer has been asked what a run that is there would have been asked,
 // about standIn. Refused at once, a run that is not there was answered in the time of one lookup and
 // a run the caller may not reach in the time of a lookup and a question, which a caller measures, so
-// how long a 404 took said which runs exist.
+// how long a 404 took said which runs exist. Its answer is not read, but a question that could not
+// be answered is the 500 it is for a run that is there, or an outage would tell the two apart.
 func (rt *Router) denyAfterAsking(ctx context.Context, w http.ResponseWriter, as Identity, g guard, path Target) {
 	asked := standIn
 	if path.Namespace != "" {
 		asked.Namespace = path.Namespace
 	}
-	rt.allow(ctx, as, g.permission, asked)
+	if _, err := rt.allow(ctx, as, g.permission, asked); err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
 	rt.deny(w, g.scope)
 }
 

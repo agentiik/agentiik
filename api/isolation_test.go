@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -23,18 +25,31 @@ import (
 // yields nothing" holds of how long the answer takes as well as of what it says. What the router and
 // the listing ask the authorizer is the same, question for question, whether what a request names is
 // there or not, which a timing measured against a real database follows: see
-// cmd/agentiik-api's TestHowLongAbsenceAndInvisibilityTake.
+// cmd/agentiik-api's TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse.
 
-// counted answers as its Authorizer does and counts what it is asked one target at a time, and, as
-// countedAmong, several as one question.
+// counted answers as its Authorizer does and counts what it is asked one target at a time, keeping
+// the last target, and, as countedAmong, several as one question.
 type counted struct {
 	api.Authorizer
 	one, many atomic.Int32
+
+	mu   sync.Mutex
+	last api.Target
 }
 
 func (c *counted) Allow(ctx context.Context, who api.Principal, what api.Permission, over api.Target) (bool, error) {
 	c.one.Add(1)
+	c.mu.Lock()
+	c.last = over
+	c.mu.Unlock()
 	return c.Authorizer.Allow(ctx, who, what, over)
+}
+
+// lastAsked is the target counted was last asked about.
+func (c *counted) lastAsked() api.Target {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
 }
 
 // countedAmong is counted implementing api.Among.
@@ -66,9 +81,11 @@ func narrowing(r *http.Request) (api.Identity, error) {
 
 // A route naming a run is refused after the question a run that is there is asked, whether the run
 // is not there, is of a workflow the caller holds nothing on, is under another namespace than its
-// path names, or is outside what the caller's token reaches: one question each, so that none is
+// path names, is outside what the caller's token reaches, or is named by a URI that does not parse:
+// one question each, about a workflow of a namespace, the path's where it names one, so that none is
 // answered sooner than the others. Before, a run that was not there and one outside a token's reach
-// were refused with no question at all, a lookup sooner than a run the caller could not read.
+// were refused with no question at all, a lookup sooner than a run the caller could not read. And a
+// question that could not be answered is a 500 whether the run is there or not.
 func TestARouteNamingARunAsksTheSameQuestionWhateverTheRunIs(t *testing.T) {
 	invoicing := api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}
 	auth := &counted{Authorizer: granted{"alice": {{api.RunRead, invoicing}, {api.RunReadData, invoicing}}}}
@@ -105,7 +122,7 @@ func TestARouteNamingARunAsksTheSameQuestionWhateverTheRunIs(t *testing.T) {
 			"/api/v1/runs/" + unread, "/api/v1/runs/" + elsewhere, "/api/v1/runs/" + absent,
 			"/api/v1/finance/runs/" + unread, "/api/v1/finance/runs/" + elsewhere, "/api/v1/finance/runs/" + absent,
 			"/api/v1/team-ops/runs/" + mine, "/api/v1/nowhere/runs/" + absent,
-			artifact(unread), artifact(elsewhere), artifact(absent),
+			artifact(unread), artifact(elsewhere), artifact(absent), "/api/v1/artifacts/not-a-uri",
 		}},
 		{"alice@finance", "/api/v1/finance/runs/" + mine, []string{
 			"/api/v1/runs/" + unread, "/api/v1/runs/" + elsewhere, "/api/v1/runs/" + absent,
@@ -128,6 +145,29 @@ func TestARouteNamingARunAsksTheSameQuestionWhateverTheRunIs(t *testing.T) {
 			if got := auth.one.Load() - before; got != asked {
 				t.Errorf("%s: %s was refused after %d questions, and a run the caller reads is answered after %d", c.who, path, got, asked)
 			}
+			// A workflow of a namespace, since a question about the installation, or a namespace
+			// alone, reads less than one about a run's workflow does.
+			over := auth.lastAsked()
+			if over.Namespace == "" || over.Workflow == "" {
+				t.Errorf("%s: %s was refused after a question about %+v, which is no workflow", c.who, path, over)
+			}
+			if ns, _, _ := strings.Cut(strings.TrimPrefix(path, "/api/v1/"), "/"); ns != "runs" && ns != "artifacts" && over.Namespace != ns {
+				t.Errorf("%s: %s was refused after a question about %+v, outside the namespace its path names", c.who, path, over)
+			}
+		}
+	}
+
+	// An authorizer that cannot answer is a 500 for a run that is there and for one that is not.
+	broken := &counted{Authorizer: holder{broke: true}}
+	rt, err = api.NewRouter(broken, narrowing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.ServeRuns(&runsOf{of: map[string]api.Target{mine: invoicing}})
+	rt.MustHandle("GET", "/api/v1/runs/{run}", api.OnRun{Permission: api.RunRead}, ok)
+	for _, path := range []string{"/api/v1/runs/" + mine, "/api/v1/runs/" + absent} {
+		if code, _ := reached(t, rt, "GET", path, "alice"); code != http.StatusInternalServerError {
+			t.Errorf("with the authorizer failing, %s answered %d", path, code)
 		}
 	}
 }
@@ -333,6 +373,38 @@ func TestAnArtifactsURLOpensThatObjectOfThatNamespaceForThatRun(t *testing.T) {
 	} {
 		if w, _ := call(t, h, "GET", uri, "", nil); w.Code != http.StatusForbidden || w.Body.Len() != 0 {
 			t.Errorf("%s, through the URL signed for finance's artifact, answered %d %q", what, w.Code, w.Body)
+		}
+	}
+}
+
+// What Principals costs to answer about several targets as one question is the same whatever the
+// targets and however many, none, one or a hundred across namespaces that exist and namespaces that
+// do not: who the principal is, read once, and its grants, read once. It is what one target costs
+// Allow, so that a listing takes what a route about one workflow takes, and what a run that is not
+// there costs to refuse is what one that is costs. Asked a target at a time, a hundred targets were
+// two hundred transactions.
+func TestPrincipalsAnswerManyTargetsAtTheCostOfOne(t *testing.T) {
+	in := somePrincipals(t)
+	var many []api.Target
+	for i := range 100 {
+		many = append(many, api.Target{Namespace: []string{"finance", "hr", "nowhere"}[i%3], Workflow: fmt.Sprintf("workflow-%d", i)})
+	}
+	one := func(ask func()) int64 {
+		before := api.Questions(in.p)
+		ask()
+		return api.Questions(in.p) - before
+	}
+	for _, who := range []api.Principal{"alice", "finance/nightly", "carol"} {
+		single := one(func() { in.holds(t, who, api.RunRead, invoicingTarget) })
+		for _, over := range [][]api.Target{nil, {invoicingTarget}, {{Namespace: "nowhere", Workflow: "nothing"}}, many} {
+			cost := one(func() {
+				if _, err := in.p.AllowAmong(t.Context(), who, api.RunRead, over); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if cost != single {
+				t.Errorf("%s: asked about %d targets as one question, Principals opened %d transactions, and one target costs %d", who, len(over), cost, single)
+			}
 		}
 	}
 }

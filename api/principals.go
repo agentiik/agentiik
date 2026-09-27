@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
@@ -53,6 +54,10 @@ type Principals struct {
 	// passwords allowed and no passkey required.
 	origin      string
 	ipAddressed bool
+
+	// questions counts the transactions opened to say who a principal is and what it holds, for a
+	// test to hold that what a question costs does not depend on its targets.
+	questions atomic.Int64
 }
 
 // NewPrincipals builds them over an installation's database. now is the clock tokens, sessions and
@@ -170,6 +175,7 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 	}
 
 	var grants []access.Grant
+	p.questions.Add(1)
 	err = p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
 		var err error
 		grants, err = n.AccessGrantsFor(ctx, principal, over.Workflow, now)
@@ -204,6 +210,7 @@ func (p *Principals) AllowAmong(ctx context.Context, who Principal, what Permiss
 	}
 	var grants []access.Grant
 	if who != BootstrapOperator && principal.Ref != "" {
+		p.questions.Add(1)
 		err := p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
 			var err error
 			grants, err = w.AccessGrantsAcross(ctx, principal, now)
@@ -252,6 +259,7 @@ func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error
 	}
 	now := p.now()
 	var grants []access.Grant
+	p.questions.Add(1)
 	err = p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		grants, err = w.AccessGrantsAcross(ctx, principal, now)
@@ -276,6 +284,7 @@ func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error
 // with an empty Ref.
 func (p *Principals) resolve(ctx context.Context, who Principal) (principal access.Principal, admin, bootstrapped bool, err error) {
 	principal = access.Principal{Ref: string(who)}
+	p.questions.Add(1)
 	err = p.pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
 		if who == BootstrapOperator {
 			bootstrap, err := w.Bootstrap(ctx)
