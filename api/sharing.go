@@ -292,7 +292,7 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 		}
 		detail := grantDetail(g)
 		if Administering(r) || (g.Role != "" && own(g.Principal)) {
-			told, err := wide.TellOwners(ctx, g, string(who), now)
+			told, err := wide.TellOwners(ctx, db.Widening{Grant: g, Act: db.ActGranted, By: string(who), At: now})
 			if err != nil {
 				return err
 			}
@@ -400,7 +400,9 @@ func (s *SharingAPI) revoke(w http.ResponseWriter, r *http.Request, who Principa
 		}
 		detail := grantDetail(gone)
 		if gone.Deny != "" && own(gone.Principal) {
-			told, err := n.TellOwners(ctx, gone, string(who), s.now().UTC().Truncate(time.Microsecond))
+			told, err := n.TellOwners(ctx, db.Widening{
+				Grant: gone, Act: db.ActDenyLifted, By: string(who), At: s.now().UTC().Truncate(time.Microsecond),
+			})
 			if err != nil {
 				return err
 			}

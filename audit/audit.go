@@ -81,8 +81,9 @@ const (
 	// recorded in its namespace with whom, where and what. The first written is a namespace's
 	// owner's, which its creation writes. GrantDelete is one revoked, recorded as it was. Either,
 	// where the namespace's owners were told of it, an administrator's grant or a widening of their
-	// own access, names who was told as notified; so do GroupMemberAdd, GroupMemberRemove and
-	// GroupDelete where an administrator widened their own access by one, by namespace.
+	// own access, names who was told as notified; so do GroupMemberAdd where a user was put in a
+	// group holding a role, and GroupMemberRemove and GroupDelete where an administrator widened
+	// their own access by one, by namespace.
 	GrantCreate = "grant.create"
 	GrantDelete = "grant.delete"
 

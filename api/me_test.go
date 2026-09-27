@@ -155,7 +155,8 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 		t.Fatalf("frank is told %s", raw)
 	}
 	passkey, widened := me.Notifications[0], me.Notifications[1]
-	if passkey.Kind != "passkey_counter_refused" || passkey.Credential != "aVBob25lUGFzc2tleQ" || passkey.Grant != nil || passkey.Namespace != "" {
+	if passkey.Kind != "passkey_counter_refused" || passkey.Credential != "aVBob25lUGFzc2tleQ" || passkey.Grant != nil || passkey.Namespace != "" ||
+		passkey.Act != "" || passkey.By != "" || strings.Contains(string(raw), `"act":"",`) {
 		t.Errorf("frank is told of a passkey as %+v", passkey)
 	}
 	if widened.Kind != "admin_access_widened" || widened.Namespace != "finance" || !widened.At.Equal(in.at) || widened.Credential != "" ||
@@ -170,7 +171,7 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 	}
 	json.Unmarshal(raw, &told)
 	valid(t, "/$defs/accessGrant", told.Notifications[1].Grant)
-	if want := `{"id":"` + widened.ID + `","kind":"admin_access_widened","at":"` + in.at.Format(time.RFC3339) + `","namespace":"finance","grant":`; !strings.Contains(string(raw), want) {
+	if want := `{"id":"` + widened.ID + `","kind":"admin_access_widened","at":"` + in.at.Format(time.RFC3339) + `","act":"granted","by":"carol","namespace":"finance","grant":`; !strings.Contains(string(raw), want) {
 		t.Errorf("the notification is written\n%s\nwant it to hold\n%s", raw, want)
 	}
 

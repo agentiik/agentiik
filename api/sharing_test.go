@@ -412,7 +412,7 @@ func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 	if got := told(self); !slices.Equal(got, []string{"dave", "frank"}) {
 		t.Errorf("carol's grant to herself in finance was told to %q", got)
 	}
-	if got := in.strings(t, `select kind || ' ' || namespace from notifications where access_grant->>'id' = $1`, self.ID); len(got) != 2 || got[0] != "admin_access_widened finance" {
+	if got := in.strings(t, `select concat_ws(' ', kind, namespace, act, acted_by) from notifications where access_grant->>'id' = $1`, self.ID); len(got) != 2 || got[0] != "admin_access_widened finance granted carol" {
 		t.Errorf("carol's grant to herself was told as %q", got)
 	}
 	if got := recorded("grant.create", self.ID); got != `{"notified":["dave","frank"],"principal":"carol","role":"editor","scope":"finance"}` {
@@ -487,8 +487,8 @@ func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+deny.ID, "carol", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("carol revoking the deny on herself answered %d", w.Code)
 	}
-	if got := in.strings(t, `select recipient || ' ' || (access_grant->>'deny') from notifications where access_grant->>'id' = $1 order by recipient, at`, deny.ID); !slices.Equal(got, []string{
-		"dave secret:write", "dave secret:write", "frank secret:write", "frank secret:write",
+	if got := in.strings(t, `select concat_ws(' ', recipient, act, acted_by, access_grant->>'deny') from notifications where access_grant->>'id' = $1 order by recipient, at`, deny.ID); !slices.Equal(got, []string{
+		"dave granted carol secret:write", "dave deny_lifted carol secret:write", "frank granted carol secret:write", "frank deny_lifted carol secret:write",
 	}) {
 		t.Errorf("carol's deny on herself, written and then lifted, was told as %q", got)
 	}
@@ -509,6 +509,32 @@ func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 	}
 	if w := in.ask(t, "POST", "/api/v1/hr/grants", "agk_op_bootstrap", `{"principal":"operator","role":"owner"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("a grant to operator answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// Where a namespace's record names no owner and nobody holds its owner role, an administrator's
+// grant there is told to the other administrators rather than to nobody, each reading who did what,
+// and recorded naming them.
+func TestAnAdministratorsGrantWhereNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T) {
+	in := someSharing(t)
+	for _, stmt := range []string{`insert into namespaces (name) values ('ops')`, `update users set admin = true where login = 'ivan'`} {
+		if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g := in.granted(t, "/api/v1/ops/grants", "carol", `{"principal":"alice","role":"viewer"}`)
+	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1 order by recipient`, g.ID); !slices.Equal(got, []string{"ivan"}) {
+		t.Errorf("carol's grant in ops, which nobody owns, was told to %q", got)
+	}
+	var detail string
+	in.query(t, &detail, `select detail from audit_log where action = 'grant.create' and target = $1`, g.ID)
+	if detail != `{"notified":["ivan"],"principal":"alice","role":"viewer","scope":"ops"}` {
+		t.Errorf("carol's grant in ops is recorded as %s", detail)
+	}
+	me, raw := in.me(t, "ivan")
+	if len(me.Notifications) != 1 || me.Notifications[0].Act != "granted" || me.Notifications[0].By != "carol" ||
+		me.Notifications[0].Namespace != "ops" || me.Notifications[0].Grant == nil || me.Notifications[0].Grant.ID != g.ID {
+		t.Errorf("ivan is told %s", raw)
 	}
 }
 
@@ -566,12 +592,12 @@ func TestAGrantNamesSomebodyItsWriterSees(t *testing.T) {
 	}
 }
 
-// An administrator putting themselves in a group widens their own access wherever the group's grants
-// give something, and taking themselves out of one, or removing one they are in, wherever its denies
-// took something away: each tells those namespaces' owners, as a grant they wrote themselves does,
-// with the group's grant or deny, and is recorded naming who was told, by namespace. Putting somebody
-// else in, putting themselves in a group that holds nothing, or doing again what is done already,
-// tells nobody.
+// An administrator putting anybody in a group widens their access wherever the group's grants give a
+// role, and taking themselves out of one, or removing one they are in, widens their own wherever its
+// denies took something away: each tells those namespaces' owners, as a grant written by the
+// installation's power does, with the group's grant or deny, the act, who did it and the member put
+// in, and is recorded naming who was told, by namespace. Putting somebody in a group that holds
+// nothing, taking somebody else out of one, or doing again what is done already, tells nobody.
 func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAccess(t *testing.T) {
 	in := someSharing(t)
 	rt, err := api.NewRouter(in.p, in.p.Identify)
@@ -605,8 +631,8 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 	}
 	told := func() []string {
 		t.Helper()
-		return in.strings(t, `select recipient || ' ' || kind || ' ' || namespace || ' ' || (access_grant->>'principal') || ' '
-		                             || coalesce(access_grant->>'role', 'deny ' || (access_grant->>'deny'))
+		return in.strings(t, `select concat_ws(' ', recipient, kind, namespace, act, acted_by, login, access_grant->>'principal',
+		                                       coalesce(access_grant->>'role', 'deny ' || (access_grant->>'deny')))
 		                        from notifications order by recipient, namespace, at, id`)
 	}
 	asked := func(method, path, action, detail string) {
@@ -621,30 +647,32 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 		}
 	}
 
-	asked("PUT", "/api/v1/groups/auditors/members/alice", "group_member.add", `{"member":"alice"}`)
 	asked("PUT", "/api/v1/groups/empty/members/carol", "group_member.add", `{"member":"carol"}`)
 	if got := told(); len(got) != 0 {
-		t.Errorf("putting alice in auditors and carol in a group holding nothing told %q", got)
+		t.Errorf("putting carol in a group holding nothing told %q", got)
 	}
-	// finance's record names no owner, and dave and frank hold its owner role.
+	// finance's record names no owner, and dave and frank hold its owner role: carol putting alice
+	// in auditors, which edits payroll, is told to them as her putting herself in is.
+	asked("PUT", "/api/v1/groups/auditors/members/alice", "group_member.add", `{"member":"alice","notified":{"finance":["dave","frank"]}}`)
 	asked("PUT", "/api/v1/groups/auditors/members/carol", "group_member.add", `{"member":"carol","notified":{"finance":["dave","frank"]}}`)
 	joined := []string{
-		"dave admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
+		"dave admin_access_widened finance joined_group carol alice group:auditors editor",
+		"dave admin_access_widened finance joined_group carol carol group:auditors editor",
+		"frank admin_access_widened finance joined_group carol alice group:auditors editor",
+		"frank admin_access_widened finance joined_group carol carol group:auditors editor",
 	}
 	if got := told(); !slices.Equal(got, joined) {
-		t.Errorf("carol putting herself in auditors told %q", got)
+		t.Errorf("carol putting alice and herself in auditors told %q", got)
 	}
 	asked("PUT", "/api/v1/groups/auditors/members/carol", "group_member.add", `{"member":"carol"}`)
 	if got := told(); !slices.Equal(got, joined) {
 		t.Errorf("carol putting herself in auditors again told %q", got)
 	}
-	// hr's record names team-ops, whose member hank is told of the deny carol no longer has.
+	// hr's record names team-ops, whose member hank is told of the deny carol no longer has; alice
+	// taken out lifts nothing from carol's own access.
 	asked("DELETE", "/api/v1/groups/auditors/members/carol", "group_member.remove", `{"member":"carol","notified":{"hr":["hank"]}}`)
 	asked("DELETE", "/api/v1/groups/auditors/members/alice", "group_member.remove", `{"member":"alice"}`)
-	left := []string{
-		"dave admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
-		"hank admin_access_widened hr group:auditors deny run:read_data",
-	}
+	left := append(slices.Clone(joined), "hank admin_access_widened hr left_group carol group:auditors deny run:read_data")
 	if got := told(); !slices.Equal(got, left) {
 		t.Errorf("carol taking herself out of auditors told %q", got)
 	}
@@ -654,9 +682,14 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 	asked("DELETE", "/api/v1/groups/auditors", "group.delete", `{"members":["carol"],"notified":{"hr":["hank"]}}`)
 	asked("DELETE", "/api/v1/groups/empty", "group.delete", `{"members":["carol"]}`)
 	if got := told(); !slices.Equal(got, []string{
-		"dave admin_access_widened finance group:auditors editor", "dave admin_access_widened finance group:auditors editor",
-		"frank admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
-		"hank admin_access_widened hr group:auditors deny run:read_data", "hank admin_access_widened hr group:auditors deny run:read_data",
+		"dave admin_access_widened finance joined_group carol alice group:auditors editor",
+		"dave admin_access_widened finance joined_group carol carol group:auditors editor",
+		"dave admin_access_widened finance joined_group carol carol group:auditors editor",
+		"frank admin_access_widened finance joined_group carol alice group:auditors editor",
+		"frank admin_access_widened finance joined_group carol carol group:auditors editor",
+		"frank admin_access_widened finance joined_group carol carol group:auditors editor",
+		"hank admin_access_widened hr left_group carol group:auditors deny run:read_data",
+		"hank admin_access_widened hr group_removed carol group:auditors deny run:read_data",
 	}) {
 		t.Errorf("carol removing a group she is in told %q", got)
 	}
