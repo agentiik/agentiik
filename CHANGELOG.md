@@ -53,7 +53,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A registration from an enrolment link's code records the passkey, spends the code and signs its user in, and from the first administrator's link ends the bootstrap token, a suspended user being signed in by neither; one from a session adds a passkey to its user, and a session an enrolment code opened registers nothing. Audited as `credential.enrol`, `enrolment.use`, `bootstrap.end` and `signin.succeed`.
 - An assertion opens a full session and records the passkey's counter, Backup State and last use. A counter that did not move forward is refused, stores nothing and writes the user a `passkey_counter_refused` notification, and a synced passkey where `device_bound_only` applies is a 403 naming it; each refusal is audited as `signin.fail`, those before a signature verified at most ten per address and a hundred in all in ten minutes, the next entry counting those left out.
 - A user's first sign-in creates their personal namespace, owned by them with the owner role and its `NS/agentiik`, recorded as the installation's act.
-- A write to the built-in store, a policy's form or a presigned PUT, that would take its namespace past `max_artifact_bytes` is answered 507 with nothing stored, which a runner reads as `artifact.ErrNoRoom`. What counts is the namespace's live artifacts, each digest once, and its uploads not yet referenced, room being made at the request's length under a lock on the namespace before the bytes are read, so two writes at once cannot both take the last of it. An object the namespace holds takes none, and a namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
+- A write to the built-in store, a policy's form or a presigned PUT, that would take its namespace past `max_artifact_bytes` is answered 507 with nothing stored, which a runner reads as `artifact.ErrNoRoom`. What counts is the namespace's live artifacts, each digest once, and its uploads not yet referenced, room being made at the request's length, or the room left up to `artifact_max_bytes` where it states none, under a lock on the namespace's room before the bytes are read, so two writes at once cannot both take the last of it. An object the namespace holds as a live artifact takes none, and a namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 
 ### State
 
@@ -70,7 +70,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0034 adds `notifications`, one row per reader: `db.NS.TellOwners` writes them in the grant's transaction, `db.Wide.NotificationsOf` reads a reader's and removes those past 90 days, `db.Wide.DismissNotification` removes one.
 - `db.NS.AccessGrantsAt` lists what applies at a scope, `db.NS.RevokeAccess` revokes a grant at the scope it was written at and answers it, and `db.NS.Present` tells a namespace or a workflow that is not there.
 - Migration 0035 adds `users.webauthn_handle`, 32 random bytes minted at a user's first registration, and `webauthn_challenges`.
-- Migration 0036 adds `artifact_uploads`, the objects written and not yet referenced, and indexes the live artifacts by digest: `db.NS.MakeRoom` holds room for an object or refuses it with `db.NoRoom`, and `db.NS.Stored` and `db.NS.Unwritten` settle it.
+- Migration 0036 adds `artifact_uploads`, one row per write not yet referenced, lapsing a quarter of an hour after its policy, and `artifact_room`, what a namespace with `max_artifact_bytes` holds as last counted, counted whole again once a minute old or before a refusal on a count over a second old, and indexes the live artifacts by digest: `db.NS.MakeRoom` holds room for a `db.Upload` or refuses it with `db.NoRoom`, and `db.NS.Stored` and `db.NS.Unwritten` settle it.
+- An artifact of a workflow that declares no `retain` is recorded, kept as long as the namespace's `max_retention_days`, rather than left for nothing to expire, collect or count.
 - A finished run's envelopes and logs expire once its `defaults.retain` has run, capped at the namespace's `max_retention_days`, which also bounds a workflow declaring none: `db.Decision.Retain` replaces `ExpiresAt`, which nothing set.
 - `db.Wide.Consumption` reads what each namespace holds against its quotas, and `db.Evaluation.MaxRunDuration` its bound with the run.
 
@@ -78,7 +79,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - A step's pool is chosen among those its namespace's `allowed_runner_pools` names, where it names any: a step whose labels only a pool outside them carries fails with 125 naming the list.
 - A run's root `timeout` is held to its namespace's `max_run_duration`, read at every pass, and a workflow writing none is bounded by it; `graph.New` and `graph.Options.MaxRunDuration` take the bound, zero bounding nothing.
-- `agentiik_quota_used` and `agentiik_quota_limit`, by namespace and quota, for `max_concurrent_tasks`, `max_runs_per_hour` and `max_artifact_bytes`, kept to 1,000 label sets as a counter is, the rest summed under `_other` (`metrics.Desc.Fold`).
+- `agentiik_quota_used` and `agentiik_quota_limit`, by namespace and quota, for `max_concurrent_tasks`, `max_runs_per_hour` and `max_artifact_bytes`, keeping 1,000 namespaces and summing the rest under `namespace="_other"`, each quota apart (`metrics.Desc.FoldBy`).
 
 ### Tests
 
