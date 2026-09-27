@@ -1,7 +1,10 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/artifact"
 )
 
 // A refusal that takes longer for what exists than for what does not says which exists as plainly
@@ -279,5 +283,56 @@ func TestPrincipalsAnswerSeveralTargetsAsTheyAnswerEach(t *testing.T) {
 	check("once the bootstrap has ended")
 	if held, err := in.p.AllowAmong(t.Context(), "alice", api.RunRead, nil); err != nil || len(held) != 0 {
 		t.Errorf("asked about nothing, alice was answered %v, %v", held, err)
+	}
+}
+
+// "Artifacts from another namespace. A presigned URL covers one artifact of one run and expires in
+// minutes." The URL an artifact of finance is redirected to is signed for its namespace, its run and
+// its digest, and checked for all three when it is followed: the same bytes held by team-ops, which
+// the namespace is the one segment of the key to tell apart, another object of finance, and the same
+// object under another run are each refused, as the URL with nothing edited is not.
+func TestAnArtifactsURLOpensThatObjectOfThatNamespaceForThatRun(t *testing.T) {
+	s := withSomeRuns(t)
+	content := []byte("invoice 2026-01, the same bytes in two namespaces")
+	u := s.anArtifact(t, s.finance[0], "invoice.pdf", 0, content)
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+	other := []byte("another invoice of finance")
+	otherSum := sha256.Sum256(other)
+	for key, bytesOf := range map[string][]byte{
+		artifact.Key("team-ops", digest):                         content,
+		artifact.Key("finance", hex.EncodeToString(otherSum[:])): other,
+	} {
+		if err := s.objects.Put(t.Context(), key, bytes.NewReader(bytesOf)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := s.servedTo(t, granted{"alice": {{api.RunReadData, api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}}}})
+
+	w, _ := call(t, h, "GET", artifactPath(u), "alice", nil)
+	if w.Code != http.StatusFound {
+		t.Fatalf("the artifact answered %d: %s", w.Code, w.Body)
+	}
+	location, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followed, _ := call(t, h, "GET", location.RequestURI(), "", nil); followed.Code != http.StatusOK || followed.Body.String() != string(content) {
+		t.Fatalf("the URL as it was signed answered %d %q", followed.Code, followed.Body)
+	}
+	edited := func(path string, run string) string {
+		q := location.Query()
+		q.Set("run", run)
+		return path + "?" + q.Encode()
+	}
+	for what, uri := range map[string]string{
+		"the same bytes in team-ops":              edited(strings.Replace(location.Path, "/objects/finance/", "/objects/team-ops/", 1), s.finance[0]),
+		"another object of finance":               edited(strings.Replace(location.Path, digest, hex.EncodeToString(otherSum[:]), 1), s.finance[0]),
+		"the same object for another run":         edited(location.Path, s.finance[1]),
+		"the same object for a run of team-ops's": edited(location.Path, s.teamOps),
+	} {
+		if w, _ := call(t, h, "GET", uri, "", nil); w.Code != http.StatusForbidden || w.Body.Len() != 0 {
+			t.Errorf("%s, through the URL signed for finance's artifact, answered %d %q", what, w.Code, w.Body)
+		}
 	}
 }
