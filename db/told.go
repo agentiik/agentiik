@@ -88,9 +88,9 @@ func (what Widening) check() error {
 	case what.By == "":
 		return errors.New("db: a widening nobody did")
 	case !slices.Contains([]string{ActGranted, ActDenyLifted, ActJoinedGroup, ActLeftGroup, ActGroupRemoved}, what.Act):
-		return fmt.Errorf("db: a widening by %q, and it is granted, deny_lifted, joined_group, left_group or group_removed", what.Act)
+		return fmt.Errorf("db: a widening whose act is %q, and it is granted, deny_lifted, joined_group, left_group or group_removed", what.Act)
 	case (what.Member != "") != (what.Act == ActJoinedGroup):
-		return fmt.Errorf("db: a widening by %s names the member put in a group on joined_group, and on joined_group alone", what.Act)
+		return fmt.Errorf("db: a widening whose act is %s names a member, and only one whose act is joined_group names the member put in a group", what.Act)
 	}
 	return nil
 }

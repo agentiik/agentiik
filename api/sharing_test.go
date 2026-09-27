@@ -702,6 +702,91 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 	}
 }
 
+// Putting a user in a group beside the removal of that user takes turns with it, where the owners
+// told count the member among them: the membership holds the member's personal namespace and then
+// their principal before it writes anything of theirs, which is the order the removal takes them in,
+// so that neither holds what the other waits for and neither is refused as a deadlock. Once the user
+// is gone the membership is answered as one of nobody; where the removal went no further, it is
+// written.
+func TestPuttingAUserInAGroupBesideTheirRemovalTakesTurns(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		personal    bool
+		first, then string
+		commit      bool
+		want        int
+	}{
+		// The removal of a user holding no namespace: their principal, then their user row.
+		{"their principal", false, `select from principals where id = 'gina' for update`, `delete from principals where id = 'gina'`, true, http.StatusNotFound},
+		// The removal of one holding their personal namespace, where the group holds a role: the
+		// namespace, then their principal.
+		{"their personal namespace", true, `select from namespaces where name = 'gina' for update`, `select from principals where id = 'gina' for update`, false, http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := someSharing(t)
+			rt, err := api.NewRouter(in.p, in.p.Identify)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := api.NewUsers(rt, api.UserOptions{Pool: in.pool, PublicURL: "https://agentiik.example.com", Now: func() time.Time { return in.at }}); err != nil {
+				t.Fatal(err)
+			}
+			groups := in
+			groups.h = rt
+			// leads owns finance, so that gina put in it is among finance's owners told.
+			if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+				return w.CreateGroup(ctx, "leads")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			grants := map[string]access.Grant{"finance": {Principal: "group:leads", Role: access.Owner}}
+			if c.personal {
+				if err := in.pool.Installation(t.Context(), db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
+					_, err := w.CreateNamespace(ctx, db.Namespace{Name: "gina", Kind: db.NamespacePersonal, Owner: "gina"})
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				grants["gina"] = access.Grant{Principal: "group:leads", Role: access.Viewer}
+			}
+			for namespace, g := range grants {
+				g.ID, g.Scope, g.GrantedBy = ulid.New(), access.Scope{Namespace: namespace}, "carol"
+				if err := in.pool.In(t.Context(), namespace, func(ctx context.Context, n *db.NS) error { return n.GrantAccess(ctx, g) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			removing, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer removing.Rollback(context.WithoutCancel(t.Context()))
+			if _, err := removing.Exec(t.Context(), c.first); err != nil {
+				t.Fatal(err)
+			}
+			answered := make(chan *httptest.ResponseRecorder, 1)
+			go func() { answered <- groups.ask(t, "PUT", "/api/v1/groups/leads/members/gina", "carol", "") }()
+			if err := waitForLocks(t, in.super, 1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := removing.Exec(t.Context(), c.then); err != nil {
+				t.Errorf("the removal of gina beside her membership: %s", err)
+			}
+			if c.commit {
+				err = removing.Commit(t.Context())
+			} else {
+				err = removing.Rollback(t.Context())
+			}
+			if err != nil {
+				t.Errorf("the removal of gina beside her membership: %s", err)
+			}
+			if w := <-answered; w.Code != c.want {
+				t.Errorf("gina put in leads beside her removal answered %d: %s", w.Code, w.Body)
+			}
+		})
+	}
+}
+
 // Telling the owners holds the namespace told about before the grants in it, as its removal takes
 // them, so that an administrator's act beside a removal of that namespace waits for it and then tells
 // nobody of a namespace no longer there, rather than being refused as a deadlock or failing on a

@@ -893,6 +893,11 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		action := audit.GroupMemberAdd
 		if in {
 			err = keepAnAdministrator(ctx, wide, s.now(), s.ipAddressed, func() error {
+				// Held before the insert, as the removal of the member takes them, since the
+				// owners told below may count the member among them (db.Wide.HoldMember).
+				if err := wide.HoldMember(ctx, login); err != nil {
+					return err
+				}
 				var err error
 				changed, err = wide.AddMember(ctx, name, login)
 				return err

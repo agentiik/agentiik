@@ -156,9 +156,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0042 adds `users.suspended_for`, why the policy suspended an account: `db.Wide.Suspend` writes it, `db.Wide.LiftSuspension` lifts a suspension made for that reason alone, and `db.Wide.UsersUnderPolicy` answers who holds a role in a namespace. `db.Session.BackupEligible` says whether a synced passkey opened a session. `db.Wide.HoldUser` and `db.Wide.Administrators` hold a user's row as a reference to it does not wait on, so that a membership written with two users never deadlocks with an act holding every user.
 - Migration 0043 adds `notifications.login` and the kind `break_glass_recovery`, which `db.Wide.TellAdministrators` writes to every administrator.
 - Migration 0044 adds `exchange_codes`, agk login's one-time codes: `db.Wide.IssueExchangeCode` keeps one, removing some past their minute, `db.Wide.TakeExchangeCode` takes one once, and `db.Wide.SetPassword` removes those the password it replaces minted.
-- Migration 0046 adds `notifications.act` and `notifications.acted_by`, which `db.Widening` fills, keeps the notifications written before it where they name who acted and removes the rest; `db.NS.TellOwners` and `db.Wide.TellOwnersIn` take a `db.Widening`.
 - `db.Wide.Present` and `db.Wide.TellOwners` do what `db.NS`'s do, for a grant written through the installation's handle, which reads who can sign in across the namespaces in the same transaction; `db.Session.Admin` says whether a session's user administers the installation.
 - Migration 0045 puts `audit_log`, `auth_policy`, `notifications` and `service_accounts` behind the namespace's row level security, as every other table naming a namespace is: each is read through the installation's door, and a handle on one namespace reads its own rows of them and nothing else.
+- Migration 0046 adds `notifications.act` and `notifications.acted_by`, which `db.Widening` fills, keeps the notifications written before it where they name who acted and removes the rest; `db.NS.TellOwners`, `db.Wide.TellOwners` and `db.Wide.TellOwnersIn` take a `db.Widening`.
+- `db.Wide.HoldMember` holds a user's personal namespace and principal, as their removal takes them, and a membership takes it before its insert, so that the two take turns rather than deadlock.
 
 ### Artifacts
 
