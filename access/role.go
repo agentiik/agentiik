@@ -12,10 +12,10 @@ const (
 	// Viewer reads: the workflow and its runs, without their data.
 	Viewer Role = "viewer"
 
-	// Operator runs, and follows the runs it starts: it "deliberately lacks workflow:read, so a
-	// colleague can launch a job without seeing the queries, endpoints and business rules inside
-	// it", and holds run:read "to follow the runs it starts, their state and log lines, and never
-	// run:read_data".
+	// Operator runs, and follows runs: it "deliberately lacks workflow:read, so a colleague can
+	// launch a job without seeing the queries, endpoints and business rules inside it", and "holds
+	// run:read, so it follows the runs of what it may run, the ones it starts among them: their
+	// state and log lines, and never run:read_data".
 	Operator Role = "operator"
 
 	// Editor reads, runs, writes, reads data and uses and writes the namespace's secrets.

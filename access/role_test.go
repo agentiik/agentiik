@@ -74,8 +74,9 @@ func TestTheFourRolesAreThePageTable(t *testing.T) {
 }
 
 // "operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the
-// queries, endpoints and business rules inside it. It holds run:read to follow the runs it starts,
-// their state and log lines, and never run:read_data."
+// queries, endpoints and business rules inside it. It holds run:read, so it follows the runs of
+// what it may run, the ones it starts among them: their state and log lines, and never
+// run:read_data, so their payloads stay out of its reach."
 func TestAnOperatorRunsWhatItCannotRead(t *testing.T) {
 	op := access.Operator.Permissions()
 	if !op.Has(access.WorkflowRun) {

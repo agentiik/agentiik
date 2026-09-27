@@ -48,16 +48,17 @@ func resolved(t *testing.T, who access.Principal, grants []access.Grant, at acce
 }
 
 // The documentation's own example, as its figure draws it: alice, a member of team-finance, holds
-// viewer on the namespace finance through her group and editor on monthly-invoicing herself, and a
-// deny on that workflow keeps run:read_data from her there. "Grants add up; a deny is the only
-// thing that subtracts." "The editor role holds run:read_data, and the deny takes it away on this
-// one workflow: alice maintains monthly-invoicing without reading the invoices its runs carry."
+// editor on the namespace finance through her group, and a deny on monthly-invoicing keeps
+// run:read_data from her there. "Grants add up; a deny is the only thing that subtracts."
+// "team-finance edits every workflow of finance, and the deny takes run:read_data, which the editor
+// role holds, from alice on monthly-invoicing alone: she maintains it, secrets included, without
+// reading the invoices its runs carry."
 func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 	grants := []access.Grant{
-		allow("01JQ3M8T", "group:team-finance", finance, access.Viewer),
-		allow("01JQ3M9A", "alice", invoicing, access.Editor),
+		allow("01JQ3M8T", "group:team-finance", finance, access.Editor),
 		deny("01JQ3M9B", "alice", invoicing, access.RunReadData),
 	}
+	editor := access.Editor.Permissions().Permissions()
 	for _, c := range []struct {
 		what string
 		who  access.Principal
@@ -65,19 +66,19 @@ func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 		want []access.Permission
 	}{
 		{
-			"alice on monthly-invoicing holds her group's viewer from the namespace and her own editor from the workflow, less the denied run:read_data, secret:use, which a workflow's grant never gives, and workflow:delete, which no editor holds",
+			"alice on monthly-invoicing holds her group's editor from the namespace, secrets included, less the denied run:read_data, and never workflow:delete, which no editor holds",
 			alice, invoicing,
-			[]access.Permission{access.WorkflowRead, access.WorkflowRun, access.WorkflowWrite, access.RunRead},
+			[]access.Permission{access.WorkflowRead, access.WorkflowRun, access.WorkflowWrite, access.RunRead, access.SecretUse, access.SecretWrite},
 		},
 		{
-			"alice on the namespace holds only what the namespace gives, since a workflow's grant never reaches up",
+			"alice on the namespace holds the whole role, since a deny on one workflow never reaches up",
 			alice, finance,
-			[]access.Permission{access.WorkflowRead, access.RunRead},
+			editor,
 		},
 		{
-			"alice on another workflow of finance inherits the namespace's grant and not the other workflow's",
+			"alice on another workflow of finance inherits the whole role, and the deny is not there",
 			alice, payroll,
-			[]access.Permission{access.WorkflowRead, access.RunRead},
+			editor,
 		},
 		{
 			"alice in another namespace holds nothing, even on a workflow of the same name",
@@ -85,9 +86,9 @@ func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 			nil,
 		},
 		{
-			"carol, another member of team-finance, holds the group's grant and none of alice's own",
+			"carol, another member of team-finance, holds the whole role on monthly-invoicing, since the deny is alice's alone",
 			carol, invoicing,
-			[]access.Permission{access.WorkflowRead, access.RunRead},
+			editor,
 		},
 		{
 			"bob, in no group, holds nothing",
@@ -108,25 +109,10 @@ func TestAliceHoldsWhatTheFigureSays(t *testing.T) {
 		})
 	}
 
-	// The deny takes away something she would otherwise hold: without it, her editor grant gives
-	// her run:read_data on monthly-invoicing.
-	if got := resolved(t, alice, grants[:2], invoicing, t0); !got.Has(access.RunReadData) {
+	// The deny takes away something she would otherwise hold: without it, her group's editor
+	// grant gives her run:read_data on monthly-invoicing.
+	if got := resolved(t, alice, grants[:1], invoicing, t0); !got.Has(access.RunReadData) {
 		t.Errorf("without the deny, alice holds %s on monthly-invoicing, and the deny took nothing away", got)
-	}
-
-	// team-finance later becomes editor of the namespace: alice reads data everywhere in finance
-	// but on monthly-invoicing, where the deny still wins, and carol reads it there too.
-	grants = append(grants, allow("01JQ3MA0", "group:team-finance", finance, access.Editor))
-	if got := resolved(t, alice, grants, invoicing, t0); got.Has(access.RunReadData) || !got.Has(access.WorkflowWrite) {
-		t.Errorf("an editor through her group, alice holds %s on monthly-invoicing", got)
-	}
-	for _, c := range []struct {
-		who access.Principal
-		at  access.Scope
-	}{{alice, finance}, {alice, payroll}, {carol, invoicing}} {
-		if got := resolved(t, c.who, grants, c.at, t0); !got.Has(access.RunReadData) {
-			t.Errorf("an editor through team-finance, %s holds %s at %q", c.who.Ref, got, c.at)
-		}
 	}
 }
 
