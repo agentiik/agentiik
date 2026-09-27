@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/agentiik/agentiik/audit"
@@ -54,18 +55,20 @@ import (
 // request. A sign-in is a sign-in, so the first one gives the user their personal namespace whatever
 // the session may do.
 //
-// # What the page does not name
+// # Setting one
 //
-// No route sets or changes a password, and none enrols a TOTP generator: the page names neither, so
-// none is served. A password is a row of credentials of type password holding its hash as
-// password.Hash writes it, and a generator one of type totp holding its secret sealed as the secret
-// store seals one (TOTPSecrets).
+// A password is set from an enrolment code, on the enrolment page, and from a browser's session,
+// and a TOTP generator is enrolled beside it from a session: passwords_set.go and passwords_totp.go.
+// A password is a row of credentials of type password holding its hash as password.Hash writes it,
+// and a generator one of type totp holding its secret sealed as the secret store seals one
+// (TOTPSecrets).
 
-// TOTPSecrets opens the secret of a TOTP generator, sealed under the master key as the credentials
-// row holds it: "a code is checked against the secret itself, so it cannot be hashed, and a dump
-// alone opens nothing". The secret store fills it, as it fills Secrets, since package api may not
-// link the store.
+// TOTPSecrets seals and opens the secret of a TOTP generator, under the master key as the
+// credentials row holds it: "a code is checked against the secret itself, so it cannot be hashed,
+// and a dump alone opens nothing". The secret store fills it, as it fills Secrets, since package api
+// may not link the store.
 type TOTPSecrets interface {
+	SealTOTP(login, id string, secret []byte) ([]byte, error)
 	OpenTOTP(login, id string, sealed []byte) ([]byte, error)
 }
 
@@ -78,9 +81,15 @@ type PasswordOptions struct {
 	// where the policy is applied with passwords allowed and no passkey.
 	PublicURL string
 
-	// TOTP opens the secrets of TOTP generators. Nil opens none, and an account holding one is then
-	// refused its sign-in, with a 500, rather than signed in with its password alone.
+	// TOTP seals and opens the secrets of TOTP generators. Nil opens none, and an account holding
+	// one is then refused its sign-in, with a 500, rather than signed in with its password alone;
+	// nor does it enrol one.
 	TOTP TOTPSecrets
+
+	// Identify reads the session a password is set from. It is the installation's own,
+	// Principals.Identify, and not the router's, which refuses a session that may only enrol
+	// everywhere, and such a session, opened by the password it holds, may set another.
+	Identify Identify
 
 	// SignIns is what the sign-in routes share: where a sign-in comes from, and the bound on the
 	// failures they record. Nil is one of this route's own, reading no proxy's header.
@@ -96,15 +105,17 @@ type PasswordOptions struct {
 
 // PasswordAPI is the password sign-in.
 type PasswordAPI struct {
-	pool    *db.Pool
-	totp    TOTPSecrets
-	signIns *SignIns
-	now     func() time.Time
-	trouble func(error)
+	pool     *db.Pool
+	totp     TOTPSecrets
+	identify Identify
+	signIns  *SignIns
+	now      func() time.Time
+	trouble  func(error)
 
-	// origin is the sign-in page's, and ipAddressed an installation addressed by an IP address.
-	origin      string
-	ipAddressed bool
+	// origin is the sign-in page's, host the public URL's, which a TOTP generator names its
+	// account at, and ipAddressed an installation addressed by an IP address.
+	origin, host string
+	ipAddressed  bool
 
 	attempts *attempts
 	hashing  *hashing
@@ -113,8 +124,8 @@ type PasswordAPI struct {
 	// so that such a sign-in takes as long as any other.
 	nobody string
 
-	// checked is run between the checks and the sign-in's transaction, where a test changes what
-	// was checked. Nil outside tests.
+	// checked is run between the checks and the transaction of a sign-in, or of a password or a
+	// TOTP generator set or removed, where a test changes what was checked. Nil outside tests.
 	checked func()
 }
 
@@ -154,6 +165,8 @@ func NewPasswords(rt *Router, o PasswordOptions) (*PasswordAPI, error) {
 		return nil, errors.New("api: no router")
 	case o.Pool == nil:
 		return nil, errors.New("api: no database, and the password and the policy are kept there")
+	case o.Identify == nil:
+		return nil, errors.New("api: no way to read a session, and a signed-in user sets a password from theirs")
 	}
 	origin, err := originOf(o.PublicURL)
 	if err != nil {
@@ -178,12 +191,15 @@ func NewPasswords(rt *Router, o PasswordOptions) (*PasswordAPI, error) {
 		return nil, err
 	}
 	s := &PasswordAPI{
-		pool: o.Pool, totp: o.TOTP, signIns: o.SignIns, now: o.Now, trouble: o.Trouble,
-		origin: origin, ipAddressed: net.ParseIP(u.Hostname()) != nil,
+		pool: o.Pool, totp: o.TOTP, identify: o.Identify, signIns: o.SignIns, now: o.Now, trouble: o.Trouble,
+		origin: origin, host: strings.ToLower(u.Hostname()), ipAddressed: net.ParseIP(u.Hostname()) != nil,
 		attempts: newAttempts(), hashing: newHashing(hashingTurns(), hashingWait), nobody: nobody,
 	}
 	public := Public{Why: "a password sign-in is how somebody proves who they are, with the password it carries, and opens the session every other route is then authorised by"}
 	if err := rt.Handle("POST", "/api/v1/auth/login", public, s.login); err != nil {
+		return nil, err
+	}
+	if err := s.setting(rt); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -249,29 +265,33 @@ type SignedIn struct {
 }
 
 // passwordPolicy is what the policy that applies to one account says of passwords and of the
-// passkeys that stand for them: whether passwords are forbidden, whether a passkey is required, and
-// whether it must be device-bound, each the stricter of the installation's and that of every
-// namespace the account holds a grant in.
+// passkeys that stand for them: whether passwords are forbidden, whether a passkey is required,
+// whether it must be device-bound, and how many the password may be removed beside, each the
+// stricter of the installation's and that of every namespace the account holds a grant in.
 type passwordPolicy struct {
 	forbidden       bool
 	passkeyRequired bool
 	deviceBoundOnly bool
+	minPasskeys     int
+}
+
+// passkeys counts the passkeys among held the policy accepts, a synced one counting for nothing
+// where device_bound_only applies, since it signs nobody in there.
+func (p passwordPolicy) passkeys(held []db.Credential) int {
+	n := 0
+	for _, c := range held {
+		if c.Type == db.CredentialPasskey && !(p.deviceBoundOnly && c.BackupEligible) {
+			n++
+		}
+	}
+	return n
 }
 
 // enrolling says whether a session a password opened for an account holding held may only enrol:
-// where a passkey is required and it holds none the policy accepts, a synced one counting for
-// nothing where device_bound_only applies, since it signs nobody in there and the password would
+// where a passkey is required and it holds none the policy accepts, since the password would
 // otherwise be the way round the requirement.
 func (p passwordPolicy) enrolling(held []db.Credential) bool {
-	if !p.passkeyRequired {
-		return false
-	}
-	for _, c := range held {
-		if c.Type == db.CredentialPasskey && !(p.deviceBoundOnly && c.BackupEligible) {
-			return false
-		}
-	}
-	return true
+	return p.passkeyRequired && p.passkeys(held) == 0
 }
 
 // passwordPolicyOf is the policy that applies to login's password. On an installation addressed by
@@ -289,11 +309,13 @@ func passwordPolicyOf(ctx context.Context, wide *db.Wide, login string, now time
 		forbidden:       installation.Password == "forbidden",
 		passkeyRequired: installation.Passkey == "required",
 		deviceBoundOnly: installation.DeviceBoundOnly != nil && *installation.DeviceBoundOnly,
+		minPasskeys:     installation.MinPasskeys,
 	}
 	for _, tightened := range tightening {
 		p.forbidden = p.forbidden || tightened.Password == "forbidden"
 		p.passkeyRequired = p.passkeyRequired || tightened.Passkey == "required"
 		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
+		p.minPasskeys = max(p.minPasskeys, tightened.MinPasskeys)
 	}
 	return p, nil
 }
@@ -477,9 +499,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		}
 	}
 
-	if s.checked != nil {
-		s.checked()
-	}
+	s.betweenChecks()
 	var cookie *http.Cookie
 	var answer SignedIn
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -525,6 +545,13 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 	s.attempts.signedIn(ask.Login, address, now)
 	http.SetCookie(w, cookie)
 	shownOnce(w, http.StatusOK, answer)
+}
+
+// betweenChecks runs checked, where a test gave one.
+func (s *PasswordAPI) betweenChecks() {
+	if s.checked != nil {
+		s.checked()
+	}
 }
 
 // errForbidden is a sign-in whose account's policy came to forbid passwords while it was checked.

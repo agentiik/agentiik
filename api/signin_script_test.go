@@ -394,7 +394,7 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock, Identify: p.Identify}); err != nil {
 		t.Fatal(err)
 	}
 	policy := func(passwords, passkeys string) {
