@@ -646,7 +646,8 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 // them, so that an administrator's act beside a removal of that namespace waits for it and then tells
 // nobody of a namespace no longer there, rather than being refused as a deadlock or failing on a
 // namespace gone: removing a group they are in holding a deny there, putting themselves in a group
-// holding a role there, and revoking a deny on themselves there.
+// holding a role there, and revoking a deny on themselves there. It holds each owner told as well,
+// so that one removed at that moment is told nothing rather than failing the act.
 func TestAnAlertBesideTheRemovalOfItsNamespaceWaitsForIt(t *testing.T) {
 	in := someSharing(t)
 	rt, err := api.NewRouter(in.p, in.p.Identify)
@@ -734,5 +735,45 @@ func TestAnAlertBesideTheRemovalOfItsNamespaceWaitsForIt(t *testing.T) {
 	}
 	if got := in.strings(t, `select recipient || ' ' || namespace from notifications`); len(got) != 0 {
 		t.Errorf("the acts told %q of namespaces removed", got)
+	}
+
+	// An owner removed while carol's grant to herself in the namespace they own is told waits for
+	// the removal, and is told nothing; the other owner is told.
+	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `insert into namespaces (name) values ('ops4')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.pool.In(t.Context(), "ops4", func(ctx context.Context, n *db.NS) error {
+		for _, owner := range []string{"frank", "gina"} {
+			if err := n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: owner, Scope: access.Scope{Namespace: "ops4"}, Role: access.Owner, GrantedBy: "frank"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removing, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removing.Exec(t.Context(), `delete from principals where id = 'gina'`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- in.ask(t, "POST", "/api/v1/ops4/grants", "carol", `{"principal":"carol","role":"viewer"}`)
+	}()
+	if err := waitForLocks(t, in.super, 1); err != nil {
+		removing.Rollback(t.Context())
+		t.Fatal(err)
+	}
+	if err := removing.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if w := <-answered; w.Code != http.StatusCreated {
+		t.Errorf("carol's grant beside the removal of an owner answered %d: %s", w.Code, w.Body)
+	}
+	if got := in.strings(t, `select recipient from notifications where namespace = 'ops4'`); !slices.Equal(got, []string{"frank"}) {
+		t.Errorf("carol's grant beside the removal of an owner was told to %q", got)
 	}
 }
