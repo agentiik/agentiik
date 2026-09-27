@@ -4,15 +4,17 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
 
-// What a failed sign-in costs the audit log.
+// What a failed sign-in costs the audit log, and where a sign-in comes from.
 //
-// Every assertion refused is recorded as signin.fail, and one refused before its signature
-// verified is anybody's to send: an answer to options they asked for themselves, signed with a key
-// of their own, or with none. Unbounded, that is a row in the audit log for every request anybody
+// Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
+// it has been read and counted (passwords.go). An assertion refused before its signature verified is
+// anybody's to send: an answer to options they asked for themselves, signed with a key of their own,
+// or with none; and so is any password sign-in, with any login and any password. Unbounded, that is a row in the audit log for every request anybody
 // cares to make, each append waiting its turn at the head of the one chain every act of the
 // installation appends to, and each kept for good and exported. So what such refusals append is
 // bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
@@ -27,12 +29,16 @@ import (
 // for, a copy of the key in use above all, which a bound anybody else could fill would silence.
 //
 // The bound is on the log and not on the sign-in: a refusal past it is still verified and still
-// answered 401, and a sign-in that verifies is never refused for the failures beside it. Behind a
-// proxy every request comes from the proxy's address, and a bound on sign-ins would let one person
-// failing at the proxy shut everybody out; a bound on the log only makes them share it.
+// answered 401, and a sign-in that verifies is never refused for the failures beside it. A proxy in
+// front of the API that does not say who its client is makes every request come from its own
+// address, and a bound on sign-ins would then let one person failing at it shut everybody out; a
+// bound on the log only makes them share it. The password sign-in's own bound, on the guesses it
+// takes, is its own (passwords_limits.go).
 //
 // Kept in memory, by each replica of the API for itself, since what it bounds is the volume and not
 // a count anybody reads: an installation of three replicas appends three times the bound at most.
+// The sign-in routes share one count, SignIns, so that failing at one route and then at the other
+// is bounded as failing at one.
 
 // The bound: ten entries from one address in ten minutes, more than a person fumbling for the right
 // authenticator makes, and one a minute from anybody failing on purpose for as long as they keep at
@@ -74,6 +80,24 @@ func (c *failuresFrom) at(now time.Time) *failuresFrom {
 }
 
 func newFailedSignIns() *failedSignIns { return &failedSignIns{by: map[string]*failuresFrom{}} }
+
+// SignIns is what the sign-in routes share: where a request comes from, and the bound on what the
+// sign-ins they refuse append to the audit log. serve makes one and hands it to each.
+type SignIns struct {
+	// proxied is an API served behind the proxy AGK_PROXY_URL names, whose client addresses
+	// are read from X-Forwarded-For.
+	proxied  bool
+	failures *failedSignIns
+}
+
+// NewSignIns makes one, for an API served behind the proxy AGK_PROXY_URL names where proxied is set.
+func NewSignIns(proxied bool) *SignIns {
+	return &SignIns{proxied: proxied, failures: newFailedSignIns()}
+}
+
+// addressOf is the address a sign-in came from: the connection's, or the proxy's last entry of
+// X-Forwarded-For where the API is served behind the proxy AGK_PROXY_URL names.
+func (s *SignIns) addressOf(r *http.Request) string { return addressOf(r, s.proxied) }
 
 // admit says whether a failed sign-in from address at now, one refused before its signature
 // verified, is recorded, and, where it is, how many went unrecorded before it.
@@ -139,9 +163,24 @@ func failureKey(address string) string {
 	return p.String()
 }
 
-// addressOf is the address a request came from, as the connection says: behind a proxy on the same
-// host, the proxy's. Never a header, which whoever sends the request writes.
-func addressOf(r *http.Request) string {
+// addressOf is the address a request came from, as the connection says; or, for an API served
+// behind the proxy AGK_PROXY_URL names where proxied is set, as the last entry of X-Forwarded-For
+// says, the one that proxy wrote, and the connection's where the request carries none that reads as
+// an address.
+//
+// The last entry and no other, and behind that proxy and nowhere else: the API then listens on the
+// loopback, so every request comes through the proxy on this host, and the proxy writes its
+// client's address after whatever the client sent; the entries before it are the client's to write.
+// Anywhere else the header is anybody's, and not read.
+func addressOf(r *http.Request, proxied bool) string {
+	if proxied {
+		if forwarded := r.Header.Values("X-Forwarded-For"); len(forwarded) > 0 {
+			entries := strings.Split(forwarded[len(forwarded)-1], ",")
+			if a, err := netip.ParseAddr(strings.TrimSpace(entries[len(entries)-1])); err == nil {
+				return a.String()
+			}
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil || host == "" {
 		if r.RemoteAddr != "" {

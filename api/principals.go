@@ -48,7 +48,10 @@ type Principals struct {
 
 	// origin is the public URL's origin, which a request changing something that a session
 	// carries has to come from, and empty where sessions are not accepted: see AcceptSessions.
-	origin string
+	// ipAddressed is a public URL whose host is an IP address, where the policy is applied with
+	// passwords allowed and no passkey required.
+	origin      string
+	ipAddressed bool
 }
 
 // NewPrincipals builds them over an installation's database. now is the clock tokens, sessions and

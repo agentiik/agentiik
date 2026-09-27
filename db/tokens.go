@@ -192,6 +192,10 @@ type Session struct {
 	Credential    string
 	EnrolmentCode []byte
 
+	// CredentialType is the type of the credential that opened it, as SessionByHash reads it:
+	// what a session a password opened may do is the policy's to say at each request.
+	CredentialType string
+
 	CreatedAt     time.Time
 	IdleExpiresAt time.Time
 }
@@ -250,14 +254,17 @@ const liveSession = `revoked_at is null and idle_expires_at > $2
 	      select from enrolment_codes c
 	       where c.hash = sessions.enrolment_code and c.revoked_at is null and c.expires_at > $2))`
 
-// SessionByHash answers the session whose identifier hashes to hash, if it is live at now.
+// SessionByHash answers the session whose identifier hashes to hash, if it is live at now, with the
+// type of the credential that opened it.
 func (w *Wide) SessionByHash(ctx context.Context, hash []byte, now time.Time) (Session, error) {
 	var s Session
 	var credential *string
 	err := w.tx.QueryRow(ctx,
-		`select hash, login, credential, enrolment_code, created_at, idle_expires_at from sessions
+		`select hash, login, credential, enrolment_code, created_at, idle_expires_at,
+		        coalesce((select type from credentials c where c.id = sessions.credential), '')
+		   from sessions
 		  where hash = $1 and `+liveSession, hash, now,
-	).Scan(&s.Hash, &s.Login, &credential, &s.EnrolmentCode, &s.CreatedAt, &s.IdleExpiresAt)
+	).Scan(&s.Hash, &s.Login, &credential, &s.EnrolmentCode, &s.CreatedAt, &s.IdleExpiresAt, &s.CredentialType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrNoSession
 	}
@@ -296,6 +303,18 @@ func (w *Wide) RevokeSessions(ctx context.Context, login string, hash []byte, at
 		return 0, fmt.Errorf("db: the sessions of %s could not be revoked: %w", login, err)
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// EndSession revokes the session whose identifier hashes to hash, live or not, and answers whether
+// it revoked one: a sign-out. One that opens nothing now is revoked all the same, since a session a
+// suspension silences would open again when the suspension is lifted, and its holder asked for it
+// to end. Found by its hash alone, which only whoever holds its cookie can give.
+func (w *Wide) EndSession(ctx context.Context, hash []byte, at time.Time) (bool, error) {
+	tag, err := w.tx.Exec(ctx, `update sessions set revoked_at = $2 where hash = $1 and revoked_at is null`, hash, at)
+	if err != nil {
+		return false, fmt.Errorf("db: a session could not be ended: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // The kinds of enrolment code, as enrolment_codes.kind writes them.

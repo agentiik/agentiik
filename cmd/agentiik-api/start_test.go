@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -508,6 +509,11 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"DELETE /api/v1/me/notifications/{id}":                           own,
 		"POST /api/v1/auth/passkey/options":                              public,
 		"POST /api/v1/auth/passkey/verify":                               public,
+		"POST /api/v1/auth/login":                                        public,
+		"POST /api/v1/auth/sign-out":                                     public,
+		"GET /auth/sign-in":                                              public,
+		"GET /auth/enrol":                                                public,
+		"GET /auth/assets/{name}":                                        public,
 		"GET /objects/{key...}":                                          public,
 		"PUT /objects/{key...}":                                          public,
 		"POST /objects/{namespace}":                                      public,
@@ -531,6 +537,15 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		if !served[name] {
 			t.Errorf("serve does not register %s", name)
 		}
+	}
+
+	// The sign-in page offers the password form, since the route it calls is served and the
+	// policy an installation starts with lets passwords in.
+	page := httptest.NewRecorder()
+	in.router.ServeHTTP(page, httptest.NewRequestWithContext(t.Context(), "GET", "/auth/sign-in", nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-password="offered"`) {
+		t.Errorf("the sign-in page served answered %d, with the password form %s", page.Code,
+			regexp.MustCompile(`data-password="[^"]*"`).FindString(page.Body.String()))
 	}
 }
 

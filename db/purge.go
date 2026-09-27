@@ -271,7 +271,7 @@ func pairsOf(ctx context.Context, tx pgx.Tx, query string, args ...any) (pairs, 
 //
 // The run's row is taken before anything is lowered and stamped in the same transaction, which
 // is what keeps a sweep from taking the same run for ever and two sweeps at once from lowering
-// its counts twice: migration 0037 says why the stamp is on the run. A run whose steps were all
+// its counts twice: migration 0038 says why the stamp is on the run. A run whose steps were all
 // stamped before it had one of its own is stamped and lowers nothing. The counts of the whole
 // batch are lowered in one statement, so that a run fanned out to ten thousand shards costs one
 // statement and not twenty thousand, held inside one transaction.
