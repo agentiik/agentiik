@@ -104,10 +104,20 @@ func written(pattern string, named map[string]string) string {
 	})
 }
 
+// naming are the bodies the routes an owner of hr may ask there are sent under hr, which take the
+// route past reading its body to looking up the workflow its path names, and find nothing, a
+// version or a workflow to share, whichever workflow of finance's it names: the empty body is
+// refused before any name is looked at. A push and a secret's declaration look nothing up, but
+// write what their path names in the namespace it names, so they are sent the empty body there too.
+var naming = map[string]any{
+	"POST /api/v1/{namespace}/workflows/{workflow}/runs":   api.Start{Commit: Commit},
+	"POST /api/v1/{namespace}/workflows/{workflow}/grants": api.GrantRequest{Principal: "alice", Role: "viewer"},
+}
+
 // unknowableByPath asks every route naming something in its path, as who, once naming nothing
 // and once naming finance's things, each named in turn with those before it, and holds the answers
 // alike. It asks again with hr in place of any namespace a path names, and finance's things in the
-// rest.
+// rest, where the routes a namespace's owner may ask are sent what takes them to a lookup.
 func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 	t.Helper()
 	asked := 0
@@ -128,15 +138,19 @@ func (f *Fixture) unknowableByPath(t testing.TB, who Asker) {
 					continue
 				}
 			}
+			body := any("{}")
+			if b, ok := naming[c.Method+" "+c.Pattern]; ok && within != "" {
+				body = b
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing), who, "{}")
+			none := f.ask(t, ctx, c.Method, written(c.Pattern, nothing), who, body)
 			for i := range varying {
 				mixed := maps.Clone(nothing)
 				for _, p := range varying[:i+1] {
 					mixed[p] = named[p]
 				}
 				path := written(c.Pattern, mixed)
-				a := f.ask(t, ctx, c.Method, path, who, "{}")
+				a := f.ask(t, ctx, c.Method, path, who, body)
 				asked++
 				if diff := Difference(none, a); diff != "" {
 					t.Errorf("%s %s: as %s, %s answered %s", c.Method, c.Pattern, who.Name, path, diff)

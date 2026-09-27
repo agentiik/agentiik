@@ -8,19 +8,19 @@
 // installation would hold: the bootstrap token creates the administrator, whose first sign-in ends
 // it, and everything after is asked of the API by whoever the documentation lets ask it.
 //
-//	carol              an administrator of the installation, owning finance through its record
-//	alice              a user, in team-finance; editor of hr/onboarding through a grant of her own
-//	bob                a user, owning hr through its record, and holding nothing in finance
-//	team-finance       a group, alice in it
+//	carol                 an administrator of the installation, owning finance through its record
+//	alice                 a user, in team-finance, editor of hr/onboarding by a grant of her own
+//	bob                   a user, owning hr through its record, and holding nothing in finance
+//	team-finance          a group, alice in it
 //	finance/nightly-sync  a service account of finance, with a token its owner minted
 //
-//	finance            team-finance             editor
-//	finance            finance/nightly-sync     viewer, until the lapse
-//	finance/payroll    finance/nightly-sync     operator
-//	finance/monthly-invoicing  alice            deny run:read_data
-//	hr                 team-finance             deny workflow:run
-//	hr/onboarding      alice                    editor
-//	hr/onboarding      alice                    deny workflow:read, until the lapse
+//	finance                    team-finance          editor
+//	finance                    finance/nightly-sync  viewer, until the lapse
+//	finance/payroll            finance/nightly-sync  operator
+//	finance/monthly-invoicing  alice                 deny run:read_data
+//	hr                         team-finance          deny workflow:run
+//	hr/onboarding              alice                 editor
+//	hr/onboarding              alice                 deny workflow:read, until the lapse
 //
 // The first and the fourth are the figure of the page's Scopes and resolution: team-finance edits
 // every workflow of finance, and the deny takes run:read_data from alice on monthly-invoicing alone.

@@ -3,6 +3,8 @@ package accesstest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -83,7 +85,7 @@ func (f *Fixture) Probe(t testing.TB, served []api.Route, lapsed bool) {
 		}
 	}
 	for _, as := range askers {
-		f.lists(t, as, f.Holds(as, lapsed))
+		f.lists(t, as, f.Holds(as, lapsed), lapsed)
 	}
 	if asked < 1000 {
 		t.Fatalf("the routes were asked %d questions, and the fixture names more than that", asked)
@@ -184,22 +186,22 @@ func (f *Fixture) probe(t testing.TB, c Case, as Asker, at Target, h Holding) {
 		made = f.freshName()
 		body = api.NewServiceAccount{Namespace: at.Namespace, Name: made}
 	}
-	// A log stream answers for as long as its reader reads, so it is read for a moment.
-	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if c.Method != "GET" || !strings.HasSuffix(c.Pattern, "/logs") {
-		ctx, cancel = context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-	}
 	a := f.ask(t, ctx, c.Method, path, as, body)
 	name := c.Method + " " + c.Pattern
 	status, refused := refusal(c, as, h)
+	f.carriesNoSecret(t, name, as, a)
 	switch {
 	case allowed && c.Makes != "" && a.Status != http.StatusNoContent:
 		t.Errorf("%s: %s, holding it, asked about %s to remove %s, which it answered %d: %s", name, as.Name, at, made, a.Status, a.Body)
 	case allowed && c.Owned && c.Method == "POST" && a.Status != http.StatusCreated:
 		t.Errorf("%s: %s, owning %s, was answered %d making a service account there: %s", name, as.Name, at.Namespace, a.Status, a.Body)
 	case allowed && c.FindsNothing:
+	case allowed && c.Refused && (a.Status < 400 || a.Status >= 500):
+		// The body sent is one the route refuses as it reads it, so that asking changes
+		// nothing: a route answering it otherwise may have acted on the fixture.
+		t.Errorf("%s: %s asked about %s at %s with a body the route refuses, and was answered %d: %s", name, as.Name, at, path, a.Status, a.Body)
 	case allowed && (a.Status == http.StatusUnauthorized || a.Status >= 500 || refusedAs(a, status, refused)):
 		t.Errorf("%s: %s, holding what it needs, asked about %s at %s and was refused %d: %s", name, as.Name, at, path, a.Status, a.Body)
 	case !allowed && a.Status != status:
@@ -218,7 +220,27 @@ func (f *Fixture) probe(t testing.TB, c Case, as Asker, at Target, h Holding) {
 			t.Errorf("%s: %s was answered the run's inputs %v, holding %s there %v", name, as.Name, told, c.Reveals, !told)
 		}
 	}
+	if allowed && c.Makes == "token" {
+		f.revoked(made)
+	}
 	f.unmake(t, c, at, made, allowed)
+}
+
+// carriesNoSecret holds an answer to carrying no value of a secret the fixture declared, in any
+// spelling an answer writes bytes in: "secret values, at any role".
+func (f *Fixture) carriesNoSecret(t testing.TB, name string, as Asker, a Answer) {
+	t.Helper()
+	answer := string(a.Body) + fmt.Sprint(a.Header)
+	for _, value := range f.Values {
+		for _, spelled := range []string{
+			value, base64.StdEncoding.EncodeToString([]byte(value)), base64.RawURLEncoding.EncodeToString([]byte(value)),
+			hex.EncodeToString([]byte(value)),
+		} {
+			if strings.Contains(answer, spelled) {
+				t.Errorf("%s, asked by %s, answered %d carrying a secret's value: %s", name, as.Name, a.Status, answer)
+			}
+		}
+	}
 }
 
 // refusedAs says whether an answer is the refusal of status and refused.
@@ -280,7 +302,7 @@ func (f *Fixture) unmake(t testing.TB, c Case, at Target, made string, allowed b
 	case "secret":
 		f.must(t, "DELETE", "/api/v1/"+at.Namespace+"/secrets/"+made, owner, nil, http.StatusNoContent)
 	case "token":
-		f.must(t, "DELETE", "/api/v1/auth/tokens/"+made, f.Carol, nil, http.StatusNoContent)
+		f.revoke(t, f.Carol, made)
 	case "service account":
 		f.must(t, "DELETE", "/api/v1/service-accounts/"+at.Namespace+"/"+made, owner, nil, http.StatusNoContent)
 	}
@@ -344,12 +366,14 @@ func absent() map[string]string {
 	}
 }
 
-// lists holds each listing, as as asks it, to what h lets it list: the runs of the workflows it
-// holds run:read on, across the installation and within each namespace; the namespaces it sees;
-// the service accounts of the namespaces it owns; and the tokens it may revoke, a narrowed token's
-// being itself alone. "The existence of workflows they cannot read, in any listing": whatever a
-// listing names beyond these is something the asker was not to learn of.
-func (f *Fixture) lists(t testing.TB, as Asker, h Holding) {
+// lists holds each listing, as as asks it, to what h lets it list, before the lapse or from it
+// where lapsed is set: the runs of the workflows it holds run:read on, across the installation and
+// within each namespace; the namespaces it sees; the service accounts of the namespaces it owns;
+// the tokens it may revoke, by identifier, a narrowed token's being itself alone; and the grants of
+// each scope it manages them at. "The existence of workflows they cannot read, in any listing":
+// whatever a listing names beyond these is something the asker was not to learn of, and whatever
+// it names past its expiry is something that no longer holds.
+func (f *Fixture) lists(t testing.TB, as Asker, h Holding, lapsed bool) {
 	t.Helper()
 	if !h.Opens {
 		for _, path := range []string{"/api/v1/runs", "/api/v1/namespaces", "/api/v1/service-accounts", "/api/v1/auth/tokens"} {
@@ -391,19 +415,56 @@ func (f *Fixture) lists(t testing.TB, as Asker, h Holding) {
 	}
 	f.listed(t, as, "/api/v1/service-accounts", "service_accounts", func(e map[string]any) string { return fmt.Sprint(e["namespace"], "/", e["name"]) }, accounts, false)
 
-	// The tokens it may revoke, by whose they are: its own, and the service accounts' of the
-	// namespaces it owns, finance/nightly-sync's being the fixture's one; a narrowed token lists
-	// itself alone.
-	tokens := []string{as.Principal}
+	// The tokens it may revoke, those "still accepted": its own, and the service accounts' of the
+	// namespaces it owns, finance/nightly-sync's being the fixture's one, none revoked and none
+	// past its expiry; a narrowed token lists itself alone.
+	var tokens []string
 	if as.Session == nil && (as.holding == "carol for finance" || strings.HasPrefix(as.holding, "alice for")) {
 		tokens = []string{as.tokenID}
-		f.listed(t, as, "/api/v1/auth/tokens", "tokens", func(e map[string]any) string { return fmt.Sprint(e["id"]) }, tokens, false)
-		return
+	} else {
+		for id, m := range f.tokens {
+			whose := m.principal == as.Principal || (m.principal == NightlySync && slices.Contains(h.Owns, Finance))
+			if whose && !m.revoked && !(m.lapses && lapsed) {
+				tokens = append(tokens, id)
+			}
+		}
 	}
-	if slices.Contains(h.Owns, Finance) {
-		tokens = append(tokens, NightlySync)
+	f.listed(t, as, "/api/v1/auth/tokens", "tokens", func(e map[string]any) string { return fmt.Sprint(e["id"]) }, tokens, false)
+
+	// The grants and denies written at each scope it holds grant:manage on, "leaving out those
+	// expired": a namespace's own, and a workflow's with its namespace's before them. Those the
+	// namespace's record gave its owner are not the fixture's to name, so a listing is held to
+	// holding the fixture's that apply there and last, and none that has lapsed or applies
+	// elsewhere.
+	for _, at := range []Target{{Namespace: Finance}, {Namespace: HR}, {Finance, Invoicing, ""}, {Finance, Payroll, ""}, {HR, Onboarding, ""}, {HR, Offboarding, ""}} {
+		if !h.Hold("grant:manage", at.Namespace, at.Workflow) {
+			continue
+		}
+		path := "/api/v1/" + at.Namespace + "/grants"
+		if at.Workflow != "" {
+			path = "/api/v1/" + at.Namespace + "/workflows/" + at.Workflow + "/grants"
+		}
+		a := f.ask(t, t.Context(), "GET", path, as, nil)
+		var listing struct {
+			Grants []struct {
+				ID string `json:"id"`
+			} `json:"grants"`
+		}
+		if a.Status != http.StatusOK || json.Unmarshal(a.Body, &listing) != nil {
+			t.Errorf("GET %s as %s answered %d: %s", path, as.Name, a.Status, a.Body)
+			continue
+		}
+		var listed []string
+		for _, g := range listing.Grants {
+			listed = append(listed, g.ID)
+		}
+		for _, g := range f.written {
+			applies := g.scope == at.Namespace || (at.Workflow != "" && g.scope == at.Namespace+"/"+at.Workflow)
+			if want := applies && !(g.lapses && lapsed); want != slices.Contains(listed, g.id) {
+				t.Errorf("GET %s as %s lists %v, and %s written at %s is listed %v", path, as.Name, listed, g.id, g.scope, !want)
+			}
+		}
 	}
-	f.listed(t, as, "/api/v1/auth/tokens", "tokens", func(e map[string]any) string { return fmt.Sprint(e["principal"]) }, tokens, false)
 }
 
 // listed holds one listing, member names each entry of it, to want: the same set, or one holding it

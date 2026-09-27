@@ -28,8 +28,9 @@ type Case struct {
 
 	// FindsNothing is set where the route answers what it finds nothing under with the absence the
 	// router refuses with, and the fixture holds nothing it would find: an artifact, which only a
-	// task's result writes. Such a route is held to its refusals alone, and to letting its holders
-	// through by package api's tests, which write one.
+	// task's result writes. Its asking proves nothing here, since whoever it lets through and
+	// whoever it refuses are answered alike; package api's tests, which write an artifact, hold its
+	// authorisation.
 	FindsNothing bool
 }
 

@@ -108,7 +108,7 @@ func (f *Fixture) Refuses(t testing.TB) {
 	revoked := f.mint(t, f.BobsBrowser, "bob", api.TokenRequest{DeviceLabel: "a lost phone"})
 	revoked.Name = "bob's token revoked"
 	f.must(t, "GET", "/api/v1/me", revoked, nil, http.StatusOK)
-	f.must(t, "DELETE", "/api/v1/auth/tokens/"+revoked.tokenID, f.Bob, nil, http.StatusNoContent)
+	f.revoke(t, f.Bob, revoked.tokenID)
 	if a := f.ask(t, t.Context(), "GET", "/api/v1/me", revoked, nil); a.Status != http.StatusUnauthorized || !bytes.HasPrefix(a.Body, []byte(opensNothing)) {
 		t.Errorf("GET /api/v1/me as %s answered %d: %s", revoked.Name, a.Status, a.Body)
 	}
@@ -135,7 +135,8 @@ func (f *Fixture) Refuses(t testing.TB) {
 		if a.Status == http.StatusCreated {
 			var issued api.IssuedToken
 			decode(t, a, &issued)
-			f.must(t, "DELETE", "/api/v1/auth/tokens/"+issued.APIToken.ID, f.Carol, nil, http.StatusNoContent)
+			f.tokens[issued.APIToken.ID] = &minted{principal: c.principal}
+			f.revoke(t, f.Carol, issued.APIToken.ID)
 		}
 	}
 

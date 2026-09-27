@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -62,7 +61,9 @@ type Installation struct {
 }
 
 // Serve is a client whose every request h answers in this process, from 192.0.2.1, the address
-// httptest gives a request, whatever its URL names.
+// httptest gives a request, whatever its URL names. An answer is handed back once its headers are
+// written, as a server's is, and its body as it is written, so that a stream is read while it goes
+// on.
 func Serve(h http.Handler) *http.Client {
 	return &http.Client{Transport: served{h}}
 }
@@ -77,12 +78,51 @@ func (s served) RoundTrip(r *http.Request) (*http.Response, error) {
 	if in.Body == nil {
 		in.Body = http.NoBody
 	}
-	w := httptest.NewRecorder()
-	s.h.ServeHTTP(w, in)
-	answered := w.Result()
-	answered.Request = r
-	return answered, nil
+	read, written := io.Pipe()
+	w := &streamed{header: http.Header{}, body: written, sent: make(chan struct{})}
+	go func() {
+		defer written.Close()
+		s.h.ServeHTTP(w, in)
+		w.WriteHeader(http.StatusOK)
+	}()
+	<-w.sent
+	return &http.Response{
+		Status: http.StatusText(w.status), StatusCode: w.status, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header: w.headed, Body: read, ContentLength: -1, Request: r,
+	}, nil
 }
+
+// streamed is the answer a handler writes for served: its headers as they stood when it wrote them,
+// and its body through a pipe the client reads, which a client that stops reading closes, and a
+// handler still writing then learns of from its next write.
+type streamed struct {
+	header, headed http.Header
+	status         int
+	body           *io.PipeWriter
+	once           sync.Once
+	sent           chan struct{}
+}
+
+func (w *streamed) Header() http.Header { return w.header }
+
+func (w *streamed) WriteHeader(status int) {
+	w.once.Do(func() {
+		w.status, w.headed = status, w.header.Clone()
+		close(w.sent)
+	})
+}
+
+// Write writes the body, naming its type where the handler did not, as net/http's server does.
+func (w *streamed) Write(b []byte) (int, error) {
+	if w.header.Get("Content-Type") == "" && w.header.Get("Transfer-Encoding") == "" {
+		w.header.Set("Content-Type", http.DetectContentType(b))
+	}
+	w.WriteHeader(http.StatusOK)
+	return w.body.Write(b)
+}
+
+// Flush sends the headers, which is all a pipe ever holds back.
+func (w *streamed) Flush() { w.WriteHeader(http.StatusOK) }
 
 // Clock is an installation's clock that a test holds: the wall clock until it is held at an
 // instant, and that instant from then on, however long the test takes.
@@ -169,8 +209,26 @@ type Fixture struct {
 	// Token is the identifier of finance/nightly-sync's token.
 	Token string
 
+	// tokens are the API tokens the fixture minted, by identifier, and written the grants and
+	// denies Build wrote, for the listings to be held to.
+	tokens  map[string]*minted
+	written []writtenGrant
+
 	// fresh numbers the things probes make to act on.
 	fresh int
+}
+
+// minted is an API token the fixture minted: whose it is, and whether it lapses or was revoked.
+type minted struct {
+	principal       string
+	lapses, revoked bool
+}
+
+// writtenGrant is a grant or a deny Build wrote: its identifier, the scope it was written at, and
+// whether it lapses.
+type writtenGrant struct {
+	id, scope string
+	lapses    bool
 }
 
 // Build stands the fixture up on an installation nothing has been done with since it was made, but
@@ -192,6 +250,7 @@ func Build(t testing.TB, in Installation) *Fixture {
 		Runs:    map[string]string{},
 		Grants:  map[string]string{},
 		Secrets: map[string]string{},
+		tokens:  map[string]*minted{},
 	}
 	f.Nobody = Asker{Name: "nobody", holding: "nobody"}
 	f.Bootstrap = Asker{Name: "the bootstrap token", Principal: "operator", Bearer: in.Bootstrap, holding: "nobody"}
@@ -254,6 +313,7 @@ func Build(t testing.TB, in Installation) *Fixture {
 		if _, ok := f.Grants[g.scope]; !ok {
 			f.Grants[g.scope] = id
 		}
+		f.written = append(f.written, writtenGrant{id, g.scope, g.lapses})
 	}
 
 	// A secret of each namespace, declared by whoever may write one there: alice, whom
@@ -373,7 +433,22 @@ func (f *Fixture) mint(t testing.TB, from Asker, principal string, q api.TokenRe
 	if issued.Token == "" || issued.APIToken.Principal != principal {
 		t.Fatalf("minting a token of %s answered %+v", principal, issued.APIToken)
 	}
+	f.tokens[issued.APIToken.ID] = &minted{principal: principal, lapses: q.ExpiresAt != nil && !q.ExpiresAt.After(f.Lapse)}
 	return Asker{Name: principal, Principal: principal, Bearer: issued.Token, tokenID: issued.APIToken.ID}
+}
+
+// revoke revokes a token the fixture minted, as by.
+func (f *Fixture) revoke(t testing.TB, by Asker, id string) {
+	t.Helper()
+	f.must(t, "DELETE", "/api/v1/auth/tokens/"+id, by, nil, http.StatusNoContent)
+	f.revoked(id)
+}
+
+// revoked records that a token the fixture minted was revoked.
+func (f *Fixture) revoked(id string) {
+	if m, ok := f.tokens[id]; ok {
+		m.revoked = true
+	}
 }
 
 // grant writes one grant or deny at scope, NS or NS/workflow, as by, and answers its identifier.
@@ -465,9 +540,6 @@ func pushOf(t testing.TB, document string) api.Push {
 // otherwise, and answers what came back. A browser's request comes from the public URL's origin, as
 // the sign-in page's and the console's do, and so does a request carrying no credential, which is
 // how the enrolment page asks.
-//
-// An answer cut by ctx is what arrived before, a log stream's among them, which answers until its
-// reader goes.
 func (f *Fixture) Ask(ctx context.Context, method, path string, as Asker, body any) (Answer, error) {
 	var reader io.Reader
 	switch b := body.(type) {
@@ -499,13 +571,20 @@ func (f *Fixture) Ask(ctx context.Context, method, path string, as Asker, body a
 	if as.Session != nil {
 		r.AddCookie(as.Session)
 	}
-	answered, err := f.client.Do(r)
+	asked, cancel := context.WithCancel(ctx)
+	defer cancel()
+	answered, err := f.client.Do(r.WithContext(asked))
 	if err != nil {
 		return Answer{}, err
 	}
 	defer answered.Body.Close()
+	if strings.HasPrefix(answered.Header.Get("Content-Type"), "text/event-stream") {
+		// A stream goes on for as long as its reader reads, and what it goes on to say is
+		// the log's: its status and its headers are the route's answer to the asker.
+		return Answer{Status: answered.StatusCode, Header: answered.Header}, nil
+	}
 	read, err := io.ReadAll(io.LimitReader(answered.Body, 16<<20))
-	if err != nil && ctx.Err() == nil {
+	if err != nil {
 		return Answer{}, err
 	}
 	return Answer{Status: answered.StatusCode, Header: answered.Header, Body: read}, nil
