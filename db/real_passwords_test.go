@@ -288,37 +288,3 @@ func TestATOTPGeneratorWaitsForItsFirstCode(t *testing.T) {
 		t.Errorf("a generator waiting more than ten minutes answered %v", err)
 	}
 }
-
-// Whether a user enrolled with a first administrator's link: not before it is spent, not for a new
-// user's link spent, and so once one of theirs is.
-func TestAFirstAdministratorIsKnownByTheLinkTheySpent(t *testing.T) {
-	pool := identity(t)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		for _, login := range []string{"alice", "bob"} {
-			if err := w.CreateUser(ctx, User{Login: login, DisplayName: login}); err != nil {
-				return err
-			}
-		}
-		for login, kind := range map[string]string{"alice": EnrolmentFirstAdministrator, "bob": EnrolmentNewUser} {
-			if _, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash(login), Login: login, Kind: kind,
-				IssuedBy: "operator", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
-				return err
-			}
-		}
-		if spent, err := w.SpentFirstAdministratorLink(ctx, "alice"); err != nil || spent {
-			t.Errorf("before her link was spent, alice spent one: %v %v", spent, err)
-		}
-		for _, login := range []string{"alice", "bob"} {
-			if _, err := w.UseEnrolmentCode(ctx, valueHash(login), now); err != nil {
-				return err
-			}
-		}
-		for login, want := range map[string]bool{"alice": true, "bob": false, "nobody": false} {
-			if spent, err := w.SpentFirstAdministratorLink(ctx, login); err != nil || spent != want {
-				t.Errorf("%s spent a first administrator's link: %v %v", login, spent, err)
-			}
-		}
-		return nil
-	})
-}

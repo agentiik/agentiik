@@ -728,6 +728,68 @@ func TestAFirstAdministratorsLinkEndsWithTheBootstrapToken(t *testing.T) {
 	})
 }
 
+// The recovery codes the bootstrap token issued end with it, as its first administrators' links do,
+// and nothing else it or anybody issued does: an administrator's recovery code, a new user's link
+// the token issued, and a code spent before the end are left as they were. Ended a second time, it
+// revokes nothing more.
+func TestTheRecoveryCodesTheBootstrapTokenIssuedEndWithIt(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	code := func(login, kind, by, value string) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: login, Kind: kind, IssuedBy: by, IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{{Login: "alice", Admin: true}, {Login: "alcie", Admin: true}, {Login: "bob"}, {Login: "carol", Admin: true}, {Login: "dan"}} {
+			u.DisplayName = u.Login
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		for _, c := range []EnrolmentCode{
+			code("alcie", EnrolmentRecovery, "operator", "the token's"),
+			code("dan", EnrolmentRecovery, "operator", "spent"),
+			code("bob", EnrolmentNewUser, "operator", "a new user's"),
+			code("carol", EnrolmentRecovery, "alice", "an administrator's"),
+			code("alice", EnrolmentRecovery, "installation", "the installation's"),
+		} {
+			if _, err := w.IssueEnrolmentCode(ctx, c); err != nil {
+				return err
+			}
+		}
+		if _, err := w.UseEnrolmentCode(ctx, valueHash("spent"), now); err != nil {
+			return err
+		}
+		if ended, err := w.EndBootstrap(ctx, now); err != nil || !ended {
+			t.Errorf("the bootstrap token ended as %v, %v", ended, err)
+		}
+		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("the token's"), now); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("a recovery code the bootstrap token issued was answered %v once it ended", err)
+		}
+		for _, value := range []string{"a new user's", "an administrator's", "the installation's"} {
+			if _, err := w.EnrolmentCodeByHash(ctx, valueHash(value), now); err != nil {
+				t.Errorf("%s code was answered %v once the bootstrap token ended", value, err)
+			}
+		}
+		var revoked int
+		if err := w.tx.QueryRow(ctx, `select count(*) from enrolment_codes where revoked_at is not null`).Scan(&revoked); err != nil {
+			return err
+		}
+		if revoked != 1 {
+			t.Errorf("the end of the bootstrap token revoked %d codes, the spent one among them", revoked)
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, code("alcie", EnrolmentRecovery, "carol", "after")); err != nil {
+			return err
+		}
+		if ended, err := w.EndBootstrap(ctx, now.Add(time.Minute)); err != nil || ended {
+			t.Errorf("the bootstrap token ended a second time as %v, %v", ended, err)
+		}
+		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("after"), now); err != nil {
+			t.Errorf("a recovery code issued after the end was answered %v once it ended again", err)
+		}
+		return nil
+	})
+}
+
 // Two links issued for one user at once both succeed, the second replacing the first, rather than
 // the second failing on the first.
 func TestTwoLinksIssuedAtOnceTakeTurns(t *testing.T) {
