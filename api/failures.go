@@ -1,22 +1,31 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/agentiik/agentiik/audit"
+	"github.com/agentiik/agentiik/db"
 )
 
 // What a failed sign-in costs the audit log, and where a sign-in comes from.
 //
 // Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
-// it has been read and counted (passwords.go). An assertion refused before its signature verified is
-// anybody's to send: an answer to options they asked for themselves, signed with a key of their own,
-// or with none; and so is any password sign-in, with any login and any password. Unbounded, that is a row in the audit log for every request anybody
-// cares to make, each append waiting its turn at the head of the one chain every act of the
-// installation appends to, and each kept for good and exported. So what such refusals append is
+// it has been read and counted (passwords.go), and every sign-in an enrolment code or a recovery
+// code was refused: the code presented to start a registration or to set a password, and a
+// registration it started refused (refuseCode). An assertion refused before its signature verified
+// is anybody's to send: an answer to options they asked for themselves, signed with a key of their
+// own, or with none; and so is any password sign-in, with any login and any password, and any code.
+// Unbounded, that is a row in the audit log for every request anybody cares to make, each append
+// waiting its turn at the head of the one chain every act of the installation appends to, and each
+// kept for good and exported. So what such refusals append is
 // bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
 // failuresRecordedAll from every address together, so that a sender with many addresses is held
 // too. Past either, a refusal is answered as every other is, and counted, and the next entry
@@ -191,4 +200,92 @@ func addressOf(r *http.Request, proxied bool) string {
 		return "an unknown address"
 	}
 	return host
+}
+
+// unknownCode is the account a refused sign-in names where the enrolment code it presented names
+// none: no code of that value was issued, or its user was removed with it. Written with spaces, as
+// no login can be, so that it reads as nobody's account.
+const unknownCode = "an unknown enrolment code"
+
+// codeFailure is a sign-in with an enrolment code refused, or a registration answering a challenge
+// that names nothing, and what its entry in the audit log records.
+type codeFailure struct {
+	// code is the SHA-256 of the code presented, which names the account it was issued for and its
+	// kind wherever a row of it is kept, whatever its state; nil where the refusal presented none.
+	code []byte
+
+	// target is what the entry names where no code of its value is kept to name an account: the
+	// account a registration's challenge was issued for, whose code went with it when it was
+	// removed, or the credential ID a registration answering no challenge presented, cut to
+	// presentedMax characters. Empty is unknownCode.
+	target string
+
+	// reason is why it was refused where the code's state does not say it, empty where it does.
+	reason string
+
+	// detail is the rest the entry records besides the reason, the address and the code's kind:
+	// the credential's type, and the credential ID a registration presented.
+	detail map[string]any
+}
+
+// codeShut is why a code opens nothing, as ShutEnrolmentCode says, in the audit log's words.
+var codeShut = map[string]string{
+	db.CodeUsed:           "the code was used already",
+	db.CodeReplaced:       "the code was replaced by a fresher one",
+	db.CodeLapsed:         "the code lapsed",
+	db.CodeEnrolled:       "the code enrols an account's first credential, and its account holds one already",
+	db.CodeBootstrapEnded: "the code was issued by the bootstrap token, which has ended",
+}
+
+// refuseCode records a sign-in by an enrolment code or a recovery code refused, as signin.fail in a
+// transaction of its own, since what it records wrote nothing: by the address it came from, about
+// the account the code was issued for, with why it opened nothing. A code is anybody's to present
+// who holds one, and anybody's to make up, so what these refusals append is bounded as an assertion
+// refused before its signature verified is, and shares its count. The code itself is never
+// recorded, since a code that lapsed may be one mistyped by a letter from one that has not.
+func (s *SignIns) refuseCode(ctx context.Context, pool *db.Pool, address string, f codeFailure, now time.Time) error {
+	unrecorded, recorded := s.failures.admit(address, now)
+	if !recorded {
+		return nil
+	}
+	detail := map[string]any{"address": address}
+	for k, v := range f.detail {
+		detail[k] = v
+	}
+	if unrecorded > 0 {
+		detail["unrecorded"] = unrecorded
+	}
+	return pool.Installation(context.WithoutCancel(ctx), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		target, reason := f.target, f.reason
+		if f.code != nil {
+			code, shut, err := wide.ShutEnrolmentCode(ctx, f.code, now)
+			switch {
+			case errors.Is(err, db.ErrNoEnrolmentCode):
+				if target == "" {
+					target = unknownCode
+				}
+				if reason == "" {
+					reason = "no code of that value was issued, or its account was removed"
+				}
+			case err != nil:
+				return err
+			default:
+				target, detail["code"] = code.Login, code.Kind
+				if why, ok := codeShut[shut]; ok && reason == "" {
+					reason = why
+				}
+			}
+		}
+		if reason == "" {
+			reason = "the code opened nothing when it was presented"
+		}
+		for len(reason) > failureReasonMax {
+			_, size := utf8.DecodeLastRuneInString(reason)
+			reason = reason[:len(reason)-size]
+		}
+		detail["reason"] = reason
+		return wide.Audit(ctx, audit.Record{
+			Actor: address, Action: audit.SigninFail, Target: target, Result: audit.Done, Detail: detail,
+		})
+	})
 }

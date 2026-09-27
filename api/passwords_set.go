@@ -236,13 +236,25 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	refused := func() {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		fail(w, http.StatusUnauthorized, codeOpensNothing)
-	}
 	now := s.now().Truncate(time.Microsecond)
 	sum := sha256.Sum256([]byte(ask.Code))
 	codeHash := sum[:]
+	// Every refusal of a code is a sign-in refused, since the password a code sets opens a
+	// session, and is recorded as one, as a password sign-in's refusal is: about the account the
+	// code was issued for, which login names once it is read, where the code went with it.
+	login := ""
+	signedIn := func(reason string) {
+		s.refuseCode(r, codeFailure{code: codeHash, target: login, reason: reason, detail: map[string]any{"credential_type": db.CredentialPassword}}, now)
+	}
+	refused := func(reason string) {
+		signedIn(reason)
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		fail(w, http.StatusUnauthorized, codeOpensNothing)
+	}
+	forbidden := func() {
+		signedIn("passwords are forbidden by the policy that applies to the account")
+		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
+	}
 
 	var a account
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -255,19 +267,20 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	})
 	switch {
 	case errors.Is(err, db.ErrNoEnrolmentCode):
-		refused()
+		refused("")
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the password could not be set")
 		return
 	case !a.exists:
-		refused()
+		// Removed between the code being read and the account, which took the code with them.
+		refused("")
 		return
 	case a.policy.passwordsForbidden:
-		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
+		forbidden()
 		return
 	}
-	login := a.user.Login
+	login = a.user.Login
 	if err := notTheLogin("password", ask.Password, login); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -384,12 +397,15 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	var refusedFor *refusal
 	switch {
 	case errors.Is(err, errForbidden):
-		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
+		forbidden()
 		return
-	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode):
-		// A code spent, lapsed or replaced since it was read, or a user removed: nothing was
-		// written.
-		refused()
+	case errors.As(err, &refusedFor):
+		// A user removed, or a bootstrap ended: nothing was written.
+		refused(refusedFor.reason)
+		return
+	case errors.Is(err, db.ErrNoEnrolmentCode):
+		// A code spent, lapsed or replaced since it was read, which its row says.
+		refused("")
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the password could not be set")
