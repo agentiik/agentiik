@@ -481,8 +481,8 @@ const (
 // opens nothing at now: CodeUsed, CodeReplaced, CodeLapsed, CodeEnrolled for a link whose user holds
 // a credential already, CodeBootstrapEnded for a first administrator's link the end of the bootstrap
 // revoked, which it revokes at the moment it ends, or for a recovery code of the bootstrap token that
-// has ended, or the empty string for one open still. It is ErrNoEnrolmentCode where no code of that value
-// was issued, or its user was removed with it. What a refused sign-in records, which names the
+// has ended, or the empty string for one open still. It is ErrNoEnrolmentCode where no code of that
+// value was issued, or its user was removed with it. What a refused sign-in records, which names the
 // account a code was issued for and why it opened nothing, and never the code.
 func (w *Wide) ShutEnrolmentCode(ctx context.Context, hash []byte, now time.Time) (EnrolmentCode, string, error) {
 	var c EnrolmentCode

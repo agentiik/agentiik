@@ -401,13 +401,9 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 	switch {
 	case ask.coded && (errors.Is(err, db.ErrNoEnrolmentCode) || errors.Is(err, db.ErrNoPrincipal)):
 		// A code that opens nothing, or whose user was removed between the code being read and
-		// the challenge being issued: a sign-in refused, since a registration a code starts signs
-		// its user in.
-		reason := ""
-		if errors.Is(err, db.ErrNoPrincipal) {
-			reason = "the code's user was removed"
-		}
-		s.refuseCode(r, codeFailure{code: codeHash, reason: reason, detail: map[string]any{"credential_type": db.CredentialPasskey}}, now)
+		// the challenge being issued, which took the code with them: a sign-in refused, since a
+		// registration a code starts signs its user in, and the code's row says why.
+		s.refuseCode(r, codeFailure{code: codeHash, detail: map[string]any{"credential_type": db.CredentialPasskey}}, now)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, codeOpensNothing)
 	case errors.Is(err, db.ErrNoPrincipal):
@@ -574,7 +570,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		if took.EnrolmentCode == nil && took.Login != "" {
 			return
 		}
-		f := codeFailure{code: took.EnrolmentCode, reason: reason, detail: map[string]any{
+		f := codeFailure{code: took.EnrolmentCode, target: took.Login, reason: reason, detail: map[string]any{
 			"credential_type": db.CredentialPasskey, "credential": presented,
 		}}
 		if f.code == nil {

@@ -240,9 +240,11 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	sum := sha256.Sum256([]byte(ask.Code))
 	codeHash := sum[:]
 	// Every refusal of a code is a sign-in refused, since the password a code sets opens a
-	// session, and is recorded as one, as a password sign-in's refusal is.
+	// session, and is recorded as one, as a password sign-in's refusal is: about the account the
+	// code was issued for, which login names once it is read, where the code went with it.
+	login := ""
 	signedIn := func(reason string) {
-		s.refuseCode(r, codeFailure{code: codeHash, reason: reason, detail: map[string]any{"credential_type": db.CredentialPassword}}, now)
+		s.refuseCode(r, codeFailure{code: codeHash, target: login, reason: reason, detail: map[string]any{"credential_type": db.CredentialPassword}}, now)
 	}
 	refused := func(reason string) {
 		signedIn(reason)
@@ -271,13 +273,14 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		fail(w, http.StatusInternalServerError, "the password could not be set")
 		return
 	case !a.exists:
-		refused("the code's user was removed")
+		// Removed between the code being read and the account, which took the code with them.
+		refused("")
 		return
 	case a.policy.passwordsForbidden:
 		forbidden()
 		return
 	}
-	login := a.user.Login
+	login = a.user.Login
 	if err := notTheLogin("password", ask.Password, login); err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return

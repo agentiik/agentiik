@@ -20,11 +20,12 @@ import (
 // Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
 // it has been read and counted (passwords.go), and every sign-in an enrolment code or a recovery
 // code was refused: the code presented to start a registration or to set a password, and a
-// registration it started refused (refuseCode). An assertion refused before its signature verified is
-// anybody's to send: an answer to options they asked for themselves, signed with a key of their own,
-// or with none; and so is any password sign-in, with any login and any password. Unbounded, that is a row in the audit log for every request anybody
-// cares to make, each append waiting its turn at the head of the one chain every act of the
-// installation appends to, and each kept for good and exported. So what such refusals append is
+// registration it started refused (refuseCode). An assertion refused before its signature verified
+// is anybody's to send: an answer to options they asked for themselves, signed with a key of their
+// own, or with none; and so is any password sign-in, with any login and any password, and any code.
+// Unbounded, that is a row in the audit log for every request anybody cares to make, each append
+// waiting its turn at the head of the one chain every act of the installation appends to, and each
+// kept for good and exported. So what such refusals append is
 // bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
 // failuresRecordedAll from every address together, so that a sender with many addresses is held
 // too. Past either, a refusal is answered as every other is, and counted, and the next entry
@@ -213,8 +214,10 @@ type codeFailure struct {
 	// kind wherever a row of it is kept, whatever its state; nil where the refusal presented none.
 	code []byte
 
-	// target is what the entry names where no code names an account: the credential ID a
-	// registration presented, cut to presentedMax characters.
+	// target is what the entry names where no code of its value is kept to name an account: the
+	// account a registration's challenge was issued for, whose code went with it when it was
+	// removed, or the credential ID a registration answering no challenge presented, cut to
+	// presentedMax characters. Empty is unknownCode.
 	target string
 
 	// reason is why it was refused where the code's state does not say it, empty where it does.
@@ -258,7 +261,9 @@ func (s *SignIns) refuseCode(ctx context.Context, pool *db.Pool, address string,
 			code, shut, err := wide.ShutEnrolmentCode(ctx, f.code, now)
 			switch {
 			case errors.Is(err, db.ErrNoEnrolmentCode):
-				target = unknownCode
+				if target == "" {
+					target = unknownCode
+				}
 				if reason == "" {
 					reason = "no code of that value was issued, or its account was removed"
 				}

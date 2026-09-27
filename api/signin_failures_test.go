@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/access"
+	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
@@ -344,5 +345,134 @@ func TestAFirstAdministratorsLinkShutByTheBootstrapsEndIsRecordedSo(t *testing.T
 		"192.0.2.1 zed the code was issued by the bootstrap token, which has ended",
 	}) {
 		t.Errorf("the failed sign-ins recorded are %q", got)
+	}
+}
+
+// Every way a code comes to open nothing is recorded with its own reason: a link whose user holds a
+// credential already, a recovery code of the bootstrap token once it has ended, a registration it
+// started refused for a synced passkey where device_bound_only applies, for an attestation that
+// does not verify or for a passkey registered already, a password it would set where the policy
+// forbids passwords, and its user removed while the registration or the password was checked, which
+// takes the code with them and leaves the entry naming their account.
+func TestEveryRefusalOfACodeRecordsWhyItOpenedNothing(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, login := range []string{"kim", "lee", "max", "ned", "oli", "pat", "quin", "ros"} {
+			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "a long enough passphrase"
+	status := func(what string, w *httptest.ResponseRecorder, want int) {
+		t.Helper()
+		if w.Code != want || w.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("%s answered %d %s", what, w.Code, w.Body)
+		}
+	}
+	credential := func(login, id string) {
+		t.Helper()
+		if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			return w.AddCredential(ctx, db.Credential{ID: id, Login: login, Type: db.CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registration := func(browser *webauthntest.Authenticator, code string) webauthntest.Credential {
+		t.Helper()
+		w := in.codeOptions(t, code)
+		status("the options of "+code, w, http.StatusOK)
+		var o optionsAnswer
+		if err := json.Unmarshal(w.Body.Bytes(), &o); err != nil {
+			t.Fatal(err)
+		}
+		made, _, err := browser.Create(o.Options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return made
+	}
+	verified := func(made webauthntest.Credential) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"ceremony": "registration", "credential": made})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return in.call(t, "POST", "/api/v1/auth/passkey/verify", string(body))
+	}
+
+	enrolled := in.enrolCode(t, "kim", db.EnrolmentNewUser)
+	credential("kim", "kims-passkey")
+	status("kim's link, kim holding a passkey", in.codeOptions(t, enrolled), http.StatusUnauthorized)
+
+	raw := make([]byte, 32)
+	raw[0] = 7
+	bootstraps := "agkenrol_" + base64.RawURLEncoding.EncodeToString(raw)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.IssueEnrolmentCode(ctx, db.EnrolmentCode{
+			Hash: hashOf(bootstraps), Login: "lee", Kind: db.EnrolmentRecovery, IssuedBy: "operator", IssuedAt: *in.clock, ExpiresAt: in.clock.Add(time.Hour),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	in.endBootstrap(t)
+	status("lee's recovery code, its bootstrap ended", in.enrolWith(t, bootstraps, secret), http.StatusUnauthorized)
+
+	bound := true
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2})
+	synced := webauthntest.New(in.origin)
+	synced.BackupEligible, synced.BackedUp = true, true
+	status("max's synced passkey", verified(registration(synced, in.enrolCode(t, "max", db.EnrolmentRecovery))), http.StatusForbidden)
+	in.policy(t, "allowed", "optional")
+
+	broken := registration(webauthntest.New(in.origin), in.enrolCode(t, "ned", db.EnrolmentRecovery))
+	broken.Response.AttestationObject = "AAAA"
+	status("ned's attestation broken", verified(broken), http.StatusUnauthorized)
+
+	taken := registration(webauthntest.New(in.origin), in.enrolCode(t, "oli", db.EnrolmentRecovery))
+	credential("carol", taken.ID)
+	status("oli's passkey registered already", verified(taken), http.StatusUnauthorized)
+
+	forbidden := in.enrolCode(t, "pat", db.EnrolmentRecovery)
+	in.policy(t, "forbidden", "required")
+	status("pat's password where passwords are forbidden", in.enrolWith(t, forbidden, secret), http.StatusForbidden)
+	in.policy(t, "allowed", "optional")
+
+	removed := registration(webauthntest.New(in.origin), in.enrolCode(t, "quin", db.EnrolmentRecovery))
+	api.BetweenVerifyAndRegister(in.passkeys, func() { in.exec(t, `delete from principals where id = 'quin'`) })
+	status("quin's registration, quin removed meanwhile", verified(removed), http.StatusUnauthorized)
+	api.BetweenVerifyAndRegister(in.passkeys, nil)
+
+	ros := in.enrolCode(t, "ros", db.EnrolmentRecovery)
+	api.BetweenChecksAndSignIn(in.passwords, func() { in.exec(t, `delete from principals where id = 'ros'`) })
+	status("ros's password, ros removed meanwhile", in.enrolWith(t, ros, secret), http.StatusUnauthorized)
+	api.BetweenChecksAndSignIn(in.passwords, nil)
+
+	got := in.failures(t)
+	want := []string{
+		"192.0.2.1 kim the code enrols an account's first credential, and its account holds one already",
+		"192.0.2.1 lee the code was issued by the bootstrap token, which has ended",
+		"192.0.2.1 max the passkey is synced and device_bound_only applies to the account",
+		"192.0.2.1 ned the registration does not verify: ",
+		"192.0.2.1 oli the passkey is registered already",
+		"192.0.2.1 pat passwords are forbidden by the policy that applies to the account",
+		"192.0.2.1 quin the user was removed",
+		"192.0.2.1 ros the user was removed",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the failed sign-ins recorded are\n%s", strings.Join(got, "\n"))
+	}
+	for i := range want {
+		if !strings.HasPrefix(got[i], want[i]) {
+			t.Errorf("failure %d is recorded as %q, want %q", i, got[i], want[i])
+		}
+	}
+	if len(*in.trouble) != 0 {
+		t.Errorf("the refusals reported %v", *in.trouble)
 	}
 }
