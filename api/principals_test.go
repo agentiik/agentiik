@@ -273,6 +273,50 @@ func TestTheGrantsOfAPrincipalAndItsGroupsDecide(t *testing.T) {
 	}
 }
 
+// A namespace or a workflow no grant can name is held by nobody, and answered so without asking the
+// database, which cannot hold every byte a path may carry: a name PostgreSQL refuses as text is an
+// absence like any other, never a 500.
+func TestWhatNoGrantCanNameIsHeldByNobody(t *testing.T) {
+	in := somePrincipals(t)
+	const bootstrap = "agk_op_3q2Z7x9Kf1LmQ8vR4tYw6pBn0sDhJc5A"
+	in.withBootstrap(t, bootstrap)
+	for _, over := range []api.Target{
+		{Namespace: "fin\xffance"}, {Namespace: "fin\x00ance"}, {Namespace: "Finance"},
+		{Namespace: "finance", Workflow: "\xff"}, {Namespace: "finance", Workflow: "a/b"}, {Workflow: "monthly-invoicing"},
+	} {
+		for _, who := range []api.Principal{"alice", api.BootstrapOperator} {
+			held, err := in.p.Allow(t.Context(), who, api.RunRead, over)
+			if held || err != nil {
+				t.Errorf("%s holds run:read over %q: %v, %v", who, over, held, err)
+			}
+		}
+	}
+
+	rt, err := api.NewRouter(in.p, in.p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := func(w http.ResponseWriter, _ *http.Request, _ api.Principal, _ api.Target) {
+		w.WriteHeader(http.StatusOK)
+	}
+	rt.MustHandle("GET", "/api/v1/{namespace}/secrets", api.Needs{Permission: api.WorkflowRead, Scope: api.Namespace}, ok)
+	rt.MustHandle("GET", "/api/v1/{namespace}/workflows/{workflow}/runs", api.Needs{Permission: api.RunRead, Scope: api.Workflow}, ok)
+	token := in.token(t, "alice", nil, nil, in.now.Add(time.Hour))
+	// Each answered as alice's namespace that does not exist is, and as the bootstrap
+	// operator's, which owns every namespace that could.
+	for _, path := range []string{"/api/v1/%ff/secrets", "/api/v1/%00/secrets", "/api/v1/finance/workflows/%ff/runs"} {
+		for _, as := range []string{token, bootstrap} {
+			r := httptest.NewRequestWithContext(t.Context(), "GET", path, nil)
+			r.Header.Set("Authorization", "Bearer "+as)
+			w := httptest.NewRecorder()
+			rt.ServeHTTP(w, r)
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s answered %d: %s", path, w.Code, w.Body.String())
+			}
+		}
+	}
+}
+
 // "A platform administrator manages users, groups, namespaces, quotas, runners, runner policies and
 // the authentication policy", which the routes that do require as grant:manage at installation
 // scope, and "holds no implicit run:read_data": in a namespace an administrator holds what their

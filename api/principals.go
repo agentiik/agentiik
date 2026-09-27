@@ -133,7 +133,7 @@ func (p *Principals) Identify(r *http.Request) (Identity, error) {
 // A suspended user holds nothing either, whatever their grants, since "a suspended account opens no
 // session", and neither does anybody who is not a user now, a login removed since included.
 func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, over Target) (bool, error) {
-	if who == "" || !what.Valid() {
+	if who == "" || !what.Valid() || !nameable(over) {
 		return false, nil
 	}
 	now := p.now()
@@ -190,4 +190,21 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		return false, err
 	}
 	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
+}
+
+// nameable says whether a grant could name the target: the installation, or a namespace and a
+// workflow on the grammars a grant's scope is written on. One that no grant could name holds
+// nothing for anybody, the bootstrap operator included, and is answered so before the database is
+// asked about it: a path naming a namespace such as %ff, which PostgreSQL cannot hold as text, is
+// the absence it is rather than a 500 for a question the database refused to be asked.
+func nameable(over Target) bool {
+	if over.Namespace == "" {
+		return over.Workflow == ""
+	}
+	at := over.Namespace
+	if over.Workflow != "" {
+		at += "/" + over.Workflow
+	}
+	_, err := access.ParseScope(at)
+	return err == nil
 }
