@@ -102,6 +102,15 @@ func (p accountPolicy) enrolling() bool {
 	return p.passkeyRequired
 }
 
+// enrolledPast says whether a password set now could only ever enrol, and has nothing left to enrol
+// for: the policy requires a passkey, so that every session a password opens only enrols, and the
+// account holds the min_passkeys passkeys it accepts already, beside which a password goes at the next
+// passkey and gives no more than enrolling until then. Setting one is refused rather than kept as a
+// credential that does nothing but stand beside the passkeys.
+func (p accountPolicy) enrolledPast(held []db.Credential) bool {
+	return p.passkeyRequired && p.passkeys(held) >= p.minPasskeys
+}
+
 // offPasswords says whether the policy takes the account off passwords: it forbids them, or it
 // requires a passkey, the step before forbidding them, where a password is the way to a passkey and
 // nothing more. The passkey that brings such an account to min_passkeys takes its password.

@@ -70,6 +70,10 @@ import (
 // takes the TOTP generator beside it, and the sessions it opened, the one it is removed from among
 // them where that one was.
 //
+// Where the policy requires a passkey and the account holds the min_passkeys passkeys it accepts, a
+// password is set from neither and the request is a 409 naming passkey: every session it opened
+// would only enrol, with nothing left to enrol for, and the next passkey would take it.
+//
 // A bearer token sets and removes nothing: a token that leaked would otherwise be a way to a
 // credential that outlives it, and these routes are the sign-in page's, where a browser's session is.
 // Neither does the bootstrap token's operator, who is nobody's account.
@@ -97,6 +101,11 @@ const (
 	// passwordsForbiddenToSet is a password set where the policy that applies to the account
 	// forbids them, answered naming the setting.
 	passwordsForbiddenToSet = "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey"
+
+	// passwordOnlyEnrols is a password set where the policy that applies to the account requires
+	// a passkey and the account holds the min_passkeys passkeys it accepts, answered naming the
+	// setting.
+	passwordOnlyEnrols = "the authentication policy that applies to this account requires a passkey, and the account holds the passkeys it asks for already: a password could only ever open a session that enrols one, and none is set. Sign in with a passkey"
 
 	// credentialsFromASession is a password or a TOTP generator set or removed with a bearer
 	// token.
@@ -267,6 +276,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	case a.policy.passwordsForbidden:
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
+	case a.policy.enrolledPast(a.held):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		return
 	}
 	login := a.user.Login
 	if err := notTheLogin("password", ask.Password, login); err != nil {
@@ -322,6 +334,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		}
 		if held.policy.passwordsForbidden {
 			return errForbidden
+		}
+		if held.policy.enrolledPast(held.held) {
+			return errOnlyEnrols
 		}
 		set, replaced, err := wide.SetPassword(ctx, login, ulid.New(), hash, now)
 		if err != nil {
@@ -387,6 +402,9 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	case errors.Is(err, errForbidden):
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
+	case errors.Is(err, errOnlyEnrols):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		return
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode):
 		// A code spent, lapsed or replaced since it was read, or a user removed: nothing was
 		// written.
@@ -401,6 +419,11 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	}
 	shownOnce(w, http.StatusOK, answer)
 }
+
+// errOnlyEnrols is a password set, in the transaction that would record it, where the policy requires
+// a passkey and the account holds the passkeys it asks for, as a passkey registered since the account
+// was read may have brought it to.
+var errOnlyEnrols = errors.New("api: a password here would only enrol")
 
 // hash hashes a password set, in its turn, and answers false where it has answered the request
 // already: 503 where no turn came in time, 500 where the hash could not be made.
@@ -540,6 +563,9 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 	case a.policy.passwordsForbidden:
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
+	case a.policy.enrolledPast(a.held):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		return
 	case a.password.ID != "" && !ask.current:
 		fail(w, http.StatusBadRequest, "current_password: this account holds a password, and setting another takes the current one")
 		return
@@ -599,6 +625,8 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 			return db.ErrNoPrincipal
 		case held.policy.passwordsForbidden:
 			return errForbidden
+		case held.policy.enrolledPast(held.held):
+			return errOnlyEnrols
 		case held.password.ID != a.password.ID || held.password.PasswordHash != a.password.PasswordHash:
 			return &refusal{reason: passwordChanged}
 		}
@@ -620,6 +648,8 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 	switch {
 	case errors.Is(err, errForbidden):
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
+	case errors.Is(err, errOnlyEnrols):
+		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrCredentialExists):
 		fail(w, http.StatusConflict, passwordChanged)
 	case errors.Is(err, db.ErrNoPrincipal):
