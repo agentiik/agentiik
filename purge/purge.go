@@ -121,7 +121,7 @@ type Purger struct {
 	Grace time.Duration
 
 	// Passed is told what each pass of Run removed, nothing included, and Trouble why one did not
-	// finish.
+	// finish, before Passed is told of it.
 	Passed  func(Purged)
 	Trouble func(error)
 }
@@ -134,11 +134,13 @@ func (p *Purger) Run(ctx context.Context) {
 	}
 	for {
 		purged, err := p.Pass(ctx)
-		if p.Passed != nil {
-			p.Passed(purged)
-		}
+		// Why the pass did not finish is said before what it removed, so that Passed is the last
+		// word on a pass: whoever stops Run once it has heard of a pass has heard all of it.
 		if err != nil && ctx.Err() == nil && p.Trouble != nil {
 			p.Trouble(err)
+		}
+		if p.Passed != nil {
+			p.Passed(purged)
 		}
 		select {
 		case <-ctx.Done():
