@@ -69,7 +69,7 @@ type PasskeyOptions struct {
 
 	// Identify reads the session a registration with no code is made from. It is the
 	// installation's own, Principals.Identify, and not the router's, which refuses a session that
-	// may only enrol: enrolling is the one thing such a session is for.
+	// may only enrol everywhere, where enrolling is the one thing such a session is for.
 	Identify Identify
 
 	// Now is the clock challenges lapse and sessions open by, the wall clock where it is nil.
@@ -117,6 +117,9 @@ const (
 
 	// noRegistrar is a registration with neither an enrolment code nor a session.
 	noRegistrar = "a passkey is registered from a signed-in browser's session, or with the code of an enrolment link or a recovery code, and this request carries neither"
+
+	// sessionOfACode is a registration from a session an enrolment code opened.
+	sessionOfACode = "this session was opened by an enrolment link, and registers nothing: open the link again, whose code registers the passkey"
 
 	// codeOpensNothing is an enrolment code used, lapsed, replaced or never issued.
 	codeOpensNothing = "that code opens nothing: it was used already, or it has lapsed or been replaced by a fresher link. Ask an administrator for a new one"
@@ -447,9 +450,16 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 }
 
 // registrar is who a registration with no code is for: the user whose session the request
-// carries, one that may only enrol included. A bearer token registers nothing, since a passkey is
-// registered in a browser, on the sign-in page, and a request carrying one is answered as one
-// carrying nothing that could; so is the bootstrap token's operator, who is nobody's account.
+// carries. A bearer token registers nothing, since a passkey is registered in a browser, on the
+// sign-in page, and a request carrying one is answered as one carrying nothing that could; so is the
+// bootstrap token's operator, who is nobody's account.
+//
+// Nor does a session an enrolment code opened, which Identify says is Enrolling: the code travels in
+// the options now and is spent by the registration it starts, which ends the bootstrap where it is
+// the first administrator's, and a session holding a code registers a passkey without spending it.
+// The session a password opens that may only enrol, when passwords come, is not one of those, and
+// is the one this reads Identify rather than the router's for: the router refuses it here as
+// everywhere else.
 func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 	if _, bearer := bearerOf(r); bearer {
 		return Identity{Refused: noRegistrar}, nil
@@ -465,6 +475,8 @@ func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 		return as, nil
 	case as.Principal == "" || as.Token != "" || as.Principal == BootstrapOperator:
 		return Identity{Refused: noRegistrar}, nil
+	case as.Enrolling:
+		return Identity{Refused: sessionOfACode}, nil
 	}
 	return as, nil
 }
@@ -805,12 +817,15 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 			AuthenticatorData: ask.Credential.AuthenticatorData, Signature: ask.Credential.Signature,
 		})
 	if err != nil {
+		// A counter that did not move forward is the one refusal of an assertion valid in every
+		// other respect, its signature included.
 		failed.reason, failed.clone = err.Error(), errors.Is(err, webauthn.ErrPossibleClone)
+		failed.verified = failed.clone
 		s.refuseSignIn(w, r, failed, now)
 		return
 	}
 	if policy.deviceBoundOnly && stored.BackupEligible {
-		failed.reason, failed.synced = "the passkey is synced and device_bound_only applies to the account", true
+		failed.reason, failed.synced, failed.verified = "the passkey is synced and device_bound_only applies to the account", true, true
 		s.refuseSignIn(w, r, failed, now)
 		return
 	}
@@ -853,11 +868,11 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 	var refusedFor *refusal
 	switch {
 	case errors.As(err, &refusedFor):
-		failed.reason, failed.clone = refusedFor.reason, refusedFor.clone
+		failed.reason, failed.clone, failed.verified = refusedFor.reason, refusedFor.clone, true
 		s.refuseSignIn(w, r, failed, now)
 		return
 	case errors.Is(err, db.ErrSessionRefused):
-		failed.reason = "the account opens no session"
+		failed.reason, failed.verified = "the account opens no session", true
 		s.refuseSignIn(w, r, failed, now)
 		return
 	case err != nil:
@@ -957,8 +972,14 @@ type signInFailure struct {
 	// login the account that credential names, empty where it names none.
 	address, credential, login string
 
-	clone, synced bool
+	// verified is a refusal of an assertion whose signature verified, which only whoever holds
+	// the passkey's private key can make: clone and synced are two of them.
+	verified, clone, synced bool
 }
+
+// presentedMax is the most of a credential ID naming no passkey an entry keeps, in characters: 48
+// bytes, more than the IDs authenticators mint, which a person searching the log recognises by.
+const presentedMax = 64
 
 // failureReasonMax is the most of a refusal's reason the audit log keeps, in bytes: a reason quotes what
 // the client data said, the origin a page named for one, and an entry recording one is written for
@@ -971,10 +992,21 @@ const failureReasonMax = 256
 // who knows whether the other copy is theirs. The passkey is not locked: a lock would let a faulty
 // authenticator shut its owner out.
 //
-// The entries one address appends are bounded, as failedSignIns says: past the bound, a refusal is
-// answered all the same and counted, and the next entry says how many went unrecorded.
+// The entries refusals before a signature verified append are bounded, as failedSignIns says: past
+// the bound, a refusal is answered all the same and counted, and the next entry says how many went
+// unrecorded. A credential ID naming no passkey is recorded cut to presentedMax characters, since
+// it is whatever the sender wrote, up to a kibibyte of it.
 func (s *PasskeyAPI) refuseSignIn(w http.ResponseWriter, r *http.Request, f signInFailure, now time.Time) {
-	if unrecorded, recorded := s.failures.admit(f.address, now); recorded {
+	unrecorded, recorded := 0, true
+	if f.verified {
+		unrecorded = s.failures.recordedAnyway()
+	} else {
+		unrecorded, recorded = s.failures.admit(f.address, now)
+	}
+	if f.login == "" && len(f.credential) > presentedMax {
+		f.credential = f.credential[:presentedMax]
+	}
+	if recorded {
 		reason := f.reason
 		for len(reason) > failureReasonMax {
 			_, size := utf8.DecodeLastRuneInString(reason)

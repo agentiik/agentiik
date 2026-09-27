@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -173,6 +174,20 @@ func (in ceremonies) signIn(t *testing.T, browser *webauthntest.Authenticator) *
 		t.Fatal(err)
 	}
 	return in.verify(t, "assertion", got, "", "")
+}
+
+// junk sends an assertion that answers no challenge, from the address from, presenting the
+// credential ID id: what anybody may send, which signs nobody in.
+func (in ceremonies) junk(t *testing.T, from, id string) {
+	t.Helper()
+	client := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":%q}`,
+		base64.RawURLEncoding.EncodeToString(make([]byte, 32)), publicOrigin)
+	c := webauthntest.Credential{ID: id, RawID: id, Type: "public-key", Response: webauthntest.Response{
+		ClientDataJSON: base64.RawURLEncoding.EncodeToString([]byte(client)), AuthenticatorData: "AAAA", Signature: "AAAA", UserHandle: "AAAA",
+	}}
+	if w := in.verify(t, "assertion", c, "", from); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a sign-in answering no challenge answered %d %s", w.Code, w.Body)
+	}
 }
 
 // session is the session cookie an answer set, failing the test where it set none.
@@ -534,7 +549,9 @@ func TestACeremonyOfAnotherOriginOrRelyingPartyIsRefused(t *testing.T) {
 
 // A signature counter that did not move forward refuses the sign-in, stores nothing of it, records
 // signin.fail with the reason and tells the passkey's user in a notification, and does not lock
-// the passkey: the next sign-in counting on from the stored counter goes through.
+// the passkey: the next sign-in counting on from the stored counter goes through. Both are written
+// whatever the bound on failed sign-ins says, which anybody sending junk from the same address, a
+// proxy's, could otherwise fill first.
 func TestACounterThatDidNotMoveForwardRefusesTheSignInAndTellsTheUser(t *testing.T) {
 	in := someCeremonies(t)
 	browser := newBrowser()
@@ -552,6 +569,9 @@ func TestACounterThatDidNotMoveForwardRefusesTheSignInAndTellsTheUser(t *testing
 	in.query(t, `select last_used_at from credentials where id = '`+id+`'`, &used)
 	*in.clock = in.clock.Add(time.Minute)
 
+	for range failuresPerAddress {
+		in.junk(t, "192.0.2.1:1234", "AAAA")
+	}
 	passkey.Count = 1 // a copy of the key, whose counter is behind
 	if w := in.signIn(t, browser); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "signs nobody in") {
 		t.Fatalf("a sign-in whose counter went back answered %d %s", w.Code, w.Body)
@@ -563,7 +583,7 @@ func TestACounterThatDidNotMoveForwardRefusesTheSignInAndTellsTheUser(t *testing
 		t.Errorf("the refused sign-in left the counter at %d, last used at %s", count, still)
 	}
 	var actor, target, reason, credential string
-	in.query(t, `select actor, target, detail::jsonb->>'reason', detail::jsonb->>'credential' from audit_log where action = 'signin.fail'`,
+	in.query(t, `select actor, target, detail::jsonb->>'reason', detail::jsonb->>'credential' from audit_log where action = 'signin.fail' and target = 'bob'`,
 		&actor, &target, &reason, &credential)
 	if actor != "192.0.2.1" || target != "bob" || !strings.Contains(reason, "signature counter did not move forward") || credential != id {
 		t.Errorf("the refusal is recorded as %s %s %q %s", actor, target, reason, credential)
@@ -672,7 +692,9 @@ func TestAnEnrolmentCodeIsSpentByTheRegistrationItStarted(t *testing.T) {
 
 // A signed-in user registers another passkey from their session, one the options exclude the
 // first from, and the registration opens no other session. Without a session or a code, or with a
-// bearer token, nothing is registered.
+// bearer token, nothing is registered, and neither with a session an enrolment code opened, which
+// would register a passkey without spending the code, and without ending the bootstrap where the
+// code is the first administrator's.
 func TestASignedInUserRegistersAnotherPasskeyFromTheirSession(t *testing.T) {
 	in := someCeremonies(t)
 	phone := newBrowser()
@@ -730,6 +752,50 @@ func TestASignedInUserRegistersAnotherPasskeyFromTheirSession(t *testing.T) {
 		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "carries neither") {
 			t.Errorf("a registration carrying %s answered %d %s", name, w.Code, w.Body)
 		}
+	}
+
+	code := in.user(t, "alice", true)
+	var coded *http.Cookie
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		coded, err = api.OpenSession(ctx, wide, "alice", api.OpenedBy{EnrolmentCode: hashOf(code)}, *in.clock)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", `{"ceremony":"registration"}`, "", coded); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "opened by an enrolment link") {
+		t.Errorf("a registration from a session an enrolment code opened answered %d %s", w.Code, w.Body)
+	}
+	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusOK {
+		t.Errorf("the bootstrap token answered %d once a session of the first administrator's code was refused", w.Code)
+	}
+}
+
+// Starting a ceremony removes challenges past their minutes, and skips one another transaction
+// holds rather than waiting for it: a ceremony anybody may start never waits on another's.
+func TestStartingACeremonyWaitsOnNoOtherCeremony(t *testing.T) {
+	in := someCeremonies(t)
+	in.exec(t, `insert into webauthn_challenges (challenge, ceremony, issued_at, expires_at)
+	            values ('\x`+strings.Repeat("ab", 32)+`', 'assertion', now() - interval '1 hour', now() - interval '55 minutes')`)
+	holder, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.WithoutCancel(t.Context()))
+	if _, err := holder.Exec(t.Context(), `select from webauthn_challenges for update`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan int, 1)
+	go func() {
+		answered <- in.call(t, "POST", "/api/v1/auth/passkey/options", `{"ceremony":"assertion"}`, "").Code
+	}()
+	select {
+	case code := <-answered:
+		if code != http.StatusOK {
+			t.Errorf("the options answered %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the options waited on another transaction holding a lapsed challenge")
 	}
 }
 
@@ -816,39 +882,52 @@ func TestASuspendedUserEnrolsAndOpensNoSession(t *testing.T) {
 	}
 }
 
-// What one address appends to the audit log in failed sign-ins is bounded: ten in ten minutes, and
-// past them a refusal is answered all the same, and counted in the next entry the address appends.
-// Another address is counted apart.
-func TestFailedSignInsFromOneAddressAreBoundedInTheAuditLog(t *testing.T) {
+// The bound on failed sign-ins, as the API holds it, for the tests: ten entries from one address and
+// a hundred from all of them in ten minutes.
+const (
+	failuresPerAddress = 10
+	failuresAll        = 100
+)
+
+// What failed sign-ins append to the audit log is bounded: ten from one address in ten minutes, and
+// a hundred from every address together, so that a sender with many addresses is held too. Past
+// either, a refusal is answered all the same, and counted in the next entry appended. A credential
+// ID naming no passkey is recorded cut short, since the sender wrote it.
+func TestFailedSignInsAreBoundedInTheAuditLog(t *testing.T) {
 	in := someCeremonies(t)
-	refused := func(from string) {
-		t.Helper()
-		client := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":%q}`,
-			base64.RawURLEncoding.EncodeToString(make([]byte, 32)), publicOrigin)
-		c := webauthntest.Credential{ID: "AAAA", RawID: "AAAA", Type: "public-key", Response: webauthntest.Response{
-			ClientDataJSON: base64.RawURLEncoding.EncodeToString([]byte(client)), AuthenticatorData: "AAAA", Signature: "AAAA", UserHandle: "AAAA",
-		}}
-		if w := in.verify(t, "assertion", c, "", from); w.Code != http.StatusUnauthorized {
-			t.Fatalf("a sign-in answering no challenge answered %d %s", w.Code, w.Body)
-		}
+	for range failuresPerAddress + 3 {
+		in.junk(t, "198.51.100.4:50000", "AAAA")
 	}
-	for range 13 {
-		refused("198.51.100.4:50000")
-	}
-	refused("[2001:db8:7:1::1]:443")
-	refused("[2001:db8:7:1::2]:443")
-	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and actor = '198.51.100.4'`); n != 10 {
+	in.junk(t, "[2001:db8:7:1::1]:443", "AAAA")
+	in.junk(t, "[2001:db8:7:1::2]:443", "AAAA")
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and actor = '198.51.100.4'`); n != failuresPerAddress {
 		t.Errorf("thirteen failures from one address appended %d entries", n)
 	}
 	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and actor like '2001:db8:7:1::%'`); n != 2 {
 		t.Errorf("two failures from another address appended %d entries", n)
 	}
+	for i := range 10 {
+		for range failuresPerAddress {
+			in.junk(t, fmt.Sprintf("203.0.113.%d:443", i+1), "AAAA")
+		}
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail'`); n != failuresAll {
+		t.Errorf("a hundred and fifteen failures from twelve addresses appended %d entries", n)
+	}
+
 	*in.clock = in.clock.Add(10 * time.Minute)
-	refused("198.51.100.4:50001")
-	var unrecorded string
-	in.query(t, `select detail::jsonb->>'unrecorded' from audit_log where action = 'signin.fail' order by seq desc limit 1`, &unrecorded)
-	if unrecorded != "3" {
-		t.Errorf("the first entry past the window counts %s unrecorded failures before it", unrecorded)
+	long := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xfb}, 1000))
+	in.junk(t, "198.51.100.9:50001", long)
+	var target, credential, unrecorded string
+	in.query(t, `select target, detail::jsonb->>'credential', detail::jsonb->>'unrecorded' from audit_log where action = 'signin.fail' order by seq desc limit 1`,
+		&target, &credential, &unrecorded)
+	// Three went unrecorded before the first failure from the second address, which says so, and
+	// twelve before this one.
+	if total := in.count(t, `select sum((detail::jsonb->>'unrecorded')::int) from audit_log where action = 'signin.fail'`); unrecorded != "12" || total != 15 {
+		t.Errorf("the first entry past the window counts %s unrecorded failures before it, and the log %d in all, where 15 went unrecorded", unrecorded, total)
+	}
+	if target != long[:64] || credential != long[:64] {
+		t.Errorf("a credential ID of %d characters naming no passkey is recorded as %d and %d", len(long), len(target), len(credential))
 	}
 }
 
