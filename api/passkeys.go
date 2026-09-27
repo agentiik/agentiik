@@ -479,6 +479,10 @@ type Verified struct {
 	Ceremony   string   `json:"ceremony"`
 	Login      string   `json:"login"`
 	Credential *Passkey `json:"credential,omitempty"`
+
+	// RedirectTo is where the sign-in page sends the browser next, for an assertion agk login
+	// started: its loopback address with a one-time code (handOff).
+	RedirectTo string `json:"redirect_to,omitempty"`
 }
 
 // verify is POST /api/v1/auth/passkey/verify.
@@ -865,6 +869,7 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 	}
 
 	var cookie *http.Cookie
+	var redirect string
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		// The user's row first, as every act on an account takes it, then the passkey's.
 		user, err := wide.HoldUser(ctx, stored.Login)
@@ -897,6 +902,12 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 			return err
 		}
 		cookie = opened
+		// A passkey's session is a full one, which agk login's sign-in hands a code beside.
+		if ask.Terminal != nil {
+			if redirect, err = handOff(ctx, wide, ask.Terminal, user.Login, id, now); err != nil {
+				return err
+			}
+		}
 		return appendEntries(ctx, wide, append(entries, signedIn))
 	})
 	var refusedFor *refusal
@@ -914,7 +925,7 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 		return
 	}
 	http.SetCookie(w, cookie)
-	shownOnce(w, http.StatusOK, Verified{Ceremony: db.CeremonyAssertion, Login: stored.Login})
+	shownOnce(w, http.StatusOK, Verified{Ceremony: db.CeremonyAssertion, Login: stored.Login, RedirectTo: redirect})
 }
 
 // entry is one entry of the audit log an act appends, in the namespace it names, or on the

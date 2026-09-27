@@ -204,12 +204,15 @@ func NewPasswords(rt *Router, o PasswordOptions) (*PasswordAPI, error) {
 	return s, nil
 }
 
-// passwordAsked is openapi.json's passwordLoginRequest. terminal, agk login's, is not read yet, and
-// refused as any member a route does not read is.
+// passwordAsked is openapi.json's passwordLoginRequest.
 type passwordAsked struct {
 	Login    string
 	Password string
 	TOTP     string
+
+	// Terminal is what agk login opened the sign-in page with, for a sign-in it started: the way it
+	// signs in on an installation addressed by an IP address, where no passkey can be used.
+	Terminal *TerminalSignIn
 
 	// coded is whether the request wrote a TOTP code, null being none.
 	coded bool
@@ -224,12 +227,14 @@ func (q *passwordAsked) field(b *body, name string) error {
 	case "totp":
 		q.coded = b.d.PeekKind() != jsontext.KindNull
 		return text(b, &q.TOTP)
+	case "terminal":
+		return readTerminal(b, &q.Terminal)
 	}
 	return unknown(name)
 }
 
 // check refuses what the schema refuses: a login no user can hold, a service account's among them,
-// no password, and a code that is not six digits.
+// no password, a code that is not six digits, and agk login's terminal outside its grammar.
 func (q passwordAsked) check() error {
 	if err := LoginName(q.Login); err != nil {
 		return err
@@ -240,6 +245,8 @@ func (q passwordAsked) check() error {
 	case q.coded && !sixDigits(q.TOTP):
 		// The code is not repeated, since it may be most of a real one.
 		return fmt.Errorf("totp: a TOTP code is %d digits, as the generator shows it", totp.Digits)
+	case q.Terminal != nil:
+		return q.Terminal.check()
 	}
 	return nil
 }
@@ -261,6 +268,11 @@ func sixDigits(code string) bool {
 type SignedIn struct {
 	Login   string `json:"login"`
 	Session string `json:"session"`
+
+	// RedirectTo is where the sign-in page sends the browser next, for a sign-in agk login started
+	// that opened a full session: its loopback address with a one-time code (handOff). Never beside
+	// a session that may only enrol, which mints no token.
+	RedirectTo string `json:"redirect_to,omitempty"`
 }
 
 // account is what a password sign-in reads of the account a login names: whether a user holds it,
@@ -464,7 +476,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		case held.totp.ID != a.totp.ID:
 			return &refusal{reason: "the TOTP generator was enrolled or removed during the sign-in"}
 		}
-		cookie, answer, err = s.signIn(ctx, wide, held, address, step, now)
+		cookie, answer, err = s.signIn(ctx, wide, held, address, step, ask.Terminal, now)
 		return err
 	})
 	var refusedFor *refusal
@@ -544,10 +556,11 @@ func (s *PasswordAPI) passwordGoes(r *http.Request, login string, now time.Time)
 var errForbidden = errors.New("api: passwords are forbidden")
 
 // signIn signs a checked account in at now, in the transaction wide is: the code's step, the
-// password's use, the sign-in, the personal namespace where it is the first, and a session opened by
-// the password, full or enrolment-only as the policy says, recorded as signin.succeed. It answers
-// the cookie to set once the transaction commits, and what the answer says.
-func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, address string, step int64, now time.Time) (*http.Cookie, SignedIn, error) {
+// password's use, the sign-in, the personal namespace where it is the first, a session opened by the
+// password, full or enrolment-only as the policy says, recorded as signin.succeed, and, for a sign-in
+// agk login started that opened a full session, its one-time code. It answers the cookie to set once
+// the transaction commits, and what the answer says.
+func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, address string, step int64, terminal *TerminalSignIn, now time.Time) (*http.Cookie, SignedIn, error) {
 	login := a.user.Login
 	if a.totp.ID != "" {
 		if err := wide.TOTPUsed(ctx, a.totp.ID, step, now); err != nil {
@@ -570,7 +583,13 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 		kind = SessionEnrolment
 	}
 	signedIn.record.Detail["session"] = kind
-	return cookie, SignedIn{Login: login, Session: kind}, appendEntries(ctx, wide, append(entries, signedIn))
+	answer := SignedIn{Login: login, Session: kind}
+	if terminal != nil && kind == SessionFull {
+		if answer.RedirectTo, err = handOff(ctx, wide, terminal, login, a.password.ID, now); err != nil {
+			return nil, SignedIn{}, err
+		}
+	}
+	return cookie, answer, appendEntries(ctx, wide, append(entries, signedIn))
 }
 
 // refuse records a password sign-in refused, as signin.fail in a transaction of its own, since the

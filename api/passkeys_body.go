@@ -58,12 +58,15 @@ func (q ceremonyAsked) check() error {
 	return nil
 }
 
-// ceremonyAnswered is openapi.json's passkeyVerifyRequest. terminal, agk login's, is not read yet,
-// and refused as any member a route does not read is.
+// ceremonyAnswered is openapi.json's passkeyVerifyRequest.
 type ceremonyAnswered struct {
 	Ceremony   string
 	Credential *publicKeyCredential
 	Label      string
+
+	// Terminal is what agk login opened the sign-in page with, for an assertion it started, and
+	// nil for any other ceremony.
+	Terminal *TerminalSignIn
 
 	// labelled is whether the request wrote a label, null being none.
 	labelled bool
@@ -83,13 +86,15 @@ func (q *ceremonyAnswered) field(b *body, name string) error {
 	case "label":
 		q.labelled = b.d.PeekKind() != jsontext.KindNull
 		return text(b, &q.Label)
+	case "terminal":
+		return readTerminal(b, &q.Terminal)
 	}
 	return unknown(name)
 }
 
 // check refuses what the schema refuses before anything is verified: a ceremony of another name, a
-// label beside an assertion, a label a passkey cannot be given, and a credential missing a member
-// its ceremony needs.
+// label beside an assertion, a label a passkey cannot be given, agk login's terminal beside a
+// registration or outside its grammar, and a credential missing a member its ceremony needs.
 func (q ceremonyAnswered) check() error {
 	switch {
 	case q.Ceremony != db.CeremonyRegistration && q.Ceremony != db.CeremonyAssertion:
@@ -104,6 +109,12 @@ func (q ceremonyAnswered) check() error {
 		return fmt.Errorf("label: a passkey's label is at most %d characters and this one is %d", labelMax, utf8.RuneCountInString(q.Label))
 	case strings.ContainsFunc(q.Label, unicode.IsControl):
 		return errors.New("label: it holds a line break or another control character, and it is one line, shown in a console as it is")
+	case q.Terminal != nil && q.Ceremony == db.CeremonyRegistration:
+		return errors.New("terminal: agk login signs in with an assertion, and a registration hands it no code")
+	case q.Terminal != nil:
+		if err := q.Terminal.check(); err != nil {
+			return err
+		}
 	}
 	return q.Credential.check(q.Ceremony)
 }

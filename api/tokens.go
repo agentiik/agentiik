@@ -117,24 +117,7 @@ func (q *TokenRequest) field(b *body, name string) error {
 		}
 		return nil
 	case "device_label":
-		if absent, err := null(b); absent || err != nil {
-			return err
-		}
-		if err := text(b, &q.DeviceLabel); err != nil {
-			return err
-		}
-		switch {
-		case q.DeviceLabel == "":
-			return errors.New("device_label is empty: it says which machine or which script the token is for, and a token with none leaves it out")
-		case utf8.RuneCountInString(q.DeviceLabel) > deviceLabelMax:
-			return fmt.Errorf("device_label is %d characters, and it is at most %d, to be listed beside the token", utf8.RuneCountInString(q.DeviceLabel), deviceLabelMax)
-		case strings.ContainsRune(q.DeviceLabel, 0):
-			// PostgreSQL holds no U+0000 in text, so a label holding one would be refused by
-			// the database, as a failure of the API's own, rather than here, in front of
-			// whoever sent it.
-			return errors.New("device_label holds U+0000, which no label is written with and the installation cannot keep")
-		}
-		return nil
+		return deviceLabel(b, &q.DeviceLabel)
 	case "expires_at":
 		if absent, err := null(b); absent || err != nil {
 			return err
@@ -161,6 +144,27 @@ func (q *TokenRequest) field(b *body, name string) error {
 		return nil
 	}
 	return unknown(name)
+}
+
+// deviceLabel reads a token's device_label, null being none, as the wire's apiToken holds it.
+func deviceLabel(b *body, into *string) error {
+	if absent, err := null(b); absent || err != nil {
+		return err
+	}
+	if err := text(b, into); err != nil {
+		return err
+	}
+	switch label := *into; {
+	case label == "":
+		return errors.New("device_label is empty: it says which machine or which script the token is for, and a token with none leaves it out")
+	case utf8.RuneCountInString(label) > deviceLabelMax:
+		return fmt.Errorf("device_label is %d characters, and it is at most %d, to be listed beside the token", utf8.RuneCountInString(label), deviceLabelMax)
+	case strings.ContainsRune(label, 0):
+		// PostgreSQL holds no U+0000 in text, so a label holding one would be refused by the
+		// database, as a failure of the API's own, rather than here, in front of whoever sent it.
+		return errors.New("device_label holds U+0000, which no label is written with and the installation cannot keep")
+	}
+	return nil
 }
 
 // null reads a null, and answers whether it read one: a member written null is one left out.
@@ -393,37 +397,15 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		Permissions: narrowed.Permissions, Within: narrowed.Within,
 		DeviceLabel: q.DeviceLabel, CreatedAt: now, ExpiresAt: expires,
 	}
-	issued := listedToken(row)
 	err = t.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		live, err := wide.LiveTokens(ctx, holder, now)
-		if err != nil {
-			return err
-		}
-		if live >= tokensMost {
-			return errTokensMost
-		}
-		if err := wide.MintToken(ctx, row); err != nil {
-			return err
-		}
-		// Recorded by its identifier, and never by the token, which is shown once, here.
-		detail := map[string]any{"principal": holder, "expires_at": expires.Format(time.RFC3339Nano)}
-		if row.DeviceLabel != "" {
-			detail["device_label"] = row.DeviceLabel
-		}
-		if issued.Scope != nil {
-			detail["scope"] = issued.Scope
-		}
-		return auditToken(ctx, wide, holder, audit.Record{
-			Actor: string(caller.Principal), Action: audit.APITokenCreate, Target: row.ID, Result: audit.Done,
-			Detail: detail,
-		})
+		return mintToken(ctx, wide, row, string(caller.Principal), nil)
 	})
 	switch {
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("principal %s names nobody", holder))
 		return
 	case errors.Is(err, errTokensMost):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s holds %d live tokens, the most one principal may hold: revoke one no longer used, with agk token revoke, and mint again", holder, tokensMost))
+		fail(w, http.StatusConflict, tooManyTokens(holder))
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the token could not be minted")
@@ -431,7 +413,44 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 	}
 	// It exists in this answer and nowhere else.
 	w.Header().Set("Cache-Control", "no-store")
-	write(w, http.StatusCreated, IssuedToken{Token: clear, APIToken: issued})
+	write(w, http.StatusCreated, IssuedToken{Token: clear, APIToken: listedToken(row)})
+}
+
+// mintToken writes a token in the transaction wide is, and records it in the audit log as actor's
+// act, with detail beside what every such entry records: the principal's live tokens counted first,
+// under a lock on the principal, so that two mints at once cannot both take the last of tokensMost;
+// then the row; then api_token.create, naming the token by its identifier and never by its value,
+// which is shown once, in the answer, with whose it is, its expiry, its label and its scope.
+func mintToken(ctx context.Context, wide *db.Wide, row db.APIToken, actor string, detail map[string]any) error {
+	live, err := wide.LiveTokens(ctx, row.Principal, row.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if live >= tokensMost {
+		return errTokensMost
+	}
+	if err := wide.MintToken(ctx, row); err != nil {
+		return err
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	detail["principal"] = row.Principal
+	detail["expires_at"] = row.ExpiresAt.Format(time.RFC3339Nano)
+	if row.DeviceLabel != "" {
+		detail["device_label"] = row.DeviceLabel
+	}
+	if scope := scopeOf(row); scope != nil {
+		detail["scope"] = scope
+	}
+	return auditToken(ctx, wide, row.Principal, audit.Record{
+		Actor: actor, Action: audit.APITokenCreate, Target: row.ID, Result: audit.Done, Detail: detail,
+	})
+}
+
+// tooManyTokens is the refusal of a token to a principal holding tokensMost live ones.
+func tooManyTokens(holder string) string {
+	return fmt.Sprintf("%s holds %d live tokens, the most one principal may hold: revoke one no longer used, with agk token revoke, and mint again", holder, tokensMost)
 }
 
 // list answers the caller's tokens and those of the service accounts of the namespaces it owns that
