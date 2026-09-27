@@ -435,7 +435,11 @@ func administrationRefused(e Env, err error, what, name string) int {
 	said := err.Error()
 	switch statusOf(err) {
 	case http.StatusForbidden:
-		said += fmt.Sprintf(": users and groups are an administrator's to manage, and the token in %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has enrolled", tokenVariable)
+		held := "the token in " + tokenVariable
+		if e.presentsKept() {
+			held = "the token agk login kept"
+		}
+		said += fmt.Sprintf(": users and groups are an administrator's to manage, and %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has enrolled", held)
 	case http.StatusNotFound:
 		switch what {
 		case "":

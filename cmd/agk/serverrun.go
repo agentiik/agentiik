@@ -204,7 +204,7 @@ func start(ctx context.Context, at remote, namespace, workflow, sha string, inpu
 		}
 		switch r.status {
 		case http.StatusUnauthorized:
-			return "", fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
+			return "", errors.New(at.refusedCredential())
 		case http.StatusNotFound:
 			// The same answer an inaccessible workflow gets, and a commit never pushed.
 			return "", fmt.Errorf("%s/%s@%s is not there, or not yours: a server runs a commit agk push registered, so push it first", namespace, workflow, short(sha))
@@ -277,7 +277,7 @@ func (f *following) follow(ctx context.Context) (db.RunDetail, int) {
 		case err != nil:
 			// The run was started, so a refusal now is not the workflow's: a credential
 			// revoked meanwhile, or a run deleted with its workflow.
-			fmt.Fprintf(f.e.Err, "run %s could not be read: %s\n", f.run, aboutRun(f.run, err))
+			fmt.Fprintf(f.e.Err, "run %s could not be read: %s\n", f.run, f.at.aboutRun(f.run, err))
 			return d, exitNoOutcome
 		default:
 			failing = time.Time{}

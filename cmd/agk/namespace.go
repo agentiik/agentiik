@@ -457,7 +457,7 @@ func namespaceRefused(e Env, name string, change bool, err error) int {
 	status := statusOf(err)
 	switch {
 	case status == http.StatusUnauthorized:
-		said = fmt.Sprintf("the installation did not accept the credential in %s: %s", tokenVariable, said)
+		said = credentialRefused(e.presentsKept()) + ": " + said
 	case status == http.StatusForbidden && change:
 		said = "creating, bounding and removing a namespace are an administrator's, through a token with no scope: " + said
 	case status == http.StatusNotFound && name != "":

@@ -28,6 +28,10 @@ type remote struct {
 	// appended to.
 	base  string
 	token string
+
+	// kept is a token agk login kept, presented where AGENTIIK_TOKEN is not set, which a refusal
+	// of it names rather than a variable nobody set.
+	kept bool
 }
 
 // reach reads which installation a command talks to, --server where it was given and
@@ -46,23 +50,38 @@ func reach(e Env, server string) (remote, bool) {
 	if !ok {
 		return remote{}, false
 	}
-	token := e.getenv(tokenVariable)
+	token, kept := e.getenv(tokenVariable), false
 	if token == "" {
 		stored, found, err := profileToken(e, where)
 		if err != nil {
 			fmt.Fprintf(e.Err, "%s\n", err)
 			return remote{}, false
 		}
-		if found {
-			token = stored
-		}
+		token, kept = stored, found
 	}
 	if token == "" {
 		fmt.Fprintf(e.Err, "no credential: sign in with agk login, or set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
 		return remote{}, false
 	}
-	return remote{base: strings.TrimRight(where, "/"), token: token}, true
+	return remote{base: strings.TrimRight(where, "/"), token: token, kept: kept}, true
 }
+
+// credentialRefused is what a 401 says of the credential a command presented, by where it came
+// from: AGENTIIK_TOKEN, or the token agk login kept, which signing in again replaces.
+func credentialRefused(kept bool) string {
+	if kept {
+		return "the installation did not accept the token agk login kept for it: sign in again with agk login"
+	}
+	return fmt.Sprintf("the installation did not accept the credential in %s", tokenVariable)
+}
+
+// refusedCredential is credentialRefused of the credential this remote presents.
+func (r remote) refusedCredential() string { return credentialRefused(r.kept) }
+
+// presentsKept says whether a command that reached its installation presents the token agk login
+// kept, as it does where AGENTIIK_TOKEN is not set: for a refusal written where only the Env is
+// at hand.
+func (e Env) presentsKept() bool { return e.getenv(tokenVariable) == "" }
 
 // installationOf reads which installation a command talks to, --server where it was given and
 // AGENTIIK_SERVER where it was not, and answers false once it has said what is wrong with it.
@@ -107,7 +126,7 @@ func checkAddress(where string) error {
 		return fmt.Errorf("%s carries a query or a fragment, and every path is appended to the address: write it without either", where)
 	}
 	if u.Scheme == "http" && !loopback(u.Hostname()) {
-		return fmt.Errorf("%s is plain http, and the credential in %s would cross the network readable by anyone on the way: use https, or http to a loopback address", where, tokenVariable)
+		return fmt.Errorf("%s is plain http, and the credential agk presents would cross the network readable by anyone on the way: use https, or http to a loopback address", where)
 	}
 	return nil
 }
@@ -242,10 +261,10 @@ func passing(err error) bool {
 //
 // A run the caller may not read answers what one that does not exist answers, which is the
 // point, so the sentence says both rather than guessing.
-func aboutRun(run string, err error) string {
+func (r remote) aboutRun(run string, err error) string {
 	switch statusOf(err) {
 	case http.StatusUnauthorized:
-		return fmt.Sprintf("the installation did not accept the credential in %s", tokenVariable)
+		return r.refusedCredential()
 	case http.StatusNotFound:
 		return fmt.Sprintf("no run %s, or not yours", run)
 	}

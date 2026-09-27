@@ -368,7 +368,7 @@ func sharingRefused(e Env, err error, at access.Scope, id string, changes bool) 
 	}
 	switch status := statusOf(err); {
 	case status == http.StatusUnauthorized:
-		fmt.Fprintf(e.Err, "the installation did not accept the credential in %s: %s\n", tokenVariable, err)
+		fmt.Fprintf(e.Err, "%s: %s\n", credentialRefused(e.presentsKept()), err)
 	case status == http.StatusNotFound && id != "":
 		fmt.Fprintf(e.Err, "no grant %s written on %s, or not yours to revoke\n", id, at)
 	case status == http.StatusNotFound && at.Namespace != "":
