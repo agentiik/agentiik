@@ -510,10 +510,15 @@ func TestAUserIsRemovedWithWhatTheyHeldAndTheirEmptyPersonalNamespace(t *testing
 	in.exec(t,
 		`insert into namespaces (name, kind, owner) values ('dan', 'personal', 'dan'), ('erin', 'personal', 'erin'), ('team-ops', 'shared', 'erin')`,
 		`insert into workflows (namespace, name) values ('erin', 'sandbox')`,
+		// Each personal namespace with its built-in identity, as every namespace is created.
+		`insert into principals (id, kind) values ('dan/agentiik', 'service_account'), ('erin/agentiik', 'service_account')`,
+		`insert into service_accounts (namespace, name) values ('dan', 'agentiik'), ('erin', 'agentiik')`,
 		`insert into grants (id, namespace, principal, role, granted_by) values ('01JQ3M8T000000000000000000', 'finance', 'bob', 'editor', 'carol'),
-		   ('01JQ3M8T000000000000000001', 'dan', 'dan', 'owner', 'installation')`,
+		   ('01JQ3M8T000000000000000001', 'dan', 'dan', 'owner', 'installation'),
+		   ('01JQ3M8T000000000000000002', 'dan', 'dan/agentiik', 'operator', 'dan')`,
 	)
 	in.token(t, "bob", nil, nil)
+	in.token(t, "dan/agentiik", nil, nil)
 	if w := in.ask(t, "POST", "/api/v1/users/bob/enrolment", in.carol, "", nil); w.Code != http.StatusCreated {
 		t.Fatalf("a link for bob answered %d: %s", w.Code, w.Body)
 	}
@@ -540,12 +545,20 @@ func TestAUserIsRemovedWithWhatTheyHeldAndTheirEmptyPersonalNamespace(t *testing
 		t.Errorf("bob, removed, was removed again answering %d", w.Code)
 	}
 
-	// dan's personal namespace holds nothing, and goes with him, its grants with it.
+	// dan's personal namespace holds nothing but its built-in identity, and goes with him, the
+	// identity, its token and every grant in the namespace with it.
 	if w := in.ask(t, "DELETE", "/api/v1/users/dan", in.carol, "", nil); w.Code != http.StatusNoContent {
 		t.Fatalf("removing dan answered %d: %s", w.Code, w.Body)
 	}
-	if n := in.count(t, `select count(*) from namespaces where name = 'dan'`); n != 0 {
-		t.Error("dan's empty personal namespace outlived him")
+	for _, q := range []string{
+		`select count(*) from namespaces where name = 'dan'`,
+		`select count(*) from principals where id like 'dan%'`,
+		`select count(*) from grants where namespace = 'dan'`,
+		`select count(*) from api_tokens where principal = 'dan/agentiik'`,
+	} {
+		if n := in.count(t, q); n != 0 {
+			t.Errorf("once dan is removed with his empty personal namespace and its built-in identity, %s answers %d", q, n)
+		}
 	}
 
 	// erin owns team-ops, and her personal namespace holds a workflow: refused, naming each, and
