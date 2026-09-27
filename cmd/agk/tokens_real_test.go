@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,5 +231,36 @@ func TestWhatAgkTokenRefuses(t *testing.T) {
 	l.Close()
 	if code, _, errs := agkWithToken(t, gone, in.alice, "token", "list"); code != exitNoOutcome || !strings.Contains(errs, "could not be reached") {
 		t.Errorf("an installation that answers nothing left agk with %d: %s", code, errs)
+	}
+}
+
+// A token minted or revoked answered with a 5xx is no outcome, since the installation may have
+// minted or revoked it before the answer failed, and the sentence says how to tell; the list
+// answered so changed nothing and is a refusal, and so is a change the installation refused.
+func TestAgkTokenTellsNoOutcomeFromARefusal(t *testing.T) {
+	status := atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(int(status.Load()))
+		w.Write([]byte(`{"error":"said by the installation"}`))
+	}))
+	t.Cleanup(srv.Close)
+	for _, c := range []struct {
+		status int
+		args   []string
+		code   int
+		says   string
+	}{
+		{http.StatusInternalServerError, []string{"token", "create"}, exitNoOutcome, "whether a token was minted cannot be told from it: agk token list shows the tokens minted"},
+		{http.StatusBadGateway, []string{"token", "create", "--for", "finance/nightly"}, exitNoOutcome, "cannot be told"},
+		{http.StatusServiceUnavailable, []string{"token", "revoke", "01M2AD1R3T5W7Y9A1C3E5G7J9M"}, exitNoOutcome, "whether token 01M2AD1R3T5W7Y9A1C3E5G7J9M was revoked cannot be told from it: agk token list reads it back"},
+		{http.StatusInternalServerError, []string{"token", "list"}, exitRefused, "said by the installation"},
+		{http.StatusConflict, []string{"token", "create"}, exitRefused, "said by the installation"},
+		{http.StatusForbidden, []string{"token", "revoke", "01M2AD1R3T5W7Y9A1C3E5G7J9M"}, exitRefused, "said by the installation"},
+	} {
+		status.Store(int64(c.status))
+		code, out, errs := against(t.Context(), t.TempDir(), srv.URL, c.args...)
+		if code != c.code || out != "" || !strings.Contains(errs, c.says) {
+			t.Errorf("agk %s answered %d left with %d, printing %q; want %d saying %q: %s", strings.Join(c.args, " "), c.status, code, out, c.code, c.says, errs)
+		}
 	}
 }
