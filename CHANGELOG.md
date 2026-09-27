@@ -80,6 +80,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Setting a password or a generator where the policy that applies to the account forbids passwords is a 403 naming `password`, and a bearer token sets and removes neither (403).
 - The enrolment page sets a password from its link or a recovery code, beside the passkey or in its place on an installation addressed by an IP address, and both pages offer a signed-in browser its password and a generator, whose key they show as text and as a QR code drawn in SVG by an encoder of their own, `qr.js`.
 - `GET /api/v1/runs/{id}` answers `reason` for a run the controller cancelled at creation, its principal no longer holding `workflow:run`.
+- `POST /api/v1/users/{login}/recovery` issues a user a recovery code, shown once with the link to `/auth/enrol` that carries it, single use and good for an hour, revoking their open one; it enrols a passkey, or a password where the policy allows passwords. Audited as `enrolment.issue` of the kind `recovery`, by the administrator for the user; their own account is a 403, a service account a 404.
+- `agentiik-api recover LOGIN`, the break-glass path, issues an administrator a recovery code with no credential, from the API's database settings and public URL, and prints its link once; recorded as `enrolment.issue` by `installation`, and refused for a user who is not an administrator.
+- The bootstrap token ends at the enrolment of any administrator who can sign in while it lives, from a recovery code or a session as from the first administrator's link, and the recovery codes it issued end with it.
 
 ### State
 
@@ -113,6 +116,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0040 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
 - Migration 0041 adds `runs.files_recorded`, which every decision sets, so that a finished run without it is one whose files a v0.2 controller left unrecorded: `db.Pool.UnrecordedRuns` reads those with the envelopes their steps published, and `db.Pool.RecordUnrecorded` records the files and sets the column in one transaction, giving a run with no expiry its namespace's `max_retention_days`, and leaves a run whose object a writer holds rather than wait for it.
 - `db.Pool.Sweepable`, `Unnamed`, `LiveEnvelopes` and `Orphaned` find the files of the store no row names, in a namespace with no finished run still to be recorded, and hand them to the collection as rows counting nothing, collectable from then.
+- `db.Wide.EndBootstrap` revokes the recovery codes the bootstrap token issued beside its first administrators' links, and `db.Wide.SpentFirstAdministratorLink` is gone.
 
 ### Artifacts
 
@@ -139,6 +143,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `internal/webauthn/webauthntest` is a software authenticator answering the API's options as a browser would, held to `internal/webauthn` by its tests.
 - A test holds every record a person signs in with or through, credentials, sessions and enrolment codes, refused to a service account; a sign-in path added later joins it.
 - The tests, CI and `e2e` run PostgreSQL 18, and a job upgrades with `postgres-upgrade` a cluster the official 17 image wrote, starts 18 on it, and checks what it refuses and what it recovers from.
+- A test holds that no file the module ships imports a mail package, requires a module for mail, or holds an SMTP transport, `sendmail` or a `mailto:` link.
 
 ### agk
 
@@ -151,6 +156,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk service-account create NS/NAME`, `list [NS]` and `delete NS/NAME`, with `-o json` on create and list. A change answered with a 5xx leaves with 4, a list with 1.
 - `agk share NS[/WORKFLOW] --user L|--group G|--service-account NS/N --role R|--deny P [--expires D]` and `agk share NS[/WORKFLOW] --revoke ID`, `agk grants NS[/WORKFLOW]`, one grant a line with its scope and what it gives there, and `agk whoami [NS[/WORKFLOW]]`, with what the installation tells where it names no scope.
 - `agk status` says why a run refused at creation was cancelled, `cancelled: ` and its reason, and `agk run` ends its report with it.
+- `agk user recover LOGIN` prints the link of a recovery code for a user, and refuses the caller's own account and a service account in the installation's words.
 
 ## v0.2.5, 2026-09-26
 
