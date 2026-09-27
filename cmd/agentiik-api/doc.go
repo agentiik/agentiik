@@ -100,6 +100,12 @@
 // ended, once: the file is never read again. A file that is not there imports nothing, and one in
 // any other shape than v0.2 wrote, or that others may read, fails the run naming the variable.
 //
+// Before the hash, it gives every namespace that has no built-in identity, NS/agentiik, its own, as
+// init does: a namespace is created with one from v0.3.0, so those that lack it are the ones v0.2
+// made, and the runs nobody starts there are attributed to it. Each is recorded as
+// service_account.create by installation in its namespace, and a run finding none lacking says
+// nothing of it.
+//
 // # init
 //
 // init prepares an installation in the directory AGK_INIT_DIR names, whose subdirectories are what
@@ -111,8 +117,10 @@
 // with the control plane's credential in a directory of its own that the API and the controller
 // share, renewed from when the API would renew it, and moved there from where an earlier init put
 // it; and the bus's configuration; the migration, as migrate does, as the role
-// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does;
-// the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
+// AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does,
+// saying so and going on where a user's login holds the name, since a failed init would keep every
+// service from starting over a name somebody else holds; the built-in identity of every namespace
+// that has none, as migrate gives it; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has enrolled, saying so where none is set and none is kept, and minting none; and a
 // join token of the pool default for the runner beside it, issued through the database since the
 // API is not serving yet. Each service is given its own copy of what it reads, owned by uid 65532

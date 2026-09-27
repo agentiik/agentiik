@@ -60,6 +60,12 @@
 //	agk token list    the tokens still accepted, with expiry, last use, scope and label
 //	agk token revoke  one token, by the identifier the list prints, from its next request
 //
+// And one manages those service accounts, NS/NAME, which whoever owns their namespace creates,
+// lists and removes, so that the name agk token create --for takes is one agk made:
+//
+//	agk service-account  create, list, of every namespace owned or of the one named, and
+//	                     delete, with its tokens and grants
+//
 // --version is a flag rather than a command, reporting what runtime/debug.ReadBuildInfo
 // says, so the documented table stays exactly the table.
 //
@@ -148,6 +154,7 @@
 //	users.go         agk user and agk group
 //	remote.go        the installation's address, the credential, and its refusals
 //	tokens.go        agk token create, list and revoke
+//	serviceaccounts.go  agk service-account create, list and delete
 //	absent.go        the five verbs that wait, each refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid
