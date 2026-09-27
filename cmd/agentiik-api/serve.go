@@ -29,6 +29,11 @@ type settings struct {
 	// keys is the master key parsed, on a keyring of its own. Only this package may parse it,
 	// since only the API may link the secret store that knows how.
 	keys *secret.Keyring
+
+	// now is the one clock every route tells time by, grants, tokens and sessions expiring by it,
+	// and the wall clock where it is nil, which is what serve reads. A test sets it to hold the
+	// installation at an instant, a grant's expiry, which the wall clock never waits at.
+	now func() time.Time
 }
 
 // readSettings reads the API's configuration, then the master key and the env prefixes, which
@@ -227,9 +232,11 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 // the service accounts, the passkey ceremonies, the passwords, agk login's exchange, the
 // authentication policy, the caller's credentials, and the sign-in page with its sign-out. Each
 // request is identified and authorised by api.Principals, from the tokens, the grants and the
-// bootstrap state the database holds. The log streams end when stopping closes.
+// bootstrap state the database holds. The log streams end when stopping closes. Every route is
+// handed the settings' one clock, so that a grant lapses at the same instant for the authorizer,
+// the routes that list grants and GET /api/v1/me.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
-	principals, err := api.NewPrincipals(pool, nil)
+	principals, err := api.NewPrincipals(pool, s.now)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +255,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	objects := artifact.Dir(s.Objects)
 	// On the public URL rather than on a request's Host header, which a caller chooses. Outside
 	// /api/v1, where api.NewObjects serves them.
-	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{Key: []byte(s.PresignKey), Base: s.PublicURL + "/objects"})
+	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{Key: []byte(s.PresignKey), Base: s.PublicURL + "/objects", Now: s.now})
 	if err != nil {
 		return nil, err
 	}
@@ -260,12 +267,12 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	runners := api.RunnerOptions{
 		Pool: pool, JoinRotation: s.JoinRotation, RevocationGrace: s.RevocationGrace,
 		Objects: objects, URLs: signed,
-		BusIssuer: issuer, BusConsumers: consumers,
+		BusIssuer: issuer, BusConsumers: consumers, Now: s.now,
 		Trouble: func(err error) {
 			log.Warn("a redemption could not give a task a secret", "error", err)
 		},
 	}
-	declarations := api.DeclarationOptions{Pool: pool}
+	declarations := api.DeclarationOptions{Pool: pool, Now: s.now}
 	// The providers, attached here and nowhere else, since this is the one package allowed to
 	// link the store. A nil keyring is not reachable, since the master key is required, and would
 	// attach no built-in store rather than admit a value it could not seal.
@@ -274,7 +281,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 
 	if _, err := api.NewServer(rt, api.ServerOptions{
-		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping,
+		Pool: pool, Versions: versions, Objects: objects, URLs: signed, Stopping: stopping, Now: s.now,
 		Trouble: func(err error) { log.Warn("a log stream could not read back a chunk the API wrote", "error", err) },
 	}); err != nil {
 		return nil, err
@@ -287,7 +294,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 	// The users and groups, whose enrolment links point at the enrolment page on the public URL,
 	// the Relying Party's origin.
-	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
 	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: pool}); err != nil {
@@ -298,14 +305,14 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	// The API tokens of whoever asks, and of the service accounts of the namespaces they own.
-	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool}); err != nil {
+	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool, Now: s.now}); err != nil {
 		return nil, err
 	}
 	// The grants of each namespace and workflow, and who the caller is, with what it is told.
-	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
-	if _, err := api.NewMe(rt, api.MeOptions{Pool: pool}); err != nil {
+	if _, err := api.NewMe(rt, api.MeOptions{Pool: pool, Now: s.now}); err != nil {
 		return nil, err
 	}
 	// The service accounts themselves, created, listed and removed by whoever owns their namespace.
@@ -320,13 +327,13 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// behind AGK_PROXY_URL, and the bound on the failures they record.
 	signIns := api.NewSignIns(s.Proxied)
 	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
-		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify, SignIns: signIns,
+		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify, SignIns: signIns, Now: s.now,
 		Trouble: func(err error) { log.Warn("a failed sign-in could not be recorded in the audit log", "error", err) },
 	}); err != nil {
 		return nil, err
 	}
 	passwords := api.PasswordOptions{
-		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Identify: principals.Identify,
+		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Identify: principals.Identify, Now: s.now,
 		Trouble: func(err error) { log.Warn("a password sign-in was answered with trouble", "error", err) },
 	}
 	// A nil keyring is not reachable, since the master key is required, and would open no TOTP
@@ -345,22 +352,22 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	// agk login's exchange, trading the one-time code either sign-in hands its loopback address for
 	// an API token, its refusals recorded within the bound the sign-ins share.
 	if _, err := api.NewExchange(rt, api.ExchangeOptions{
-		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns,
+		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Now: s.now,
 		Trouble: func(err error) { log.Warn("a refused exchange could not be recorded in the audit log", "error", err) },
 	}); err != nil {
 		return nil, err
 	}
 	// The authentication policy, the installation's and each namespace's tightening of it, which an
 	// administrator sets; and the caller's own credentials, listed and removed as the policy allows.
-	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
-	if _, err := api.NewCredentials(rt, api.CredentialOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+	if _, err := api.NewCredentials(rt, api.CredentialOptions{Pool: pool, PublicURL: s.PublicURL, Now: s.now}); err != nil {
 		return nil, err
 	}
 	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers, with the
 	// password forms where the policy lets passwords in, now that the password routes are served.
-	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true}); err != nil {
+	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true, Now: s.now}); err != nil {
 		return nil, err
 	}
 	return rt, nil
