@@ -57,6 +57,7 @@ type counted struct {
 	artifactsExpired *metrics.Counter
 	runsPurged       *metrics.Counter
 	logsPurged       *metrics.Counter
+	orphansFound     *metrics.Counter
 	objectsCollected *metrics.Counter
 	bytesCollected   *metrics.Counter
 
@@ -101,13 +102,15 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 		"Finished runs past their retention whose envelopes the envelope purge let go of, published and handed alike. The run and its record stay.")
 	c.logsPurged = r.Counter("agentiik_logs_purged_total",
 		"Task logs past their run's retention deleted from the object store whole. The line count stays.")
+	c.orphansFound = r.Counter("agentiik_orphans_found_total",
+		"Files of the object store that no row named, no write held and no envelope of a run under way named, a day after they were written, handed to the collection: outputs of attempts that failed or were lost, and what v0.2 left. The collection counts them again as it deletes them.")
 	c.objectsCollected = r.Counter("agentiik_objects_collected_total",
 		"Objects the collection deleted from the object store: counted by nothing for the grace period, named by no live artifact, and written by no upload under way.")
 	c.bytesCollected = r.Counter("agentiik_objects_collected_bytes_total",
 		"The bytes of the objects the collection deleted from the object store.")
 	// Written at zero from the start, since they carry no label to be first seen with, so that a
 	// rate over them is one from the first scrape.
-	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.objectsCollected, c.bytesCollected} {
+	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.orphansFound, c.objectsCollected, c.bytesCollected} {
 		counter.Add(0)
 	}
 
@@ -175,6 +178,7 @@ func (c *counted) purged(p purge.Purged) {
 	c.artifactsExpired.Add(float64(p.Artifacts))
 	c.runsPurged.Add(float64(p.Runs))
 	c.logsPurged.Add(float64(p.Logs))
+	c.orphansFound.Add(float64(p.Orphans))
 	c.objectsCollected.Add(float64(p.Objects))
 	c.bytesCollected.Add(float64(p.Bytes))
 }

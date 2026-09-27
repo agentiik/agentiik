@@ -146,12 +146,12 @@ func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 	if err := c.registry.WriteTo(t.Context(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !has("\n"+out.String(), "agentiik_objects_collected_total 0") {
+	if !has("\n"+out.String(), "agentiik_objects_collected_total 0") || !has("\n"+out.String(), "agentiik_orphans_found_total 0") {
 		t.Errorf("a controller that has purged nothing says:\n%s", out.String())
 	}
-	c.purged(purge.Purged{Artifacts: 3, Runs: 2, Logs: 4, Uploads: 7, Objects: 5, Bytes: 4096})
+	c.purged(purge.Purged{Artifacts: 3, Runs: 2, Logs: 4, Uploads: 7, Orphans: 2, Objects: 5, Bytes: 4096})
 	c.purged(purge.Purged{})
-	c.purged(purge.Purged{Artifacts: 1, Objects: 1, Bytes: 1024})
+	c.purged(purge.Purged{Artifacts: 1, Orphans: 1, Objects: 1, Bytes: 1024})
 	out.Reset()
 	if err := c.registry.WriteTo(t.Context(), &out); err != nil {
 		t.Fatal(err)
@@ -160,6 +160,7 @@ func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 		`agentiik_artifacts_expired_total 4`,
 		`agentiik_runs_purged_total 2`,
 		`agentiik_logs_purged_total 4`,
+		`agentiik_orphans_found_total 3`,
 		`agentiik_objects_collected_total 6`,
 		`agentiik_objects_collected_bytes_total 5120`,
 	} {

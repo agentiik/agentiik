@@ -338,7 +338,7 @@ func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term,
 			if p.Removed() {
 				log.Info("the purges removed what had run out",
 					"artifacts", p.Artifacts, "runs", p.Runs, "logs", p.Logs, "uploads", p.Uploads,
-					"objects", p.Objects, "bytes", p.Bytes)
+					"orphans", p.Orphans, "objects", p.Objects, "bytes", p.Bytes)
 			}
 		},
 		Trouble: func(err error) {
