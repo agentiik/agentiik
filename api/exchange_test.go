@@ -340,16 +340,13 @@ func TestASessionThatMayOnlyEnrolIsHandedNoCode(t *testing.T) {
 
 // An exchange refused once it holds to its schema is recorded as signin.fail, by the address it came
 // from, with why: about the account the code was minted for, with the credential that signed in, or
-// about the code's SHA-256 where it names none, the code itself written nowhere. Refusals anybody may
+// about an unknown exchange code where it names none, the code itself written nowhere. Refusals anybody may
 // send are held to the bound the sign-in routes share, ten from one address in ten minutes, a
 // password sign-in refused counted among them; one made after the verifier answered the code is
 // recorded whatever the bound says, and counts those left out before it.
 func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
 	in := exchanging(t)
-	hexOf := func(code string) string {
-		sum := sha256.Sum256([]byte(code))
-		return fmt.Sprintf("%x", sum)
-	}
+	const unknown = "192.0.2.1 an unknown exchange code"
 	never := func(i int) string {
 		raw := make([]byte, 32)
 		raw[0] = byte(i)
@@ -366,7 +363,6 @@ func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
 	if w := exchange(t, in.h, code, verifier, "x"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("a code spent answered %d %s", w.Code, w.Body)
 	}
-	spent := code
 	code, verifier = in.handedOff(t, "alice")
 	in.policy(t, "forbidden", "optional")
 	if w := exchange(t, in.h, code, verifier, "x"); w.Code != http.StatusForbidden {
@@ -377,9 +373,9 @@ func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
 		forbidden = "192.0.2.1 alice passwords are forbidden by the policy that applies to the account"
 	)
 	want := []string{
-		"192.0.2.1 " + hexOf(never(0)) + noCode,
+		unknown + noCode,
 		"192.0.2.1 alice the verifier does not answer the challenge the code was minted against",
-		"192.0.2.1 " + hexOf(spent) + noCode,
+		unknown + noCode,
 		forbidden,
 	}
 	if got := in.failures(t); !slices.Equal(got, want) {
@@ -402,7 +398,7 @@ func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
 	if w := in.login(t, `{"login":"zoe","password":"whatever zoe's is"}`, "192.0.2.1:1234"); w.Code != http.StatusForbidden {
 		t.Fatalf("a password sign-in where passwords are forbidden answered %d %s", w.Code, w.Body)
 	}
-	if got := in.failures(t); len(got) != 11 || got[10] != "192.0.2.1 "+hexOf(never(7))+noCode {
+	if got := in.failures(t); len(got) != 11 || got[10] != unknown+noCode {
 		t.Fatalf("past the bound the failures recorded are %q", got)
 	}
 	in.policy(t, "allowed", "optional")
@@ -416,7 +412,7 @@ func TestARefusedExchangeIsRecordedAsAFailedSignIn(t *testing.T) {
 	                       and detail::jsonb->>'unrecorded' = '2'`); n != 1 {
 		t.Errorf("the refusal after the verifier answered is not recorded counting the two left out: %q", in.failures(t))
 	}
-	if n := in.count(t, `select count(*) from audit_log where detail like '%agkcode_%'`); n != 0 {
+	if n := in.count(t, `select count(*) from audit_log where detail like '%agkcode_%' or target like '%agkcode_%'`); n != 0 {
 		t.Error("a code is written in the audit log")
 	}
 }

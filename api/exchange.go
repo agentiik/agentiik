@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -48,8 +47,8 @@ import (
 // An exchange refused once its request holds to the schema is a sign-in that failed, and is recorded
 // as signin.fail with why, as the sign-in routes record theirs and within the bound they share on
 // what failures append (failures.go): by the address it came from, about the account the code was
-// minted for, or the code's SHA-256, as it is kept, where it names none, so that no code is written
-// in the log. A refusal before the verifier answered the code is anybody's to send, and is held to
+// minted for, or unknownExchange where it names none, as a refused enrolment code is. The code is
+// never written in the log, nor anything drawn from it. A refusal before the verifier answered the code is anybody's to send, and is held to
 // the bound; one after is only whoever signed in and holds the verifier's to make, and is recorded
 // whatever the bound says, as an assertion refused after its signature verified is.
 
@@ -83,6 +82,10 @@ const (
 	codeSynced          = "the passkey that signed in is synced, and device_bound_only applies"
 	codeTokensMost      = "the account holds the most live tokens one principal may hold"
 )
+
+// unknownExchange is the account a refused exchange names where its code names none: never minted,
+// or taken already. Written with spaces, as unknownCode is, so that it reads as nobody's account.
+const unknownExchange = "an unknown exchange code"
 
 // exchangeCredential is what signin.fail's detail says an exchange presented, where a password's
 // says password: agk login's one-time code, as openapi.json's exchangeCode names it.
@@ -273,7 +276,7 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 	}
 
 	hash := sha256.Sum256([]byte(ask.Code))
-	failed := exchangeFailure{address: s.signIns.addressOf(r), target: hex.EncodeToString(hash[:])}
+	failed := exchangeFailure{address: s.signIns.addressOf(r), target: unknownExchange}
 	var code db.ExchangeCode
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		var err error
@@ -398,9 +401,9 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 type exchangeFailure struct {
 	reason string
 
-	// address is where the request came from; target the account the code was minted for, or the
-	// code's SHA-256 in hexadecimal where it names none; credential the credential that signed in,
-	// where the code names one.
+	// address is where the request came from; target the account the code was minted for, or
+	// unknownExchange where it names none; credential the credential that signed in, where the code
+	// names one.
 	address, target, credential string
 
 	// verified is a refusal after the verifier answered the code, which only whoever signed in and

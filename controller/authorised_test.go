@@ -160,6 +160,14 @@ func refusedFor(t *testing.T, core *Core, q *fakeQueue, pool *db.Pool, conn *pgx
 	if recorded["account"] != account {
 		t.Errorf("the audit log's account is\n%q\nwant\n%q", recorded["account"], account)
 	}
+	// Once, however many passes the run ended by comes to again.
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var cancels int
+	if err := conn.QueryRow(t.Context(), `select count(*) from audit_log where action = 'run.cancel'`).Scan(&cancels); err != nil || cancels != 1 {
+		t.Errorf("the refusal is recorded %d times, %v", cancels, err)
+	}
 }
 
 // Every way a principal comes to no longer hold workflow:run between the moment its run was created

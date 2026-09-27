@@ -468,6 +468,11 @@ func TestAPasswordThatCouldOnlyEnrolIsNotSet(t *testing.T) {
 	if n := in.count(t, `select count(*) from enrolment_codes where login = 'frank' and used_at is null and revoked_at is null`); n != 1 {
 		t.Error("the recovery code refused was spent")
 	}
+	// A code refused is a sign-in refused, recorded as every other is.
+	if n := in.count(t, `select count(*) from audit_log where action = 'signin.fail' and target = 'frank' and detail::jsonb->>'code' = 'recovery'
+	                       and detail::jsonb->>'reason' like '%could only ever enrol'`); n != 1 {
+		t.Errorf("the recovery code refused is recorded %d times as a sign-in refused", n)
+	}
 
 	bound := true
 	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "required", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2})

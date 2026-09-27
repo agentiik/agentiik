@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
@@ -798,6 +800,21 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 			}
 			return &ownsNamespaces{principal: principal, namespaces: names}
 		}
+		// An administrator removing a group they are in lifts the group's denies from their own
+		// access, as revoking one of them would. The owners are told before the removal takes the
+		// denies, since telling them holds each namespace, which a removal of the namespace holds
+		// before it takes the grants in it: taken the other way round, the two would each wait on
+		// what the other holds.
+		detail := map[string]any{"members": orEmpty(held.Members)}
+		if slices.Contains(held.Members, string(who)) {
+			denies, err := groupGrants(ctx, wide, name, false, s.now())
+			if err != nil {
+				return err
+			}
+			if err := widened(ctx, wide, denies, who, s.now(), detail); err != nil {
+				return err
+			}
+		}
 		if err := wide.RemovePrincipal(ctx, principal); err != nil {
 			return err
 		}
@@ -805,8 +822,7 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 			return err
 		}
 		return wide.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.GroupDelete, Target: principal, Result: audit.Done,
-			Detail: map[string]any{"members": orEmpty(held.Members)},
+			Actor: string(who), Action: audit.GroupDelete, Target: principal, Result: audit.Done, Detail: detail,
 		})
 	})
 	var owns *ownsNamespaces
@@ -889,6 +905,20 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		if now, err = wide.Group(ctx, name); err != nil {
 			return err
 		}
+		// An administrator putting themselves in a group widens their own access wherever its
+		// grants give something, and taking themselves out of one wherever its denies took
+		// something away: "an administrator widening their own access notifies the namespace
+		// owners", however they came to it.
+		detail := map[string]any{"member": login}
+		if changed && string(who) == login {
+			reach, err := groupGrants(ctx, wide, name, in, s.now())
+			if err != nil {
+				return err
+			}
+			if err := widened(ctx, wide, reach, who, s.now(), detail); err != nil {
+				return err
+			}
+		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
@@ -897,8 +927,7 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 			result = audit.Unchanged
 		}
 		return wide.Audit(ctx, audit.Record{
-			Actor: string(who), Action: action, Target: groupPrincipal(name), Result: result,
-			Detail: map[string]any{"member": login},
+			Actor: string(who), Action: action, Target: groupPrincipal(name), Result: result, Detail: detail,
 		})
 	})
 	var locked *errLockedOut
@@ -917,6 +946,51 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 	default:
 		write(w, http.StatusOK, groupOf(now))
 	}
+}
+
+// groupGrants answers the grants of group that have not expired at now, in every namespace and at
+// both scopes: those giving a role where gives is set, and its denies where it is not.
+func groupGrants(ctx context.Context, wide *db.Wide, group string, gives bool, now time.Time) ([]access.Grant, error) {
+	all, err := wide.AccessGrantsAcross(ctx, access.Principal{Ref: groupPrincipal(group)}, now)
+	if err != nil {
+		return nil, err
+	}
+	var reach []access.Grant
+	for _, g := range all {
+		if (g.Role != "") == gives {
+			reach = append(reach, g)
+		}
+	}
+	return reach, nil
+}
+
+// widened tells the owners of the namespace of each grant that who, an administrator, widened their
+// own access there by it, the grant given or the deny taken away, as TellOwners tells them of a grant
+// they wrote themselves, and writes who was told into detail as notified, by namespace. A namespace
+// whose owners are who alone is written with nobody, so that the entry says the act widened who's
+// access there all the same. It writes nothing where grants is empty.
+func widened(ctx context.Context, wide *db.Wide, grants []access.Grant, who Principal, now time.Time, detail map[string]any) error {
+	if len(grants) == 0 {
+		return nil
+	}
+	at := now.UTC().Truncate(time.Microsecond)
+	notified := map[string][]string{}
+	for _, g := range grants {
+		told, err := wide.TellOwnersIn(ctx, g.Scope.Namespace, g, string(who), at)
+		if err != nil {
+			return err
+		}
+		names := notified[g.Scope.Namespace]
+		for _, n := range told {
+			if !slices.Contains(names, n) {
+				names = append(names, n)
+			}
+		}
+		slices.Sort(names)
+		notified[g.Scope.Namespace] = orEmpty(names)
+	}
+	detail["notified"] = notified
+	return nil
 }
 
 // shownOnce answers a secret shown this once, a link's code, and says no cache on the way may keep a

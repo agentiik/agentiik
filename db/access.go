@@ -83,7 +83,16 @@ func grantAccess(ctx context.Context, tx pgx.Tx, g access.Grant, within string) 
 // written, so that whoever may share one workflow revokes what was written on it and nothing its
 // namespace gives. A revoked grant is gone rather than kept: the audit log is where who granted
 // what and who took it back is kept.
+//
+// The namespace is held for key share first, as a grant written in it holds it, so that a removal
+// of the namespace, which holds it for update and then takes its grants, and the owners told of a
+// deny revoked (NS.TellOwners), which hold it too, take it in the order every other act does: a
+// revocation holding the grant and waiting on the namespace, while the removal holds the namespace
+// and waits on the grant, is a deadlock.
 func (n *NS) RevokeAccess(ctx context.Context, workflow, id string) (access.Grant, error) {
+	if _, err := n.tx.Exec(ctx, `select from namespaces where name = $1 for key share`, n.namespace); err != nil {
+		return access.Grant{}, fmt.Errorf("db: namespace %s could not be held: %w", n.namespace, err)
+	}
 	revoked, err := collectAccess(n.tx.Query(ctx,
 		`delete from grants where namespace = $1 and id = $2 and workflow is not distinct from $3
 		  returning `+accessColumns, n.namespace, id, nilIfEmpty(workflow)))

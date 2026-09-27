@@ -98,6 +98,30 @@ func (in passwordsOf) changes(t *testing.T) []map[string]any {
 	return all
 }
 
+// taken are the policy.change and credential.remove entries of the audit log from the first
+// policy.change on, as action actor target, the namespace where there is one and the login a
+// removal names, in order: what a change forbidding passwords records of each credential it took.
+func (in passwordsOf) taken(t *testing.T) []string {
+	t.Helper()
+	rows, err := dbtest.Superuser(t, in.super).Query(t.Context(),
+		`select action || ' ' || actor || ' ' || target || coalesce(' in ' || namespace, '') || coalesce(' ' || (detail::jsonb->>'login'), '')
+		   from audit_log where action in ('policy.change', 'credential.remove')
+		    and seq >= (select min(seq) from audit_log where action = 'policy.change') order by seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var all []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, s)
+	}
+	return all
+}
+
 const theDefaults = `{"password":"allowed","passkey":"required","user_verification":"required","device_bound_only":false,"min_passkeys":2}`
 
 // The installation's policy is read, every setting written, by whoever is signed in, and not by a
@@ -241,6 +265,17 @@ func TestForbiddingPasswordsDeletesThemAndSuspendsWhoHoldsNoPasskey(t *testing.T
 	suspended, _ := json.Marshal(changes[0]["suspended"])
 	if string(deleted) != `["alice","bob","carol","dave"]` || string(suspended) != `["alice","bob","erin"]` {
 		t.Errorf("the change records passwords deleted %s and accounts suspended %s", deleted, suspended)
+	}
+	// Each password it took, and bob's generator beside his, is recorded after it as
+	// credential.remove by carol, whose change took it, as a removal by its holder is recorded.
+	if got := in.taken(t); !slices.Equal(got, []string{
+		"policy.change carol installation",
+		"credential.remove carol alice-password alice",
+		"credential.remove carol bob-password bob", "credential.remove carol bob-totp bob",
+		"credential.remove carol carol-password carol",
+		"credential.remove carol dave-password dave",
+	}) {
+		t.Errorf("forbidding passwords recorded %q", got)
 	}
 
 	// frank, created since, holds nothing, and a change keeping passwords forbidden leaves him be.
@@ -465,6 +500,15 @@ func TestANamespaceForbiddingPasswordsTakesThemFromWhoHoldsAGrantInIt(t *testing
 	deleted, _ := json.Marshal(changes[0]["passwords_deleted"])
 	if len(changes) != 1 || changes[0]["_namespace"] != "finance" || string(deleted) != `["alice","bob"]` {
 		t.Errorf("the change is recorded as %v", changes)
+	}
+	// The credentials it took are on the installation, where every credential's removal is
+	// recorded, and the change in the namespace it tightens.
+	if got := in.taken(t); !slices.Equal(got, []string{
+		"policy.change carol finance in finance",
+		"credential.remove carol alice-password alice",
+		"credential.remove carol bob-password bob", "credential.remove carol bob-totp bob",
+	}) {
+		t.Errorf("finance forbidding passwords recorded %q", got)
 	}
 
 	// carol, granted a role in finance since, is left as she is by a change that keeps
