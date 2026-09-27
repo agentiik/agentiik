@@ -83,7 +83,10 @@ jobs:
       # ordinary case rather than a race to avoid, and that promise is only held if it
       # is tested under -race.
       - name: test
-        run: go test ./... -race
+        # The api package runs over two minutes without -race and past Go's default ten minutes
+        # with it, since v0.3.0's access routes each start a server over PostgreSQL: the bound
+        # is raised rather than the tests thinned.
+        run: go test ./... -race -timeout 30m
         env:
           # A superuser, because the tests create a database of their own, the schema, and
           # the unprivileged role the application connects as. What is under test is what
