@@ -238,8 +238,9 @@ func (w *Wide) ImportBootstrapToken(ctx context.Context, hash []byte) (bool, err
 	return tag.RowsAffected() == 1, nil
 }
 
-// EndBootstrap ends the bootstrap token at the first administrator's enrolment, forgetting its
-// hash, and answers whether this was the end of it: a second enrolment ends nothing more. Every
+// EndBootstrap ends the bootstrap token at the first administrator's enrolment, or at their first
+// password sign-in to a full session where their enrolment opened none, forgetting its hash, and
+// answers whether this was the end of it: a second enrolment or sign-in ends nothing more. Every
 // first administrator's link still open is revoked with it, and the session each opened, since a
 // link made with the token is the token's reach and ends where it does. The recovery codes the
 // token issued end with it too, and are not revoked here but read as ended (openCode), so that the

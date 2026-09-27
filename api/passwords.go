@@ -59,8 +59,9 @@ import (
 //
 // An administrator's sign-in to a full session ends the bootstrap token where it has not ended, as
 // the enrolment that first gives an administrator one does: a password set while the policy required
-// a passkey opened a session that only enrols and left the token going, and a policy relaxed since
-// makes the next sign-in the first from which that administrator administers.
+// a passkey opened a session that only enrols and left the token going, and once the policy no
+// longer requires one, the next sign-in of that password ends it. A session opened before, full from
+// the same moment, ends nothing by itself: a sign-in or an enrolment is what ends the token.
 //
 // # Setting one
 //
@@ -574,10 +575,10 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 	// An administrator whose password opens a full session can administer from it, so the
 	// bootstrap token ends here, as it ends at the enrolment that first gives an administrator a
 	// full session (passkeys.go, passwords_set.go). Setting the password did not end it where the
-	// policy then required a passkey the account did not hold; a policy relaxed since makes this
-	// sign-in the first full session, and two administrators, one of them a token, would otherwise
-	// go on side by side. Taken after the rows the sign-in writes and before the audit log, and
-	// ending nothing once ended. A suspended account never reaches here.
+	// policy then required a passkey; ended at none of this administrator's sign-ins once the
+	// policy relaxed, the token would go on beside the administrator it made. Taken after the rows
+	// the sign-in writes and before the audit log, and ending nothing once ended. A suspended
+	// account never reaches here.
 	var entries []entry
 	if a.user.Admin && kind == SessionFull {
 		ended, err := wide.EndBootstrap(ctx, now)
