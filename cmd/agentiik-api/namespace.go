@@ -80,8 +80,8 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
 		return fmt.Errorf("there is no namespace %s, so nothing was removed", name)
-	case errors.Is(err, db.ErrPersonalNamespace):
-		return fmt.Errorf("namespace %s is %s's personal namespace, which is its user's and is never removed on its own, so it was not removed", name, name)
+	case errors.Is(err, api.ErrPersonalNamespace):
+		return fmt.Errorf("%s, so it was not removed", api.PersonalRefusal(name))
 	case errors.Is(err, db.ErrNameTaken):
 		return fmt.Errorf("%s is a user's login, and logins and namespace names share one name space, so no namespace %s was created", name, name)
 	case errors.As(err, &holds):

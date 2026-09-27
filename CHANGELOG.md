@@ -35,7 +35,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
-- `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.RemoveNamespace` refuses a personal one with `db.ErrPersonalNamespace`, and `db.Wide.GrantAccess` writes a grant in any namespace, for the owner's grant at creation.
+- `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
 
 ### Controller
 
@@ -51,7 +51,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
-- `agk namespace create`, `list`, `show`, `delete` and `quotas`, the last sending the quotas given as the whole set, as the route reads them, and printing them as they then stand. A change answered with a failure that may pass leaves with 4, since whether it was made cannot be told.
+- `agk namespace create`, `list`, `show`, `delete` and `quotas`, the last sending the quotas given as the whole set and printing them as they then stand. A change answered with a 5xx leaves with 4.
 
 ## v0.2.5, 2026-09-26
 

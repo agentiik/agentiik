@@ -57,19 +57,15 @@ func (h *NamespaceHolds) Held() string {
 	return fmt.Sprintf("namespace %s holds %s, and a namespace is removed only once it holds nothing, since what it holds is somebody's work", h.Name, strings.Join(held, ", "))
 }
 
-// ErrPersonalNamespace is a user's personal namespace, refused removal on its own: it is its
-// user's, named after their login, and "they cannot delete or rename" it.
-var ErrPersonalNamespace = errors.New("db: that namespace is a user's personal namespace")
-
 // CreateNamespace creates a namespace with its built-in identity, NS/agentiik, and answers whether
 // it did: false is one that already existed, which is left as it was, so that an installation
 // script run twice creates it once. A name that is a user's login is ErrNameTaken, and an owner
 // nobody created ErrNoPrincipal.
 //
 // n.Kind is shared where it is empty, and n.Owner is written on the row alone: the grant that lets
-// an owner act on the namespace is its creator's to write, beside this, with GrantAccess. The quotas
-// are written as SetQuotas writes them, so a zero MaxConcurrentTasks or MaxRetentionDays starts at
-// the table's default, 20 or 90.
+// an owner act on the namespace is its creator's to write, beside this, with GrantAccess. The
+// quotas are written as SetQuotas writes them, so a zero MaxConcurrentTasks or MaxRetentionDays
+// starts at the table's default, 20 or 90.
 //
 // The built-in identity is created with the namespace because "scheduled, webhook and event runs
 // are attributed to" it, and it "holds no grant until an owner gives it one", so creating it grants
@@ -103,7 +99,11 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 
 // RemoveNamespace removes a namespace that holds no workflow, run, secret, stored object or service
 // account but its built-in identity, and refuses one that does with a *NamespaceHolds. One that
-// does not exist is ErrNoNamespace, and a user's personal namespace ErrPersonalNamespace.
+// does not exist is ErrNoNamespace.
+//
+// It removes a personal namespace as it removes a shared one: whether one may be removed, and by
+// whom, is its caller's to say, since the route that removes a namespace refuses a personal one and
+// removing a user takes their empty personal namespace with them.
 //
 // The built-in identity goes first, with the tokens and grants it holds: it is the namespace's own
 // and nobody created it, so it is no reason to keep the namespace, and a service account refers to
@@ -114,16 +114,13 @@ func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
 // service account created while the counts are read waits for this transaction and then finds the
 // namespace gone, rather than landing in a namespace counted as empty.
 func (w *Wide) RemoveNamespace(ctx context.Context, name string) error {
-	var kind string
-	err := w.tx.QueryRow(ctx, `select kind from namespaces where name = $1 for update`, name).Scan(&kind)
+	var found string
+	err := w.tx.QueryRow(ctx, `select name from namespaces where name = $1 for update`, name).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s", ErrNoNamespace, name)
 	}
 	if err != nil {
 		return fmt.Errorf("db: namespace %s could not be read: %w", name, err)
-	}
-	if kind == NamespacePersonal {
-		return fmt.Errorf("%w: %s", ErrPersonalNamespace, name)
 	}
 	holds := &NamespaceHolds{Name: name}
 	if err := w.tx.QueryRow(ctx,

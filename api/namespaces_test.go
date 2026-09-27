@@ -119,10 +119,10 @@ func (in namespaces) entries(t *testing.T) []string {
 	return out
 }
 
-// An administrator creates a shared namespace with an owner and quotas. The owner is given the owner
-// role on it in the same act, granted by the administrator, so that its members can share it and
-// act in it at once; the namespace has its built-in identity, which holds nothing; and the creation
-// is recorded, with the grant that made the owner one.
+// An administrator creates a shared namespace with an owner and quotas. The owner is given the
+// owner role on it in the same act, granted by the administrator, so that its members can share it
+// and act in it at once; the namespace has its built-in identity, which holds nothing; and the
+// creation is recorded, with the grant that made the owner one.
 func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	in := someNamespaces(t)
 	w := in.ask(t, "POST", "/api/v1/namespaces", in.carol,
@@ -154,9 +154,9 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 		t.Errorf("the audit log holds %q", got)
 	}
 	var detail string
-	in.query(t, &detail, `select detail from audit_log where action = 'grant.create'`)
-	if detail != `{"principal":"group:team-finance","role":"owner","scope":"team-ops"}` {
-		t.Errorf("the owner's grant is recorded with %s", detail)
+	in.query(t, &detail, `select coalesce(namespace, '') || ' ' || detail from audit_log where action = 'grant.create'`)
+	if detail != `team-ops {"principal":"group:team-finance","role":"owner","scope":"team-ops"}` {
+		t.Errorf("the owner's grant is recorded in the namespace and with the detail %s", detail)
 	}
 	in.query(t, &detail, `select detail from audit_log where action = 'namespace.create'`)
 	if !strings.Contains(detail, `"owner_grant":"`+grant+`"`) || !strings.Contains(detail, `"owner":"group:team-finance"`) {
@@ -254,6 +254,7 @@ func TestANamespaceIsRefusedWhatTheWireAndTheInstallationRefuse(t *testing.T) {
 		{`{"name":"team-ops","owner":"alice","quotas":{"allowed_runner_pools":["DMZ"]}}`, http.StatusBadRequest, "not a runner pool's name"},
 		{`{"name":"team-ops","owner":"alice","quotas":{"max_disk":1}}`, http.StatusBadRequest, "not a field"},
 		{`{"name":"team-ops","owner":"alice","auth_policy":{}}`, http.StatusBadRequest, "not a field"},
+		{`{"name":"team-ops","owner":"` + strings.Repeat("a", 64<<10) + `"}`, http.StatusRequestEntityTooLarge, "larger than"},
 	} {
 		w := in.ask(t, "POST", "/api/v1/namespaces", in.carol, c.body)
 		if w.Code != c.want || !strings.Contains(w.Body.String(), c.says) {
@@ -333,9 +334,9 @@ func TestANamespaceIsReadByWhoeverHoldsAGrantInIt(t *testing.T) {
 }
 
 // PUT on a namespace's quotas writes them whole: max_concurrent_tasks and max_retention_days keep
-// their values where the body leaves them out, and each of the other four the body leaves out bounds
-// nothing any more. A pool that does not exist is refused and nothing changes, and every change is
-// recorded as namespace.update.
+// their values where the body leaves them out, and each of the other four the body leaves out
+// bounds nothing any more. A pool that does not exist is refused and nothing changes, and every
+// change is recorded as namespace.update.
 func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 	in := someNamespaces(t)
 	all := `{"max_concurrent_tasks":7,"max_runs_per_hour":500,"max_artifact_bytes":536870912000,"max_retention_days":180,"max_run_duration":"4h","allowed_runner_pools":["dmz"]}`
@@ -363,6 +364,8 @@ func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 		{"/api/v1/namespaces/finance/quotas", `{"max_retention_days":0}`, http.StatusBadRequest},
 		{"/api/v1/namespaces/nowhere/quotas", `{}`, http.StatusNotFound},
 		{"/api/v1/namespaces/Finance/quotas", `{}`, http.StatusNotFound},
+		{"/api/v1/namespaces/%ff/quotas", `{}`, http.StatusNotFound},
+		{"/api/v1/namespaces/finance/quotas", `{"allowed_runner_pools":["` + strings.Repeat("a", 64<<10) + `"]}`, http.StatusRequestEntityTooLarge},
 	} {
 		if got := in.ask(t, "PUT", c.path, in.carol, c.body); got.Code != c.want {
 			t.Errorf("PUT %s %q answered %d, want %d: %s", c.path, c.body, got.Code, c.want, got.Body)
@@ -380,10 +383,15 @@ func TestANamespacesQuotasAreWrittenWhole(t *testing.T) {
 	if got := in.entries(t); len(got) != 3 || got[0] != "carol namespace.update finance done" || got[2] != got[0] {
 		t.Errorf("the audit log holds %q", got)
 	}
+	var detail string
+	in.query(t, &detail, `select detail from audit_log where action = 'namespace.update' order by seq desc limit 1`)
+	if detail != `{"quotas":{"max_concurrent_tasks":7,"max_retention_days":180}}` {
+		t.Errorf("the last change is recorded with %s, and it is the quotas as they then stood", detail)
+	}
 }
 
-// DELETE removes a namespace that holds nothing but its built-in identity, which goes first, with its
-// grants and its authentication policy, and refuses one that holds a workflow, saying so, and a
+// DELETE removes a namespace that holds nothing but its built-in identity, which goes first, with
+// its grants and its authentication policy, and refuses one that holds a workflow, saying so, and a
 // user's personal namespace, which goes only with its user.
 func TestANamespaceIsRemovedOnlyWhenItHoldsNothing(t *testing.T) {
 	in := someNamespaces(t)
@@ -466,8 +474,8 @@ func valid(t *testing.T, pointer string, answer []byte) {
 }
 
 // An owner removed while the namespace naming it is being created is the owner that names nobody,
-// found by the namespace's reference to it rather than by the check before: 422, and nothing written
-// or recorded.
+// found by the namespace's reference to it rather than by the check before: 422, and nothing
+// written or recorded.
 func TestAnOwnerRemovedDuringACreationNamesNobody(t *testing.T) {
 	in := someNamespaces(t)
 	removing, err := dbtest.Superuser(t, in.super).Begin(t.Context())

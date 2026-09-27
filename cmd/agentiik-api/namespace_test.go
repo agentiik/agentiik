@@ -95,6 +95,25 @@ func TestNamespaceCreateRefusesANameTheAPIRefuses(t *testing.T) {
 	}
 }
 
+// A namespace named after a user's login is refused, since a login is also the name of its user's
+// personal namespace, and saying so names the collision rather than the table that refused it.
+func TestNamespaceCreateRefusesALogin(t *testing.T) {
+	database, admin := namespaced(t)
+	for _, stmt := range []string{
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+	} {
+		if _, err := admin.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	var out bytes.Buffer
+	err := namespace(t.Context(), database.Application, "create", "alice", &out)
+	if err == nil || !strings.Contains(err.Error(), "alice is a user's login") || out.Len() > 0 || exists(t, admin, "alice") {
+		t.Errorf("creating a namespace named after a login answered %v, said %q", err, out.String())
+	}
+}
+
 // With nothing configured, namespace refuses and names the database setting the API reads, and not
 // the privileged role migrate connects as, which it never uses.
 func TestNamespaceReadsTheAPIsDatabaseSettingAlone(t *testing.T) {
@@ -157,7 +176,7 @@ func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 
 	for name, held := range map[string]string{
 		"with-workflow": "1 workflow", "with-secret": "1 secret", "with-object": "1 stored object",
-		"with-account": "1 service account besides with-account/agentiik", "alice": "alice's personal namespace",
+		"with-account": "1 service account besides with-account/agentiik", "alice": "the personal namespace of the user alice",
 	} {
 		out.Reset()
 		err := namespace(t.Context(), database.Application, "remove", name, &out)

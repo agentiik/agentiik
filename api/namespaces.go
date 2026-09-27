@@ -105,8 +105,8 @@ func (n *NamespaceRecord) field(b *body, name string) error {
 //
 // Each is left out where it is not set, and none is ever written as zero or empty: each count
 // "starts at one", and an empty allowed_runner_pools is refused rather than read. An answer always
-// writes max_concurrent_tasks and max_retention_days, which "always hold a value, 20 and 90 until an
-// administrator sets another", and the other four where they are set.
+// writes max_concurrent_tasks and max_retention_days, which "always hold a value, 20 and 90 until
+// an administrator sets another", and the other four where they are set.
 type Quotas struct {
 	MaxConcurrentTasks int      `json:"max_concurrent_tasks,omitempty"`
 	MaxRunsPerHour     int      `json:"max_runs_per_hour,omitempty"`
@@ -203,9 +203,9 @@ func runDuration(written string) error {
 }
 
 // notNullHere refuses null where a namespace writes its kind, its quotas or one quota, and reads
-// nothing otherwise. The wire allows null for none of them, and read as left out, a null quota would
-// lift a bound, or keep one, from a value somebody meant to set, which is what a client sends for a
-// variable it left unset.
+// nothing otherwise. The wire allows null for none of them, and read as left out, a null quota
+// would lift a bound, or keep one, from a value somebody meant to set, which is what a client sends
+// for a variable it left unset.
 func notNullHere(b *body, want string) error {
 	if b.d.PeekKind() != jsontext.KindNull {
 		return nil
@@ -387,10 +387,11 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 		if created, err = wide.NamespaceNamed(ctx, ask.Name); err != nil {
 			return err
 		}
-		// The owner's grant is a grant written like any other, and recorded as one, so that
-		// whoever reads the log for who was given what finds it there; the namespace's entry
-		// names it too, so that who could act in it from the start reads off one entry.
-		if err := wide.Audit(ctx, audit.Record{
+		// The owner's grant is a grant written like any other, and recorded as one, in the
+		// namespace it was done in, so that whoever reads the log for who was given what there
+		// finds it; the namespace's entry names it too, so that who could act in it from the start
+		// reads off one entry.
+		if err := wide.AuditIn(ctx, ask.Name, audit.Record{
 			Actor: string(who), Action: audit.GrantCreate, Target: grant.ID, Result: audit.Done,
 			Detail: map[string]any{"principal": grant.Principal, "scope": grant.Scope.String(), "role": string(grant.Role)},
 		}); err != nil {
@@ -502,8 +503,8 @@ func (s *NamespaceAPI) remove(w http.ResponseWriter, r *http.Request, who Princi
 	case errors.Is(err, db.ErrNoNamespace):
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 		return
-	case errors.Is(err, db.ErrPersonalNamespace):
-		fail(w, http.StatusConflict, "namespace "+name+" is "+name+"'s personal namespace, which is its user's and is never removed on its own")
+	case errors.Is(err, ErrPersonalNamespace):
+		fail(w, http.StatusConflict, PersonalRefusal(name))
 		return
 	case errors.As(err, &holds):
 		fail(w, http.StatusConflict, holds.Held())
@@ -515,15 +516,34 @@ func (s *NamespaceAPI) remove(w http.ResponseWriter, r *http.Request, who Princi
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ErrPersonalNamespace is a user's personal namespace, which RemoveNamespace refuses: it is named
+// after its user's login, and "every user owns a personal namespace named after their login ...
+// which they cannot delete or rename". Removing the user is what removes it.
+var ErrPersonalNamespace = errors.New("api: that namespace is a user's personal namespace")
+
+// PersonalRefusal is the refusal of a personal namespace's removal, in the words the route and the
+// server verb both say it in.
+func PersonalRefusal(name string) string {
+	return "namespace " + name + " is the personal namespace of the user " + name + ", named after their login, and is removed with its user rather than as a namespace"
+}
+
 // RemoveNamespace removes the namespace name as who, with its built-in identity, its grants and its
 // authentication policy, and records it in the audit log in the same transaction. It is what DELETE
-// /api/v1/namespaces/{ns} does, and what agentiik-api namespace remove does on the server, so that the
-// two refuse the same namespaces.
+// /api/v1/namespaces/{ns} does, and what agentiik-api namespace remove does on the server, so that
+// the two refuse the same namespaces.
 //
 // A namespace that is not there is db.ErrNoNamespace, a user's personal namespace
-// db.ErrPersonalNamespace, and one that holds anything a *db.NamespaceHolds saying what.
+// ErrPersonalNamespace, and one that holds anything a *db.NamespaceHolds saying what. The kind is
+// read before the row is locked, which is sound because a namespace's kind never changes.
 func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Principal) error {
 	return pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
+		n, err := w.NamespaceNamed(ctx, name)
+		if err != nil {
+			return err
+		}
+		if n.Kind == db.NamespacePersonal {
+			return fmt.Errorf("%w: %s", ErrPersonalNamespace, name)
+		}
 		if err := w.RemoveNamespace(ctx, name); err != nil {
 			return err
 		}
@@ -533,10 +553,11 @@ func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Princi
 
 // setQuotas is PUT /api/v1/namespaces/{namespace}/quotas: the namespace's quotas, whole.
 //
-// "max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator
-// sets another, and a write that leaves either out keeps the value it has. The other four bound
-// nothing until they are set, and a write that leaves one out removes its bound." So the body is the
-// whole of what the four bound, and what a Terraform apply sends is what the namespace holds after it.
+// "max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an
+// administrator sets another, and a write that leaves either out keeps the value it has. The other
+// four bound nothing until they are set, and a write that leaves one out removes its bound." So the
+// body is the whole of what the four bound, and what a Terraform apply sends is what the namespace
+// holds after it.
 func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
 	if NamespaceName(name) != nil {
