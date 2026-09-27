@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
@@ -30,7 +29,7 @@ func bootstrapped(t *testing.T, database config.Database) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := newPreparer(t.TempDir(), time.Now(), io.Discard).bootstrapToken(t.Context(), pool, theToken); err != nil {
+	if err := bootstrapToken(t.Context(), pool, "init", theToken, nil, io.Discard); err != nil {
 		t.Fatalf("the bootstrap token could not be kept: %s", err)
 	}
 }

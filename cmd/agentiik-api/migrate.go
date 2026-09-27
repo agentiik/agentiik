@@ -16,11 +16,36 @@ func migrateVerb(ctx context.Context, lookup config.Lookup, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "%s migrate: the configuration refuses the start:\n%s\n", program, err)
 		return exitFailed
 	}
-	if err := migrate(ctx, c, stdout); err != nil {
+	if err := migrateAndBootstrap(ctx, c, stdout); err != nil {
 		fmt.Fprintf(stderr, "%s migrate: %s\n", program, err)
 		return exitFailed
 	}
 	return exitStopped
+}
+
+// migrateAndBootstrap is the whole of migrate: the migrations and the role, then the bootstrap
+// token's hash, as init keeps it, for an installation that runs no init.
+//
+// Homebrew's server and one put together by hand run migrate where a Compose file runs init, at
+// every start, so migrate keeps the hash of the token their settings set, as init does. And an
+// installation of v0.2 upgraded that way has the hash its operator token left in the file
+// AGK_OPERATOR_TOKEN_FILE names and nowhere else, since no init ran to write it where the API reads
+// it now: migrate imports it, once, so that the token goes on working through an upgrade that
+// changes nothing but the programs.
+func migrateAndBootstrap(ctx context.Context, c config.Migration, stdout io.Writer) error {
+	if err := migrate(ctx, c, stdout); err != nil {
+		return err
+	}
+	pool, err := db.Open(ctx, c.Application.ConnString())
+	if err != nil {
+		return fmt.Errorf("the database %s names could not be reached as %s: %w", config.DatabaseURL, c.Application.Role, err)
+	}
+	defer pool.Close()
+	var imported func() ([]byte, error)
+	if c.OperatorTokenFile != "" {
+		imported = c.OperatorTokenHash
+	}
+	return bootstrapToken(ctx, pool, "migrate", c.OperatorToken, imported, stdout)
 }
 
 // migrate applies the migrations as the role that may change the schema, and creates or narrows

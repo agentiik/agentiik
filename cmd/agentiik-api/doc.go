@@ -3,7 +3,7 @@
 // what it serves on.
 //
 //	agentiik-api serve                 serve every route
-//	agentiik-api migrate               apply the migrations and create the application role
+//	agentiik-api migrate               apply the migrations, create the application role, keep the bootstrap hash
 //	agentiik-api init                  prepare an installation, and bring it in line with its settings
 //	agentiik-api health                exit 0 where the API serving beside it answers
 //	agentiik-api bus-init DIR          create the installation's NATS operator and accounts
@@ -77,18 +77,28 @@
 // # The bootstrap token
 //
 // The v0.2 operator token is the bootstrap token from v0.3.0, under the setting that named it,
-// AGK_OPERATOR_TOKEN, which init reads and keeps the SHA-256 of in the database. api.Principals
-// takes it as the bootstrap operator, written operator as the v0.2 operator was, an administrator
-// owning every namespace, until the first administrator has enrolled a passkey; from then on it is
-// refused, and init says at every run that the line is ignored. AGK_OPERATOR_TOKEN_FILE, which
-// named the file a v0.2 init kept the hash in, is read by no program: a v0.2 Compose file still
-// sets it, and serve starts as though it did not.
+// AGK_OPERATOR_TOKEN, which init reads, and migrate where no init runs, and keeps the SHA-256 of in
+// the database. api.Principals takes it as the bootstrap operator, written operator as the v0.2
+// operator was, an administrator owning every namespace, until the first administrator has enrolled
+// a passkey; from then on it is refused, and init and migrate say at every run that the line is
+// ignored. AGK_OPERATOR_TOKEN_FILE, which named the file a v0.2 installation kept the hash in, is
+// read by migrate alone, to import that hash once: a v0.2 Compose file still sets it, and serve
+// starts as though it did not.
 //
 // # migrate
 //
 // It reads config.ReadMigration and runs db.Provision as the role AGK_MIGRATE_DATABASE_URL names:
 // the migrations, then the NOSUPERUSER NOBYPASSRLS role AGK_DATABASE_URL names, with the password
 // in AGK_DATABASE_PASSWORD_FILE. Running it again applies nothing and changes nothing.
+//
+// It then keeps the bootstrap token's hash as init does, connected as that role, since Homebrew's
+// server and an installation put together by hand run migrate at every start where a Compose file
+// runs init: the token AGK_OPERATOR_TOKEN sets replaces the hash at every run until the bootstrap
+// has ended, and is ignored, saying so, from then on. With none set, an installation upgraded from
+// v0.2 without init has its operator token's hash in the file AGK_OPERATOR_TOKEN_FILE names and
+// nowhere else, and migrate imports it where the database keeps no hash and the bootstrap has not
+// ended, once: the file is never read again. A file that is not there imports nothing, and one in
+// any other shape than v0.2 wrote, or that others may read, fails the run naming the variable.
 //
 // # init
 //
@@ -110,8 +120,8 @@
 // which anybody may read; the control plane's credential alone is one file for two, since the API
 // renews it while it runs.
 //
-// It is the one program that takes a secret as a value: the bootstrap token, which a person sets
-// once in the file Docker Compose reads, and of which init writes the hash alone.
+// It takes a secret as a value, as migrate alone does besides: the bootstrap token, which a person
+// sets once in the file Docker Compose reads, and of which init writes the hash alone.
 //
 // # namespace
 //
