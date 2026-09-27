@@ -409,7 +409,7 @@ func TestARunOfTheV02OperatorIsLetInWhileTheBootstrapLasts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := "operator no longer holds workflow:run on finance/monthly-invoicing: the bootstrap token ended at 2026-09-14T05:59:00Z, when the first administrator enrolled a passkey"
+	want := "operator no longer holds workflow:run on finance/monthly-invoicing: the bootstrap token ended at 2026-09-14T05:59:00Z, when the first administrator signed in"
 	if d.State != agk.Cancelled || d.Reason != want {
 		t.Errorf("once the bootstrap has ended operator's waiting run is %s, for\n%q\nwant\n%q", d.State, d.Reason, want)
 	}

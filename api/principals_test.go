@@ -382,7 +382,7 @@ func TestTheBootstrapTokenIsTheOperatorUntilTheFirstAdministratorEnrols(t *testi
 
 	in.endBootstrap(t)
 	as := in.identified(t, bootstrap)
-	if as.Principal != "" || !strings.Contains(as.Refused, "bootstrap token") || !strings.Contains(as.Refused, "first administrator enrolled") {
+	if as.Principal != "" || !strings.Contains(as.Refused, "bootstrap token") || !strings.Contains(as.Refused, "first administrator signed in") {
 		t.Errorf("once the first administrator enrolled, the bootstrap token identified %+v", as)
 	}
 	for _, p := range api.Permissions {
@@ -487,7 +487,7 @@ func TestThroughTheRouterATokenReachesOnlyWhatItsScopeKeeps(t *testing.T) {
 	in.endBootstrap(t)
 	for _, path := range []string{"/api/v1/runners", invoicing} {
 		w := ask(path, bootstrap)
-		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "the bootstrap token, that ended when the first administrator enrolled a passkey") {
+		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "the bootstrap token, that ended when the first administrator signed in") {
 			t.Errorf("once ended, the bootstrap token at %s answered %d: %s", path, w.Code, w.Body.String())
 		}
 	}

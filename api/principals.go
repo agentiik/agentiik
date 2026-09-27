@@ -38,7 +38,7 @@ const BootstrapOperator Principal = access.BootstrapOperator
 const (
 	noToken = "that token opens nothing: it is no API token this installation issued, or it was revoked or has expired, or its holder is suspended"
 
-	noTokenSinceTheBootstrap = noToken + ". If it is the bootstrap token, that ended when the first administrator enrolled a passkey: sign in with agk login, or use a service account's token"
+	noTokenSinceTheBootstrap = noToken + ". If it is the bootstrap token, that ended when the first administrator signed in: sign in with agk login, or use a service account's token"
 )
 
 // Principals identifies a request's principal from the credential it presents, and answers what

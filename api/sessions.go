@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 )
 
@@ -191,6 +192,14 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // otherwise. Such a session is enrolling without having been opened by a code, which the
 // registration ceremony tells apart: it registers from it. A session a synced passkey opened opens
 // nothing where device_bound_only applies, read the same way.
+//
+// The first request of an administrator's full session ends the bootstrap token where it has not
+// ended, recorded as bootstrap.end: a session a password opened while the policy required a passkey
+// only enrolled and left the token going, and once the policy relaxes it is full from its next
+// request, from which its holder administers. Ended at no sign-in or enrolment of theirs, the token
+// would go on beside the administrator it made for as long as that session did. The session's row is
+// kept open first, the bootstrap state taken next and the audit log appended to last, the order every
+// act ending the token takes them in.
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
 		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
@@ -246,6 +255,11 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 				return err
 			}
 		}
+		if s.Admin && !enrolling {
+			if err := endBootstrapAtSession(ctx, w, s, now); err != nil {
+				return err
+			}
+		}
 		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0, ProvedAt: s.CreatedAt}
 		return nil
 	})
@@ -253,6 +267,25 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		return Identity{}, err
 	}
 	return as, nil
+}
+
+// endBootstrapAtSession ends the bootstrap token at a request of s, an administrator's full session,
+// where it has not ended, and records the end, in the transaction w is. The state is read before it
+// is written, so that the requests of every session once the token has ended write nothing; two
+// first requests at the same moment take turns on its row, and the second ends nothing.
+func endBootstrapAtSession(ctx context.Context, w *db.Wide, s db.Session, now time.Time) error {
+	b, err := w.Bootstrap(ctx)
+	if err != nil || b.Ended() {
+		return err
+	}
+	ended, err := w.EndBootstrap(ctx, now)
+	if err != nil || !ended {
+		return err
+	}
+	return w.Audit(ctx, audit.Record{
+		Actor: s.Login, Action: audit.BootstrapEnd, Target: string(BootstrapOperator), Result: audit.Done,
+		Detail: map[string]any{"first_administrator": s.Login, "credential": s.Credential},
+	})
 }
 
 // proofLife is how recently a session has to have been signed in to for a credential that lasts to

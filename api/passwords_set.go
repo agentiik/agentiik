@@ -40,8 +40,9 @@ import (
 // installation addressed by an IP address, and where the policy requires no passkey. Where it
 // requires one, the bootstrap stays until the administrator registers a passkey, from the session
 // the password opened or a later one, which ends it then (passkeys.go), or until the password signs
-// them in to a full session, the policy relaxed since (passwords.go): ended at the password, it
-// would leave the installation to somebody who can do nothing but enrol.
+// them in to a full session, or a session it opened is full at a request, the policy relaxed since
+// (passwords.go, sessions.go): ended at the password, it would leave the installation to somebody
+// who can do nothing but enrol.
 //
 // A code sets the password in place of one held, which only a recovery code can meet, since the
 // other two are issued to a user holding no credential; the TOTP generator beside the old password

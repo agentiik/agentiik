@@ -362,6 +362,65 @@ func TestAnAdministratorsPasswordSigningInToAFullSessionEndsTheBootstrap(t *test
 	}
 }
 
+// A first administrator's session that only enrolled, opened by the password they set while the
+// policy required a passkey, ends the bootstrap token at its first request once the policy relaxes,
+// with no sign-in of theirs: recorded as bootstrap.end, and once. Its requests while it only enrols
+// end nothing, and neither do the full session's of somebody who administers nothing.
+func TestAnAdministratorsSessionComingToBeFullEndsTheBootstrapAtItsFirstRequest(t *testing.T) {
+	in := someCeremonies(t)
+	sessions := map[string]*http.Cookie{}
+	for _, u := range []struct {
+		login string
+		admin bool
+	}{{"alice", true}, {"bob", false}} {
+		w := in.call(t, "POST", "/api/v1/auth/password/enrol", fmt.Sprintf(`{"code":%q,"password":"a password of their own"}`, in.user(t, u.login, u.admin)), "")
+		var answer api.PasswordEnrolled
+		if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil || w.Code != http.StatusOK || answer.Session != api.SessionEnrolment {
+			t.Fatalf("%s setting a password answered %d %s", u.login, w.Code, w.Body)
+		}
+		sessions[u.login] = session(t, w)
+	}
+	ended := func() bool {
+		t.Helper()
+		return in.count(t, `select count(*) from bootstrap where enrolled_at is not null and token_hash is null`) == 1
+	}
+	me := func(login string, want int) {
+		t.Helper()
+		if w := in.call(t, "GET", "/api/v1/me", "", "", sessions[login]); w.Code != want {
+			t.Fatalf("%s's session asking who it is answered %d %s, want %d", login, w.Code, w.Body, want)
+		}
+	}
+
+	me("alice", http.StatusForbidden)
+	if ended() {
+		t.Fatal("a request of alice's session that only enrols ended the bootstrap")
+	}
+	bound := false
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.SetInstallationPolicy(ctx, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2}, *in.clock)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	me("bob", http.StatusOK)
+	if ended() {
+		t.Fatal("a request of bob's full session, who administers nothing, ended the bootstrap")
+	}
+	me("alice", http.StatusOK)
+	if !ended() {
+		t.Fatal("the first request of alice's session, full since the policy relaxed, left the bootstrap going")
+	}
+	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("the bootstrap token after alice's request answered %d %s", w.Code, w.Body)
+	}
+	if got := in.actions(t); len(got) == 0 || got[len(got)-1] != "alice bootstrap.end operator" {
+		t.Errorf("the audit log reads %q", got)
+	}
+	me("alice", http.StatusOK)
+	if n := in.count(t, `select count(*) from audit_log where action = 'bootstrap.end'`); n != 1 {
+		t.Errorf("the bootstrap is recorded as ended %d times", n)
+	}
+}
+
 // What was checked is checked again in the transaction that acts on it: a generator started again
 // between a code confirming the first and the enrolment is not enrolled, the one started last still
 // waiting; a generator removed between a code checked and the removal is 409; and a password

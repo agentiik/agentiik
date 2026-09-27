@@ -812,7 +812,7 @@ func TestInitKeepsTheBootstrapTokensHashInTheDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, token := range []config.Secret{changed, chosen} {
-		if out := initAt(token, firstRun.Add(time.Duration(6+i)*time.Minute)); kept() != nil || !strings.Contains(out, "ignored the bootstrap token set") || !strings.Contains(out, "no error") {
+		if out := initAt(token, firstRun.Add(time.Duration(6+i)*time.Minute)); kept() != nil || !strings.Contains(out, "ignored the bootstrap token set: it ended when the first administrator signed in") || !strings.Contains(out, "no error") {
 			t.Errorf("once the bootstrap ended, a token set was kept as %x, or not said to be ignored:\n%s", kept(), out)
 		}
 	}

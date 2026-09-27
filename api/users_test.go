@@ -275,7 +275,7 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		_, err := w.EndBootstrap(ctx, in.now)
 		return err
 	})
-	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"frank","display_name":"Frank","admin":true}`, nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") {
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"frank","display_name":"Frank","admin":true}`, nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") {
 		t.Errorf("the ended bootstrap token creating frank answered %d: %s", w.Code, w.Body)
 	}
 	// And an administrator creates one, answered a new user's link that they issued: a first
@@ -832,7 +832,7 @@ func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 		{"DELETE", "/api/v1/groups/old-team", ""},
 	} {
 		w := sent(t, rt, r.method, r.path, "operator", r.body)
-		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") || w.Header().Get("WWW-Authenticate") != "Bearer" {
+		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator signed in") || w.Header().Get("WWW-Authenticate") != "Bearer" {
 			t.Errorf("%s %s %s by the operator once the bootstrap ended answered %d: %s", r.method, r.path, r.body, w.Code, w.Body)
 		}
 	}

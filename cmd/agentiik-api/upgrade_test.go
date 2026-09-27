@@ -134,7 +134,7 @@ func TestAnInstallationOfV025KeepsItsOperatorTokenThroughTheUpgrade(t *testing.T
 		t.Fatal(err)
 	}
 	code, answer = cl.do("GET", "/api/v1/runner-pools", theToken, nil)
-	if said, _ := answer["error"].(string); code != http.StatusUnauthorized || !strings.Contains(said, "bootstrap token, that ended when the first administrator enrolled a passkey") {
+	if said, _ := answer["error"].(string); code != http.StatusUnauthorized || !strings.Contains(said, "bootstrap token, that ended when the first administrator signed in") {
 		t.Errorf("once the first administrator enrolled, the operator token answered %d: %v", code, answer)
 	}
 	d.out.Reset()
