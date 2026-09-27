@@ -185,7 +185,7 @@ func Build(t testing.TB, in Installation) *Fixture {
 	f := &Fixture{
 		Installation: in,
 		client: &http.Client{
-			Transport: client.Transport, Timeout: client.Timeout, Jar: nil,
+			Transport: client.Transport, Timeout: client.Timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		Lapse:   in.Now().Add(time.Hour).Truncate(time.Second).UTC(),
