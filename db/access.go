@@ -74,15 +74,41 @@ func grantAccess(ctx context.Context, tx pgx.Tx, g access.Grant, within string) 
 	return nil
 }
 
-// RevokeAccess removes a grant of this namespace. A revoked grant is gone rather than kept: the
-// audit log is where who granted what and who took it back is kept.
-func (n *NS) RevokeAccess(ctx context.Context, id string) error {
-	tag, err := n.tx.Exec(ctx, `delete from grants where namespace = $1 and id = $2`, n.namespace, id)
+// RevokeAccess removes the grant id written at one scope of this namespace, on the namespace where
+// workflow is empty and on that workflow where it is not, and answers it as it was. One written at
+// the other scope is ErrNoAccessGrant, as one nobody wrote is: a grant is revoked where it was
+// written, so that whoever may share one workflow revokes what was written on it and nothing its
+// namespace gives. A revoked grant is gone rather than kept: the audit log is where who granted what
+// and who took it back is kept.
+func (n *NS) RevokeAccess(ctx context.Context, workflow, id string) (access.Grant, error) {
+	revoked, err := collectAccess(n.tx.Query(ctx,
+		`delete from grants where namespace = $1 and id = $2 and workflow is not distinct from $3
+		  returning `+accessColumns, n.namespace, id, nilIfEmpty(workflow)))
 	if err != nil {
-		return fmt.Errorf("db: access grant %s could not be revoked: %w", id, err)
+		return access.Grant{}, fmt.Errorf("db: access grant %s could not be revoked: %w", id, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNoAccessGrant
+	if len(revoked) == 0 {
+		return access.Grant{}, ErrNoAccessGrant
+	}
+	return revoked[0], nil
+}
+
+// Present answers nil where this namespace exists and, where workflow is not empty, holds that
+// workflow, and ErrNoNamespace or ErrNoWorkflow where not. A route an administrator may reach for a
+// namespace nobody created tells the absent from the empty with it.
+func (n *NS) Present(ctx context.Context, workflow string) error {
+	var namespace, held bool
+	err := n.tx.QueryRow(ctx,
+		`select exists (select from namespaces where name = $1),
+		        exists (select from workflows where namespace = $1 and name = $2)`,
+		n.namespace, workflow).Scan(&namespace, &held)
+	switch {
+	case err != nil:
+		return fmt.Errorf("db: whether %s is there could not be read: %w", n.namespace, err)
+	case !namespace:
+		return fmt.Errorf("%w: %s", ErrNoNamespace, n.namespace)
+	case workflow != "" && !held:
+		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
 	}
 	return nil
 }
@@ -123,6 +149,22 @@ func named(p access.Principal) []string {
 func (n *NS) AccessGrants(ctx context.Context) ([]access.Grant, error) {
 	return collectAccess(n.tx.Query(ctx,
 		`select `+accessColumns+` from grants where namespace = $1 order by granted_at, id`, n.namespace))
+}
+
+// AccessGrantsAt answers the grants and denies that apply at one scope of this namespace and have not
+// expired at now, each with the scope it was written at: those written on the namespace, which every
+// workflow in it inherits, and where workflow is not empty, those written on that workflow; the
+// namespace's first, then each in the order written. A namespace nobody created is ErrNoNamespace,
+// and a workflow it does not hold ErrNoWorkflow, so that a listing tells the absent from the empty.
+func (n *NS) AccessGrantsAt(ctx context.Context, workflow string, now time.Time) ([]access.Grant, error) {
+	if err := n.Present(ctx, workflow); err != nil {
+		return nil, err
+	}
+	return collectAccess(n.tx.Query(ctx,
+		`select `+accessColumns+` from grants
+		  where namespace = $1 and (workflow is null or workflow = $2)
+		    and (expires_at is null or expires_at > $3)
+		  order by workflow nulls first, granted_at, id`, n.namespace, workflow, now))
 }
 
 // AccessGrantsFor answers the grants of this namespace that may apply at now to p, its own and its
