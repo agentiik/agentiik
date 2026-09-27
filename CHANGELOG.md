@@ -112,6 +112,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An exchange refused once it holds to its schema is recorded as `signin.fail` with its reason, by the address it came from, about the account the code names, or `an unknown exchange code`, within the bound the sign-ins share; one refused after its verifier answered is recorded whatever the bound says.
 - A deny of `grant:manage` on a workflow is refused with 422, since it would take from whoever it names the permission that revokes it: nobody locks a namespace's owners out of a workflow.
 - A machine joining a pool is recorded as `runner.join` on the installation, by whoever issued its join token, `installation` for the one `init` issues, with the runner, its pool and its labels.
+- At most 10,000 passkey challenges are open at once across the installation (`db.ChallengesLive`): past it, `POST /api/v1/auth/passkey/options` answers 503 with `Retry-After`, the seconds until the oldest lapses, and writes nothing.
 
 ### State
 
