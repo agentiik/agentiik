@@ -450,7 +450,7 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 			if len(named) > 1 {
 				noun = "the secrets"
 			}
-			fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use in the namespace %s, which you do not: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(named, ", "), over.Namespace))
+			fail(w, http.StatusForbidden, fmt.Sprintf("this version names %s %s, and a version naming a secret is accepted only from someone holding secret:use on %s, which a grant on the namespace %s gives and a deny on the workflow takes away, and you do not hold it there: whoever writes a secret's name into a workflow answers for its value going into a container, and running the version afterwards takes workflow:run alone", noun, strings.Join(named, ", "), over.Workflow, over.Namespace))
 			return
 		}
 	}
@@ -951,10 +951,11 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request, who Principal, o
 //
 // It says nothing of how the run stands, and its status is the same whether the run is going or
 // has ended. The route is guarded by workflow:run, and a run's state is what run:read guards: "See
-// run state, per-step state, timings and log lines". operator holds the one and not the other, as
-// does anybody denied run:read, and an answer saying how the run stood, or a status that changed
-// once it had ended, would hand them what GET refuses them, at any moment and with no side effect
-// on a run that has ended. Somebody holding both reads the state where run:read guards it.
+// run state, per-step state, timings and log lines". A token narrowed to workflow:run holds the one
+// and not the other, as does anybody denied run:read, and an answer saying how the run stood, or a
+// status that changed once it had ended, would hand them what GET refuses them, at any moment and
+// with no side effect on a run that has ended. Somebody holding both reads the state where run:read
+// guards it.
 //
 // Asking again is asking once, and asking about a run that has ended changes nothing: "a
 // principal asking twice, or asking about a run that finished while they were asking, has got

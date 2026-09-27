@@ -441,13 +441,26 @@ func TestARouteAsksOnlyAboutWhatItAlsoNeeds(t *testing.T) {
 		t.Errorf("a request no router served was answered %t, %v", held, err)
 	}
 
+	// A request built from one a route needing secret:use was given, and served again as a
+	// facade over the API serves one, asks what its own route declared: nothing.
+	rt.MustHandle("PUT", "/api/v1/{namespace}/workflows/{workflow}/facade", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+			again := r.Clone(r.Context())
+			again.URL.Path = "/api/v1/finance/workflows/monthly-invoicing/triggers"
+			rt.ServeHTTP(w, again)
+		})
+	answer = true
+	if code, _ := reached(t, rt, "PUT", "/api/v1/finance/workflows/monthly-invoicing/facade", "alice"); code != http.StatusOK || answer || failure != nil {
+		t.Errorf("a route needing nothing more, reached through one needing secret:use, was answered %v, %v", answer, failure)
+	}
+
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
 	if err := rt.Handle("PUT", "/api/v1/{namespace}/workflows/{workflow}/other", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow, Also: "secret:everything"}, ok); err == nil {
 		t.Error("a route was registered needing as well a permission nobody documents")
 	}
 	for _, route := range rt.Routes() {
 		want := api.Permission("")
-		if strings.Contains(route.Pattern, "/versions/") {
+		if strings.Contains(route.Pattern, "/versions/") || strings.HasSuffix(route.Pattern, "/facade") {
 			want = api.SecretUse
 		}
 		if route.Also != want {
