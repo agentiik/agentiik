@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing/fstest"
 	"time"
@@ -888,6 +889,15 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, who Principal, ov
 			Detail: map[string]any{"workflow": over.Workflow, "commit": start.commit},
 		})
 	})
+	var reached *db.RunsPerHourReached
+	if errors.As(err, &reached) {
+		// "Past it the API answers 429 with Retry-After, the seconds until the oldest run
+		// counted leaves the window." No run exists, so a client told to come back then is not
+		// asking for a second one.
+		w.Header().Set("Retry-After", strconv.Itoa(reached.Seconds()))
+		fail(w, http.StatusTooManyRequests, reached.Reason())
+		return
+	}
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the run could not be created")
 		return
