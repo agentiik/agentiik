@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -337,7 +338,9 @@ const notificationActs = "0046_notification_acts.sql"
 // A notification a build of v0.3.0 wrote before migration 0046 is kept where its row says who acted:
 // a grant told at the instant it was written was written then, by its granted_by, and is told as
 // granted by them. One told later, a deny lifted or a membership changed, names nobody who acted and
-// is removed. The other kinds are left as they were.
+// is removed. The other kinds are left as they were. Migrated as a managed PostgreSQL's
+// administrator, which owns the database and is no superuser, and so reads the notifications behind
+// their row security only through the installation's scope.
 func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
 	all, err := Migrations()
 	if err != nil {
@@ -347,13 +350,30 @@ func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
 	if i < 1 {
 		t.Fatalf("no migration %s after another", notificationActs)
 	}
-	super, _ := migratedAt(t, all[i-1].Name)
+	super, role := blank(t)
 	ctx := t.Context()
-	conn, err := pgx.Connect(ctx, super)
-	if err != nil {
-		t.Fatal(err)
+	url := os.Getenv("AGENTIIK_TEST_DATABASE_URL")
+	admin := role[:min(len(role), maxIdentifier-len("_admin"))] + "_admin"
+	// The administrator owns the database, so it is dropped once the database is: this runs
+	// before the cleanups blank registered.
+	t.Cleanup(func() {
+		drop(ctx, url, `drop database if exists `+role+` with (force)`)
+		drop(ctx, url, `drop role if exists `+admin)
+	})
+	conn := connect(t, super)
+	for _, stmt := range []string{
+		`drop role if exists ` + admin,
+		`create role ` + admin + ` login createrole nosuperuser nobypassrls password 'test'`,
+		`alter database ` + role + ` owner to ` + admin,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
 	}
-	defer conn.Close(ctx)
+	as := connect(t, withCredentials(super, admin, "test"))
+	if _, err := MigrateThrough(ctx, as, all[i-1].Name); err != nil {
+		t.Fatalf("the database could not be migrated as far as %s as its administrator: %s", all[i-1].Name, err)
+	}
 	for _, stmt := range []string{
 		`insert into namespaces (name) values ('finance')`,
 		`insert into principals (id, kind) values ('dave', 'user')`,
@@ -369,7 +389,7 @@ func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
 			t.Fatalf("filling the database as a build before migration %s would have: %s", notificationActs, err)
 		}
 	}
-	if _, err := MigrateThrough(ctx, conn, ""); err != nil {
+	if _, err := MigrateThrough(ctx, as, ""); err != nil {
 		t.Fatalf("the notifications a build before migration %s wrote were refused: %s", notificationActs, err)
 	}
 	rows, err := conn.Query(ctx, `select concat_ws(' ', id, kind, act, acted_by) from notifications order by id`)
