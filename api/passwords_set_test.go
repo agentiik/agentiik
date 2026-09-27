@@ -18,6 +18,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/password"
+	"github.com/agentiik/agentiik/internal/totp"
 	"github.com/agentiik/agentiik/internal/ulid"
 )
 
@@ -362,12 +363,20 @@ func TestWhatTheEnrolmentRouteRefuses(t *testing.T) {
 
 // A namespace forbidding passwords forbids setting one to those holding a grant in it, and not to
 // the others, before anything is hashed: with every turn to hash held, the refusal comes at once
-// rather than after the wait.
+// rather than after the wait. A generator started before passwords were forbidden is not confirmed
+// after.
 func TestANamespaceForbiddingPasswordsForbidsSettingOne(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
-	in.tighten(t, db.AuthPolicy{Password: "forbidden"})
 	alice := in.passkeyed(t, "alice", "alice-passkey", false)
+	_, secret := in.started(t, alice)
+	in.tighten(t, db.AuthPolicy{Password: "forbidden"})
+	if w := in.call(t, "POST", "/api/v1/me/totp/confirm", fmt.Sprintf(`{"totp":%q}`, totp.Code(secret, totp.StepAt(*in.clock))), alice); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"password"`) {
+		t.Errorf("alice confirming a generator answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'alice' and type = 'totp'`); n != 0 {
+		t.Error("a generator was enrolled where passwords are forbidden")
+	}
 	carol := in.passkeyed(t, "carol", "carol-passkey", false)
 	body := `{"password":"a long enough passphrase","current_password":"%s"}`
 	done := api.Hashing(in.passwords, 1, 50*time.Millisecond)()
@@ -436,10 +445,12 @@ func TestAPasswordIsChangedWithTheCurrentOne(t *testing.T) {
 		t.Error("the change is not recorded")
 	}
 
-	// The right one starts the count again: ten wrong guesses, and the eleventh attempt, right or
-	// not, is refused.
-	for range 10 {
-		set(`{"password":"bob's third passphrase","current_password":"a guess"}`, c)
+	// The right one starts the count again: ten wrong guesses, each refused as a guess, and the
+	// eleventh attempt, right or not, is refused.
+	for i := range 10 {
+		if w := set(`{"password":"bob's third passphrase","current_password":"a guess"}`, c); w.Code != http.StatusForbidden {
+			t.Errorf("wrong guess %d after the change answered %d %s", i+1, w.Code, w.Body)
+		}
 	}
 	w = set(`{"password":"bob's third passphrase","current_password":"bob's new passphrase"}`, c)
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" {
@@ -450,12 +461,24 @@ func TestAPasswordIsChangedWithTheCurrentOne(t *testing.T) {
 	}
 }
 
-// A session a passkey opened sets a first password with no current one, and one sent there is 400;
-// a session that may only enrol, which a password opened, changes it with the current one; a session
-// an enrolment code opened sets nothing.
+// A session a passkey opened sets a first password with no current one, and one sent there is 400,
+// as a password that is the login is 422; a session that may only enrol, which a password opened,
+// changes it with the current one; a session an enrolment code opened sets nothing.
 func TestAPasswordIsSetFromAnySessionOfItsUser(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.CreateUser(ctx, db.User{Login: "frank-martinez", DisplayName: "Frank"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	frank := in.passkeyed(t, "frank-martinez", "frank-passkey", false)
+	if w := in.call(t, "PUT", "/api/v1/me/password", `{"password":"FRANK-MARTINEZ"}`, frank); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "not the login") {
+		t.Errorf("frank's login as his password answered %d %s", w.Code, w.Body)
+	}
+	if in.hashHeld(t, "frank-martinez") != "" {
+		t.Error("frank's login was set as his password")
+	}
 	erin := in.passkeyed(t, "erin", "erin-passkey", false)
 	if w := in.call(t, "PUT", "/api/v1/me/password", `{"password":"erin's first passphrase","current_password":"x"}`, erin); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "holds no password") {
 		t.Errorf("a current password where none is held answered %d %s", w.Code, w.Body)
@@ -487,13 +510,17 @@ func TestAPasswordIsSetFromAnySessionOfItsUser(t *testing.T) {
 }
 
 // Every route setting or removing a password or a generator refuses a bearer token, the user's own
-// included, and a request with no credential; a request from another origin carrying a session is
-// refused before the session is read.
+// included, and the bootstrap token, which is nobody's account; and a request with no credential; a
+// request from another origin carrying a session is refused before the session is read.
 func TestPasswordsAreSetFromASessionAlone(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
 	token := "agktoken_" + ulid.New()
+	bootstrap := "agk_op_" + ulid.New()
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		if _, err := w.SetBootstrapToken(ctx, hashOf(bootstrap)); err != nil {
+			return err
+		}
 		return w.MintToken(ctx, db.APIToken{ID: ulid.New(), Hash: hashOf(token), Principal: "alice", CreatedAt: *in.clock, ExpiresAt: in.clock.Add(time.Hour)})
 	}); err != nil {
 		t.Fatal(err)
@@ -506,8 +533,10 @@ func TestPasswordsAreSetFromASessionAlone(t *testing.T) {
 		{"POST", "/api/v1/me/totp/confirm", `{"totp":"123456"}`},
 		{"DELETE", "/api/v1/me/totp", `{"totp":"123456"}`},
 	} {
-		if w := sent(t, in.h, route.method, route.path, token, route.body); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "from a browser's session") {
-			t.Errorf("%s %s with a token answered %d %s", route.method, route.path, w.Code, w.Body)
+		for who, bearer := range map[string]string{"alice's token": token, "the bootstrap token": bootstrap} {
+			if w := sent(t, in.h, route.method, route.path, bearer, route.body); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "from a browser's session") {
+				t.Errorf("%s %s with %s answered %d %s", route.method, route.path, who, w.Code, w.Body)
+			}
 		}
 		if w := in.call(t, route.method, route.path, route.body); w.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s with no credential answered %d %s", route.method, route.path, w.Code, w.Body)

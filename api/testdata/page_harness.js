@@ -598,16 +598,28 @@ async function scenarios() {
   check(!visible(b, "own") && !visible(b, "signed-in") && visible(b, "password") && visible(b, "passkey") && /Password removed/.test(text(b, "status")),
     "once the session the password opened ended with it, the page does not offer a sign-in again");
 
-  scenario = "the signed-in section where passwords are forbidden to the account";
-  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
-  all.push(b);
-  await settle();
-  request(b, "me").answer(200, { principal: "alice" });
-  await settle();
-  await fire(b, "totp-start", "click");
-  request(b, "me/totp").answer(403, { error: "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey", setting: "password" });
-  await settle();
-  check(!visible(b, "own") && visible(b, "problem"), "the section is still offered once the API forbade passwords");
+  for (const [from, act] of [
+    ["starting a generator", async (b) => {
+      await fire(b, "totp-start", "click");
+      return request(b, "me/totp");
+    }],
+    ["setting the password", async (b) => {
+      b.elements["changed-password"].value = "alice's new passphrase";
+      b.elements["changed-password-again"].value = "alice's new passphrase";
+      await fire(b, "change-password", "submit");
+      return request(b, "me/password");
+    }],
+  ]) {
+    scenario = "the signed-in section where passwords are forbidden to the account, " + from;
+    b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+    all.push(b);
+    await settle();
+    request(b, "me").answer(200, { principal: "alice" });
+    await settle();
+    (await act(b)).answer(403, { error: "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey", setting: "password" });
+    await settle();
+    check(!visible(b, "own") && /passwords are forbidden/i.test(text(b, "problem")), "the section is still offered once the API forbade passwords");
+  }
 
   scenario = "the signed-in section: a one-time code generator";
   const uri = "otpauth://totp/Agentiik:alice@agentiik.example.com?algorithm=SHA1&digits=6&issuer=Agentiik&period=30&secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
