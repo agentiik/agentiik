@@ -50,6 +50,12 @@ import (
 // once they are gone. Nor is an object taken that a live artifact names, whatever its count
 // says: a count that went wrong costs an object kept, never one deleted.
 //
+// The controller writes objects of its own, the envelopes of a decision and a task's inputs,
+// straight to the store and records no write. A task's inputs are written again where their grant
+// was told to. An envelope names its run, step, port, attempt and the instant it was produced, so
+// its digest is its run's alone and counted from the decision that first names it until the run's
+// retention runs out: no decision names again an envelope whose count has sat at zero.
+//
 // # The grace period
 //
 // An object becomes collectable the moment its count reaches zero, and is collected no
