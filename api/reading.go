@@ -41,11 +41,12 @@ const artifactURLLifetime = 5 * time.Minute
 //
 // The filters narrow what is asked about rather than what is answered: a namespace or a workflow
 // the caller cannot read lists nothing, which is what one that does not exist lists, so a listing
-// is no way of learning which exist. Each workflow is asked about in turn, because a permission is
-// held on a whole namespace or on a single workflow and asking about the workflow answers both, a
-// deny on it included. Under a namespace's path, a namespace in the query is not read: the path's
-// is the only one its Holds answers about.
-func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, within Target, holds Holds) {
+// is no way of learning which exist. Each workflow is asked about, because a permission is held on a
+// whole namespace or on a single workflow and asking about the workflow answers both, a deny on it
+// included; and every one of them in one question, HoldsEach, asked even where there is none, so that
+// how long a listing takes to refuse is no way of learning either. Under a namespace's path, a
+// namespace in the query is not read: the path's is the only one its questions answer about.
+func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, within Target, _ Holds) {
 	q, err := runQuery(r)
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
@@ -75,14 +76,18 @@ func (s *Server) across(w http.ResponseWriter, r *http.Request, who Principal, w
 	// Asked outside the transaction that found them, since an authorizer may read the database
 	// itself, and a request holding one connection while it waits for another is how a pool runs
 	// dry under load.
+	targets := make([]Target, len(workflows))
+	for i, wf := range workflows {
+		targets[i] = Target{Namespace: wf.Namespace, Workflow: wf.Name}
+	}
+	allowed, err := HoldsEach(r)(r.Context(), targets)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+		return
+	}
 	readable := make([]db.Workflow, 0, len(workflows))
-	for _, wf := range workflows {
-		allowed, err := holds(r.Context(), Target{Namespace: wf.Namespace, Workflow: wf.Name})
-		if err != nil {
-			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
-			return
-		}
-		if allowed {
+	for i, wf := range workflows {
+		if allowed[i] {
 			readable = append(readable, wf)
 		}
 	}

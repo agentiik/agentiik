@@ -42,3 +42,6 @@ func BetweenVerifyAndRegister(s *PasskeyAPI, f func()) { s.checked = f }
 // BetweenIdentifyAndSetPolicy has f run between the checks of every policy s sets and the
 // transaction that writes it, which is where the bootstrap can end.
 func BetweenIdentifyAndSetPolicy(s *PolicyAPI, f func()) { s.checked = f }
+
+// Questions is how many transactions p has opened to say who a principal is and what it holds.
+func Questions(p *Principals) int64 { return p.questions.Load() }

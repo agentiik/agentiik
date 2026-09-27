@@ -154,7 +154,7 @@ func NewServer(rt *Router, o ServerOptions) (*Server, error) {
 		}
 	}
 	// One namespace's runs are the listing across the installation narrowed to it, asked about
-	// one workflow at a time for the reason the run is authorised over its own.
+	// each workflow for the reason the run is authorised over its own.
 	for _, pattern := range []string{"/api/v1/{namespace}/runs", "/api/v1/runs"} {
 		if err := rt.HandleAcross("GET", pattern, Across{Permission: RunRead}, s.across); err != nil {
 			return nil, err

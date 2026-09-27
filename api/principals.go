@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
@@ -53,6 +54,10 @@ type Principals struct {
 	// passwords allowed and no passkey required.
 	origin      string
 	ipAddressed bool
+
+	// questions counts the transactions opened to say who a principal is and what it holds, for a
+	// test to hold that what a question costs does not depend on its targets.
+	questions atomic.Int64
 }
 
 // NewPrincipals builds them over an installation's database. now is the clock tokens, sessions and
@@ -170,6 +175,7 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 	}
 
 	var grants []access.Grant
+	p.questions.Add(1)
 	err = p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
 		var err error
 		grants, err = n.AccessGrantsFor(ctx, principal, over.Workflow, now)
@@ -179,6 +185,58 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		return false, err
 	}
 	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
+}
+
+// Principals is an Among. The router finds one by asking, and asks an authorizer that is not one
+// target at a time, so a Principals without the method would have a listing take longer to refuse
+// the more workflows a namespace holds, and nothing else would fail.
+var _ Among = (*Principals)(nil)
+
+// AllowAmong is the router's Among: what Allow answers about each target, as one question. Who who
+// is is read once, and its grants and its groups' across the namespaces once, whatever the targets
+// are and however many, none included, so that refusing a listing of a namespace holding a hundred
+// workflows takes what refusing one of a namespace nobody created takes. The grants of every
+// namespace are read where Allow reads one namespace's, and package access passes over those that do
+// not apply to a target, as it does to Allow's.
+func (p *Principals) AllowAmong(ctx context.Context, who Principal, what Permission, over []Target) ([]bool, error) {
+	held := make([]bool, len(over))
+	if who == "" || !what.Valid() {
+		return held, nil
+	}
+	now := p.now()
+	principal, admin, bootstrapped, err := p.resolve(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	var grants []access.Grant
+	if who != BootstrapOperator && principal.Ref != "" {
+		p.questions.Add(1)
+		err := p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
+			var err error
+			grants, err = w.AccessGrantsAcross(ctx, principal, now)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i, target := range over {
+		switch {
+		case !nameable(target):
+		case who == BootstrapOperator && target.Namespace == "":
+			held[i] = bootstrapped && what == GrantManage
+		case who == BootstrapOperator:
+			held[i] = bootstrapped && access.Owner.Permissions().Has(what)
+		case principal.Ref == "":
+		case target.Namespace == "":
+			held[i] = admin && what == GrantManage
+		default:
+			if held[i], err = access.Holds(principal, grants, what, access.Scope{Namespace: target.Namespace, Workflow: target.Workflow}, now); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return held, nil
 }
 
 // HeldIn is the router's Holdings: the namespaces who holds a grant in, its own or one of its
@@ -201,6 +259,7 @@ func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error
 	}
 	now := p.now()
 	var grants []access.Grant
+	p.questions.Add(1)
 	err = p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		grants, err = w.AccessGrantsAcross(ctx, principal, now)
@@ -225,6 +284,7 @@ func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error
 // with an empty Ref.
 func (p *Principals) resolve(ctx context.Context, who Principal) (principal access.Principal, admin, bootstrapped bool, err error) {
 	principal = access.Principal{Ref: string(who)}
+	p.questions.Add(1)
 	err = p.pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
 		if who == BootstrapOperator {
 			bootstrap, err := w.Bootstrap(ctx)
