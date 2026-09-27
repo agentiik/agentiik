@@ -46,7 +46,8 @@ func within(got, want time.Duration) bool {
 // One counter across every trigger kind, over the last 60 minutes and not the clock hour: the run a
 // namespace creates past its quota is refused, whatever started it, and told when one more fits;
 // a run created more than an hour ago no longer counts, and a namespace that sets no quota is
-// refused nothing.
+// refused nothing. The oldest run is 59 minutes old, so that it lies in the clock hour before this
+// one at every minute but the last, where a count per clock hour would not count it.
 func TestARunPastTheRunsAnHourIsRefusedWhateverStartedIt(t *testing.T) {
 	pool, super := created(t)
 	conn, err := pgx.Connect(t.Context(), super)
@@ -54,9 +55,9 @@ func TestARunPastTheRunsAnHourIsRefusedWhateverStartedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close(t.Context())
-	// The run seed created, 50 minutes ago, and a quota of three.
+	// The run seed created, 59 minutes ago, and a quota of three.
 	if _, err := conn.Exec(t.Context(), `
-		update runs set created_at = now() - interval '50 minutes' where namespace = 'finance';
+		update runs set created_at = now() - interval '59 minutes' where namespace = 'finance';
 		update namespaces set max_runs_per_hour = 3 where name = 'finance'`); err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +76,9 @@ func TestARunPastTheRunsAnHourIsRefusedWhateverStartedIt(t *testing.T) {
 		if reached.Namespace != "finance" || reached.Limit != 3 {
 			t.Errorf("the refusal reads %+v", reached)
 		}
-		// One more fits once the run seed created leaves the window, ten minutes from now.
-		if !within(reached.RetryAfter, 10*time.Minute) {
-			t.Errorf("one more run is said to fit in %s, and the oldest run counted leaves the window in 10m", reached.RetryAfter)
+		// One more fits once the run seed created leaves the window, a minute from now.
+		if !within(reached.RetryAfter, time.Minute) {
+			t.Errorf("one more run is said to fit in %s, and the oldest run counted leaves the window in 1m", reached.RetryAfter)
 		}
 	}
 	var runs int
@@ -287,9 +288,36 @@ func TestAFiringPastTheQuotaIsSkippedWithItsReason(t *testing.T) {
 	if len(f.created) != 1 || len(f.skipped) != 2 {
 		t.Fatalf("three firings created %d runs and skipped %d", len(f.created), len(f.skipped))
 	}
+	// A skipped firing commits, so the refusal must have written nothing for it to commit.
+	var scheduled int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from runs where namespace = 'finance' and trigger = 'schedule'`).Scan(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	if scheduled != 1 {
+		t.Errorf("three firings, two of them skipped, left %d runs", scheduled)
+	}
 	for _, why := range f.skipped {
 		if !strings.HasPrefix(why, "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 2, allows, and one more fits in ") {
 			t.Errorf("a skipped firing says %q", why)
+		}
+	}
+}
+
+// Retry-After is whole seconds rounded up, since a client asking again a fraction of a second early
+// would find the oldest run still counted, and never zero, which would ask again at once.
+func TestRetryAfterIsWholeSecondsRoundedUp(t *testing.T) {
+	for _, c := range []struct {
+		after time.Duration
+		want  int
+	}{
+		{29*time.Second + time.Millisecond, 30},
+		{30 * time.Second, 30},
+		{time.Millisecond, 1},
+		{0, 1},
+	} {
+		if got := (&RunsPerHourReached{RetryAfter: c.after}).Seconds(); got != c.want {
+			t.Errorf("%s reads as %d seconds, want %d", c.after, got, c.want)
 		}
 	}
 }
