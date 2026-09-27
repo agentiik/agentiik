@@ -31,6 +31,7 @@ import (
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/accesstest"
 	"github.com/agentiik/agentiik/internal/bustest"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/dbtest/dbname"
@@ -403,21 +404,9 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // answer a runner, a pool or an object with the mux's 404, which a test of the routes alone would
 // never see, and one whose guard drifted from the page would grant what the page does not.
 //
-// The page's words, route by route: the administration routes are "Administrator only", a
-// namespace's record is read "to an administrator and to a principal holding a grant in it", and
-// drain and revoke "require grant:manage at installation scope", which is what an administrator
-// holds there; a secret's declarations take workflow:read at namespace scope and writing one
-// secret:write there; a push workflow:write, and secret:use where it names a secret; starting a run
-// and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
-// being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
-// an artifact run:read_data. Registration is authenticated by the join token in its body, the
-// runner's own routes by the runner credential alone, and the object store by the signature in the
-// URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
-// namespace it owns", which no permission names, and so are the service accounts, "of the namespaces
-// the caller owns", and GET /api/v1/me with the caller's notifications, and so are the caller's
-// credentials. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
-// The installation's authentication policy is read by whoever is signed in and a namespace's by
-// whoever reads its record, and "PUT is an administrator's" for both.
+// The table is accesstest.Cases, the page's words beside it route by route, which the access suite
+// asks every route by: a route served with no case there fails here until one is written, and so
+// does a case no route is served for.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -433,106 +422,15 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	}
 	defer in.close()
 
-	administrator := api.Route{Permission: api.GrantManage, Scope: api.Installation}
-	runner := api.Route{Runner: true}
-	public := api.Route{Public: true}
-	// A namespace's record is "to an administrator and to a principal holding a grant in it".
-	members := api.Route{Scope: api.Namespace, Members: true}
-	own := api.Route{Own: true}
-	onRun := func(p, reveals api.Permission) api.Route {
-		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
-	}
-	// Sharing "requires grant:manage" at the scope the route names, "or an administrator, whose
-	// grant notifies the namespace's owner", and writing one is handed what its writer sees, for a
-	// service account of another namespace; "in a namespace, an administrator holds what their
-	// grants give", so listing and revoking are grant:manage's alone.
-	sharing := func(at api.Scope, writes bool) api.Route {
-		return api.Route{Permission: api.GrantManage, Scope: at, OrAdministrator: writes, Seeing: writes}
-	}
-	want := map[string]api.Route{
-		"GET /api/v1/runner-pools":                                       administrator,
-		"POST /api/v1/runner-pools":                                      administrator,
-		"POST /api/v1/runner-pools/{pool}/join-tokens":                   administrator,
-		"GET /api/v1/runners":                                            administrator,
-		"POST /api/v1/runners/{runner}/drain":                            administrator,
-		"POST /api/v1/runners/{runner}/revoke":                           administrator,
-		"POST /api/v1/users":                                             administrator,
-		"GET /api/v1/users":                                              administrator,
-		"GET /api/v1/users/{login}":                                      administrator,
-		"DELETE /api/v1/users/{login}":                                   administrator,
-		"POST /api/v1/users/{login}/enrolment":                           administrator,
-		"POST /api/v1/users/{login}/recovery":                            administrator,
-		"POST /api/v1/groups":                                            administrator,
-		"GET /api/v1/groups":                                             administrator,
-		"GET /api/v1/groups/{group}":                                     administrator,
-		"DELETE /api/v1/groups/{group}":                                  administrator,
-		"PUT /api/v1/groups/{group}/members/{login}":                     administrator,
-		"DELETE /api/v1/groups/{group}/members/{login}":                  administrator,
-		"POST /api/v1/runners":                                           public,
-		"POST /api/v1/runners/heartbeat":                                 runner,
-		"POST /api/v1/runners/rotate":                                    runner,
-		"POST /api/v1/tasks/redeem":                                      runner,
-		"POST /api/v1/tasks/logs":                                        runner,
-		"POST /api/v1/bus/token":                                         runner,
-		"POST /api/v1/auth/tokens":                                       own,
-		"GET /api/v1/auth/tokens":                                        own,
-		"DELETE /api/v1/auth/tokens/{id}":                                own,
-		"GET /api/v1/service-accounts":                                   own,
-		"POST /api/v1/service-accounts":                                  own,
-		"DELETE /api/v1/service-accounts/{ns}/{name}":                    own,
-		"GET /api/v1/runs":                                               {Permission: api.RunRead, Scope: api.Workflow, Across: true},
-		"GET /api/v1/{namespace}/runs":                                   {Permission: api.RunRead, Scope: api.Workflow, Across: true},
-		"GET /api/v1/runs/{run}":                                         onRun(api.RunRead, api.RunReadData),
-		"GET /api/v1/{namespace}/runs/{run}":                             onRun(api.RunRead, api.RunReadData),
-		"GET /api/v1/runs/{run}/steps/{step}/logs":                       onRun(api.RunRead, ""),
-		"POST /api/v1/runs/{run}/cancel":                                 onRun(api.WorkflowRun, ""),
-		"GET /api/v1/runs/{run}/outputs/{name}":                          onRun(api.RunReadData, ""),
-		"GET /api/v1/runs/{run}/steps/{step}/outputs/{port}":             onRun(api.RunReadData, ""),
-		"GET /api/v1/runs/{run}/steps/{step}/inputs/{port}":              onRun(api.RunReadData, ""),
-		"GET /api/v1/artifacts/{uri}":                                    onRun(api.RunReadData, ""),
-		"GET /api/v1/{namespace}/secrets":                                {Permission: api.WorkflowRead, Scope: api.Namespace},
-		"GET /api/v1/{namespace}/secrets/{name}":                         {Permission: api.WorkflowRead, Scope: api.Namespace},
-		"PUT /api/v1/{namespace}/secrets/{name}":                         {Permission: api.SecretWrite, Scope: api.Namespace},
-		"DELETE /api/v1/{namespace}/secrets/{name}":                      {Permission: api.SecretWrite, Scope: api.Namespace},
-		"POST /api/v1/{namespace}/workflows/{workflow}/runs":             {Permission: api.WorkflowRun, Scope: api.Workflow},
-		"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": {Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse},
-		"POST /api/v1/namespaces":                                        administrator,
-		"GET /api/v1/namespaces":                                         members,
-		"GET /api/v1/namespaces/{namespace}":                             members,
-		"DELETE /api/v1/namespaces/{namespace}":                          administrator,
-		"GET /api/v1/namespaces/{namespace}/quotas":                      members,
-		"PUT /api/v1/namespaces/{namespace}/quotas":                      administrator,
-		"GET /api/v1/{namespace}/grants":                                 sharing(api.Namespace, false),
-		"POST /api/v1/{namespace}/grants":                                sharing(api.Namespace, true),
-		"DELETE /api/v1/{namespace}/grants/{id}":                         sharing(api.Namespace, false),
-		"GET /api/v1/{namespace}/workflows/{workflow}/grants":            sharing(api.Workflow, false),
-		"POST /api/v1/{namespace}/workflows/{workflow}/grants":           sharing(api.Workflow, true),
-		"DELETE /api/v1/{namespace}/workflows/{workflow}/grants/{id}":    sharing(api.Workflow, false),
-		"GET /api/v1/me":                                                 own,
-		"DELETE /api/v1/me/notifications/{id}":                           own,
-		"POST /api/v1/auth/passkey/options":                              public,
-		"POST /api/v1/auth/passkey/verify":                               public,
-		"POST /api/v1/auth/login":                                        public,
-		"POST /api/v1/auth/exchange":                                     public,
-		"POST /api/v1/auth/password/enrol":                               public,
-		"PUT /api/v1/me/password":                                        public,
-		"DELETE /api/v1/me/password":                                     own,
-		"POST /api/v1/me/totp":                                           own,
-		"POST /api/v1/me/totp/confirm":                                   own,
-		"DELETE /api/v1/me/totp":                                         own,
-		"GET /api/v1/me/credentials":                                     own,
-		"DELETE /api/v1/me/credentials/{id}":                             own,
-		"GET /api/v1/auth/policy":                                        own,
-		"PUT /api/v1/auth/policy":                                        administrator,
-		"GET /api/v1/{namespace}/auth/policy":                            members,
-		"PUT /api/v1/{namespace}/auth/policy":                            administrator,
-		"POST /api/v1/auth/sign-out":                                     public,
-		"GET /auth/sign-in":                                              public,
-		"GET /auth/enrol":                                                public,
-		"GET /auth/assets/{name}":                                        public,
-		"GET /objects/{key...}":                                          public,
-		"PUT /objects/{key...}":                                          public,
-		"POST /objects/{namespace}":                                      public,
+	want := map[string]api.Route{}
+	for _, c := range accesstest.Cases {
+		name := c.Method + " " + c.Pattern
+		if _, twice := want[name]; twice {
+			t.Errorf("%s is two cases of accesstest.Cases", name)
+		}
+		r := c.Route
+		r.Method, r.Pattern = "", ""
+		want[name] = r
 	}
 	served := map[string]bool{}
 	for _, r := range in.router.Routes() {
@@ -540,7 +438,7 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		served[name] = true
 		w, listed := want[name]
 		if !listed {
-			t.Errorf("serve registers %s, which this test does not hold to the page", name)
+			t.Errorf("serve registers %s, which no case of accesstest.Cases holds to the page", name)
 			continue
 		}
 		got := r
