@@ -262,3 +262,43 @@ func TestRunnerRegistrationsCarriesTheWholeCorpus(t *testing.T) {
 		t.Fatalf("the corpus holds %d valid and %d invalid registrations, want 1 and 1", valid, invalid)
 	}
 }
+
+func TestTheAccessCorporaCarryTheWholeCorpus(t *testing.T) {
+	for _, c := range []struct {
+		what           string
+		read           func() ([]Case, error)
+		valid, invalid int
+	}{
+		// A viewer on a namespace, an operator on one workflow with an expiry, and a deny of
+		// run:read_data on that workflow, which is the documentation's example; refused, a row
+		// carrying a role and a deny, a deny naming a role, a role that is not one of the four,
+		// and a scope on a reserved word.
+		{"access grants", AccessGrants, 3, 4},
+		// A login, a group and a service account; refused, operator, a user written with a
+		// prefix, and a group written in capitals.
+		{"principal references", PrincipalRefs, 3, 3},
+		// operator and owner; refused, admin.
+		{"roles", Roles, 2, 1},
+		// run:read_data and grant:manage; refused, a hyphenated one and a wildcard.
+		{"permissions", Permissions, 2, 2},
+	} {
+		cases, err := c.read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var valid, invalid int
+		for _, f := range cases {
+			if f.Valid {
+				valid++
+				continue
+			}
+			invalid++
+			if f.Rule == "" {
+				t.Errorf("%s names no rule it is refused by", f.File)
+			}
+		}
+		if valid != c.valid || invalid != c.invalid {
+			t.Errorf("the corpus holds %d valid and %d invalid %s, want %d and %d", valid, invalid, c.what, c.valid, c.invalid)
+		}
+	}
+}

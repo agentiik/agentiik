@@ -1,0 +1,9 @@
+{
+  "name": "treasury",
+  "kind": "shared",
+  "owner": "alice",
+  "auth_policy": {
+    "device_bound_only": true,
+    "min_passkeys": 3
+  }
+}

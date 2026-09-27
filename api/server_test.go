@@ -141,11 +141,17 @@ func call(t *testing.T, h http.Handler, method, path, as string, body any) (*htt
 
 func aPush(t *testing.T) api.Push {
 	t.Helper()
+	return aPushOf(t, workflowDocument)
+}
+
+// aPushOf is the ordinary push of another workflow document.
+func aPushOf(t *testing.T, document string) api.Push {
+	t.Helper()
 	m, err := brick.ParseManifest([]byte(brickManifest))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(workflowDocument)}}
+	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(document)}}
 	v, err := version.Capture(tree, "agentiik.yaml", map[string]brick.Manifest{image: m})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +159,7 @@ func aPush(t *testing.T) api.Push {
 	return api.Push{
 		Entry: v.Entry, Document: v.Document,
 		Includes: v.Includes, Manifests: v.Manifests, Branch: "main",
-		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(workflowDocument), Mode: "0644"}},
+		Tree: map[string]api.PushFile{"agentiik.yaml": {Content: []byte(document), Mode: "0644"}},
 	}
 }
 

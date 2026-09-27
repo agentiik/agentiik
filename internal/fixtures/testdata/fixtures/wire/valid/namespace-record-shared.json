@@ -1,0 +1,16 @@
+{
+  "name": "finance",
+  "kind": "shared",
+  "owner": "group:finance-leads",
+  "quotas": {
+    "max_concurrent_tasks": 20,
+    "max_runs_per_hour": 500,
+    "max_artifact_bytes": 536870912000,
+    "max_retention_days": 180,
+    "max_run_duration": "24h",
+    "allowed_runner_pools": [
+      "default",
+      "dmz"
+    ]
+  }
+}

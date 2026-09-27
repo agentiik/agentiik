@@ -91,6 +91,10 @@ type Route struct {
 	// Reveals is the permission whose holder the route answers more than Permission alone
 	// is answered, where it declares one.
 	Reveals Permission
+
+	// Also is the permission the route needs besides Permission where what a request carries
+	// calls for it, where it declares one.
+	Also Permission
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -243,7 +247,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		Method: method, Pattern: pattern,
 		Permission: guard.permission, Scope: guard.scope,
 		Public: guard.public, OfRun: guard.run, Why: guard.why,
-		Reveals: guard.reveals,
+		Reveals: guard.reveals, Also: guard.also,
 	})
 	return nil
 }
@@ -461,6 +465,14 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		}
 		return rt.auth.Allow(ctx, who, g.reveals, over)
 	})))
+	// Set on every route for the same reason, and asked over the target the route was
+	// authorised against and no other, since what a request carries is judged where it goes.
+	r = r.WithContext(context.WithValue(r.Context(), alsoKey{}, func(ctx context.Context) (bool, error) {
+		if g.also == "" {
+			return false, nil
+		}
+		return rt.auth.Allow(ctx, who, g.also, target)
+	}))
 	asked := r
 	r = r.WithContext(context.WithValue(r.Context(), stillKey{}, func(ctx context.Context) (bool, error) {
 		// The credential first, since a token revoked or a session ended while its holder's

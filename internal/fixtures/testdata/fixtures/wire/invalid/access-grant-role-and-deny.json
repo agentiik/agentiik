@@ -1,0 +1,9 @@
+{
+  "id": "01M2AC9Q4S6V8X0Z2B4D6F8H0K",
+  "principal": "alice",
+  "scope": "finance",
+  "role": "editor",
+  "deny": "secret:write",
+  "granted_by": "alice",
+  "granted_at": "2026-09-27T09:00:00Z"
+}

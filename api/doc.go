@@ -19,8 +19,9 @@
 // every request that needs one, which is what deny by default means when there is nothing to
 // grant yet.
 //
-// The permissions themselves are here rather than in v0.3.0, because a route declares what it
-// needs and a route is written now. They are the page's own nine, held to it by a test.
+// The permissions themselves arrived before v0.3.0, because a route declares what it needs and a
+// route was written then. They are the page's own nine, held to it by a test, and they live in
+// package access, which resolves them from grants, with their names kept here for the routes.
 //
 // # Absent and forbidden answer the same thing
 //
@@ -30,4 +31,7 @@
 // a namespaced or workflow scope is a 404, and 403 is kept for the case where there is nothing
 // to hide: the caller is authenticated, the resource is the installation itself, and saying no
 // tells them nothing they did not already know.
+//
+// A push refused for naming a secret its pusher holds no secret:use for is the other 403: the
+// route let the pusher through on workflow:write, so the workflow is one they already reach.
 package api

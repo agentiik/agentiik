@@ -1,0 +1,8 @@
+{
+  "name": "finance",
+  "kind": "shared",
+  "owner": "alice",
+  "quotas": {
+    "allowed_runner_pools": []
+  }
+}

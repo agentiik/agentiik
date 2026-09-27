@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.agentiik.dev/wire.schema.json",
   "title": "The wire",
-  "description": "Every message that travels between the controller, the bus, the runner and the API, in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
+  "description": "Every message that travels between the controller, the bus, the runner and the API, and the identity and access records the API keeps (principals, credentials, API tokens, grants, roles, permissions, namespaces with their quotas, and the authentication policy), in one document because they share a vocabulary: the run and task states, the identifiers, the digests and the idempotency key are the same strings everywhere, and a $ref may not leave a document here, so an enumeration written twice would be an enumeration that drifts. There is no message at the root: a reader validates against the member it is holding, $defs/taskMessage, $defs/taskResult or $defs/taskProgress and so on, and the fixture index names one group per member for that reason. Nothing here is a business payload. A task message names the secrets a step mounts and carries no value, names its inputs by digest and carries no URL that works on its own, and the objects are closed so that neither can be written at all rather than merely being undocumented.",
   "$defs": {
     "taskMessage": {
       "title": "Task message",
@@ -3201,6 +3201,1116 @@
           "cpu": "0.5",
           "memory": "256Mi",
           "pids": 128
+        }
+      ]
+    },
+    "login": {
+      "title": "Login",
+      "description": "What a user signs in as, and the name of the personal namespace created for them on first sign-in. Logins and namespace names share one name space, each refused where the other already exists, so a login is held to the namespace grammar and its reserved words by reference rather than by a copy: a login that could not also be a namespace would be a user whose personal namespace cannot be created. operator is refused as well, because it is the principal the interim operator token of v0.2.5 wrote on the rows it touched, and those rows keep it: a user called operator would inherit a history that is not theirs.",
+      "$ref": "#/$defs/namespace",
+      "not": {
+        "const": "operator"
+      },
+      "examples": [
+        "alice",
+        "bob-martin"
+      ]
+    },
+    "groupRef": {
+      "title": "Group reference",
+      "description": "A group, written where a principal is expected: group: then the group's name. The prefix is what tells a group from a login in one string, since both are written on the same grammar; a login can hold neither a colon nor a slash, so the three forms of a principal reference never overlap. The name is held to the namespace grammar, the same pattern written after the prefix, and tools/check.py refuses the two drifting apart.",
+      "type": "string",
+      "pattern": "^group:[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "examples": [
+        "group:team-finance",
+        "group:finance-leads"
+      ]
+    },
+    "serviceAccountRef": {
+      "title": "Service account reference",
+      "description": "A service account, written where a principal is expected: the namespace it lives in, a slash, and its name. A service account belongs to one namespace, so its name alone is not unique and the namespace is part of the reference. Every namespace has a built-in one called agentiik, to which scheduled, webhook and event runs are attributed, which is why finance/agentiik is the reference that shows up most. Both halves are held to the namespace grammar, the same pattern written on either side of the slash, and tools/check.py refuses them drifting apart. The reserved words are not repeated here: a reserved word never names a namespace, so a reference through one names a principal that does not exist, and the API refuses it for that.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "examples": [
+        "finance/agentiik",
+        "team-ops/deploy-bot"
+      ]
+    },
+    "principalRef": {
+      "title": "Principal reference",
+      "description": "A principal, named in one string wherever a grant, a token, an owner or an audit row points at one: a login for a user, group:NAME for a group, NS/NAME for a service account. One string rather than a kind and a name so that it reads the same in the API, in agk and in a Terraform principal attribute, and the three forms cannot be confused because a login holds neither a colon nor a slash.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/login"
+        },
+        {
+          "$ref": "#/$defs/groupRef"
+        },
+        {
+          "$ref": "#/$defs/serviceAccountRef"
+        }
+      ],
+      "examples": [
+        "alice",
+        "group:team-finance",
+        "finance/agentiik"
+      ]
+    },
+    "actor": {
+      "title": "Actor",
+      "description": "Who did something a record keeps: a principal reference, or operator. operator is the interim operator token of v0.2.5, which became the bootstrap token of v0.3.0, and the rows it wrote keep that name rather than being rewritten to a principal that did not exist when they were written. It is refused as a login for the same reason, so the one string never names two things.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/principalRef"
+        },
+        {
+          "const": "operator"
+        }
+      ],
+      "examples": [
+        "alice",
+        "finance/agentiik",
+        "operator"
+      ]
+    },
+    "user": {
+      "title": "User",
+      "description": "A local account: a login, a display name and the credentials it signs in with. The credentials are listed on their own, through the caller's credentials, rather than inside this record, so that a listing of users never carries what a user proves themselves with.",
+      "type": "object",
+      "required": [
+        "kind",
+        "login",
+        "display_name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "What kind of principal this is, always user here. It travels in the record so that a listing mixing users, groups and service accounts can be read one entry at a time.",
+          "const": "user",
+          "examples": [
+            "user"
+          ]
+        },
+        "login": {
+          "$ref": "#/$defs/login",
+          "description": "What the user signs in as, and the reference a grant names them by. It cannot change: it is also the name of their personal namespace, which cannot be renamed.",
+          "examples": [
+            "alice"
+          ]
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "The name a person reads in the console and in the sharing panel. Free text, because it is shown and never matched against: everything that decides access reads the login.",
+          "examples": [
+            "Alice Martin",
+            "Bob"
+          ]
+        },
+        "admin": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and shown to the namespace owners.",
+          "examples": [
+            false,
+            true
+          ]
+        },
+        "suspended": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the account is suspended. An account that has not enrolled a passkey when passwords are forbidden is suspended rather than left reachable by a password the policy says no longer exists; a suspended account opens no session.",
+          "examples": [
+            false,
+            true
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the account was created.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "kind": "user",
+          "login": "alice",
+          "display_name": "Alice Martin",
+          "admin": false,
+          "suspended": false,
+          "created_at": "2026-09-27T09:00:00Z"
+        }
+      ]
+    },
+    "group": {
+      "title": "Group",
+      "description": "A named set of users. Grants target groups so that membership changes without touching grants: a person joining the finance team is added here, and every grant written against the group reaches them at the next request.",
+      "type": "object",
+      "required": [
+        "kind",
+        "name",
+        "members"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "What kind of principal this is, always group here.",
+          "const": "group",
+          "examples": [
+            "group"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/namespace",
+          "description": "The group's name, which a reference writes after group:. Held to the namespace grammar and its reserved words by reference, so that every name a person gives on an installation is written one way.",
+          "examples": [
+            "team-finance",
+            "finance-leads"
+          ]
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/login"
+          },
+          "uniqueItems": true,
+          "description": "The users in the group, by login. Only users: a group holding a group would make effective permissions a graph walk, and a service account is attributed to one namespace rather than to a team. A user may belong to any number of groups, and an empty group is legal, since it is how a group is created before anyone joins it.",
+          "examples": [
+            [
+              "alice",
+              "bob-martin"
+            ],
+            []
+          ]
+        }
+      },
+      "examples": [
+        {
+          "kind": "group",
+          "name": "team-finance",
+          "members": [
+            "alice",
+            "bob-martin"
+          ]
+        }
+      ]
+    },
+    "serviceAccount": {
+      "title": "Service account",
+      "description": "A non-human principal living in one namespace. It holds API tokens and cannot sign in to a client, and the authentication policy does not apply to it: passkeys change how people prove who they are, never how machines do. Each namespace has a built-in one named agentiik, holding no grant by default, to which scheduled, webhook and event runs are attributed, so a schedule survives its author leaving.",
+      "type": "object",
+      "required": [
+        "kind",
+        "namespace",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "What kind of principal this is, always service_account here. Written with an underscore, as every multi-word value of this document is.",
+          "const": "service_account",
+          "examples": [
+            "service_account"
+          ]
+        },
+        "namespace": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace the service account belongs to, the half of its reference before the slash. It is created in a namespace its creator owns.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/namespace",
+          "description": "Its name within the namespace, the half of its reference after the slash. agentiik is the built-in identity every namespace carries, and the API refuses to create a second one by that name.",
+          "examples": [
+            "agentiik",
+            "deploy-bot"
+          ]
+        },
+        "created_by": {
+          "$ref": "#/$defs/actor",
+          "description": "Who created it. Absent on the built-in identity, which the installation creates with the namespace.",
+          "examples": [
+            "alice"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was created.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "kind": "service_account",
+          "namespace": "finance",
+          "name": "agentiik",
+          "created_at": "2026-09-27T09:00:00Z"
+        },
+        {
+          "kind": "service_account",
+          "namespace": "team-ops",
+          "name": "deploy-bot",
+          "created_by": "alice",
+          "created_at": "2026-09-27T09:05:00Z"
+        }
+      ]
+    },
+    "principal": {
+      "title": "Principal",
+      "description": "Someone or something access is granted to: a user, a group or a service account. An API token is not one of them; it is a credential of a principal and can only narrow that principal's rights, so it is described on its own. A reader tells the three apart by kind.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/user"
+        },
+        {
+          "$ref": "#/$defs/group"
+        },
+        {
+          "$ref": "#/$defs/serviceAccount"
+        }
+      ],
+      "examples": [
+        {
+          "kind": "user",
+          "login": "alice",
+          "display_name": "Alice Martin"
+        },
+        {
+          "kind": "group",
+          "name": "team-ops",
+          "members": [
+            "bob-martin"
+          ]
+        },
+        {
+          "kind": "service_account",
+          "namespace": "finance",
+          "name": "agentiik"
+        }
+      ]
+    },
+    "credential": {
+      "title": "Credential",
+      "description": "One way a user proves who they are, as the caller's credentials list them: a passkey, a password or a TOTP generator. The record describes the credential and never holds it: no public key, no hash, no shared secret, and the objects are closed so that none of them can be written here at all. A reader tells the three apart by type. Two rules need the rest of the user's credentials and are left to the API: a TOTP exists only alongside a password, since with user verification required a passkey assertion already proves two factors, and a removal leaving fewer passkeys than min_passkeys is refused.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/passkey"
+        },
+        {
+          "$ref": "#/$defs/passwordCredential"
+        },
+        {
+          "$ref": "#/$defs/totpCredential"
+        }
+      ],
+      "examples": [
+        {
+          "type": "passkey",
+          "id": "Q2hyb21lUGFzc2tleTAx",
+          "label": "work laptop",
+          "backup_eligible": false,
+          "backup_state": false,
+          "kind": "device-bound",
+          "created_at": "2026-09-27T09:00:00Z"
+        },
+        {
+          "type": "password",
+          "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "created_at": "2026-09-27T09:00:00Z"
+        }
+      ]
+    },
+    "passkey": {
+      "title": "Passkey",
+      "description": "A Web Authentication credential, the one a user is meant to sign in with. Its kind is recorded from the Backup Eligibility and Backup State flags the authenticator reported and is shown in the console, because an administrator who cannot see whether a passkey is synced cannot reason about their exposure. Two relations between the flags are held here: Backup State can only be set where Backup Eligibility is, as Web Authentication defines them, and the kind is synced exactly when Backup Eligibility is set, which is also what device_bound_only refuses.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "backup_eligible",
+        "backup_state",
+        "kind",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "What kind of credential this is, always passkey here.",
+          "const": "passkey",
+          "examples": [
+            "passkey"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "The credential ID the authenticator minted, base64url without padding, which is how Web Authentication writes it and what removing the credential names.",
+          "examples": [
+            "Q2hyb21lUGFzc2tleTAx"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "A name the user gave it, so that two passkeys on two devices can be told apart when one of them is lost and has to be removed.",
+          "examples": [
+            "work laptop",
+            "phone"
+          ]
+        },
+        "backup_eligible": {
+          "type": "boolean",
+          "description": "The Backup Eligibility flag, as the authenticator reported it at registration: whether this credential can be synced off the device. It cannot change over the credential's life, which is why the kind is derived from it.",
+          "examples": [
+            true,
+            false
+          ]
+        },
+        "backup_state": {
+          "type": "boolean",
+          "description": "The Backup State flag, as last reported: whether the credential is currently backed up. Only an eligible credential can be, so it is refused set beside a Backup Eligibility that is not.",
+          "examples": [
+            true,
+            false
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "synced",
+            "device-bound"
+          ],
+          "description": "synced when Backup Eligibility is set, device-bound otherwise, as the documentation prints the two. A synced passkey moves its trust to the cloud account that syncs it, and device_bound_only answers that where it is unacceptable; a device-bound one ties it to one piece of hardware, which can be lost, and min_passkeys answers that. Derived rather than chosen, and held to the flag it is derived from.",
+          "examples": [
+            "synced",
+            "device-bound"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the credential was enrolled.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        },
+        "last_used_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "The last assertion made with it. Absent until it has been used once after enrolment.",
+          "examples": [
+            "2026-09-27T12:30:00Z"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "backup_eligible": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backup_state": {
+                "const": false
+              },
+              "kind": {
+                "const": "device-bound"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backup_eligible": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "synced"
+              }
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "type": "passkey",
+          "id": "Q2hyb21lUGFzc2tleTAx",
+          "label": "work laptop",
+          "backup_eligible": false,
+          "backup_state": false,
+          "kind": "device-bound",
+          "created_at": "2026-09-27T09:00:00Z"
+        },
+        {
+          "type": "passkey",
+          "id": "aVBob25lUGFzc2tleQ",
+          "label": "phone",
+          "backup_eligible": true,
+          "backup_state": true,
+          "kind": "synced",
+          "created_at": "2026-09-27T09:02:00Z",
+          "last_used_at": "2026-09-27T12:30:00Z"
+        }
+      ]
+    },
+    "passwordCredential": {
+      "title": "Password",
+      "description": "A password, the fallback an installation can forbid. Only its existence is described: the hash never leaves the database, and forbidding passwords deletes it rather than disabling it.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "What kind of credential this is, always password here.",
+          "const": "password",
+          "examples": [
+            "password"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "What removing it names. Minted by the engine, since a password has no identifier of its own.",
+          "examples": [
+            "01M2AAZ9G62NQXFAFCXKRPJEH5"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the password was last set.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        },
+        "last_used_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "The last sign-in made with it. Absent until it has been used.",
+          "examples": [
+            "2026-09-27T12:30:00Z"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "type": "password",
+          "id": "01M2AAZ9G62NQXFAFCXKRPJEH5",
+          "created_at": "2026-09-27T09:00:00Z"
+        }
+      ]
+    },
+    "totpCredential": {
+      "title": "TOTP",
+      "description": "A time-based one-time password generator, a second factor for a password and for nothing else: on top of a passkey whose user verification is required it adds friction and no factor. Only its existence is described; the shared secret is shown once at enrolment and never again.",
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "What kind of credential this is, always totp here.",
+          "const": "totp",
+          "examples": [
+            "totp"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "What removing it names, minted by the engine.",
+          "examples": [
+            "01M2AB3K5Q7R9T1V3X5Z7B9D1F"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was enrolled.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        },
+        "last_used_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "The last code accepted from it. Absent until one has been.",
+          "examples": [
+            "2026-09-27T12:30:00Z"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "type": "totp",
+          "id": "01M2AB3K5Q7R9T1V3X5Z7B9D1F",
+          "created_at": "2026-09-27T09:00:00Z"
+        }
+      ]
+    },
+    "permission": {
+      "title": "Permission",
+      "description": "One of the nine atoms every authorisation decision is made of, and the only strings a role expands to or a deny names. They are closed rather than open because the API decides deny by default: a permission the API does not know is one it can never grant, and a typo in a deny would otherwise silently deny nothing. secret:use and secret:write count at namespace scope only, since a declaration serves every workflow of the namespace; grant:manage at installation scope is what drains and revokes a runner.",
+      "type": "string",
+      "enum": [
+        "workflow:read",
+        "workflow:run",
+        "workflow:write",
+        "workflow:delete",
+        "run:read",
+        "run:read_data",
+        "secret:use",
+        "secret:write",
+        "grant:manage"
+      ],
+      "examples": [
+        "workflow:read",
+        "run:read_data",
+        "grant:manage"
+      ]
+    },
+    "role": {
+      "title": "Role",
+      "description": "A named set of permissions a grant binds, by the documentation's table: viewer reads, operator runs, editor reads, runs, writes, reads data and writes secrets, and owner adds grant:manage. operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the queries, endpoints and business rules inside it; someone who needs both holds both roles. Four and no more, since a role invented per installation is one the clients cannot explain.",
+      "type": "string",
+      "enum": [
+        "viewer",
+        "operator",
+        "editor",
+        "owner"
+      ],
+      "examples": [
+        "viewer",
+        "operator",
+        "owner"
+      ]
+    },
+    "grantScope": {
+      "title": "Grant scope",
+      "description": "Where a grant applies: a namespace by its name, inherited by every workflow inside, or one workflow as NS/NAME, the identifier the API imports a workflow by and a Terraform scope attribute holds. The workflow half is the name a workflow file's metadata.name writes, which is the identifier grammar rather than the namespace one; the namespace half is the namespace grammar, and tools/check.py holds both halves to the patterns they are copied from.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/namespace"
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9][A-Za-z0-9_-]*$"
+        }
+      ],
+      "examples": [
+        "finance",
+        "finance/monthly-invoicing"
+      ]
+    },
+    "accessGrant": {
+      "title": "Access grant",
+      "description": "One principal, one scope and one role, or one principal, one scope and one denied permission. Grants add up across the principal's own and its groups', at both scopes, and a deny is the only thing that subtracts: it wins over any allow at any scope. That is why a deny names a permission and not a role, since the documentation's own deny takes run:read_data away from an operator and no role is that one permission. Named access grant because $defs/grant is the bearer token issued with one task, a different thing that happens to share the word. Grants live in the platform database and never in the workflow file, where workflow:write would equal grant:manage.",
+      "type": "object",
+      "required": [
+        "id",
+        "principal",
+        "scope",
+        "granted_by",
+        "granted_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The grant's identifier, what revoking it names and what Terraform imports it by.",
+          "examples": [
+            "01M2AC7N2P4R6T8V0X2Z4B6D8F"
+          ]
+        },
+        "principal": {
+          "$ref": "#/$defs/principalRef",
+          "description": "Who the grant is for: a user, a group or a service account.",
+          "examples": [
+            "alice",
+            "group:team-ops"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/grantScope",
+          "description": "The namespace or the single workflow it applies to. A workflow-scope grant only adds to what the namespace gives.",
+          "examples": [
+            "finance",
+            "finance/monthly-invoicing"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/role",
+          "description": "The role granted, on an allow. Exactly one of role and deny is written, which is what tells an allow from a deny.",
+          "examples": [
+            "operator",
+            "viewer"
+          ]
+        },
+        "deny": {
+          "$ref": "#/$defs/permission",
+          "description": "The permission taken away, on a deny, whatever any allow at any scope gives. One permission per row, so that each is revoked on its own.",
+          "examples": [
+            "run:read_data",
+            "secret:write"
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the grant ends by itself, without anyone remembering to revoke it. Absent means it lasts until revoked. Authorisation is evaluated again when a run is created, so a trigger armed under the grant stops starting runs once it has passed.",
+          "examples": [
+            "2027-01-01T00:00:00Z"
+          ]
+        },
+        "granted_by": {
+          "$ref": "#/$defs/actor",
+          "description": "Who wrote the grant: a principal holding grant:manage at this scope, or operator for a grant the bootstrap token wrote.",
+          "examples": [
+            "alice",
+            "operator"
+          ]
+        },
+        "granted_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was written.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "required": [
+            "deny"
+          ]
+        }
+      ],
+      "examples": [
+        {
+          "id": "01M2AC7N2P4R6T8V0X2Z4B6D8F",
+          "principal": "group:team-ops",
+          "scope": "finance/monthly-invoicing",
+          "role": "operator",
+          "expires_at": "2027-01-01T00:00:00Z",
+          "granted_by": "alice",
+          "granted_at": "2026-09-27T09:00:00Z"
+        },
+        {
+          "id": "01M2AC9Q4S6V8X0Z2B4D6F8H0K",
+          "principal": "alice",
+          "scope": "finance/monthly-invoicing",
+          "deny": "run:read_data",
+          "granted_by": "alice",
+          "granted_at": "2026-09-27T09:01:00Z"
+        }
+      ]
+    },
+    "apiToken": {
+      "title": "API token",
+      "description": "A bearer credential of a user or a service account, as it is listed: never its value. The value is shown once, in the answer that mints it, and stored hashed, so no record of it here can carry it, and the object is closed so that it cannot be written at all. Two rules need the clock the token was minted by and are left to the API: an expiry 90 days out when none is asked for, and never more than a year after creation.",
+      "type": "object",
+      "required": [
+        "id",
+        "principal",
+        "created_at",
+        "expires_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The token's identifier, what revoking it one by one names. It is not the token and opens nothing.",
+          "examples": [
+            "01M2AD1R3T5W7Y9A1C3E5G7J9M"
+          ]
+        },
+        "principal": {
+          "$ref": "#/$defs/principalRef",
+          "description": "Whose rights the token carries: the user who minted it, or a service account of a namespace they own. Never a group, which holds no credential.",
+          "examples": [
+            "alice",
+            "finance/agentiik"
+          ]
+        },
+        "device_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "What the token was minted on or for, so that a list of tokens can be read and the one on a lost phone revoked.",
+          "examples": [
+            "agk on alice-laptop",
+            "iPhone"
+          ]
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "What the token is narrowed to. It can only narrow: the token's rights are its principal's, intersected with these, so a scope naming a permission the principal lacks grants nothing. Absent means the principal's full rights.",
+          "properties": {
+            "permissions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/permission"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "The permissions the token keeps. Absent keeps every permission the principal holds.",
+              "examples": [
+                [
+                  "workflow:read",
+                  "run:read"
+                ],
+                [
+                  "workflow:run"
+                ]
+              ]
+            },
+            "within": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/grantScope"
+              },
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "The namespaces and workflows the token reaches, written as a grant's scope is. Absent reaches everywhere the principal does.",
+              "examples": [
+                [
+                  "finance"
+                ],
+                [
+                  "finance/monthly-invoicing",
+                  "team-ops"
+                ]
+              ]
+            }
+          },
+          "examples": [
+            {
+              "permissions": [
+                "workflow:run"
+              ],
+              "within": [
+                "finance/monthly-invoicing"
+              ]
+            },
+            {
+              "within": [
+                "finance"
+              ]
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it was minted.",
+          "examples": [
+            "2026-09-27T09:00:00Z"
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it stops being accepted. Every token has one: 90 days after creation unless asked otherwise, at most a year.",
+          "examples": [
+            "2026-12-26T09:00:00Z"
+          ]
+        },
+        "last_used_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "The last request it authenticated, listed so that a token nobody uses can be seen and revoked. Absent until it has been used.",
+          "examples": [
+            "2026-09-27T12:30:00Z"
+          ]
+        }
+      },
+      "examples": [
+        {
+          "id": "01M2AD1R3T5W7Y9A1C3E5G7J9M",
+          "principal": "alice",
+          "device_label": "agk on alice-laptop",
+          "created_at": "2026-09-27T09:00:00Z",
+          "expires_at": "2026-12-26T09:00:00Z",
+          "last_used_at": "2026-09-27T12:30:00Z"
+        }
+      ]
+    },
+    "authPolicy": {
+      "title": "Authentication policy",
+      "description": "How people prove who they are: set once per installation by an administrator, and tightened by a namespace, never loosened. Every key is optional and absent means its default on an installation; in a namespace's policy, absent means the installation's value. Whether a namespace's policy is tighter than the installation's needs both documents and is left to the API. Service accounts are outside it: they hold API tokens only.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "password": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "forbidden"
+          ],
+          "default": "allowed",
+          "description": "Whether a password may be used at all. forbidden deletes the stored hashes and the password endpoint refuses every attempt, rather than a form being hidden: hiding a form is not a policy. Allowed by default, as a fallback, and the only way in on an installation addressed by IP, where passkeys are unavailable.",
+          "examples": [
+            "allowed",
+            "forbidden"
+          ]
+        },
+        "passkey": {
+          "type": "string",
+          "enum": [
+            "optional",
+            "required"
+          ],
+          "default": "required",
+          "description": "Whether a passkey must be enrolled. required: nothing is reachable until one is, and a session opened another way is an enrolment-only session that cannot read a workflow, start a run or mint a token.",
+          "examples": [
+            "required",
+            "optional"
+          ]
+        },
+        "user_verification": {
+          "type": "string",
+          "enum": [
+            "required",
+            "preferred"
+          ],
+          "default": "required",
+          "description": "What the Relying Party asks of the authenticator, on registration and on every assertion. required makes a passkey two factors, the authenticator and whatever unlocks it, which is why no TOTP is ever asked on top of one.",
+          "examples": [
+            "required",
+            "preferred"
+          ]
+        },
+        "device_bound_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "Refuses a credential whose Backup Eligibility flag is set, that is, a synced passkey, for a population where trusting the cloud account that syncs it is unacceptable.",
+          "examples": [
+            false,
+            true
+          ]
+        },
+        "min_passkeys": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "How many passkeys a user must hold before their password may be removed, and below which removing one is refused. Two by default, so that losing a device is an inconvenience rather than an incident. At least one, since zero would let a password go from an account with nothing to replace it.",
+          "examples": [
+            2,
+            3
+          ]
+        }
+      },
+      "examples": [
+        {
+          "password": "allowed",
+          "passkey": "required",
+          "user_verification": "required",
+          "device_bound_only": false,
+          "min_passkeys": 2
+        },
+        {
+          "password": "forbidden",
+          "device_bound_only": true
+        }
+      ]
+    },
+    "namespaceRecord": {
+      "title": "Namespace record",
+      "description": "A namespace as an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner and its quotas. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API.",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "owner"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace's name, the first path segment of its routes, which is why the reserved words are refused.",
+          "examples": [
+            "finance",
+            "alice"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "personal",
+            "shared"
+          ],
+          "description": "personal for the namespace a user is given on first sign-in, shared for one an administrator creates for a team. The console's namespace switcher shows the personal one first and groups the shared ones after it.",
+          "examples": [
+            "shared",
+            "personal"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/principalRef",
+          "description": "Who owns it: the user, for a personal namespace, and a user or a group for a shared one. The owner is who a self-granted administrator's access is reported to.",
+          "examples": [
+            "group:finance-leads",
+            "alice"
+          ]
+        },
+        "quotas": {
+          "$ref": "#/$defs/quotas",
+          "description": "What this namespace may consume. Absent sets no bound of its own.",
+          "examples": [
+            {
+              "max_concurrent_tasks": 20,
+              "max_runs_per_hour": 500
+            }
+          ]
+        },
+        "auth_policy": {
+          "$ref": "#/$defs/authPolicy",
+          "description": "How this namespace tightens the installation's authentication policy for everyone holding a grant in it, for instance by requiring device-bound passkeys. Absent means the installation's policy as it stands.",
+          "examples": [
+            {
+              "device_bound_only": true
+            }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "personal"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "owner": {
+            "$ref": "#/$defs/login"
+          }
+        }
+      },
+      "examples": [
+        {
+          "name": "finance",
+          "kind": "shared",
+          "owner": "group:finance-leads",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_runs_per_hour": 500,
+            "max_artifact_bytes": 536870912000,
+            "max_retention_days": 180,
+            "allowed_runner_pools": [
+              "default",
+              "dmz"
+            ]
+          }
+        },
+        {
+          "name": "alice",
+          "kind": "personal",
+          "owner": "alice"
+        }
+      ]
+    },
+    "quotas": {
+      "title": "Quotas",
+      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Each is optional, and an absent one sets no bound at the namespace. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrent_tasks": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The fleet share one namespace can hold at once, so that a fan-out of ten thousand items cannot starve everyone else.",
+          "examples": [
+            20,
+            200
+          ]
+        },
+        "max_runs_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "A rate limit across every trigger kind, webhooks included, counted over a sliding sixty minutes rather than a clock hour, so that a burst straddling the hour cannot run twice the limit. The API answers 429 with Retry-After past it.",
+          "examples": [
+            500,
+            60
+          ]
+        },
+        "max_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The total live artifact storage, in bytes; beyond it, new writes are refused. Bytes rather than a written size so that the API, the provider and the console compare the same integer.",
+          "examples": [
+            536870912000,
+            10737418240
+          ]
+        },
+        "max_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The upper bound on how long the namespace may ask to keep what its runs produce.",
+          "examples": [
+            180,
+            30
+          ]
+        },
+        "max_run_duration": {
+          "$ref": "#/$defs/taskMessage/properties/timeout",
+          "description": "The upper bound on a workflow's root timeout, so no run holds capacity longer than the operator accepts. Written as a duration on the grammar a timeout is written in, by reference to it.",
+          "examples": [
+            "24h",
+            "90m"
+          ]
+        },
+        "allowed_runner_pools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/runnerPool/properties/pool/properties/name"
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "The runner pools, by name, this namespace's steps may be sent to; a step's runs_on chooses among them and the pools that accept the namespace. Absent allows every pool that accepts the namespace. An empty list is refused rather than read: a pool's own empty list of namespaces means every one, so an empty list here would be read one way by half the people writing it.",
+          "examples": [
+            [
+              "default",
+              "dmz"
+            ],
+            [
+              "gpu-nvme"
+            ]
+          ]
+        }
+      },
+      "examples": [
+        {
+          "max_concurrent_tasks": 20,
+          "max_runs_per_hour": 500,
+          "max_artifact_bytes": 536870912000,
+          "max_retention_days": 180,
+          "max_run_duration": "24h",
+          "allowed_runner_pools": [
+            "default",
+            "dmz"
+          ]
         }
       ]
     }

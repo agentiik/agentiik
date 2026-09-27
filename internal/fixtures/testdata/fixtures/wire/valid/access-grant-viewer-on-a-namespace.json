@@ -1,0 +1,8 @@
+{
+  "id": "01M2AC8P3R5T7W9Y1A3C5E7G9J",
+  "principal": "group:team-finance",
+  "scope": "finance",
+  "role": "viewer",
+  "granted_by": "operator",
+  "granted_at": "2026-09-27T09:00:00Z"
+}

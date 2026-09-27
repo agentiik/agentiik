@@ -1,0 +1,8 @@
+{
+  "name": "finance",
+  "kind": "shared",
+  "owner": "alice",
+  "auth_policy": {
+    "password": "allowed"
+  }
+}
