@@ -18,14 +18,17 @@ import (
 //
 // A rule nothing checks is a preference, and a mailer is one import and one afternoon away, added
 // for a notification nobody meant to carry a link. So this reads every file the module ships, the
-// Go of every package, the root's and the commands' included, the sign-in page's HTML and scripts,
-// the images' Dockerfiles and scripts, and go.mod, and names each that imports a mail package,
-// requires a module for mail, or holds a mail transport or a mailto: link. Test files and testdata
-// are not read: they ship nowhere, and a test may name what it refuses, as this one does.
+// Go of every package, the root's and the commands' included, whatever its build tags, the sign-in
+// page's HTML and scripts, the images' Dockerfiles and scripts, and go.mod, and names each that
+// imports a mail package, requires a module for mail, or holds a mail transport, a provider's name,
+// the word email or a mailto: link. Test files and testdata are not read: they ship nowhere, and a
+// test may name what it refuses, as this one does.
 func TestNothingSendsMailOrWritesALinkForIt(t *testing.T) {
 	// What no shipped file holds, whatever the case of its letters: the protocol mail is sent
-	// with, the program that sends it on a host, and a link that opens a message to be sent.
-	words := []string{"smtp", "sendmail", "mailto:"}
+	// with, the program that sends it on a host, a link that opens a message to be sent, the word
+	// itself, which a mailer calling a provider's HTTP API writes somewhere, in a field, a route
+	// or a function's name, and the providers whose APIs send it.
+	words := []string{"smtp", "sendmail", "mailto:", "email", "e-mail", "sendgrid", "mailgun", "postmark", "mandrill", "sesv2", "sparkpost"}
 	// The packages that send or compose mail, and any module whose path says it does.
 	mailPackages := map[string]bool{"net/smtp": true, "net/mail": true}
 
