@@ -47,11 +47,19 @@
 //	agk user          create, printing the enrolment link, list, show and delete
 //	agk group         create, list, show, delete, and add and remove one member
 //
-// Five more verbs are in the documented table and wait for something that is not there
-// yet: login, whoami, share and grants for the principals v0.3.0 brings, and brick init for
-// templates released from agentiik/bricks. Each is in this table and each refuses naming
-// what is missing, because a verb the documentation lists and the binary does not know is a
-// binary that looks broken.
+// Three say who may do what, as whoever holds grant:manage on a namespace or a workflow, or
+// an administrator, shares it, and as anybody reads what they hold:
+//
+//	agk share         a role or a deny granted to a user, a group or a service account on a
+//	                  namespace or a workflow, or with --revoke, one grant revoked
+//	agk grants        who can do what there, and from which scope, one grant a line
+//	agk whoami        who the token is, its groups and what it holds, everywhere or on one
+//	                  namespace or workflow, and what the installation tells it
+//
+// Two more verbs are in the documented table and wait for something that is not there yet:
+// login for the sign-in v0.3.0 brings, and brick init for templates released from
+// agentiik/bricks. Each is in this table and each refuses naming what is missing, because a
+// verb the documentation lists and the binary does not know is a binary that looks broken.
 //
 // Three manage the API tokens of whoever runs them, and of the service accounts of the
 // namespaces they own:
