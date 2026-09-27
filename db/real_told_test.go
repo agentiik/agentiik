@@ -299,12 +299,23 @@ func TestAnActInANamespaceNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T)
 	}
 }
 
-// A notification a build of v0.3.0 wrote before migration 0045 is kept where its row says who acted:
+// notificationActs is the migration that gives a notification its act and who did it.
+const notificationActs = "0046_notification_acts.sql"
+
+// A notification a build of v0.3.0 wrote before migration 0046 is kept where its row says who acted:
 // a grant told at the instant it was written was written then, by its granted_by, and is told as
 // granted by them. One told later, a deny lifted or a membership changed, names nobody who acted and
 // is removed. The other kinds are left as they were.
 func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
-	super, _ := migratedAt(t, "0044_exchange_codes.sql")
+	all, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(all, func(m Migration) bool { return m.Name == notificationActs })
+	if i < 1 {
+		t.Fatalf("no migration %s after another", notificationActs)
+	}
+	super, _ := migratedAt(t, all[i-1].Name)
 	ctx := t.Context()
 	conn, err := pgx.Connect(ctx, super)
 	if err != nil {
@@ -323,11 +334,11 @@ func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
 		`insert into notifications (id, recipient, kind, at, login) values ('01JQ7D', 'dave', 'break_glass_recovery', now(), 'carol')`,
 	} {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("filling the database as a build before migration 0045 would have: %s", err)
+			t.Fatalf("filling the database as a build before migration %s would have: %s", notificationActs, err)
 		}
 	}
 	if _, err := MigrateThrough(ctx, conn, ""); err != nil {
-		t.Fatalf("the notifications a build before migration 0045 wrote were refused: %s", err)
+		t.Fatalf("the notifications a build before migration %s wrote were refused: %s", notificationActs, err)
 	}
 	rows, err := conn.Query(ctx, `select concat_ws(' ', id, kind, act, acted_by) from notifications order by id`)
 	if err != nil {
@@ -340,7 +351,7 @@ func TestANotificationFromBeforeItsActIsKeptWhereItSaysWhoActed(t *testing.T) {
 	if !slices.Equal(kept, []string{
 		"01JQ7A admin_access_widened granted carol", "01JQ7C passkey_counter_refused", "01JQ7D break_glass_recovery",
 	}) {
-		t.Errorf("after migration 0045 the notifications are %q", kept)
+		t.Errorf("after migration %s the notifications are %q", notificationActs, kept)
 	}
 }
 
