@@ -14,8 +14,8 @@
 //
 // # Why the prefix
 //
-// agktoken_, agkgrant_, agkjoin_, agkrunner_ and agkenrol_ say what a credential is before anybody
-// tries it. That is worth a few bytes for two reasons: a value that leaks into a log or a bug report
+// agktoken_, agkgrant_, agkjoin_, agkrunner_, agkenrol_ and agkcode_ say what a credential is before
+// anybody tries it. That is worth a few bytes for two reasons: a value that leaks into a log or a bug report
 // can be recognised and revoked by whoever finds it, and a value presented to the wrong door can be
 // refused for being the wrong kind rather than for failing a lookup that the wrong door would have
 // had to perform.
@@ -57,6 +57,12 @@ const (
 	// sends, so the prefix is what somebody who finds one in a chat or a ticket recognises it
 	// by.
 	Enrol Kind = "agkenrol"
+
+	// Code is agk login's one-time code: what the sign-in page hands agk at its loopback address
+	// once somebody has signed in there, and which agk trades, with the verifier it kept, for an API
+	// token. Single use and good for a minute, and worth nothing without the verifier, so the prefix
+	// is for whoever finds one in a browser's history.
+	Code Kind = "agkcode"
 )
 
 // Bits is how much entropy every credential carries.
@@ -72,8 +78,8 @@ const secretLength = 43
 // New mints one credential and answers the clear value and what to store.
 //
 // id is the identifier the credential names inside its own text, and is empty for the kinds that
-// name nothing: a grant carries its task, a join token, a runner credential and an enrolment code
-// carry nothing because what they are bound to is a row rather than a segment.
+// name nothing: a grant carries its task, a join token, a runner credential, an enrolment code and
+// agk login's code carry nothing because what they are bound to is a row rather than a segment.
 //
 // The clear value is returned once and is not recoverable from the hash. A caller that loses it
 // mints another.
@@ -87,7 +93,7 @@ func New(kind Kind, id string) (clear, hashed string, err error) {
 		if id == "" {
 			return "", "", fmt.Errorf("token: a grant names the task it belongs to, and this one names none")
 		}
-	case Join, Runner, Enrol:
+	case Join, Runner, Enrol, Code:
 		if id != "" {
 			return "", "", fmt.Errorf("token: a %s carries no identifier in its text, and this one was given %q: what it is bound to is a row", kind, id)
 		}
@@ -152,7 +158,7 @@ func KindOf(clear string) (Kind, bool) {
 	case Grant:
 		id, secret, ok := strings.Cut(rest, "_")
 		return kind, ok && id != "" && len(secret) >= 16
-	case Join, Runner, Enrol:
+	case Join, Runner, Enrol, Code:
 		return kind, len(rest) >= secretLength
 	}
 	return "", false
