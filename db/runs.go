@@ -52,12 +52,49 @@ type NewRun struct {
 	Steps []agk.Step
 }
 
-// CreateRun writes a run and one row per step of its graph.
+// RunsPerHourReached is a run refused at creation because its namespace has created as many runs
+// in the last 60 minutes as its max_runs_per_hour allows.
+//
+// It is for the caller to say what that comes to, since every run is created by CreateRun whatever
+// started it and what a refusal means is not the same for each: the API answers 429 with
+// Retry-After, and a scheduled or event firing starts no run and is recorded as a skipped firing,
+// with Reason, rather than failing, since the trigger is not broken and fires again when it next
+// comes round. Nothing is written before it is answered, so the transaction it is answered in may
+// go on to record the skip.
+type RunsPerHourReached struct {
+	Namespace string
+	Limit     int
+
+	// RetryAfter is how long until one more run fits: until the oldest of the runs counted
+	// against the limit leaves the window.
+	RetryAfter time.Duration
+}
+
+func (r *RunsPerHourReached) Error() string { return "db: " + r.Reason() }
+
+// Reason says why no run was created, in a sentence a person reads. It names the quota and not
+// how many runs the hour holds, which is more than the quota where an administrator lowered it.
+func (r *RunsPerHourReached) Reason() string {
+	return fmt.Sprintf("namespace %s has created as many runs in the last 60 minutes as its max_runs_per_hour, %d, allows, and one more fits in %d seconds", r.Namespace, r.Limit, r.Seconds())
+}
+
+// Seconds is RetryAfter in whole seconds, as Retry-After writes it: rounded up, since a client
+// asking again a fraction of a second early would find the oldest run still counted, and at least
+// one.
+func (r *RunsPerHourReached) Seconds() int {
+	return max(1, int((r.RetryAfter+time.Second-1)/time.Second))
+}
+
+// CreateRun writes a run and one row per step of its graph, and refuses one past the namespace's
+// max_runs_per_hour with a *RunsPerHourReached.
 //
 // The run is queued and not running, because "Created, waiting on a concurrency lock or on
 // namespace quota" is what queued means and admission has not happened yet. It carries no
 // evaluation document for the same reason: a document is what a decision leaves behind, and
 // nothing has decided.
+//
+// The runs an hour are counted here and nowhere else because every run is created here, whatever
+// its trigger: an entry point added later is limited without a counter of its own.
 func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	if err := r.ID.Validate(); err != nil {
 		return fmt.Errorf("db: the run: %w", err)
@@ -71,6 +108,9 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 	inputs := r.Inputs
 	if len(inputs) == 0 {
 		inputs = json.RawMessage(`{}`)
+	}
+	if err := n.withinRunsPerHour(ctx); err != nil {
+		return err
 	}
 
 	if _, err := n.tx.Exec(ctx,
@@ -95,6 +135,48 @@ func (n *NS) CreateRun(ctx context.Context, r NewRun) error {
 		return fmt.Errorf("db: the steps of run %s could not be created: %w", r.ID, err)
 	}
 	return nil
+}
+
+// withinRunsPerHour refuses one more run where the namespace has created max_runs_per_hour of them
+// in the last 60 minutes, "a sliding count", and lets every run through where it sets no such
+// quota, as every namespace did before v0.3.0.
+//
+// The namespace's row is locked before the runs are counted, where it sets a quota, so that two
+// replicas of the API creating runs in it at once count one after the other: each would otherwise
+// count the runs committed before it, miss the other's, and both create a run where one more
+// fitted. The count is a statement of its own, and READ COMMITTED gives each statement the rows
+// committed when it starts, so the second counts the first's run once the first has committed and
+// let go. FOR NO KEY UPDATE, the weakest lock two creations conflict on, since it leaves alone the
+// key share a foreign key takes on the row, which a workflow, a secret or a grant written in the
+// namespace takes.
+//
+// The window is the database's clock, which wrote each created_at. What is answered is when one
+// more fits, which is when the run Limit places from the newest leaves the window: the oldest run
+// counted, where more than Limit are counted only once an administrator has lowered the quota.
+func (n *NS) withinRunsPerHour(ctx context.Context) error {
+	var limit int
+	err := n.tx.QueryRow(ctx,
+		`select max_runs_per_hour from namespaces
+		 where name = $1 and max_runs_per_hour is not null
+		 for no key update`, n.namespace).Scan(&limit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("db: the runs an hour namespace %s may create could not be read: %w", n.namespace, err)
+	}
+	var leaves, now time.Time
+	err = n.tx.QueryRow(ctx,
+		`select created_at + interval '60 minutes', now() from runs
+		 where namespace = $1 and created_at > now() - interval '60 minutes'
+		 order by created_at desc offset $2 limit 1`, n.namespace, limit-1).Scan(&leaves, &now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("db: the runs namespace %s created in the last 60 minutes could not be counted: %w", n.namespace, err)
+	}
+	return &RunsPerHourReached{Namespace: n.namespace, Limit: limit, RetryAfter: leaves.Sub(now)}
 }
 
 // RequestCancel records that a run is to be cancelled, and answers the state it is in and whether

@@ -1013,10 +1013,11 @@ func TestARedemptionWithNoRepositoryToGiveRefuses(t *testing.T) {
 	}
 }
 
-// "The API checks the pool's namespaces again at the redemption (422)", and a host's own narrowing,
-// AGK_RUNNER_NAMESPACES, gets 403, "so another runner of the pool takes the task". Neither reads a
-// secret or binds anything, which a forged redemption shows: a runner holding a grant it was never
-// offered, of a pool that does not run finance, or narrowed to leave finance out.
+// "The API checks the pool's namespaces again at the redemption (422)", and the pools the namespace
+// allows alike, while a host's own narrowing, AGK_RUNNER_NAMESPACES, gets 403, "so another runner of
+// the pool takes the task". None reads a secret or binds anything, which a forged redemption shows:
+// a runner holding a grant it was never offered, of a pool that does not run finance, of a pool
+// finance does not allow, or narrowed to leave finance out.
 func TestARedemptionOutsideThePoolOrTheHostsNamespacesBindsNothing(t *testing.T) {
 	store := &rotated{values: map[string]string{"finance/stripe": "sk_live_notreal"}}
 	g := withGrants(t, store)
@@ -1024,8 +1025,15 @@ func TestARedemptionOutsideThePoolOrTheHostsNamespacesBindsNothing(t *testing.T)
 		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: "ops", AcceptedNamespaces: []string{"team-ops"}, CreatedBy: "admin"}); err != nil {
 			return err
 		}
-		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "shared", AcceptedNamespaces: []string{"finance", "team-ops"}, CreatedBy: "admin"})
+		if err := w.CreateRunnerPool(ctx, db.RunnerPool{Name: "shared", AcceptedNamespaces: []string{"finance", "team-ops"}, CreatedBy: "admin"}); err != nil {
+			return err
+		}
+		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "gpu", CreatedBy: "admin"})
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbtest.Superuser(t, g.super).Exec(t.Context(),
+		`update namespaces set allowed_runner_pools = '{default, dmz, ops, shared}' where name = 'finance'`); err != nil {
 		t.Fatal(err)
 	}
 	clear, _, _ := g.dispatched(t, []string{"stripe"})
@@ -1037,7 +1045,8 @@ func TestARedemptionOutsideThePoolOrTheHostsNamespacesBindsNothing(t *testing.T)
 		status     int
 		says       string
 	}{
-		{"a runner of a pool that does not accept finance", "ops", nil, http.StatusUnprocessableEntity, "report that no container ran"},
+		{"a runner of a pool that does not accept finance", "ops", nil, http.StatusUnprocessableEntity, "does not accept the namespace"},
+		{"a runner of a pool finance does not allow", "gpu", nil, http.StatusUnprocessableEntity, "leaves this runner's pool out of its allowed_runner_pools"},
 		{"a runner narrowed to leave finance out", "shared", []string{"team-ops"}, http.StatusForbidden, "put the message back"},
 	} {
 		credential := g.joinedTo(t, c.pool, c.namespaces)

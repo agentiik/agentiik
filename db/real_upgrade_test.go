@@ -170,18 +170,21 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 		t.Fatalf("the pools could not be read after the upgrade: %s", err)
 	}
 
-	// And everything v0.2.5 did goes on: the operator starts a run, init creates a namespace, and
-	// both are audited on the chain the upgrade found, which still verifies.
-	started := agk.NewRunID()
-	err = pool.In(ctx, "finance", func(ctx context.Context, n *NS) error {
-		if err := n.CreateRun(ctx, NewRun{ID: started, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
-			Trigger: agk.TriggerManual, TriggeredBy: "operator", Steps: []agk.Step{"invoice"}}); err != nil {
-			return err
+	// And everything v0.2.5 did goes on: the operator starts runs, as many in an hour as it did
+	// before, since the upgrade set no max_runs_per_hour, init creates a namespace, and each is
+	// audited on the chain the upgrade found, which still verifies.
+	for range 30 {
+		started := agk.NewRunID()
+		err = pool.In(ctx, "finance", func(ctx context.Context, n *NS) error {
+			if err := n.CreateRun(ctx, NewRun{ID: started, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
+				Trigger: agk.TriggerManual, TriggeredBy: "operator", Steps: []agk.Step{"invoice"}}); err != nil {
+				return err
+			}
+			return n.Audit(ctx, audit.Record{Actor: "operator", Action: audit.RunTrigger, Target: string(started), Result: audit.Done})
+		})
+		if err != nil {
+			t.Fatalf("the operator could not start a run after the upgrade: %s", err)
 		}
-		return n.Audit(ctx, audit.Record{Actor: "operator", Action: audit.RunTrigger, Target: string(started), Result: audit.Done})
-	})
-	if err != nil {
-		t.Fatalf("the operator could not start a run after the upgrade: %s", err)
 	}
 	err = pool.Installation(ctx, NamespaceAdministration, func(ctx context.Context, w *Wide) error {
 		if _, err := w.CreateNamespace(ctx, "team-ops"); err != nil {

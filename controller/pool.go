@@ -50,26 +50,37 @@ func (u unpublishable) Error() string { return u.why }
 // the task cannot be two different pools. The policy is the step's, since every shard of a step
 // carries its labels and its run's namespace, so a refusal of one task is a refusal of each of them.
 //
-// A namespace reaches a pool only where both sides agree: the namespace allows the pool and the pool
-// accepts the namespace. No namespace carries a list of allowed pools yet, so the pools chosen among
-// are every pool that accepts it. A pool that does not is never a candidate, since a pool dedicated
-// to one namespace, carrying the labels a shared pool carries, would otherwise make every other
-// namespace's steps on those labels ambiguous. Only where no pool that accepts the namespace carries
-// the labels and one that refuses it does is the step told which pool refused it, as it was before
-// labels chose the pool.
-func poolOf(namespace string, t graph.Task, pools []db.RunnerPool) (db.RunnerPool, error) {
-	var reachable, refusing []bus.Pool
+// A namespace reaches a pool only where both sides agree: the namespace allows the pool, by naming
+// it in its allowed_runner_pools or by naming none, and the pool accepts the namespace. A pool
+// either side refuses is never a candidate, since a pool dedicated to one namespace, carrying the
+// labels a shared pool carries, would otherwise make every other namespace's steps on those labels
+// ambiguous, and a namespace kept off a pool would find its steps there. Only where no pool both
+// allow carries the labels and one of them refuses does the step say which pool, and which side
+// refused it.
+func poolOf(namespace string, allowed []string, t graph.Task, pools []db.RunnerPool) (db.RunnerPool, error) {
+	var reachable, refusing, disallowed []bus.Pool
 	for _, p := range pools {
-		if p.Accepts(namespace) {
-			reachable = append(reachable, bus.Pool{Name: p.Name, Labels: p.Labels})
-		} else {
-			refusing = append(refusing, bus.Pool{Name: p.Name, Labels: p.Labels})
+		switch candidate := (bus.Pool{Name: p.Name, Labels: p.Labels}); {
+		case !p.Accepts(namespace):
+			refusing = append(refusing, candidate)
+		case allowed != nil && !slices.Contains(allowed, p.Name):
+			disallowed = append(disallowed, candidate)
+		default:
+			reachable = append(reachable, candidate)
 		}
 	}
 	name, err := bus.Route(t.RunsOn, reachable)
 	var unrouted *bus.Unrouted
 	if errors.As(err, &unrouted) && len(unrouted.Pools) == 0 {
+		if other, err := bus.Route(t.RunsOn, disallowed); err == nil {
+			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which is not among the allowed_runner_pools of the namespace %s (%s), so no runner may be handed it: the step fails on the infrastructure's account until an administrator allows the pool", t.Step, other, namespace, strings.Join(allowed, ", "))}
+		}
 		if other, err := bus.Route(t.RunsOn, refusing); err == nil {
+			// Both sides named where both refuse, so that the administrator who mends one is not
+			// told of the other only by the next run.
+			if allowed != nil && !slices.Contains(allowed, other) {
+				return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s and is not among its allowed_runner_pools (%s), so no runner may be handed it: the step fails on the infrastructure's account until an administrator both lets the pool accept it and allows the pool", t.Step, other, namespace, strings.Join(allowed, ", "))}
+			}
 			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, other, namespace)}
 		}
 	}
@@ -99,7 +110,7 @@ func poolOf(namespace string, t graph.Task, pools []db.RunnerPool) (db.RunnerPoo
 // The plan answered carries the stops of every round. The evaluator names a stop sent while the
 // run goes on only in the pass that ends its task, so a round that dropped them would leave a
 // fail_fast sibling or a superseded task running with nobody told.
-func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
+func refuseUnpooled(ev *graph.Evaluator, namespace string, allowed []string, pools []db.RunnerPool, plan graph.Plan, now time.Time) (graph.Plan, error) {
 	var stops []graph.Stop
 	for {
 		for _, s := range plan.Stop {
@@ -109,7 +120,7 @@ func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool
 		}
 		refused := map[agk.Step]string{}
 		for _, t := range plan.Start {
-			if _, err := poolOf(namespace, t, pools); err != nil {
+			if _, err := poolOf(namespace, allowed, t, pools); err != nil {
 				refused[t.Step] = err.Error()
 			}
 		}
@@ -142,18 +153,23 @@ func refuseUnpooled(ev *graph.Evaluator, namespace string, pools []db.RunnerPool
 	}
 }
 
-// policed reads the pools in the transaction that issues a task's grant, and answers the pool the
-// task's labels select there and what the task may be given on it: the step's resources capped to
-// the pool's ceilings. A pool that will not run it, which the pass found running it when it read
-// the pools, is refused here too, and the task stays pending for the next pass to end. Every pool
-// and not the one the pass found, since the rule chooses among all of them: a pool created since
-// can make one that matched alone one of two.
+// policed reads the pools, and the ones the namespace allows, in the transaction that issues a
+// task's grant, and answers the pool the task's labels select there and what the task may be given
+// on it: the step's resources capped to the pool's ceilings. A pool that will not run it, or that
+// the namespace no longer allows, which the pass found running it when it read them, is refused
+// here too, and the task stays pending for the next pass to end. Every pool and not the one the
+// pass found, since the rule chooses among all of them: a pool created since can make one that
+// matched alone one of two.
 func policed(ctx context.Context, w *db.Wide, namespace string, t graph.Task) (string, graph.Resources, error) {
 	pools, err := w.RunnerPools(ctx)
 	if err != nil {
 		return "", graph.Resources{}, err
 	}
-	pool, err := poolOf(namespace, t, pools)
+	ns, err := w.NamespaceNamed(ctx, namespace)
+	if err != nil {
+		return "", graph.Resources{}, err
+	}
+	pool, err := poolOf(namespace, ns.Quotas.AllowedRunnerPools, t, pools)
 	if err != nil {
 		return "", graph.Resources{}, err
 	}

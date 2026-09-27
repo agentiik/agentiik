@@ -216,12 +216,16 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	var e db.Evaluation
 	var losses []db.Loss
 	var pools []db.RunnerPool
+	var ns db.Namespace
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
 		if e, err = w.Run(ctx, run); err != nil {
 			return err
 		}
 		if losses, err = w.Losses(ctx, e.Namespace, run); err != nil {
+			return err
+		}
+		if ns, err = w.NamespaceNamed(ctx, e.Namespace); err != nil {
 			return err
 		}
 		pools, err = w.RunnerPools(ctx)
@@ -293,7 +297,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 	// A step whose pool will not run the namespace ends before anything is counted against
 	// the quota, since it will never hold a slot, and before the decision is written, so that
 	// the pass that finds it is the pass that fails it.
-	if plan, err = refuseUnpooled(ev, e.Namespace, pools, plan, now); err != nil {
+	if plan, err = refuseUnpooled(ev, e.Namespace, ns.Quotas.AllowedRunnerPools, pools, plan, now); err != nil {
 		return fmt.Errorf("controller: run %s could not be evaluated: %w", run, err)
 	}
 
