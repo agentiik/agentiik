@@ -118,8 +118,8 @@ const (
 // identifier and its type, the generator that goes with a password among them. EnrolmentUse is the
 // enrolment link or recovery code a registration or a password spent.
 // BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded once and
-// for good. SigninSucceed is a session opened, by an assertion or by the registration an enrolment
-// link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
+// for good. SigninSucceed is a session opened, by an assertion, by a password, or by the registration
+// or the password an enrolment link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
 // since the sign-in it records committed nothing; its actor is the address the request came from,
 // since nobody was identified, and its target the account the passkey names, or the credential ID
 // presented where it names none.

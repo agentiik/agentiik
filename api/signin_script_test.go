@@ -342,14 +342,18 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 // The page's script on a stand-in browser, testdata/page_harness.js: the DOM of each page as it is
 // served, fetch answered as the API answers, navigator.credentials, location and history, driven
 // through what a person does. Signed out, the page offers the passkey; a session that may only
-// enrol is told what it needs and offered its sign-out, and no sign-in, agk login's included; a password refused by the policy is not
-// offered again, whatever answers after; a sign-in agk login opened, by passkey or by password,
-// hands on its loopback address and follows the API back to it and nowhere else; an enrolment
-// link's code travels in the options' body alone and leaves the address once spent; where no
+// enrol is told what it needs and offered its sign-out and its password, and no sign-in, agk
+// login's included; a password refused by the policy is not offered again, whatever answers after;
+// a sign-in agk login opened, by passkey or by password, hands on its loopback address and follows
+// the API back to it and nowhere else; an enrolment link's code travels in the body alone, of the
+// passkey's options or of the password it sets, and leaves the address once spent; where no
 // passkey can run, an installation addressed by an IP address or a page that is not a secure
-// context, the page says why and offers none; a credential with no toJSON() is written by codec;
-// and every request is the page's own fetch, under the public URL's path, with credentials
-// same-origin and no mode, which the API's Origin check needs.
+// context, the page says why and offers none, and a password in its place where passwords are
+// offered; a credential with no toJSON() is written by codec; a signed-in browser sets its
+// password, with the current one where it sends one, removes it, and enrols a TOTP generator whose
+// key is shown as text and as a QR code, the one the reference encoder draws, and forgotten once
+// the generator is on, and removes it; and every request is the page's own fetch, under the public
+// URL's path, with credentials same-origin and no mode, which the API's Origin check needs.
 func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 	onAStandInBrowser(t, javaScript(t), "null")
 }

@@ -27,7 +27,8 @@ import (
 // its own on the public URL's origin: HTML, one stylesheet and three scripts, embedded here, which
 // load nothing from anywhere else and do the two ceremonies and the password fallback, nothing
 // more: signing in with a password, setting one from an enrolment code or a session, and enrolling
-// a TOTP generator beside it, whose key the page draws as a QR code with a script of its own, qr.js. Each answer of it carries a Content-Security-Policy letting it load its own files and reach
+// a TOTP generator beside it, whose key the page draws as a QR code with a script of its own, qr.js.
+// Each answer of it carries a Content-Security-Policy letting it load its own files and reach
 // its own origin and nothing else: no script or style written into the page, no form posted
 // anywhere, never framed. The HTML is never cached, since it says what the installation offers when
 // it is asked; the stylesheet and the scripts are revalidated at every load, so that an upgrade never

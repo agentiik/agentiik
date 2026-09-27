@@ -50,10 +50,11 @@ import (
 // so that a policy changed, or a first passkey enrolled from the session, applies from the next
 // request. The answer says which it was when the session opened.
 //
-// A registration from such a session is the one thing it may do, and the passkey ceremonies read it
-// themselves for that; it opens no other session, and the one it was made from is full from the next
-// request. A sign-in is a sign-in, so the first one gives the user their personal namespace whatever
-// the session may do.
+// A registration from such a session is what it is for, and the passkey ceremonies read it themselves
+// for that; it opens no other session, and the one it was made from is full from the next request.
+// Setting the password that opened it is the one other thing it may do (passwords_set.go), which
+// reads it itself as well. A sign-in is a sign-in, so the first one gives the user their personal
+// namespace whatever the session may do.
 //
 // # Setting one
 //
