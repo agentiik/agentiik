@@ -163,6 +163,17 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte { return filled(`{"quotas":{"allowed_runner_pools":[`, `]}}`, l, empty) }, 0, 0, 0.141},
 		{"quotas of empty pools", func() request { return new(Quotas) }, smallMaxBytes,
 			func(l int64) []byte { return filled(`{"allowed_runner_pools":[`, `]}`, l, empty) }, 0, 0, 0.141},
+		// So did the passkey ceremonies, which answer anybody.
+		{"a ceremony's options with one long code, from anybody", func() request { return new(ceremonyAsked) }, smallMaxBytes,
+			func(l int64) []byte { return []byte(`{"code":"` + strings.Repeat("A", int(l)-11) + `"}`) }, 0, 0, 0.145},
+		{"a verification of one long client data, from anybody", func() request { return new(ceremonyAnswered) }, smallMaxBytes,
+			func(l int64) []byte {
+				return []byte(`{"credential":{"response":{"clientDataJSON":"` + strings.Repeat("A", int(l)-50) + `"}}}`)
+			}, 0, 0, 0.131},
+		{"a verification of a credential of many members, from anybody", func() request { return new(ceremonyAnswered) }, smallMaxBytes,
+			func(l int64) []byte {
+				return filled(`{"credential":{`, `}}`, l, func(i int) string { return named(i) + `:0` })
+			}, 0, 0, 0.084},
 	} {
 		body := c.body(c.limit)
 		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {

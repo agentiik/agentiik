@@ -104,6 +104,20 @@ func (w *Wide) User(ctx context.Context, login string) (User, error) {
 	return u, nil
 }
 
+// HoldUser reads one by login as User does, and holds its row until the transaction ends: an
+// enrolment takes the user's row first, as issuing a link does, so that the two take turns rather
+// than each waiting on what the other took.
+func (w *Wide) HoldUser(ctx context.Context, login string) (User, error) {
+	u, err := scanUser(w.tx.QueryRow(ctx, `select `+userColumns+` from users where login = $1 for update`, login))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("db: user %s could not be read: %w", login, err)
+	}
+	return u, nil
+}
+
 // Users is the listing, ordered by login.
 func (w *Wide) Users(ctx context.Context) ([]User, error) {
 	rows, err := w.tx.Query(ctx, `select `+userColumns+` from users order by login`)

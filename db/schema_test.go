@@ -264,6 +264,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// What a principal is told is read where it asks who it is, across every namespace, and a
 		// passkey's refusal names none.
 		"notifications": true,
+		// A passkey ceremony is how somebody proves who they are, before any namespace is in
+		// question.
+		"webauthn_challenges": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

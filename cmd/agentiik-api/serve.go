@@ -309,6 +309,14 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewServiceAccounts(rt, api.ServiceAccountOptions{Pool: pool}); err != nil {
 		return nil, err
 	}
+	// The passkey ceremonies, on the public URL's host as the Relying Party, reading a session
+	// that may only enrol, which the router refuses everywhere else.
+	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
+		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify,
+		Trouble: func(err error) { log.Warn("a failed sign-in could not be recorded in the audit log", "error", err) },
+	}); err != nil {
+		return nil, err
+	}
 	return rt, nil
 }
 

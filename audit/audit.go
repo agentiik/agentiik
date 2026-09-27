@@ -44,7 +44,8 @@ import (
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
 // cancellation, secret write, runner policy change, runner drain and revocation, and namespace
 // changes; and from v0.3.0 the identity and access events, of which users, their enrolment links,
-// groups and service accounts are here so far. Approval arrives with the wait step in v0.8.0.
+// groups, service accounts, API tokens and the passkey ceremonies are here so far. Approval arrives with the wait
+// step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -107,6 +108,24 @@ const (
 const (
 	APITokenCreate = "api_token.create"
 	APITokenRevoke = "api_token.revoke"
+)
+
+// The passkey ceremonies' events of v0.3.0's identity and access events.
+//
+// CredentialEnrol is a passkey registered, recorded by its credential ID with its kind, its flags
+// and its label, and EnrolmentUse the enrolment link or recovery code a registration spent.
+// BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded once and
+// for good. SigninSucceed is a session opened, by an assertion or by the registration an enrolment
+// link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
+// since the sign-in it records committed nothing; its actor is the address the request came from,
+// since nobody was identified, and its target the account the passkey names, or the credential ID
+// presented where it names none.
+const (
+	CredentialEnrol = "credential.enrol"
+	EnrolmentUse    = "enrolment.use"
+	BootstrapEnd    = "bootstrap.end"
+	SigninSucceed   = "signin.succeed"
+	SigninFail      = "signin.fail"
 )
 
 // The results an entry records.

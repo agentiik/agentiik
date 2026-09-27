@@ -141,7 +141,7 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 // a token". The router identifies every caller it authorises through it, whatever the route and
 // whichever hook serves it, so that no route reaches such a session by being written without the
 // check; the registration ceremony, the one thing it may do, is not a route the router authorises
-// by who asks.
+// by who asks, and reads the session itself.
 func confined(identify Identify) Identify {
 	return func(r *http.Request) (Identity, error) {
 		as, err := identify(r)
