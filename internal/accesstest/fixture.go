@@ -193,8 +193,10 @@ type Fixture struct {
 	// lapsing token end.
 	Lapse time.Time
 
-	// Runs are the run started of each workflow that has one, by NS/workflow.
-	Runs map[string]string
+	// Runs are the first run started of each workflow that has one, by NS/workflow, and started
+	// every run the fixture started, a run of a version naming a secret among them.
+	Runs    map[string]string
+	started []Target
 
 	// Grants are the identifier of one grant or deny written at each scope the fixture writes
 	// one, by the scope as a grant writes it: finance, finance/monthly-invoicing, finance/payroll,
@@ -301,6 +303,8 @@ func Build(t testing.TB, in Installation) *Fixture {
 		{f.Carol, Finance + "/" + Invoicing, "alice", "", "run:read_data", false},
 		{f.Carol, Finance + "/" + Payroll, NightlySync, "operator", "", false},
 		{f.Carol, Finance, NightlySync, "viewer", "", true},
+		{f.Carol, Finance, "bob", "", "run:read_data", false},
+		{f.Carol, Finance + "/" + Payroll, "bob", "", "workflow:run", false},
 		{f.Bob, HR, "group:" + TeamFinance, "", "workflow:run", false},
 		{f.Bob, HR + "/" + Onboarding, "alice", "editor", "", false},
 		{f.Bob, HR + "/" + Onboarding, "alice", "", "workflow:read", true},
@@ -341,6 +345,7 @@ func Build(t testing.TB, in Installation) *Fixture {
 		}
 		decode(t, started, &run)
 		f.Runs[r.namespace+"/"+r.workflow] = run.Run
+		f.started = append(f.started, Target{r.namespace, r.workflow, run.Run})
 	}
 
 	// The narrowed tokens, minted from the browsers, and alice's token that lapses.

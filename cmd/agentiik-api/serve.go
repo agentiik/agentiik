@@ -255,7 +255,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	objects := artifact.Dir(s.Objects)
 	// On the public URL rather than on a request's Host header, which a caller chooses. Outside
 	// /api/v1, where api.NewObjects serves them.
-	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{Key: []byte(s.PresignKey), Base: s.PublicURL + "/objects"})
+	signed, err := artifact.NewSigned(objects, artifact.SignedOptions{Key: []byte(s.PresignKey), Base: s.PublicURL + "/objects", Now: s.now})
 	if err != nil {
 		return nil, err
 	}

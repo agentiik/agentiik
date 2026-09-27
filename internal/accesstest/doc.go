@@ -10,7 +10,7 @@
 //
 //	carol                 an administrator of the installation, owning finance through its record
 //	alice                 a user, in team-finance, editor of hr/onboarding by a grant of her own
-//	bob                   a user, owning hr through its record, and holding nothing in finance
+//	bob                   a user, owning hr through its record, and holding only denies in finance
 //	team-finance          a group, alice in it
 //	finance/nightly-sync  a service account of finance, with a token its owner minted
 //
@@ -18,16 +18,20 @@
 //	finance                    finance/nightly-sync  viewer, until the lapse
 //	finance/payroll            finance/nightly-sync  operator
 //	finance/monthly-invoicing  alice                 deny run:read_data
+//	finance                    bob                   deny run:read_data
+//	finance/payroll            bob                   deny workflow:run
 //	hr                         team-finance          deny workflow:run
 //	hr/onboarding              alice                 editor
 //	hr/onboarding              alice                 deny workflow:read, until the lapse
 //
 // The first and the fourth are the figure of the page's Scopes and resolution: team-finance edits
-// every workflow of finance, and the deny takes run:read_data from alice on monthly-invoicing alone.
-// Each user also owns the personal namespace their first sign-in made, and each namespace holds its
-// built-in identity, NS/agentiik, which holds nothing. finance holds monthly-invoicing and payroll,
-// hr holds onboarding and offboarding, each namespace one secret, and three of the workflows a run
-// each, started by alice, by finance/nightly-sync and by bob.
+// every workflow of finance, and the deny takes run:read_data from alice on monthly-invoicing
+// alone. bob's two denies give him nothing: a deny alone is no grant, and finance is a namespace he
+// holds nothing in whoever asks. Each user also owns the personal namespace their first sign-in
+// made, and each namespace holds its built-in identity, NS/agentiik, which holds nothing. finance
+// holds monthly-invoicing and payroll, hr holds onboarding and offboarding, each namespace one
+// secret, and three of the workflows a run each, started by alice, by finance/nightly-sync and by
+// bob.
 //
 // The lapse is an hour after the installation's clock read when the fixture was built: a grant, a
 // deny and one of alice's API tokens end then. A test serving the installation in its own process

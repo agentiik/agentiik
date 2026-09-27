@@ -20,9 +20,10 @@ import (
 
 // Unknowable holds the roadmap's v0.3.0 fact against the fixture: "A principal with no permission
 // on a namespace cannot establish that it exists: not through the API, and not through an error
-// that distinguishes absent from forbidden." Each of as holds nothing in finance, and asks about it
-// every way the API offers, each time once about finance and once about nowhere, which no namespace
-// is, and the two are answered alike:
+// that distinguishes absent from forbidden." Each of as holds no permission in finance, bob two
+// denies there and alice's token for hr nothing it reaches, and asks about it every way the API
+// offers, each time once about finance and once about nowhere, which no namespace is, and the two
+// are answered alike:
 //
 //   - every route of Cases that names something in its path, with each thing it names named as
 //     finance holds it in turn and the rest as nothing, and again under hr, which bob owns, so that
@@ -207,9 +208,9 @@ func (f *Fixture) unknowableInListings(t testing.TB, who Asker) {
 	t.Helper()
 	words := []string{`"` + Finance + `"`, `"` + Finance + `/`, `/` + Finance + `/`, `/` + Finance + `"`,
 		Invoicing, Payroll, strings.TrimPrefix(NightlySync, Finance+"/"), f.Secrets[Finance], f.Token}
-	for key, run := range f.Runs {
-		if strings.HasPrefix(key, Finance+"/") {
-			words = append(words, run)
+	for _, run := range f.started {
+		if run.Namespace == Finance {
+			words = append(words, run.Run)
 		}
 	}
 	for scope, id := range f.Grants {

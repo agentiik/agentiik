@@ -98,12 +98,13 @@ func TestTheAccessFixtureHoldsEveryResolutionRuleAndRefusal(t *testing.T) {
 
 // The roadmap's v0.3.0 fact: "A principal with no permission on a namespace cannot establish that
 // it exists: not through the API, and not through an error that distinguishes absent from
-// forbidden." bob, who owns hr and holds nothing in finance, asks about finance and about nowhere
-// every way the API offers, with his token and from his browser, and so does alice through her token
-// narrowed to hr, which reaches nothing in finance whatever she holds there: every answer about the
-// one is the answer about the other, byte for byte, and no listing names anything of finance's. Where
-// AGENTIIK_TEST_TIMING is set, the refusals a prober would time first take as long for the one as
-// for the other, as the isolation test holds them.
+// forbidden." bob, who owns hr and holds no permission in finance, two denies there giving him
+// nothing, asks about finance and about nowhere every way the API offers, with his token and from
+// his browser, and so does alice through her token narrowed to hr, which reaches nothing in finance
+// whatever she holds there: every answer about the one is the answer about the other, byte for
+// byte, and no listing names anything of finance's. Where AGENTIIK_TEST_TIMING is set, the refusals
+// a prober would time first take as long for the one as for the other, as the isolation test holds
+// them.
 func TestAPrincipalHoldingNothingInANamespaceCannotEstablishThatItExists(t *testing.T) {
 	f, _, _ := accessFixture(t, "")
 	f.Unknowable(t, f.Bob, f.BobsBrowser, f.AliceForHR)

@@ -42,7 +42,8 @@ type Holding struct {
 // workflow-scope grant only adds. Only an explicit deny removes, and it wins over any allow at any
 // scope." "secret:use and secret:write come from namespace grants alone." "A grant or a deny ends at
 // the instant its expiry names." And an administrator "holds what their grants give, as anybody
-// does", through a token with no scope alone.
+// does", through any credential, and administers the installation through a token with no scope
+// alone.
 func (f *Fixture) Holds(as Asker, lapsed bool) Holding {
 	switch as.holding {
 	case "carol":
@@ -82,6 +83,8 @@ func (f *Fixture) Holds(as Asker, lapsed bool) Holding {
 			HR + "/" + Onboarding: onboarding(lapsed),
 		}}
 	case "bob":
+		// hr's record names bob its owner. His denies in finance give him nothing: "a deny
+		// alone is not one", and finance is a namespace he holds nothing in.
 		return Holding{Opens: true, Owns: []string{"bob", HR}, Permissions: map[string][]string{"bob": owner, HR: owner}}
 	case NightlySync:
 		// An operator of payroll, which follows the runs of what it may run and reads none of

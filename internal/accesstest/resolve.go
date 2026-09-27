@@ -84,8 +84,9 @@ func sameSet(a, b []string) bool {
 // credentials, a browser's request changing something from another origin, a token revoked, the
 // tokens nobody but a namespace's owner mints for its service account, and a version naming a
 // secret, pushed by whoever holds workflow:write on its workflow and not secret:use in its
-// namespace. It changes nothing the fixture holds but the versions it pushes, a second commit of
-// each workflow.
+// namespace, and run by whoever holds workflow:run whatever else it holds. It changes nothing the
+// fixture holds but the versions it pushes, a second commit of each workflow, and the run it starts
+// of one.
 func (f *Fixture) Refuses(t testing.TB) {
 	t.Helper()
 
@@ -162,4 +163,14 @@ func (f *Fixture) Refuses(t testing.TB) {
 			}
 		}
 	}
+
+	// "Running it then needs workflow:run only": finance/nightly-sync, which operates payroll and
+	// holds no secret:use, starts the version naming billing, which carol pushed.
+	started := f.must(t, "POST", "/api/v1/"+Finance+"/workflows/"+Payroll+"/runs", f.NightlySyncToken,
+		api.Start{Commit: named, Inputs: map[string]any{"orders": []any{}}}, http.StatusAccepted)
+	var run struct {
+		Run string `json:"run"`
+	}
+	decode(t, started, &run)
+	f.started = append(f.started, Target{Finance, Payroll, run.Run})
 }

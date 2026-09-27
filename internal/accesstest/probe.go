@@ -34,7 +34,8 @@ const (
 )
 
 // refusedBody is what a route the fixture asks without changing anything is sent: a member no
-// route reads, which every route reading a body refuses with 400 before it acts.
+// route reads, which every route reading a body refuses with 400 before it acts, unless it refused
+// the asker before reading it, with a 403 or a 404 of its own.
 const refusedBody = `{"agentiik_access_fixture":true}`
 
 // Target is what one asking names: a namespace, a workflow of it, a run of the workflow, or none of
@@ -119,7 +120,7 @@ func (f *Fixture) targets(c Case) []Target {
 	return []Target{{}}
 }
 
-// owners are who owns each shared namespace, and makes and removes what a probe acts on there.
+// owner is who owns a shared namespace, and makes and removes what a probe acts on there.
 func (f *Fixture) owner(namespace string) Asker {
 	if namespace == HR {
 		return f.Bob
@@ -384,10 +385,9 @@ func (f *Fixture) lists(t testing.TB, as Asker, h Holding, lapsed bool) {
 		return
 	}
 	var readable []string
-	for key, run := range f.Runs {
-		namespace, workflow, _ := strings.Cut(key, "/")
-		if h.Hold("run:read", namespace, workflow) {
-			readable = append(readable, namespace+"/"+run)
+	for _, run := range f.started {
+		if h.Hold("run:read", run.Namespace, run.Workflow) {
+			readable = append(readable, run.Namespace+"/"+run.Run)
 		}
 	}
 	f.listed(t, as, "/api/v1/runs", "runs", func(e map[string]any) string { return fmt.Sprint(e["namespace"], "/", e["run"]) }, readable, false)

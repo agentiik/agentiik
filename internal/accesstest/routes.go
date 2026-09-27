@@ -11,7 +11,8 @@ type Case struct {
 	api.Route
 
 	// Refused is set where the route reads a body and acts on one it takes: an asker it lets
-	// through is sent one it refuses as it reads it, with 400, so that asking changes nothing.
+	// through is sent one it refuses as it reads it, with 400, or before it reads it for a reason
+	// of its own, so that asking changes nothing.
 	Refused bool
 
 	// Makes is set where the route removes what it names and reads no body: each asking names a
