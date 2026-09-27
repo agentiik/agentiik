@@ -52,7 +52,7 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 	var made api.CreatedUser
 	status, err := at.send(ctx, http.MethodPost, "/api/v1/users", api.NewUser{Login: login, DisplayName: name, Admin: *admin}, &made, http.StatusCreated, http.StatusOK)
 	if err != nil {
-		return administrationRefused(e, err, "user", login)
+		return administrationRefused(e, err, "", login)
 	}
 	who := "a user"
 	if made.User.Admin {
@@ -165,7 +165,7 @@ func userDelete(ctx context.Context, e Env, args []string) int {
 	if _, err := at.send(ctx, http.MethodDelete, "/api/v1/users/"+url.PathEscape(login), nil, nil, http.StatusNoContent); err != nil {
 		return administrationRefused(e, err, "user", login)
 	}
-	fmt.Fprintf(e.Out, "removed user %s, with their credentials, tokens, sessions, memberships and grants\n", login)
+	fmt.Fprintf(e.Out, "removed user %s, with their credentials, tokens, sessions, enrolment links, memberships and grants, and their personal namespace where it was empty\n", login)
 	return exitSucceeded
 }
 
@@ -179,7 +179,7 @@ func groupCreate(ctx context.Context, e Env, args []string) int {
 	}
 	var made api.Group
 	if _, err := at.send(ctx, http.MethodPost, "/api/v1/groups", api.NewGroup{Name: named[0], Members: named[1:]}, &made, http.StatusCreated); err != nil {
-		return administrationRefused(e, err, "group", named[0])
+		return administrationRefused(e, err, "", named[0])
 	}
 	fmt.Fprintf(e.Out, "created group %s, %s\n", made.Name, holding(made.Members))
 	return exitSucceeded
@@ -391,7 +391,9 @@ func administrationRefused(e Env, err error, what, name string) int {
 		fmt.Fprintf(e.Err, "%s\n", err)
 		return exitNoOutcome
 	}
-	if passing(err) {
+	// A 429 is a refusal, nothing having been done, as agk run says it; any other answer that
+	// may pass if asked again is no outcome.
+	if passing(err) && statusOf(err) != http.StatusTooManyRequests {
 		fmt.Fprintf(e.Err, "the installation answered %d, %s, and whether it did what was asked is not known: read it back, or ask again\n", statusOf(err), err)
 		return exitNoOutcome
 	}
@@ -401,6 +403,9 @@ func administrationRefused(e Env, err error, what, name string) int {
 		said += fmt.Sprintf(": users and groups are an administrator's to manage, and the token in %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has enrolled", tokenVariable)
 	case http.StatusNotFound:
 		switch what {
+		case "":
+			// Nothing on the path to be absent: the installation serves no such route.
+			said = fmt.Sprintf("the installation serves no route for users and groups: it predates v0.3.0, which brought them, or it is not an Agentiik API (%s)", err)
 		case "user":
 			said = "no user " + name
 		case "group":

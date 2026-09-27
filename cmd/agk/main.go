@@ -73,7 +73,7 @@ var commands = []command{
 	{"user create", "Creates a user, --admin for an administrator, and prints the enrolment link.", userCreate},
 	{"user list", "Lists the users of an installation.", userList},
 	{"user show", "Shows one user: display name, whether an administrator or suspended, when created and last signed in.", userShow},
-	{"user delete", "Removes a user with their credentials, tokens, sessions, memberships and grants.", userDelete},
+	{"user delete", "Removes a user with what they hold, and their personal namespace where it is empty.", userDelete},
 	{"group create", "Creates a group, empty or with its first members.", groupCreate},
 	{"group list", "Lists the groups of an installation and their members.", groupList},
 	{"group show", "Shows one group and its members.", groupShow},

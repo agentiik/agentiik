@@ -175,7 +175,7 @@ func TestAnAdministratorManagesUsersAndGroupsWithAgk(t *testing.T) {
 		{[]string{"group", "list"}, "finance-leads  no member\nteam-finance   bob-martin\n"},
 		{[]string{"group", "show", "team-finance"}, "group:team-finance: bob-martin\n"},
 		{[]string{"group", "delete", "team-finance"}, "removed group team-finance, with its memberships and grants; its members stay\n"},
-		{[]string{"user", "delete", "bob-martin"}, "removed user bob-martin, with their credentials, tokens, sessions, memberships and grants\n"},
+		{[]string{"user", "delete", "bob-martin"}, "removed user bob-martin, with their credentials, tokens, sessions, enrolment links, memberships and grants, and their personal namespace where it was empty\n"},
 	} {
 		code, out, errs := in.agk(t, in.carol, c.args...)
 		if code != exitSucceeded || out != c.want {
@@ -290,5 +290,28 @@ func TestAnAnswerThatCouldNotBeGivenIsNoOutcome(t *testing.T) {
 			}
 		}
 		srv.Close()
+	}
+}
+
+// An installation that serves no route for users and groups, one from before v0.3.0, is said to be
+// one, where a verb naming nothing on the path would otherwise read its 404 as no such user; and a
+// 429 is a refusal, nothing having been done.
+func TestAnInstallationWithNoSuchRouteOrTooManyRequestsIsARefusal(t *testing.T) {
+	missing := httptest.NewServer(http.NotFoundHandler())
+	defer missing.Close()
+	for _, args := range [][]string{
+		{"user", "create", "alice", "--admin"}, {"group", "create", "team-finance", "alice"}, {"user", "list"}, {"group", "list"},
+	} {
+		code, out, errs := agkAt(t, missing.URL, "agktoken_"+strings.Repeat("C", 43), args...)
+		if code != exitRefused || out != "" || !strings.Contains(errs, "predates v0.3.0") || strings.Contains(errs, "no user") || strings.Contains(errs, "no group") {
+			t.Errorf("agk %s against no such route left with %d, printed %q and said %q", strings.Join(args, " "), code, out, errs)
+		}
+	}
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer limited.Close()
+	if code, _, errs := agkAt(t, limited.URL, "agktoken_"+strings.Repeat("C", 43), "user", "delete", "dan"); code != exitRefused {
+		t.Errorf("a 429 left with %d: %s", code, errs)
 	}
 }
