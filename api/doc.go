@@ -33,16 +33,24 @@
 // the public URL. It ends twelve hours idle and thirty days after it opened. A request changing
 // something that a session carries comes from the public URL's origin or is a 403, since
 // SameSite=Lax leaves the other hosts of the same site free to send the cookie. A session that may
-// only enrol reaches the registration ceremony and nothing else, and the router refuses it on every
-// route it authorises by who asks with a 403, which hides nothing: what is refused is the
-// credential, whatever the route names. A request carrying a bearer token and a session is a 400.
+// only enrol reaches the registration ceremony and the setting of the password that opened it, and
+// nothing else, and the router refuses it on every route it authorises by who asks with a 403, which
+// hides nothing: what is refused is the credential, whatever the route names. A request carrying a
+// bearer token and a session is a 400.
 //
 // The sessions are opened on the API's own sign-in and enrolment page, GET /auth/sign-in and GET
 // /auth/enrol, which NewSignIn serves on the public URL's origin, the one a ceremony is accepted
-// from: static HTML, a stylesheet and two scripts embedded in the program, under a
+// from: static HTML, a stylesheet and three scripts embedded in the program, under a
 // Content-Security-Policy that lets them load nothing from anywhere else. POST
 // /api/v1/auth/sign-out, which the page offers, ends the session a request carries and clears its
 // cookie.
+//
+// Where the policy allows passwords, which on an installation addressed by an IP address it always
+// does, the page sets one from an enrolment code, POST /api/v1/auth/password/enrol, beside the
+// passkey or in its place where no ceremony runs, and from a signed-in browser's session, PUT and
+// DELETE /api/v1/me/password, with a TOTP generator beside it, POST /api/v1/me/totp, its
+// confirmation and DELETE /api/v1/me/totp. Each is a browser's: a bearer token sets and removes
+// nothing, since a token that leaked would otherwise be a way to a credential that outlives it.
 //
 // # Absent and forbidden answer the same thing
 //

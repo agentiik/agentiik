@@ -1,6 +1,8 @@
 // The sign-in and enrolment page: the two passkey ceremonies, the password fallback where the
-// installation offers it, who this browser is signed in as, and signing out. codec.js, loaded
-// before it, converts what a browser without WebAuthn Level 3's JSON methods cannot.
+// installation offers it, a password set from an enrolment code or from a session and a one-time
+// code generator enrolled beside it, who this browser is signed in as, and signing out. codec.js,
+// loaded before it, converts what a browser without WebAuthn Level 3's JSON methods cannot, and
+// qr.js draws a generator's key as a QR code.
 //
 // Every request is a fetch to the API on this page's own origin, with credentials same-origin, so
 // that the session cookie travels with it and nowhere else, and in fetch's default mode, cors. The
@@ -183,6 +185,189 @@
     };
   }
 
+  // forbidden says whether an answer refused a password because the policy that applies to the
+  // account forbids passwords, which it says by naming the setting: the form it came from is not
+  // offered to the account again.
+  function forbidden(r) {
+    return r.status === 403 && !!r.answer && r.answer.setting === "password";
+  }
+
+  // refusedAfter is an answer's sentence, and where it refused too many attempts, how long it asks
+  // to wait.
+  function refusedAfter(r) {
+    return refusal(r) + (r.status === 429 ? wait(r.retryAfter) : "");
+  }
+
+  // drawQR draws text's QR code in container as SVG, made element by element and never written as
+  // markup: dark modules on light whatever the page's colours, with the quiet zone of four modules a
+  // scanner needs, the dark modules of each row joined into runs. Nothing is drawn for a text too
+  // long for one, which the page shows as text all the same.
+  function drawQR(container, text) {
+    container.replaceChildren();
+    let code;
+    try {
+      code = qr.encode(text);
+    } catch (_) {
+      return;
+    }
+    const ns = "http://www.w3.org/2000/svg";
+    const n = code.modules.length;
+    const side = String(n + 8);
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 " + side + " " + side);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "The key as a QR code, for an authenticator application to scan");
+    const ground = document.createElementNS(ns, "rect");
+    ground.setAttribute("width", side);
+    ground.setAttribute("height", side);
+    ground.setAttribute("fill", "#fff");
+    let d = "";
+    code.modules.forEach((row, y) => {
+      for (let x = 0; x < n; x++) {
+        if (!row[x]) {
+          continue;
+        }
+        let run = 1;
+        while (x + run < n && row[x + run]) {
+          run++;
+        }
+        d += "M" + (x + 4) + " " + (y + 4) + "h" + run + "v1h-" + run + "z";
+        x += run - 1;
+      }
+    });
+    const dark = document.createElementNS(ns, "path");
+    dark.setAttribute("d", d);
+    dark.setAttribute("fill", "#000");
+    svg.appendChild(ground);
+    svg.appendChild(dark);
+    container.appendChild(svg);
+  }
+
+  // ownSection is the section a signed-in browser sets its password and its one-time code generator
+  // in, on both pages, where the installation offers passwords: the password set or changed, the
+  // current one asked for where the account holds one, and removed; a generator started, its key
+  // shown once as text and as a QR code, and turned on with a code it shows; and removed with one. A
+  // session that may only enrol sets its password and nothing else. Once the API has refused this
+  // account a password, the section is not offered again. changed is what the page does once the
+  // session may have changed: removing the password ends the sessions it opened.
+  function ownSection(offered, changed) {
+    let withdrawn = false;
+    let login = null;
+
+    function render(who) {
+      login = who;
+      show("own", offered && !withdrawn && login !== null && login !== undefined);
+      show("own-more", !!login);
+    }
+
+    // withdraw takes the section away where the answer says passwords are forbidden to the
+    // account, and answers whether it did.
+    function withdraw(r) {
+      if (!forbidden(r)) {
+        return false;
+      }
+      withdrawn = true;
+      say("");
+      problem(refusal(r));
+      render(login);
+      return true;
+    }
+
+    // forget forgets a generator's key once it is turned on or given up: shown once, it is not
+    // left on the page.
+    function forget() {
+      $("totp-secret").textContent = "";
+      $("totp-uri").textContent = "";
+      $("totp-qr").replaceChildren();
+      show("totp-enrolling", false);
+      show("totp-start", true);
+    }
+
+    $("change-password").addEventListener("submit", busy($("change-password-button"), async () => {
+      const password = $("changed-password").value;
+      const again = $("changed-password-again").value;
+      const current = $("current-password").value;
+      for (const id of ["changed-password", "changed-password-again", "current-password"]) {
+        $(id).value = "";
+      }
+      if (password !== again) {
+        problem("The two passwords differ. Type the same one in both fields.");
+        return;
+      }
+      const body = { password };
+      if (current) {
+        body.current_password = current;
+      }
+      say("Setting your password…");
+      const r = await call("PUT", "me/password", body);
+      if (withdraw(r)) {
+        return;
+      }
+      if (r.status !== 200) {
+        say("");
+        problem(refusedAfter(r));
+        return;
+      }
+      say("Password set. Any other session it opened is signed out.");
+    }));
+
+    $("remove-password").addEventListener("click", busy($("remove-password"), async () => {
+      const r = await call("DELETE", "me/password");
+      if (r.status !== 204) {
+        problem(refusal(r));
+        return;
+      }
+      forget();
+      await changed();
+      say("Password removed, with the one-time code generator beside it where there was one.");
+    }));
+
+    $("totp-start").addEventListener("click", busy($("totp-start"), async () => {
+      const r = await call("POST", "me/totp");
+      if (withdraw(r)) {
+        return;
+      }
+      if (r.status !== 200 || !r.answer || typeof r.answer.uri !== "string") {
+        problem(refusal(r));
+        return;
+      }
+      $("totp-secret").textContent = r.answer.secret;
+      $("totp-uri").textContent = r.answer.uri;
+      drawQR($("totp-qr"), r.answer.uri);
+      show("totp-start", false);
+      show("totp-enrolling", true);
+      say("");
+    }));
+
+    $("totp-confirm").addEventListener("submit", busy($("totp-confirm-button"), async () => {
+      const code = $("totp-code").value.trim();
+      $("totp-code").value = "";
+      const r = await call("POST", "me/totp/confirm", { totp: code });
+      if (withdraw(r)) {
+        return;
+      }
+      if (r.status !== 200) {
+        problem(refusal(r));
+        return;
+      }
+      forget();
+      say("One-time codes are on: a sign-in with the password now asks for the code the application shows.");
+    }));
+
+    $("totp-remove").addEventListener("submit", busy($("totp-remove-button"), async () => {
+      const code = $("totp-remove-code").value.trim();
+      $("totp-remove-code").value = "";
+      const r = await call("DELETE", "me/totp", { totp: code });
+      if (r.status !== 204) {
+        problem(refusedAfter(r));
+        return;
+      }
+      say("The one-time code generator is removed.");
+    }));
+
+    return { render };
+  }
+
   // signOut ends this browser's session, and answers whether it did.
   async function signOut() {
     const r = await call("POST", "auth/sign-out");
@@ -210,10 +395,17 @@
     // agk login's included, since such a session mints no token. Once a sign-in or a sign-out on the
     // page has said who that is, settled keeps the page's first question from answering over it;
     // once the API has refused this account a password, withdrawn keeps the form from coming back.
+    // Whoever is signed in is offered the section setting their password, where passwords are.
     let settled = false;
     let withdrawn = false;
+    const own = ownSection(offered, async () => {
+      const now = await signedIn();
+      settled = true;
+      render(now);
+    });
     function render(login) {
       showSignedIn(login);
+      own.render(login);
       show("enrolling", login === "");
       const signing = login !== "" && (!login || !!handOff);
       show("passkey", signing && !why);
@@ -284,7 +476,7 @@
       $("secret").value = "";
       $("totp").value = "";
       const r = await call("POST", "auth/login", body);
-      if (r.status === 403 && r.answer && r.answer.setting === "password") {
+      if (forbidden(r)) {
         // Passwords are forbidden to this account, and the form is not offered to it again.
         withdrawn = true;
         show("password", false);
@@ -335,44 +527,101 @@
     // the browser's session enrols.
     let linked = window.location.hash.slice(1);
     const why = unavailable();
+    const passkeys = !why;
+    const offered = main.dataset.password === "offered";
     if (why) {
       $("unavailable").textContent = why;
       show("unavailable", true);
-    }
-    const login = await signedIn();
-    showSignedIn(login);
-    $("sign-out").addEventListener("click", busy($("sign-out"), async () => {
-      if (await signOut()) {
-        window.location.reload();
-      }
-    }));
-    if (why) {
-      return;
     }
     if (linked && !enrolmentCode.test(linked)) {
       linked = "";
       problem("This link's code is incomplete. Open the whole link as it was given to you, or ask an administrator for a fresh one.");
     }
-    if (linked) {
-      $("intro").textContent = "Your enrolment link is ready. Enrol a passkey, on this device or on a phone nearby, to sign in with from now on.";
-    } else if (login) {
-      $("intro").textContent = "Add a passkey to " + login + ", on this device or on a phone nearby.";
-    } else if (login === "") {
-      $("intro").textContent = "This browser is signed in to enrol a passkey, which the installation asks of your account before anything else.";
-    } else {
-      $("intro").textContent = "Type the recovery code an administrator gave you to enrol a new passkey. An enrolment link fills it in by itself.";
+
+    // render shows what is left to do. A code, the link's or one typed in where no session is,
+    // enrols a passkey where a ceremony can run and sets a password where the installation offers
+    // them, in place of the passkey where none can run, until it is spent; a session adds a passkey
+    // to its user, and sets their password in the section below. Once a code is spent, spent keeps
+    // it from being asked for again; once the API has refused this account a password, withdrawn
+    // keeps the form from coming back.
+    let spent = false;
+    let withdrawn = false;
+    let current = null;
+    const own = ownSection(offered, async () => render(await signedIn()));
+    function render(login) {
+      current = login;
+      showSignedIn(login);
+      own.render(login);
+      const coded = !!linked || (login === null && !spent);
+      const password = offered && !withdrawn && coded;
+      show("code-field", coded && !linked && (passkeys || password));
+      show("enrol", passkeys && (coded || login !== null));
+      show("set-password", password);
+      $("intro").textContent = intro(login, coded, password);
     }
-    show("code-field", !linked && login === null);
-    show("enrol", true);
+    function intro(login, coded, password) {
+      const or = password ? ", or set a password" : "";
+      if (linked) {
+        if (passkeys) {
+          return "Your enrolment link is ready. Enrol a passkey, on this device or on a phone nearby, to sign in with from now on" + or + ".";
+        }
+        return password ? "Your enrolment link is ready. Set a password to sign in with from now on." : "";
+      }
+      if (login === "") {
+        return "This browser is signed in to enrol a passkey, which the installation asks of your account before anything else.";
+      }
+      if (login) {
+        return passkeys ? "Add a passkey to " + login + ", on this device or on a phone nearby." : "";
+      }
+      if (!coded) {
+        return "";
+      }
+      if (passkeys) {
+        return "Type the recovery code an administrator gave you to enrol a new passkey" + or + ". An enrolment link fills it in by itself.";
+      }
+      return password ? "Type the recovery code an administrator gave you to set a password. An enrolment link fills it in by itself." : "";
+    }
+
+    // codeAsked is the code a form enrols with, the link's or the one typed in, or "" where none
+    // was, having said so where one outside its grammar was typed.
+    function codeAsked() {
+      const code = linked || $("code").value.trim();
+      if (code && !enrolmentCode.test(code)) {
+        problem("A code is agkenrol_ and at least 43 letters, digits, dashes and underscores after it, as it was given to you.");
+        return null;
+      }
+      return code;
+    }
+
+    // codeSpent follows an enrolment that spent the code: the address stops carrying the link's,
+    // and what comes next is done from the session the enrolment opened.
+    function codeSpent() {
+      if (linked) {
+        linked = "";
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      spent = true;
+      $("code").value = "";
+    }
+
+    $("sign-out").addEventListener("click", busy($("sign-out"), async () => {
+      if (await signOut()) {
+        window.location.reload();
+      }
+    }));
 
     $("enrol").addEventListener("submit", busy($("enrol-button"), async () => {
+      if (!passkeys) {
+        // The form is not shown where no ceremony runs, and starts none if it is sent all the same.
+        problem(why);
+        return;
+      }
       const asked = { ceremony: "registration" };
-      const code = linked || $("code").value.trim();
+      const code = codeAsked();
+      if (code === null) {
+        return;
+      }
       if (code) {
-        if (!enrolmentCode.test(code)) {
-          problem("A code is agkenrol_ and at least 43 letters, digits, dashes and underscores after it, as it was given to you.");
-          return;
-        }
         asked.code = code;
       }
       const label = $("label").value.trim();
@@ -406,26 +655,62 @@
         problem(refusal(verified));
         return;
       }
-      if (linked) {
-        // The code is spent: the address stops carrying it, and a next passkey is added from the
-        // session the enrolment opened.
-        linked = "";
-        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      if (code) {
+        codeSpent();
       }
-      $("code").value = "";
       $("label").value = "";
       const passkey = verified.answer.credential || {};
       const named = passkey.label ? "“" + passkey.label + "”, " : "";
       $("enrolled-what").textContent = "Enrolled " + named + "a " + (passkey.kind || "new") + " passkey, for " + verified.answer.login + ".";
       show("enrolled", true);
       say("");
-      const now = await signedIn();
-      showSignedIn(now);
-      show("code-field", false);
-      $("intro").textContent = now === null ? "" : "To enrol another, on another device or on a phone nearby:";
+      render(await signedIn());
+      if (current !== null) {
+        $("intro").textContent = "To enrol another, on another device or on a phone nearby:";
+      }
       $("enrol-button").textContent = "Enrol another passkey";
-      show("enrol", now !== null);
     }));
+
+    $("set-password").addEventListener("submit", busy($("set-password-button"), async () => {
+      const password = $("new-password").value;
+      const again = $("new-password-again").value;
+      $("new-password").value = "";
+      $("new-password-again").value = "";
+      const code = codeAsked();
+      if (code === null) {
+        return;
+      }
+      if (!code) {
+        problem("Setting a password takes the recovery code an administrator gave you, or the link it came in.");
+        return;
+      }
+      if (password !== again) {
+        problem("The two passwords differ. Type the same one in both fields.");
+        return;
+      }
+      say("Setting your password…");
+      const r = await call("POST", "auth/password/enrol", { code, password });
+      if (forbidden(r)) {
+        // Passwords are forbidden to this account, and the form is not offered to it again.
+        withdrawn = true;
+        say("");
+        problem(refusal(r));
+        render(current);
+        return;
+      }
+      if (r.status !== 200) {
+        say("");
+        problem(refusal(r));
+        return;
+      }
+      codeSpent();
+      render(await signedIn());
+      say("Password set for " + r.answer.login + "." + (r.answer.session === "enrolment"
+        ? " The installation asks your account for a passkey before anything else: enrol one now."
+        : ""));
+    }));
+
+    render(await signedIn());
   }
 
   (main.dataset.page === "enrol" ? enrolPage() : signInPage()).catch((e) => {

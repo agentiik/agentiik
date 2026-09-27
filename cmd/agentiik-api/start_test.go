@@ -545,13 +545,15 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		}
 	}
 
-	// The sign-in page offers the password form, since the route it calls is served and the
-	// policy an installation starts with lets passwords in.
-	page := httptest.NewRecorder()
-	in.router.ServeHTTP(page, httptest.NewRequestWithContext(t.Context(), "GET", "/auth/sign-in", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-password="offered"`) {
-		t.Errorf("the sign-in page served answered %d, with the password form %s", page.Code,
-			regexp.MustCompile(`data-password="[^"]*"`).FindString(page.Body.String()))
+	// The sign-in and enrolment pages offer the password forms, since the routes they call are
+	// served and the policy an installation starts with lets passwords in.
+	for _, path := range []string{"/auth/sign-in", "/auth/enrol"} {
+		page := httptest.NewRecorder()
+		in.router.ServeHTTP(page, httptest.NewRequestWithContext(t.Context(), "GET", path, nil))
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-password="offered"`) {
+			t.Errorf("%s served answered %d, with the password form %s", path, page.Code,
+				regexp.MustCompile(`data-password="[^"]*"`).FindString(page.Body.String()))
+		}
 	}
 }
 

@@ -359,6 +359,9 @@ func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 // other sign-in; one that may only enrol offers the way to enrol a passkey and the sign-out, and no
 // sign-in; a wrong password keeps both forms and says so; passwords forbidden take the form away
 // and keep the passkey; and too many attempts say, in minutes, how long Retry-After asks to wait.
+// And the enrolment page's password, against what POST /api/v1/auth/password/enrol answers: a full
+// session says whose password is set and offers the signed-in section; one that may only enrol sends
+// its holder on to a passkey; and passwords forbidden take the form away.
 func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	engine := javaScript(t)
 	answers, err := json.Marshal(passwordAnswers(t))
@@ -408,6 +411,11 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 		}
 	}
 	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, login := range []string{"erin", "frank", "gail"} {
+			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+				return err
+			}
+		}
 		for _, login := range []string{"alice", "bob", "carol"} {
 			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
 				return err
@@ -434,28 +442,56 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 		return routeAnswer{Login: login, Status: w.Code, Body: bytes.TrimSpace(w.Body.Bytes()), RetryAfter: w.Header().Get("Retry-After")}
 	}
 
+	enrol := func(login string) routeAnswer {
+		t.Helper()
+		value := "agkenrol_" + base64.RawURLEncoding.EncodeToString(random(t, 32))
+		if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			_, err := w.IssueEnrolmentCode(ctx, db.EnrolmentCode{
+				Hash: sha256Of(value), Login: login, Kind: db.EnrolmentNewUser, IssuedBy: "alice", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(map[string]string{"code": value, "password": login + "'s own passphrase"})
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/auth/password/enrol", bytes.NewReader(body))
+		r.Header.Set("Origin", publicURL)
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, r)
+		return routeAnswer{Login: login, Status: w.Code, Body: bytes.TrimSpace(w.Body.Bytes())}
+	}
+
 	answers := map[string]routeAnswer{}
 	policy("allowed", "optional")
 	answers["full"] = signIn("alice", "alice's own")
 	answers["wrong"] = signIn("alice", "not alice's")
+	answers["enrolFull"] = enrol("erin")
 	policy("allowed", "required")
 	answers["enrolment"] = signIn("bob", "bob's own")
+	answers["enrolEnrolment"] = enrol("frank")
 	for range 10 {
 		signIn("carol", "a guess")
 	}
 	answers["tooMany"] = signIn("carol", "carol's own")
 	policy("forbidden", "required")
 	answers["forbidden"] = signIn("alice", "alice's own")
+	answers["enrolForbidden"] = enrol("gail")
 
 	for name, want := range map[string]int{
 		"full": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
 		"forbidden": http.StatusForbidden, "tooMany": http.StatusTooManyRequests,
+		"enrolFull": http.StatusOK, "enrolEnrolment": http.StatusOK, "enrolForbidden": http.StatusForbidden,
 	} {
 		if answers[name].Status != want {
 			t.Fatalf("the route answered %s with %d %s", name, answers[name].Status, answers[name].Body)
 		}
 	}
 	return answers
+}
+
+func sha256Of(value string) []byte {
+	sum := sha256.Sum256([]byte(value))
+	return sum[:]
 }
 
 // onAStandInBrowser runs page.js on testdata/page_harness.js, with the pages as the templates write
@@ -482,9 +518,11 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
 		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered",
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
-		"sign-in-ip": {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
-		"enrol":      {"enrol.html", pageData{Scripts: true, Passkeys: "available"}},
-		"enrol-ip":   {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable"}},
+		"sign-in-ip":        {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
+		"enrol":             {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld"}},
+		"enrol-ip":          {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "withheld"}},
+		"enrol-password":    {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
+		"enrol-ip-password": {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
 	} {
 		var b bytes.Buffer
 		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {
@@ -520,6 +558,7 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 	var script bytes.Buffer
 	for _, part := range [][]byte{
 		read(signinFiles.ReadFile("signin/assets/codec.js")),
+		read(signinFiles.ReadFile("signin/assets/qr.js")),
 		[]byte("function loadPage() {"), read(signinFiles.ReadFile("signin/assets/page.js")), []byte("}"),
 		[]byte("const pages = " + string(vectors) + ";"),
 		[]byte("const answers = " + answers + ";"),
@@ -539,13 +578,25 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 		t.Fatalf("%s ran the page's script and failed: %s\n%s%s", filepath.Base(engine), err, stderr.String(), stdout.String())
 	}
 	var out struct {
-		Failures []string `json:"failures"`
+		Failures []string            `json:"failures"`
+		Drawn    map[string][]string `json:"drawn"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
 		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
 	}
 	for _, f := range out.Failures {
 		t.Error(f)
+	}
+	// Every QR code the page drew is the one the reference encoder draws for its text.
+	reference := qrVectors(t)
+	for text, rows := range out.Drawn {
+		want, ok := reference.drawn(text)
+		switch {
+		case !ok:
+			t.Errorf("the page drew a QR code of %q, for which testdata/qr_vectors.json holds none", text)
+		case rowsHash(rows) != want.Want.SHA256:
+			t.Errorf("the page drew %q as\n%s\nwhich is not the reference encoder's", text, strings.Join(rows, "\n"))
+		}
 	}
 }
 
