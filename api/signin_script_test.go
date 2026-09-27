@@ -371,7 +371,7 @@ func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 // And agk login's hand-off from end to end: the page agk login opened hands the route its loopback
 // address and challenge with the password, follows the redirect_to the route wrote to that address,
 // and the code the page took there is the one POST /api/v1/auth/exchange trades, with the verifier
-// the challenge was made of, for alice's token.
+// the challenge was made of, for bob's token.
 func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	engine := javaScript(t)
 	answered, h := passwordAnswers(t)
@@ -390,7 +390,7 @@ func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	var issued IssuedToken
-	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &issued) != nil || issued.APIToken.Principal != "alice" {
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &issued) != nil || issued.APIToken.Principal != "bob" {
 		t.Errorf("the code the page handed agk login traded for %d %s", w.Code, w.Body)
 	}
 }
@@ -516,9 +516,10 @@ func passwordAnswers(t *testing.T) (map[string]routeAnswer, http.Handler) {
 	policy("forbidden", "required")
 	answers["forbidden"] = signIn("alice", "alice's own")
 	answers["enrolForbidden"] = enrol("gail")
-	// Last, so that the code it minted is traded under the policy it was minted under.
+	// Last, so that the code it minted is traded under the policy it was minted under, and bob's,
+	// since the sign-in passwords forbidden refused took alice's password.
 	policy("allowed", "optional")
-	answers["terminal"] = signIn("alice", "alice's own", TerminalSignIn{RedirectURI: terminalRedirect, CodeChallenge: terminalChallenge})
+	answers["terminal"] = signIn("bob", "bob's own", TerminalSignIn{RedirectURI: terminalRedirect, CodeChallenge: terminalChallenge})
 
 	for name, want := range map[string]int{
 		"full": http.StatusOK, "terminal": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
