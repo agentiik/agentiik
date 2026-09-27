@@ -107,15 +107,38 @@ func readProfile(path string) (profile, error) {
 	return p, nil
 }
 
-// writeProfile writes the profile at path whole: its directory made 0700, or brought to it, and the
-// file written 0600 beside it before it takes the profile's name.
-func writeProfile(path string, p profile) error {
-	dir := filepath.Dir(path)
+// profileDirReady makes the profile's directory 0700, or brings it to 0700.
+func profileDirReady(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("the directory of the local profile, %s, could not be made: %w", dir, err)
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return fmt.Errorf("the directory of the local profile, %s, could not be kept to its owner: %w", dir, err)
+	}
+	return nil
+}
+
+// profileWritable says whether the profile at path can be written, by making its directory and a
+// file in it, removed at once: agk login asks before anybody signs in for a token it could not keep.
+func profileWritable(path string) error {
+	dir := filepath.Dir(path)
+	if err := profileDirReady(dir); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".profile-*.json")
+	if err != nil {
+		return fmt.Errorf("the local profile could not be written in %s: %w", dir, err)
+	}
+	f.Close()
+	return os.Remove(f.Name())
+}
+
+// writeProfile writes the profile at path whole: its directory made 0700, or brought to it, and the
+// file written 0600 beside it before it takes the profile's name.
+func writeProfile(path string, p profile) error {
+	dir := filepath.Dir(path)
+	if err := profileDirReady(dir); err != nil {
+		return err
 	}
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {

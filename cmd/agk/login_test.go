@@ -43,8 +43,10 @@ type signInStandIn struct {
 	exchanged []map[string]string
 	presented []string
 	revoked   []string
-	// answer, where it is not zero, is what the exchange answers in place of a token.
+	// answer, where it is not zero, is what the exchange answers in place of a token, and where
+	// it is lost, the exchange's connection is closed with no answer.
 	answer int
+	lost   bool
 }
 
 func anInstallationSigningIn(t *testing.T) *signInStandIn {
@@ -66,6 +68,11 @@ func (in *signInStandIn) serve(w http.ResponseWriter, r *http.Request) {
 		var asked map[string]string
 		json.NewDecoder(r.Body).Decode(&asked)
 		in.exchanged = append(in.exchanged, asked)
+		if in.lost {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			conn.Close()
+			return
+		}
 		if in.answer != 0 {
 			w.WriteHeader(in.answer)
 			fmt.Fprintf(w, `{"error":"answered %d"}`, in.answer)
@@ -103,6 +110,9 @@ func (in *signInStandIn) serve(w http.ResponseWriter, r *http.Request) {
 		delete(in.tokens, bearer)
 		in.revoked = append(in.revoked, id)
 		w.WriteHeader(http.StatusNoContent)
+	case bearer != "" && in.tokens[bearer] == "":
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":"that token opens nothing"}`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error":"no such thing"}`)
@@ -260,6 +270,18 @@ func TestAgkLoginKeepsTheTokenTheBrowsersCodeIsTradedFor(t *testing.T) {
 	if code, said := presented(map[string]string{serverVariable: "https://another.example.com"}); code != exitUsage || !strings.Contains(said, "no credential: sign in with agk login") {
 		t.Errorf("another installation was answered %d: %s", code, said)
 	}
+
+	// Once the installation no longer accepts it, a refusal names the token kept, and not a
+	// variable nobody set.
+	in.mu.Lock()
+	delete(in.tokens, stored.Token)
+	in.mu.Unlock()
+	p.env = map[string]string{serverVariable: in.URL}
+	for _, args := range [][]string{{"token", "list"}, {"status", "01RUN"}} {
+		if code, _, errs := p.agk(t, args...); code != exitRefused || !strings.Contains(errs, "did not accept the token agk login kept for it: sign in again with agk login") {
+			t.Errorf("agk %s with a token kept that opens nothing left with %d: %s", args[0], code, errs)
+		}
+	}
 }
 
 // Signing in again to the same installation keeps the new token in place of the one kept, and
@@ -325,9 +347,16 @@ func TestAgkLoginKeepsNothingTheExchangeDidNotMint(t *testing.T) {
 			t.Errorf("an exchange answered %d kept %+v", status, p.kept(t))
 		}
 	}
+	// An exchange whose answer is lost may have minted a token all the same, and spent the code.
+	lost := anInstallationSigningIn(t)
+	lost.lost = true
+	p, _ := signingIn(t, lost)
+	if code, _, errs := p.agk(t, "login", "--server", lost.URL); code != exitNoOutcome || !strings.Contains(errs, "whether a token was minted cannot be told") {
+		t.Errorf("an exchange whose answer was lost left with %d: %s", code, errs)
+	}
 
 	in := anInstallationSigningIn(t)
-	p := somebody(t)
+	p = somebody(t)
 	p.browse = func(page string) error {
 		opened, _ := url.Parse(page)
 		get(t, opened.Query().Get("redirect_uri")+"?code=agkcode_short")
@@ -494,9 +523,32 @@ func TestTheLoopbackAddressTakesOneCode(t *testing.T) {
 	if answer, err := http.Post(back.redirect+"?code="+code, "text/plain", nil); err != nil || answer.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("a POST answered %v, %v", answer, err)
 	}
-	status, body := get(t, back.redirect+"?code="+code)
-	if status != http.StatusOK || !strings.HasPrefix(body, "Signed in.") {
-		t.Errorf("the code answered %d %s", status, body)
+	// A page of another site's fetch, or a frame, is no navigation of the window, and is not
+	// taken.
+	for _, says := range []map[string]string{
+		{"Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "empty"},
+		{"Sec-Fetch-Mode": "cors"},
+		{"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"},
+	} {
+		req, _ := http.NewRequest("GET", back.redirect+"?code="+code, nil)
+		for k, v := range says {
+			req.Header.Set(k, v)
+		}
+		if answer, err := http.DefaultClient.Do(req); err != nil || answer.StatusCode != http.StatusNotFound {
+			t.Errorf("a request saying %v answered %v, %v", says, answer, err)
+		}
+	}
+	req, _ = http.NewRequest("GET", back.redirect+"?code="+code, nil)
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	answer, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(answer.Body)
+	answer.Body.Close()
+	if answer.StatusCode != http.StatusOK || !strings.HasPrefix(string(body), "Signed in.") {
+		t.Errorf("the code answered %d %s", answer.StatusCode, body)
 	}
 	if got, err := back.await(t.Context(), time.Second); got != code || err != nil {
 		t.Errorf("agk was handed %q, %v", got, err)
@@ -554,8 +606,30 @@ func TestAgkLoginRefusesWhatCannotBeSignedInForFirst(t *testing.T) {
 	}
 	nowhere := &person{env: map[string]string{}, browse: p.browse}
 	out, errs := &strings.Builder{}, &strings.Builder{}
-	if code := run(t.Context(), Env{Out: out, Err: errs, Getenv: func(k string) string { return nowhere.env[k] }}, []string{"login", "--server", in.URL}); code != exitRefused || !strings.Contains(errs.String(), "keeps no local profile") {
+	if code := run(t.Context(), Env{Out: out, Err: errs, Getenv: func(k string) string { return nowhere.env[k] }}, []string{"login", "--server", in.URL}); code != exitUsage || !strings.Contains(errs.String(), "keeps no local profile") {
 		t.Errorf("an agk keeping no profile left with %d: %s", code, errs)
+	}
+	// A profile whose directory cannot be made is said before anybody signs in for a token it
+	// could not keep, as one that does not read is.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		blocked := &person{config: t.TempDir(), env: map[string]string{}, browse: p.browse}
+		if err := os.Chmod(blocked.config, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(blocked.config, 0o700) })
+		if code, _, errs := blocked.agk(t, "login", "--server", in.URL); code != exitUsage || !strings.Contains(errs, "could not be made") {
+			t.Errorf("an agk whose profile cannot be written left with %d: %s", code, errs)
+		}
+	}
+	loose := &person{config: t.TempDir(), env: map[string]string{}, browse: p.browse}
+	os.Mkdir(filepath.Join(loose.config, profileDir), 0o700)
+	if err := os.WriteFile(filepath.Join(loose.config, profileDir, profileFile), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"login", "logout"} {
+		if code, _, errs := loose.agk(t, verb, "--server", in.URL); code != exitUsage || !strings.Contains(errs, "chmod 600") {
+			t.Errorf("agk %s with a profile others may read left with %d: %s", verb, code, errs)
+		}
 	}
 	if len(*pages) != 0 || len(in.exchanged) != 0 {
 		t.Errorf("a refused agk login opened %v and exchanged %v", *pages, in.exchanged)

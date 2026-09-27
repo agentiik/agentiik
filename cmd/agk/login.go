@@ -39,9 +39,14 @@ import (
 // number and never by the name localhost, as RFC 8252 advises and the sign-in page requires, on a
 // port the system chooses. It answers one request to /callback, whatever that request carries, and
 // nothing anywhere else: the first answer the browser brings is the one agk trades, and a second is
-// told the page can be closed. A process of the machine that reached the port first could hand agk a
-// code of its own, which the exchange refuses, since that code was minted against another
-// challenge; it could not make agk present anybody else's token.
+// told the page can be closed. A request a page of another site makes to the port, a fetch or a
+// frame, is told apart by what the browser says of it, Sec-Fetch-Mode and Sec-Fetch-Dest, and not
+// taken. A process of the machine that reached the port first could still hand agk a code of its
+// own: one minted against another challenge is refused at the exchange, but the challenge is no
+// secret, printed here and handed to the browser on its command line, so somebody else with an
+// account could sign in with it as themselves and have agk keep their token. That takes somebody
+// on the same machine, is what every loopback redirect is open to, and is why agk prints who it
+// signed in as.
 //
 // The verifier is 32 bytes of the system's generator in base64url, 43 characters, and never leaves
 // agk until the exchange. agk waits five minutes for the browser, the time a person takes to find
@@ -90,19 +95,22 @@ func login(ctx context.Context, e Env, args []string) int {
 		return exitUsage
 	}
 	base := strings.TrimRight(where, "/")
-	// The profile is read before anything is asked of anybody, so that one that cannot be kept
-	// is said before a person has signed in for nothing.
+	// The profile is read, and its directory written in, before anything is asked of anybody, so
+	// that one that cannot be kept is said before a person has signed in for nothing. A profile
+	// agk cannot use is exit 2, as a credential missing from the environment is.
 	path, kept, err := profilePath(e)
 	if err == nil && !kept {
 		err = errors.New("this agk keeps no local profile to store a token in: set " + tokenVariable + " to a token made with agk token create")
 	}
+	if err == nil {
+		_, err = readProfile(path)
+	}
+	if err == nil {
+		err = profileWritable(path)
+	}
 	if err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
-		return exitRefused
-	}
-	if _, err := readProfile(path); err != nil {
-		fmt.Fprintf(e.Err, "%s\n", err)
-		return exitRefused
+		return exitUsage
 	}
 
 	verifier, challenge, err := pkce()
@@ -133,13 +141,16 @@ func login(ctx context.Context, e Env, args []string) int {
 	}
 
 	issued, err := exchangeCode(ctx, base, got, verifier, device)
+	// The code is spent by the exchange's first presentation, and a token may have been minted for
+	// it before the answer was lost.
+	const untold = "whether a token was minted cannot be told from it: run agk login again, and a token minted and never received expires on its own, or is revoked from agk token list"
 	switch status := statusOf(err); {
 	case err == nil:
 	case errors.Is(err, errUnreachable):
-		fmt.Fprintln(e.Err, err)
+		fmt.Fprintf(e.Err, "%s, and %s\n", err, untold)
 		return exitNoOutcome
 	case status >= 500:
-		fmt.Fprintf(e.Err, "the installation answered %d, %s, and whether a token was minted cannot be told from it: run agk login again, and a token minted and never received expires on its own, or is revoked from agk token list\n", status, err)
+		fmt.Fprintf(e.Err, "the installation answered %d, %s, and %s\n", status, err, untold)
 		return exitNoOutcome
 	default:
 		fmt.Fprintf(e.Err, "the installation minted no token: %s\n", err)
@@ -222,14 +233,13 @@ func logout(ctx context.Context, e Env, args []string) int {
 	if err == nil && !kept {
 		err = errors.New("this agk keeps no local profile, and agk login kept no token here")
 	}
-	if err != nil {
-		fmt.Fprintf(e.Err, "%s\n", err)
-		return exitRefused
+	var p profile
+	if err == nil {
+		p, err = readProfile(path)
 	}
-	p, err := readProfile(path)
 	if err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
-		return exitRefused
+		return exitUsage
 	}
 	key := installationKey(where)
 	stored, found := p.Installations[key]
@@ -257,8 +267,9 @@ func logout(ctx context.Context, e Env, args []string) int {
 	}
 	delete(p.Installations, key)
 	if err := writeProfile(path, p); err != nil {
-		fmt.Fprintf(e.Err, "token %s %s, and %s\n", stored.ID, revoked, err)
-		return exitRefused
+		// Revoked, and still kept: agk logout run again finds it opening nothing and forgets it.
+		fmt.Fprintf(e.Err, "token %s %s, and %s: run agk logout again to forget it\n", stored.ID, revoked, err)
+		return exitNoOutcome
 	}
 	fmt.Fprintf(e.Out, "signed out of %s: token %s %s, and is no longer kept in %s\n", base, stored.ID, revoked, path)
 	if e.getenv(tokenVariable) != "" {
@@ -434,16 +445,20 @@ func (b *callback) close() {
 	b.server.Shutdown(ctx)
 }
 
-// ServeHTTP answers the browser: 404 to any path but the callback's, or any host but the address
+// ServeHTTP answers the browser: 404 to any path but the callback's, to any host but the address
 // the page was told, which a page of another site reaching the port through a name of its own
-// would carry; the callback taken once, whatever it carries; and a plain page saying what happened.
+// would carry, and to what a browser says is no navigation of the whole window, a page's fetch or
+// a frame, since the sign-in page sends the window itself; the callback taken once, whatever it
+// carries; and a plain page saying what happened. A client that says nothing of either, as no
+// browser is, is taken at its word.
 func (b *callback) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
-	if r.URL.Path != callbackPath || r.Host != b.host {
+	mode, dest := r.Header.Get("Sec-Fetch-Mode"), r.Header.Get("Sec-Fetch-Dest")
+	if r.URL.Path != callbackPath || r.Host != b.host || (mode != "" && mode != "navigate") || (dest != "" && dest != "document") {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintln(w, "Nothing is here. agk login listens for the sign-in page's answer and nothing else.")
 		return
