@@ -330,6 +330,13 @@ func TestWhatAgkLoginSendsIsHeldToItsSchema(t *testing.T) {
 	for _, terminal := range []string{
 		`{"redirect_uri":"http://127.0.0.1:53682/callback"}`,
 		`{"code_challenge":"` + challenge + `"}`,
+	} {
+		w := in.login(t, fmt.Sprintf(`{"login":"alice","password":%q,"terminal":%s}`, thePasswords["alice"], terminal), "")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "carries both redirect_uri and code_challenge") {
+			t.Errorf("a password sign-in with terminal %s answered %d %s", terminal, w.Code, w.Body)
+		}
+	}
+	for _, terminal := range []string{
 		`{"redirect_uri":"http://localhost:53682/callback","code_challenge":"` + challenge + `"}`,
 		`{"redirect_uri":"https://127.0.0.1:53682/callback","code_challenge":"` + challenge + `"}`,
 		`{"redirect_uri":"http://evil.example/callback","code_challenge":"` + challenge + `"}`,
