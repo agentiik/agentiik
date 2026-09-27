@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Namespaces, created and removed by agentiik-api namespace, the server-side verb that stands in
-// for v0.3.0's routes: until principals arrive nothing else creates one, and a workflow, a run
-// and a secret all belong to a namespace that exists.
+// Namespaces, created and removed by an administrator through the API and by agentiik-api
+// namespace, the server-side verb that runs where the API runs: both write through here, so that
+// one namespace is one row, one built-in identity and one set of refusals whichever made it.
 
 // NamespaceHolds is a namespace refused removal for what it still holds. A namespace is removed
 // only once it is empty, because what it holds is somebody's work, and removing it would be
@@ -21,9 +21,13 @@ import (
 type NamespaceHolds struct {
 	Name                     string
 	Workflows, Runs, Secrets int
-	// Other is a table still referring to it where none of the three counted does, such as
-	// artifact_objects, whose objects outlive the runs that wrote them until they are
-	// collected.
+
+	// Objects are the stored objects its runs wrote, which outlive the runs until they are
+	// collected, and ServiceAccounts its service accounts besides its built-in identity, whose
+	// tokens a script somewhere still presents.
+	Objects, ServiceAccounts int
+
+	// Other is a table still referring to it where none of those counted does.
 	Other string
 }
 
@@ -33,14 +37,18 @@ func (h *NamespaceHolds) Error() string { return "db: " + h.Held() }
 func (h *NamespaceHolds) Held() string {
 	var held []string
 	for _, c := range []struct {
-		n    int
-		what string
-	}{{h.Workflows, "workflow"}, {h.Runs, "run"}, {h.Secrets, "secret"}} {
+		n          int
+		one, other string
+	}{
+		{h.Workflows, "workflow", "workflows"}, {h.Runs, "run", "runs"}, {h.Secrets, "secret", "secrets"},
+		{h.Objects, "stored object", "stored objects"},
+		{h.ServiceAccounts, "service account besides " + h.Name + "/" + BuiltIn, "service accounts besides " + h.Name + "/" + BuiltIn},
+	} {
 		switch {
 		case c.n == 1:
-			held = append(held, "1 "+c.what)
+			held = append(held, "1 "+c.one)
 		case c.n > 1:
-			held = append(held, fmt.Sprintf("%d %ss", c.n, c.what))
+			held = append(held, fmt.Sprintf("%d %s", c.n, c.other))
 		}
 	}
 	if h.Other != "" {
@@ -49,47 +57,90 @@ func (h *NamespaceHolds) Held() string {
 	return fmt.Sprintf("namespace %s holds %s, and a namespace is removed only once it holds nothing, since what it holds is somebody's work", h.Name, strings.Join(held, ", "))
 }
 
-// CreateNamespace creates a namespace, and answers whether it did: false is one that already
-// existed, which is left as it was, so that an installation script run twice creates it once. A
-// name that is a user's login is ErrNameTaken.
-func (w *Wide) CreateNamespace(ctx context.Context, name string) (bool, error) {
-	tag, err := w.tx.Exec(ctx, `insert into namespaces (name) values ($1) on conflict (name) do nothing`, name)
+// ErrPersonalNamespace is a user's personal namespace, refused removal on its own: it is its
+// user's, named after their login, and "they cannot delete or rename" it.
+var ErrPersonalNamespace = errors.New("db: that namespace is a user's personal namespace")
+
+// CreateNamespace creates a namespace with its built-in identity, NS/agentiik, and answers whether
+// it did: false is one that already existed, which is left as it was, so that an installation
+// script run twice creates it once. A name that is a user's login is ErrNameTaken, and an owner
+// nobody created ErrNoPrincipal.
+//
+// n.Kind is shared where it is empty, and n.Owner is written on the row alone: the grant that lets
+// an owner act on the namespace is its creator's to write, beside this, with GrantAccess. The quotas
+// are written as SetQuotas writes them, so a zero MaxConcurrentTasks or MaxRetentionDays starts at
+// the table's default, 20 or 90.
+//
+// The built-in identity is created with the namespace because "scheduled, webhook and event runs
+// are attributed to" it, and it "holds no grant until an owner gives it one", so creating it grants
+// nothing. A namespace v0.2 made has none until one is given it.
+func (w *Wide) CreateNamespace(ctx context.Context, n Namespace) (bool, error) {
+	if n.Kind == "" {
+		n.Kind = NamespaceShared
+	}
+	tag, err := w.tx.Exec(ctx,
+		`insert into namespaces (name, kind, owner) values ($1, $2, $3) on conflict (name) do nothing`,
+		n.Name, n.Kind, nilIfEmpty(n.Owner))
 	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.ConstraintName == namesShared {
-		return false, fmt.Errorf("%w: %s", ErrNameTaken, name)
+	switch {
+	case errors.As(err, &pg) && pg.ConstraintName == namesShared:
+		return false, fmt.Errorf("%w: %s", ErrNameTaken, n.Name)
+	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
+		return false, fmt.Errorf("%w: %s", ErrNoPrincipal, n.Owner)
+	case err != nil:
+		return false, fmt.Errorf("db: namespace %s could not be created: %w", n.Name, err)
+	case tag.RowsAffected() == 0:
+		return false, nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("db: namespace %s could not be created: %w", name, err)
+	if err := w.SetQuotas(ctx, n.Name, n.Quotas); err != nil {
+		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	if err := w.CreateServiceAccount(ctx, ServiceAccount{Namespace: n.Name, Name: BuiltIn}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-// RemoveNamespace removes a namespace that holds no workflow, run or secret, and refuses one that
-// does with a *NamespaceHolds. One that does not exist is ErrNoNamespace.
+// RemoveNamespace removes a namespace that holds no workflow, run, secret, stored object or service
+// account but its built-in identity, and refuses one that does with a *NamespaceHolds. One that
+// does not exist is ErrNoNamespace, and a user's personal namespace ErrPersonalNamespace.
 //
-// The row is locked before anything is counted, so that a workflow pushed or a secret written
-// while the counts are read waits for this transaction and then finds the namespace gone, rather
-// than landing in a namespace counted as empty.
+// The built-in identity goes first, with the tokens and grants it holds: it is the namespace's own
+// and nobody created it, so it is no reason to keep the namespace, and a service account refers to
+// its namespace, which could not go while it stayed. The namespace's grants and its authentication
+// policy go with the row.
+//
+// The row is locked before anything is counted, so that a workflow pushed, a secret written or a
+// service account created while the counts are read waits for this transaction and then finds the
+// namespace gone, rather than landing in a namespace counted as empty.
 func (w *Wide) RemoveNamespace(ctx context.Context, name string) error {
-	var found string
-	err := w.tx.QueryRow(ctx, `select name from namespaces where name = $1 for update`, name).Scan(&found)
+	var kind string
+	err := w.tx.QueryRow(ctx, `select kind from namespaces where name = $1 for update`, name).Scan(&kind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s", ErrNoNamespace, name)
 	}
 	if err != nil {
 		return fmt.Errorf("db: namespace %s could not be read: %w", name, err)
 	}
+	if kind == NamespacePersonal {
+		return fmt.Errorf("%w: %s", ErrPersonalNamespace, name)
+	}
 	holds := &NamespaceHolds{Name: name}
 	if err := w.tx.QueryRow(ctx,
 		`select (select count(*) from workflows where namespace = $1),
 		        (select count(*) from runs where namespace = $1),
 		        (select count(*) from (select name from secret_declarations where namespace = $1
-		                               union select name from secret_values where namespace = $1) s)`,
-		name).Scan(&holds.Workflows, &holds.Runs, &holds.Secrets); err != nil {
+		                               union select name from secret_values where namespace = $1) s),
+		        (select count(*) from artifact_objects where namespace = $1),
+		        (select count(*) from service_accounts where namespace = $1 and name <> $2)`,
+		name, BuiltIn).Scan(&holds.Workflows, &holds.Runs, &holds.Secrets, &holds.Objects, &holds.ServiceAccounts); err != nil {
 		return fmt.Errorf("db: what namespace %s holds could not be counted: %w", name, err)
 	}
-	if holds.Workflows > 0 || holds.Runs > 0 || holds.Secrets > 0 {
+	if holds.Workflows > 0 || holds.Runs > 0 || holds.Secrets > 0 || holds.Objects > 0 || holds.ServiceAccounts > 0 {
 		return holds
+	}
+	if _, err := w.tx.Exec(ctx, `delete from principals where id = $1 || '/' || $2 and kind = 'service_account'`, name, BuiltIn); err != nil {
+		return fmt.Errorf("db: the built-in identity of namespace %s could not be removed: %w", name, err)
 	}
 	_, err = w.tx.Exec(ctx, `delete from namespaces where name = $1`, name)
 	var pg *pgconn.PgError

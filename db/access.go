@@ -30,19 +30,33 @@ var ErrNoWorkflow = errors.New("db: no workflow of that name in that namespace")
 // access.Grant.Validate refuses is refused here, a principal nobody created is ErrNoPrincipal, and a
 // workflow the namespace does not hold is ErrNoWorkflow.
 func (n *NS) GrantAccess(ctx context.Context, g access.Grant) error {
+	return grantAccess(ctx, n.tx, g, n.namespace)
+}
+
+// GrantAccess writes a grant in whichever namespace its scope names, as NS.GrantAccess does in its
+// own: for the installation's acts on a namespace, the grant that makes a new namespace's owner one
+// among them, which is written in the transaction that creates the namespace, before any handle on it
+// could be opened.
+func (w *Wide) GrantAccess(ctx context.Context, g access.Grant) error {
+	return grantAccess(ctx, w.tx, g, "")
+}
+
+// grantAccess writes g, through a handle bound to the namespace within, or to none where within is
+// empty.
+func grantAccess(ctx context.Context, tx pgx.Tx, g access.Grant, within string) error {
 	if err := g.Validate(); err != nil {
 		return fmt.Errorf("db: %w", err)
 	}
 	switch {
 	case g.ID == "" || g.GrantedBy == "":
 		return fmt.Errorf("db: an access grant needs an identifier and somebody who granted it, and %q was given by %q", g.ID, g.GrantedBy)
-	case g.Scope.Namespace != n.namespace:
-		return fmt.Errorf("db: a grant on %s was written through a handle on %s, and a namespace writes only its own", g.Scope, n.namespace)
+	case within != "" && g.Scope.Namespace != within:
+		return fmt.Errorf("db: a grant on %s was written through a handle on %s, and a namespace writes only its own", g.Scope, within)
 	}
-	_, err := n.tx.Exec(ctx,
+	_, err := tx.Exec(ctx,
 		`insert into grants (id, namespace, workflow, principal, role, deny, expires_at, granted_by, granted_at)
 		 values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, now()))`,
-		g.ID, n.namespace, nilIfEmpty(g.Scope.Workflow), g.Principal, nilIfEmpty(string(g.Role)),
+		g.ID, g.Scope.Namespace, nilIfEmpty(g.Scope.Workflow), g.Principal, nilIfEmpty(string(g.Role)),
 		nilIfEmpty(string(g.Deny)), g.ExpiresAt, g.GrantedBy, nilIfZero(g.GrantedAt))
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == foreignKeyViolation {
@@ -52,7 +66,7 @@ func (n *NS) GrantAccess(ctx context.Context, g access.Grant) error {
 		case "grants_namespace_workflow_fkey":
 			return fmt.Errorf("%w: %s", ErrNoWorkflow, g.Scope)
 		}
-		return fmt.Errorf("%w: %s", ErrNoNamespace, n.namespace)
+		return fmt.Errorf("%w: %s", ErrNoNamespace, g.Scope.Namespace)
 	}
 	if err != nil {
 		return fmt.Errorf("db: access grant %s could not be written: %w", g.ID, err)

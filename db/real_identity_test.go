@@ -615,7 +615,7 @@ func TestANameIsALoginOrANamespaceAndACounterMovesForward(t *testing.T) {
 		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
 	})
 	err = pool.Installation(t.Context(), NamespaceAdministration, func(ctx context.Context, w *Wide) error {
-		_, err := w.CreateNamespace(ctx, "alice")
+		_, err := w.CreateNamespace(ctx, Namespace{Name: "alice"})
 		return err
 	})
 	if !errors.Is(err, ErrNameTaken) {

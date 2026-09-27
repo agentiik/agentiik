@@ -124,6 +124,24 @@ func readAtMost(r *http.Request, into request, limit int64) error {
 	return decode(raw, into)
 }
 
+// readObject is readAtMost for a route whose body says something by what it leaves out, as a
+// namespace's quotas do. A body of null, which readAtMost reads as an object with no member, is
+// refused rather than read as one: read so, it would lift every bound the object leaves out, from a
+// client that sent a variable it had not set. what is what the object is, for the refusal.
+func readObject(r *http.Request, into request, limit int64, what string) error {
+	raw, err := slurp(r, limit)
+	if err != nil {
+		return err
+	}
+	switch trimmed := bytes.TrimSpace(raw); {
+	case len(trimmed) == 0:
+		return errors.New("the request body is empty, and this route reads a JSON object")
+	case string(trimmed) == "null":
+		return fmt.Errorf("the request body is null, and this route reads %s, a JSON object: {} is the one that leaves everything out", what)
+	}
+	return decode(raw, into)
+}
+
 // readIfAny is readAtMost for a route whose body is optional: one that arrives empty, or holding
 // nothing but whitespace, is no body, and anything else is read and refused as readAtMost reads and
 // refuses it.

@@ -109,11 +109,13 @@ func TestNamespaceReadsTheAPIsDatabaseSettingAlone(t *testing.T) {
 	}
 }
 
-// A namespace that holds nothing is removed, and one that holds a workflow, a run or a secret is
-// refused, left as it was, and told what it holds. A namespace that does not exist is refused too.
+// A namespace that holds nothing but its built-in identity is removed, the identity with it, and
+// one that holds a workflow, a secret, a stored object or another service account is refused, left
+// as it was, and told what it holds. A namespace that does not exist is refused too, and so is a
+// user's personal namespace, which goes only with its user.
 func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 	database, admin := namespaced(t)
-	for _, name := range []string{"empty", "with-workflow", "with-secret", "with-object"} {
+	for _, name := range []string{"empty", "with-workflow", "with-secret", "with-object", "with-account"} {
 		if err := namespace(t.Context(), database.Application, "create", name, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -124,21 +126,39 @@ func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 		// An object outlives the run that wrote it until it is collected, and a namespace
 		// holding one is not empty either.
 		`insert into artifact_objects (namespace, digest, size_bytes, media_type) values ('with-object', 'sha256:` + strings.Repeat("0", 64) + `', 0, 'application/json')`,
+		`insert into principals (id, kind) values ('with-account/deploy', 'service_account')`,
+		`insert into service_accounts (namespace, name, created_by) values ('with-account', 'deploy', 'alice')`,
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+		`insert into namespaces (name, kind, owner) values ('alice', 'personal', 'alice')`,
 	} {
 		if _, err := admin.Exec(t.Context(), stmt); err != nil {
 			t.Fatalf("%s: %s", stmt, err)
 		}
+	}
+	principal := func(id string) bool {
+		var n int
+		if err := admin.QueryRow(t.Context(), `select count(*) from principals where id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	if !principal("empty/agentiik") {
+		t.Fatal("a namespace was created without its built-in identity")
 	}
 
 	var out bytes.Buffer
 	if err := namespace(t.Context(), database.Application, "remove", "empty", &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "removed namespace empty\n" || exists(t, admin, "empty") {
-		t.Errorf("removing said %q, and the namespace is still there: %v", out.String(), exists(t, admin, "empty"))
+	if out.String() != "removed namespace empty\n" || exists(t, admin, "empty") || principal("empty/agentiik") {
+		t.Errorf("removing said %q, and the namespace is still there: %v, its built-in identity: %v", out.String(), exists(t, admin, "empty"), principal("empty/agentiik"))
 	}
 
-	for name, held := range map[string]string{"with-workflow": "1 workflow", "with-secret": "1 secret", "with-object": "rows of artifact_objects"} {
+	for name, held := range map[string]string{
+		"with-workflow": "1 workflow", "with-secret": "1 secret", "with-object": "1 stored object",
+		"with-account": "1 service account besides with-account/agentiik", "alice": "alice's personal namespace",
+	} {
 		out.Reset()
 		err := namespace(t.Context(), database.Application, "remove", name, &out)
 		if err == nil || !strings.Contains(err.Error(), held) || !strings.Contains(err.Error(), "not removed") {
@@ -155,7 +175,7 @@ func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 
 	// The removal is recorded, and the refusals are not acts.
 	got := audited(t, admin)
-	if len(got) != 5 || got[4] != "installation namespace.delete empty done" {
+	if len(got) != 6 || got[5] != "installation namespace.delete empty done" {
 		t.Errorf("the audit log holds %q", got)
 	}
 }
