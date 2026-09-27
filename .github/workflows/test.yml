@@ -271,7 +271,7 @@ jobs:
           upgrade "$data" refuse-socket | tee "$RUNNER_TEMP/recover.log"
           grep 'starting it once to recover' "$RUNNER_TEMP/recover.log" >/dev/null
           postgres18 recovered "$data/postgres" refuse-socket
-          test "$(sql recovered -d agentiik -c 'select string_agg(name, ', ' order by id) from runs')" = 'still served, written before the kill'
+          test "$(sql recovered -d agentiik -c "select string_agg(name, ', ' order by id) from runs")" = 'still served, written before the kill'
           gone recovered
 
   # A runner as the page installs one, which the job above cannot be: its daemon does not
