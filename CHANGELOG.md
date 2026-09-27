@@ -25,12 +25,16 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
 - A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
 - A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
+- `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
+- A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it. The bootstrap token creating an administrator is answered a first administrator's link.
+- A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own.
 
 ### State
 
 - Migration 0032 adds the identity and access tables and a namespace's kind, owner and four new quotas; `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
+- A suspended user's enrolment link still opens its session, and one it opened stays open, since enrolling is how such an account comes back; a credential of theirs opens nothing.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 
 ### Controller

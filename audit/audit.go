@@ -43,8 +43,8 @@ import (
 
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
 // cancellation, secret write, runner policy change, runner drain and revocation, and namespace
-// changes. Approval arrives with the wait step in v0.8.0, and the identity and access events with
-// principals in v0.3.0.
+// changes; and from v0.3.0 the identity and access events, of which users, their enrolment links
+// and groups are here so far. Approval arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -66,6 +66,21 @@ const (
 	// namespace create and remove until v0.3.0's routes make them.
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
+
+	// UserCreate and UserDelete are a user created, POST /api/v1/users, and removed with what
+	// they held, DELETE /api/v1/users/{login}. EnrolmentIssue is an enrolment link issued, with
+	// the user or on its own at POST /api/v1/users/{login}/enrolment, recorded with who issued
+	// it and for whom, and never with its code.
+	UserCreate     = "user.create"
+	UserDelete     = "user.delete"
+	EnrolmentIssue = "enrolment.issue"
+	// GroupCreate and GroupDelete are a group created and removed, and GroupMemberAdd and
+	// GroupMemberRemove one member put in or taken out, since a member gains or loses what the
+	// group's grants give.
+	GroupCreate       = "group.create"
+	GroupDelete       = "group.delete"
+	GroupMemberAdd    = "group_member.add"
+	GroupMemberRemove = "group_member.remove"
 )
 
 // The results an entry records.
