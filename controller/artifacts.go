@@ -38,15 +38,12 @@ func artifactsOf(g *graph.Graph, s *graph.State) []db.Reference {
 	for _, name := range sortedSteps(s) {
 		st := s.Steps[name]
 		for _, port := range sortedPorts(st.Ports) {
+			// A workflow that declared no default and no retention on this output
+			// still has its artifacts recorded, with no duration, which keeps them
+			// as long as the namespace allows. Left unrecorded, they would be bytes
+			// nothing expires, nothing collects and max_artifact_bytes stops counting
+			// once their upload lapses.
 			retain := retainOf(wf, name, port)
-			if retain.For <= 0 {
-				// A workflow that declared no default and no retention on this
-				// output. The namespace caps what a workflow asks for and does not
-				// supply what it never asked for, so there is nothing to record: an
-				// artifact with no declared life is one the language has not let
-				// anybody write.
-				continue
-			}
 			for _, item := range st.Ports[port].Items {
 				for _, f := range item.Files {
 					out = append(out, db.Reference{

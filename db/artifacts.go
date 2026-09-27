@@ -62,9 +62,12 @@ var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 //
 // For and Fetches are the two mechanisms of retain, which "answer two different questions:
 // a duration answers how long may this be fetched, and a single fetch answers may this be
-// fetched more than once". For is required, one-shot or not: "a one-shot artifact still has
+// fetched more than once". A budget comes with a duration: "a one-shot artifact still has
 // a duration, which is what expires it when nobody ever comes for it". Fetches is zero
-// where the workflow declared no budget.
+// where the workflow declared no budget, and For is zero where it declared no retain at
+// all, which keeps the artifact as long as the namespace allows: max_retention_days is what
+// bounds what nobody asked for, as it bounds a run's envelopes, and an artifact with no
+// expiry would be one no quota ever lets go of.
 type Reference struct {
 	URI       agk.URI
 	Digest    string // sixty-four lowercase hexadecimal characters, as the envelope carries it
@@ -134,7 +137,7 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 	if r.Size < 0 {
 		return Written{}, fmt.Errorf("db: an artifact of %d bytes", r.Size)
 	}
-	if r.For <= 0 {
+	if r.For < 0 || (r.For == 0 && r.Fetches > 0) {
 		return Written{}, errors.New("db: the reference says how many fetches it survives and not how long it lives: retain always carries for, and a one-shot artifact still has a duration, which is what expires it when nobody ever comes for it")
 	}
 	if r.Fetches < 0 {
@@ -175,11 +178,11 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type,
 		                        expires_at, fetches_left)
 		 values ($1, $2, $3, $4, $5, $6, $7, $8,
-		         now() + least($9::bigint * interval '1 second', $10::int * interval '1 day'), $11)
+		         now() + least($9::bigint * interval '1 microsecond', $10::int * interval '1 day'), $11)
 		 on conflict (namespace, run_id, step, port, name) do nothing
 		 returning expires_at, status, digest`,
 		namespace, string(r.URI.Run), string(r.URI.Step), string(r.URI.Port), r.URI.Name,
-		stored, r.Size, r.MediaType, int64(r.For/time.Second), ceiling, budget).Scan(&expires, &status, &existing)
+		stored, r.Size, r.MediaType, zeroIsNull64(r.For.Microseconds()), ceiling, budget).Scan(&expires, &status, &existing)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// The reference was already there, so the count this call raised is one too

@@ -1262,6 +1262,50 @@ steps:
 	}
 }
 
+// A workflow that declares no retain still has its artifacts recorded, kept as long as the
+// namespace allows: an artifact left unrecorded would be bytes nothing expires, nothing collects and
+// max_artifact_bytes stops counting once its upload lapses.
+func TestAnArtifactOfAWorkflowDeclaringNoRetainLivesAsLongAsTheNamespaceAllows(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 1; pass <= 6; pass++ {
+		taken := q.taken()
+		if len(taken) == 0 {
+			break
+		}
+		for _, task := range taken {
+			core.answer(t, withAFile(t, task, core.now(), strings.Repeat("c", 64)))
+		}
+	}
+	rows, err := dbtest.Superuser(t, super).Query(t.Context(),
+		`select step, extract(epoch from (expires_at - created_at)) / 86400 from artifacts where run_id = $1 order by step`,
+		string(decidedRun))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lives := map[string]float64{}
+	for rows.Next() {
+		var step string
+		var days float64
+		if err := rows.Scan(&step, &days); err != nil {
+			t.Fatal(err)
+		}
+		lives[step] = days
+	}
+	rows.Close()
+	if len(lives) != 2 {
+		t.Fatalf("the run recorded the artifacts of %v, and both steps wrote one", lives)
+	}
+	for step, days := range lives {
+		if days < 89.99 || days > 90.01 {
+			t.Errorf("the artifact of %s lives %.2f days, and the namespace keeps 90", step, days)
+		}
+	}
+}
+
 // What leaves the controller carries the three things only the controller can add: the row the
 // task is known by, the grant that turns its names into values, and the digest of every input.
 func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
