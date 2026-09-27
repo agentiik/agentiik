@@ -291,7 +291,8 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewNamespaces(rt, api.NamespaceOptions{Pool: pool}); err != nil {
 		return nil, err
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	// Every write held to its namespace's max_artifact_bytes.
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
 		return nil, err
 	}
 	// The API tokens of whoever asks, and of the service accounts of the namespaces they own.

@@ -257,6 +257,9 @@ func (s *Signed) verify(method, signed string, q url.Values) (agk.RunID, error) 
 	return agk.RunID(run), nil
 }
 
+// Limits are the size rules the store holds what it takes to, artifact_max_bytes among them.
+func (s *Signed) Limits() agk.Limits { return s.limits }
+
 // Fetch opens an object. The caller has already checked the signature, which is the only thing
 // standing between this and every object in the store.
 func (s *Signed) Fetch(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -287,6 +290,11 @@ var ErrWrongDigest = errors.New("artifact: the bytes are not the object this URL
 
 // ErrTooLarge is an object above artifact_max_bytes.
 var ErrTooLarge = errors.New("artifact: above artifact_max_bytes")
+
+// ErrNoRoom is an object refused because its namespace holds too much of its max_artifact_bytes for
+// it to fit. The built-in store answers it 507, and a runner told so fails the step on the
+// platform's account, as it does for any write the store refuses.
+var ErrNoRoom = errors.New("artifact: past the namespace's max_artifact_bytes")
 
 // digestChecked fails the write rather than the check: Put is all or nothing, so a reader that
 // errors at the last byte leaves nothing behind for anyone to fetch.

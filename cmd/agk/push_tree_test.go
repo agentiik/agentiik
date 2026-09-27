@@ -149,7 +149,7 @@ func anInstallation(t *testing.T) installation {
 	if _, err := api.NewRunners(rt, api.RunnerOptions{Pool: pool, Objects: objects, URLs: signed, Secrets: api.NoSecrets{}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	handler = rt

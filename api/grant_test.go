@@ -127,7 +127,7 @@ func withGrants(t *testing.T, secrets api.Secrets) grants {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	g.handler, g.signed, g.clock = rt, signed, clock

@@ -167,7 +167,9 @@ func (o *Objects) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 // is a policy that expired or was not signed for the key, and 400 is bytes that do not hash to
 // their key, which Store.Put hashed itself: both are this side's failure and never the brick's.
 // 413 is artifact_max_bytes, which Store.Put has already held the bytes to, so the store holds a
-// lower limit than the runner does. Any other answer, a 5xx among them, is the store's trouble.
+// lower limit than the runner does. 507 is the namespace's max_artifact_bytes, which its live
+// artifacts leave no room under for this object. Any other answer, a 5xx among them, is the store's
+// trouble.
 func (o *Objects) Put(ctx context.Context, key string, r io.Reader) error {
 	digest, under := strings.CutPrefix(key, o.policy.KeyPrefix)
 	if !under || !isDigest(digest) {
@@ -221,6 +223,8 @@ func (o *Objects) Put(ctx context.Context, key string, r io.Reader) error {
 		return fmt.Errorf("granted: object %s: the store answered %d: %w", key, resp.StatusCode, artifact.ErrWrongDigest)
 	case http.StatusRequestEntityTooLarge:
 		return fmt.Errorf("granted: object %s: the store answered %d: %w", key, resp.StatusCode, artifact.ErrTooLarge)
+	case http.StatusInsufficientStorage:
+		return fmt.Errorf("granted: object %s: the store answered %d: %w", key, resp.StatusCode, artifact.ErrNoRoom)
 	}
 	return fmt.Errorf("granted: object %s: the store answered %d", key, resp.StatusCode)
 }

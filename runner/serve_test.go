@@ -157,7 +157,7 @@ func anInstallationRotating(t *testing.T, rotation time.Duration, key ed25519.Pu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := server.NewObjects(rt, in.signed); err != nil {
+	if _, err := server.NewObjects(rt, in.signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := server.NewRunners(rt, server.RunnerOptions{
