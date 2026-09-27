@@ -106,6 +106,15 @@
 // service_account.create by installation in its namespace, and a run finding none lacking says
 // nothing of it.
 //
+// And it records the artifact files of the runs v0.2 finished, as init does, where AGK_OBJECTS_DIR
+// is set, as it is among the API's settings: v0.2 recorded no reference for a file of an output its
+// workflow gave no retain, so each file the envelopes those runs' steps published name is recorded
+// as an artifact of its run, expiring the namespace's max_retention_days after the run finished,
+// for the purges to expire and collect, a batch of runs a transaction, as purge.Backfill does. A
+// migrate cut short leaves the rest for the next, and one finding nothing left says nothing. With
+// AGK_OBJECTS_DIR unset it records none, and says so while runs are left, since the collection
+// takes no file that no row names in their namespaces until they are recorded.
+//
 // # init
 //
 // init prepares an installation in the directory AGK_INIT_DIR names, whose subdirectories are what
@@ -120,7 +129,8 @@
 // AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does,
 // saying so and going on where a user's login holds the name, since a failed init would keep every
 // service from starting over a name somebody else holds; the built-in identity of every namespace
-// that has none, as migrate gives it; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
+// that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
+// envelopes in the object store's directory, as migrate records them; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has enrolled, saying so where none is set and none is kept, and minting none; and a
 // join token of the pool default for the runner beside it, issued through the database since the
 // API is not serving yet. Each service is given its own copy of what it reads, owned by uid 65532

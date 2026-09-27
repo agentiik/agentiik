@@ -114,6 +114,24 @@ func TestMigrateOpensNoOperatorTokenFileAtItsStart(t *testing.T) {
 	}
 }
 
+// migrate reads the object store's directory where it is set, held to what the API holds it to,
+// since it reads the envelopes of the runs v0.2 finished from there; and starts without it, since
+// the migrations and the bootstrap token need no store.
+func TestMigrateReadsTheObjectStoreWhereItIsSet(t *testing.T) {
+	i := anInstallation(t)
+	if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.Objects != i.env[config.ObjectsDir] {
+		t.Errorf("migrate read the object store as %q: %v", c.Objects, err)
+	}
+	delete(i.env, config.ObjectsDir)
+	if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.Objects != "" {
+		t.Errorf("with no object store set, migrate read %q: %v", c.Objects, err)
+	}
+	i.env[config.ObjectsDir] = "objects"
+	if _, err := config.ReadMigration(migrating.environment(i)); !slices.Equal(refused(err), []string{config.ObjectsDir}) {
+		t.Errorf("with a relative object store, migrate's start was refused naming %v: %v", refused(err), err)
+	}
+}
+
 // The v0.2 operator token's hash is read as v0.2's API read it: 64 lowercase hexadecimal
 // characters, a newline after them or not, in a file its owner alone may read. A file that is not
 // there is none, and is no refusal; any other is refused naming the variable, and the refusal
