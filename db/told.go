@@ -24,8 +24,9 @@ import (
 // people whose data it is should hear of it from the installation itself." So are a grant an
 // administrator writes there by the installation's power and a user an administrator puts in a group
 // holding a role there, each told with the act and who did it. The second kind, a sign-in refused for
-// a passkey's signature counter, is written by the passkey ceremonies, and read here as the first is. The third, the break-glass path used, is told to every administrator, so
-// that the one way to a recovery code that no administrator vouches for is never taken silently.
+// a passkey's signature counter, is written by the passkey ceremonies, and read here as the first is.
+// The third, the break-glass path used, is told to every administrator, so that the one way to a
+// recovery code that no administrator vouches for is never taken silently.
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
@@ -139,8 +140,8 @@ type Notification struct {
 // the role is told as itself, since its token reads GET /api/v1/me as a user's does. Where that
 // reaches nobody, no owner on the record and nobody holding the role, or only a group with no
 // members, every administrator is told instead, suspended ones included, since each may be the one
-// who comes back to read it: an administrator's act is never told to nobody but because it was the
-// only owner's own.
+// who comes back to read it: an administrator's act goes untold only where they are the one owner
+// there.
 //
 // It is written in the transaction of the act, so that no act commits untold, and before the audit
 // entry that records it, which is the last statement of the transaction.
