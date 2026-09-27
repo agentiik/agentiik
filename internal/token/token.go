@@ -14,11 +14,11 @@
 //
 // # Why the prefix
 //
-// agktoken_, agkgrant_, agkjoin_ and agkrunner_ say what a credential is before anybody tries it. That is
-// worth a few bytes for two reasons: a value that leaks into a log or a bug report can be
-// recognised and revoked by whoever finds it, and a value presented to the wrong door can be
-// refused for being the wrong kind rather than for failing a lookup that the wrong door would
-// have had to perform.
+// agktoken_, agkgrant_, agkjoin_, agkrunner_ and agkenrol_ say what a credential is before anybody
+// tries it. That is worth a few bytes for two reasons: a value that leaks into a log or a bug report
+// can be recognised and revoked by whoever finds it, and a value presented to the wrong door can be
+// refused for being the wrong kind rather than for failing a lookup that the wrong door would have
+// had to perform.
 package token
 
 import (
@@ -51,6 +51,12 @@ const (
 
 	// Runner is the long-lived credential a runner authenticates every later call with.
 	Runner Kind = "agkrunner"
+
+	// Enrol is the code of an enrolment link: it lets one user enrol a passkey, once, within
+	// the hour, and nothing else. It travels after the # of the link, which a browser never
+	// sends, so the prefix is what somebody who finds one in a chat or a ticket recognises it
+	// by.
+	Enrol Kind = "agkenrol"
 )
 
 // Bits is how much entropy every credential carries.
@@ -66,8 +72,8 @@ const secretLength = 43
 // New mints one credential and answers the clear value and what to store.
 //
 // id is the identifier the credential names inside its own text, and is empty for the kinds that
-// name nothing: a grant carries its task, a join token and a runner credential carry nothing
-// because what they are bound to is a row rather than a segment.
+// name nothing: a grant carries its task, a join token, a runner credential and an enrolment code
+// carry nothing because what they are bound to is a row rather than a segment.
 //
 // The clear value is returned once and is not recoverable from the hash. A caller that loses it
 // mints another.
@@ -81,7 +87,7 @@ func New(kind Kind, id string) (clear, hashed string, err error) {
 		if id == "" {
 			return "", "", fmt.Errorf("token: a grant names the task it belongs to, and this one names none")
 		}
-	case Join, Runner:
+	case Join, Runner, Enrol:
 		if id != "" {
 			return "", "", fmt.Errorf("token: a %s carries no identifier in its text, and this one was given %q: what it is bound to is a row", kind, id)
 		}
@@ -146,7 +152,7 @@ func KindOf(clear string) (Kind, bool) {
 	case Grant:
 		id, secret, ok := strings.Cut(rest, "_")
 		return kind, ok && id != "" && len(secret) >= 16
-	case Join, Runner:
+	case Join, Runner, Enrol:
 		return kind, len(rest) >= secretLength
 	}
 	return "", false
