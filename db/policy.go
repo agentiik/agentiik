@@ -146,7 +146,7 @@ func (w *Wide) Logins(ctx context.Context) ([]string, error) {
 var ErrBootstrapEnded = errors.New("db: the bootstrap token ended when the first administrator signed in")
 
 // Bootstrap is the bootstrap token's state: the SHA-256 of the token while it works, and when the
-// first administrator's enrolment ended it.
+// first administrator's enrolment or sign-in ended it.
 type Bootstrap struct {
 	TokenHash  []byte
 	EnrolledAt time.Time

@@ -439,7 +439,7 @@ func administrationRefused(e Env, err error, what, name string) int {
 		if e.presentsKept() {
 			held = "the token agk login kept"
 		}
-		said += fmt.Sprintf(": users and groups are an administrator's to manage, and %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has enrolled", held)
+		said += fmt.Sprintf(": users and groups are an administrator's to manage, and %s is not an administrator's with no scope, nor the bootstrap token before the first administrator has signed in", held)
 	case http.StatusNotFound:
 		switch what {
 		case "":
