@@ -47,6 +47,9 @@ type passwordsOf struct {
 	p         *api.Principals
 	totp      *secret.TOTP
 	trouble   *[]error
+
+	// signIns is what the sign-in routes share, as serve shares it, which the exchange is given.
+	signIns *api.SignIns
 }
 
 // thePasswords are the passwords the users of passwordsOf hold.
@@ -92,6 +95,7 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	signIns := api.NewSignIns(proxied)
+	in.signIns = signIns
 	if in.passkeys, err = api.NewPasskeys(rt, api.PasskeyOptions{
 		Pool: pool, PublicURL: publicURL, Identify: in.p.Identify, Now: clock, SignIns: signIns,
 	}); err != nil {

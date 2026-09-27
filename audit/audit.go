@@ -122,12 +122,13 @@ const (
 // with the reason where the policy took it: a password its account no longer needs once it holds
 // min_passkeys. EnrolmentUse is the enrolment link or recovery code a registration or a password
 // spent. BootstrapEnd is the bootstrap token ended by the enrolment, or the password sign-in, that
-// first gives an administrator a full session, recorded once and for good. SigninSucceed is a
-// session opened, by an assertion, by a password, or by the registration or the password an
-// enrolment link started. SigninFail is an assertion refused, with the reason, in a transaction of
-// its own since the sign-in it records committed nothing; its actor is the address the request came
-// from, since nobody was identified, and its target the account the passkey names, or the credential
-// ID presented where it names none.
+// first gives an administrator a full session, or by the first request of one that has come to be
+// full, recorded once and for good. SigninSucceed is a session opened, by an assertion, by a
+// password, or by the registration or the password an enrolment link started. SigninFail is an
+// assertion, a password sign-in or agk login's exchange refused, with the reason, in a transaction
+// of its own since the sign-in it records committed nothing; its actor is the address the request
+// came from, since nobody was identified, and its target the account the passkey, the login or the
+// code names, or the credential ID presented, or the code's SHA-256, where it names none.
 const (
 	CredentialEnrol  = "credential.enrol"
 	CredentialRemove = "credential.remove"

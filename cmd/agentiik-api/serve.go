@@ -343,8 +343,11 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	// agk login's exchange, trading the one-time code either sign-in hands its loopback address for
-	// an API token.
-	if _, err := api.NewExchange(rt, api.ExchangeOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+	// an API token, its refusals recorded within the bound the sign-ins share.
+	if _, err := api.NewExchange(rt, api.ExchangeOptions{
+		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns,
+		Trouble: func(err error) { log.Warn("a refused exchange could not be recorded in the audit log", "error", err) },
+	}); err != nil {
 		return nil, err
 	}
 	// The authentication policy, the installation's and each namespace's tightening of it, which an

@@ -12,16 +12,18 @@ import (
 // What a failed sign-in costs the audit log, and where a sign-in comes from.
 //
 // Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
-// it has been read and counted (passwords.go). An assertion refused before its signature verified is
-// anybody's to send: an answer to options they asked for themselves, signed with a key of their own,
-// or with none; and so is any password sign-in, with any login and any password. Unbounded, that is a row in the audit log for every request anybody
-// cares to make, each append waiting its turn at the head of the one chain every act of the
-// installation appends to, and each kept for good and exported. So what such refusals append is
-// bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
-// failuresRecordedAll from every address together, so that a sender with many addresses is held
-// too. Past either, a refusal is answered as every other is, and counted, and the next entry
-// appended says how many went unrecorded before it, from whatever address, so that the log never
-// reads as if they had not happened.
+// it has been read and counted (passwords.go), and every exchange of agk login's code refused once
+// it holds to its schema (exchange.go). An assertion refused before its signature verified is
+// anybody's to send: an answer to options they asked for themselves, signed with a key of their
+// own, or with none; and so is any password sign-in, with any login and any password, and any code
+// with any verifier. Unbounded, that is a row in the audit log for every request anybody cares to
+// make, each append waiting its turn at the head of the one chain every act of the installation
+// appends to, and each kept for good and exported. So what such refusals append is bounded, twice:
+// failuresRecorded entries from one address in a window of failuresWindow, and failuresRecordedAll
+// from every address together, so that a sender with many addresses is held too. Past either, a
+// refusal is answered as every other is, and counted, and the next entry appended says how many
+// went unrecorded before it, from whatever address, so that the log never reads as if they had not
+// happened.
 //
 // A refusal after the signature verified is recorded whatever the bound says, and so is the
 // notification a counter that did not move forward sends its user: only whoever holds the
