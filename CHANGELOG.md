@@ -51,6 +51,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
+- `agk user create LOGIN [--admin] [--display-name NAME]` prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
 
 ## v0.2.5, 2026-09-26
 

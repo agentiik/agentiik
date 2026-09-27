@@ -70,6 +70,16 @@ type command struct {
 var commands = []command{
 	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
 	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation has no route yet that says who a token belongs to", withPrincipals)},
+	{"user create", "Creates a user, --admin for an administrator, and prints the enrolment link.", userCreate},
+	{"user list", "Lists the users of an installation.", userList},
+	{"user show", "Shows one user: display name, whether an administrator or suspended, when created and last signed in.", userShow},
+	{"user delete", "Removes a user with their credentials, tokens, sessions, memberships and grants.", userDelete},
+	{"group create", "Creates a group, empty or with its first members.", groupCreate},
+	{"group list", "Lists the groups of an installation and their members.", groupList},
+	{"group show", "Shows one group and its members.", groupShow},
+	{"group delete", "Removes a group with its memberships and grants.", groupDelete},
+	{"group add", "Puts a user in a group, touching no grant.", groupAdd},
+	{"group remove", "Takes a user out of a group, touching no grant.", groupRemove},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},
@@ -133,9 +143,9 @@ func run(ctx context.Context, e Env, args []string) int {
 
 // verb reads the command out of the arguments, the two-word verbs first.
 //
-// brick test and brick init are two words because the documentation writes them as two, and
-// a binary that answered to brick-test would be a binary whose help and whose documentation
-// spell one thing differently.
+// brick test and brick init are two words because the documentation writes them as two, as it
+// writes user create, and a binary that answered to brick-test would be a binary whose help and
+// whose documentation spell one thing differently.
 func verb(args []string) (*command, []string) {
 	if len(args) >= 2 {
 		two := args[0] + " " + args[1]
@@ -157,10 +167,20 @@ func verb(args []string) (*command, []string) {
 // line: brick frobnicate is a second word of a verb that has one, and anything else is its
 // first word alone.
 func typed(args []string) string {
-	if args[0] == "brick" && len(args) >= 2 {
-		return "brick " + args[1]
+	if len(args) >= 2 && twoWords(args[0]) {
+		return args[0] + " " + args[1]
 	}
 	return args[0]
+}
+
+// twoWords says whether a word is the first of a verb written in two, brick, user or group.
+func twoWords(first string) bool {
+	for _, c := range commands {
+		if strings.HasPrefix(c.name, first+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // usage is the table, and nothing that is not in the table.
