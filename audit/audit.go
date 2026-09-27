@@ -82,8 +82,9 @@ const (
 
 	// UserCreate and UserDelete are a user created, POST /api/v1/users, and removed with what
 	// they held, DELETE /api/v1/users/{login}. EnrolmentIssue is an enrolment link issued, with
-	// the user or on its own at POST /api/v1/users/{login}/enrolment, recorded with who issued
-	// it and for whom, and never with its code.
+	// the user or on its own at POST /api/v1/users/{login}/enrolment, or a recovery code, at POST
+	// /api/v1/users/{login}/recovery or by installation at agentiik-api recover, recorded with who
+	// issued it and for whom, and never with its code.
 	UserCreate     = "user.create"
 	UserDelete     = "user.delete"
 	EnrolmentIssue = "enrolment.issue"
