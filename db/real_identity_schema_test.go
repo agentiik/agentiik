@@ -82,6 +82,9 @@ func TestTheIdentityTablesHoldTheirRules(t *testing.T) {
 		{"a second password", `insert into credentials (id, login, type, password_hash) values ('password-bob-2', 'bob', 'password', 'h')`, "credentials_one_password"},
 		{"a TOTP of its own", `insert into credentials (id, login, type, totp_sealed) values ('totp-bob', 'bob', 'totp', '\x01')`, ""},
 		{"a second TOTP", `insert into credentials (id, login, type, totp_sealed) values ('totp-bob', 'bob', 'totp', '\x01'), ('totp-bob-2', 'bob', 'totp', '\x02')`, "credentials_one_totp"},
+		{"a TOTP with the step its code was accepted at", `insert into credentials (id, login, type, totp_sealed, totp_step) values ('totp-bob', 'bob', 'totp', '\x01', 60000000)`, ""},
+		{"a TOTP at no step", `insert into credentials (id, login, type, totp_sealed, totp_step) values ('totp-bob', 'bob', 'totp', '\x01', 0)`, "credentials_totp_step"},
+		{"a password with a step", `insert into credentials (id, login, type, password_hash, totp_step) values ('password-alice', 'alice', 'password', 'h', 60000000)`, "credentials_totp_step"},
 		{"a counter past 32 bits", `insert into credentials (id, login, type, public_key, sign_count, aaguid, backup_eligible, backup_state)
 		   values ('Ym9i', 'bob', 'passkey', '\x01', 4294967296, '\x00000000000000000000000000000000', false, false)`, "credentials_sign_count_check"},
 		{"an AAGUID of fifteen bytes", `insert into credentials (id, login, type, public_key, sign_count, aaguid, backup_eligible, backup_state)

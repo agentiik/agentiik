@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // BetweenShipTransactions has f run between the two transactions of every shipment s takes, which
 // is where another shipment of the same log can be taken.
@@ -12,3 +15,21 @@ func StreamTiming(s *Server, sweep, pace, keepAlive, reauthorise, settling time.
 	s.streaming = streamTiming{sweep: sweep, pace: pace, keepAlive: keepAlive, reauthorise: reauthorise, settling: settling}
 	s.logs.sweep = sweep
 }
+
+// Hashing gives s the turns to hash and the wait for one given in place of those sized from the
+// machine, and answers the function that takes one of its turns and holds it until the function it
+// answers is called.
+func Hashing(s *PasswordAPI, turns int, wait time.Duration) func() func() {
+	s.hashing = newHashing(turns, wait)
+	return func() func() {
+		done, ok := s.hashing.turn(context.Background())
+		if !ok {
+			panic("no turn to hash came in time")
+		}
+		return done
+	}
+}
+
+// BetweenChecksAndSignIn has f run between the checks of every password sign-in s answers and the
+// transaction that signs it in, which is where what was checked can change.
+func BetweenChecksAndSignIn(s *PasswordAPI, f func()) { s.checked = f }

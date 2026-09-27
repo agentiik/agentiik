@@ -78,6 +78,10 @@ type PasskeyOptions struct {
 	// Trouble is told what went wrong where a refusal is answered all the same: a failed sign-in
 	// that could not be recorded.
 	Trouble func(error)
+
+	// SignIns is what the sign-in routes share: where a sign-in comes from, and the bound on the
+	// failures they record. Nil is one of the ceremonies' own, reading no proxy's header.
+	SignIns *SignIns
 }
 
 // PasskeyAPI is the passkey ceremonies.
@@ -91,7 +95,7 @@ type PasskeyAPI struct {
 	// ceremony runs, empty where they do.
 	rpID, origin, unavailable string
 
-	failures *failedSignIns
+	signIns *SignIns
 }
 
 // The bytes a ceremony mints: a challenge and a user handle are each 32 random bytes, 256 bits,
@@ -159,9 +163,12 @@ func NewPasskeys(rt *Router, o PasskeyOptions) (*PasskeyAPI, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
+	if o.SignIns == nil {
+		o.SignIns = NewSignIns(false)
+	}
 	s := &PasskeyAPI{
 		pool: o.Pool, identify: o.Identify, now: o.Now, trouble: o.Trouble,
-		rpID: strings.ToLower(u.Hostname()), origin: origin, failures: newFailedSignIns(),
+		rpID: strings.ToLower(u.Hostname()), origin: origin, signIns: o.SignIns,
 	}
 	if net.ParseIP(s.rpID) != nil {
 		s.rpID, s.unavailable = "", ipAddressed
@@ -199,14 +206,13 @@ type ceremonyPolicy struct {
 }
 
 // policyOf is what the policy asks of login's passkeys: the installation's user_verification and
-// device_bound_only, tightened by those of every namespace login holds a grant in, its own or one
-// of its groups', since "an account signs in under the installation's policy tightened by that of
-// each namespace it holds a grant in". A deny alone is not a grant, as it is nowhere else.
+// device_bound_only, tightened by those of every namespace login holds a grant in, as policiesOf
+// reads them.
 //
 // The two settings a ceremony reads, and no more: the rest of the policy is the password's and the
 // credentials', and is read where they are.
 func policyOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (ceremonyPolicy, error) {
-	installation, err := wide.InstallationPolicy(ctx)
+	installation, tightening, err := policiesOf(ctx, wide, login, now)
 	if err != nil {
 		return ceremonyPolicy{}, err
 	}
@@ -214,14 +220,32 @@ func policyOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (
 		userVerification: installation.UserVerification != "preferred",
 		deviceBoundOnly:  installation.DeviceBoundOnly != nil && *installation.DeviceBoundOnly,
 	}
+	for _, tightened := range tightening {
+		p.userVerification = p.userVerification || tightened.UserVerification == "required"
+		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
+	}
+	return p, nil
+}
+
+// policiesOf is the policies that apply to login: the installation's, and those of every namespace
+// login holds a grant in, its own or one of its groups', since "an account signs in under the
+// installation's policy tightened by that of each namespace it holds a grant in". A deny alone is
+// not a grant, as it is nowhere else. A login no user holds holds no grant, and is under the
+// installation's alone.
+func policiesOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (db.AuthPolicy, []db.AuthPolicy, error) {
+	installation, err := wide.InstallationPolicy(ctx)
+	if err != nil {
+		return db.AuthPolicy{}, nil, err
+	}
 	groups, err := wide.GroupsOf(ctx, login)
 	if err != nil {
-		return ceremonyPolicy{}, err
+		return db.AuthPolicy{}, nil, err
 	}
 	grants, err := wide.AccessGrantsAcross(ctx, access.Principal{Ref: login, Groups: groups}, now)
 	if err != nil {
-		return ceremonyPolicy{}, err
+		return db.AuthPolicy{}, nil, err
 	}
+	var tightening []db.AuthPolicy
 	read := map[string]bool{}
 	for _, g := range grants {
 		if g.Role == "" || read[g.Scope.Namespace] {
@@ -230,12 +254,11 @@ func policyOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (
 		read[g.Scope.Namespace] = true
 		tightened, err := wide.NamespacePolicy(ctx, g.Scope.Namespace)
 		if err != nil {
-			return ceremonyPolicy{}, err
+			return db.AuthPolicy{}, nil, err
 		}
-		p.userVerification = p.userVerification || tightened.UserVerification == "required"
-		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
+		tightening = append(tightening, tightened)
 	}
-	return p, nil
+	return installation, tightening, nil
 }
 
 // verification is how a ceremony's options write the user verification asked for.
@@ -461,8 +484,8 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 // Nor does a session an enrolment code opened: the code travels in the options now and is spent by
 // the registration it starts, which ends the bootstrap where it is the first administrator's, and a
 // session holding a code would register a passkey without spending it. The session a password
-// opens that may only enrol, when passwords come, is the one this reads Identify rather than the
-// router's for, since the router refuses it everywhere, and it registers here like any other.
+// opened that may only enrol is the one this reads Identify rather than the router's for, since the
+// router refuses it everywhere, and it registers here like any other.
 func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 	if _, bearer := bearerOf(r); bearer {
 		return Identity{Refused: noRegistrar}, nil
@@ -632,7 +655,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 	}
 
 	id := b64.EncodeToString(made.ID)
-	address := addressOf(r)
+	address := s.signIns.addressOf(r)
 	var answer Verified
 	var cookie *http.Cookie
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -758,7 +781,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 // of its own.
 func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
 	id := b64.EncodeToString(ask.Credential.RawID)
-	failed := signInFailure{address: addressOf(r), credential: id}
+	failed := signInFailure{address: s.signIns.addressOf(r), credential: id}
 	var took db.Challenge
 	var stored db.Credential
 	var handle []byte
@@ -1005,9 +1028,9 @@ const failureReasonMax = 256
 func (s *PasskeyAPI) refuseSignIn(w http.ResponseWriter, r *http.Request, f signInFailure, now time.Time) {
 	unrecorded, recorded := 0, true
 	if f.verified {
-		unrecorded = s.failures.recordedAnyway()
+		unrecorded = s.signIns.failures.recordedAnyway()
 	} else {
-		unrecorded, recorded = s.failures.admit(f.address, now)
+		unrecorded, recorded = s.signIns.failures.admit(f.address, now)
 	}
 	if f.login == "" && len(f.credential) > presentedMax {
 		f.credential = f.credential[:presentedMax]

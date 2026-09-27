@@ -37,7 +37,8 @@
   }
 
   // call sends one request to the API, whose routes are under api/v1 beside the page's own
-  // directory, and answers its status and its JSON, null where it carries none.
+  // directory, and answers its status, its JSON, null where it carries none, and the seconds its
+  // Retry-After gives, null where it gives none.
   async function call(method, path, body) {
     const init = { method, credentials: "same-origin", cache: "no-store", headers: {} };
     if (body !== undefined) {
@@ -56,7 +57,21 @@
     } catch (_) {
       answer = null;
     }
-    return { status: response.status, answer };
+    const after = Number.parseInt(response.headers.get("Retry-After"), 10);
+    return { status: response.status, answer, retryAfter: Number.isFinite(after) ? after : null };
+  }
+
+  // wait says, for a person, how long Retry-After asks them to wait, in whole minutes rounded up,
+  // or seconds under a minute: the API's sentence speaks of the header, which a person never sees.
+  function wait(seconds) {
+    if (seconds === null || seconds <= 0) {
+      return "";
+    }
+    if (seconds < 60) {
+      return " Try again in " + seconds + (seconds === 1 ? " second." : " seconds.");
+    }
+    const minutes = Math.ceil(seconds / 60);
+    return " Try again in " + minutes + (minutes === 1 ? " minute." : " minutes.");
   }
 
   // refusal is the sentence an answer refused with, or one of the page's where it carries none.
@@ -189,15 +204,18 @@
     const offered = main.dataset.password === "offered";
 
     // render shows what is left to do: signing in, where nobody is or where agk login waits for a
-    // sign-in of its own, and otherwise who is signed in. Once a sign-in or a sign-out on the page
-    // has said who that is, settled keeps the page's first question from answering over it; once
-    // the API has refused this account a password, withdrawn keeps the form from coming back.
+    // sign-in of its own, and otherwise who is signed in. A session that may only enrol is shown the
+    // way to enrol a passkey and its sign-out, and no sign-in: signing in again, with the password
+    // that opened it, opens another such session, and with a passkey is what enrolling one is for,
+    // agk login's included, since such a session mints no token. Once a sign-in or a sign-out on the
+    // page has said who that is, settled keeps the page's first question from answering over it;
+    // once the API has refused this account a password, withdrawn keeps the form from coming back.
     let settled = false;
     let withdrawn = false;
     function render(login) {
       showSignedIn(login);
       show("enrolling", login === "");
-      const signing = !login || !!handOff;
+      const signing = login !== "" && (!login || !!handOff);
       show("passkey", signing && !why);
       show("password", signing && offered && !withdrawn);
     }
@@ -271,6 +289,10 @@
         withdrawn = true;
         show("password", false);
         problem(refusal(r));
+        return;
+      }
+      if (r.status === 429) {
+        problem(refusal(r) + wait(r.retryAfter));
         return;
       }
       if (r.status !== 200) {

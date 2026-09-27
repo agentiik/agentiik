@@ -28,6 +28,10 @@ var ErrNoCredential = errors.New("db: no credential of that identifier")
 // TOTP for one user.
 var ErrCredentialExists = errors.New("db: that credential is enrolled already")
 
+// ErrNoPassword is a TOTP generator enrolled for a user holding no password: "TOTP exists only
+// alongside a password".
+var ErrNoPassword = errors.New("db: a TOTP generator is enrolled beside a password, and that user holds none")
+
 // Credential is one credential of one user. The fields of its type are set and the others are
 // empty.
 type Credential struct {
@@ -50,11 +54,18 @@ type Credential struct {
 	// A password: its hash, in the self-describing form its hasher writes.
 	PasswordHash string
 
-	// A TOTP: its secret, sealed under the master key.
+	// A TOTP: its secret, sealed under the master key, and the time step its code was last
+	// accepted at, zero where none was, which is before every step a clock reads since 1970.
 	TOTPSealed []byte
+	TOTPStep   int64
 }
 
-// AddCredential enrols one.
+// AddCredential enrols one. A TOTP generator is enrolled beside a password alone, and is
+// ErrNoPassword for a user holding none.
+//
+// Enrolling a TOTP locks its user's password, which a sign-in writes once it holds the user's row:
+// its caller holds the user's row first (HoldUser), as every act on an account does, or the two wait
+// on each other.
 func (w *Wide) AddCredential(ctx context.Context, c Credential) error {
 	var count *int64
 	var eligible, state *bool
@@ -70,6 +81,8 @@ func (w *Wide) AddCredential(ctx context.Context, c Credential) error {
 		eligible, state, nilIfEmpty(c.PasswordHash), nilIfNone(c.TOTPSealed))
 	var pg *pgconn.PgError
 	switch {
+	case errors.As(err, &pg) && pg.ConstraintName == "credentials_totp_beside_a_password":
+		return fmt.Errorf("%w: %s", ErrNoPassword, c.Login)
 	case errors.As(err, &pg) && pg.Code == uniqueViolation:
 		return fmt.Errorf("%w: %s", ErrCredentialExists, c.ID)
 	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
@@ -89,14 +102,14 @@ func nilIfNone(b []byte) []byte {
 
 const credentialColumns = `id, login, type, coalesce(label, ''), created_at, last_used_at,
 	public_key, sign_count, aaguid, coalesce(backup_eligible, false), coalesce(backup_state, false),
-	coalesce(password_hash, ''), totp_sealed`
+	coalesce(password_hash, ''), totp_sealed, coalesce(totp_step, 0)`
 
 func scanCredential(row pgx.Row) (Credential, error) {
 	var c Credential
 	var used *time.Time
 	var count *int64
 	err := row.Scan(&c.ID, &c.Login, &c.Type, &c.Label, &c.CreatedAt, &used,
-		&c.PublicKey, &count, &c.AAGUID, &c.BackupEligible, &c.BackupState, &c.PasswordHash, &c.TOTPSealed)
+		&c.PublicKey, &count, &c.AAGUID, &c.BackupEligible, &c.BackupState, &c.PasswordHash, &c.TOTPSealed, &c.TOTPStep)
 	if used != nil {
 		c.LastUsedAt = *used
 	}
@@ -164,6 +177,36 @@ func (w *Wide) PasskeyUsed(ctx context.Context, id string, count uint32, backedU
 	return ErrNoCredential
 }
 
+// ErrTOTPSpent is a TOTP code of a step at or before the one a code was last accepted at: accepted
+// once already, or older than one that was.
+var ErrTOTPSpent = errors.New("db: a code of that step, or of a later one, was accepted already")
+
+// TOTPUsed records a TOTP code accepted at step, and when: the step is kept, so that no code of it
+// or of a step before it is accepted again. One at or before the step recorded is ErrTOTPSpent and
+// nothing is recorded, checked in the statement that writes it, so that of two sign-ins with one
+// code, verified against one reading, the second is still refused.
+func (w *Wide) TOTPUsed(ctx context.Context, id string, step int64, at time.Time) error {
+	tag, err := w.tx.Exec(ctx,
+		`update credentials set totp_step = $2, last_used_at = $3
+		  where id = $1 and type = 'totp' and (totp_step is null or totp_step < $2)`,
+		id, step, at)
+	if err != nil {
+		return fmt.Errorf("db: the use of TOTP %s could not be recorded: %w", id, err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var totp bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select from credentials where id = $1 and type = 'totp')`, id).Scan(&totp); err != nil {
+		return fmt.Errorf("db: TOTP %s could not be read: %w", id, err)
+	}
+	if totp {
+		return ErrTOTPSpent
+	}
+	return ErrNoCredential
+}
+
 // CredentialUsed records when a password or a TOTP was last used.
 func (w *Wide) CredentialUsed(ctx context.Context, id string, at time.Time) error {
 	tag, err := w.tx.Exec(ctx, `update credentials set last_used_at = $2 where id = $1`, id, at)
@@ -177,7 +220,8 @@ func (w *Wide) CredentialUsed(ctx context.Context, id string, at time.Time) erro
 }
 
 // RemoveCredential deletes one of a user's credentials, and with it every session it opened.
-// Deleting a password is this: the row goes, and nothing is left to blank.
+// Deleting a password is this: the row goes, and nothing is left to blank, and the user's TOTP
+// generator goes with it, since a TOTP exists only alongside a password.
 func (w *Wide) RemoveCredential(ctx context.Context, login, id string) error {
 	tag, err := w.tx.Exec(ctx, `delete from credentials where login = $1 and id = $2`, login, id)
 	if err != nil {

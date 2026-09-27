@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -54,6 +55,38 @@ func TestAFailedSignInIsCountedUnderItsAddressOrItsSlash64(t *testing.T) {
 	} {
 		if got := failureKey(address); got != key {
 			t.Errorf("%s is counted under %s", address, got)
+		}
+	}
+}
+
+// A sign-in's address is the connection's, whatever X-Forwarded-For says, unless the API is served
+// behind the proxy AGK_PROXY_URL names: then it is the header's last entry, the one that proxy wrote
+// after whatever its client sent, of the last header where there are several, and the connection's
+// where the header holds nothing that reads as an address.
+func TestASignInsAddressIsTheProxysLastEntryBehindTheProxyAlone(t *testing.T) {
+	for _, c := range []struct {
+		forwarded []string
+		proxied   bool
+		want      string
+	}{
+		{nil, false, "127.0.0.1"},
+		{[]string{"203.0.113.9"}, false, "127.0.0.1"},
+		{nil, true, "127.0.0.1"},
+		{[]string{"203.0.113.9"}, true, "203.0.113.9"},
+		{[]string{"192.0.2.66, 10.1.1.1,203.0.113.9"}, true, "203.0.113.9"},
+		{[]string{"192.0.2.66", "203.0.113.9"}, true, "203.0.113.9"},
+		{[]string{"2001:db8::7"}, true, "2001:db8::7"},
+		{[]string{"203.0.113.9, unknown"}, true, "127.0.0.1"},
+		{[]string{"203.0.113.9, "}, true, "127.0.0.1"},
+		{[]string{"[2001:db8::7]:443"}, true, "127.0.0.1"},
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+		r.RemoteAddr = "127.0.0.1:51234"
+		for _, v := range c.forwarded {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		if got := addressOf(r, c.proxied); got != c.want {
+			t.Errorf("X-Forwarded-For %q, proxied %v, is read as %s", c.forwarded, c.proxied, got)
 		}
 	}
 }

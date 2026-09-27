@@ -284,6 +284,11 @@ type API struct {
 	// Every presigned URL is minted on it rather than on a request's Host header.
 	PublicURL string
 
+	// Proxied is an API served behind the proxy AGK_PROXY_URL names, on this host: every request
+	// then comes from the proxy's address, and the API takes the client's from the last entry of
+	// X-Forwarded-For, the one the proxy wrote, and from nowhere else.
+	Proxied bool
+
 	// PresignKey signs every presigned URL and upload policy. It is the key's bytes, decoded
 	// from the base64 its file holds.
 	PresignKey Secret
@@ -395,7 +400,7 @@ func ReadAPI(lookup Lookup) (API, error) {
 		// environment, a Compose file's, serves the installation both ways and a person
 		// chooses between them by setting this one variable or not: a Compose file sets a
 		// variable to a default or to a value and cannot leave one out on a condition.
-		c.PublicURL = proxy
+		c.PublicURL, c.Proxied = proxy, true
 		c.Listen = r.proxiedListen()
 	} else {
 		c.PublicURL = r.publicURL()
