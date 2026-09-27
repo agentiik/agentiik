@@ -21,8 +21,7 @@ import (
 // so an enrolment-only session is known server-side, not by convention."
 //
 // OpenSession opens one, for the sign-in routes to call once a passkey or a password has proved who
-// is there, or once an enrolment link has been opened; Principals.Identify reads it back on every
-// request, beside the bearer token.
+// is there; Principals.Identify reads it back on every request, beside the bearer token.
 //
 // No route ends a session its holder asks to end: the page names no sign-out, so none is served.
 // A session ends idle, at its lifetime, with its credential, while its user is suspended, and, for
@@ -86,7 +85,9 @@ const (
 // OpenedBy is what opens a session, one of the two: a credential of its user, named by its
 // identifier, which opens a session reaching what the user's grants allow; or an enrolment code,
 // named by the SHA-256 its value is kept as, which opens one that enrols passkeys and nothing else
-// and ends with the code's hour.
+// and ends with the code's hour. No route opens one with a code: the passkey ceremonies take the
+// code in the registration's options and spend it when the passkey is recorded, and refuse a
+// session a code opened, which would register a passkey without spending it.
 //
 // A password opening a session where the policy requires a passkey the account does not hold opens
 // one that may only enrol as well, as the OpenAPI document's sessionKind says. Which policy applies
@@ -205,7 +206,8 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 				return err
 			}
 		}
-		as = Identity{Principal: Principal(s.Login), Enrolling: len(s.EnrolmentCode) > 0}
+		coded := len(s.EnrolmentCode) > 0
+		as = Identity{Principal: Principal(s.Login), Enrolling: coded, OpenedByCode: coded}
 		return nil
 	})
 	if err != nil {

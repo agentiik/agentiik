@@ -281,9 +281,10 @@ type seesKey struct{}
 
 // Public is a route that is not authorised by a principal, and says what authorises it instead.
 //
-// There are four of these in the whole design and each has its own answer: registration is
+// There are five of these so far and each has its own answer: registration is
 // authenticated "by the join token in its body and by nothing else", an object route is
-// authenticated by the signature in its own URL or in the form posted to it, a webhook is
+// authenticated by the signature in its own URL or in the form posted to it, a passkey ceremony by
+// the passkey it verifies or the enrolment code or session it reads itself, a webhook is
 // authenticated "per trigger", and a health check answers nothing worth having. Why is required
 // and is checked for being a sentence rather than a shrug, because "public" with no reason beside
 // it is how a route that should have been guarded stops being guarded.
@@ -519,15 +520,20 @@ type Principal string
 // or one that may only enrol anywhere a principal is asked about, and 400 for a request carrying
 // more than one.
 //
-// Enrolling is set for a session an enrolment code opened, which "enrols passkeys and nothing
-// else": the router refuses it on every route it authorises by who asks, with the 403 the OpenAPI
-// document names.
+// Enrolling is set for a session that may only enrol, which "enrols passkeys and nothing else": the
+// router refuses it on every route it authorises by who asks, with the 403 the OpenAPI document
+// names, and the registration ceremony reads it itself. OpenedByCode says it is one an enrolment code
+// opened, which no route opens since the code travels in the registration's options instead, and
+// which the ceremony refuses as well: it would register a passkey without spending its code. The
+// other, a session a password opens where the policy requires a passkey the account does not hold,
+// comes with the password sign-in.
 type Identity struct {
-	Principal Principal
-	Scope     access.TokenScope
-	Enrolling bool
-	RefusedAs int
-	Refused   string
+	Principal    Principal
+	Scope        access.TokenScope
+	Enrolling    bool
+	OpenedByCode bool
+	RefusedAs    int
+	Refused      string
 
 	// Token is the identifier of the API token presented, which a caller revokes and lists
 	// itself by, and empty for any other credential.

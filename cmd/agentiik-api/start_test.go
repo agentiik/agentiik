@@ -502,6 +502,8 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"DELETE /api/v1/{namespace}/workflows/{workflow}/grants/{id}":    sharing(api.Workflow, false),
 		"GET /api/v1/me":                                                 own,
 		"DELETE /api/v1/me/notifications/{id}":                           own,
+		"POST /api/v1/auth/passkey/options":                              public,
+		"POST /api/v1/auth/passkey/verify":                               public,
 		"GET /objects/{key...}":                                          public,
 		"PUT /objects/{key...}":                                          public,
 		"POST /objects/{namespace}":                                      public,
