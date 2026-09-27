@@ -73,6 +73,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A write to the built-in store, a policy's form or a presigned PUT, that would take its namespace past `max_artifact_bytes` is answered 507 with nothing stored, an envelope's as an artifact's, which a runner reads as `artifact.ErrNoRoom` and fails the step on the platform's account. What counts is the namespace's live artifacts, each digest once, and its uploads not yet referenced, room being made at the request's length, or the room left up to `artifact_max_bytes` where it states none, under a lock on the namespace's room before the bytes are read, so two writes at once cannot both take the last of it. An object the namespace holds as a live artifact takes none, and a namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - Every write through the built-in store's routes, a policy's form or a presigned PUT, in a namespace with `max_artifact_bytes` or without, is recorded as under way before its bytes are read, until the collection's 24-hour grace past its policy, so that the collection leaves its object alone until the result that references it is heard; a write whose bytes are refused lets go of it.
 - A push writes a tree file again where its version had to record the object afresh and the store no longer holds its bytes, as a collection that died before confirming and the next one leave it.
+- `GET /api/v1/runs/{id}` answers `reason` for a run the controller cancelled at creation, its principal no longer holding `workflow:run`.
 
 ### State
 
@@ -102,7 +103,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Pool.LogsGone` stamps a run none of whose tasks holds a log, once no shipment can be under way, and `db.Pool.PurgeUploads` forgets the writes that have lapsed.
 - `db.Pool.Collecting` deletes what `Collectable` claimed through the caller, under a lock on each row; neither takes an object a live artifact names or a write holds.
 - `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused.
-- Migration 0039 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, `reason` in `GET /api/v1/runs/{id}`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
+- Migration 0039 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
 
 ### Artifacts
 
