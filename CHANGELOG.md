@@ -34,6 +34,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
 
+### agk
+
+- `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
+
 
 ## v0.2.5, 2026-09-26
 
