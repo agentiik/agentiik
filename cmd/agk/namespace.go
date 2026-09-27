@@ -20,7 +20,7 @@ import (
 //
 // Every verb names the namespace it is about as its one word, as agk status names its run, and
 // reaches the installation as every other verb does, through --server or AGENTIIK_SERVER and the
-// token in AGENTIIK_TOKEN. What the installation answers is printed as the wire writes it, each
+// token in AGENTIIK_TOKEN or the one agk login kept. What the installation answers is printed as the wire writes it, each
 // quota under its own name, so that what a person reads is what they would type in a request, and
 // -o json writes the answer itself.
 

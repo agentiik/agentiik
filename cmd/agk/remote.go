@@ -120,7 +120,7 @@ func checkAddress(where string) error {
 		return fmt.Errorf("%s is not an installation's address: write it https://agentiik.example.com", shown)
 	}
 	if u.User != nil {
-		return errors.New("the installation's address carries a user, and the credential is AGENTIIK_TOKEN's alone: write it without one")
+		return errors.New("the installation's address carries a user, and the credential is AGENTIIK_TOKEN's or the one agk login kept, never the address's: write it without one")
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("%s carries a query or a fragment, and every path is appended to the address: write it without either", where)

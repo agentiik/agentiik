@@ -172,12 +172,14 @@ func writeProfile(path string, p profile) error {
 }
 
 // profileToken is the token agk login stored for the installation where, and false where it stored
-// none, or this agk keeps no profile. One past its expiry is refused, saying so, rather than sent to
-// be refused with a sentence that could not say why.
+// none, or this agk keeps no profile, a machine with no configuration directory, no $HOME, among
+// them: a script there that forgot its token is told of AGENTIIK_TOKEN, not of a profile it never
+// had. One past its expiry is refused, saying so, rather than sent to be refused with a sentence
+// that could not say why.
 func profileToken(e Env, where string) (string, bool, error) {
 	path, kept, err := profilePath(e)
 	if err != nil || !kept {
-		return "", false, err
+		return "", false, nil
 	}
 	p, err := readProfile(path)
 	if err != nil {

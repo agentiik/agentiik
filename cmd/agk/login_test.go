@@ -47,6 +47,8 @@ type signInStandIn struct {
 	// it is lost, the exchange's connection is closed with no answer.
 	answer int
 	lost   bool
+	// unrevoking answers every revocation 503.
+	unrevoking bool
 }
 
 func anInstallationSigningIn(t *testing.T) *signInStandIn {
@@ -100,6 +102,9 @@ func (in *signInStandIn) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, `{"tokens":[]}`)
+	case r.Method == "DELETE" && in.unrevoking:
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"error":"not now"}`)
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/api/v1/auth/tokens/"):
 		id := strings.TrimPrefix(r.URL.Path, "/api/v1/auth/tokens/")
 		if in.tokens[bearer] != id {
@@ -270,6 +275,13 @@ func TestAgkLoginKeepsTheTokenTheBrowsersCodeIsTradedFor(t *testing.T) {
 	if code, said := presented(map[string]string{serverVariable: "https://another.example.com"}); code != exitUsage || !strings.Contains(said, "no credential: sign in with agk login") {
 		t.Errorf("another installation was answered %d: %s", code, said)
 	}
+	// A machine with no configuration directory, no $HOME, keeps no profile, and a script there
+	// that forgot its token is told of the token, not of a profile.
+	homeless := Env{Out: io.Discard, Err: &strings.Builder{}, Getenv: func(k string) string { return map[string]string{serverVariable: in.URL}[k] },
+		ConfigDir: func() (string, error) { return "", errors.New("$HOME is not defined") }}
+	if code := run(t.Context(), homeless, []string{"token", "list"}); code != exitUsage || !strings.Contains(homeless.Err.(*strings.Builder).String(), "no credential: sign in with agk login, or set AGENTIIK_TOKEN") {
+		t.Errorf("an agk with no configuration directory left with %d: %s", code, homeless.Err)
+	}
 
 	// Once the installation no longer accepts it, a refusal names the token kept, and not a
 	// variable nobody set.
@@ -326,8 +338,54 @@ func TestAgkLoginSaysWhatToDoWhereNoBrowserOpens(t *testing.T) {
 	}
 	port := regexp.MustCompile(`http://127\.0\.0\.1:([0-9]+)/callback`).FindStringSubmatch(errs)
 	if port == nil || !strings.Contains(errs, "agk runs over SSH, where it opens no browser of yours, so open this address in one") ||
-		!strings.Contains(errs, fmt.Sprintf("ssh -N -L %s:127.0.0.1:%s", port[1], port[1])) || !strings.Contains(errs, "set AGENTIIK_TOKEN here instead") {
+		!strings.Contains(errs, fmt.Sprintf("ssh -N -L %s:127.0.0.1:%s", port[1], port[1])) || !strings.Contains(errs, "set AGENTIIK_TOKEN here instead") ||
+		!strings.Contains(errs, "set AGENTIIK_TOKEN here instead. agk login waits 5 minutes.\n") {
 		t.Errorf("agk login said:\n%s", errs)
+	}
+
+	// Over SSH, the browser this agk would open is not the person's, and none is opened.
+	t.Setenv("SSH_CONNECTION", "192.0.2.1 50000 192.0.2.2 22")
+	if err := browse("https://agentiik.example.com/auth/sign-in"); err == nil || !strings.Contains(err.Error(), "over SSH") {
+		t.Errorf("browsing over SSH answered %v", err)
+	}
+}
+
+// A wait for the browser that brought no code back ends with exit 1, nothing having been signed in
+// for, and says why: no code agk can use, none within the 5 minutes agk waits, or an interrupt.
+func TestAWaitThatBringsNoCodeBackIsExitOne(t *testing.T) {
+	for err, said := range map[error]string{
+		errNoCode:        "no code it can use",
+		errNoSignIn:      "within 5 minutes",
+		context.Canceled: "stopped before a sign-in came back",
+	} {
+		if code, got := waited(err); code != exitRefused || !strings.Contains(got, said) {
+			t.Errorf("a wait ended by %v left with %d, saying %q", err, code, got)
+		}
+	}
+}
+
+// A token minted that the profile cannot keep, the profile having become readable by others while
+// the person signed in, is revoked with itself, since its value is about to be lost, and nothing is
+// kept: exit 1. One that cannot be revoked either is exit 4, naming it for agk token revoke.
+func TestATokenTheProfileCannotKeepIsRevoked(t *testing.T) {
+	for _, unrevoking := range []bool{false, true} {
+		in := anInstallationSigningIn(t)
+		in.unrevoking = unrevoking
+		p := somebody(t)
+		p.browse = func(page string) error {
+			if err := os.WriteFile(filepath.Join(p.config, profileDir, profileFile), []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			in.signedIn(t, page)
+			return nil
+		}
+		code, _, errs := p.agk(t, "login", "--server", in.URL)
+		switch {
+		case !unrevoking && (code != exitRefused || !strings.Contains(errs, "is not kept, and is revoked") || len(in.revoked) != 1):
+			t.Errorf("a token the profile could not keep left agk login with %d, revoking %v: %s", code, in.revoked, errs)
+		case unrevoking && (code != exitNoOutcome || !strings.Contains(errs, "agk token revoke 01TOKEN0000000000000000001 revokes it")):
+			t.Errorf("a token neither kept nor revoked left agk login with %d: %s", code, errs)
+		}
 	}
 }
 
@@ -428,8 +486,8 @@ func TestATokenKeptPastItsExpiryIsNotSent(t *testing.T) {
 }
 
 // The profile is its owner's alone: written 0600 in a directory 0700, a directory that was more
-// open brought to 0700; read only while nobody else may read or write it,
-// and only as a file; and one that does not read, or that is not there, says so or is empty.
+// open brought to 0700; read only while nobody else may read or write it, and only as a file; and
+// one that does not read, or that is not there, says so or is empty.
 func TestTheProfileIsItsOwnersAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows keeps no Unix modes")

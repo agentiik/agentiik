@@ -5,13 +5,13 @@ import (
 	"fmt"
 )
 
-// The verbs of the documented table that wait for something this binary does not carry, brick
+// The verb of the documented table that waits for something this binary does not carry, brick
 // templates.
 //
-// Each one is in the table and each refuses naming what is missing. A verb the documentation
-// lists and the binary does not know is a binary that looks broken, and "unknown command" for
-// agk brick init is the wrong answer twice over: it says the documentation is wrong, and it says
-// nothing about what would make the command work.
+// It is in the table and refuses naming what is missing. A verb the documentation lists and the
+// binary does not know is a binary that looks broken, and "unknown command" for agk brick init is
+// the wrong answer twice over: it says the documentation is wrong, and it says nothing about what
+// would make the command work.
 //
 // The refusal is exit 1 and not exit 2. The command line was right: it named a verb the
 // documentation lists, spelled as the documentation spells it, and what is missing is on the

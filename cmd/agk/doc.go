@@ -173,9 +173,12 @@
 //	namespace.go     agk namespace create, list, show, delete and quotas
 //	users.go         agk user and agk group
 //	remote.go        the installation's address, the credential, and its refusals
+//	login.go         agk login and agk logout, and the loopback address the browser comes
+//	                 back to
+//	profile.go       the local profile, the token agk login keeps for each installation
 //	tokens.go        agk token create, list and revoke
 //	serviceaccounts.go  agk service-account create, list and delete
-//	absent.go        the five verbs that wait, each refusing by name
+//	absent.go        brick init, which waits, refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid
 //	inputs.go        --input, --input-file, --inputs, through package schema and nothing
@@ -188,9 +191,9 @@
 //
 // The whole command line is one function, run(ctx context.Context, e Env, args []string)
 // int, and main is four lines around it. Env carries the two writers, the working
-// directory, the clock, the environment lookup and os.Executable, so a test drives argv
-// and reads bytes, which is what issue #83 needs and what no per-command entry point
-// gives.
+// directory, the clock, the environment lookup, os.Executable, the configuration directory
+// the local profile is kept in and the way a browser is opened, so a test drives argv and
+// reads bytes, which is what issue #83 needs and what no per-command entry point gives.
 //
 // # The proof of v0.1.0
 //

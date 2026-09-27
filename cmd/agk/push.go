@@ -53,8 +53,9 @@ import (
 // the edit is meant to stay behind: the commit is pushed as it was committed, and nothing else.
 
 const (
-	// tokenVariable is where the credential comes from. Never a flag: an argument is in the
-	// shell history, in the process list and in whatever recorded the terminal.
+	// tokenVariable is where a script's credential comes from, and where it is not set agk
+	// presents the token agk login kept (profile.go). Never a flag: an argument is in the shell
+	// history, in the process list and in whatever recorded the terminal.
 	tokenVariable = "AGENTIIK_TOKEN"
 
 	// serverVariable is the installation, so that a repository does not carry one and a

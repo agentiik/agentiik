@@ -76,8 +76,8 @@ type command struct {
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
-	{"login", "Signs in against an installation with a passkey in the browser, and stores an API token in the local profile.", login},
-	{"logout", "Revokes the API token agk login stored for an installation, and removes it from the local profile.", logout},
+	{"login", "Signs in against an installation in the browser, with a passkey or a password where the policy allows one, and stores an API token in the local profile.", login},
+	{"logout", "Revokes the token agk login stored for an installation, and removes it from the local profile.", logout},
 	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
 	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
 	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},

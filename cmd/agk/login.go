@@ -50,7 +50,7 @@ import (
 //
 // The verifier is 32 bytes of the system's generator in base64url, 43 characters, and never leaves
 // agk until the exchange. agk waits five minutes for the browser, the time a person takes to find
-// an authenticator, and a sign-in that has not come back by then is signed in for again.
+// an authenticator, and a sign-in that has not come back by then takes agk login run again.
 //
 // agk logout revokes the token agk login kept for an installation, presenting that token, and takes
 // it out of the profile. A token the installation no longer accepts is taken out all the same, and
@@ -128,16 +128,10 @@ func login(ctx context.Context, e Env, args []string) int {
 	tellWhere(e, base, page, back)
 
 	got, err := back.await(ctx, loginWait)
-	switch {
-	case errors.Is(err, errNoCode):
-		fmt.Fprintf(e.Err, "the browser came back to agk login with no code it can use, and nothing was signed in for: run agk login again\n")
-		return exitRefused
-	case errors.Is(err, errNoSignIn):
-		fmt.Fprintf(e.Err, "no sign-in came back to agk login within %s, and nothing was signed in for: run agk login again\n", minutes(loginWait))
-		return exitRefused
-	case err != nil:
-		fmt.Fprintf(e.Err, "agk login stopped before a sign-in came back to it, and nothing was signed in for\n")
-		return exitRefused
+	if err != nil {
+		code, said := waited(err)
+		fmt.Fprintln(e.Err, said)
+		return code
 	}
 
 	issued, err := exchangeCode(ctx, base, got, verifier, device)
@@ -181,6 +175,19 @@ func login(ctx context.Context, e Env, args []string) int {
 		fmt.Fprintf(e.Err, "agk reaches %s with --server %s, or with %s=%s set\n", base, base, serverVariable, base)
 	}
 	return exitSucceeded
+}
+
+// waited says how a wait for the browser that brought back no code ends: exit 1, since nothing was
+// signed in for and nothing was asked of the installation, whether the browser came back with no
+// code, did not come back within loginWait, or agk was interrupted.
+func waited(err error) (int, string) {
+	switch {
+	case errors.Is(err, errNoCode):
+		return exitRefused, "the browser came back to agk login with no code it can use, and nothing was signed in for: run agk login again"
+	case errors.Is(err, errNoSignIn):
+		return exitRefused, fmt.Sprintf("no sign-in came back to agk login within %s, and nothing was signed in for: run agk login again", minutes(loginWait))
+	}
+	return exitRefused, "agk login stopped before a sign-in came back to it, and nothing was signed in for"
 }
 
 // replace revokes the token agk login kept for the installation before it kept another, presenting

@@ -14,11 +14,11 @@
 //
 // # Why the prefix
 //
-// agktoken_, agkgrant_, agkjoin_, agkrunner_, agkenrol_ and agkcode_ say what a credential is before
-// anybody tries it. That is worth a few bytes for two reasons: a value that leaks into a log or a bug report
-// can be recognised and revoked by whoever finds it, and a value presented to the wrong door can be
-// refused for being the wrong kind rather than for failing a lookup that the wrong door would have
-// had to perform.
+// agktoken_, agkgrant_, agkjoin_, agkrunner_, agkenrol_ and agkcode_ say what a credential is
+// before anybody tries it. That is worth a few bytes for two reasons: a value that leaks into a log
+// or a bug report can be recognised and revoked by whoever finds it, and a value presented to the
+// wrong door can be refused for being the wrong kind rather than for failing a lookup that the
+// wrong door would have had to perform.
 package token
 
 import (
