@@ -241,9 +241,9 @@ func TestASessionEndsIdleAndAtItsLifetime(t *testing.T) {
 	}
 }
 
-// A session revoked, or whose credential was removed, opens nothing from the next request, with the
-// one sentence a token that opens nothing is refused with, and so does one of a suspended user while
-// the suspension lasts. The others are left as they are.
+// A session revoked, or whose credential was removed, opens nothing from the next request, each
+// refused with one sentence that names no reason, and so does one of a suspended user while the
+// suspension lasts. The others are left as they are.
 func TestASessionRevokedOpensNothingFromTheNextRequest(t *testing.T) {
 	in := someSessions(t)
 	revoked := in.open(t, "alice", api.OpenedBy{Credential: "alice-passkey"})
@@ -402,6 +402,20 @@ func TestASessionIsOpenedByOneThingOfItsOwnUser(t *testing.T) {
 	in.open(t, "alice", api.OpenedBy{EnrolmentCode: code})
 	if _, err := in.opening(t, "alice", api.OpenedBy{EnrolmentCode: code}); !errors.Is(err, db.ErrSessionRefused) {
 		t.Errorf("a code opened a second session, answered %v", err)
+	}
+
+	// A code a registration spent with no session behind it opens none afterwards, to whoever
+	// finds the link in a browser's history.
+	spent := in.recovery(t, "carol", "carol-recovery")
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.UseEnrolmentCode(ctx, spent, *in.clock)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*in.clock = in.clock.Add(time.Minute)
+	if c, err := in.opening(t, "carol", api.OpenedBy{EnrolmentCode: spent}); c != nil || !errors.Is(err, db.ErrSessionRefused) {
+		t.Errorf("a code spent a minute before opened a session: %v, %v", c, err)
 	}
 }
 

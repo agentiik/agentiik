@@ -175,13 +175,16 @@ type Session struct {
 }
 
 // ErrSessionRefused is a session nothing may open: one a credential opens for a suspended user,
-// or one naming an enrolment code that is revoked, past its hour, or has opened a session already.
+// or one naming an enrolment code that is revoked, past its hour, spent before it, or has opened a
+// session already.
 var ErrSessionRefused = errors.New("db: nothing opens that session")
 
 // OpenSession writes one. CreatedAt is the caller's, as IdleExpiresAt is. One opened by an
-// enrolment code is refused where the code is revoked or past its hour at CreatedAt, used or not,
-// so that the code may be spent as the session opens or when the enrolment completes, and a code
-// opens one session at most.
+// enrolment code is refused where the code is revoked or past its hour at CreatedAt, or was spent
+// before CreatedAt, so that the code may be spent as the session opens or when the enrolment
+// completes, and a link is used once: a code a registration spent with no session behind it opens
+// none afterwards to whoever finds the link in a browser's history. A code opens one session at
+// most.
 //
 // A suspended user opens no session with a credential, and one with an enrolment code all the
 // same: "its enrolment links and recovery codes still work, since enrolling is how an account
@@ -194,7 +197,8 @@ func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 		  where ($4::bytea is not null or `+fmt.Sprintf(liveUser, "$2")+`)
 		    and ($4::bytea is null or exists (
 		          select from enrolment_codes c
-		           where c.hash = $4 and c.login = $2 and c.revoked_at is null and c.expires_at > $5))`,
+		           where c.hash = $4 and c.login = $2 and c.revoked_at is null and c.expires_at > $5
+		             and (c.used_at is null or c.used_at >= $5)))`,
 		s.Hash, s.Login, nilIfEmpty(s.Credential), nilIfNone(s.EnrolmentCode), s.CreatedAt, s.IdleExpiresAt)
 	var pg *pgconn.PgError
 	switch {

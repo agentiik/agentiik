@@ -84,3 +84,47 @@ func TestAFreshLinkEndsTheSessionOfOneSpentAsItOpened(t *testing.T) {
 		return nil
 	})
 }
+
+// A link is used once: a code spent before a session opens, as a registration spends it with no
+// session behind it, opens none afterwards, and one spent as its session opens opens that one.
+func TestACodeSpentBeforeASessionOpensOpensNone(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	code := func(value string) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentRecovery, IssuedBy: "bob", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	session := func(value string, c EnrolmentCode, at time.Time) Session {
+		return Session{Hash: valueHash(value), Login: "alice", EnrolmentCode: c.Hash, CreatedAt: at, IdleExpiresAt: at.Add(30 * time.Minute)}
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+			return err
+		}
+		spent := code("spent")
+		if _, err := w.IssueEnrolmentCode(ctx, spent); err != nil {
+			return err
+		}
+		if _, err := w.UseEnrolmentCode(ctx, spent.Hash, now.Add(time.Minute)); err != nil {
+			return err
+		}
+		if err := w.OpenSession(ctx, session("after", spent, now.Add(10*time.Minute))); !errors.Is(err, ErrSessionRefused) {
+			t.Errorf("a code spent ten minutes before opened a session, answered %v", err)
+		}
+
+		// Issued again, and spent as its session opens.
+		again := code("again")
+		again.IssuedAt = now.Add(11 * time.Minute)
+		again.ExpiresAt = again.IssuedAt.Add(time.Hour)
+		if _, err := w.IssueEnrolmentCode(ctx, again); err != nil {
+			return err
+		}
+		opened := now.Add(12 * time.Minute)
+		if _, err := w.UseEnrolmentCode(ctx, again.Hash, opened); err != nil {
+			return err
+		}
+		if err := w.OpenSession(ctx, session("as-spent", again, opened)); err != nil {
+			t.Errorf("a code spent as its session opened opened none: %v", err)
+		}
+		return nil
+	})
+}
