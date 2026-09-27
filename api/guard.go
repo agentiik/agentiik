@@ -104,9 +104,10 @@ func (n Needs) guards() guard {
 // router asks which namespace and workflow the run is of, and asks the authorizer about those.
 //
 // A path may name the namespace as well, as /api/v1/{ns}/runs/{id} does, the path a Location names
-// a run by. The router then answers a run of another namespace as absent before it asks anything,
-// so that the path cannot name a namespace the caller holds beside a run of one they do not. It
-// may not name a workflow: no route needs one, and every check a path can dodge is one too many.
+// a run by. The router then answers a run of another namespace as absent before it asks anything
+// about the namespace it is in, so that the path cannot name a namespace the caller holds beside a
+// run of one they do not. It may not name a workflow: no route needs one, and every check a path can
+// dodge is one too many.
 type OnRun struct {
 	Permission Permission
 
@@ -141,9 +142,9 @@ func (o OnArtifact) guards() guard {
 // what the caller may see is a question asked of each thing the answer could hold. The router asks
 // it rather than the handler: a route taking Across is registered with HandleAcross, and its handler
 // is given Holds, which asks the authorizer about this permission for this principal and nothing
-// else, so a handler cannot ask about another permission or another caller. That it answers only
-// what Holds let through is the handler's to keep, and its tests' to hold it to: nothing here can
-// see what it answers.
+// else, so a handler cannot ask about another permission or another caller, and HoldsEach asks the
+// same about several targets at once. That it answers only what they let through is the handler's
+// to keep, and its tests' to hold it to: nothing here can see what it answers.
 //
 // A path may name a namespace, as GET /api/v1/{ns}/runs does, and the route then answers across that
 // namespace alone, with a Holds that answers about nothing outside it. It is still asked of each
@@ -162,6 +163,34 @@ func (a Across) guards() guard {
 // outside the namespace the route's path names is one it was not asked about: each is an error
 // rather than a refusal.
 type Holds func(ctx context.Context, over Target) (bool, error)
+
+// HoldsEach answers, for the route taking Across serving r, what its Holds answers about each of
+// several targets, in the order given, as one question. A request the router did not serve is
+// answered false about each.
+//
+// A listing asks about every workflow of what it lists, and asked one workflow at a time, a namespace
+// holding a hundred of them takes a hundred questions to refuse where one nobody created takes none:
+// how long the answer takes says which namespaces exist, and how many workflows each holds, to a
+// caller holding nothing in them, which is "the existence of workflows they cannot read, in any
+// listing". Asked as one question, of an authorizer implementing Among, it costs the same whatever
+// the targets, none included.
+func HoldsEach(r *http.Request) func(ctx context.Context, over []Target) ([]bool, error) {
+	if each, ok := r.Context().Value(eachKey{}).(func(context.Context, []Target) ([]bool, error)); ok {
+		return each
+	}
+	return func(_ context.Context, over []Target) ([]bool, error) { return make([]bool, len(over)), nil }
+}
+
+// eachKey is where the router leaves the question HoldsEach asks.
+type eachKey struct{}
+
+// Among is an Authorizer that answers one permission over several targets as one question, in the
+// order given, at a cost that does not depend on which targets they are or how many, none included:
+// see HoldsEach. Principals implements it, reading who a principal is once and its grants across the
+// namespaces once. An authorizer that does not is asked about each target in turn.
+type Among interface {
+	AllowAmong(ctx context.Context, who Principal, what Permission, over []Target) ([]bool, error)
+}
 
 // Revealing answers, for the route serving r, whether its caller holds the permission its guard
 // names as Reveals over one target in the namespace the route was authorised in.
