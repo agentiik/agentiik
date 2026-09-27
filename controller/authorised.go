@@ -82,7 +82,14 @@ func (co *Core) refusal(ctx context.Context, e db.Evaluation) (string, error) {
 		if err != nil || held {
 			return err
 		}
-		reason, err = lapsed(ctx, w, a, lacks, at, now)
+		// A run somebody asked for was authorised when they asked, which is when it was created, so
+		// what took the permission away ended since; one nobody asked for may have been armed
+		// long before the grant that armed it ended.
+		var since time.Time
+		if !e.Trigger.Unattended() {
+			since = e.CreatedAt
+		}
+		reason, err = lapsed(ctx, w, a, lacks, at, now, since)
 		return err
 	})
 	if err != nil {
@@ -93,11 +100,16 @@ func (co *Core) refusal(ctx context.Context, e db.Evaluation) (string, error) {
 
 // lapsed names what took workflow:run away from a principal still there to hold it: a deny that
 // applies now, first, since it would take the permission away whatever gave it; then the grant that
-// gave it and ended last, by its expiry or revoked; and where none did, that none gives it.
+// gave it and ended last, by its expiry or revoked, after since; and where none did, that none gives
+// it.
+//
+// A grant that ended before since is not what the run is refused for: the run was authorised after
+// it ended, through something else, a group its principal has left since for instance, which no
+// grant's end records.
 //
 // A revocation is named by when and not by whom. The reason is read by whoever may read the run,
 // and who took a grant back is the audit log's to say, to those who read it.
-func lapsed(ctx context.Context, w *db.Wide, a db.Attribution, lacks string, at access.Scope, now time.Time) (string, error) {
+func lapsed(ctx context.Context, w *db.Wide, a db.Attribution, lacks string, at access.Scope, now, since time.Time) (string, error) {
 	p := a.Principal
 	for _, g := range a.Grants {
 		if g.Takes(p, access.WorkflowRun, at) && !g.Expired(now) {
@@ -108,7 +120,7 @@ func lapsed(ctx context.Context, w *db.Wide, a db.Attribution, lacks string, at 
 	// The grant that ended last is the one whose end the principal is refused for. A grant
 	// revoked after it expired had ended by its expiry, and is named for that.
 	var last string
-	var ended time.Time
+	ended := since
 	for _, g := range a.Grants {
 		if g.Expired(now) && g.Gives(p, access.WorkflowRun, at) && g.ExpiresAt.After(ended) {
 			ended = *g.ExpiresAt

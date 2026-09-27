@@ -70,6 +70,19 @@ func revoke(t *testing.T, pool *db.Pool, conn *pgx.Conn, id string) time.Time {
 	return at
 }
 
+// afterTheRun is a moment after decidedRun was created, by the database's clock, which wrote when
+// it was: a grant of a run somebody asked for is named for ending only after the run was created.
+// It moves the controller's clock past it, so that a grant ending then has ended when the controller
+// asks, and answers it as the reason writes it.
+func afterTheRun(t *testing.T, later time.Duration) string {
+	t.Helper()
+	ends := time.Now().UTC().Add(time.Hour + later).Truncate(time.Second)
+	if clock.now().Before(ends.Add(time.Hour)) {
+		clock.set(ends.Add(time.Hour))
+	}
+	return ends.Format(time.RFC3339Nano)
+}
+
 // exec runs each statement as the superuser, for the state a case sets up past the policies.
 func exec(t *testing.T, conn *pgx.Conn, stmts ...string) {
 	t.Helper()
@@ -130,7 +143,6 @@ func refused(t *testing.T, core *Core, q *fakeQueue, pool *db.Pool, conn *pgx.Co
 // Every way a principal comes to no longer hold workflow:run between the moment its run was created
 // and the moment the controller would let it in, and the reason each is named by.
 func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t *testing.T) {
-	ended := clock.now().Add(-time.Hour)
 	for _, c := range []struct {
 		what string
 		// lapse sets it up past the request, and answers the reason the run ends with and
@@ -146,20 +158,34 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 		{"alice's grant expired since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
-			exec(t, conn, `update grants set expires_at = '2026-09-14T05:00:00Z' where id = '`+id+`'`)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at 2026-09-14T05:00:00Z"
+			ends := afterTheRun(t, 0)
+			exec(t, conn, `update grants set expires_at = '`+ends+`' where id = '`+id+`'`)
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends
 		}},
 		{"the grant of alice's group expired, the last of two that gave it", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			first, last := afterTheRun(t, 0), afterTheRun(t, 30*time.Minute)
 			exec(t, conn,
 				`insert into principals (id, kind) values ('group:team-finance', 'group')`,
 				`insert into groups (name) values ('team-finance')`,
 				`insert into group_members (group_name, login) values ('team-finance', 'alice')`,
 				`insert into grants (id, namespace, workflow, principal, role, granted_by, expires_at)
-				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0A', 'finance', 'monthly-invoicing', 'group:team-finance', 'editor', 'bob', '2026-09-14T05:30:00Z')`,
-				`update grants set expires_at = '2026-09-14T05:00:00Z' where principal = 'alice'`,
+				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0A', 'finance', 'monthly-invoicing', 'group:team-finance', 'editor', 'bob', '`+last+`')`,
+				`update grants set expires_at = '`+first+`' where principal = 'alice'`,
 			)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0A (editor to group:team-finance on the workflow finance/monthly-invoicing) expired at 2026-09-14T05:30:00Z"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0A (editor to group:team-finance on the workflow finance/monthly-invoicing) expired at " + last
+		}},
+		{"alice let in by a group she has left since, her own grant revoked before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+			revoke(t, pool, conn, grantOn(t, conn, "alice"))
+			exec(t, conn,
+				`insert into principals (id, kind) values ('group:team-finance', 'group')`,
+				`insert into groups (name) values ('team-finance')`,
+				`insert into group_members (group_name, login) values ('team-finance', 'alice')`,
+				`insert into grants (id, namespace, principal, role, granted_by) values ('01M2Z8V1P9C4XQ7K2N4D6F8G0E', 'finance', 'group:team-finance', 'operator', 'bob')`,
+			)
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			exec(t, conn, `delete from group_members where login = 'alice'`)
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
 		}},
 		{"a deny of workflow:run written for alice since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
@@ -193,15 +219,22 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 			runBy(t, pool, decidedRun, agk.TriggerSchedule, "")
 			return "finance/agentiik", "finance/agentiik does not hold workflow:run on finance/monthly-invoicing: no grant gives it there, and a namespace's built-in identity holds none until an owner gives it one"
 		}},
-		{"a schedule's run, the built-in identity's grant revoked since it was armed", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
-			runBy(t, pool, decidedRun, agk.TriggerSchedule, "")
+		{"a schedule's run, the built-in identity's grant revoked after the schedule was armed and before it fired", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			id := grantOn(t, conn, "finance/agentiik")
 			at := revoke(t, pool, conn, id)
+			runBy(t, pool, decidedRun, agk.TriggerSchedule, "")
 			return "finance/agentiik", fmt.Sprintf("finance/agentiik no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
 		}},
 		{"a grant revoked after it expired, which ended by its expiry", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
+			// By the database's clock, which dates the revocation: after the run was created and
+			// before the grant was revoked.
+			var ended time.Time
+			if err := conn.QueryRow(t.Context(), `select clock_timestamp()`).Scan(&ended); err != nil {
+				t.Fatal(err)
+			}
+			ended = ended.UTC()
 			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 				g, err := ns.RevokeAccess(ctx, "", id)
 				if err != nil {
@@ -215,7 +248,7 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 			}); err != nil {
 				t.Fatal(err)
 			}
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at 2026-09-14T05:00:00Z"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ended.Format(time.RFC3339Nano)
 		}},
 	} {
 		t.Run(c.what, func(t *testing.T) {
