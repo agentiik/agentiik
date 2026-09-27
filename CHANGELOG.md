@@ -182,6 +182,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The tests, CI and `e2e` run PostgreSQL 18, and a job upgrades with `postgres-upgrade` a cluster the official 17 image wrote, starts 18 on it, and checks what it refuses and what it recovers from.
 - A test holds that no file the module ships, the migrations and what `//go:embed` carries included, imports a mail package, requires a module for mail, or holds an SMTP transport, `sendmail`, a `mailto:` link, the word email or a mail provider's name.
 - The fake Docker daemon answers a start once the goroutine standing in for the container's process is running and about to call its function, as a daemon answers once the process runs, rather than while that goroutine may not have been scheduled yet, when a container killed and started again at once could have its second run's function called first.
+- A test asks every route `serve` registers that names something in its path, and the routes naming a namespace's service account in their body or a namespace in their query, about what does not exist and about what exists that the caller cannot see, by token, narrowed token and session, and holds the two answers to one status, body and header set; another asks every route as a namespace's owner and an administrator and finds no stored secret's value, in any spelling, in any answer; another holds a run's views to its runner's name, and `TestHowLongAbsenceAndInvisibilityTake`, run with `AGENTIIK_TEST_TIMING` set, measures how long both refusals take.
+- A test holds every table naming a namespace, asked of the catalog, behind row level security enabled and forced under the namespace's one policy.
 
 ### agk
 
