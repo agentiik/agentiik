@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -228,15 +231,16 @@ func (s *scenario) code(link any) string {
 	return m[1]
 }
 
-// Every route serve builds that changes something records its act once, as the page's audit log
-// row names it, with who did it, what to and where; the host's own verbs too. The acts, in the order
-// an installation lives them: the first administrator made with the bootstrap token and enrolled,
-// which ends it; users, their links and recovery codes, and every way of signing in, refused as
-// well as let in; credentials enrolled and removed; API tokens; the policy at both scopes, one
-// forbidding passwords taking one; namespaces, their quotas and service accounts; groups and their
-// members; grants and denies at both scopes; secrets, runs, pools, join tokens and runners' orders;
-// and a user removed with their personal namespace. A run the controller cancels at its admission is
-// the controller's act, which its own tests hold to its one entry.
+// Every route serve builds that changes something records its act once, as the page's audit log row
+// names it, with who did it, what to and where; the host's own verbs too. The acts, in the order an
+// installation lives them: the first administrator made with the bootstrap token and enrolled,
+// which ends it; users, their links and recovery codes, and every way of signing in, agk login's
+// exchange among them, refused as well as let in; credentials enrolled and removed; API tokens; the
+// policy at both scopes, one forbidding passwords taking one; namespaces, their quotas and service
+// accounts; groups and their members; grants and denies at both scopes; secrets, runs, pools, join
+// tokens and runners' orders; and a user removed with their personal namespace. A run the
+// controller cancels at its admission is the controller's act, which its own tests hold to its one
+// entry.
 func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -335,6 +339,29 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	s.act("POST /api/v1/auth/passkey/verify", "/api/v1/auth/passkey/verify", actor{from: "198.51.100.7"},
 		map[string]any{"ceremony": "assertion", "credential": asserted}, http.StatusUnauthorized,
 		"signin.fail 198.51.100.7 "+asserted.ID+" - done")
+
+	// agk login: an assertion carrying its loopback address and the SHA-256 of its verifier hands
+	// it a code, which it trades once for an API token of dave's; the code presented again opens
+	// nothing, and is answered as a bearer token that opens nothing is.
+	verifier := strings.Repeat("v", 43)
+	challenge := sha256.Sum256([]byte(verifier))
+	w = s.act("POST /api/v1/auth/passkey/options", "/api/v1/auth/passkey/options", actor{}, `{"ceremony":"assertion"}`, http.StatusOK)
+	terminal, err := davesKeys.Get(s.options(w))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = s.act("POST /api/v1/auth/passkey/verify", "/api/v1/auth/passkey/verify", actor{},
+		map[string]any{"ceremony": "assertion", "credential": terminal, "terminal": map[string]string{
+			"redirect_uri": "http://127.0.0.1:4711/", "code_challenge": base64.RawURLEncoding.EncodeToString(challenge[:]),
+		}}, http.StatusOK, "signin.succeed dave dave - done")
+	handed, err := url.Parse(s.answer(w)["redirect_to"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := map[string]string{"code": handed.Query().Get("code"), "code_verifier": verifier}
+	w = s.ask("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusCreated)
+	s.holds("POST /api/v1/auth/exchange", "api_token.create dave "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" - done")
+	s.act("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusUnauthorized)
 
 	// dave's password signs in, and a wrong one does not.
 	s.act("POST /api/v1/auth/login", "/api/v1/auth/login", actor{},
