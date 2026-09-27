@@ -12,6 +12,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/purge"
 )
 
@@ -310,16 +311,24 @@ func TestBackfillRecordsARunOnceAWriterLetsGoOfItsObject(t *testing.T) {
 	in.exec(t, `insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
 	            values ('finance', 'sha256:`+digest+`', 28, 'application/octet-stream', 1)`)
 
-	writer, err := in.conn.Begin(t.Context())
+	// The writer's own connection, used by the goroutine letting go of it alone, and waited for
+	// before the test ends, since a pgx.Conn is not safe for concurrent use and its cleanup
+	// closes it.
+	writer, err := dbtest.Superuser(t, in.super).Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := writer.Exec(t.Context(), `select 1 from artifact_objects where digest = 'sha256:'||$1 for update`, digest); err != nil {
 		t.Fatal(err)
 	}
-	let := time.AfterFunc(300*time.Millisecond, func() { writer.Rollback(context.Background()) })
-	defer let.Stop()
+	let := make(chan struct{})
+	go func() {
+		defer close(let)
+		time.Sleep(300 * time.Millisecond)
+		writer.Rollback(context.WithoutCancel(t.Context()))
+	}()
 	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
+	<-let
 	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 1}) {
 		t.Errorf("with a writer letting go within a round's pause, Backfill recorded %+v: %v", got, err)
 	}

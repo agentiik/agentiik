@@ -35,13 +35,18 @@ type installation struct {
 	conn  *pgx.Conn
 	dir   string
 	store artifact.Removable
+
+	// super is the superuser's address, for a test that holds a transaction open on a
+	// connection of its own while another goroutine works, since a pgx.Conn is not safe for
+	// concurrent use.
+	super string
 }
 
 func withInstallation(t *testing.T) *installation {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
-	in := &installation{pool: pool, conn: conn, dir: t.TempDir()}
+	in := &installation{pool: pool, conn: conn, dir: t.TempDir(), super: super}
 	in.store = artifact.Dir(in.dir)
 	in.exec(t,
 		`insert into namespaces (name) values ('finance')`,
