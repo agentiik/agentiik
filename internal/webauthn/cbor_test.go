@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"math"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -49,8 +50,8 @@ func TestTheDecoderReadsTheSubsetWebAuthnWrites(t *testing.T) {
 		{"a2 01 00 61 31 01", map[any]any{int64(1): int64(0), "1": int64(1)}},
 		// Keys out of the canonical order are read: once each appears once, order changes nothing.
 		{"a2 61 62 01 61 61 02", map[any]any{"b": int64(1), "a": int64(2)}},
-		// Four levels of arrays and maps, the deepest there is.
-		{"81 a1 00 81 81 00", []any{map[any]any{int64(0): []any{[]any{int64(0)}}}}},
+		// Five levels of arrays and maps, the deepest there is.
+		{"81 a1 00 81 81 81 00", []any{map[any]any{int64(0): []any{[]any{[]any{int64(0)}}}}}},
 	} {
 		got, err := decodeCBOR(h(c.in))
 		if err != nil {
@@ -122,8 +123,8 @@ func TestTheDecoderRefusesEverythingElse(t *testing.T) {
 		{"a boolean key", "a1 f5 00", "only integers and text"},
 
 		{"a byte after the item", "00 00", "1 bytes follow the item"},
-		{"five levels of arrays", "81 81 81 81 81 00", "nest deeper than 4"},
-		{"five levels of maps", "a1 00 a1 00 a1 00 a1 00 a1 00 00", "nest deeper than 4"},
+		{"six levels of arrays", "81 81 81 81 81 81 00", "nest deeper than 5"},
+		{"six levels of maps", "a1 00 a1 00 a1 00 a1 00 a1 00 a1 00 00", "nest deeper than 5"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			v, err := decodeCBOR(h(c.in))
@@ -134,6 +135,57 @@ func TestTheDecoderRefusesEverythingElse(t *testing.T) {
 				t.Fatalf("%s is refused with %q, where the refusal says %q", c.in, err, c.want)
 			}
 		})
+	}
+}
+
+// An input holds 256 items at most, and a head claiming more than what is left of them is refused
+// before anything is allocated for it.
+func TestTheDecoderRefusesMoreItemsThanWebAuthnWrites(t *testing.T) {
+	flat := func(n int) []byte { return append(encHead(majorArray, uint64(n)), make([]byte, n)...) }
+	if _, err := decodeCBOR(flat(maxItems - 1)); err != nil {
+		t.Fatalf("an array of %d items, %d with itself, gave %v", maxItems-1, maxItems, err)
+	}
+	for name, in := range map[string][]byte{
+		"an array of 256 items":                       flat(maxItems),
+		"a map of 128 entries":                        append(encHead(majorMap, maxItems/2), make([]byte, maxItems)...),
+		"arrays whose items add up to 257":            append(append(h("82"), flat(200)...), flat(54)...),
+		"a last item past the budget":                 append(append(h("82"), flat(maxItems-2)...), 0),
+		"a claim past the budget of what is left":     append(h("82 00"), encHead(majorArray, maxItems-2)...),
+		"a map claim past the budget of what is left": append(h("82 00"), encHead(majorMap, maxItems/2)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeCBOR(append(in, make([]byte, 600)...))
+			if err == nil || !strings.Contains(err.Error(), "256 items") {
+				t.Fatalf("gave %v, where it is refused for holding more than 256 items", err)
+			}
+		})
+	}
+}
+
+// What a hostile input makes the decoder allocate stays small: heads claiming thousands of entries,
+// nested as deep as allowed and padded to the size limit, cost kilobytes, not the megabytes a
+// decoder allocating for every claim would spend before refusing them.
+func TestAHostileInputCostsTheDecoderLittle(t *testing.T) {
+	for name, head := range map[string][]byte{"maps": encHead(majorMap, 8000), "arrays": encHead(majorArray, 16000)} {
+		var in []byte
+		for range maxDepth {
+			in = append(in, head...)
+			in = append(in, 0)
+		}
+		in = append(in, make([]byte, maxInput-len(in))...)
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		const runs = 20
+		for range runs {
+			if _, err := decodeCBOR(in); err == nil {
+				t.Fatalf("the hostile %s were read", name)
+			}
+		}
+		runtime.ReadMemStats(&after)
+		if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 32<<10 {
+			t.Fatalf("decoding %d bytes of hostile %s allocated %d bytes, where it stays under 32 KiB", len(in), name, per)
+		}
 	}
 }
 

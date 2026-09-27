@@ -33,14 +33,22 @@ import (
 // maxInput is the most bytes any input of a ceremony may hold: client data, an attestation object,
 // authenticator data, and each CBOR item. A registration with a 1023-byte credential ID and an
 // 8192-bit RSA key is just over 2 KiB, so sixteen is room for anything that can pass, with the
-// certificate chain of an attestation this package refuses by name rather than for its size, and
-// small enough that no input costs the parse anything worth measuring.
+// certificate chain of an attestation this package refuses by name rather than for its size.
 const maxInput = 16 << 10
 
 // maxDepth is how deeply arrays and maps may nest. The deepest structure WebAuthn defines is the
-// certificate chain inside a compound attestation statement (§8.9), four levels down, and no
-// authenticator extension answers with more than one.
-const maxDepth = 4
+// certificate chain of a statement inside a compound attestation (§8.9), five levels down: the
+// attestation object, its array of statements, one statement, that statement's own map and its
+// chain. No authenticator extension answers with more than one level.
+const maxDepth = 5
+
+// maxItems is the most data items one input may hold, keys, values and array elements counted
+// alike. A packed or TPM attestation with its certificate chain holds about twenty and a COSE key
+// ten, so this is room for anything WebAuthn writes. It is what bounds the decoder's allocation:
+// a container is allocated for the count its head claims, and a claim past what is left of this
+// budget is refused first, so 16 KiB of heads claiming thousands of entries each cost a few
+// kilobytes rather than megabytes.
+const maxItems = 256
 
 // decodeCBOR reads the one CBOR item b holds, and refuses a byte after it.
 func decodeCBOR(b []byte) (any, error) {
@@ -73,8 +81,9 @@ func decodeCBORPrefix(b []byte) (any, int, error) {
 }
 
 type decoder struct {
-	in  []byte
-	off int
+	in    []byte
+	off   int
+	items int
 }
 
 // Major types, RFC 8949 §3.1.
@@ -93,6 +102,9 @@ const (
 func (d *decoder) item(depth int) (any, error) {
 	if d.off >= len(d.in) {
 		return nil, fmt.Errorf("cbor: the input ends inside an item")
+	}
+	if d.items++; d.items > maxItems {
+		return nil, fmt.Errorf("cbor: the input holds more than %d items", maxItems)
 	}
 	if initial := d.in[d.off]; initial>>5 == majorSimple {
 		d.off++
@@ -142,6 +154,9 @@ func (d *decoder) item(depth int) (any, error) {
 		if arg > left {
 			return nil, fmt.Errorf("cbor: an array of %d items runs past the end of the input", arg)
 		}
+		if arg > uint64(maxItems-d.items) {
+			return nil, fmt.Errorf("cbor: an array of %d items takes the input past %d items", arg, maxItems)
+		}
 		a := make([]any, arg)
 		for i := range a {
 			if a[i], err = d.item(depth + 1); err != nil {
@@ -155,6 +170,9 @@ func (d *decoder) item(depth int) (any, error) {
 		}
 		if arg > left/2 {
 			return nil, fmt.Errorf("cbor: a map of %d entries runs past the end of the input", arg)
+		}
+		if arg > uint64(maxItems-d.items)/2 {
+			return nil, fmt.Errorf("cbor: a map of %d entries takes the input past %d items", arg, maxItems)
 		}
 		m := make(map[any]any, arg)
 		for range arg {
