@@ -250,7 +250,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 	// A runner belongs to the installation: it serves several namespaces, its inventory
 	// is administrator only, and a heartbeat covers every task on one host. A namespace
 	// is the name of a namespace and cannot be scoped to itself. The controller's term is
-	// the installation's too: there is one active controller across all of them.
+	// the installation's too: there is one active controller across all of them. Those of them
+	// naming a namespace are behind its policy all the same, read through the installation's door:
+	// TestEveryTableNamingANamespaceIsBehindItsPolicy holds that against the catalog.
 	installation := map[string]bool{
 		"namespaces": true, "runners": true, "controller_term": true, "join_tokens": true,
 		"runner_pools": true,

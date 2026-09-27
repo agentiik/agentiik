@@ -150,6 +150,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0043 adds `notifications.login` and the kind `break_glass_recovery`, which `db.Wide.TellAdministrators` writes to every administrator.
 - Migration 0044 adds `exchange_codes`, agk login's one-time codes: `db.Wide.IssueExchangeCode` keeps one, removing some past their minute, `db.Wide.TakeExchangeCode` takes one once, and `db.Wide.SetPassword` removes those the password it replaces minted.
 - `db.Wide.Present` and `db.Wide.TellOwners` do what `db.NS`'s do, for a grant written through the installation's handle, which reads who can sign in across the namespaces in the same transaction; `db.Session.Admin` says whether a session's user administers the installation.
+- Migration 0045 puts `audit_log`, `auth_policy`, `notifications` and `service_accounts` behind the namespace's row level security, as every other table naming a namespace is: each is read through the installation's door, and a handle on one namespace reads its own rows of them and nothing else.
 
 ### Artifacts
 
