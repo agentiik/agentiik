@@ -42,6 +42,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `/api/v1/{ns}/grants` and `/api/v1/{ns}/workflows/{name}/grants` list, write and revoke grants and denies behind `grant:manage` at that scope, and an administrator writes one in any namespace; audited as `grant.create` and `grant.delete`. A workflow's list shows its namespace's grants too, each with its scope; a grant is revoked at the scope it was written at; a principal that does not exist, or a service account of a namespace its writer does not see, is 422.
 - A grant an administrator writes by the installation's power, and an administrator widening their own access, a role given to themselves, a group they are in or a service account of a namespace they own, or a deny taken from one, tell each of the namespace's owners, `admin_access_widened`, or every holder of its owner role where its record names none.
 - `GET /api/v1/me` answers the caller's record, groups, permissions per namespace and per workflow where they differ, narrowed by its token, and its notifications, kept 90 days; `DELETE /api/v1/me/notifications/{id}` dismisses one. A narrowed token reads and dismisses none.
+- `POST /api/v1/auth/passkey/options` and `POST /api/v1/auth/passkey/verify` run the passkey ceremonies, the public URL's host being the Relying Party and its origin the only one accepted: a challenge single use and good for 5 minutes, discoverable credentials, the user verification the policy requires, attestation `none`. An installation addressed by an IP address answers 409, and a request from another origin 403.
+- A registration from an enrolment link's code records the passkey, spends the code and signs its user in, and from the first administrator's link ends the bootstrap token; one from a session adds a passkey to its user. Audited as `credential.enrol`, `enrolment.use`, `bootstrap.end` and `signin.succeed`.
+- An assertion opens a full session and records the passkey's counter, Backup State and last use. A counter that did not move forward is refused, stores nothing and writes the user a `passkey_counter_refused` notification, and a synced passkey where `device_bound_only` applies is a 403 naming it; each refusal is audited as `signin.fail`, at most ten per address in ten minutes, the next entry counting those left out.
+- A user's first sign-in creates their personal namespace, owned by them with the owner role and its `NS/agentiik`, recorded as the installation's act.
 
 ### State
 
@@ -55,6 +59,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A fresh enrolment link ends the sessions every earlier link of its kind opened, spent or not, and a code spent before a session opens opens none.
 - Migration 0034 adds `notifications`, one row per reader: `db.NS.TellOwners` writes them in the grant's transaction, `db.Wide.NotificationsOf` reads a reader's and removes those past 90 days, `db.Wide.DismissNotification` removes one.
 - `db.NS.AccessGrantsAt` lists what applies at a scope, `db.NS.RevokeAccess` revokes a grant at the scope it was written at and answers it, and `db.NS.Present` tells a namespace or a workflow that is not there.
+- Migration 0035 adds `users.webauthn_handle`, 32 random bytes minted at a user's first registration, and `webauthn_challenges`.
 
 ### Controller
 
@@ -66,6 +71,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A fan-out of ten thousand items is handed its namespace's `max_concurrent_tasks` and no more, and another namespace's run is handed its task on the same sweep.
 - A test holds that no keyword of `workflow.schema.json`, and no field of a parsed workflow or of its graph, confers access.
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
+- Package `internal/webauthn/webauthntest` is a software authenticator answering the API's options as a browser would, held to `internal/webauthn` by its tests.
 
 ### agk
 
