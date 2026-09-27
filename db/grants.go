@@ -128,6 +128,15 @@ var ErrRunnerNotTaking = errors.New("db: that runner is draining or revoked, and
 // read and not the one the task was published to, which neither the task nor its grant records.
 var ErrPoolRefusesNamespace = errors.New("db: that runner's pool does not accept the task's namespace")
 
+// ErrNamespaceRefusesPool is a redemption of a task by a runner of a pool the task's namespace leaves
+// out of its allowed_runner_pools.
+//
+// ErrPoolRefusesNamespace from the namespace's side, and answered the same way: a namespace allows
+// or refuses a pool for every runner of it, so no runner of the pool may ever run the task. The
+// controller publishes no task to such a pool, so this is a namespace whose allowed pools changed
+// while the task waited.
+var ErrNamespaceRefusesPool = errors.New("db: the task's namespace does not allow that runner's pool")
+
 // ErrRunnerNarrowed is a redemption of a task whose namespace the redeeming runner's own narrowing,
 // AGK_RUNNER_NAMESPACES, leaves out.
 //
@@ -323,19 +332,21 @@ func (w *Wide) redeemable(ctx context.Context, clear string, task agk.TaskID, ru
 }
 
 // mayTake holds a runner that would bind a task to what it may take: its standing first, then its
-// pool, then its own narrowing.
+// pool and the pools the namespace allows, then its own narrowing.
 //
 // In that order for a reason each. A draining or revoked runner settles nothing new, and a 422 would
-// have it report the task, which binds it. A namespace the pool refuses is one every runner of the
-// pool refuses, since a host's narrowing may only name namespaces its pool accepts, so it is
-// answered as never answerable rather than put back to go round the pool until its deadline.
+// have it report the task, which binds it. A namespace the pool refuses, or one that refuses the
+// pool, is refused to every runner of the pool, since a host's narrowing may only name namespaces
+// its pool accepts, so it is answered as never answerable rather than put back to go round the pool
+// until its deadline.
 func (w *Wide) mayTake(ctx context.Context, runner, namespace string) error {
-	var state string
-	var accepted, narrowed []string
+	var state, pool string
+	var accepted, narrowed, allowed []string
 	err := w.tx.QueryRow(ctx, `
-		select r.state, p.accepted_namespaces::text[], r.accepted_namespaces::text[]
+		select r.state, r.pool, p.accepted_namespaces::text[], r.accepted_namespaces::text[],
+		       (select n.allowed_runner_pools::text[] from namespaces n where n.name = $2)
 		from runners r join runner_pools p on p.name = r.pool
-		where r.id = $1`, runner).Scan(&state, &accepted, &narrowed)
+		where r.id = $1`, runner, namespace).Scan(&state, &pool, &accepted, &narrowed, &allowed)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil
@@ -345,6 +356,8 @@ func (w *Wide) mayTake(ctx context.Context, runner, namespace string) error {
 		return ErrRunnerNotTaking
 	case !(RunnerPool{AcceptedNamespaces: accepted}).Accepts(namespace):
 		return ErrPoolRefusesNamespace
+	case allowed != nil && !slices.Contains(allowed, pool):
+		return ErrNamespaceRefusesPool
 	case narrowed != nil && !slices.Contains(narrowed, namespace):
 		return ErrRunnerNarrowed
 	}

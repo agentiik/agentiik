@@ -228,12 +228,14 @@ func refuseRedemption(w http.ResponseWriter, err error) {
 		// another runner of it, and it goes back to the queue as a draining runner's does.
 		fail(w, http.StatusForbidden, "this runner narrows itself to namespaces that leave out this task's: put the message back for another runner of the pool")
 	case errors.Is(err, db.ErrPoolRefusesNamespace):
-		// This and the three below can never be answered, by this runner or any other: 422,
+		// This and the four below can never be answered, by this runner or any other: 422,
 		// "nothing to answer with, ever", so that a runner reports that no container ran and
 		// the task ends now rather than at its deadline, as a failure that may pass would.
-		// A pool's namespaces are its every runner's, so putting the message back would only
-		// hand it round the pool.
+		// A pool's namespaces are its every runner's, as a namespace's allowed pools are, so
+		// putting the message back would only hand it round the pool.
 		fail(w, http.StatusUnprocessableEntity, "this runner's pool does not accept the namespace of this task's run, so no runner of the pool may run it: report that no container ran")
+	case errors.Is(err, db.ErrNamespaceRefusesPool):
+		fail(w, http.StatusUnprocessableEntity, "the namespace of this task's run leaves this runner's pool out of its allowed_runner_pools, so no runner of the pool may run it: report that no container ran")
 	case errors.Is(err, errNoCommit):
 		// The installation's rather than the runner's: the grant was real and what it was
 		// written with cannot be answered. Each says so rather than handing over an empty
