@@ -401,6 +401,7 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 		{`{"login":"` + strings.Repeat("d", 256) + `","display_name":"Dan"}`, 400, "at most 255"},
 		{`{"login":"auth","display_name":"Auth"}`, 400, "login: auth is reserved"},
 		{`{"login":"runner-pools","display_name":"Pools"}`, 400, "login: runner-pools is reserved"},
+		{`{"login":"stats","display_name":"Stats"}`, 400, "login: stats is reserved: it is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools"},
 		{`{"login":"operator","display_name":"Operator"}`, 400, "login: operator is reserved"},
 		{`{"login":"installation","display_name":"Installation"}`, 400, "login: installation is reserved"},
 		{`{"login":"finance","display_name":"Finance"}`, 409, "finance is already a namespace"},
@@ -425,6 +426,55 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 	}
 	if n := in.count(t, `select count(*) from users`); n != 3 {
 		t.Errorf("the refusals left %d users, and there were two before dan", n)
+	}
+}
+
+// A user and a group an earlier build of v0.3.0 made under stats, before the migration that
+// reserved the word, keep their names, as a namespace v0.2 made under it keeps its own: the routes
+// naming them read them as before, and only a new login or group of that name is refused.
+func TestAUserAndAGroupMadeBeforeTheirWordWasReservedAreServed(t *testing.T) {
+	in := somePeople(t)
+	all, err := db.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reserving string
+	for _, m := range all {
+		if strings.Contains(m.SQL, "'stats'") && strings.Contains(m.SQL, "function agentiik_reserved") {
+			reserving = m.SQL
+		}
+	}
+	if reserving == "" {
+		t.Fatal("no migration reserves stats")
+	}
+	// The table as a build before that migration held it, the users made then, and the migration.
+	in.exec(t, `create or replace function agentiik_reserved(name text) returns boolean language sql immutable as $$ select false $$`)
+	in.wide(t, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateUser(ctx, db.User{Login: "stats", DisplayName: "Stats"}); err != nil {
+			return err
+		}
+		return w.CreateGroup(ctx, "stats")
+	})
+	in.exec(t, reserving)
+
+	for _, c := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{"GET", "/api/v1/users/stats", "", http.StatusOK},
+		{"POST", "/api/v1/users/stats/enrolment", "", http.StatusCreated},
+		{"GET", "/api/v1/groups/stats", "", http.StatusOK},
+		{"PUT", "/api/v1/groups/stats/members/stats", "", http.StatusOK},
+		{"DELETE", "/api/v1/groups/stats/members/stats", "", http.StatusOK},
+		{"POST", "/api/v1/groups", `{"name":"team-stats","members":["stats"]}`, http.StatusCreated},
+		{"DELETE", "/api/v1/groups/stats", "", http.StatusNoContent},
+		{"DELETE", "/api/v1/users/stats", "", http.StatusNoContent},
+		{"POST", "/api/v1/users", `{"login":"stats","display_name":"Stats"}`, http.StatusBadRequest},
+		{"POST", "/api/v1/groups", `{"name":"stats"}`, http.StatusBadRequest},
+	} {
+		if w := in.ask(t, c.method, c.path, in.carol, c.body, nil); w.Code != c.want {
+			t.Errorf("%s %s %s answered %d, want %d: %s", c.method, c.path, c.body, w.Code, c.want, w.Body)
+		}
 	}
 }
 
@@ -643,6 +693,7 @@ func TestAGroupsMembershipChangesWhatItsGrantsReachAndTouchesNoGrant(t *testing.
 		{`{"name":"team-finance"}`, 409, "exists already"},
 		{`{"name":"Team"}`, 400, "not a group's name"},
 		{`{"name":"groups"}`, 400, "name: groups is reserved"},
+		{`{"name":"stats"}`, 400, "name: stats is reserved: it is a word the API routes on from v0.6.0"},
 		{`{}`, 400, "a group has a name"},
 		{`{"name":"team-ops","members":["nobody"]}`, 422, "nobody is no user"},
 		{`{"name":"team-ops","members":["Alice"]}`, 400, "not a login"},

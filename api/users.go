@@ -130,7 +130,13 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 // grammar and the reserved words a namespace is named with, since a login is also the name of its
 // user's personal namespace, and operator and installation, which name the authors of rows the
 // installation holds, so that a user of either name would read as that author.
-func LoginName(login string) error {
+func LoginName(login string) error { return loginName(login, agk.IsReservedNamespace) }
+
+// LoginRef refuses a login no user can hold, which a route naming one answers as it answers a user
+// who does not exist: LoginName's refusals, save a word reserved late, as NamespaceRef reads one.
+func LoginRef(login string) error { return loginName(login, agk.NamesNoNamespace) }
+
+func loginName(login string, reserved func(string) bool) error {
 	switch {
 	case login == "":
 		return errors.New("login: a user has a login, lowercase words joined by hyphens, such as alice or bob-martin")
@@ -138,8 +144,8 @@ func LoginName(login string) error {
 		return fmt.Errorf("login: a login is at most %d characters and this one is %d, since it is also the name of its user's personal namespace", agk.IdentifierMaxBytes, len(login))
 	case !givenName.MatchString(login):
 		return fmt.Errorf("login: %.64q is not a login: a login is lowercase words joined by hyphens, such as alice or bob-martin, the grammar a namespace is named in, since it is also the name of its user's personal namespace", login)
-	case agk.IsReservedNamespace(login):
-		return fmt.Errorf("login: %s is reserved: the API routes on it, and a login is also the name of a namespace", login)
+	case reserved(login):
+		return fmt.Errorf("login: %s is reserved: it is %s, and a login is also the name of a namespace", login, routesOn(login))
 	case login == string(BootstrapOperator) || login == installationActor:
 		return fmt.Errorf("login: %s is reserved: it names the author of rows the installation holds, and a user of that name would read as that author", login)
 	}
@@ -149,7 +155,13 @@ func LoginName(login string) error {
 // GroupName refuses a name no group can be created under: one outside the grammar and the reserved
 // words a namespace is named with, which $defs/group holds a group's name to "so that every name a
 // person gives on an installation is written one way".
-func GroupName(name string) error {
+func GroupName(name string) error { return groupName(name, agk.IsReservedNamespace) }
+
+// groupRef refuses a name no group can carry: GroupName's refusals, save a word reserved late, as
+// NamespaceRef reads one.
+func groupRef(name string) error { return groupName(name, agk.NamesNoNamespace) }
+
+func groupName(name string, reserved func(string) bool) error {
 	switch {
 	case name == "":
 		return errors.New("name: a group has a name, lowercase words joined by hyphens, such as team-finance")
@@ -157,8 +169,8 @@ func GroupName(name string) error {
 		return fmt.Errorf("name: a group's name is at most %d characters and this one is %d", agk.IdentifierMaxBytes, len(name))
 	case !givenName.MatchString(name):
 		return fmt.Errorf("name: %.64q is not a group's name: a group is named in lowercase words joined by hyphens, such as team-finance, as a namespace is", name)
-	case agk.IsReservedNamespace(name):
-		return fmt.Errorf("name: %s is reserved: it is a word the API routes on, which names no namespace and so no group", name)
+	case reserved(name):
+		return fmt.Errorf("name: %s is reserved: it is %s, which names no namespace and so no group", name, routesOn(name))
 	}
 	return nil
 }
@@ -432,7 +444,7 @@ func (s *UserAPI) issueEnrolment(w http.ResponseWriter, r *http.Request, who Pri
 		return
 	}
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -492,7 +504,7 @@ func (s *UserAPI) users(w http.ResponseWriter, r *http.Request, _ Principal, _ T
 // user is GET /api/v1/users/{login}: one user, and never a credential.
 func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -531,7 +543,7 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 		return
 	}
 	login := r.PathValue("login")
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}
@@ -679,7 +691,7 @@ func (s *UserAPI) createGroup(w http.ResponseWriter, r *http.Request, who Princi
 		return
 	}
 	if err := distinct(ask.Members, "member", func(login string) error {
-		if err := LoginName(login); err != nil {
+		if err := LoginRef(login); err != nil {
 			return fmt.Errorf("members: %w", err)
 		}
 		return nil
@@ -750,7 +762,7 @@ func (s *UserAPI) groups(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 // group is GET /api/v1/groups/{group}: one group and its members.
 func (s *UserAPI) group(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
 	name := r.PathValue("group")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
@@ -779,7 +791,7 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 		return
 	}
 	name := r.PathValue("group")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
@@ -869,11 +881,11 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		return
 	}
 	name, login := r.PathValue("group"), r.PathValue("login")
-	if GroupName(name) != nil {
+	if groupRef(name) != nil {
 		fail(w, http.StatusNotFound, noGroup)
 		return
 	}
-	if LoginName(login) != nil {
+	if LoginRef(login) != nil {
 		fail(w, http.StatusNotFound, noUser)
 		return
 	}

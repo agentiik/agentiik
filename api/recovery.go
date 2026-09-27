@@ -121,7 +121,7 @@ func (s *UserAPI) issueRecovery(w http.ResponseWriter, r *http.Request, who Prin
 		// NS/NAME, a service account's reference, escaped into one segment of the path.
 		fail(w, http.StatusNotFound, serviceAccountRecovery)
 		return
-	case LoginName(login) != nil:
+	case LoginRef(login) != nil:
 		fail(w, http.StatusNotFound, noUser)
 		return
 	case Principal(login) == who:
@@ -175,7 +175,7 @@ func (s *UserAPI) issueRecovery(w http.ResponseWriter, r *http.Request, who Prin
 // administrator vouches for this code, so an administrator who did not run it learns that whoever
 // holds the host did.
 func BreakGlass(ctx context.Context, pool *db.Pool, publicURL, login string, now time.Time) (RecoveryCode, error) {
-	if err := LoginName(login); err != nil {
+	if err := LoginRef(login); err != nil {
 		return RecoveryCode{}, err
 	}
 	// To the microsecond the database keeps, so that the expiry answered is the one stored.

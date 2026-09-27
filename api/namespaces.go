@@ -39,7 +39,15 @@ import (
 //
 // It is the check POST /api/v1/namespaces and agentiik-api namespace create both make, so that the
 // route and the verb refuse the same names.
-func NamespaceName(name string) error {
+func NamespaceName(name string) error { return namespaceName(name, agk.IsReservedNamespace) }
+
+// NamespaceRef refuses a name no namespace can carry, which a route naming one answers as absent
+// before the database is asked: NamespaceName's refusals, save a word reserved after namespaces
+// could be created under it, since one created before keeps its name and is served as before
+// (agk.LateReservations).
+func NamespaceRef(name string) error { return namespaceName(name, agk.NamesNoNamespace) }
+
+func namespaceName(name string, reserved func(string) bool) error {
 	switch {
 	case name == "":
 		return errors.New("a namespace has a name, lowercase words joined by hyphens, such as finance or team-ops")
@@ -47,10 +55,20 @@ func NamespaceName(name string) error {
 		return fmt.Errorf("a namespace's name is at most %d characters and this one is %d: it is written in every path of the API and every key of the object store, and no filesystem holds a longer name", agk.IdentifierMaxBytes, len(name))
 	case !givenName.MatchString(name):
 		return fmt.Errorf("%.64q is not a namespace: a namespace is named in lowercase words joined by hyphens, such as finance or team-ops", name)
-	case agk.IsReservedNamespace(name):
-		return fmt.Errorf("%s is a word the API routes on: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", name, strings.Join(agk.ReservedNamespaces, ", "))
+	case reserved(name):
+		return fmt.Errorf("%s is %s: the first path segment after /api/v1/ decides the route, so %s cannot name a namespace", name, routesOn(name), strings.Join(agk.ReservedNamespaces, ", "))
 	}
 	return nil
+}
+
+// routesOn says how the API routes on a reserved word, for a refusal to name: now, or from the
+// release that serves the route a word reserved late is reserved for, so that nobody is told the
+// API routes on stats before it does.
+func routesOn(word string) string {
+	if r, late := agk.ReservedLate(word); late {
+		return fmt.Sprintf("a word the API routes on from %s, for %s", r.Served, r.Route)
+	}
+	return "a word the API routes on"
 }
 
 // NamespaceRecord is a namespace as the wire writes it, $defs/namespaceRecord: its name, whether it
@@ -469,7 +487,7 @@ func (s *NamespaceAPI) quotas(w http.ResponseWriter, r *http.Request, _ Principa
 // for the 404 to say. A name no namespace could have is one of those, and is answered so before
 // the database is asked about it, since a path can carry bytes PostgreSQL refuses to hold as text.
 func (s *NamespaceAPI) read(w http.ResponseWriter, r *http.Request, name string) (db.Namespace, bool) {
-	if NamespaceName(name) != nil {
+	if NamespaceRef(name) != nil {
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return db.Namespace{}, false
 	}
@@ -493,7 +511,7 @@ func (s *NamespaceAPI) read(w http.ResponseWriter, r *http.Request, name string)
 // remove is DELETE /api/v1/namespaces/{namespace}.
 func (s *NamespaceAPI) remove(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
-	if NamespaceName(name) != nil {
+	if NamespaceRef(name) != nil {
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 		return
 	}
@@ -560,7 +578,7 @@ func RemoveNamespace(ctx context.Context, pool *db.Pool, name string, who Princi
 // holds after it.
 func (s *NamespaceAPI) setQuotas(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	name := over.Namespace
-	if NamespaceName(name) != nil {
+	if NamespaceRef(name) != nil {
 		fail(w, http.StatusNotFound, "there is no namespace of that name")
 		return
 	}

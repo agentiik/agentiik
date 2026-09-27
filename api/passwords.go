@@ -242,7 +242,7 @@ func (q *passwordAsked) field(b *body, name string) error {
 // check refuses what the schema refuses: a login no user can hold, a service account's among them,
 // no password, a code that is not six digits, and agk login's terminal outside its grammar.
 func (q passwordAsked) check() error {
-	if err := LoginName(q.Login); err != nil {
+	if err := LoginRef(q.Login); err != nil {
 		return err
 	}
 	switch {
