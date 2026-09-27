@@ -566,6 +566,15 @@ func TestInitRefusesItsSettingsBeforeWritingAnything(t *testing.T) {
 	if entries, _ := os.ReadDir(dir); len(entries) > 0 {
 		t.Errorf("init wrote %d entries for a namespace it refuses", len(entries))
 	}
+
+	// stats, reserved since v0.2.5's init could create a namespace under it, is decided once the
+	// database says whether it holds one, so the settings let it through.
+	env[config.InitNamespace] = "stats"
+	stderr.Reset()
+	run(t.Context(), []string{"init"}, lookup, &stdout, &stderr)
+	if strings.Contains(stderr.String(), "the configuration refuses the start") {
+		t.Errorf("the settings refused stats before the database was asked:\n%s", stderr.String())
+	}
 }
 
 // Against a database: the migration, the namespace and the runner's join token, each run, and a
