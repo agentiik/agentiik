@@ -313,6 +313,33 @@ func TestAWorkflowsGrantsShowWhatItInherits(t *testing.T) {
 	}
 }
 
+// A deny of grant:manage on a workflow is refused with 422, from its namespace's owner as from an
+// administrator, whoever it names, and nothing is written or recorded: it would take from whoever it
+// names the permission that revokes it there. A deny of another permission on the workflow is
+// written, as one of grant:manage on the namespace is.
+func TestNobodyLocksANamespacesOwnersOutOfAWorkflow(t *testing.T) {
+	in := someSharing(t)
+	for _, c := range []struct{ who, principal string }{
+		{"frank", "frank"}, {"frank", "gina"}, {"frank", "group:team-finance"}, {"carol", "dave"}, {"gina", "alice"},
+	} {
+		w := in.ask(t, "POST", "/api/v1/finance/workflows/payroll/grants", c.who, `{"principal":"`+c.principal+`","deny":"grant:manage"}`)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "nobody locks a namespace's owners out of a workflow") {
+			t.Errorf("a deny of grant:manage on payroll to %s by %s answered %d: %s", c.principal, c.who, w.Code, w.Body)
+		}
+	}
+	var n int
+	in.query(t, &n, `select count(*) from grants where deny = 'grant:manage'`)
+	if n != 0 {
+		t.Errorf("the refused denies wrote %d rows", n)
+	}
+	in.query(t, &n, `select count(*) from audit_log`)
+	if n != 0 {
+		t.Errorf("the refused denies were recorded %d times", n)
+	}
+	in.granted(t, "/api/v1/finance/workflows/payroll/grants", "frank", `{"principal":"gina","deny":"workflow:delete"}`)
+	in.granted(t, "/api/v1/finance/grants", "frank", `{"principal":"alice","deny":"grant:manage"}`)
+}
+
 // Sharing takes grant:manage where the route names, and a refusal is the absence of the namespace
 // or the workflow: an editor, a viewer, a token narrowed to what shares nothing, and a principal
 // holding nothing there are each answered 404, nobody is answered 401, and nothing is written.

@@ -162,6 +162,9 @@ const (
 
 	// A grant that is not there, or not at this scope, or not the caller's to revoke.
 	noSuchGrant = "no such grant here, or not yours"
+
+	// A deny of grant:manage written on a workflow.
+	workflowGrantManageDenied = "a deny of grant:manage on a workflow is refused: it takes from whoever it names the permission that revokes it there, and nobody locks a namespace's owners out of a workflow"
 )
 
 // grantLocksOut is a grant that would leave no administrator able to sign in, in namespace.
@@ -240,6 +243,13 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 	}
 	if err := g.Validate(); err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// A deny of grant:manage on a workflow takes from whoever it names the one permission that
+	// revokes it there, a namespace's owners included, so that only an administrator could lift
+	// it: nobody locks a namespace's owners out of one of its workflows.
+	if at.Workflow != "" && g.Deny == access.GrantManage {
+		fail(w, http.StatusUnprocessableEntity, workflowGrantManageDenied)
 		return
 	}
 	if q.ExpiresAt != nil {
