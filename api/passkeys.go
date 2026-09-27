@@ -439,9 +439,13 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 		fail(w, http.StatusUnauthorized, codeOpensNothing)
 	case errors.Is(err, db.ErrNoPrincipal):
 		// A user removed between the session or the code being read and the challenge being
-		// issued, which the removal would have ended.
+		// issued, which the removal ended.
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		fail(w, http.StatusUnauthorized, codeOpensNothing)
+		if ask.coded {
+			fail(w, http.StatusUnauthorized, codeOpensNothing)
+		} else {
+			fail(w, http.StatusUnauthorized, noSession)
+		}
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the registration could not be started")
 	default:
@@ -454,12 +458,11 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 // sign-in page, and a request carrying one is answered as one carrying nothing that could; so is the
 // bootstrap token's operator, who is nobody's account.
 //
-// Nor does a session an enrolment code opened, which Identify says is Enrolling: the code travels in
-// the options now and is spent by the registration it starts, which ends the bootstrap where it is
-// the first administrator's, and a session holding a code registers a passkey without spending it.
-// The session a password opens that may only enrol, when passwords come, is not one of those, and
-// is the one this reads Identify rather than the router's for: the router refuses it here as
-// everywhere else.
+// Nor does a session an enrolment code opened: the code travels in the options now and is spent by
+// the registration it starts, which ends the bootstrap where it is the first administrator's, and a
+// session holding a code would register a passkey without spending it. The session a password
+// opens that may only enrol, when passwords come, is the one this reads Identify rather than the
+// router's for, since the router refuses it everywhere, and it registers here like any other.
 func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 	if _, bearer := bearerOf(r); bearer {
 		return Identity{Refused: noRegistrar}, nil
@@ -475,7 +478,7 @@ func (s *PasskeyAPI) registrar(r *http.Request) (Identity, error) {
 		return as, nil
 	case as.Principal == "" || as.Token != "" || as.Principal == BootstrapOperator:
 		return Identity{Refused: noRegistrar}, nil
-	case as.Enrolling:
+	case as.OpenedByCode:
 		return Identity{Refused: sessionOfACode}, nil
 	}
 	return as, nil
@@ -703,7 +706,10 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 				Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": id},
 			}})
 		}
-		if code.Kind == db.EnrolmentFirstAdministrator {
+		// The bootstrap ends at the enrolment of a first administrator who can sign in, and not
+		// before: ended at a suspended one's, it would leave the installation with nobody to
+		// administer it, the lockout ending it at an enrolment rather than at a creation avoids.
+		if code.Kind == db.EnrolmentFirstAdministrator && !user.Suspended {
 			ended, err := wide.EndBootstrap(ctx, now)
 			if err != nil {
 				return err

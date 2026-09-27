@@ -150,14 +150,13 @@ func (w *Wide) UserVerificationRequired(ctx context.Context) (bool, error) {
 }
 
 // TellPasskeyRefused tells login, in their GET /api/v1/me, that a sign-in with their passkey
-// credential was refused at at because its signature counter did not move forward: the wire's
-// passkey_counter_refused. The passkey is named by its credential ID and not referred to, so that
+// credential was refused at at because its signature counter did not move forward:
+// PasskeyCounterRefused. The passkey is named by its credential ID and not referred to, so that
 // removing it, which is what its user may do on reading this, leaves what they were told.
 func (w *Wide) TellPasskeyRefused(ctx context.Context, login, credential string, at time.Time) error {
 	if _, err := w.tx.Exec(ctx,
-		`insert into notifications (id, recipient, kind, at, credential)
-		 values ($1, $2, 'passkey_counter_refused', $3, $4)`,
-		ulid.New(), login, at, credential); err != nil {
+		`insert into notifications (id, recipient, kind, at, credential) values ($1, $2, $3, $4, $5)`,
+		ulid.New(), login, PasskeyCounterRefused, at, credential); err != nil {
 		return fmt.Errorf("db: %s could not be told of the refusal of passkey %s: %w", login, credential, err)
 	}
 	return nil

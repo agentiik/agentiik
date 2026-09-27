@@ -20,10 +20,11 @@ import (
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 )
 
-// The passkey ceremonies, through the router serve builds, over a real PostgreSQL, with a software
-// authenticator answering the options the API issues as a browser would: the first administrator
-// enrolling from the link the bootstrap token made them, which ends the token; a sign-in, which
-// gives a user their personal namespace the first time; and every refusal a ceremony owes.
+// The passkey ceremonies, through a router built as serve builds it, over a real PostgreSQL, with a
+// software authenticator answering the options the API issues as a browser would: the first
+// administrator enrolling from the link the bootstrap token made them, which ends the token; a
+// sign-in, which gives a user their personal namespace the first time; and every refusal a
+// ceremony owes.
 
 // ceremonies is an installation with no user yet, its bootstrap token set, serving the user routes
 // and the passkey ceremonies on https://agentiik.example.com, on a clock the test moves.
@@ -63,6 +64,9 @@ func ceremoniesOn(t *testing.T, publicURL string) ceremonies {
 		Pool: pool, PublicURL: publicURL, Identify: p.Identify, Now: clock,
 		Trouble: func(err error) { t.Errorf("trouble: %s", err) },
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewMe(rt, api.MeOptions{Pool: pool, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt
@@ -599,8 +603,24 @@ func TestACounterThatDidNotMoveForwardRefusesTheSignInAndTellsTheUser(t *testing
 	}
 
 	passkey.Count = 3
-	if w := in.signIn(t, browser); w.Code != http.StatusOK {
-		t.Errorf("the passkey was locked: a sign-in counting on from the stored counter answered %d %s", w.Code, w.Body)
+	w := in.signIn(t, browser)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the passkey was locked: a sign-in counting on from the stored counter answered %d %s", w.Code, w.Body)
+	}
+	me := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/me", nil)
+	me.AddCookie(session(t, w))
+	read := httptest.NewRecorder()
+	in.h.ServeHTTP(read, me)
+	var answer struct {
+		Notifications []struct {
+			Kind, Credential string
+		} `json:"notifications"`
+	}
+	if err := json.Unmarshal(read.Body.Bytes(), &answer); err != nil || read.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/me answered %d %s", read.Code, read.Body)
+	}
+	if len(answer.Notifications) != 1 || answer.Notifications[0].Kind != "passkey_counter_refused" || answer.Notifications[0].Credential != id {
+		t.Errorf("GET /api/v1/me tells bob %s", read.Body)
 	}
 }
 
@@ -850,8 +870,9 @@ func TestThePolicyDecidesUserVerificationAndSyncedPasskeys(t *testing.T) {
 
 // A suspended user enrols with a code, since enrolling is how an account suspended for having no
 // passkey comes back, and opens no session while the suspension lasts: neither the registration
-// nor a sign-in signs them in. Once the suspension is lifted, their first sign-in is an assertion,
-// and that gives them their personal namespace.
+// nor a sign-in signs them in, and a suspended first administrator's does not end the bootstrap.
+// Once the suspension is lifted, the first sign-in is an assertion, and that gives the user their
+// personal namespace.
 func TestASuspendedUserEnrolsAndOpensNoSession(t *testing.T) {
 	in := someCeremonies(t)
 	code := in.user(t, "bob", false)
@@ -871,6 +892,17 @@ func TestASuspendedUserEnrolsAndOpensNoSession(t *testing.T) {
 	in.query(t, `select detail::jsonb->>'reason' from audit_log where action = 'signin.fail'`, &reason)
 	if reason != "the account is suspended" {
 		t.Errorf("the refusal is recorded for %q", reason)
+	}
+
+	// A suspended first administrator's enrolment leaves the bootstrap token working, since
+	// ending it would leave nobody who can sign in to administer the installation.
+	first := in.user(t, "alice", true)
+	in.exec(t, `update users set suspended = true where login = 'alice'`)
+	if w := in.enrol(t, newBrowser(), first, ""); w.Code != http.StatusOK {
+		t.Fatalf("a suspended first administrator's registration answered %d %s", w.Code, w.Body)
+	}
+	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusOK {
+		t.Errorf("the bootstrap token after a suspended first administrator enrolled answered %d %s", w.Code, w.Body)
 	}
 
 	in.exec(t, `update users set suspended = false where login = 'bob'`)
@@ -1037,5 +1069,142 @@ func TestTheFirstAdministratorsEnrolmentAndAFreshLinkTakeTurns(t *testing.T) {
 	}
 	if n := in.count(t, `select count(*) from credentials`) + in.count(t, `select count(*) from bootstrap where enrolled_at is not null`); n != 0 {
 		t.Error("the enrolment from a revoked code registered a passkey or ended the bootstrap")
+	}
+}
+
+// device_bound_only refuses a synced passkey at sign-in as it does at registration, with 403 naming
+// the setting, and the refusal is recorded whatever the bound on failed sign-ins says, since only the
+// passkey's holder can make it. The Backup State an assertion reports is recorded, as it may change
+// between sign-ins.
+func TestASyncedPasskeyIsRefusedAtSignInWhereDeviceBoundOnlyApplies(t *testing.T) {
+	in := someCeremonies(t)
+	synced := newBrowser()
+	synced.BackupEligible = true
+	if w := in.enrol(t, synced, in.user(t, "bob", false), ""); w.Code != http.StatusOK {
+		t.Fatalf("the registration answered %d %s", w.Code, w.Body)
+	}
+	id := base64.RawURLEncoding.EncodeToString(synced.Passkeys()[0].ID)
+	synced.BackedUp = true
+	if w := in.signIn(t, synced); w.Code != http.StatusOK {
+		t.Fatalf("the sign-in answered %d %s", w.Code, w.Body)
+	}
+	var state bool
+	in.query(t, `select backup_state from credentials where id = '`+id+`'`, &state)
+	if !state {
+		t.Error("the Backup State the sign-in reported was not recorded")
+	}
+
+	in.exec(t, `update auth_policy set device_bound_only = true where namespace is null`)
+	for range failuresPerAddress {
+		in.junk(t, "192.0.2.1:1234", "AAAA")
+	}
+	w := in.signIn(t, synced)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"setting":"device_bound_only"`) {
+		t.Errorf("a synced passkey's sign-in where device_bound_only applies answered %d %s", w.Code, w.Body)
+	}
+	var reason string
+	in.query(t, `select detail::jsonb->>'reason' from audit_log where action = 'signin.fail' and target = 'bob'`, &reason)
+	if !strings.Contains(reason, "device_bound_only") {
+		t.Errorf("the refusal is recorded for %q", reason)
+	}
+}
+
+// A code decides over a session: the page an enrolment link opens enrols the link's user whoever
+// last signed in in that browser, and the registration signs the browser in as them.
+func TestAnEnrolmentCodeDecidesOverTheSessionBesideIt(t *testing.T) {
+	in := someCeremonies(t)
+	w := in.enrol(t, newBrowser(), in.user(t, "bob", false), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("bob's registration answered %d %s", w.Code, w.Body)
+	}
+	bobs := session(t, w)
+	code := in.user(t, "carol", false)
+	raw := in.options(t, fmt.Sprintf(`{"ceremony":"registration","code":%q}`, code), bobs)
+	if !strings.Contains(string(raw), `"name":"carol"`) {
+		t.Errorf("options asked with carol's code in bob's browser are for %s", raw)
+	}
+	made, _, err := newBrowser().Create(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = in.verify(t, "registration", made, "", "", bobs)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"login":"carol"`) {
+		t.Fatalf("carol's registration in bob's browser answered %d %s", w.Code, w.Body)
+	}
+	session(t, w)
+	if n := in.count(t, `select count(*) from credentials where login = 'carol'`); n != 1 {
+		t.Errorf("carol holds %d passkeys", n)
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'bob'`); n != 1 {
+		t.Errorf("bob holds %d passkeys", n)
+	}
+}
+
+// A namespace's policy tightens the sign-in of an account holding a grant in it, and a deny alone
+// is not one: an account holding nothing there but a deny signs in under the installation's policy.
+func TestADenyAloneBringsNoNamespacesPolicyToASignIn(t *testing.T) {
+	in := someCeremonies(t)
+	in.exec(t, `update auth_policy set user_verification = 'preferred' where namespace is null`)
+	careless := newBrowser()
+	careless.UserVerified = false
+	if w := in.enrol(t, careless, in.user(t, "bob", false), ""); w.Code != http.StatusOK {
+		t.Fatalf("the registration answered %d %s", w.Code, w.Body)
+	}
+	in.exec(t,
+		`insert into namespaces (name) values ('finance')`,
+		`insert into grants (id, namespace, principal, deny, granted_by) values ('`+ulid.New()+`', 'finance', 'bob', 'run:read_data', 'carol')`,
+		`insert into auth_policy (namespace, user_verification) values ('finance', 'required')`)
+	if w := in.signIn(t, careless); w.Code != http.StatusOK {
+		t.Errorf("a sign-in by an account holding only a deny in a namespace requiring user verification answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A session that may only enrol, and that no enrolment code opened, as the password sign-in's will
+// be, registers a passkey: the router refuses it everywhere else, and the ceremony reads it itself.
+func TestASessionThatMayOnlyEnrolRegistersAPasskey(t *testing.T) {
+	pool, _ := dbtest.Open(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	var cookie *http.Cookie
+	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		if err := w.CreateUser(ctx, db.User{Login: "bob", DisplayName: "Bob"}); err != nil {
+			return err
+		}
+		if err := w.AddCredential(ctx, db.Credential{ID: "bob-password", Login: "bob", Type: db.CredentialPassword, PasswordHash: "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA"}); err != nil {
+			return err
+		}
+		var err error
+		cookie, err = api.OpenSession(ctx, w, "bob", api.OpenedBy{Credential: "bob-password"}, now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := api.NewPrincipals(pool, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AcceptSessions(publicOrigin); err != nil {
+		t.Fatal(err)
+	}
+	// Every session may only enrol here, as a password's does where the policy requires a passkey
+	// its account does not hold.
+	enrolling := func(r *http.Request) (api.Identity, error) {
+		as, err := p.Identify(r)
+		as.Enrolling = as.Principal != "" && as.Token == ""
+		return as, err
+	}
+	rt, err := api.NewRouter(p, enrolling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{Pool: pool, PublicURL: publicOrigin, Identify: enrolling, Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	in := ceremonies{pool: pool, clock: &now, h: rt}
+	made, _, err := newBrowser().Create(in.options(t, `{"ceremony":"registration"}`, cookie))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := in.verify(t, "registration", made, "", "", cookie); w.Code != http.StatusOK {
+		t.Errorf("a registration from a session that may only enrol answered %d %s", w.Code, w.Body)
 	}
 }
