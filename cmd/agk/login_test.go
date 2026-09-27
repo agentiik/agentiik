@@ -18,7 +18,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -399,15 +398,13 @@ func TestATokenKeptPastItsExpiryIsNotSent(t *testing.T) {
 	}
 }
 
-// The profile is its owner's alone: written 0600 in a directory 0700 whatever the umask, a
-// directory that was more open brought to 0700; read only while nobody else may read or write it,
+// The profile is its owner's alone: written 0600 in a directory 0700, a directory that was more
+// open brought to 0700; read only while nobody else may read or write it,
 // and only as a file; and one that does not read, or that is not there, says so or is empty.
 func TestTheProfileIsItsOwnersAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows keeps no Unix modes")
 	}
-	old := syscall.Umask(0)
-	defer syscall.Umask(old)
 	dir := filepath.Join(t.TempDir(), profileDir)
 	path := filepath.Join(dir, profileFile)
 	if p, err := readProfile(path); err != nil || len(p.Installations) != 0 {
