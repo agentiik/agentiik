@@ -680,6 +680,60 @@ func TestInitWarnsAndGoesOnWhereALoginHoldsTheNamespacesName(t *testing.T) {
 	}
 }
 
+// init names the namespace AGK_INIT_NAMESPACE says at every run. On an installation of v0.2.5
+// that named stats, which v0.3.0 reserved for GET /api/v1/stats/pools, the namespace is there
+// already and is kept: init goes on, at every run, saying the route will take its paths from v0.6.0
+// and what to do. A new installation naming it is refused, naming the setting, as the API refuses
+// the name.
+func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
+	database := freshDatabase(t)
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "stats",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	err := initialize(t.Context(), c, d.at(firstRun))
+	if err == nil || !strings.Contains(err.Error(), config.InitNamespace) || !strings.Contains(err.Error(), "from v0.6.0, for GET /api/v1/stats/pools") {
+		t.Fatalf("a new installation naming stats answered %v", err)
+	}
+
+	database = freshDatabase(t)
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(t.Context()))
+	if _, err := db.MigrateThrough(t.Context(), admin, v025); err != nil {
+		t.Fatalf("the database could not be migrated as v0.2.5 migrated it: %s", err)
+	}
+	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	d = aPreparedDirectory(t)
+	c.Dir, c.Admin, c.Application = d.dir, database.Admin, config.Database{URL: database.Application.URL, Role: database.Application.Role}
+	for run := range 2 {
+		d.out.Reset()
+		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run)*time.Minute))); err != nil {
+			t.Fatalf("run %d on the installation v0.2.5 left failed: %s\n%s", run+1, err, d.out.String())
+		}
+		for _, said := range []string{
+			"namespace stats already exists, and was left as it was",
+			"namespace stats is named after a word the API routes on from v0.6.0, for GET /api/v1/stats/pools, and from then its own routes under /api/v1/stats/ will not reach it: create another namespace and move its workflows there. It is served as before until then, and init says so at every run while it exists",
+		} {
+			if !strings.Contains(d.out.String(), said) {
+				t.Errorf("run %d did not say %q:\n%s", run+1, said, d.out.String())
+			}
+		}
+	}
+	var accounts int
+	if err := admin.QueryRow(t.Context(), `select count(*) from service_accounts where namespace = 'stats' and name = 'agentiik'`).Scan(&accounts); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 1 {
+		t.Error("stats was given no built-in identity")
+	}
+}
+
 // A namespace v0.2 made, which has no built-in identity, is given one by init, recorded as a
 // creation by installation in the namespace, and a run that finds none lacking says nothing of it.
 func TestInitGivesANamespaceOfV02ItsBuiltInIdentity(t *testing.T) {

@@ -95,6 +95,37 @@ func TestNamespaceCreateRefusesANameTheAPIRefuses(t *testing.T) {
 	}
 }
 
+// stats, reserved from v0.3.0 for GET /api/v1/stats/pools, is refused as a new namespace's name,
+// as the API refuses it, once the database says no namespace carries it; one v0.2 created under it
+// is left as any namespace created again is, so that a script or an init that names it goes on
+// working through the upgrade that reserved the word.
+func TestNamespaceCreateKeepsANamespaceCreatedBeforeItsWordWasReserved(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"namespace", "create", "stats"}, empty, io.Discard, &stderr); code != exitFailed || !strings.Contains(stderr.String(), config.DatabaseURL) {
+		t.Errorf("stats was refused before the database was asked, exiting %d:\n%s", code, stderr.String())
+	}
+
+	database, admin := namespaced(t)
+	var out bytes.Buffer
+	err := namespace(t.Context(), database.Application, "create", "stats", &out)
+	if err == nil || !strings.Contains(err.Error(), "stats is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools") || exists(t, admin, "stats") {
+		t.Errorf("creating stats answered %v, and the namespace exists: %v", err, exists(t, admin, "stats"))
+	}
+	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := namespace(t.Context(), database.Application, "create", "stats", &out); err != nil {
+		t.Fatalf("creating stats where v0.2 created it failed: %s", err)
+	}
+	if out.String() != "namespace stats already exists, and was left as it was\n" {
+		t.Errorf("creating stats where v0.2 created it said %q", out.String())
+	}
+	if got := audited(t, admin); strings.Join(got, "\n") != "installation namespace.create stats unchanged" {
+		t.Errorf("the audit log holds %q", got)
+	}
+}
+
 // A namespace named after a user's login is refused, since a login is also the name of its user's
 // personal namespace, and saying so names the collision rather than the table that refused it.
 func TestNamespaceCreateRefusesALogin(t *testing.T) {

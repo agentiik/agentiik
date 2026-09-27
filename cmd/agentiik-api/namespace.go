@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
@@ -22,9 +23,10 @@ const namespaceActor = "installation"
 // namespaceVerb is agentiik-api namespace create NAME and agentiik-api namespace remove NAME.
 func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name string, stdout, stderr io.Writer) int {
 	// The name is checked before the settings are read, so that a name no namespace can have is
-	// refused as that wherever the verb is run.
+	// refused as that wherever the verb is run. A word reserved late is decided once the database
+	// says whether a namespace carries it already (namespace).
 	if action == "create" {
-		if err := api.NamespaceName(name); err != nil {
+		if err := api.NamespaceRef(name); err != nil {
 			fmt.Fprintf(stderr, "%s namespace create: %s\n", program, err)
 			return exitFailed
 		}
@@ -44,6 +46,12 @@ func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name strin
 // loginHoldsName is a namespace not created because a user's login is its name.
 type loginHoldsName string
 
+// reservedName is a namespace not created because its name is a word reserved late, which no
+// namespace of the installation carries yet: api.NamespaceName's refusal.
+type reservedName struct{ error }
+
+func (r reservedName) Unwrap() error { return r.error }
+
 func (name loginHoldsName) Error() string {
 	return fmt.Sprintf("%s is a user's login, and logins and namespace names share one name space, so no namespace %s was created", string(name), string(name))
 }
@@ -57,6 +65,11 @@ func (name loginHoldsName) Error() string {
 // through the same store and refuse the same names, and a namespace is created with its built-in
 // identity either way. Creating a namespace that exists changes nothing and says so, so that an
 // installation script run twice succeeds twice.
+//
+// A word reserved late (agk.LateReservations) is refused as a new namespace's name, as the API
+// refuses it, and a namespace created under it before it was reserved is one that exists: left as
+// it was, so that an installation whose init names it goes on starting after the upgrade that
+// reserved the word.
 func namespace(ctx context.Context, d config.Database, action, name string, stdout io.Writer) error {
 	pool, err := db.Open(ctx, d.ConnString())
 	if err != nil {
@@ -68,6 +81,15 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 	switch action {
 	case "create":
 		err = pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
+			if _, late := agk.ReservedLate(name); late {
+				_, err := w.NamespaceNamed(ctx, name)
+				switch {
+				case errors.Is(err, db.ErrNoNamespace):
+					return reservedName{api.NamespaceName(name)}
+				case err != nil:
+					return err
+				}
+			}
 			var err error
 			if created, err = w.CreateNamespace(ctx, db.Namespace{Name: name}); err != nil {
 				return err
@@ -139,4 +161,38 @@ func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) err
 		fmt.Fprintf(stdout, "gave namespace %s its built-in identity, %s/%s, which holds no grant until an owner gives it one\n", name, name, db.BuiltIn)
 	}
 	return nil
+}
+
+// reservedLater says, for every namespace named after a word reserved since it was created
+// (agk.LateReservations), that the route the word was reserved for will take its paths, and what
+// to do about it. Nothing renames a namespace, so the installation keeps it and serves it as
+// before; init and migrate say so at every run while it exists, since one of the two runs wherever
+// an installation is upgraded, and the person who reads either is the one who can move its
+// workflows.
+//
+// It never fails: what it reads decides nothing, and a failed init keeps every service of the
+// installation from starting. A read that fails is said, and the next run tries again.
+func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Writer) {
+	var held []agk.LateReservation
+	err := pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
+		held = held[:0]
+		for _, r := range agk.LateReservations {
+			_, err := w.NamespaceNamed(ctx, r.Word)
+			switch {
+			case errors.Is(err, db.ErrNoNamespace):
+			case err != nil:
+				return err
+			default:
+				held = append(held, r)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(stdout, "could not tell whether a namespace is named after a word reserved since it was created, and %s goes on: %v\n", verb, err)
+		return
+	}
+	for _, r := range held {
+		fmt.Fprintf(stdout, "namespace %s is named after a word the API routes on from %s, for %s, and from then its own routes under /api/v1/%s/ will not reach it: create another namespace and move its workflows there. It is served as before until then, and %s says so at every run while it exists\n", r.Word, r.Served, r.Route, r.Word, verb)
+	}
 }

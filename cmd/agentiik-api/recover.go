@@ -26,7 +26,7 @@ import (
 func recoverVerb(ctx context.Context, lookup config.Lookup, login string, now time.Time, stdout, stderr io.Writer) int {
 	// The login is checked before the settings are read, so that one no user can have is refused
 	// as that wherever the verb is run.
-	if err := api.LoginName(login); err != nil {
+	if err := api.LoginRef(login); err != nil {
 		fmt.Fprintf(stderr, "%s recover: %s\n", program, err)
 		return exitFailed
 	}

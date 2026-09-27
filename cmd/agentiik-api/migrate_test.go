@@ -198,6 +198,32 @@ func TestMigrateGivesTheNamespacesOfV02TheirBuiltInIdentityOnce(t *testing.T) {
 	}
 }
 
+// An installation of v0.2.5 may hold a namespace named stats, which v0.3.0 reserved for GET
+// /api/v1/stats/pools. migrate keeps it, gives it its built-in identity as any other, and says at
+// every run that the route will take its paths from v0.6.0 and what to do; it says nothing where no
+// namespace carries the word.
+func TestMigrateSaysWhereANamespaceIsNamedAfterAWordReservedSince(t *testing.T) {
+	b := aBootstrapState(t)
+	if _, err := db.MigrateThrough(t.Context(), b.admin, v025); err != nil {
+		t.Fatalf("the database could not be migrated as v0.2.5 migrated it: %s", err)
+	}
+	if out := b.migrated(theToken, ""); strings.Contains(out, "named after a word") {
+		t.Errorf("migrate, with no namespace named stats, said:\n%s", out)
+	}
+	if _, err := b.admin.Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
+		t.Fatal(err)
+	}
+	for run := range 2 {
+		out := b.migrated(theToken, "")
+		if !strings.Contains(out, "namespace stats is named after a word the API routes on from v0.6.0, for GET /api/v1/stats/pools, and from then its own routes under /api/v1/stats/ will not reach it: create another namespace and move its workflows there. It is served as before until then, and migrate says so at every run while it exists\n") {
+			t.Errorf("migrate's run %d said:\n%s", run+1, out)
+		}
+		if run == 0 && !strings.Contains(out, "gave namespace stats its built-in identity, stats/agentiik") {
+			t.Errorf("migrate gave stats no built-in identity:\n%s", out)
+		}
+	}
+}
+
 // A hash kept is the installation's, from a token set since or from init, and the v0.2 file never
 // replaces it. Once the bootstrap has ended, nothing is imported, nothing is said, and the file is
 // not read at all.
