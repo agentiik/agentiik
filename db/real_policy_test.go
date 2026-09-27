@@ -122,3 +122,51 @@ func TestANamespacesPolicyReachesWhoHoldsARoleInIt(t *testing.T) {
 		return nil
 	})
 }
+
+// Holding a user's row, as every act on an account does and forbidding passwords does of every
+// account, keeps no row referring to it from being written, a membership, a credential or a
+// challenge: an act holding many users' rows would otherwise wait on a group created with two of
+// them as members in the other order, while the group waits on it.
+func TestHoldingAUserLetsARowReferringToItBeWritten(t *testing.T) {
+	pool := identity(t)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice", Admin: true}); err != nil {
+			return err
+		}
+		return w.CreateGroup(ctx, "auditors")
+	})
+	for name, hold := range map[string]func(context.Context, *Wide) error{
+		"HoldUser":       func(ctx context.Context, w *Wide) error { _, err := w.HoldUser(ctx, "alice"); return err },
+		"Administrators": func(ctx context.Context, w *Wide) error { _, err := w.Administrators(ctx); return err },
+	} {
+		held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		go func() {
+			done <- pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+				if err := hold(ctx, w); err != nil {
+					return err
+				}
+				close(held)
+				<-release
+				return nil
+			})
+		}()
+		<-held
+		err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
+			if _, err := w.tx.Exec(ctx, `set local lock_timeout = '2s'`); err != nil {
+				return err
+			}
+			if _, err := w.AddMember(ctx, "auditors", "alice"); err != nil {
+				return err
+			}
+			_, err := w.RemoveMember(ctx, "auditors", "alice")
+			return err
+		})
+		close(release)
+		if err != nil {
+			t.Errorf("a membership of alice, her row held by %s, answered %v", name, err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}

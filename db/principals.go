@@ -111,8 +111,14 @@ func (w *Wide) User(ctx context.Context, login string) (User, error) {
 // HoldUser reads one by login as User does, and holds its row until the transaction ends: an
 // enrolment takes the user's row first, as issuing a link does, so that the two take turns rather
 // than each waiting on what the other took.
+//
+// The row is held against every other act that holds or writes it, and not against a row written
+// elsewhere that refers to it, a membership, a credential or a challenge, which takes the weaker
+// lock a reference takes: an act holding many users' rows, as forbidding passwords holds every one,
+// would otherwise wait on a group created with two of them as members in the other order, while the
+// group waits on it.
 func (w *Wide) HoldUser(ctx context.Context, login string) (User, error) {
-	u, err := scanUser(w.tx.QueryRow(ctx, `select `+userColumns+` from users where login = $1 for update`, login))
+	u, err := scanUser(w.tx.QueryRow(ctx, `select `+userColumns+` from users where login = $1 for no key update`, login))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, fmt.Errorf("%w: %s", ErrNoPrincipal, login)
 	}
@@ -200,11 +206,12 @@ type Administrator struct {
 
 // Administrators answers the installation's administrators, ordered by login, and locks each of
 // their rows until the transaction ends, so that two removals of administrators at once take turns
-// in one order and the second counts what the first left.
+// in one order and the second counts what the first left. The lock is HoldUser's, which a row
+// referring to a user does not wait on.
 func (w *Wide) Administrators(ctx context.Context) ([]Administrator, error) {
 	rows, err := w.tx.Query(ctx,
 		`select u.login, not u.suspended and exists (select from credentials c where c.login = u.login)
-		   from users u where u.admin order by u.login for update of u`)
+		   from users u where u.admin order by u.login for no key update of u`)
 	if err != nil {
 		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
 	}
