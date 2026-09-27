@@ -137,7 +137,7 @@ func (s someRuns) servedTo(t *testing.T, auth api.Authorizer) http.Handler {
 	if _, err := api.NewServer(rt, api.ServerOptions{Pool: s.pool, Versions: s.store, Objects: s.objects, URLs: s.signed}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, s.signed); err != nil {
+	if _, err := api.NewObjects(rt, s.signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	return rt

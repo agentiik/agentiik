@@ -42,7 +42,7 @@ func TestTheFamiliesAreWrittenInTheTextFormat(t *testing.T) {
 	took.Observe(42, "invoice", "succeeded")
 	took.Observe(3, `say "hi"`, "failed")
 
-	want := `# HELP agentiik_metrics_folded_total Observations counted under the label set _other because their family already held as many label sets as it keeps.
+	want := `# HELP agentiik_metrics_folded_total Observations counted under _other because their family was full: for a counter or a histogram, the label set whose every value is _other once it held as many label sets as it keeps; for a gauge read per namespace, the namespace _other once it held as many namespaces, counted at every scrape.
 # TYPE agentiik_metrics_folded_total counter
 # HELP agentiik_tasks_lost_total Dispatches declared lost.
 # TYPE agentiik_tasks_lost_total counter
@@ -95,6 +95,46 @@ func TestALabelSetPastTheLimitIsFoldedIntoOther(t *testing.T) {
 	}
 	if strings.Contains(got, "reporting") || strings.Contains(got, "onboarding") {
 		t.Errorf("a label set past the limit was kept:\n%s", got)
+	}
+}
+
+// A gauge family registered to fold by a label keeps as many values of it at each scrape as a
+// counter keeps label sets, in the order its read sets them, and sums the rest under _other with
+// their other labels as they are, each counted as folded: a sum over the family is still the
+// installation's figure, and what the other labels say is counted is never added to something else.
+// One that does not fold keeps every label set, as a gauge of what the installation holds needs no
+// bound.
+func TestAGaugeThatFoldsKeepsTheLimitAndSumsTheRestUnderOther(t *testing.T) {
+	r := NewRegistry()
+	r.Limit = 2
+	r.Gauges(func(_ context.Context, g *Gauges) error {
+		for i, namespace := range []string{"finance", "hr", "legal", "ops"} {
+			g.Set("agentiik_quota_used", float64(i+1), namespace, "max_concurrent_tasks")
+			g.Set("agentiik_quota_used", float64(1000*(i+1)), namespace, "max_artifact_bytes")
+			g.Set("agentiik_runner_slots", float64(i+1), namespace, "runner-1")
+		}
+		return nil
+	}, Desc{Name: "agentiik_quota_used", Help: "Held.", Labels: []string{"namespace", "quota"}, FoldBy: "namespace"},
+		Desc{Name: "agentiik_runner_slots", Help: "Slots.", Labels: []string{"pool", "runner"}})
+
+	got := written(t, r)
+	for _, line := range []string{
+		`agentiik_quota_used{namespace="finance",quota="max_concurrent_tasks"} 1`,
+		`agentiik_quota_used{namespace="hr",quota="max_artifact_bytes"} 2000`,
+		`agentiik_quota_used{namespace="_other",quota="max_concurrent_tasks"} 7`,
+		`agentiik_quota_used{namespace="_other",quota="max_artifact_bytes"} 7000`,
+		`agentiik_runner_slots{pool="ops",runner="runner-1"} 4`,
+	} {
+		if !strings.Contains(got, line+"\n") {
+			t.Errorf("the registry wrote no line %s:\n%s", line, got)
+		}
+	}
+	if strings.Contains(got, `namespace="legal"`) || strings.Contains(got, `namespace="ops"`) {
+		t.Errorf("a namespace past the limit was kept:\n%s", got)
+	}
+	// Counted as it was folded, so the next scrape says so.
+	if got := written(t, r); !strings.Contains(got, `agentiik_metrics_folded_total{metric="agentiik_quota_used"} 4`+"\n") {
+		t.Errorf("the folds were not counted:\n%s", got)
 	}
 }
 

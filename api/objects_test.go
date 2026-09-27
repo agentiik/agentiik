@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"maps"
 	"mime/multipart"
@@ -47,7 +48,7 @@ func withObjectsUnder(t *testing.T, limits agk.Limits) (http.Handler, *artifact.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	return rt, signed
@@ -304,7 +305,7 @@ func TestTheObjectRoutesSayWhatAuthorisesThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	served := 0
@@ -327,7 +328,7 @@ func TestTheObjectRoutesSayWhatAuthorisesThem(t *testing.T) {
 
 	// A presigner is not optional: an object route with nothing to check a signature
 	// against would serve every object to anybody.
-	if _, err := api.NewObjects(rt, nil); err == nil {
+	if _, err := api.NewObjects(rt, nil, nil); err == nil {
 		t.Error("an object route was registered with nothing to check a signature against")
 	}
 }
@@ -359,7 +360,7 @@ func TestTheObjectRoutesShareARouterWithTheRestOfTheAPI(t *testing.T) {
 	if _, err := api.NewRunners(rt, api.RunnerOptions{Pool: pool, Objects: objects, URLs: signed}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -393,4 +394,212 @@ func follow(t *testing.T, h http.Handler, method, raw, body string) *httptest.Re
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+// "max_artifact_bytes: Total live artifact storage; beyond it, new writes are refused." The store
+// holds every write to it, a policy's form and a presigned PUT alike, and answers one that would take
+// the namespace past its quota 507 with no body, storing nothing of it. An object the namespace
+// already holds takes no room, and a namespace that sets no quota is refused nothing.
+func TestAWritePastMaxArtifactBytesIsAnswered507(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(),
+		`insert into namespaces (name, max_artifact_bytes) values ('finance', 3000), ('team-ops', null)`); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	const run = "01JMZ8W4K2R7Q0E3N5T9"
+	until := time.Now().UTC().Add(time.Hour)
+	policy, err := signed.Policy(t.Context(), "finance", run, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := func(c byte) string { return strings.Repeat(string(c), 1000) }
+	post := func(content string) *httptest.ResponseRecorder {
+		t.Helper()
+		return posted(t, rt, policy.URL, policy.Fields, artifact.Key("finance", digestOf([]byte(content))), content)
+	}
+
+	// Bytes that are not the object their key names are refused, and the room made for them is
+	// given back: 2,000 bytes of it, which would leave no room for what follows.
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("finance", digestOf([]byte("another"))), strings.Repeat("x", 2000)); w.Code != http.StatusBadRequest {
+		t.Fatalf("bytes that are not their key's object answered %d", w.Code)
+	}
+
+	// Two objects of 1,000 bytes fit, each given room at its form's length and counted at its
+	// size once it is in; a third would take the namespace to 3,000 and its form past it.
+	for _, c := range []byte{'a', 'b'} {
+		if w := post(object(c)); w.Code != http.StatusCreated {
+			t.Fatalf("an object of 1,000 bytes within the quota answered %d", w.Code)
+		}
+	}
+	third := object('c')
+	w := post(third)
+	if w.Code != http.StatusInsufficientStorage || w.Body.Len() != 0 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("an object past the quota answered %d, %q, %q", w.Code, w.Header().Get("Cache-Control"), w.Body)
+	}
+	get, err := signed.Presign(t.Context(), "GET", artifact.Key("finance", digestOf([]byte(third))), run, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, rt, "GET", get, ""); w.Code != http.StatusNotFound {
+		t.Errorf("fetching the object refused answered %d, and nothing of it was to be stored", w.Code)
+	}
+	// Posting again what the namespace holds takes no room.
+	if w := post(object('a')); w.Code != http.StatusCreated {
+		t.Errorf("an object the namespace holds, posted again, answered %d", w.Code)
+	}
+
+	// A presigned PUT carries the object and nothing else, so it is given room at exactly its
+	// size: the last 1,000 bytes fit, and one byte more does not.
+	put := func(content string) *httptest.ResponseRecorder {
+		t.Helper()
+		url, err := signed.Presign(t.Context(), "PUT", artifact.Key("finance", digestOf([]byte(content))), run, until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return follow(t, rt, "PUT", url, content)
+	}
+	if w := put(third); w.Code != http.StatusCreated {
+		t.Errorf("the last 1,000 bytes of the quota, put, answered %d", w.Code)
+	}
+	if w := put("d"); w.Code != http.StatusInsufficientStorage {
+		t.Errorf("one byte past the quota, put, answered %d", w.Code)
+	}
+
+	// team-ops sets no quota.
+	elsewhere, err := signed.Policy(t.Context(), "team-ops", run, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := strings.Repeat("e", 10000)
+	if w := posted(t, rt, elsewhere.URL, elsewhere.Fields, artifact.Key("team-ops", digestOf([]byte(large))), large); w.Code != http.StatusCreated {
+		t.Errorf("an object in a namespace with no quota answered %d", w.Code)
+	}
+}
+
+// A write of no stated length is given the room left, up to artifact_max_bytes, and held to it as
+// its bytes arrive: past it, nothing is stored and the write is answered 507.
+func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into namespaces (name, max_artifact_bytes) values ('finance', 1000), ('legal', 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	unstated := func(h http.Handler, signed *artifact.Signed, namespace, content string) int {
+		t.Helper()
+		key := artifact.Key(namespace, digestOf([]byte(content)))
+		url, err := signed.Presign(t.Context(), "PUT", key, "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A reader net/http cannot measure, so the request states no length.
+		r := httptest.NewRequest("PUT", url, io.MultiReader(strings.NewReader(content)))
+		if r.ContentLength != -1 {
+			t.Fatalf("the request states a length of %d", r.ContentLength)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+
+	// Under the default artifact_max_bytes, 5 GiB, one byte fits a namespace of 1,000.
+	defaulted, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, defaulted, pool); err != nil {
+		t.Fatal(err)
+	}
+	if code := unstated(rt, defaulted, "legal", "a"); code != http.StatusCreated {
+		t.Errorf("one byte of no stated length, under the default artifact_max_bytes, answered %d", code)
+	}
+
+	// artifact_max_bytes off, which is what leaves the room left as the only bound.
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+		Limits: agk.Limits{InlineMaxBytes: agk.DefaultInlineMaxBytes, EnvelopeMaxBytes: agk.DefaultEnvelopeMaxBytes, MaxItems: agk.DefaultMaxItems},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err = api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().UTC().Add(time.Hour)
+	for _, c := range []struct {
+		size int
+		want int
+	}{
+		{1001, http.StatusInsufficientStorage},
+		{1000, http.StatusCreated},
+	} {
+		content := strings.Repeat("a", c.size)
+		if code := unstated(rt, signed, "finance", content); code != c.want {
+			t.Errorf("%d bytes of no stated length with 1,000 left answered %d, want %d", c.size, code, c.want)
+		}
+		get, err := signed.Presign(t.Context(), "GET", artifact.Key("finance", digestOf([]byte(content))), "01JMZ8W4K2R7Q0E3N5T9", until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := follow(t, rt, "GET", get, ""); (w.Code == http.StatusOK) != (c.want == http.StatusCreated) {
+			t.Errorf("%d bytes answered %d, and are fetched with %d", c.size, c.want, w.Code)
+		}
+	}
+}
+
+// A write whose length is past artifact_max_bytes is an object the store refuses as too large,
+// 413, and it is given the room of the most an object may be rather than refused as the quota's
+// for a length no object reaches.
+func TestAWritePastArtifactMaxBytesIsTooLargeRatherThanPastTheQuota(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into namespaces (name, max_artifact_bytes) values ('finance', 1100)`); err != nil {
+		t.Fatal(err)
+	}
+	limits := agk.DefaultLimits()
+	limits.ArtifactMaxBytes = 1000
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects", Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("a", 1200)
+	url, err := signed.Presign(t.Context(), "PUT", artifact.Key("finance", digestOf([]byte(content))), "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, rt, "PUT", url, content); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("1,200 bytes past an artifact_max_bytes of 1,000, in a namespace of 1,100, answered %d", w.Code)
+	}
 }

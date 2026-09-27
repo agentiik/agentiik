@@ -460,6 +460,75 @@ steps:
 	}
 }
 
+// max_run_duration is the "Upper bound on a workflow's root timeout": a workflow asking for
+// more is held to it, one asking for less keeps what it asked for, and one writing none is
+// bounded by it. A namespace that sets none bounds nothing.
+func TestMaxRunDurationBoundsTheRootTimeout(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		timeout string
+		bound   time.Duration
+		want    time.Duration
+	}{
+		{"asking-for-more", "timeout: 4h", time.Hour, time.Hour},
+		{"asking-for-less", "timeout: 30m", time.Hour, 30 * time.Minute},
+		{"asking-for-nothing", "", time.Hour, time.Hour},
+		{"bounded-by-nothing", "timeout: 4h", 0, 4 * time.Hour},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+`+c.timeout+`
+steps:
+  invoice:
+    image: `+image+`
+    outputs: [ok]
+`, Options{MaxRunDuration: c.bound})
+
+			plan := next(t, e, runAt)
+			if want := runAt.Add(c.want); !plan.Wake.Equal(want) {
+				t.Errorf("wake at %s, want the deadline at %s", plan.Wake, want)
+			}
+			record(t, e, Result{Task: plan.Start[0].ID, State: agk.TaskRunning}, runAt)
+			next(t, e, runAt.Add(c.want-time.Second))
+			if e.State().Run.State != agk.Running {
+				t.Fatalf("the run is %s a second before its deadline", e.State().Run.State)
+			}
+			plan = next(t, e, runAt.Add(c.want))
+			if e.State().Run.State != agk.TimedOut || len(plan.Stop) != 1 || plan.Stop[0].Reason != StopDeadline {
+				t.Errorf("the run is %s at its deadline and the plan stops %#v", e.State().Run.State, plan.Stop)
+			}
+		})
+	}
+
+	// A pass is decided under the bound that holds when it is taken, so a run resumed under a
+	// lower one is held to that from its next pass.
+	e := started(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+timeout: 4h
+steps:
+  invoice:
+    image: `+image+`
+    outputs: [ok]
+`, Options{})
+	next(t, e, runAt)
+	lowered, err := New(e.Graph(), e.State(), agk.DefaultLimits(), DefaultMaxRequeues, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next(t, lowered, runAt.Add(time.Hour))
+	if lowered.State().Run.State != agk.TimedOut {
+		t.Errorf("a run resumed under a bound of an hour is %s an hour after it started", lowered.State().Run.State)
+	}
+	if _, err := New(e.Graph(), e.State(), agk.DefaultLimits(), DefaultMaxRequeues, -time.Second); err == nil || !strings.Contains(err.Error(), "max_run_duration") {
+		t.Errorf("a negative max_run_duration answered %v", err)
+	}
+}
+
 // "Failover is a state resume and never a rebuild": load the State, call Next, get the
 // Plan the instance that died would have got.
 func TestARunIsPickedUpWhereItWasLeft(t *testing.T) {
@@ -475,7 +544,7 @@ func TestARunIsPickedUpWhereItWasLeft(t *testing.T) {
 	if err := json.Unmarshal(doc, &resumed); err != nil {
 		t.Fatal(err)
 	}
-	second, err := New(e.Graph(), &resumed, agk.DefaultLimits(), DefaultMaxRequeues)
+	second, err := New(e.Graph(), &resumed, agk.DefaultLimits(), DefaultMaxRequeues, 0)
 	if err != nil {
 		t.Fatalf("resuming the run: %v", err)
 	}
@@ -893,10 +962,10 @@ func TestMaxRequeuesIsWhatTheInstallationPasses(t *testing.T) {
 	task := next(t, e, runAt).Start[0]
 	lose(t, e, task, 0, runAt)
 	next(t, e, runAt)
-	if _, err := New(e.Graph(), e.State(), agk.DefaultLimits(), -1); err == nil || !strings.Contains(err.Error(), "max_requeues") {
+	if _, err := New(e.Graph(), e.State(), agk.DefaultLimits(), -1, 0); err == nil || !strings.Contains(err.Error(), "max_requeues") {
 		t.Errorf("a run resumed under max_requeues: -1, which is no number of times, answering %v", err)
 	}
-	resumed, err := New(e.Graph(), e.State(), agk.DefaultLimits(), 1)
+	resumed, err := New(e.Graph(), e.State(), agk.DefaultLimits(), 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

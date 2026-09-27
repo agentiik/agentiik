@@ -199,7 +199,7 @@ func TestOneURICannotNameTwoDigests(t *testing.T) {
 }
 
 // "retain is capped by the namespace quota and cannot exceed it; a workflow may always ask
-// for less."
+// for less." A workflow that asks for nothing keeps its artifacts as long as the namespace allows.
 func TestRetainIsCappedByTheNamespace(t *testing.T) {
 	pool, super := opened(t)
 	conn, err := pgx.Connect(t.Context(), super)
@@ -219,6 +219,7 @@ func TestRetainIsCappedByTheNamespace(t *testing.T) {
 	}{
 		{"asking-for-more", 90 * 24 * time.Hour, 7 * 24 * time.Hour},
 		{"asking-for-less", 24 * time.Hour, 24 * time.Hour},
+		{"asking-for-nothing", 0, 7 * 24 * time.Hour},
 	} {
 		var w Written
 		err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {

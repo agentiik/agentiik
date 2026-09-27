@@ -63,7 +63,7 @@ func serve(t *testing.T, limits agk.Limits) *store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := api.NewObjects(rt, signed); err != nil {
+	if _, err := api.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.signed = signed
@@ -349,6 +349,26 @@ func TestAnObjectAboveTheStoresLimitIsRefusedAsTooLarge(t *testing.T) {
 	}
 	if s.holds(t, artifact.Key("finance", digestOf(larger))) {
 		t.Error("a post refused as too large left something behind")
+	}
+}
+
+// A namespace with no room left under its max_artifact_bytes is the built-in store's 507, which a
+// runner reads as the quota and as none of the other refusals, so that the step's failure names it.
+func TestAStoreWithNoRoomLeftIsRefusedAsTheQuota(t *testing.T) {
+	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInsufficientStorage)
+	}))
+	defer full.Close()
+	const content = "the whole of an invoice"
+	o := objects(t, granted.Options{Uploads: artifact.Policy{URL: full.URL + "/objects/finance", KeyPrefix: artifact.Prefix("finance")}})
+	err := o.Put(t.Context(), artifact.Key("finance", digestOf(content)), strings.NewReader(content))
+	if !errors.Is(err, artifact.ErrNoRoom) || !strings.Contains(err.Error(), "max_artifact_bytes") {
+		t.Fatalf("a store with no room left answered %v", err)
+	}
+	for _, refusal := range []error{artifact.ErrNotSigned, artifact.ErrWrongDigest, artifact.ErrTooLarge} {
+		if errors.Is(err, refusal) {
+			t.Errorf("a store with no room left reads as %v", refusal)
+		}
 	}
 }
 

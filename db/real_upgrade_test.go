@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -225,5 +227,120 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 		t.Errorf("the bootstrap state after the upgrade holds %x, ended at %v", hash, enrolled)
 	case password != "allowed" || passkey != "required" || minPasskeys != 2:
 		t.Errorf("the installation's policy starts as password %s, passkey %s, %d passkeys", password, passkey, minPasskeys)
+	}
+}
+
+// The three bounds v0.3.0 adds on storage and time bound nothing on a namespace v0.2.5 made, which
+// sets none of them: a write of any size is refused nothing and holds no lock, a run is bounded by
+// its own timeout alone, and what the metrics read of the namespace says so. What v0.2.5 already
+// bounded stays bounded: a finished run keeps its envelopes within the retention the namespace had.
+func TestANamespaceOfV025IsHeldToNoBoundItNeverSet(t *testing.T) {
+	super, role := migratedAt(t, v025)
+	ctx := t.Context()
+
+	const run = "01JMZ8V1P9C4XQ7K2N4D6F8H0A"
+	const huge = int64(1) << 40
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, stmt := range []string{
+		`insert into namespaces (name, max_retention_days, max_concurrent_tasks) values ('finance', 30, 7)`,
+		`insert into workflows (namespace, name) values ('finance', 'monthly-invoicing')`,
+		`insert into workflow_versions (namespace, workflow, commit, graph, author, created_at)
+		   values ('finance', 'monthly-invoicing', 'a3f9c1e', '{}', 'operator', now())`,
+		`insert into runs (namespace, id, workflow, commit, state, trigger, triggered_by)
+		   values ('finance', '` + run + `', 'monthly-invoicing', 'a3f9c1e', 'running', 'manual', 'operator')`,
+		`insert into steps (namespace, run_id, step, state) values ('finance', '` + run + `', 'archive', 'succeeded')`,
+		// A terabyte of live artifacts, which v0.2.5 bounded in nothing.
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs)
+		   values ('finance', 'sha256:` + digestOf("a") + `', ` + fmt.Sprint(huge) + `, 'application/zip', 1)`,
+		`insert into artifacts (namespace, run_id, step, port, name, digest, size_bytes, media_type, expires_at)
+		   values ('finance', '` + run + `', 'archive', 'out', 'invoices.zip', 'sha256:` + digestOf("a") + `',
+		           ` + fmt.Sprint(huge) + `, 'application/zip', now() + interval '1 day')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as v0.2.5 would have: %s", err)
+		}
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatalf("the upgrade was refused: %s", err)
+	}
+	pool, err := Open(ctx, withCredentials(super, role, "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	other, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close(ctx)
+	err = pool.In(ctx, "finance", func(ctx context.Context, ns *NS) error {
+		room, err := ns.MakeRoom(ctx, Upload{Digest: digestOf("b"), Length: huge, Until: time.Now().Add(time.Hour)})
+		if err != nil || room.Held() {
+			t.Errorf("a terabyte more in a namespace v0.2.5 made answered %+v, %v", room, err)
+		}
+		// Nothing was locked either, since there is no room to lock: while the write's
+		// transaction is open, the namespace has no row of room and its row is another's at once.
+		var rooms int
+		if err := ns.tx.QueryRow(ctx, `select count(*) from artifact_room`).Scan(&rooms); err != nil {
+			return err
+		}
+		if rooms != 0 {
+			t.Errorf("a write the namespace bounds nothing of made it %d rows of room", rooms)
+		}
+		if _, err := other.Exec(ctx, `select 1 from namespaces where name = 'finance' for update nowait`); err != nil {
+			t.Errorf("a write the namespace bounds nothing of held its row: %s", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var bound string
+	var held []Consumption
+	err = pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		e, err := w.Run(ctx, run)
+		if err != nil {
+			return err
+		}
+		bound = e.MaxRunDuration
+		held, err = w.Consumption(ctx)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound != "" {
+		t.Errorf("a run of a namespace v0.2.5 made reads a max_run_duration of %q", bound)
+	}
+	want := Consumption{Namespace: "finance", RunsLastHour: 1, ArtifactBytes: huge, MaxConcurrentTasks: 7}
+	if len(held) != 1 || held[0] != want {
+		t.Errorf("the metrics read %+v of a namespace v0.2.5 made, want %+v", held, want)
+	}
+
+	// Its run finishes after the upgrade, declaring no retention, and keeps its envelopes and logs
+	// for the 30 days the namespace held.
+	finished := time.Now().UTC().Truncate(time.Millisecond)
+	var expires time.Time
+	err = pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		if err := w.SaveDecision(ctx, Decision{
+			Namespace: "finance", Run: run, Was: 0, Seq: 1,
+			Document: json.RawMessage(`{"version":1}`), State: agk.Succeeded,
+			StartedAt: finished.Add(-time.Hour), FinishedAt: finished,
+		}); err != nil {
+			return err
+		}
+		return w.tx.QueryRow(ctx, `select expires_at from runs where id = $1`, run).Scan(&expires)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := expires.Sub(finished); got != 30*24*time.Hour {
+		t.Errorf("a run of a namespace keeping 30 days keeps its envelopes %s after it finished", got)
 	}
 }

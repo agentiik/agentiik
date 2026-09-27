@@ -41,7 +41,7 @@ func newObjectStore(t *testing.T) *objectStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := apiserver.NewObjects(rt, signed); err != nil {
+	if _, err := apiserver.NewObjects(rt, signed, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.signed = signed

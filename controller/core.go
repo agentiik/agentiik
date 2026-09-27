@@ -338,6 +338,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		Steps:      steps, Tasks: tasks,
 		Envelopes: referencesOf(doc),
 		Artifacts: artifactsOf(g, state),
+		Retain:    runRetain(g),
 	}
 	if state.Run.State.Terminal() {
 		if outputs, err := ev.Outputs(); err == nil {
@@ -462,6 +463,7 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 			Steps:      steps, Tasks: tasks,
 			Envelopes: referencesOf(elided),
 			Artifacts: artifactsOf(g, state),
+			Retain:    runRetain(g),
 		}); err != nil {
 			return err
 		}
@@ -528,8 +530,13 @@ func contains(ids []agk.TaskID, want agk.TaskID) bool {
 	return false
 }
 
-// resume builds the evaluator for a run, starting it where nothing has decided yet.
+// resume builds the evaluator for a run, starting it where nothing has decided yet, under the
+// max_run_duration its namespace sets as the run is read.
 func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now time.Time) (*graph.Evaluator, error) {
+	bound, err := runBound(e)
+	if err != nil {
+		return nil, err
+	}
 	if len(e.Document) == 0 {
 		// Nothing has decided this run, so it starts here. Admission, which is what
 		// queued is waiting on, is the concurrency group's and arrives with it; until
@@ -540,7 +547,7 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 		return graph.Start(g, agk.Run{
 			ID: e.Run, Workflow: e.Workflow, Namespace: e.Namespace, Commit: e.Commit,
 			Trigger: e.Trigger,
-		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues)}, now)
+		}, graph.Options{Inputs: e.Inputs, Vars: g.Workflow().Vars, Limits: co.limits, MaxRequeues: new(co.requeues), MaxRunDuration: bound}, now)
 	}
 
 	var doc Document
@@ -551,11 +558,28 @@ func (co *Core) resume(ctx context.Context, e db.Evaluation, g *graph.Graph, now
 	if err != nil {
 		return nil, err
 	}
-	ev, err := graph.New(g, state, co.limits, co.requeues)
+	ev, err := graph.New(g, state, co.limits, co.requeues, bound)
 	if err != nil {
 		return nil, fmt.Errorf("controller: run %s could not be resumed: %w", e.Run, err)
 	}
 	return ev, nil
+}
+
+// runBound reads the max_run_duration a run's namespace sets, and zero where it sets none. The
+// column holds nothing off the timeout grammar, so a bound that does not read is refused rather
+// than taken for none: a run of a namespace whose bound was lost would run unbounded.
+func runBound(e db.Evaluation) (time.Duration, error) {
+	if e.MaxRunDuration == "" {
+		return 0, nil
+	}
+	d, err := graph.ParseDuration(e.MaxRunDuration)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("controller: the max_run_duration of namespace %s bounds no run: %w", e.Namespace, err)
+	case d <= 0:
+		return 0, fmt.Errorf("controller: the max_run_duration of namespace %s, %q, is longer than a clock measures and bounds no run", e.Namespace, e.MaxRunDuration)
+	}
+	return time.Duration(d), nil
 }
 
 // hand publishes what was planned, asks for what should stop, and answers what actually went and

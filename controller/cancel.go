@@ -89,6 +89,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 			Steps:      steps, Tasks: tasks,
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
+			Retain:    runRetain(g),
 		}); err != nil {
 			return err
 		}
