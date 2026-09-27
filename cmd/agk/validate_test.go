@@ -185,14 +185,14 @@ func TestTheTableAndTheDispatchCannotDisagree(t *testing.T) {
 		t.Errorf("the refusal does not name what was typed: %s", errs)
 	}
 
-	// A verb of the table that reaches an installation refuses by name, and it is exit 1
-	// and not exit 2: the command line was right. push used to be one of these and is not
+	// A verb of the table that waits for something refuses by name, and it is exit 1 and not
+	// exit 2: the command line was right. push and login used to be ones of these and are not
 	// any more, so the one asked about here is one that still waits for something.
 	e, _, errs = reading(t)
-	if code := run(t.Context(), e, []string{"login"}); code != exitRefused {
-		t.Errorf("agk login leaves with %d and a verb that reaches an installation leaves with %d", code, exitRefused)
+	if code := run(t.Context(), e, []string{"brick", "init"}); code != exitRefused {
+		t.Errorf("agk brick init leaves with %d and a verb that waits for something leaves with %d", code, exitRefused)
 	}
-	if !strings.Contains(errs.String(), "login") {
+	if !strings.Contains(errs.String(), "brick init") {
 		t.Errorf("the refusal does not name the verb: %s", errs)
 	}
 }

@@ -513,6 +513,7 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/auth/passkey/options":                              public,
 		"POST /api/v1/auth/passkey/verify":                               public,
 		"POST /api/v1/auth/login":                                        public,
+		"POST /api/v1/auth/exchange":                                     public,
 		"POST /api/v1/auth/password/enrol":                               public,
 		"PUT /api/v1/me/password":                                        public,
 		"DELETE /api/v1/me/password":                                     own,

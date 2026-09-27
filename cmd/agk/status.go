@@ -50,7 +50,7 @@ func status(ctx context.Context, e Env, args []string) int {
 
 	var raw json.RawMessage
 	if err := at.getJSON(ctx, "/api/v1/runs/"+url.PathEscape(run), &raw); err != nil {
-		fmt.Fprintf(e.Err, "%s\n", aboutRun(run, err))
+		fmt.Fprintf(e.Err, "%s\n", at.aboutRun(run, err))
 		if errors.Is(err, errUnreachable) {
 			return exitNoOutcome
 		}

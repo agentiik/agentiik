@@ -181,6 +181,10 @@ func TestAServiceAccountSignsInWithNothing(t *testing.T) {
 		"a sign-in": func(ctx context.Context, w *Wide) error {
 			return w.SignedIn(ctx, account, now)
 		},
+		"agk login's code": func(ctx context.Context, w *Wide) error {
+			return w.IssueExchangeCode(ctx, ExchangeCode{Hash: valueHash("code"), Login: account, Credential: "password-sync",
+				CodeChallenge: strings.Repeat("A", 43), IssuedAt: now, ExpiresAt: now.Add(ExchangeCodeLife)})
+		},
 	} {
 		err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error { return write(ctx, w) })
 		if !errors.Is(err, ErrNoPrincipal) {
@@ -190,10 +194,11 @@ func TestAServiceAccountSignsInWithNothing(t *testing.T) {
 	var held int
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		return w.tx.QueryRow(ctx,
-			`select (select count(*) from credentials) + (select count(*) from sessions) + (select count(*) from enrolment_codes)`).Scan(&held)
+			`select (select count(*) from credentials) + (select count(*) from sessions) + (select count(*) from enrolment_codes)
+			      + (select count(*) from exchange_codes)`).Scan(&held)
 	})
 	if held != 0 {
-		t.Errorf("%d credentials, sessions and enrolment codes were written for a service account", held)
+		t.Errorf("%d credentials, sessions, enrolment codes and exchange codes were written for a service account", held)
 	}
 }
 

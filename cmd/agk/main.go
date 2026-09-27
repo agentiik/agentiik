@@ -45,6 +45,14 @@ type Env struct {
 	Now        func() time.Time
 	Getenv     func(string) string
 	Executable func() (string, error)
+
+	// ConfigDir is the user's configuration directory, os.UserConfigDir, where the local profile
+	// agk login writes is kept. Nil keeps none, so that a test reads no profile of whoever runs it.
+	ConfigDir func() (string, error)
+
+	// Browse opens an address in the person's browser, for agk login. Nil opens none, and agk
+	// login prints the address for them to open.
+	Browse func(string) error
 }
 
 // command is one verb of the documented table.
@@ -60,15 +68,16 @@ type command struct {
 // commands is the table of #command-line, in the order the documentation writes it, with
 // each effect in the documentation's own words.
 //
-// One of these reaches an installation for a sign-in it does not serve yet, and brick init for
-// templates released elsewhere, and each refuses naming what is missing, because a verb the
-// documentation lists and the binary does not know is a binary that looks broken.
+// One of these, brick init, waits for templates released elsewhere, and refuses naming what is
+// missing, because a verb the documentation lists and the binary does not know is a binary that
+// looks broken.
 //
 // The row for agk run is added by run.go, the file that implements it beside
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
-	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withSignIn)},
+	{"login", "Signs in against an installation in the browser, with a passkey or a password where the policy allows one, and stores an API token in the local profile.", login},
+	{"logout", "Revokes the token agk login stored for an installation, and removes it from the local profile.", logout},
 	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
 	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
 	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},
@@ -113,6 +122,7 @@ func main() {
 	code := run(ctx, Env{
 		Out: os.Stdout, Err: os.Stderr, Dir: dir,
 		Now: time.Now, Getenv: os.Getenv, Executable: os.Executable,
+		ConfigDir: os.UserConfigDir, Browse: browse,
 	}, os.Args[1:])
 	stop()
 	os.Exit(code)
