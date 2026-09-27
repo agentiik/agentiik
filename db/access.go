@@ -264,10 +264,9 @@ type Revocation struct {
 const revocationsRead = 100
 
 // Revocations answers the grants of namespace revoked from p or from one of its groups, on the
-// namespace or on workflow, newest first, as the audit log recorded each: "a revoked grant is gone
-// rather than kept: the audit log is where who granted what and who took it back is kept". Where the
-// principal, the scope or the role an entry records cannot be read as a grant, the entry is passed
-// over, since what is asked is which grant gave something, and an entry that cannot say gave nothing
+// namespace or on workflow, newest first, as the audit log recorded each: RevokeAccess removes a
+// grant rather than keeping it, and the log is where what it was stays. Where the principal, the
+// scope or the role an entry records cannot be read as a grant, the entry is passed over, since what is asked is which grant gave something, and an entry that cannot say gave nothing
 // anybody could name.
 func (w *Wide) Revocations(ctx context.Context, namespace, workflow string, p access.Principal) ([]Revocation, error) {
 	scopes := []string{namespace}

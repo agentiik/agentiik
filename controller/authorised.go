@@ -84,7 +84,9 @@ func (co *Core) refusal(ctx context.Context, e db.Evaluation) (string, error) {
 		}
 		// A run somebody asked for was authorised when they asked, which is when it was created, so
 		// what took the permission away ended since; one nobody asked for may have been armed
-		// long before the grant that armed it ended.
+		// long before the grant that armed it ended. The API asks a moment before the run's row is
+		// written, and a grant that ended in that moment is not named: the reason then says no
+		// grant gives it, which is true, rather than naming a grant that might not be the one.
 		var since time.Time
 		if !e.Trigger.Unattended() {
 			since = e.CreatedAt

@@ -47,7 +47,8 @@ func grantOn(t *testing.T, conn *pgx.Conn, who string) string {
 }
 
 // revoke revokes a grant on finance as DELETE /api/v1/{ns}/grants/{id} does, and records it in the
-// audit log as the API does, with the grant as it was, by bob; and answers when it was recorded.
+// audit log as the API does, with the grant as it was, its expiry included, by bob; and answers when
+// it was recorded.
 func revoke(t *testing.T, pool *db.Pool, conn *pgx.Conn, id string) time.Time {
 	t.Helper()
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
@@ -55,9 +56,12 @@ func revoke(t *testing.T, pool *db.Pool, conn *pgx.Conn, id string) time.Time {
 		if err != nil {
 			return err
 		}
+		detail := map[string]any{"principal": g.Principal, "scope": g.Scope.String(), "role": string(g.Role)}
+		if g.ExpiresAt != nil {
+			detail["expires_at"] = g.ExpiresAt.UTC().Format(time.RFC3339Nano)
+		}
 		return ns.Audit(ctx, audit.Record{
-			Actor: "bob", Action: audit.GrantDelete, Target: id, Result: audit.Done,
-			Detail: map[string]any{"principal": g.Principal, "scope": g.Scope.String(), "role": string(g.Role)},
+			Actor: "bob", Action: audit.GrantDelete, Target: id, Result: audit.Done, Detail: detail,
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -68,6 +72,17 @@ func revoke(t *testing.T, pool *db.Pool, conn *pgx.Conn, id string) time.Time {
 		t.Fatal(err)
 	}
 	return at
+}
+
+// inTeamFinance puts alice in team-finance, which holds operator on finance.
+func inTeamFinance(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+	exec(t, conn,
+		`insert into principals (id, kind) values ('group:team-finance', 'group')`,
+		`insert into groups (name) values ('team-finance')`,
+		`insert into group_members (group_name, login) values ('team-finance', 'alice')`,
+		`insert into grants (id, namespace, principal, role, granted_by) values ('01M2Z8V1P9C4XQ7K2N4D6F8G0E', 'finance', 'group:team-finance', 'operator', 'bob')`,
+	)
 }
 
 // afterTheRun is a moment after decidedRun was created, by the database's clock, which wrote when
@@ -177,12 +192,7 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 		}},
 		{"alice let in by a group she has left since, her own grant revoked before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
 			revoke(t, pool, conn, grantOn(t, conn, "alice"))
-			exec(t, conn,
-				`insert into principals (id, kind) values ('group:team-finance', 'group')`,
-				`insert into groups (name) values ('team-finance')`,
-				`insert into group_members (group_name, login) values ('team-finance', 'alice')`,
-				`insert into grants (id, namespace, principal, role, granted_by) values ('01M2Z8V1P9C4XQ7K2N4D6F8G0E', 'finance', 'group:team-finance', 'operator', 'bob')`,
-			)
+			inTeamFinance(t, conn)
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `delete from group_members where login = 'alice'`)
 			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
@@ -235,20 +245,44 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 				t.Fatal(err)
 			}
 			ended = ended.UTC()
-			if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
-				g, err := ns.RevokeAccess(ctx, "", id)
-				if err != nil {
-					return err
-				}
-				return ns.Audit(ctx, audit.Record{
-					Actor: "bob", Action: audit.GrantDelete, Target: id, Result: audit.Done,
-					Detail: map[string]any{"principal": g.Principal, "scope": g.Scope.String(), "role": string(g.Role),
-						"expires_at": ended.Format(time.RFC3339Nano)},
-				})
-			}); err != nil {
-				t.Fatal(err)
-			}
+			exec(t, conn, `update grants set expires_at = '`+ended.Format(time.RFC3339Nano)+`' where id = '`+id+`'`)
+			revoke(t, pool, conn, id)
 			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ended.Format(time.RFC3339Nano)
+		}},
+		{"alice let in by a group she has left since, her own grant expired before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+			exec(t, conn, `update grants set expires_at = '2026-09-14T05:00:00Z' where principal = 'alice'`)
+			inTeamFinance(t, conn)
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			exec(t, conn, `delete from group_members where login = 'alice'`)
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
+		}},
+		{"alice let in by a group she has left since, her own grant expired before she asked and revoked after", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+			exec(t, conn, `update grants set expires_at = '2026-09-14T05:00:00Z' where principal = 'alice'`)
+			inTeamFinance(t, conn)
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			exec(t, conn, `delete from group_members where login = 'alice'`)
+			revoke(t, pool, conn, grantOn(t, conn, "alice"))
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
+		}},
+		{"a deny written since, beside a grant that expired since, which the deny is named before", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			exec(t, conn,
+				`update grants set expires_at = '`+afterTheRun(t, 0)+`' where principal = 'alice'`,
+				`insert into grants (id, namespace, principal, deny, granted_by)
+				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0F', 'finance', 'alice', 'workflow:run', 'bob')`,
+			)
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0F denies alice workflow:run on the namespace finance"
+		}},
+		{"a grant expired since, beside a deny that ended, which is not named", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			id := grantOn(t, conn, "alice")
+			ends := afterTheRun(t, 0)
+			exec(t, conn,
+				`update grants set expires_at = '`+ends+`' where principal = 'alice'`,
+				`insert into grants (id, namespace, principal, deny, granted_by, expires_at)
+				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0G', 'finance', 'alice', 'workflow:run', 'bob', '2026-09-14T05:00:00Z')`,
+			)
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends
 		}},
 	} {
 		t.Run(c.what, func(t *testing.T) {
@@ -303,8 +337,8 @@ func TestARunWhosePrincipalStillHoldsWorkflowRunIsLetIn(t *testing.T) {
 }
 
 // A run v0.2.5 left queued, attributed to operator, is let in after the upgrade while the bootstrap
-// token lasts, since the token is that operator's under its v0.3.0 name and "after the upgrade it
-// works as before". Once the first administrator has enrolled and the token has ended, operator
+// token lasts, since the token is that operator's under its v0.3.0 name, and "so it does what it
+// did" until the first administrator has enrolled. Once the first administrator has enrolled and the token has ended, operator
 // holds nothing, as the API answers it then: a run of its still waiting to be let in ends cancelled,
 // naming the end of the bootstrap, and one already let in goes on, since what was decided at its
 // creation stands.
