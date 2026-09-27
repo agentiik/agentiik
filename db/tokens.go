@@ -154,19 +154,24 @@ type Session struct {
 	IdleExpiresAt time.Time
 }
 
-// ErrSessionRefused is a session nothing may open: its user is suspended, or the enrolment code
-// it names is revoked, past its hour, or has opened a session already.
+// ErrSessionRefused is a session nothing may open: one a credential opens for a suspended user,
+// or one naming an enrolment code that is revoked, past its hour, or has opened a session already.
 var ErrSessionRefused = errors.New("db: nothing opens that session")
 
 // OpenSession writes one. CreatedAt is the caller's, as IdleExpiresAt is. One opened by an
 // enrolment code is refused where the code is revoked or past its hour at CreatedAt, used or not,
 // so that the code may be spent as the session opens or when the enrolment completes, and a code
 // opens one session at most.
+//
+// A suspended user opens no session with a credential, and one with an enrolment code all the
+// same: "its enrolment links and recovery codes still work, since enrolling is how an account
+// suspended for having no passkey comes back", and such a session enrols a passkey and nothing
+// else.
 func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 	tag, err := w.tx.Exec(ctx,
 		`insert into sessions (hash, login, credential, enrolment_code, created_at, idle_expires_at)
 		 select $1, $2, $3, $4, $5, $6
-		  where `+fmt.Sprintf(liveUser, "$2")+`
+		  where ($4::bytea is not null or `+fmt.Sprintf(liveUser, "$2")+`)
 		    and ($4::bytea is null or exists (
 		          select from enrolment_codes c
 		           where c.hash = $4 and c.login = $2 and c.revoked_at is null and c.expires_at > $5))`,
@@ -188,11 +193,13 @@ func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 }
 
 // liveSession is the condition a session is answered and kept open on at $2: neither revoked nor
-// idle past its expiry, its user not suspended, and where an enrolment code opened it, that code
-// neither revoked nor past its hour. A session that may only enrol lives no longer than the link
-// that opened it, and a link issued again ends it.
+// idle past its expiry, and either opened by a credential of a user not suspended, or by an
+// enrolment code neither revoked nor past its hour. A session that may only enrol lives no longer
+// than the link that opened it, and a link issued again ends it; a suspension does not, since the
+// link is how a suspended account comes back.
 const liveSession = `revoked_at is null and idle_expires_at > $2
-	and not exists (select from users u where u.login = sessions.login and u.suspended)
+	and (enrolment_code is not null
+	     or not exists (select from users u where u.login = sessions.login and u.suspended))
 	and (enrolment_code is null or exists (
 	      select from enrolment_codes c
 	       where c.hash = sessions.enrolment_code and c.revoked_at is null and c.expires_at > $2))`

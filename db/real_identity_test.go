@@ -454,6 +454,68 @@ func TestASuspendedUserOpensNothing(t *testing.T) {
 	})
 }
 
+// A suspended account's enrolment link still opens its session, and a session it opened before the
+// suspension stays open, since "enrolling is how an account suspended for having no passkey comes
+// back"; a credential of the same account opens nothing all the while.
+func TestASuspendedUserStillEnrolsThroughALink(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	code := func(value string, at time.Time) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentNewUser, IssuedBy: "bob",
+			IssuedAt: at, ExpiresAt: at.Add(time.Hour)}
+	}
+	before, during := code("before", now), code("during", now.Add(time.Minute))
+	passkey := Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+			return err
+		}
+		if _, err := w.IssueEnrolmentCode(ctx, before); err != nil {
+			return err
+		}
+		if err := w.OpenSession(ctx, Session{Hash: valueHash("opened-before"), Login: "alice", EnrolmentCode: before.Hash,
+			CreatedAt: now, IdleExpiresAt: now.Add(30 * time.Minute)}); err != nil {
+			return err
+		}
+		return w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true})
+	})
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if _, err := w.SessionByHash(ctx, valueHash("opened-before"), now.Add(time.Second)); err != nil {
+			t.Errorf("a link's session opened before the suspension was answered %v once suspended", err)
+		}
+		if err := w.TouchSession(ctx, valueHash("opened-before"), now.Add(time.Second), now.Add(40*time.Minute)); err != nil {
+			t.Errorf("a link's session was not kept open once its user was suspended: %v", err)
+		}
+
+		// A link issued during the suspension opens its session, which is live and kept open.
+		if _, err := w.IssueEnrolmentCode(ctx, during); err != nil {
+			return err
+		}
+		opened := now.Add(2 * time.Minute)
+		if err := w.OpenSession(ctx, Session{Hash: valueHash("opened-during"), Login: "alice", EnrolmentCode: during.Hash,
+			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)}); err != nil {
+			t.Errorf("a suspended user's link opened no session: %v", err)
+		}
+		if _, err := w.SessionByHash(ctx, valueHash("opened-during"), opened); err != nil {
+			t.Errorf("a suspended user's link session was answered %v", err)
+		}
+		if err := w.TouchSession(ctx, valueHash("opened-during"), opened, opened.Add(30*time.Minute)); err != nil {
+			t.Errorf("a suspended user's link session was not kept open: %v", err)
+		}
+
+		// And a credential of the same account opens nothing.
+		if err := w.AddCredential(ctx, passkey); err != nil {
+			return err
+		}
+		err := w.OpenSession(ctx, Session{Hash: valueHash("by-passkey"), Login: "alice", Credential: passkey.ID,
+			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)})
+		if !errors.Is(err, ErrSessionRefused) {
+			t.Errorf("a suspended user's passkey opened a session, answered %v", err)
+		}
+		return nil
+	})
+}
+
 // A session opened by an enrolment code lives no longer than the code: a link issued again ends
 // it, and it ends with the code's hour however often it is kept open.
 func TestASessionOpenedByALinkEndsWithTheLink(t *testing.T) {
