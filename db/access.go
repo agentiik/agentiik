@@ -251,11 +251,12 @@ func (w *Wide) Attribution(ctx context.Context, namespace, workflow, principal s
 	return a, nil
 }
 
-// Revocation is a grant revoked, as the audit log recorded it: the grant as it was, and when it was
-// revoked.
+// Revocation is a grant revoked, as the audit log recorded it: the grant as it was, and when and by
+// whom it was revoked.
 type Revocation struct {
 	Grant access.Grant
 	At    time.Time
+	By    string
 }
 
 // revocationsRead bounds how many revocations Revocations reads back through the log, newest first.
@@ -277,7 +278,7 @@ func (w *Wide) Revocations(ctx context.Context, namespace, workflow string, p ac
 	// revocations is partial and PostgreSQL uses one only where the statement itself proves its
 	// predicate: a parameter, planned once for every value, proves nothing.
 	rows, err := w.tx.Query(ctx,
-		`select target, at, detail from audit_log
+		`select target, actor, at, detail from audit_log
 		  where action = '`+audit.GrantDelete+`' and namespace = $1
 		    and detail::jsonb->>'principal' = any($2) and detail::jsonb->>'scope' = any($3)
 		  order by seq desc limit $4`,
@@ -290,7 +291,7 @@ func (w *Wide) Revocations(ctx context.Context, namespace, workflow string, p ac
 	for rows.Next() {
 		var r Revocation
 		var detail string
-		if err := rows.Scan(&r.Grant.ID, &r.At, &detail); err != nil {
+		if err := rows.Scan(&r.Grant.ID, &r.By, &r.At, &detail); err != nil {
 			return nil, fmt.Errorf("db: the grants revoked in %s could not be read: %w", namespace, err)
 		}
 		var was struct {

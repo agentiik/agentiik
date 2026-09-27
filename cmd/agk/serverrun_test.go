@@ -300,7 +300,7 @@ func TestACancelledRunNamesWhatWasStopped(t *testing.T) {
 func TestARunRefusedAtCreationIsReportedWithItsReason(t *testing.T) {
 	dir := repository(t)
 	refused := runReading(agk.Cancelled, agk.VerdictPending)
-	refused.Reason = "alice no longer holds workflow:run on finance/monthly-invoicing: alice is suspended"
+	refused.Reason = "alice no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there"
 	s := &standIn{readings: []db.RunDetail{refused}}
 	url := installationAt(t, s)
 

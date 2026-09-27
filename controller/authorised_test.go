@@ -108,10 +108,11 @@ func exec(t *testing.T, conn *pgx.Conn, stmts ...string) {
 	}
 }
 
-// refused holds decidedRun to having been refused at creation for want: cancelled before it
-// started, with nothing handed out, the reason on the run as GET /api/v1/runs/{id} reads it, and the
-// refusal in the audit log as the installation's act, naming the principal and the reason.
-func refused(t *testing.T, core *Core, q *fakeQueue, pool *db.Pool, conn *pgx.Conn, by, want string) {
+// refusedFor holds decidedRun to having been refused at creation: cancelled before it started, with
+// nothing handed out, want on the run as GET /api/v1/runs/{id} reads it, and the refusal in the
+// audit log as the installation's act, naming the principal, want, and account, the whole of it,
+// which is want where want keeps nothing back.
+func refusedFor(t *testing.T, core *Core, q *fakeQueue, pool *db.Pool, conn *pgx.Conn, by, want, account string) {
 	t.Helper()
 	if err := core.Decide(t.Context(), decidedRun); err != nil {
 		t.Fatal(err)
@@ -149,35 +150,45 @@ func refused(t *testing.T, core *Core, q *fakeQueue, pool *db.Pool, conn *pgx.Co
 	if err := json.Unmarshal([]byte(detail), &recorded); err != nil {
 		t.Fatal(err)
 	}
+	if account == "" {
+		account = want
+	}
 	if actor != "installation" || namespace != "finance" || target != string(decidedRun) || result != audit.Done ||
 		recorded["reason"] != want || recorded["principal"] != by || recorded["workflow"] != "monthly-invoicing" {
 		t.Errorf("the audit log records %s %s %s %s %s", actor, namespace, target, result, detail)
 	}
+	if recorded["account"] != account {
+		t.Errorf("the audit log's account is\n%q\nwant\n%q", recorded["account"], account)
+	}
 }
 
 // Every way a principal comes to no longer hold workflow:run between the moment its run was created
-// and the moment the controller would let it in, and the reason each is named by.
+// and the moment the controller would let it in, the reason each is named by on the run, and the
+// account the audit log keeps. The reason names a grant by its identifier, role and scope and says
+// nothing of groups, denies, suspensions or removals, which whoever reads the run has no business
+// learning; the account says all of it.
 func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t *testing.T) {
 	for _, c := range []struct {
 		what string
-		// lapse sets it up past the request, and answers the reason the run ends with and
-		// the principal it is attributed to.
-		lapse func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (by, reason string)
+		// lapse sets it up past the request, and answers the principal the run is attributed
+		// to, the reason it ends with, and the account, empty where it is the reason.
+		lapse func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (by, reason, account string)
 	}{
-		{"alice's grant revoked since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice's grant revoked since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
 			at := revoke(t, pool, conn, id)
-			return "alice", fmt.Sprintf("alice no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
+			reason := fmt.Sprintf("alice no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
+			return "alice", reason, reason + " by bob"
 		}},
-		{"alice's grant expired since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice's grant expired since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
 			ends := afterTheRun(t, 0)
 			exec(t, conn, `update grants set expires_at = '`+ends+`' where id = '`+id+`'`)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends, ""
 		}},
-		{"the grant of alice's group expired, the last of two that gave it", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"the grant of alice's group expired, the last of two that gave it", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			first, last := afterTheRun(t, 0), afterTheRun(t, 30*time.Minute)
 			exec(t, conn,
@@ -188,32 +199,37 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0A', 'finance', 'monthly-invoicing', 'group:team-finance', 'editor', 'bob', '`+last+`')`,
 				`update grants set expires_at = '`+first+`' where principal = 'alice'`,
 			)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0A (editor to group:team-finance on the workflow finance/monthly-invoicing) expired at " + last
+			return "alice",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0A (editor on the workflow finance/monthly-invoicing) expired at " + last,
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0A (editor to group:team-finance on the workflow finance/monthly-invoicing) expired at " + last
 		}},
-		{"alice let in by a group she has left since, her own grant revoked before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice let in by a group she has left since, her own grant revoked before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			revoke(t, pool, conn, grantOn(t, conn, "alice"))
 			inTeamFinance(t, conn)
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `delete from group_members where login = 'alice'`)
-			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there", ""
 		}},
-		{"a deny of workflow:run written for alice since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a deny of workflow:run written for alice since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `insert into grants (id, namespace, workflow, principal, deny, granted_by)
 			   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0B', 'finance', 'monthly-invoicing', 'alice', 'workflow:run', 'bob')`)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0B denies alice workflow:run on the workflow finance/monthly-invoicing"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: a deny applies",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0B denies alice workflow:run on the workflow finance/monthly-invoicing"
 		}},
-		{"alice suspended since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice suspended since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `update users set suspended = true where login = 'alice'`)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: alice is suspended"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: alice is suspended"
 		}},
-		{"alice removed since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice removed since the request", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `delete from principals where id = 'alice'`)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: the user alice was removed"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: the user alice was removed"
 		}},
-		{"a service account removed since its token started the run", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a service account removed since its token started the run", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			mayRun(t, conn, "finance/nightly-sync", "finance")
 			runBy(t, pool, decidedRun, agk.TriggerManual, "finance/nightly-sync")
 			if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
@@ -222,20 +238,22 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 			}); err != nil {
 				t.Fatal(err)
 			}
-			return "finance/nightly-sync", "finance/nightly-sync no longer holds workflow:run on finance/monthly-invoicing: the service account finance/nightly-sync was removed"
+			return "finance/nightly-sync", "finance/nightly-sync no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there",
+				"finance/nightly-sync no longer holds workflow:run on finance/monthly-invoicing: the service account finance/nightly-sync was removed"
 		}},
-		{"a schedule's run, the built-in identity holding no grant", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a schedule's run, the built-in identity holding no grant", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			exec(t, conn, `delete from grants where principal = 'finance/agentiik'`)
 			runBy(t, pool, decidedRun, agk.TriggerSchedule, "")
-			return "finance/agentiik", "finance/agentiik does not hold workflow:run on finance/monthly-invoicing: no grant gives it there, and a namespace's built-in identity holds none until an owner gives it one"
+			return "finance/agentiik", "finance/agentiik does not hold workflow:run on finance/monthly-invoicing: no grant gives it there, and a namespace's built-in identity holds none until an owner gives it one", ""
 		}},
-		{"a schedule's run, the built-in identity's grant revoked after the schedule was armed and before it fired", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a schedule's run, the built-in identity's grant revoked after the schedule was armed and before it fired", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			id := grantOn(t, conn, "finance/agentiik")
 			at := revoke(t, pool, conn, id)
 			runBy(t, pool, decidedRun, agk.TriggerSchedule, "")
-			return "finance/agentiik", fmt.Sprintf("finance/agentiik no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
+			reason := fmt.Sprintf("finance/agentiik no longer holds workflow:run on finance/monthly-invoicing: grant %s (operator on the namespace finance) was revoked at %s", id, at.UTC().Format(time.RFC3339Nano))
+			return "finance/agentiik", reason, reason + " by bob"
 		}},
-		{"a grant revoked after it expired, which ended by its expiry", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a grant revoked after it expired, which ended by its expiry", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
 			// By the database's clock, which dates the revocation: after the run was created and
@@ -247,33 +265,34 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 			ended = ended.UTC()
 			exec(t, conn, `update grants set expires_at = '`+ended.Format(time.RFC3339Nano)+`' where id = '`+id+`'`)
 			revoke(t, pool, conn, id)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ended.Format(time.RFC3339Nano)
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ended.Format(time.RFC3339Nano), ""
 		}},
-		{"alice let in by a group she has left since, her own grant expired before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice let in by a group she has left since, her own grant expired before she asked", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			exec(t, conn, `update grants set expires_at = '2026-09-14T05:00:00Z' where principal = 'alice'`)
 			inTeamFinance(t, conn)
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `delete from group_members where login = 'alice'`)
-			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there", ""
 		}},
-		{"alice let in by a group she has left since, her own grant expired before she asked and revoked after", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"alice let in by a group she has left since, her own grant expired before she asked and revoked after", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			exec(t, conn, `update grants set expires_at = '2026-09-14T05:00:00Z' where principal = 'alice'`)
 			inTeamFinance(t, conn)
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn, `delete from group_members where login = 'alice'`)
 			revoke(t, pool, conn, grantOn(t, conn, "alice"))
-			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there"
+			return "alice", "alice does not hold workflow:run on finance/monthly-invoicing: no grant gives it there", ""
 		}},
-		{"a deny written since, beside a grant that expired since, which the deny is named before", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a deny written since, beside a grant that expired since, which the deny is named before", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			exec(t, conn,
 				`update grants set expires_at = '`+afterTheRun(t, 0)+`' where principal = 'alice'`,
 				`insert into grants (id, namespace, principal, deny, granted_by)
 				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0F', 'finance', 'alice', 'workflow:run', 'bob')`,
 			)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0F denies alice workflow:run on the namespace finance"
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: a deny applies",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0F denies alice workflow:run on the namespace finance"
 		}},
-		{"a grant expired since, beside a deny that ended, which is not named", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string) {
+		{"a grant expired since, beside a deny that ended, which is not named", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
 			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
 			id := grantOn(t, conn, "alice")
 			ends := afterTheRun(t, 0)
@@ -282,14 +301,31 @@ func TestARunWhosePrincipalNoLongerHoldsWorkflowRunIsCancelledNamingWhatLapsed(t
 				`insert into grants (id, namespace, principal, deny, granted_by, expires_at)
 				   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0G', 'finance', 'alice', 'workflow:run', 'bob', '2026-09-14T05:00:00Z')`,
 			)
-			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: grant " + id + " (operator on the namespace finance) expired at " + ends, ""
+		}},
+		{"a deny written since for alice's group, which the reason does not name", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
+			inTeamFinance(t, conn)
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			exec(t, conn, `insert into grants (id, namespace, principal, deny, granted_by)
+			   values ('01M2Z8V1P9C4XQ7K2N4D6F8G0H', 'finance', 'group:team-finance', 'workflow:run', 'bob')`)
+			return "alice", "alice no longer holds workflow:run on finance/monthly-invoicing: a deny applies",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0H denies group:team-finance workflow:run on the namespace finance"
+		}},
+		{"the grant of alice's group revoked since the request, which the reason does not name the group of", func(t *testing.T, pool *db.Pool, conn *pgx.Conn) (string, string, string) {
+			exec(t, conn, `delete from grants where principal = 'alice'`)
+			inTeamFinance(t, conn)
+			runBy(t, pool, decidedRun, agk.TriggerManual, "alice")
+			at := revoke(t, pool, conn, "01M2Z8V1P9C4XQ7K2N4D6F8G0E").UTC().Format(time.RFC3339Nano)
+			return "alice",
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0E (operator on the namespace finance) was revoked at " + at,
+				"alice no longer holds workflow:run on finance/monthly-invoicing: grant 01M2Z8V1P9C4XQ7K2N4D6F8G0E (operator to group:team-finance on the namespace finance) was revoked at " + at + " by bob"
 		}},
 	} {
 		t.Run(c.what, func(t *testing.T) {
 			core, q, pool, super := deciding(t)
 			conn := dbtest.Superuser(t, super)
-			by, want := c.lapse(t, pool, conn)
-			refused(t, core, q, pool, conn, by, want)
+			by, want, account := c.lapse(t, pool, conn)
+			refusedFor(t, core, q, pool, conn, by, want, account)
 		})
 	}
 }
@@ -427,7 +463,7 @@ func TestARefusalReachingARunLetInSinceChangesNothing(t *testing.T) {
 	if got := q.taken(); len(got) != 1 {
 		t.Fatalf("the run handed out %d tasks", len(got))
 	}
-	if err := core.refuse(t.Context(), decidedRun, "alice no longer holds workflow:run on finance/monthly-invoicing: alice is suspended"); err != nil {
+	if err := core.refuse(t.Context(), decidedRun, both("alice no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there")); err != nil {
 		t.Fatal(err)
 	}
 	if got := stateOf(t, core); got != agk.Running {

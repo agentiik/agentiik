@@ -51,7 +51,7 @@ const (
 	RunTrigger = "run.trigger"
 	// RunCancel is a run asked to cancel, POST /api/v1/runs/{id}/cancel; and a run the controller
 	// cancelled before letting it in, its principal no longer holding workflow:run, recorded by
-	// installation with the principal and the reason.
+	// installation with the principal, the reason the run carries and the whole account.
 	RunCancel = "run.cancel"
 	// SecretWrite is a secret declared, changed or given a value, PUT
 	// /api/v1/{ns}/secrets/{name}, and SecretDelete one removed, DELETE on the same path.
