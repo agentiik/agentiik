@@ -58,8 +58,8 @@ var recordsNothing = map[string]string{
 	"POST /api/v1/tasks/redeem":            "a runner's own traffic under its credential, which no principal does",
 	"POST /api/v1/tasks/logs":              "a runner's own traffic under its credential, which no principal does",
 	"POST /api/v1/bus/token":               "a runner's own traffic under its credential, which no principal does",
-	"PUT /objects/{key...}":                "bytes written under a URL the API signed for one object of an act recorded already",
-	"POST /objects/{namespace}":            "bytes written under a policy the API signed for one object of an act recorded already",
+	"PUT /objects/{key...}":                "a task's output, stored under a URL its redemption signed, and the page's audit log names no upload",
+	"POST /objects/{namespace}":            "a task's output, stored under a policy its redemption signed, and the page's audit log names no upload",
 }
 
 // actor is how a step asks: bearing a token, carrying a session from the public URL's origin, or
@@ -81,10 +81,18 @@ type scenario struct {
 	record map[string]bool
 }
 
-// act asks route, which is its method and pattern, at path as who with body, a string sent as it is
-// and anything else as its JSON, holds the answer to status, and the entries it appended to want,
-// each written action actor target namespace result, with - for no namespace and * for any target.
+// act asks route and holds the entries it appended to want, as ask and holds say.
 func (s *scenario) act(route, path string, who actor, body any, status int, want ...string) *httptest.ResponseRecorder {
+	s.t.Helper()
+	w := s.ask(route, path, who, body, status)
+	s.holds(route, want...)
+	return w
+}
+
+// ask asks route, which is its method and pattern, at path as who with body, a string sent as it is
+// and anything else as its JSON, and holds the answer to status and the route that answered it to
+// route, so that no case is counted for a route it did not reach.
+func (s *scenario) ask(route, path string, who actor, body any, status int) *httptest.ResponseRecorder {
 	s.t.Helper()
 	var reader io.Reader
 	switch b := body.(type) {
@@ -120,11 +128,21 @@ func (s *scenario) act(route, path string, who actor, body any, status int, want
 	if w.Code != status {
 		s.t.Fatalf("%s %s answered %d, want %d: %s", method, path, w.Code, status, w.Body)
 	}
+	if r.Pattern != route {
+		s.t.Fatalf("%s %s was answered by %q, and the case is for %s", method, path, r.Pattern, route)
+	}
+	return w
+}
+
+// holds holds the entries appended since the last step to want, each written action actor target
+// namespace result, with - for no namespace and * for a target the answer does not name, and counts
+// a case for route where it appended any.
+func (s *scenario) holds(route string, want ...string) {
+	s.t.Helper()
 	if len(want) > 0 {
 		s.record[route] = true
 	}
 	s.recorded(route, want...)
-	return w
 }
 
 // recorded holds the entries appended since the last step to want, as act says, and verifies the
@@ -284,12 +302,12 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"enrolment.issue carol dave - done")
 	recovery := s.answer(w)["code"].(string)
 	const davesPassword, davesNext = "correct horse battery staple", "a second passphrase for dave"
-	w = s.act("POST /api/v1/auth/password/enrol", "/api/v1/auth/password/enrol", actor{},
-		map[string]string{"code": recovery, "password": davesPassword}, http.StatusOK,
-		"credential.enrol dave * - done", "enrolment.use dave dave - done",
-		"grant.create installation * dave done", "namespace.create installation dave - done", "signin.succeed dave dave - done")
+	w = s.ask("POST /api/v1/auth/password/enrol", "/api/v1/auth/password/enrol", actor{},
+		map[string]string{"code": recovery, "password": davesPassword}, http.StatusOK)
 	enrolling := actor{cookie: s.session(w)}
 	password := s.answer(w)["credential"].(map[string]any)["id"].(string)
+	s.holds("POST /api/v1/auth/password/enrol", "credential.enrol dave "+password+" - done", "enrolment.use dave dave - done",
+		"grant.create installation * dave done", "namespace.create installation dave - done", "signin.succeed dave dave - done")
 	s.act("POST /api/v1/auth/password/enrol", "/api/v1/auth/password/enrol", actor{},
 		map[string]string{"code": recovery, "password": davesPassword}, http.StatusUnauthorized,
 		"signin.fail 192.0.2.1 dave - done")
@@ -359,16 +377,16 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"policy.change carol installation - done")
 	s.act("DELETE /api/v1/me/credentials/{id}", "/api/v1/me/credentials/"+second.ID, dave, nil, http.StatusNoContent,
 		"credential.remove dave "+second.ID+" - done")
-	w = s.act("PUT /api/v1/me/password", "/api/v1/me/password", dave, map[string]string{"password": davesPassword}, http.StatusOK,
-		"credential.enrol dave * - done")
+	w = s.ask("PUT /api/v1/me/password", "/api/v1/me/password", dave, map[string]string{"password": davesPassword}, http.StatusOK)
 	again := s.answer(w)["id"].(string)
+	s.holds("PUT /api/v1/me/password", "credential.enrol dave "+again+" - done")
 	s.act("DELETE /api/v1/me/password", "/api/v1/me/password", dave, nil, http.StatusNoContent,
 		"credential.remove dave "+again+" - done")
 
 	// carol's own API token, minted and revoked.
-	w = s.act("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"device_label":"laptop"}`, http.StatusCreated,
-		"api_token.create carol * - done")
+	w = s.ask("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"device_label":"laptop"}`, http.StatusCreated)
 	minted := s.answer(w)["api_token"].(map[string]any)["id"].(string)
+	s.holds("POST /api/v1/auth/tokens", "api_token.create carol "+minted+" - done")
 	s.act("DELETE /api/v1/auth/tokens/{id}", "/api/v1/auth/tokens/"+minted, carol, nil, http.StatusNoContent,
 		"api_token.revoke carol "+minted+" - done")
 
@@ -379,8 +397,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"namespace.update carol ops - done")
 	s.act("POST /api/v1/service-accounts", "/api/v1/service-accounts", carol, `{"namespace":"ops","name":"deployer"}`, http.StatusCreated,
 		"service_account.create carol ops/deployer ops done")
-	s.act("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"principal":"ops/deployer"}`, http.StatusCreated,
-		"api_token.create carol * ops done")
+	w = s.ask("POST /api/v1/auth/tokens", "/api/v1/auth/tokens", carol, `{"principal":"ops/deployer"}`, http.StatusCreated)
+	s.holds("POST /api/v1/auth/tokens", "api_token.create carol "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" ops done")
 	s.act("DELETE /api/v1/service-accounts/{ns}/{name}", "/api/v1/service-accounts/ops/deployer", carol, nil, http.StatusNoContent,
 		"service_account.delete carol ops/deployer ops done")
 	s.act("DELETE /api/v1/namespaces/{namespace}", "/api/v1/namespaces/ops", carol, nil, http.StatusNoContent,
@@ -398,17 +416,18 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 
 	// carol gives herself the owner role in finance by the installation's power, which tells its
 	// owners, none but her; then she shares it, pushes, keeps a secret, and starts and cancels a run.
-	s.act("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"carol","role":"owner"}`, http.StatusCreated,
-		"grant.create carol * finance done")
+	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"carol","role":"owner"}`, http.StatusCreated)
+	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" finance done")
 	s.act("PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}", "/api/v1/finance/workflows/monthly-invoicing/versions/"+theCommit, carol, aPush(t), http.StatusOK)
-	w = s.act("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated,
-		"grant.create carol * finance done")
+	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"dave","deny":"run:read_data"}`, http.StatusCreated)
 	deny := s.answer(w)["id"].(string)
+	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+deny+" finance done")
 	s.act("DELETE /api/v1/{namespace}/grants/{id}", "/api/v1/finance/grants/"+deny, carol, nil, http.StatusNoContent,
 		"grant.delete carol "+deny+" finance done")
-	w = s.act("POST /api/v1/{namespace}/workflows/{workflow}/grants", "/api/v1/finance/workflows/monthly-invoicing/grants", carol,
-		`{"principal":"dave","role":"viewer"}`, http.StatusCreated, "grant.create carol * finance done")
+	w = s.ask("POST /api/v1/{namespace}/workflows/{workflow}/grants", "/api/v1/finance/workflows/monthly-invoicing/grants", carol,
+		`{"principal":"dave","role":"viewer"}`, http.StatusCreated)
 	viewer := s.answer(w)["id"].(string)
+	s.holds("POST /api/v1/{namespace}/workflows/{workflow}/grants", "grant.create carol "+viewer+" finance done")
 	s.act("DELETE /api/v1/{namespace}/workflows/{workflow}/grants/{id}", "/api/v1/finance/workflows/monthly-invoicing/grants/"+viewer, carol, nil,
 		http.StatusNoContent, "grant.delete carol "+viewer+" finance done")
 	value := "hunter2-but-longer"
@@ -416,22 +435,23 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 		"secret.write carol billing finance done")
 	s.act("DELETE /api/v1/{namespace}/secrets/{name}", "/api/v1/finance/secrets/billing", carol, nil, http.StatusNoContent,
 		"secret.delete carol billing finance done")
-	w = s.act("POST /api/v1/{namespace}/workflows/{workflow}/runs", "/api/v1/finance/workflows/monthly-invoicing/runs", carol,
-		api.Start{Commit: theCommit, Inputs: map[string]any{"orders": []any{}}}, http.StatusAccepted, "run.trigger carol * finance done")
+	w = s.ask("POST /api/v1/{namespace}/workflows/{workflow}/runs", "/api/v1/finance/workflows/monthly-invoicing/runs", carol,
+		api.Start{Commit: theCommit, Inputs: map[string]any{"orders": []any{}}}, http.StatusAccepted)
 	run := s.answer(w)["run"].(string)
+	s.holds("POST /api/v1/{namespace}/workflows/{workflow}/runs", "run.trigger carol "+run+" finance done")
 	s.act("POST /api/v1/runs/{run}/cancel", "/api/v1/runs/"+run+"/cancel", carol, nil, http.StatusAccepted,
 		"run.cancel carol "+run+" finance done")
 
 	// finance comes to forbid passwords, which takes erin's, erin holding a role there.
 	w = s.act("POST /api/v1/users", "/api/v1/users", carol, `{"login":"erin"}`, http.StatusCreated,
 		"user.create carol erin - done", "enrolment.issue carol erin - done")
-	w = s.act("POST /api/v1/auth/password/enrol", "/api/v1/auth/password/enrol", actor{},
-		map[string]string{"code": s.code(s.answer(w)["enrolment"].(map[string]any)["link"]), "password": "erin's own passphrase"}, http.StatusOK,
-		"credential.enrol erin * - done", "enrolment.use erin erin - done",
-		"grant.create installation * erin done", "namespace.create installation erin - done", "signin.succeed erin erin - done")
+	w = s.ask("POST /api/v1/auth/password/enrol", "/api/v1/auth/password/enrol", actor{},
+		map[string]string{"code": s.code(s.answer(w)["enrolment"].(map[string]any)["link"]), "password": "erin's own passphrase"}, http.StatusOK)
 	erinsPassword := s.answer(w)["credential"].(map[string]any)["id"].(string)
-	s.act("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"erin","role":"viewer"}`, http.StatusCreated,
-		"grant.create carol * finance done")
+	s.holds("POST /api/v1/auth/password/enrol", "credential.enrol erin "+erinsPassword+" - done", "enrolment.use erin erin - done",
+		"grant.create installation * erin done", "namespace.create installation erin - done", "signin.succeed erin erin - done")
+	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/finance/grants", carol, `{"principal":"erin","role":"viewer"}`, http.StatusCreated)
+	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" finance done")
 	s.act("PUT /api/v1/{namespace}/auth/policy", "/api/v1/finance/auth/policy", carol, `{"password":"forbidden"}`, http.StatusOK,
 		"policy.change carol finance finance done", "credential.remove carol "+erinsPassword+" - done")
 	s.act("DELETE /api/v1/users/{login}", "/api/v1/users/erin", carol, nil, http.StatusNoContent,
@@ -440,10 +460,10 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	// A pool, a join token, a machine joining with it, and the runner drained and revoked.
 	s.act("POST /api/v1/runner-pools", "/api/v1/runner-pools", carol, aPool(), http.StatusCreated,
 		"runner_pool.create carol dmz - done")
-	w = s.act("POST /api/v1/runner-pools/{pool}/join-tokens", "/api/v1/runner-pools/dmz/join-tokens", carol, api.Issue{Labels: []string{"zone=dmz"}}, http.StatusCreated,
-		"join_token.issue carol * - done")
-	joined := s.act("POST /api/v1/runners", "/api/v1/runners", actor{},
-		aMachine(s.answer(w)["join_token"].(map[string]any)["token"].(string)), http.StatusCreated)
+	w = s.ask("POST /api/v1/runner-pools/{pool}/join-tokens", "/api/v1/runner-pools/dmz/join-tokens", carol, api.Issue{Labels: []string{"zone=dmz"}}, http.StatusCreated)
+	issued := s.answer(w)["join_token"].(map[string]any)
+	s.holds("POST /api/v1/runner-pools/{pool}/join-tokens", "join_token.issue carol "+issued["id"].(string)+" - done")
+	joined := s.act("POST /api/v1/runners", "/api/v1/runners", actor{}, aMachine(issued["token"].(string)), http.StatusCreated)
 	runner := s.answer(joined)["runner"].(string)
 	s.act("POST /api/v1/runners/{runner}/drain", "/api/v1/runners/"+runner+"/drain", carol, `{"reason":"moving racks"}`, http.StatusOK,
 		"runner.drain carol "+runner+" - done")
@@ -452,8 +472,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 
 	// carol widening her own access in dave's namespace tells dave, who dismisses it; and dave
 	// signs out. Neither is an act the log records.
-	s.act("POST /api/v1/{namespace}/grants", "/api/v1/dave/grants", carol, `{"principal":"carol","role":"viewer"}`, http.StatusCreated,
-		"grant.create carol * dave done")
+	w = s.ask("POST /api/v1/{namespace}/grants", "/api/v1/dave/grants", carol, `{"principal":"carol","role":"viewer"}`, http.StatusCreated)
+	s.holds("POST /api/v1/{namespace}/grants", "grant.create carol "+s.answer(w)["id"].(string)+" dave done")
 	w = s.act("GET /api/v1/me", "/api/v1/me", dave, nil, http.StatusOK)
 	told, _ := s.answer(w)["notifications"].([]any)
 	if len(told) != 1 {
