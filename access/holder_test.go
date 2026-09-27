@@ -88,10 +88,9 @@ func TestATokenBelongsToAUserOrAServiceAccount(t *testing.T) {
 	}
 }
 
-// Owning a namespace is holding every permission of the owner role there, from a grant on the
-// namespace, one's own or a group's: a grant on one workflow owns nothing, another role owns
-// nothing, a deny taking one permission away owns nothing, and a grant past its expiry owns
-// nothing.
+// Owning a namespace is holding the owner role there, from a grant on the namespace, one's own or a
+// group's: a grant on one workflow owns nothing, another role owns nothing, and a grant past its
+// expiry owns nothing. A deny beside the role takes a permission away and leaves the role held.
 func TestOwningANamespaceIsHoldingTheOwnerRoleThere(t *testing.T) {
 	later := t0.Add(time.Hour)
 	for _, c := range []struct {
@@ -103,24 +102,24 @@ func TestOwningANamespaceIsHoldingTheOwnerRoleThere(t *testing.T) {
 		{"an owner grant of one's own", bob, []access.Grant{allow("1", "bob", finance, access.Owner)}, true},
 		{"an owner grant of one's group", alice, []access.Grant{allow("1", "group:team-finance", finance, access.Owner)}, true},
 		{"a service account's owner grant", access.Principal{Ref: "finance/nightly"}, []access.Grant{allow("1", "finance/nightly", finance, access.Owner)}, true},
+		{"an owner grant with a deny beside it", bob, []access.Grant{
+			allow("1", "bob", finance, access.Owner), deny("2", "bob", finance, access.RunReadData),
+		}, true},
 		{"an owner grant on one workflow", bob, []access.Grant{allow("1", "bob", invoicing, access.Owner)}, false},
 		{"an editor grant", bob, []access.Grant{allow("1", "bob", finance, access.Editor)}, false},
-		{"an owner grant in another namespace", bob, []access.Grant{allow("1", "bob", access.Scope{Namespace: "hr"}, access.Owner)}, false},
-		{"an owner grant with a deny beside it", bob, []access.Grant{
-			allow("1", "bob", finance, access.Owner), deny("2", "bob", finance, access.GrantManage),
+		{"every other role together", bob, []access.Grant{
+			allow("1", "bob", finance, access.Viewer), allow("2", "bob", finance, access.Operator), allow("3", "bob", finance, access.Editor),
 		}, false},
+		{"an owner grant in another namespace", bob, []access.Grant{allow("1", "bob", access.Scope{Namespace: "hr"}, access.Owner)}, false},
 		{"an owner grant past its expiry", bob, []access.Grant{until(allow("1", "bob", finance, access.Owner), t0)}, false},
 		{"an owner grant of somebody else", bob, []access.Grant{allow("1", "carol", finance, access.Owner)}, false},
+		{"an owner grant of a group one is not in", bob, []access.Grant{allow("1", "group:team-finance", finance, access.Owner)}, false},
 	} {
-		owns, err := access.Owns(c.who, c.grants, "finance", later)
-		if err != nil {
-			t.Fatalf("%s: %v", c.what, err)
-		}
-		if owns != c.owns {
+		if owns := access.Owns(c.who, c.grants, "finance", later); owns != c.owns {
 			t.Errorf("%s owns finance: %v, want %v", c.what, owns, c.owns)
 		}
 	}
-	if owns, _ := access.Owns(bob, []access.Grant{allow("1", "bob", finance, access.Owner)}, "", later); owns {
+	if access.Owns(bob, []access.Grant{allow("1", "bob", finance, access.Owner)}, "", later) {
 		t.Error("an owner of finance owns the installation")
 	}
 }

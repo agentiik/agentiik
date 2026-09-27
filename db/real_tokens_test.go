@@ -13,7 +13,8 @@ import (
 
 // The tokens of a principal and of the service accounts of the namespaces named, newest first, and
 // none that is revoked, expired or a suspended user's: "an expired or revoked token is gone from the
-// list". A service account of a namespace not named is not listed, and neither is anybody else's.
+// list". A service account of a namespace not named is not listed, and neither is anybody else's,
+// the user a namespace named is named after included.
 func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -21,7 +22,7 @@ func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 		return APIToken{ID: id, Hash: valueHash(id), Principal: principal, CreatedAt: created, ExpiresAt: expires}
 	}
 	week := 7 * 24 * time.Hour
-	var listed, ofTeamOps, ofSuspended []APIToken
+	var listed, ofTeamOps, ofSuspended, asAlice []APIToken
 	var revoked APIToken
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		for _, u := range []User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"}} {
@@ -60,6 +61,11 @@ func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 		if ofTeamOps, err = w.TokensOf(ctx, "bob", []string{"team-ops"}, now); err != nil {
 			return err
 		}
+		// A namespace named after a login, as a personal namespace is, lists no token of
+		// that user: a login is no service account of it.
+		if asAlice, err = w.TokensOf(ctx, "bob", []string{"alice"}, now); err != nil {
+			return err
+		}
 		if revoked, err = w.Token(ctx, "01B"); err != nil {
 			return err
 		}
@@ -84,6 +90,9 @@ func TestAListingHoldsOnlyTheTokensStillAccepted(t *testing.T) {
 	}
 	if got, want := ids(ofTeamOps), []string{"01F", "01G"}; !slices.Equal(got, want) {
 		t.Errorf("bob with team-ops lists %q, want %q", got, want)
+	}
+	if got, want := ids(asAlice), []string{"01G"}; !slices.Equal(got, want) {
+		t.Errorf("bob with the namespace alice lists %q, want %q", got, want)
 	}
 	if len(ofSuspended) != 0 {
 		t.Errorf("a suspended user's tokens are listed: %q", ids(ofSuspended))

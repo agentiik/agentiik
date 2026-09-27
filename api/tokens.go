@@ -85,7 +85,16 @@ type TokenRequest struct {
 func (q *TokenRequest) field(b *body, name string) error {
 	switch name {
 	case "principal":
-		return text(b, &q.Principal)
+		if absent, err := null(b); absent || err != nil {
+			return err
+		}
+		if err := text(b, &q.Principal); err != nil {
+			return err
+		}
+		if q.Principal == "" {
+			return errors.New("principal is empty: a token of your own leaves it out, and one of a service account names it NS/NAME")
+		}
+		return nil
 	case "device_label":
 		if absent, err := null(b); absent || err != nil {
 			return err
@@ -359,7 +368,7 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		if issued.Scope != nil {
 			detail["scope"] = issued.Scope
 		}
-		return wide.Audit(ctx, audit.Record{
+		return auditToken(ctx, wide, holder, audit.Record{
 			Actor: string(caller.Principal), Action: audit.APITokenCreate, Target: row.ID, Result: audit.Done,
 			Detail: detail,
 		})
@@ -438,7 +447,7 @@ func (t *TokenAPI) revoke(w http.ResponseWriter, r *http.Request, caller Caller)
 		if !was {
 			result = audit.Unchanged
 		}
-		return wide.Audit(ctx, audit.Record{
+		return auditToken(ctx, wide, tk.Principal, audit.Record{
 			Actor: string(caller.Principal), Action: audit.APITokenRevoke, Target: id, Result: result,
 			Detail: map[string]any{"principal": tk.Principal},
 		})
@@ -452,6 +461,17 @@ func (t *TokenAPI) revoke(w http.ResponseWriter, r *http.Request, caller Caller)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditToken appends an act on a token to the audit log: in the namespace of the service account it
+// belongs to, as a grant is recorded in the namespace it gives something in, since whoever reads the
+// log for what was done in a namespace looks for who was handed a way in as that namespace's
+// identity; and on the installation for a user's, which belongs to no namespace.
+func auditToken(ctx context.Context, wide *db.Wide, principal string, r audit.Record) error {
+	if namespace, _, account := strings.Cut(principal, "/"); account {
+		return wide.AuditIn(ctx, namespace, r)
+	}
+	return wide.Audit(ctx, r)
 }
 
 // mayRevoke says whether the caller may revoke a token: its own, or one of a service account of a
@@ -468,19 +488,24 @@ func (c Caller) mayRevoke(t db.APIToken, owned []string) bool {
 }
 
 // Owned is the router's Owners: the namespaces who owns, ordered by name, where it holds the owner
-// role by a grant of its own or of one of its groups on the namespace, and no deny takes a
-// permission of it away, as access.Owns says.
+// role on the namespace by a grant of its own or of one of its groups, as access.Owns says.
 //
 // The bootstrap operator owns every namespace while it has not ended, as Allow answers it, and
 // nothing after. A suspended user, and a login removed since, own nothing.
 func (p *Principals) Owned(ctx context.Context, who Principal) ([]string, error) {
+	if who == "" {
+		return nil, nil
+	}
+	principal, _, bootstrapped, err := p.resolve(ctx, who)
+	if err != nil {
+		return nil, err
+	}
 	now := p.now()
 	var owned []string
-	err := p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
+	err = p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
 		if who == BootstrapOperator {
-			bootstrap, err := w.Bootstrap(ctx)
-			if err != nil || bootstrap.Ended() {
-				return err
+			if !bootstrapped {
+				return nil
 			}
 			all, err := w.Namespaces(ctx)
 			for _, n := range all {
@@ -488,41 +513,17 @@ func (p *Principals) Owned(ctx context.Context, who Principal) ([]string, error)
 			}
 			return err
 		}
-		principal := access.Principal{Ref: string(who)}
-		if !strings.Contains(string(who), "/") {
-			// A user, whose groups' grants are theirs too. A service account, NS/NAME,
-			// belongs to no group.
-			user, err := w.User(ctx, string(who))
-			switch {
-			case errors.Is(err, db.ErrNoPrincipal):
-				return nil
-			case err != nil:
-				return err
-			case user.Suspended:
-				return nil
-			}
-			if principal.Groups, err = w.GroupsOf(ctx, user.Login); err != nil {
-				return err
-			}
+		if principal.Ref == "" {
+			return nil
 		}
 		grants, err := w.AccessGrantsAcross(ctx, principal, now)
-		if err != nil {
-			return err
-		}
 		for _, g := range grants {
 			namespace := g.Scope.Namespace
-			if g.Role != access.Owner || g.Scope.Workflow != "" || slices.Contains(owned, namespace) {
-				continue
-			}
-			owns, err := access.Owns(principal, grants, namespace, now)
-			if err != nil {
-				return err
-			}
-			if owns {
+			if !slices.Contains(owned, namespace) && access.Owns(principal, grants, namespace, now) {
 				owned = append(owned, namespace)
 			}
 		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return nil, err

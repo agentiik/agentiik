@@ -28,11 +28,12 @@ import (
 
 // tokened is an installation for the token routes, on a clock the test moves.
 //
-// finance holds monthly-invoicing, and hr holds nothing. alice owns finance and bob edits it; carol
-// administers the installation and holds no grant; dave owns hr with grant:manage denied him there,
-// which leaves him owning nothing; erin is in team-hr, which owns hr. finance/nightly and hr/sync
-// are service accounts. Each principal but the service account hr/sync holds a token with no scope,
-// and the bootstrap token has not ended.
+// finance holds monthly-invoicing, and hr holds nothing. alice owns finance, and bob's personal
+// namespace, which bob shares with her as owner; bob edits finance and owns monthly-invoicing alone,
+// which owns no namespace; carol administers the installation and holds no grant; dave owns hr with
+// run:read_data denied him there, which takes a permission and leaves the role; erin is in team-hr,
+// which owns hr. finance/nightly and hr/sync are service accounts. Each principal but the service
+// account hr/sync holds a token with no scope, and the bootstrap token has not ended.
 type tokened struct {
 	pool      *db.Pool
 	super     string
@@ -99,6 +100,10 @@ func tokenedInstallation(t *testing.T) *tokened {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// bob's personal namespace, named after his login, as every user's is.
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name, kind, owner) values ('bob', 'personal', 'bob')`); err != nil {
+		t.Fatalf("seeding: %s", err)
+	}
 	grant := func(ns string, gs ...access.Grant) {
 		t.Helper()
 		if err := pool.In(t.Context(), ns, func(ctx context.Context, n *db.NS) error {
@@ -117,12 +122,14 @@ func tokenedInstallation(t *testing.T) *tokened {
 	grant("finance",
 		access.Grant{Principal: "alice", Scope: finance, Role: access.Owner},
 		access.Grant{Principal: "bob", Scope: finance, Role: access.Editor},
+		access.Grant{Principal: "bob", Scope: access.Scope{Namespace: "finance", Workflow: "monthly-invoicing"}, Role: access.Owner},
 	)
 	grant("hr",
 		access.Grant{Principal: "dave", Scope: hr, Role: access.Owner},
-		access.Grant{Principal: "dave", Scope: hr, Deny: access.GrantManage},
+		access.Grant{Principal: "dave", Scope: hr, Deny: access.RunReadData},
 		access.Grant{Principal: "group:team-hr", Scope: hr, Role: access.Owner},
 	)
+	grant("bob", access.Grant{Principal: "alice", Scope: access.Scope{Namespace: "bob"}, Role: access.Owner})
 
 	clock := func() time.Time { return in.at }
 	principals, err := api.NewPrincipals(pool, clock)
@@ -350,8 +357,9 @@ func TestAScopeOnlyNarrowsAndANarrowedTokenMintsNone(t *testing.T) {
 }
 
 // A token is minted for the caller, or for a service account of a namespace it owns, through a grant
-// of its own or of a group's; for anybody else it is refused with one sentence whether they exist
-// or not, and a group is not a holder at all.
+// of its own or of a group's and whatever a deny beside it takes; for anybody else it is refused
+// with one sentence whether they exist or not, the user a personal namespace owned is named after
+// included, and a group is not a holder at all.
 func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T) {
 	in := tokenedInstallation(t)
 	for _, c := range []struct {
@@ -359,6 +367,7 @@ func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T)
 	}{
 		{"alice", "finance/nightly"},
 		{"erin", "hr/sync"},
+		{"dave", "hr/sync"},
 		{"alice", "alice"},
 		{"finance/nightly", "finance/nightly"},
 		{"finance/nightly", ""},
@@ -386,16 +395,17 @@ func TestATokenIsMintedForAServiceAccountOfANamespaceTheCallerOwns(t *testing.T)
 		says           string
 	}{
 		{"bob", "finance/nightly", http.StatusUnprocessableEntity, "neither you nor a service account of a namespace you own"},
-		{"dave", "hr/sync", http.StatusUnprocessableEntity, "neither you nor"},
+		{"alice", "bob", http.StatusUnprocessableEntity, "neither you nor"},
 		{"alice", "hr/sync", http.StatusUnprocessableEntity, "neither you nor"},
 		{"alice", "hr/nobody", http.StatusUnprocessableEntity, "neither you nor"},
 		{"carol", "finance/nightly", http.StatusUnprocessableEntity, "neither you nor"},
-		{"alice", "bob", http.StatusUnprocessableEntity, "neither you nor"},
+		{"bob", "alice", http.StatusUnprocessableEntity, "neither you nor"},
 		{"finance/nightly", "alice", http.StatusUnprocessableEntity, "neither you nor"},
 		{"alice", "finance/ghost", http.StatusUnprocessableEntity, "finance/ghost names nobody"},
 		{"alice", "group:team-hr", http.StatusBadRequest, "is a group"},
 		{"alice", "operator", http.StatusBadRequest, "operator"},
 		{"alice", "Finance/nightly", http.StatusBadRequest, "names no service account"},
+		{"alice", "", http.StatusBadRequest, "principal is empty"},
 	} {
 		w := in.ask(t, "POST", "/api/v1/auth/tokens", in.values[c.who], `{"principal":"`+c.principal+`"}`)
 		if w.Code != c.status || !strings.Contains(w.Body.String(), c.says) {
@@ -420,6 +430,18 @@ func TestTheBootstrapTokenMintsNoToken(t *testing.T) {
 	}
 	if minted != len(in.values) {
 		t.Errorf("the bootstrap token's refusals left %d tokens, and there were %d", minted, len(in.values))
+	}
+
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		_, err := w.EndBootstrap(ctx, in.at)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"POST", "GET"} {
+		if w := in.ask(t, method, "/api/v1/auth/tokens", in.bootstrap, `{}`); w.Code != http.StatusUnauthorized {
+			t.Errorf("the ended bootstrap token's %s was answered %d", method, w.Code)
+		}
 	}
 }
 
@@ -451,6 +473,8 @@ func TestAListingHoldsWhatTheCallerMayRevoke(t *testing.T) {
 	if len(ids) != 4 || ids[0] != narrowed.APIToken.ID || ids[1] != nightly.APIToken.ID || !slices.Contains(ids, in.tokenOf(t, "alice")) || !slices.Contains(ids, in.tokenOf(t, "finance/nightly")) {
 		t.Errorf("alice lists %q", ids)
 	}
+	// bob's own token is not listed, though alice owns the namespace named after his login: a
+	// login is no service account of it.
 	if slices.Contains(ids, revoked.APIToken.ID) || slices.Contains(ids, sync.APIToken.ID) || slices.Contains(ids, in.tokenOf(t, "bob")) {
 		t.Errorf("alice lists a revoked token or one not hers: %q", ids)
 	}
@@ -503,6 +527,7 @@ func TestARevokedTokenOpensNothingFromItsNextRequest(t *testing.T) {
 		{in.values["bob"], nightly.APIToken.ID},
 		{in.values["bob"], in.tokenOf(t, "alice")},
 		{alice, sync.APIToken.ID},
+		{alice, in.tokenOf(t, "bob")},
 		{in.values["carol"], in.tokenOf(t, "alice")},
 		{in.values["finance/nightly"], in.tokenOf(t, "alice")},
 		{narrowed.Token, in.tokenOf(t, "alice")},
@@ -530,8 +555,9 @@ func TestARevokedTokenOpensNothingFromItsNextRequest(t *testing.T) {
 }
 
 // Minting and revoking are recorded in the audit log, by the token's identifier and never its value,
-// with who acted, whose token it is, its label, expiry and scope; revoking a token already revoked
-// is recorded as unchanged, and a refusal records nothing.
+// with who acted, whose token it is, its label, expiry and scope, in the namespace of the service
+// account it belongs to and on the installation for a user's; revoking a token already revoked is
+// recorded as unchanged, and a refusal records nothing.
 func TestMintingAndRevokingAreRecorded(t *testing.T) {
 	in := tokenedInstallation(t)
 	minted := in.mint(t, in.values["alice"], `{"principal":"finance/nightly","device_label":"terraform","scope":{"permissions":["workflow:run"],"within":["finance/monthly-invoicing"]}}`)
@@ -542,16 +568,20 @@ func TestMintingAndRevokingAreRecorded(t *testing.T) {
 		}
 	}
 	in.ask(t, "DELETE", "/api/v1/auth/tokens/"+in.tokenOf(t, "alice"), in.values["bob"], "")
+	own := in.mint(t, in.values["alice"], `{}`)
 
 	entries := audited(t, in.pool)
-	if len(entries) != 3 {
-		t.Fatalf("the audit log holds %d entries, and three acts were done: %+v", len(entries), entries)
+	if len(entries) != 4 {
+		t.Fatalf("the audit log holds %d entries, and four acts were done: %+v", len(entries), entries)
+	}
+	if e := entries[3]; e.Action != audit.APITokenCreate || e.Target != own.APIToken.ID || e.Namespace != "" || detailOf(t, e)["principal"] != "alice" {
+		t.Errorf("alice's own token is recorded as %+v", e)
 	}
 	for i, want := range []struct{ action, result string }{
 		{audit.APITokenCreate, audit.Done}, {audit.APITokenRevoke, audit.Done}, {audit.APITokenRevoke, audit.Unchanged},
 	} {
 		e := entries[i]
-		if e.Actor != "alice" || e.Action != want.action || e.Target != minted.APIToken.ID || e.Result != want.result || e.Namespace != "" {
+		if e.Actor != "alice" || e.Action != want.action || e.Target != minted.APIToken.ID || e.Result != want.result || e.Namespace != "finance" {
 			t.Errorf("entry %d reads %+v, want %s %s", i, e, want.action, want.result)
 		}
 		if strings.Contains(e.Detail, strings.TrimPrefix(minted.Token, "agktoken_")) {
