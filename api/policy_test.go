@@ -454,6 +454,20 @@ func TestANamespaceForbiddingPasswordsTakesThemFromWhoHoldsAGrantInIt(t *testing
 	if len(changes) != 1 || changes[0]["_namespace"] != "finance" || string(deleted) != `["alice","bob"]` {
 		t.Errorf("the change is recorded as %v", changes)
 	}
+
+	// carol, granted a role in finance since, is left as she is by a change that keeps
+	// passwords forbidden there: it is their coming to be forbidden that takes them.
+	if err := in.pool.In(t.Context(), "finance", func(ctx context.Context, n *db.NS) error {
+		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "carol", Scope: access.Scope{Namespace: "finance"}, Role: access.Viewer, GrantedBy: "carol"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := in.bearing(t, "PUT", "/api/v1/finance/auth/policy", in.token(t, "carol", nil, nil), `{"password":"forbidden","min_passkeys":3}`); w.Code != http.StatusOK {
+		t.Fatalf("finance keeping passwords forbidden answered %d %s", w.Code, w.Body)
+	}
+	if in.hashHeld(t, "carol") == "" {
+		t.Error("a change keeping passwords forbidden took carol's password")
+	}
 }
 
 // endBootstrap ends the bootstrap token, as the first administrator's enrolment does.
@@ -469,8 +483,10 @@ func (in passwordsOf) endBootstrap(t *testing.T) {
 
 // Refusing synced passkeys takes a way in from whoever holds nothing else: where it would leave no
 // administrator able to sign in once the bootstrap token has ended, the installation's policy and a
-// namespace's are refused naming device_bound_only, and changed not at all; beside an administrator
-// holding a device-bound passkey, they are not.
+// namespace's are refused naming device_bound_only, and changed not at all, forbidding passwords
+// beside it included, since the passwords erin does not hold are not what she loses; forbidding them
+// alone takes nothing from her. Beside an administrator holding a device-bound passkey, neither is
+// refused.
 func TestRefusingEveryAdministratorsSyncedPasskeyIsRefused(t *testing.T) {
 	in := somePasswords(t)
 	in.administrator(t, "erin")
@@ -482,18 +498,54 @@ func TestRefusingEveryAdministratorsSyncedPasskeyIsRefused(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/v1/auth/policy", "/api/v1/finance/auth/policy"} {
-		w := in.bearing(t, "PUT", path, erin, `{"device_bound_only":true}`)
+	for _, c := range []struct{ path, body string }{
+		{"/api/v1/auth/policy", `{"device_bound_only":true}`},
+		{"/api/v1/finance/auth/policy", `{"device_bound_only":true}`},
+		{"/api/v1/auth/policy", `{"password":"forbidden","device_bound_only":true}`},
+		{"/api/v1/finance/auth/policy", `{"password":"forbidden","device_bound_only":true}`},
+	} {
+		w := in.bearing(t, "PUT", c.path, erin, c.body)
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"device_bound_only"`) || !strings.Contains(w.Body.String(), "no administrator able to sign in") {
-			t.Errorf("refusing erin's one synced passkey at %s answered %d %s", path, w.Code, w.Body)
+			t.Errorf("%s at %s, erin's one passkey synced, answered %d %s", c.body, c.path, w.Code, w.Body)
 		}
 	}
-	if n := in.count(t, `select count(*) from auth_policy where device_bound_only`); n != 0 {
+	if n := in.count(t, `select count(*) from auth_policy where device_bound_only or password = 'forbidden'`); n != 0 {
 		t.Error("a policy refused was written")
+	}
+	if n := in.count(t, `select count(*) from credentials where type = 'password'`); n != 4 {
+		t.Errorf("%d passwords are left of four after the refusals", n)
+	}
+	if w := in.bearing(t, "PUT", "/api/v1/finance/auth/policy", erin, `{"password":"forbidden"}`); w.Code != http.StatusOK {
+		t.Errorf("forbidding passwords in finance, which takes nothing from erin, answered %d %s", w.Code, w.Body)
 	}
 	in.administrator(t, "carol")
 	if w := in.bearing(t, "PUT", "/api/v1/auth/policy", erin, `{"device_bound_only":true}`); w.Code != http.StatusOK {
 		t.Errorf("beside carol, refusing synced passkeys answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A change is not refused for taking a way in from administrators where none had one to take: erin,
+// the one administrator, holds nothing but a token.
+func TestAPolicyChangeWhereNoAdministratorCouldSignInIsNotRefused(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "erin")
+	in.endBootstrap(t)
+	if w := in.bearing(t, "PUT", "/api/v1/auth/policy", in.token(t, "erin", nil, nil), `{"device_bound_only":true}`); w.Code != http.StatusOK {
+		t.Errorf("a change where no administrator could sign in answered %d %s", w.Code, w.Body)
+	}
+}
+
+// On an installation addressed by an IP address no passkey signs anybody in, so an administrator
+// holding a passkey and no password is no administrator who can sign in: the one holding a password
+// is not removed beside them.
+func TestAnAdministratorsPasskeySignsNobodyInWhereTheInstallationIsAddressedByAnIPAddress(t *testing.T) {
+	in := passwordsAt(t, "https://192.0.2.10", false)
+	in.administrator(t, "carol")
+	in.administrator(t, "erin")
+	in.passkeyed(t, "erin", "erin-passkey", false)
+	in.endBootstrap(t)
+	if w := in.bearing(t, "DELETE", "/api/v1/users/carol", in.token(t, "erin", nil, nil), ""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "last administrator who can sign in") {
+		t.Errorf("removing carol beside erin, holding a passkey alone, answered %d %s", w.Code, w.Body)
 	}
 }
 

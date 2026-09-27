@@ -41,10 +41,12 @@ import (
 // the account holds min_passkeys passkeys the policy accepts; the passkey that brings it there
 // deletes the password, the hash and the TOTP generator beside it as rows, since the password was a
 // way to the passkeys and they are held now ("holds min_passkeys: password hash deleted, not
-// disabled"). A password found beside them all the same opens a session that only enrols. Forbidding passwords deletes every password it reaches in the transaction that forbids
-// them, and suspends each account it reaches that holds no passkey the policy accepts, "rather than
-// leaving it reachable by a password the policy says no longer exists", recording why; a passkey
-// enrolled from an enrolment link or a recovery code lifts that suspension and no other (passkeys.go).
+// disabled"). A password found beside them all the same opens a session that only enrols.
+//
+// Forbidding passwords deletes every password it reaches in the transaction that forbids them, and
+// suspends each account it reaches that holds no passkey the policy accepts, "rather than leaving
+// it reachable by a password the policy says no longer exists", recording why; a passkey enrolled
+// from an enrolment link or a recovery code lifts that suspension and no other (passkeys.go).
 
 // accountPolicy is the authentication policy that applies to one account: the installation's,
 // tightened setting by setting by that of every namespace the account holds a grant in.
@@ -375,18 +377,32 @@ func (s *PolicyAPI) installation(w http.ResponseWriter, r *http.Request, _ Calle
 }
 
 // errLockedOut is a policy that would leave no administrator able to sign in, and the setting that
-// would: password where it forbids passwords, and device_bound_only otherwise, since the other
-// settings take no credential away from anybody.
+// would, as lockingSetting says.
 type errLockedOut struct{ setting string }
 
 func (e *errLockedOut) Error() string { return lockedOut }
 
-// takesAway is the setting a change from was to set takes a way in away by, as errLockedOut names it.
-func takesAway(forbids bool) string {
-	if forbids {
-		return passwordSetting
+// lockingSetting is the setting a change that left none of the administrators of before able to sign
+// in takes their way in away by, read under the policy the change wrote: device_bound_only where one
+// of them holds a synced passkey it now refuses, since with synced passkeys accepted that one would
+// still sign in, and forbidding passwords would neither delete it nor suspend its holder; password
+// otherwise. The other settings take no credential away from anybody that this can know of.
+func lockingSetting(ctx context.Context, wide *db.Wide, before []string, now time.Time, ipAddressed bool) (string, error) {
+	for _, login := range before {
+		policy, err := policyFor(ctx, wide, login, now, ipAddressed)
+		if err != nil {
+			return "", err
+		}
+		held, err := wide.CredentialsOf(ctx, login)
+		if err != nil {
+			return "", err
+		}
+		synced := slices.ContainsFunc(held, func(c db.Credential) bool { return c.Type == db.CredentialPasskey && c.BackupEligible })
+		if policy.deviceBoundOnly && synced && !ipAddressed {
+			return deviceBoundOnly, nil
+		}
 	}
-	return deviceBoundOnly
+	return passwordSetting, nil
 }
 
 // administratorsSigningIn answers the logins of the installation's administrators who can sign in
@@ -429,11 +445,12 @@ func administratorsSigningIn(ctx context.Context, wide *db.Wide, now time.Time, 
 }
 
 // guarding runs change, which writes a policy in the transaction wide is, and refuses it with
-// errLockedOut naming setting where, once the bootstrap token has ended, it would leave no
-// administrator able to sign in of those who could before it: the installation would have nobody to
-// administer it, as the removal of the last administrator who can sign in is refused. The bootstrap
-// token, while it lasts, administers it and makes another.
-func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, setting string, change func() error) error {
+// errLockedOut where, once the bootstrap token has ended, it would leave no administrator able to
+// sign in of those who could before it: the installation would have nobody to administer it, as the
+// removal of the last administrator who can sign in is refused. The bootstrap token, while it lasts,
+// administers it and makes another; and a change where nobody could sign in before takes nothing
+// away that was there.
+func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, change func() error) error {
 	before, err := administratorsSigningIn(ctx, wide, now, s.ipAddressed)
 	if err != nil {
 		return err
@@ -450,6 +467,10 @@ func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, 
 		return err
 	}
 	if bootstrap.Ended() && len(before) > 0 && len(after) == 0 {
+		setting, err := lockingSetting(ctx, wide, before, now, s.ipAddressed)
+		if err != nil {
+			return err
+		}
 		return &errLockedOut{setting: setting}
 	}
 	return nil
@@ -485,7 +506,7 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 		}
 		detail := map[string]any{"policy": set, "was": policyOf(was)}
 		forbids := set.Password == "forbidden" && was.Password != "forbidden"
-		if err := s.guarding(ctx, wide, now, takesAway(forbids), func() error {
+		if err := s.guarding(ctx, wide, now, func() error {
 			if err := wide.SetInstallationPolicy(ctx, set.stored(), now); err != nil {
 				return err
 			}
@@ -597,7 +618,7 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 		}
 		detail := map[string]any{"policy": ask, "was": policyOf(was)}
 		forbids := ask.Password == "forbidden" && was.Password != "forbidden" && installation.Password != "forbidden"
-		if err := s.guarding(ctx, wide, now, takesAway(forbids), func() error {
+		if err := s.guarding(ctx, wide, now, func() error {
 			if err := wide.SetNamespacePolicy(ctx, name, ask.stored(), now); err != nil {
 				return err
 			}

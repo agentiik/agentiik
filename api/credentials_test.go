@@ -117,6 +117,10 @@ func TestAPasskeyIsRemovedWhileMinPasskeysRemain(t *testing.T) {
 	if got := in.trail(t); got[len(got)-1] != "erin credential.remove erin-3" {
 		t.Errorf("the audit log ends %q", got[len(got)-1])
 	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'credential.remove' and target = 'erin-3'
+	                       and detail::jsonb->>'type' = 'passkey' and detail::jsonb->>'kind' = 'device-bound'`); n != 1 {
+		t.Error("the removal does not record what kind of passkey went")
+	}
 	w := in.removing(t, "erin-2", c)
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"min_passkeys"`) ||
 		!strings.Contains(w.Body.String(), "removing this passkey would leave this account with 1 passkey the policy accepts, and min_passkeys is 2") {
