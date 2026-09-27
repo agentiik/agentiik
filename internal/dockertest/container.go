@@ -235,10 +235,13 @@ func (d *Daemon) containerStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A daemon answers a start once the container's process is running, so this one
-	// answers once the goroutine standing in for that process is about to call the
-	// test's function. Answered sooner, a container killed and started again at once
-	// could have its second run's function called before its first run's, each then
-	// standing in for the other: the killed run's late return would end the next.
+	// answers once the goroutine standing in for that process is running and about to
+	// call the test's function. Answered sooner, the goroutine of a run killed at once
+	// could still be waiting to be scheduled when the next start's goroutine calls the
+	// function, which a test telling runs apart by call order reads as the runs swapped:
+	// the killed run's late return then seems to end the next. What is left is the few
+	// instructions between here and the function's first statement, which only a thread
+	// descheduled there for the whole of a kill and a start could reorder.
 	calling := make(chan struct{})
 	go func() {
 		close(calling)
