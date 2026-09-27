@@ -18,25 +18,25 @@ import (
 )
 
 // agk share, agk grants and agk whoami against the real API over PostgreSQL: alice owns finance,
-// which holds monthly-invoicing, bob is in team-ops and holds nothing, and carol administers the
-// installation.
+// which holds monthly-invoicing, bob is in team-ops and holds nothing, carol administers the
+// installation, and ops holds no grant. The bootstrap token has not ended.
 
 type shareInstallation struct {
-	url, alice, bob, carol string
+	url, alice, bob, carol, bootstrap string
 }
 
 func anInstallationToShare(t *testing.T) shareInstallation {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 	for _, stmt := range []string{
-		`insert into namespaces (name) values ('finance')`,
+		`insert into namespaces (name) values ('finance'), ('ops')`,
 		`insert into workflows (namespace, name) values ('finance', 'monthly-invoicing')`,
 	} {
 		if _, err := dbtest.Superuser(t, super).Exec(t.Context(), stmt); err != nil {
 			t.Fatal(err)
 		}
 	}
-	in := shareInstallation{alice: "agktoken_alice" + strings.Repeat("E", 40), bob: "agktoken_bob" + strings.Repeat("F", 40), carol: "agktoken_carol" + strings.Repeat("G", 40)}
+	in := shareInstallation{alice: "agktoken_alice" + strings.Repeat("E", 40), bob: "agktoken_bob" + strings.Repeat("F", 40), carol: "agktoken_carol" + strings.Repeat("G", 40), bootstrap: "agk_op_share"}
 	now := time.Now().UTC()
 	err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		for _, u := range []db.User{{Login: "alice", DisplayName: "Alice"}, {Login: "bob", DisplayName: "Bob"}, {Login: "carol", DisplayName: "Carol", Admin: true}} {
@@ -48,6 +48,10 @@ func anInstallationToShare(t *testing.T) shareInstallation {
 			return err
 		}
 		if _, err := w.AddMember(ctx, "team-ops", "bob"); err != nil {
+			return err
+		}
+		bootstrap := sha256.Sum256([]byte(in.bootstrap))
+		if _, err := w.SetBootstrapToken(ctx, bootstrap[:]); err != nil {
 			return err
 		}
 		for login, value := range map[string]string{"alice": in.alice, "bob": in.bob, "carol": in.carol} {
@@ -121,6 +125,15 @@ func TestAWorkflowIsSharedListedAndRevokedWithAgk(t *testing.T) {
 	}
 	if code, out, _ := agkWithToken(t, in.url, in.bob, "whoami", "finance"); code != exitSucceeded || out != "bob, in group:team-ops\non finance: nothing\n" {
 		t.Errorf("agk whoami on the namespace printed %q", out)
+	}
+	// A workflow with no grant of its own holds what its namespace gives.
+	if code, out, _ := agkWithToken(t, in.url, in.alice, "whoami", "finance/monthly-invoicing"); code != exitSucceeded ||
+		out != "alice\non finance/monthly-invoicing: workflow:read, workflow:run, workflow:write, workflow:delete, run:read, run:read_data, secret:use, secret:write, grant:manage\n" {
+		t.Errorf("agk whoami on a workflow alice owns through its namespace printed %q", out)
+	}
+	// A namespace nobody shares lists nothing, and says so.
+	if code, out, errs := agkWithToken(t, in.url, in.bootstrap, "grants", "ops"); code != exitSucceeded || out != "" || errs != "no grant on ops\n" {
+		t.Errorf("agk grants on a namespace with none left with %d, printing %q and saying %q", code, out, errs)
 	}
 	if code, out, _ := agkWithToken(t, in.url, in.bob, "whoami"); code != exitSucceeded || out != "bob, in group:team-ops\non finance/monthly-invoicing: workflow:run, run:read\n" {
 		t.Errorf("agk whoami printed %q", out)

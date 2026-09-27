@@ -37,5 +37,5 @@ func absent(name, missing, arrives string) func(context.Context, Env, []string) 
 	}
 }
 
-// withPrincipals is what the verb that waits on an installation's sign-in waits for.
-const withPrincipals = "It arrives with principals, in v0.3.0"
+// withSignIn is what the verb that waits on an installation's sign-in waits for.
+const withSignIn = "It arrives with the sign-in, in v0.3.0"

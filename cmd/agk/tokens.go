@@ -198,8 +198,8 @@ const tokenEnds = "a token expires after it is minted"
 
 // expiryOf reads --expires: a number of days, 30d, a duration Go reads, 12h, or an instant in RFC
 // 3339. A length is counted from now, on this machine's clock, and the installation holds the
-// instant it comes to to what it expires: a token to a year after it mints it. ends is what one of
-// no time at all is refused with, since what it is refused for is what it would have ended.
+// instant it comes to to its own rule, a token's to within a year of its minting. ends says, for a
+// length of no time at all, why it is refused: what expires, and after what.
 func expiryOf(written string, now time.Time, ends string) (time.Time, error) {
 	if at, err := time.Parse(time.RFC3339, written); err == nil {
 		return at, nil

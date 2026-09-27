@@ -68,7 +68,7 @@ type command struct {
 // cmd/agk/internal/local, and it goes between graph and push, which is where the documentation
 // writes it.
 var commands = []command{
-	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
+	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withSignIn)},
 	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
 	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
 	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},

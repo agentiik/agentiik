@@ -53,8 +53,8 @@
 //	agk share         a role or a deny granted to a user, a group or a service account on a
 //	                  namespace or a workflow, or with --revoke, one grant revoked
 //	agk grants        who can do what there, and from which scope, one grant a line
-//	agk whoami        who the token is, its groups and what it holds, everywhere or on one
-//	                  namespace or workflow, and what the installation tells it
+//	agk whoami        who the token is, its groups and what it holds, everywhere, with what
+//	                  the installation tells it, or on one namespace or workflow
 //
 // Two more verbs are in the documented table and wait for something that is not there yet:
 // login for the sign-in v0.3.0 brings, and brick init for templates released from
