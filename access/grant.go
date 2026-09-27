@@ -173,6 +173,14 @@ func (g Grant) Expired(now time.Time) bool {
 	return g.ExpiresAt != nil && !now.Before(*g.ExpiresAt)
 }
 
+// BootstrapOperator is the principal the bootstrap token identifies, and the v0.2 operator on the
+// rows it wrote: operator, which no grant names and no login can be. What it holds comes from no
+// grant: while the bootstrap token lasts, what an owner holds in every namespace and administering
+// the installation, and nothing once it has ended. Whoever reads the bootstrap state answers which,
+// the API for a request and the controller for a run it is about to let in, and both name it by
+// this one string.
+const BootstrapOperator = "operator"
+
 // principalRef refuses a principal no grant can name, on the wire's three forms: a login, which is
 // held to the namespace grammar and its reserved words since each user's personal namespace is
 // named after it, and is never operator; group:NAME for a group; and NS/NAME for a service account,
@@ -206,7 +214,7 @@ func principalRef(ref string) error {
 	switch {
 	case ref == "":
 		return errors.New("a grant names the principal it is for: a login such as alice, group:NAME such as group:team-finance, or NS/NAME such as finance/agentiik")
-	case ref == "operator":
+	case ref == BootstrapOperator:
 		return errors.New("operator names the v0.2 operator on the rows it wrote, and is no principal a grant can name")
 	case !given(ref):
 		return fmt.Errorf("%.64q names no principal: a login is lowercase words joined by hyphens, such as alice, a group is group:NAME and a service account NS/NAME", ref)
