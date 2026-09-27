@@ -65,9 +65,9 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 	}
 	before := made.Enrolment.ExpiresAt.UTC().Format("15:04 UTC")
 	if status == http.StatusOK {
-		fmt.Fprintf(e.Out, "%s is %s who has not enrolled yet, and the link issued before no longer works. Open this one once, before %s, to enrol a passkey:\n", login, who, before)
+		fmt.Fprintf(e.Out, "%s is %s who has not enrolled yet, and the link issued before no longer works. Open this one once, before %s, to enrol a passkey, or a password where the installation allows one:\n", login, who, before)
 	} else {
-		fmt.Fprintf(e.Out, "%s is %s with no credential yet. Open this link once, before %s, to enrol a passkey:\n", login, who, before)
+		fmt.Fprintf(e.Out, "%s is %s with no credential yet. Open this link once, before %s, to enrol a passkey, or a password where the installation allows one:\n", login, who, before)
 	}
 	fmt.Fprintln(e.Out, made.Enrolment.Link)
 	if made.User.Admin && !strings.HasPrefix(at.token, apiTokenPrefix) {

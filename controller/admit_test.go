@@ -260,6 +260,7 @@ func TestATenThousandItemFanOutStarvesNoOtherNamespace(t *testing.T) {
 			t.Fatalf("%s: %s", stmt, err)
 		}
 	}
+	mayRun(t, conn, "alice", "team-ops")
 	orders := make([]map[string]any, 10_000)
 	for i := range orders {
 		orders[i] = map[string]any{"customer_id": fmt.Sprintf("C-%d", i)}

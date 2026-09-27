@@ -93,6 +93,33 @@ func Holds(p Principal, grants []Grant, what Permission, at Scope, now time.Time
 	return held.Has(what), nil
 }
 
+// Gives says whether g, were it live, would give p what at at: an allow written for p or one of its
+// groups, at a scope covering at, of a role holding what, and not one of the permissions a grant on
+// one workflow never gives. Its expiry is not read, and neither is whether it was revoked since.
+//
+// It is for saying why p does not hold what, once Holds has answered that it does not: "a trigger
+// armed months ago can fire long after the grant that armed it", and the reason a run is refused
+// names the grant that lapsed, which is the one that gave it, found among those that have ended by
+// their expiry or been revoked. It is Resolve's rule for one allow, and a test holds the two to one
+// answer.
+func (g Grant) Gives(p Principal, what Permission, at Scope) bool {
+	if g.Role == "" || g.Deny != "" || at.Namespace == "" || !p.named(g.Principal) || !g.Scope.covers(at) {
+		return false
+	}
+	gives := g.Role.Permissions()
+	if g.Scope.Workflow != "" {
+		gives = gives.without(namespaceOnly)
+	}
+	return gives.Has(what)
+}
+
+// Takes says whether g denies p what at at: a deny of what written for p or one of its groups, at a
+// scope covering at. Its expiry is not read either, and a deny past it takes nothing away, which
+// Expired answers. It is Resolve's rule for one deny, held to it as Gives is.
+func (g Grant) Takes(p Principal, what Permission, at Scope) bool {
+	return g.Role == "" && g.Deny != "" && g.Deny == what && at.Namespace != "" && p.named(g.Principal) && g.Scope.covers(at)
+}
+
 // Owns says whether p owns a namespace as of now: "one on which it holds the owner role, by a grant
 // of its own or of one of its groups, on the namespace rather than on one of its workflows". A
 // grant on one workflow owns nothing, and a grant past its expiry nothing either. A deny beside the

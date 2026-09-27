@@ -304,6 +304,11 @@ type Evaluation struct {
 	Trigger agk.TriggerKind
 	WakeAt  time.Time
 
+	// TriggeredBy is who the run is attributed to, as a grant names a principal, and empty where
+	// the row names nobody. It is who the controller asks about before it lets the run in, since
+	// "authorisation is re-evaluated when a run is created".
+	TriggeredBy string
+
 	// Version names the row as it was read: the transaction that last wrote it, which any write
 	// of it moves, a decision's, a loss's clock or a cancellation request alike. Rewake is held to
 	// it.
@@ -341,10 +346,12 @@ func (w *Wide) Run(ctx context.Context, run agk.RunID) (Evaluation, error) {
 	err := w.tx.QueryRow(ctx,
 		`select namespace, id, workflow, commit, state, evaluation, seq, inputs, trigger, wake_at,
 		        cancel_requested_at, xmin::text, created_at,
-		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), '')
+		        coalesce((select n.max_run_duration from namespaces n where n.name = runs.namespace), ''),
+		        coalesce(triggered_by, '')
 		 from runs where id = $1`, string(run)).
 		Scan(&e.Namespace, &e.Run, &e.Workflow, &e.Commit, &state, &e.Document, &e.Seq,
-			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration)
+			&inputs, &trigger, &wake, &cancel, &e.Version, &e.CreatedAt, &e.MaxRunDuration,
+			&e.TriggeredBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evaluation{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}
@@ -406,6 +413,11 @@ type Decision struct {
 
 	// Outputs are the run's declared outputs as digests, written when it succeeds.
 	Outputs map[string]any
+
+	// Reason is why the run ended as it did, written with the decision that ends it where nothing
+	// in its workflow is what ended it: a run its principal may no longer start, refused at
+	// creation. Empty writes none and keeps what the row holds.
+	Reason string
 
 	Steps []StepRow
 	Tasks []TaskRow
@@ -502,17 +514,17 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	}
 
 	// files_recorded says that every file the run's steps have published has a row of artifacts,
-	// which the artifacts written below this make true: migration 0039 says who reads it.
+	// which the artifacts written below this make true: migration 0041 says who reads it.
 	tag, err := w.tx.Exec(ctx,
 		`update runs
 		 set evaluation = $4, seq = $5, state = $6,
 		     started_at = coalesce(started_at, $7), finished_at = $8,
-		     wake_at = $9, expires_at = $10, outputs = $11, files_recorded = true
+		     wake_at = $9, expires_at = $10, outputs = $11, reason = coalesce($12, reason), files_recorded = true
 		 where namespace = $1 and id = $2 and seq = $3`,
 		d.Namespace, string(d.Run), d.Was,
 		d.Document, d.Seq, d.State.String(),
 		nilIfZero(d.StartedAt), nilIfZero(d.FinishedAt),
-		nilIfZero(d.WakeAt), nilIfZero(expires), outputs)
+		nilIfZero(d.WakeAt), nilIfZero(expires), outputs, nilIfEmpty(d.Reason))
 	if err != nil {
 		return fmt.Errorf("db: run %s could not be decided: %w", d.Run, err)
 	}

@@ -270,6 +270,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// A passkey ceremony is how somebody proves who they are, before any namespace is in
 		// question.
 		"webauthn_challenges": true,
+		// A TOTP generator waiting for its first code is a credential on its way, and is the
+		// installation's as every credential is.
+		"totp_enrolments": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

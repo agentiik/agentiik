@@ -17,7 +17,7 @@ import (
 // other output are named by the envelopes their steps published and by no row: nothing counts
 // them, nothing expires them, and the collection never reaches them. A decision of this release
 // records every file its run's steps have published and sets runs.files_recorded, so a finished run
-// that has it unset was finished by a controller that did not, which migration 0039 sets out.
+// that has it unset was finished by a controller that did not, which migration 0041 sets out.
 // init, migrate and the controller that leads record their files as a decision would have, an
 // artifact of the run for every file its steps published, expiring the namespace's
 // max_retention_days after the run finished, as migration 0038 dates the run's envelopes and logs,

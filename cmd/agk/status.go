@@ -83,6 +83,11 @@ func describe(w io.Writer, d db.RunDetail, now time.Time, verbose bool) {
 		by = " by " + d.TriggeredBy
 	}
 	fmt.Fprintf(w, "%s%s at %s\n", d.Trigger, by, d.CreatedAt.UTC().Format(time.RFC3339))
+	if d.Reason != "" {
+		// Why it ended where nothing in the workflow ended it: a run refused at creation, whose
+		// steps say nothing since none ran.
+		fmt.Fprintf(w, "%s: %s\n", d.State, d.Reason)
+	}
 
 	width := 0
 	for _, s := range d.Steps {

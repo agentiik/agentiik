@@ -27,8 +27,9 @@ import (
 // The bootstrap token is the v0.2 operator token under its v0.3.0 name, so its principal is written
 // operator, as that operator was on every row it left: a run it started under v0.2 is its own, and
 // what it writes now reads as those rows read. operator is refused as a login, so nobody created
-// later is taken for it.
-const BootstrapOperator Principal = "operator"
+// later is taken for it. The string is package access's, which the controller reads too, when it
+// lets in a run the bootstrap token started.
+const BootstrapOperator Principal = access.BootstrapOperator
 
 // The sentences a bearer token that opens nothing is refused with. One for every reason, since
 // telling a caller which reason it was tells somebody guessing whether they had a real one, and the

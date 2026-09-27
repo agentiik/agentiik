@@ -426,6 +426,12 @@ func reportSucceeded(w io.Writer, at remote, d db.RunDetail) {
 // reportEnded says what became of a server run that did not succeed, as reportFailure says it of a
 // local one.
 func reportEnded(w io.Writer, d db.RunDetail) {
+	if d.Reason != "" {
+		// Ended by nothing in the workflow, as a run refused at creation is, so no step failed
+		// or was stopped and the reason is the whole report.
+		fmt.Fprintf(w, "%s %s: %s\n", d.Workflow, d.State, d.Reason)
+		return
+	}
 	fs := failuresOf(d)
 	if len(fs) == 0 {
 		line := fmt.Sprintf("%s %s: no step failed", d.Workflow, d.State)

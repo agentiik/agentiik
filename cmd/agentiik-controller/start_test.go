@@ -151,11 +151,21 @@ spec:
 )
 
 // seeded stores both versions of finance/monthly-invoicing, through the application role as a
-// push stores them.
+// push stores them, and makes alice, who starts the runs, a user holding operator on finance, which
+// the controller asks before it lets a run of hers in.
 func seeded(t *testing.T, pool *db.Pool, super string) {
 	t.Helper()
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
-		t.Fatal(err)
+	conn := dbtest.Superuser(t, super)
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance')`,
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+		`insert into grants (id, namespace, principal, role, granted_by)
+		   values ('01M2Z8V1P9C4XQ7K2N4D6F8G00', 'finance', 'alice', 'operator', 'operator')`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
 	}
 	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		if err := ns.SaveWorkflow(ctx, "monthly-invoicing", "main"); err != nil {

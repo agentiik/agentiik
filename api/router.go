@@ -140,8 +140,8 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 // such a session "enrols passkeys and nothing else: it cannot read a workflow, start a run or mint
 // a token". The router identifies every caller it authorises through it, whatever the route and
 // whichever hook serves it, so that no route reaches such a session by being written without the
-// check; the registration ceremony, the one thing it may do, is not a route the router authorises
-// by who asks, and reads the session itself.
+// check; the registration ceremony and the setting of the password that opened it, the two things it
+// may do, are not routes the router authorises by who asks, and read the session themselves.
 func confined(identify Identify) Identify {
 	return func(r *http.Request) (Identity, error) {
 		as, err := identify(r)

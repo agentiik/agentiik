@@ -396,3 +396,55 @@ func TestTheOrderOfTheGrantsChangesNothing(t *testing.T) {
 		t.Errorf("the grants resolve to %s", want)
 	}
 }
+
+// Gives and Takes are Resolve's rule for one grant, whatever its expiry: the reason a run is
+// refused names the grant that lapsed by asking which grant would give the permission were it still
+// live, and an answer that differed from Resolve's would name a grant that never gave it, or miss
+// the one that did. So each is held to Resolve over every grant of a corpus, every principal, every
+// scope and every permission: an allow gives what Resolve holds from it alone once its expiry is
+// taken off, and a deny takes what an owner of the namespace, who holds all nine there, is left
+// without beside it.
+func TestGivesAndTakesAreResolvesRuleForOneGrant(t *testing.T) {
+	ended := t0.Add(-time.Hour)
+	var corpus []access.Grant
+	for _, who := range []string{"alice", "bob", "group:team-finance", "group:team-ops", "finance/agentiik"} {
+		for _, at := range []access.Scope{finance, invoicing, payroll, hrInvoicing} {
+			for _, r := range access.Roles {
+				corpus = append(corpus, allow("g", who, at, r), until(allow("g", who, at, r), ended))
+			}
+			for _, p := range access.Permissions {
+				corpus = append(corpus, deny("d", who, at, p), until(deny("d", who, at, p), ended))
+			}
+		}
+	}
+	builtIn := access.Principal{Ref: "finance/agentiik"}
+	for _, g := range corpus {
+		live := g
+		live.ExpiresAt = nil
+		for _, who := range []access.Principal{alice, carol, bob, builtIn} {
+			for _, at := range []access.Scope{installation, finance, invoicing, payroll, hrInvoicing} {
+				for _, p := range access.Permissions {
+					gives := resolved(t, who, []access.Grant{live}, at, t0).Has(p)
+					if got := g.Gives(who, p, at); got != gives {
+						t.Errorf("%s %s%s to %s on %q gives %s %s at %q: Gives says %v, Resolve %v", g.ID, g.Role, g.Deny, g.Principal, g.Scope, who.Ref, p, at, got, gives)
+					}
+					owner := allow("o", who.Ref, access.Scope{Namespace: at.Namespace}, access.Owner)
+					takes := at.Namespace != "" && !resolved(t, who, []access.Grant{owner, live}, at, t0).Has(p)
+					if got := g.Takes(who, p, at); got != takes {
+						t.Errorf("%s %s%s to %s on %q takes %s from %s at %q: Takes says %v, Resolve %v", g.ID, g.Role, g.Deny, g.Principal, g.Scope, p, who.Ref, at, got, takes)
+					}
+				}
+			}
+		}
+	}
+
+	// And the corpus is one where both answer yes somewhere, since a rule that always said no
+	// would agree with Resolve about nothing it gives.
+	expired := until(allow("g", "group:team-finance", finance, access.Operator), ended)
+	if !expired.Gives(alice, access.WorkflowRun, invoicing) {
+		t.Error("an expired operator grant to alice's group on the namespace does not say it gave her workflow:run on one of its workflows")
+	}
+	if !until(deny("d", "alice", invoicing, access.WorkflowRun), ended).Takes(alice, access.WorkflowRun, invoicing) {
+		t.Error("a deny of workflow:run to alice on monthly-invoicing does not say it takes it from her there")
+	}
+}

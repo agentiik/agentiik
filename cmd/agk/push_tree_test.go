@@ -114,8 +114,19 @@ type installation struct {
 func anInstallation(t *testing.T) installation {
 	t.Helper()
 	pool, super := dbtest.Open(t)
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance')`); err != nil {
-		t.Fatal(err)
+	// alice is a user holding operator on finance as well as whoever the router says she is, since
+	// the controller asks before it lets a run of hers in.
+	conn := dbtest.Superuser(t, super)
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance')`,
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+		`insert into grants (id, namespace, principal, role, granted_by)
+		   values ('01M2Z8V1P9C4XQ7K2N4D6F8G00', 'finance', 'alice', 'operator', 'operator')`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
 	}
 	if err := pool.Installation(t.Context(), db.RunnerInventory, func(ctx context.Context, w *db.Wide) error {
 		return w.CreateRunnerPool(ctx, db.RunnerPool{Name: "dmz", Labels: []string{"zone=dmz"}, CreatedBy: "alice"})

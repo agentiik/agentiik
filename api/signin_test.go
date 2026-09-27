@@ -125,6 +125,7 @@ func TestThePageIsServedUnderAPolicyThatLoadsNothingFromElsewhere(t *testing.T) 
 	for name, kind := range map[string]string{
 		"page.css": "text/css; charset=utf-8",
 		"codec.js": "text/javascript; charset=utf-8",
+		"qr.js":    "text/javascript; charset=utf-8",
 		"page.js":  "text/javascript; charset=utf-8",
 	} {
 		w := fetched(t, h, "/auth/assets/"+name)
@@ -192,7 +193,7 @@ func TestThePageHoldsNoScriptOrStyleOfItsOwn(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"codec.js", "page.js"} {
+	for _, name := range []string{"codec.js", "qr.js", "page.js"} {
 		script := fetched(t, h, "/auth/assets/"+name).Body.String()
 		for _, sink := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute(\"style\""} {
 			if strings.Contains(script, sink) {
@@ -322,20 +323,28 @@ func TestThePageSaysWherePasskeysCannotRun(t *testing.T) {
 	}
 }
 
-// The page offers the password form where the password route is served and the policy lets
-// passwords in, which it reads at each page, so that a change applies from the next one. An
-// installation addressed by an IP address lets them in whatever the stored policy says, since
-// nobody could sign in there otherwise.
+// The sign-in and enrolment pages offer the password forms where the password routes are served
+// and the policy lets passwords in, which they read at each page, so that a change applies from the
+// next one. An installation addressed by an IP address lets them in whatever the stored policy says,
+// since nobody could sign in there otherwise, and its enrolment page sets a password in place of the
+// passkey it cannot enrol.
 func TestThePasswordFormIsOfferedWhereTheRouteIsServedAndThePolicyLetsPasswordsIn(t *testing.T) {
 	in := someSessions(t)
 	password := func(h http.Handler) string {
 		t.Helper()
-		w := fetched(t, h, "/auth/sign-in")
-		if w.Code != http.StatusOK {
-			t.Fatalf("the page answered %d: %s", w.Code, w.Body)
+		var offers []string
+		for _, path := range []string{"/auth/sign-in", "/auth/enrol"} {
+			w := fetched(t, h, path)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s answered %d: %s", path, w.Code, w.Body)
+			}
+			got, _ := attribute(w.Body.String(), "data-password")
+			offers = append(offers, got)
 		}
-		got, _ := attribute(w.Body.String(), "data-password")
-		return got
+		if offers[0] != offers[1] {
+			t.Errorf("the sign-in page's password form is %q, and the enrolment page's %q", offers[0], offers[1])
+		}
+		return offers[0]
 	}
 	policy := func(setting string) {
 		t.Helper()
@@ -365,6 +374,11 @@ func TestThePasswordFormIsOfferedWhereTheRouteIsServedAndThePolicyLetsPasswordsI
 	}
 	if got := password(byAddress); got != "offered" {
 		t.Errorf("on an installation addressed by an IP address, the page's password form is %q", got)
+	}
+	for h, heading := range map[http.Handler]string{byAddress: "<h1>Set a password</h1>", served: "<h1>Enrol a passkey</h1>"} {
+		if page := fetched(t, h, "/auth/enrol").Body.String(); !strings.Contains(page, heading) {
+			t.Errorf("the enrolment page is not headed %s: %s", heading, page)
+		}
 	}
 	policy("allowed")
 	if got := password(served); got != "offered" {

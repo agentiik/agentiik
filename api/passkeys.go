@@ -600,8 +600,10 @@ func (r *refusal) Error() string { return r.reason }
 // The challenge is taken in a transaction of its own, so that it is spent whatever follows. The
 // attestation is verified outside any transaction, since verifying costs a signature check and
 // holds nothing. What the registration writes is then one transaction: the passkey, the code it
-// spent, the end of the bootstrap where the code was the first administrator's, and, where a code
-// started it, the sign-in, recorded in the audit log last.
+// spent, the end of the bootstrap where the code was the first administrator's, or where the
+// session registering it is of a first administrator whose link set a password and left the
+// bootstrap to their first passkey, and, where a code started it, the sign-in, recorded in the
+// audit log last.
 func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
 	refused := func() {
 		w.Header().Set("WWW-Authenticate", "Bearer")
@@ -732,7 +734,16 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		// The bootstrap ends at the enrolment of a first administrator who can sign in, and not
 		// before: ended at a suspended one's, it would leave the installation with nobody to
 		// administer it, the lockout ending it at an enrolment rather than at a creation avoids.
-		if code.Kind == db.EnrolmentFirstAdministrator && !user.Suspended {
+		// A first administrator whose link set a password where the policy requires a passkey
+		// left it to their first passkey, which a session registers: the password's session
+		// may only enrol, and nobody administers from it (passwords_set.go).
+		first := code.Kind == db.EnrolmentFirstAdministrator
+		if !coded && !user.Suspended {
+			if first, err = wide.SpentFirstAdministratorLink(ctx, user.Login); err != nil {
+				return err
+			}
+		}
+		if first && !user.Suspended {
 			ended, err := wide.EndBootstrap(ctx, now)
 			if err != nil {
 				return err
