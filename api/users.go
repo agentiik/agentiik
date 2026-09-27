@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"net/http"
@@ -167,11 +168,19 @@ func displayName(name string) error {
 	return nil
 }
 
-// NewUser is a user to create, as agk user create sends it: openapi.json's userCreate.
+// NewUser is a user to create, as agk user create sends it: openapi.json's userCreate. agk sends
+// only what it was given, and the display name and admin a request leaves out are the login and
+// false for a user created, and what is recorded for one asked for again.
 type NewUser struct {
 	Login       string `json:"login"`
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"display_name,omitempty"`
 	Admin       bool   `json:"admin,omitempty"`
+
+	// namesOne and saysAdmin are whether the request wrote a display name and admin, null being
+	// neither: a user asked for again for a fresh link is refused only for what the request
+	// says otherwise than was recorded, so that agk user create LOGIN, run again with nothing
+	// more, answers the fresh link it is run again for.
+	namesOne, saysAdmin bool
 }
 
 func (u *NewUser) field(b *body, name string) error {
@@ -179,11 +188,18 @@ func (u *NewUser) field(b *body, name string) error {
 	case "login":
 		return text(b, &u.Login)
 	case "display_name":
+		u.namesOne = b.d.PeekKind() != jsontext.KindNull
 		return text(b, &u.DisplayName)
 	case "admin":
+		u.saysAdmin = b.d.PeekKind() != jsontext.KindNull
 		return flag(b, &u.Admin)
 	}
 	return unknown(name)
+}
+
+// otherwise says whether the request says something of existing other than was recorded.
+func (u NewUser) otherwise(existing db.User) bool {
+	return (u.namesOne && u.DisplayName != existing.DisplayName) || (u.saysAdmin && u.Admin != existing.Admin)
 }
 
 // User is a user as the routes answer one, $defs/user: never a credential.
@@ -262,11 +278,11 @@ func stillBootstrapping(ctx context.Context, wide *db.Wide, who Principal) error
 
 // createUser is POST /api/v1/users: a user, and the link that enrols their first passkey.
 //
-// Asked again for a user who has not enrolled, with the same login, display name and admin, it
-// answers a fresh link and revokes the one before, with 200 rather than 201, so that a link that
-// lapsed unused locks nobody out: "run again for the same login before it has enrolled, it answers
-// a fresh link and revokes the one before". The bootstrap token relies on this until the first
-// administrator has enrolled.
+// Asked again for a user who has not enrolled, with the same login, and the display name and admin
+// as they were created or left out, it answers a fresh link and revokes the one before, with 200
+// rather than 201, so that a link that lapsed unused locks nobody out: "run again for the same
+// login before it has enrolled, it answers a fresh link and revokes the one before". The bootstrap
+// token relies on this until the first administrator has enrolled.
 func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var ask NewUser
 	if err := readAtMost(r, &ask, smallMaxBytes); err != nil {
@@ -277,9 +293,11 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := displayName(ask.DisplayName); err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
-		return
+	if ask.namesOne {
+		if err := displayName(ask.DisplayName); err != nil {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// To the microsecond the database keeps, so that the expiry answered is the one stored.
@@ -300,7 +318,7 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 	case errors.Is(err, db.ErrNameTaken):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is already a namespace, and logins and namespaces share one name space, since a user's personal namespace is named after their login", ask.Login))
 	case errors.Is(err, errOtherwise):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another display name or admin: a user is asked for again only as they were created, for a fresh link while they have not enrolled", ask.Login))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user created with another display name or admin: a user is asked for again as they were created, or with neither, for a fresh link while they have not enrolled", ask.Login))
 	case errors.Is(err, db.ErrEnrolled):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is a user who has enrolled already, and an enrolment link enrols the first passkey of an account that holds none", ask.Login))
 	case errors.Is(err, db.ErrPrincipalExists):
@@ -325,13 +343,18 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		existing, err := wide.User(ctx, ask.Login)
 		switch {
 		case errors.Is(err, db.ErrNoPrincipal):
-			if err := wide.CreateUser(ctx, db.User{Login: ask.Login, DisplayName: ask.DisplayName, Admin: ask.Admin}); err != nil {
+			// A user created with no display name reads as their login until one is given.
+			name := ask.DisplayName
+			if !ask.namesOne {
+				name = ask.Login
+			}
+			if err := wide.CreateUser(ctx, db.User{Login: ask.Login, DisplayName: name, Admin: ask.Admin}); err != nil {
 				return err
 			}
 			created = true
 		case err != nil:
 			return err
-		case existing.DisplayName != ask.DisplayName || existing.Admin != ask.Admin:
+		case ask.otherwise(existing):
 			return errOtherwise
 		}
 		// Read back, since when it was created is the database's to say.

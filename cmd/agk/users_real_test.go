@@ -142,12 +142,23 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 		}
 	}
 
-	// dan asked for otherwise is refused in the installation's words, and the display name
-	// defaults to the login.
-	code, _, errs = in.agk(t, in.bootstrap, "user", "create", "dan", "--admin")
+	// Run again with the login alone, or with --admin alone, dan is kept as he was created and
+	// printed a fresh link; with another display name, refused in the installation's words.
+	for _, args := range [][]string{{"user", "create", "dan"}, {"user", "create", "dan", "--admin"}} {
+		code, out, errs := in.agk(t, in.bootstrap, args...)
+		if code != exitSucceeded || !strings.HasPrefix(out, "dan is an administrator who has not enrolled yet") || !strings.Contains(out, "the bootstrap token works until dan has enrolled") {
+			t.Errorf("agk %s left with %d:\n%s%s", strings.Join(args, " "), code, out, errs)
+		}
+	}
+	code, _, errs = in.agk(t, in.bootstrap, "user", "create", "dan", "--display-name", "Dan")
 	if code != exitRefused || !strings.Contains(errs, "another display name or admin") {
 		t.Errorf("dan with another display name left with %d: %s", code, errs)
 	}
+	if code, _, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--display-name", ""); code != exitUsage {
+		t.Errorf("an empty --display-name left with %d: %s", code, errs)
+	}
+
+	// A user created with no display name reads as their login.
 	var erin api.User
 	if code, out, _ := in.agk(t, in.carol, "user", "show", "erin", "-o", "json"); code != exitSucceeded || json.Unmarshal([]byte(out), &erin) != nil || erin.DisplayName != "erin" {
 		t.Errorf("erin, created with no display name, reads as %d %s", code, out)

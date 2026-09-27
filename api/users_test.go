@@ -225,8 +225,8 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		t.Errorf("the fresh link was answered %v", err)
 	}
 
-	// Asked with another display name, or not as an administrator: somebody else's login.
-	for _, other := range []string{`{"login":"dan","display_name":"Dan"}`, `{"login":"dan","display_name":"Dan Martin"}`} {
+	// Asked with another display name, or as no administrator: somebody else's login.
+	for _, other := range []string{`{"login":"dan","display_name":"Dan"}`, `{"login":"dan","display_name":"Dan Martin","admin":false}`, `{"login":"dan","admin":false}`} {
 		if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, other, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "another display name or admin") {
 			t.Errorf("dan asked for otherwise answered %d: %s", w.Code, w.Body)
 		}
@@ -240,8 +240,13 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 	if _, err := in.openCode(t, second); !errors.Is(err, db.ErrNoEnrolmentCode) {
 		t.Errorf("dan's link was left open beside a first administrator's link for another login: %v", err)
 	}
-	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, &again); w.Code != http.StatusOK {
-		t.Fatalf("dan asked for a third time answered %d: %s", w.Code, w.Body)
+	// Asked for with the login alone, as agk user create dan run again sends it: what is recorded
+	// is kept, and the link is a first administrator's, since dan is one.
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"dan"}`, &again); w.Code != http.StatusOK || !again.User.Admin || again.User.DisplayName != "Dan Martin" {
+		t.Fatalf("dan asked for a third time, with his login alone, answered %d: %s", w.Code, w.Body)
+	}
+	if c, err := in.openCode(t, codeOf(t, again.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentFirstAdministrator {
+		t.Errorf("dan's link asked with his login alone reads as %+v, %v", c, err)
 	}
 	if _, err := in.openCode(t, codeOf(t, mistyped.Enrolment.Link)); !errors.Is(err, db.ErrNoEnrolmentCode) {
 		t.Errorf("the mistyped login's link was left open beside dan's: %v", err)
@@ -399,8 +404,8 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 		{`{"login":"installation","display_name":"Installation"}`, 400, "login: installation is reserved"},
 		{`{"login":"finance","display_name":"Finance"}`, 409, "finance is already a namespace"},
 		{`{"login":"alice","display_name":"Alice"}`, 200, ""},
-		{`{"login":"dan"}`, 400, "a user has a display name"},
 		{`{"login":"dan","display_name":""}`, 400, "a user has a display name"},
+		{`{"login":"dan","display_name":"   \t"}`, 400, "control character"},
 		{`{"login":"dan","display_name":"` + strings.Repeat("é", 257) + `"}`, 400, "at most 256 characters and this one is 257"},
 		{`{"login":"dan","display_name":"Dan\nMartin"}`, 400, "control character"},
 		{`{"login":"dan","display_name":"Dan\u001b[2J"}`, 400, "control character"},
@@ -434,6 +439,22 @@ func TestAUserIsListedReadAndGivenAFreshLink(t *testing.T) {
 	if c, err := in.openCode(t, codeOf(t, bob.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentNewUser || c.IssuedBy != "carol" {
 		t.Errorf("bob-martin's link reads as %+v, %v", c, err)
 	}
+	// Created with the login alone, a user reads as their login; asked for again with the login
+	// alone, or saying what was recorded, a fresh link; saying otherwise, refused.
+	var hana api.CreatedUser
+	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"hana"}`, &hana); w.Code != http.StatusCreated || hana.User.DisplayName != "hana" || hana.User.Admin {
+		t.Errorf("hana, created with her login alone, answered %d: %s", w.Code, w.Body)
+	}
+	for body, want := range map[string]int{
+		`{"login":"hana"}`: http.StatusOK, `{"login":"hana","display_name":null,"admin":null}`: http.StatusOK,
+		`{"login":"hana","display_name":"hana","admin":false}`: http.StatusOK,
+		`{"login":"hana","admin":true}`:                        http.StatusConflict, `{"login":"hana","display_name":"Hana"}`: http.StatusConflict,
+	} {
+		if w := in.ask(t, "POST", "/api/v1/users", in.carol, body, nil); w.Code != want {
+			t.Errorf("%s answered %d: %s", body, w.Code, w.Body)
+		}
+	}
+	in.exec(t, `delete from principals where id = 'hana'`)
 
 	var listing struct {
 		Users []api.User `json:"users"`

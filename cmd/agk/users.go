@@ -37,20 +37,25 @@ const apiTokenPrefix = "agktoken_"
 func userCreate(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user create", "agk user create <login> [--admin] [--display-name <name>] [--server <url>]")
 	admin := fs.Bool("admin", false, "Makes the user an administrator. The first administrator is created this way with the bootstrap token.")
-	display := fs.String("display-name", "", "The name people read in the console and in the sharing panel. Defaults to the login.")
+	display := fs.String("display-name", "", "The name people read in the console and in the sharing panel. A user created without one reads as their login, and one asked for again keeps theirs.")
 	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
 	at, named, code, ok := administering(e, fs, args, server, 1, "agk user create names one login, the name the user signs in as")
 	if !ok {
 		return code
 	}
 	login := named[0]
-	name := *display
-	if name == "" {
-		name = login
+	// Only what was given is sent: the installation names a user created with no display name
+	// after their login, and one asked for again keeps what the command line leaves out, so that
+	// agk user create LOGIN run again prints a fresh link whatever the first run was given.
+	given := false
+	fs.Visit(func(f *flag.Flag) { given = given || f.Name == "display-name" })
+	if given && *display == "" {
+		fmt.Fprintln(e.Err, "--display-name is the name people read in the console, and it is empty: leave it out for the login")
+		return exitUsage
 	}
 
 	var made api.CreatedUser
-	status, err := at.send(ctx, http.MethodPost, "/api/v1/users", api.NewUser{Login: login, DisplayName: name, Admin: *admin}, &made, http.StatusCreated, http.StatusOK)
+	status, err := at.send(ctx, http.MethodPost, "/api/v1/users", api.NewUser{Login: login, DisplayName: *display, Admin: *admin}, &made, http.StatusCreated, http.StatusOK)
 	if err != nil {
 		return administrationRefused(e, err, "", login)
 	}

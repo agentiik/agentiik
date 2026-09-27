@@ -33,7 +33,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `/api/v1/namespaces`: an administrator creates a shared namespace with an owner, given the owner role on it in the same act, and quotas naming pools that exist, sets its quotas whole with `PUT .../quotas`, and removes one holding nothing, audited as `namespace.create` beside the owner's `grant.create`, `namespace.update` and `namespace.delete`; whoever holds a grant in one reads it and its quotas.
 - A namespace is created with its built-in identity, `NS/agentiik`, holding no grant, and removed with it, its grants and its authentication policy. `agentiik-api namespace` writes through the same store, refuses a user's personal namespace, and counts stored objects and service accounts in what a namespace holds.
 - `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
-- A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it. The bootstrap token creating an administrator is answered a first administrator's link.
+- A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it, a display name or admin left out keeping what was recorded, and a display name left out at creation being the login. The bootstrap token creating an administrator is answered a first administrator's link.
 - A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own, and, once the bootstrap token has ended, for the last administrator who can sign in.
 
 ### State
@@ -62,7 +62,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
 - `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
-- `agk user create LOGIN [--admin] [--display-name NAME]` prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
+- `agk user create LOGIN [--admin] [--display-name NAME]` sends only what it is given and prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
 
 ## v0.2.5, 2026-09-26
 
