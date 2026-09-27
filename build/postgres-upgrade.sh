@@ -236,13 +236,15 @@ as_postgres "$newbin/pg_ctl" -D "$partial" -m fast -w -t 300 stop >/dev/null
 # upgrade the person brought back, gets the time beside it rather than overwrite anything.
 kept=$name-$old
 if [ -e "$parent/$kept" ]; then kept=$name-$old-$(date -u +%Y%m%dT%H%M%SZ); fi
-mv "$partial" "$ready"
+mv "$partial" "$ready" || fail "the upgraded cluster could not be renamed $name-$new.ready: nothing was changed"
 if ! mv "$dir" "$parent/$kept"; then
 	rm -rf "$ready"
 	fail "$name could not be renamed $kept: nothing was changed"
 fi
 if ! mv "$ready" "$dir"; then
-	mv "$parent/$kept" "$dir" || true
-	fail "the upgraded cluster could not be renamed $name, and $name is back as it was"
+	if mv "$parent/$kept" "$dir"; then
+		fail "the upgraded cluster could not be renamed $name, which is back as it was: the next docker compose up upgrades it again"
+	fi
+	fail "the upgraded cluster could not be renamed $name, and the old one is $kept: the next docker compose up puts $name-$new.ready in place"
 fi
 say "$name is on PostgreSQL $new, with the databases $databases; the PostgreSQL $old cluster is kept beside it as $kept, as the previous release left it: the way back"
