@@ -31,8 +31,10 @@ type remote struct {
 }
 
 // reach reads which installation a command talks to, --server where it was given and
-// AGENTIIK_SERVER where it was not, and the credential, from AGENTIIK_TOKEN alone. It answers
-// false once it has said what is missing, and the command leaves with exitUsage.
+// AGENTIIK_SERVER where it was not, and the credential: AGENTIIK_TOKEN where it is set, and
+// otherwise the token agk login stored for that installation in the local profile, so that a
+// script's token set in its environment is never passed over for a person's. It answers false once
+// it has said what is missing, and the command leaves with exitUsage.
 //
 // An address that would carry the credential in plaintext is refused before anything is sent:
 // "nothing reaches the API in plaintext", and the credential is a bearer token that opens
@@ -40,24 +42,44 @@ type remote struct {
 // http is taken for a loopback address alone, as a runner takes it for AGK_API, since that is
 // a test server or a tunnel on this machine and never a network.
 func reach(e Env, server string) (remote, bool) {
+	where, ok := installationOf(e, server)
+	if !ok {
+		return remote{}, false
+	}
+	token := e.getenv(tokenVariable)
+	if token == "" {
+		stored, found, err := profileToken(e, where)
+		if err != nil {
+			fmt.Fprintf(e.Err, "%s\n", err)
+			return remote{}, false
+		}
+		if found {
+			token = stored
+		}
+	}
+	if token == "" {
+		fmt.Fprintf(e.Err, "no credential: sign in with agk login, or set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
+		return remote{}, false
+	}
+	return remote{base: strings.TrimRight(where, "/"), token: token}, true
+}
+
+// installationOf reads which installation a command talks to, --server where it was given and
+// AGENTIIK_SERVER where it was not, and answers false once it has said what is wrong with it.
+func installationOf(e Env, server string) (string, bool) {
 	where := server
 	if where == "" {
 		where = e.getenv(serverVariable)
 	}
 	if where == "" {
 		fmt.Fprintf(e.Err, "no installation to talk to: pass --server or set %s\n", serverVariable)
-		return remote{}, false
+		return "", false
 	}
 	if err := checkAddress(where); err != nil {
 		fmt.Fprintf(e.Err, "%s\n", err)
-		return remote{}, false
+		return "", false
 	}
-	token := e.getenv(tokenVariable)
-	if token == "" {
-		fmt.Fprintf(e.Err, "no credential: set %s. It is not a flag, because an argument is in the shell history, in the process list and in whatever recorded the terminal\n", tokenVariable)
-		return remote{}, false
-	}
-	return remote{base: strings.TrimRight(where, "/"), token: token}, true
+	return where, true
 }
 
 // checkAddress refuses an installation address the credential cannot be sent to.
