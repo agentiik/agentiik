@@ -653,10 +653,12 @@ func TestARunViewNamesItsRunnerAndNothingOfItsHost(t *testing.T) {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
 	for _, path := range []string{"/api/v1/runs", "/api/v1/finance/runs", "/api/v1/runs/" + x.run + "/steps/normalize/logs"} {
+		// Each its own second: the log stream answers until its deadline, and one shared with the
+		// listings before it could run out before the stream had answered at all.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		w := x.ask(ctx, "GET", path, x.as["alice"], nil)
+		cancel()
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s answered %d: %s", path, w.Code, w.Body)
 		}

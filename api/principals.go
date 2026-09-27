@@ -181,6 +181,11 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
 }
 
+// Principals is an Among. The router finds one by asking, and asks an authorizer that is not one
+// target at a time, so a Principals without the method would have a listing take longer to refuse
+// the more workflows a namespace holds, and nothing else would fail.
+var _ Among = (*Principals)(nil)
+
 // AllowAmong is the router's Among: what Allow answers about each target, as one question. Who who
 // is is read once, and its grants and its groups' across the namespaces once, whatever the targets
 // are and however many, none included, so that refusing a listing of a namespace holding a hundred
