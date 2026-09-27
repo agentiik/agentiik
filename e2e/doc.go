@@ -85,4 +85,14 @@
 // registry, run with agk run --local on this machine's daemon and again on the installation with
 // the same inputs and the same secret, and every declared output compared through internal/diff
 // under diff.Default.
+//
+// # What the access fixture holds
+//
+// The fact v0.3.0 holds: the access fixture of internal/accesstest stood up through the terminator,
+// the bootstrap token making the administrator whose first sign-in ends it, and every user signing
+// in with a password, since the installation is addressed by an IP address. What each principal
+// holds is read back from GET /api/v1/me, and a principal holding nothing in finance asks about it
+// and about a namespace that does not exist through every route, and is answered the two alike.
+// With AGENTIIK_TEST_TIMING set, the refusals a prober would time first are timed across the
+// terminator as well.
 package e2e
