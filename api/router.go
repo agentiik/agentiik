@@ -105,6 +105,10 @@ type Route struct {
 	// Also is the permission the route needs besides Permission where what a request carries
 	// calls for it, where it declares one.
 	Also Permission
+
+	// Own is set where the route answers about its caller's own credentials and those of the
+	// service accounts of the namespaces it owns, and needs no permission: see Own.
+	Own bool
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -213,6 +217,9 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		return fmt.Errorf("api: %s %s has no guard, and every request is authorised at the API boundary", method, pattern)
 	}
 	guard := g.guards()
+	if guard.own {
+		return fmt.Errorf("api: %s %s answers about its caller's own credentials, and is registered with HandleOwn, whose handler is given who asks and what they own", method, pattern)
+	}
 	if err := guard.check(method, pattern); err != nil {
 		return err
 	}
@@ -311,6 +318,59 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 	if err := rt.HandleAcross(method, pattern, g, h); err != nil {
 		panic(err.Error())
 	}
+}
+
+// HandleOwn registers one route about its caller's own credentials and what it owns.
+//
+// Separate from Handle for the reason HandleAcross is: the handler is given a Caller in place of a
+// target, since what it answers is the caller's own and there is nothing in its path to authorise.
+// Its pattern names no namespace, workflow, run or artifact, each of which is a target a handler
+// could be handed unauthorised, and the authorizer has to say what a principal owns.
+func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
+	if h == nil {
+		return fmt.Errorf("api: %s %s has no handler", method, pattern)
+	}
+	for _, named := range []string{"{namespace}", "{workflow}", "{run}", "{uri}"} {
+		if strings.Contains(pattern, named) {
+			return fmt.Errorf("api: %s %s answers about its caller's own credentials and names %s, which is a target to authorise before the handler runs rather than something the caller owns", method, pattern, named)
+		}
+	}
+	owners, ok := rt.auth.(Owners)
+	if !ok {
+		return fmt.Errorf("api: %s %s answers about the service accounts of the namespaces its caller owns, and the authorizer does not say who owns what", method, pattern)
+	}
+	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+		rt.serveOwn(w, r, owners, h)
+	}); err != nil {
+		return err
+	}
+	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Scope: Installation, Own: true})
+	return nil
+}
+
+// MustHandleOwn is HandleOwn for a caller that builds its routes at start-up.
+func (rt *Router) MustHandleOwn(method, pattern string, g Own, h OwnHandler) {
+	if err := rt.HandleOwn(method, pattern, g, h); err != nil {
+		panic(err.Error())
+	}
+}
+
+// OwnHandler is a route about its caller's own credentials, given who asks, as Caller says.
+type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
+
+// serveOwn is the hook every route taking Own passes through: the caller is identified as on any
+// other route, a request with no credential is refused, and the handler is given who asks.
+func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
+	as, err := rt.identify(r)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
+		return
+	}
+	if as.Principal == "" {
+		unauthenticated(w, as)
+		return
+	}
+	h(w, r, Caller{Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners})
 }
 
 // AcrossHandler is a route answering across the installation or one namespace, given who asks,
