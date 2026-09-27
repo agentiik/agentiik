@@ -50,8 +50,8 @@ const (
 )
 
 // A user is answered their record, their groups as a grant names them and their permissions: a
-// namespace's at its name, and a workflow's where a grant or a deny on it changes what the namespace
-// gives, with the whole of what applies there.
+// namespace's at its name, and a workflow's where a grant or a deny on it changes what the
+// namespace gives, with the whole of what applies there.
 func TestMeIsTheCallersIdentityGroupsAndPermissions(t *testing.T) {
 	in := someSharing(t)
 	me, raw := in.me(t, "alice")
@@ -141,8 +141,8 @@ func TestMeIsNarrowedByTheCredential(t *testing.T) {
 }
 
 // An owner told of an administrator's grant reads it in GET /api/v1/me, and dismisses it once; one
-// not theirs, one dismissed already and one a narrowed token would dismiss are the same absence, and
-// a narrowed token reads none.
+// not theirs, one dismissed already and one a narrowed token would dismiss are the same absence,
+// and a narrowed token reads none.
 func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 	in := someSharing(t)
 	self := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","role":"editor","expires_at":"`+in.at.Add(24*time.Hour).Format(time.RFC3339)+`"}`)

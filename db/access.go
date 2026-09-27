@@ -78,8 +78,8 @@ func grantAccess(ctx context.Context, tx pgx.Tx, g access.Grant, within string) 
 // workflow is empty and on that workflow where it is not, and answers it as it was. One written at
 // the other scope is ErrNoAccessGrant, as one nobody wrote is: a grant is revoked where it was
 // written, so that whoever may share one workflow revokes what was written on it and nothing its
-// namespace gives. A revoked grant is gone rather than kept: the audit log is where who granted what
-// and who took it back is kept.
+// namespace gives. A revoked grant is gone rather than kept: the audit log is where who granted
+// what and who took it back is kept.
 func (n *NS) RevokeAccess(ctx context.Context, workflow, id string) (access.Grant, error) {
 	revoked, err := collectAccess(n.tx.Query(ctx,
 		`delete from grants where namespace = $1 and id = $2 and workflow is not distinct from $3
@@ -151,11 +151,12 @@ func (n *NS) AccessGrants(ctx context.Context) ([]access.Grant, error) {
 		`select `+accessColumns+` from grants where namespace = $1 order by granted_at, id`, n.namespace))
 }
 
-// AccessGrantsAt answers the grants and denies that apply at one scope of this namespace and have not
-// expired at now, each with the scope it was written at: those written on the namespace, which every
-// workflow in it inherits, and where workflow is not empty, those written on that workflow; the
-// namespace's first, then each in the order written. A namespace nobody created is ErrNoNamespace,
-// and a workflow it does not hold ErrNoWorkflow, so that a listing tells the absent from the empty.
+// AccessGrantsAt answers the grants and denies that apply at one scope of this namespace and have
+// not expired at now, each with the scope it was written at: those written on the namespace, which
+// every workflow in it inherits, and where workflow is not empty, those written on that workflow;
+// the namespace's first, then each in the order written. A namespace nobody created is
+// ErrNoNamespace, and a workflow it does not hold ErrNoWorkflow, so that a listing tells the absent
+// from the empty.
 func (n *NS) AccessGrantsAt(ctx context.Context, workflow string, now time.Time) ([]access.Grant, error) {
 	if err := n.Present(ctx, workflow); err != nil {
 		return nil, err

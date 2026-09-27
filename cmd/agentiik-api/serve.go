@@ -224,9 +224,8 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 // routes builds every route built so far on one router: runs and versions, the step log streams,
 // the secret declarations, the runners and their pools, the bus credential, the users and groups,
 // the namespaces, the API tokens, the grants, the caller's own record, and the built-in object
-// store. Each request is identified and
-// authorised by api.Principals, from the tokens, the grants and the bootstrap state the database
-// holds. The log streams end when stopping closes.
+// store. Each request is identified and authorised by api.Principals, from the tokens, the grants
+// and the bootstrap state the database holds. The log streams end when stopping closes.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
 	principals, err := api.NewPrincipals(pool, nil)
 	if err != nil {

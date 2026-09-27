@@ -16,8 +16,9 @@ import (
 // namespace, and notifications", and DELETE /api/v1/me/notifications/{id}, which dismisses one.
 //
 // What it answers is the caller's own, so both take Own. The permissions are what the caller's
-// grants resolve to at this moment, narrowed by the credential it presented, which is what agk whoami
-// prints and what a console reads to hide what the caller does not hold rather than disable it.
+// grants resolve to at this moment, narrowed by the credential it presented, which is what agk
+// whoami prints and what a console reads to hide what the caller does not hold rather than disable
+// it.
 
 // Me is openapi.json's me.
 type Me struct {
@@ -120,7 +121,8 @@ var errGone = errors.New("api: the caller's record is gone")
 // A credential narrowed by a scope is answered no notification: what is told to a principal is its
 // own, of the installation's accord, and reading it, as dismissing it, is none of the nine a scope
 // keeps some of, as managing credentials is not. So a script holding such a token neither reads
-// that an administrator widened their access nor makes the notice go away before its owner reads it.
+// that an administrator widened their access nor makes the notice go away before its owner reads
+// it.
 func (m *MeAPI) me(w http.ResponseWriter, r *http.Request, caller Caller) {
 	held, err := caller.Effective(r.Context())
 	if err != nil {
@@ -188,10 +190,10 @@ func (m *MeAPI) me(w http.ResponseWriter, r *http.Request, caller Caller) {
 }
 
 // dismiss is DELETE /api/v1/me/notifications/{id}: one of the caller's notifications, which GET
-// /api/v1/me lists no more. It changes nothing of what happened: the grant.create or the signin.fail
-// the audit log recorded stays. One that is not the caller's, one dismissed already and one past its
-// 90 days are the same absence, and a credential narrowed by a scope dismisses none, as it reads
-// none.
+// /api/v1/me lists no more. It changes nothing of what happened: the grant.create or the
+// signin.fail the audit log recorded stays. One that is not the caller's, one dismissed already and
+// one past its 90 days are the same absence, and a credential narrowed by a scope dismisses none,
+// as it reads none.
 func (m *MeAPI) dismiss(w http.ResponseWriter, r *http.Request, caller Caller) {
 	id := r.PathValue("id")
 	if !ulidForm.MatchString(id) || caller.Narrowed() || caller.Principal == BootstrapOperator {
