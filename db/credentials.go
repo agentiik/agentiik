@@ -62,6 +62,10 @@ type Credential struct {
 
 // AddCredential enrols one. A TOTP generator is enrolled beside a password alone, and is
 // ErrNoPassword for a user holding none.
+//
+// Enrolling a TOTP locks its user's password, which a sign-in writes once it holds the user's row:
+// its caller holds the user's row first (HoldUser), as every act on an account does, or the two wait
+// on each other.
 func (w *Wide) AddCredential(ctx context.Context, c Credential) error {
 	var count *int64
 	var eligible, state *bool

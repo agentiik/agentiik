@@ -61,14 +61,15 @@ func TestAnAttemptPastACountWaitsForTheFirstToLeaveTheWindow(t *testing.T) {
 }
 
 // However many logins and addresses attempts name, the counts hold attemptsTracked of each at most,
-// forgetting first those whose window holds nothing, then the least recently tried.
+// forgetting first those whose window holds nothing, then a sixteenth of the table, those holding
+// fewest attempts and least recently tried first.
 func TestTheCountsHoldABoundedNumberOfLoginsAndAddresses(t *testing.T) {
 	a := newAttempts()
 	start := time.Unix(1_800_000_000, 0)
 	for i := range attemptsTracked + 100 {
 		a.take(fmt.Sprintf("user-%d", i), fmt.Sprintf("10.%d.%d.%d", i>>16, (i>>8)&255, i&255), start.Add(time.Duration(i)*time.Millisecond))
 	}
-	if len(a.logins) != attemptsTracked || len(a.addresses) != attemptsTracked {
+	if len(a.logins) > attemptsTracked || len(a.addresses) > attemptsTracked {
 		t.Errorf("the counts hold %d logins and %d addresses", len(a.logins), len(a.addresses))
 	}
 	if _, kept := a.logins["user-0"]; kept {
@@ -77,10 +78,53 @@ func TestTheCountsHoldABoundedNumberOfLoginsAndAddresses(t *testing.T) {
 	if _, kept := a.logins[fmt.Sprintf("user-%d", attemptsTracked+99)]; !kept {
 		t.Error("the most recently tried login is not counted")
 	}
+	// Once every window has ended, the next key past the bound forgets them all.
 	later := start.Add(attemptsWindow + time.Hour)
-	a.take("fresh", "192.0.2.1", later)
-	if len(a.logins) != 1 || len(a.addresses) != 1 {
-		t.Errorf("once every window had ended, the counts hold %d logins and %d addresses", len(a.logins), len(a.addresses))
+	fresh := attemptsTracked - len(a.logins) + 1
+	for i := range fresh {
+		a.take(fmt.Sprintf("fresh-%d", i), fmt.Sprintf("192.0.%d.%d", i>>8, i&255), later)
+	}
+	if len(a.logins) != fresh || len(a.addresses) != fresh {
+		t.Errorf("once every window had ended, the counts hold %d logins and %d addresses, and %d were tried since", len(a.logins), len(a.addresses), fresh)
+	}
+}
+
+// A login or an address that has spent its count is never forgotten to make room, however many
+// others are named after it: alice, shut out, stays shut out past sixteen thousand logins tried
+// once each from as many addresses, and given back. Where every key counted has spent its count, a
+// new one is refused as they are, until the first of their attempts leaves its window.
+func TestALoginShutOutIsNotForgottenForOthers(t *testing.T) {
+	a := newAttempts()
+	start := time.Unix(1_800_000_000, 0)
+	for i := range attemptsPerLogin {
+		a.take("alice", fmt.Sprintf("192.0.2.%d", i), start)
+	}
+	at := start.Add(time.Minute)
+	for i := range attemptsTracked + 1000 {
+		login, address := fmt.Sprintf("filler-%d", i), fmt.Sprintf("10.%d.%d.%d", i>>16, (i>>8)&255, i&255)
+		if _, ok := a.take(login, address, at); ok {
+			a.forgive(login, address, at)
+		}
+	}
+	for i := range attemptsTracked + 1000 {
+		a.take(fmt.Sprintf("other-%d", i), fmt.Sprintf("10.%d.%d.%d", 100+i>>16, (i>>8)&255, i&255), at)
+	}
+	if _, ok := a.take("alice", "198.51.100.1", at); ok {
+		t.Error("alice, shut out, was let back in once sixteen thousand other logins were tried")
+	}
+
+	full := newAttempts()
+	for i := range attemptsTracked {
+		for range attemptsPerLogin {
+			full.take(fmt.Sprintf("user-%d", i), "", start)
+		}
+		full.addresses = map[string][]time.Time{}
+	}
+	if wait, ok := full.take("someone-new", "203.0.113.1", start.Add(time.Minute)); ok || wait != attemptsWindow-time.Minute {
+		t.Errorf("a new login at a table of logins shut out answered %v, %s", ok, wait)
+	}
+	if _, ok := full.take("someone-new", "203.0.113.1", start.Add(attemptsWindow)); !ok {
+		t.Error("a new login was refused once the windows of the others had ended")
 	}
 }
 

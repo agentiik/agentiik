@@ -737,3 +737,52 @@ func TestAHashAboveTheBaselineIsTheInstallationsTrouble(t *testing.T) {
 		t.Errorf("the trouble said is %v", *in.trouble)
 	}
 }
+
+// A refusal by a policy forbidding passwords compares nothing, and gives its login's attempt back,
+// but tells a login holding a grant where passwords are forbidden from one nobody holds, so it is
+// counted where it is asked from: thirty from one address, and the thirty-first is refused as a
+// guess past the count would be, while another address is answered, for the same login.
+func TestAPolicyRefusalIsCountedWhereItIsAskedFrom(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "forbidden", "optional")
+	for i := range 30 {
+		if w := in.login(t, `{"login":"alice","password":"x"}`, "198.51.100.7:1000"); w.Code != http.StatusForbidden {
+			t.Fatalf("question %d from one address answered %d %s", i, w.Code, w.Body)
+		}
+	}
+	if w := in.login(t, `{"login":"alice","password":"x"}`, "198.51.100.7:1000"); w.Code != http.StatusTooManyRequests {
+		t.Errorf("a thirty-first question from one address answered %d %s", w.Code, w.Body)
+	}
+	if w := in.login(t, `{"login":"alice","password":"x"}`, "198.51.100.8:1000"); w.Code != http.StatusForbidden {
+		t.Errorf("a question from another address answered %d %s", w.Code, w.Body)
+	}
+}
+
+// A suspended account is refused as soon as its password is checked, right or wrong, and never
+// waits on its user's row, which a wrong password never reaches: with the row held by another
+// transaction, the right password is answered at once.
+func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	conn := dbtest.Superuser(t, in.super)
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.WithoutCancel(t.Context()))
+	if _, err := tx.Exec(t.Context(), `select from users where login = 'dave' for update`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answered <- in.as(t, "dave", "") }()
+	select {
+	case w := <-answered:
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("dave's right password answered %d %s", w.Code, w.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("dave's right password waited on his row, which a wrong one never does")
+		tx.Rollback(t.Context())
+		<-answered
+	}
+}

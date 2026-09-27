@@ -367,10 +367,16 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		return
 	}
 	// Given back where the attempt ends before a password was compared, or on the API's own
-	// account; kept where it was a guess.
-	guessed := false
+	// account; kept where it was a guess. A refusal by a policy forbidding passwords is kept by the
+	// address alone: it compared nothing, but it tells a login holding a grant where passwords are
+	// forbidden from one nobody holds, and a question that answers who has an account is counted
+	// like a guess where it is asked from.
+	guessed, asked := false, false
 	defer func() {
-		if !guessed {
+		switch {
+		case asked:
+			s.attempts.forgetLogin(ask.Login, now)
+		case !guessed:
 			s.attempts.forgive(ask.Login, address, now)
 		}
 	}()
@@ -392,6 +398,7 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		return
 	}
 	if a.policy.forbidden {
+		asked = true
 		s.refuse(r, ask.Login, address, "passwords are forbidden by the policy that applies to the account", now)
 		failSetting(w, http.StatusForbidden, passwordsForbidden, passwordSetting)
 		return
@@ -421,6 +428,12 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		return
 	case !matched:
 		failed("the password does not match")
+		return
+	case a.user.Suspended:
+		// Refused here as well as under the user's row, so that a right password for a
+		// suspended account is answered as soon as a wrong one, rather than after a
+		// transaction a wrong one never reaches.
+		failed("the account is suspended")
 		return
 	}
 

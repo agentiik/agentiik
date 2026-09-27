@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +27,9 @@ import (
 //
 // An attempt is counted as it starts rather than once it has failed, so that a hundred sent at once
 // for one login are not a hundred guesses before the first is counted, and it is given back where it
-// was no guess: refused before any password was compared, as by a policy forbidding passwords, or
-// failing on the API's own account. A sign-in that succeeds gives back its own, and starts its
+// was no guess: refused before any password was compared, or failing on the API's own account. A
+// policy forbidding passwords gives back the account's and not the address's, since its refusal
+// still answers something about the account (passwords.go). A sign-in that succeeds gives back its own, and starts its
 // account's count again, so that a person who mistyped nine times and then signed in does not begin
 // the next day one guess from the limit; the address keeps what it spent on other accounts.
 //
@@ -59,10 +61,18 @@ const (
 	attemptsWindow     = 15 * time.Minute
 )
 
-// attemptsTracked is how many logins, and how many addresses, are counted at once. Past it, those
-// whose window holds nothing any more are forgotten, and where none is, the one whose last attempt
-// is oldest: what the counts hold is bounded however many logins and addresses attempts name, and
-// what is forgotten is what was least recently tried.
+// attemptsTracked is how many logins, and how many addresses, are counted at once, so that what the
+// counts hold is bounded however many logins and addresses attempts name. Past it, those whose window
+// holds nothing any more are forgotten; where none is, a sixteenth of the table is, those holding the
+// fewest attempts first and the least recently tried among them; and none that has spent its count
+// is ever forgotten, since a login or an address shut out would otherwise be let back in by anybody
+// naming sixteen thousand others, which is what an attacker with many addresses could afford and a
+// count of ten could not. A new login or address arriving at a table full of those that have spent
+// theirs is refused as they are, until the first of their attempts leaves its window.
+//
+// A sixteenth at a time, so that the table is read whole once in a thousand new keys rather than at
+// each, which one sender naming a new login at every request could otherwise make every sign-in wait
+// on.
 const attemptsTracked = 16384
 
 // attempts counts the password sign-ins started, for each login and each address, in a sliding
@@ -92,6 +102,9 @@ func (a *attempts) take(login, address string, now time.Time) (time.Duration, bo
 	}
 	if len(byAddress) >= attemptsPerAddress {
 		wait = max(wait, byAddress[len(byAddress)-attemptsPerAddress].Add(attemptsWindow).Sub(now))
+	}
+	if wait <= 0 {
+		wait = max(room(a.logins, login, attemptsPerLogin, now), room(a.addresses, key, attemptsPerAddress, now))
 	}
 	if wait > 0 {
 		keep(a.logins, login, byLogin)
@@ -140,31 +153,67 @@ func without(times []time.Time, at time.Time) []time.Time {
 	return times
 }
 
-// keep writes the attempts of one key, forgetting a key that holds none, and making room for a new
-// key where attemptsTracked are counted already.
+// forgetLogin takes back the attempt taken at at for login alone, one that was no guess at the
+// account but still a question asked from address, which keeps it.
+func (a *attempts) forgetLogin(login string, at time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	keep(a.logins, login, without(a.logins[login], at))
+}
+
+// keep writes the attempts of one key, forgetting a key that holds none.
 func keep(counts map[string][]time.Time, key string, times []time.Time) {
 	if len(times) == 0 {
 		delete(counts, key)
 		return
 	}
-	if _, counted := counts[key]; !counted && len(counts) >= attemptsTracked {
-		now := times[len(times)-1]
-		oldest, last := "", time.Time{}
-		for k, held := range counts {
-			newest := held[len(held)-1]
-			if !newest.After(now.Add(-attemptsWindow)) {
-				delete(counts, k)
-				continue
-			}
-			if oldest == "" || newest.Before(last) {
-				oldest, last = k, newest
-			}
-		}
-		if len(counts) >= attemptsTracked {
-			delete(counts, oldest)
+	counts[key] = times
+}
+
+// room makes room in counts for key where it is not counted and attemptsTracked are, as
+// attemptsTracked says, keys that have spent most attempts being kept; and answers how long until
+// one of those leaves its window where every key counted has spent its count, zero where there is
+// room.
+func room(counts map[string][]time.Time, key string, most int, now time.Time) time.Duration {
+	if _, counted := counts[key]; counted || len(counts) < attemptsTracked {
+		return 0
+	}
+	type held struct {
+		key    string
+		live   int
+		newest time.Time
+	}
+	var forgettable []held
+	wait := attemptsWindow
+	for k, times := range counts {
+		live := inWindow(times, now)
+		switch {
+		case len(live) == 0:
+			delete(counts, k)
+		case len(live) >= most:
+			counts[k] = live
+			wait = min(wait, live[len(live)-most].Add(attemptsWindow).Sub(now))
+		default:
+			counts[k] = live
+			forgettable = append(forgettable, held{k, len(live), live[len(live)-1]})
 		}
 	}
-	counts[key] = times
+	if len(counts) < attemptsTracked {
+		return 0
+	}
+	if len(forgettable) == 0 {
+		return max(wait, time.Nanosecond)
+	}
+	slices.SortFunc(forgettable, func(x, y held) int {
+		if x.live != y.live {
+			return x.live - y.live
+		}
+		return x.newest.Compare(y.newest)
+	})
+	for _, h := range forgettable[:min(len(forgettable), attemptsTracked/16)] {
+		delete(counts, h.key)
+	}
+	return 0
 }
 
 // hashingWait is how long a sign-in waits for its turn to hash: five seconds, a hundred hashes and
