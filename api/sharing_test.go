@@ -13,6 +13,7 @@ import (
 
 	"github.com/agentiik/agentiik/access"
 	"github.com/agentiik/agentiik/api"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/ulid"
@@ -535,5 +536,108 @@ func TestAGrantNamesSomebodyItsWriterSees(t *testing.T) {
 	within := in.token(t, "frank", nil, []string{"finance"}, in.now.Add(time.Hour))
 	if w := in.ask(t, "POST", "/api/v1/finance/grants", within, `{"principal":"hr/reports","role":"viewer"}`); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a grant to a service account of a namespace the token does not reach answered %d: %s", w.Code, w.Body)
+	}
+}
+
+// An administrator putting themselves in a group widens their own access wherever the group's grants
+// give something, and taking themselves out of one, or removing one they are in, wherever its denies
+// took something away: each tells those namespaces' owners, as a grant they wrote themselves does,
+// with the group's grant or deny, and is recorded naming who was told, by namespace. Putting somebody
+// else in, putting themselves in a group that holds nothing, or doing again what is done already,
+// tells nobody.
+func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAccess(t *testing.T) {
+	in := someSharing(t)
+	rt, err := api.NewRouter(in.p, in.p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewUsers(rt, api.UserOptions{Pool: in.pool, PublicURL: "https://agentiik.example.com", Now: func() time.Time { return in.at }}); err != nil {
+		t.Fatal(err)
+	}
+	groups := in
+	groups.h = rt
+	// auditors edits finance/payroll and is denied run:read_data in hr; empty holds nothing.
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, name := range []string{"auditors", "empty"} {
+			if err := w.CreateGroup(ctx, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for namespace, g := range map[string]access.Grant{
+		"finance": {Principal: "group:auditors", Scope: access.Scope{Namespace: "finance", Workflow: "payroll"}, Role: access.Editor},
+		"hr":      {Principal: "group:auditors", Scope: access.Scope{Namespace: "hr"}, Deny: access.RunReadData},
+	} {
+		g.ID, g.GrantedBy = ulid.New(), "frank"
+		if err := in.pool.In(t.Context(), namespace, func(ctx context.Context, n *db.NS) error { return n.GrantAccess(ctx, g) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	told := func() []string {
+		t.Helper()
+		return in.strings(t, `select recipient || ' ' || kind || ' ' || namespace || ' ' || (access_grant->>'principal') || ' '
+		                             || coalesce(access_grant->>'role', 'deny ' || (access_grant->>'deny'))
+		                        from notifications order by recipient, namespace, at, id`)
+	}
+	asked := func(method, path, action, detail string) {
+		t.Helper()
+		if w := groups.ask(t, method, path, "carol", ""); w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+			t.Fatalf("%s %s by carol answered %d: %s", method, path, w.Code, w.Body)
+		}
+		var got string
+		in.query(t, &got, `select detail from audit_log where action = $1 order by seq desc limit 1`, action)
+		if got != detail {
+			t.Errorf("%s %s is recorded as %s", method, path, got)
+		}
+	}
+
+	asked("PUT", "/api/v1/groups/auditors/members/alice", "group_member.add", `{"member":"alice"}`)
+	asked("PUT", "/api/v1/groups/empty/members/carol", "group_member.add", `{"member":"carol"}`)
+	if got := told(); len(got) != 0 {
+		t.Errorf("putting alice in auditors and carol in a group holding nothing told %q", got)
+	}
+	// finance's record names no owner, and dave and frank hold its owner role.
+	asked("PUT", "/api/v1/groups/auditors/members/carol", "group_member.add", `{"member":"carol","notified":{"finance":["dave","frank"]}}`)
+	joined := []string{
+		"dave admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
+	}
+	if got := told(); !slices.Equal(got, joined) {
+		t.Errorf("carol putting herself in auditors told %q", got)
+	}
+	asked("PUT", "/api/v1/groups/auditors/members/carol", "group_member.add", `{"member":"carol"}`)
+	if got := told(); !slices.Equal(got, joined) {
+		t.Errorf("carol putting herself in auditors again told %q", got)
+	}
+	// hr's record names team-ops, whose member hank is told of the deny carol no longer has.
+	asked("DELETE", "/api/v1/groups/auditors/members/carol", "group_member.remove", `{"member":"carol","notified":{"hr":["hank"]}}`)
+	asked("DELETE", "/api/v1/groups/auditors/members/alice", "group_member.remove", `{"member":"alice"}`)
+	left := []string{
+		"dave admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
+		"hank admin_access_widened hr group:auditors deny run:read_data",
+	}
+	if got := told(); !slices.Equal(got, left) {
+		t.Errorf("carol taking herself out of auditors told %q", got)
+	}
+	// Removing a group she is in lifts its deny from her, as leaving it does; the finance owners
+	// are told again of her joining it first.
+	asked("PUT", "/api/v1/groups/auditors/members/carol", "group_member.add", `{"member":"carol","notified":{"finance":["dave","frank"]}}`)
+	asked("DELETE", "/api/v1/groups/auditors", "group.delete", `{"members":["carol"],"notified":{"hr":["hank"]}}`)
+	asked("DELETE", "/api/v1/groups/empty", "group.delete", `{"members":["carol"]}`)
+	if got := told(); !slices.Equal(got, []string{
+		"dave admin_access_widened finance group:auditors editor", "dave admin_access_widened finance group:auditors editor",
+		"frank admin_access_widened finance group:auditors editor", "frank admin_access_widened finance group:auditors editor",
+		"hank admin_access_widened hr group:auditors deny run:read_data", "hank admin_access_widened hr group:auditors deny run:read_data",
+	}) {
+		t.Errorf("carol removing a group she is in told %q", got)
+	}
+	entries, err := in.pool.AuditTrail().After(t.Context(), 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.Verify(entries); err != nil {
+		t.Error(err)
 	}
 }

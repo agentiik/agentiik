@@ -214,3 +214,12 @@ func (w *Wide) DismissNotification(ctx context.Context, recipient, id string, no
 	}
 	return nil
 }
+
+// TellOwnersIn writes AdminAccessWidened in namespace, as NS.TellOwners writes it in its handle's,
+// from a transaction across the installation: a group's membership reaches every namespace its
+// grants and denies are in, and an administrator putting themselves in a group, or taking
+// themselves out of one, widens their own access in each of those that gives them something, or
+// took something from them.
+func (w *Wide) TellOwnersIn(ctx context.Context, namespace string, g access.Grant, actor string, at time.Time) ([]string, error) {
+	return (&NS{tx: w.tx, namespace: namespace}).TellOwners(ctx, g, actor, at)
+}
