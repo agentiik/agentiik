@@ -516,59 +516,73 @@ func TestAPassThatDiedHalfwayIsFinishedByTheNext(t *testing.T) {
 	}
 }
 
-// Run passes at once, tells what each pass removed, says a pass that failed, and stops when its
+// Run passes at once, tells what each pass removed, passes again on its interval, and stops when its
 // context is done.
 func TestRunPassesAtOnceAndOnItsInterval(t *testing.T) {
 	in := withInstallation(t)
 	run := in.run(t)
 	in.artifact(t, run, "gone.bin", "gone bytes", true)
 
-	var mu sync.Mutex
-	var passes []purge.Purged
-	var troubles []error
+	// running runs p until it has passed n times, and answers what each pass removed and what
+	// went wrong.
+	running := func(p *purge.Purger, n int) ([]purge.Purged, []error) {
+		t.Helper()
+		var mu sync.Mutex
+		var passes []purge.Purged
+		var troubles []error
+		p.Passed = func(got purge.Purged) {
+			mu.Lock()
+			defer mu.Unlock()
+			passes = append(passes, got)
+		}
+		p.Trouble = func(err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			troubles = append(troubles, err)
+		}
+		ctx, stop := context.WithCancel(t.Context())
+		ran := make(chan struct{})
+		go func() {
+			defer close(ran)
+			p.Run(ctx)
+		}()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			mu.Lock()
+			got := len(passes)
+			mu.Unlock()
+			if got >= n {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Run passed %d times in 10s, and %d were due", got, n)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		stop()
+		select {
+		case <-ran:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not stop once its context was done")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return passes, troubles
+	}
+
+	// At once, with the next pass an hour away.
 	p := in.purger(0, 0)
-	p.Every = 50 * time.Millisecond
-	p.Passed = func(got purge.Purged) {
-		mu.Lock()
-		defer mu.Unlock()
-		passes = append(passes, got)
+	p.Every = time.Hour
+	passes, troubles := running(p, 1)
+	if len(passes) != 1 || passes[0].Artifacts != 1 || len(troubles) != 0 {
+		t.Errorf("the first pass removed %+v, and met %v", passes, troubles)
 	}
-	p.Trouble = func(err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		troubles = append(troubles, err)
-	}
-	ctx, stop := context.WithCancel(t.Context())
-	ran := make(chan struct{})
-	go func() {
-		defer close(ran)
-		p.Run(ctx)
-	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		mu.Lock()
-		n := len(passes)
-		mu.Unlock()
-		if n >= 3 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Run passed %d times in 10s", n)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	stop()
-	select {
-	case <-ran:
-	case <-time.After(10 * time.Second):
-		t.Fatal("Run did not stop once its context was done")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if passes[0].Artifacts != 1 || passes[1].Removed() {
-		t.Errorf("the passes removed %+v", passes)
-	}
-	if len(troubles) != 0 {
-		t.Errorf("the passes met %v", troubles)
+
+	// And on the interval.
+	p = in.purger(0, 0)
+	p.Every = 20 * time.Millisecond
+	passes, troubles = running(p, 3)
+	if passes[1].Removed() || len(troubles) != 0 {
+		t.Errorf("the passes removed %+v, and met %v", passes, troubles)
 	}
 }
