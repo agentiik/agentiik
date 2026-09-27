@@ -42,8 +42,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A route declaring `api.Needs.OrAdministrator` is reached by an administrator as well, whatever they hold at its scope, through a credential that carries the power, and its handler asks `api.Administering` whether the caller came in so; one declaring `api.Needs.Seeing` hands its handler `api.Sees`.
 - `api.Caller.Effective` answers what the caller holds at each scope through the credential it presented, resolved from what the authorizer says as `api.Standings`.
 - `access.Grant.Gives` and `access.Grant.Takes` answer what one grant gives or denies at a scope whatever its expiry, held to `access.Resolve`, and `access.BootstrapOperator` names the bootstrap token's principal for the API and the controller alike.
-- A 404 takes as long whatever it refuses: a route naming a run that is not there, or not under the namespace its path names, asks the authorizer about a stand-in before refusing it, and the router asks the authorizer whether or not a token keeps the permission, narrowing the answer after.
-- `GET /api/v1/runs` and `GET /api/v1/{ns}/runs` ask about every workflow they could list as one question, `api.HoldsEach`, which `api.Principals` answers as `api.Among` from the principal and its grants read once, so that a namespace's workflows no longer tell by how long their refusal takes that it exists.
+- A route naming a run refuses one that is not there, one not under its path's namespace, and a URI that does not parse, after the question it asks of a run that is there, about a stand-in; the router asks the authorizer whether or not the token keeps the permission, and narrows the answer after.
+- `GET /api/v1/runs` and `GET /api/v1/{ns}/runs` ask about every workflow they could list as one question, `api.HoldsEach`, which `api.Principals` answers as `api.Among` from the principal and its grants read once.
 
 ### API
 
@@ -182,8 +182,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The tests, CI and `e2e` run PostgreSQL 18, and a job upgrades with `postgres-upgrade` a cluster the official 17 image wrote, starts 18 on it, and checks what it refuses and what it recovers from.
 - A test holds that no file the module ships, the migrations and what `//go:embed` carries included, imports a mail package, requires a module for mail, or holds an SMTP transport, `sendmail`, a `mailto:` link, the word email or a mail provider's name.
 - The fake Docker daemon answers a start once the goroutine standing in for the container's process is running and about to call its function, as a daemon answers once the process runs, rather than while that goroutine may not have been scheduled yet, when a container killed and started again at once could have its second run's function called first.
-- A test asks every route `serve` registers that names something in its path, and the routes naming a namespace's service account in their body or a namespace in their query, about what does not exist and about what exists that the caller cannot see, by token, narrowed token and session, and holds the two answers to one status, body and header set; another asks every route as a namespace's owner and an administrator and finds no stored secret's value, in any spelling, in any answer; another holds a run's views to its runner's name, and `TestHowLongAbsenceAndInvisibilityTake`, run with `AGENTIIK_TEST_TIMING` set, measures how long both refusals take.
-- A test holds every table naming a namespace, asked of the catalog, behind row level security enabled and forced under the namespace's one policy.
+- A test asks every route `serve` registers that names something in its path about what does not exist and about what exists that the caller cannot see, by token, narrowed token and session, and holds the two answers to one status, body and header set; so are the routes naming a namespace's service account in their body or a namespace in their query.
+- A test asks every route `serve` registers, as a namespace's owner and as an administrator, and finds a stored secret's value in no answer, as it is, in base64 or in hexadecimal.
+- A test holds a run's views to its runner's identifier, and its listings and log stream to no runner at all.
+- A test holds the secret routes to namespace grants with real principals: a namespace's viewer reads the declarations and writes none, and an editor of one workflow neither reads nor writes them, nor pushes a version naming one.
+- A test follows the presigned URL of an artifact, and holds its signature to the artifact's namespace, digest and run.
+- Tests hold the router to one question about a workflow before any refusal of a run, and `api.Principals` to the same transactions whatever the targets it is asked about as one question; `TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse`, run with `AGENTIIK_TEST_TIMING` set, measures both refusals on the routes a prober asks first.
+- A test holds every table naming a namespace, asked of the catalog, behind row level security enabled and forced under the namespace's one policy, and every column of namespace names outside it to a decision.
 
 ### agk
 
