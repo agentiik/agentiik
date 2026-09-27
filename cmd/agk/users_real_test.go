@@ -114,7 +114,7 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 		t.Fatalf("agk user create dan --admin left with %d: %s", code, errs)
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	before := regexp.MustCompile(`^dan is an administrator with no credential yet\. Open this link once, before \d\d:\d\d UTC, to enrol a passkey:$`)
+	before := regexp.MustCompile(`^dan is an administrator with no credential yet\. Open this link once, before \d\d:\d\d UTC, to enrol a passkey, or a password where the installation allows one:$`)
 	if len(lines) != 3 || !before.MatchString(lines[0]) || !aLink.MatchString(lines[1]) ||
 		lines[2] != "the bootstrap token works until dan has enrolled; then sign in as dan with agk login" {
 		t.Fatalf("agk user create dan --admin printed:\n%s", out)
