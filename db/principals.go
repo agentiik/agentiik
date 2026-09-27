@@ -144,6 +144,30 @@ func (w *Wide) SignedIn(ctx context.Context, login string, at time.Time) error {
 	return nil
 }
 
+// Administrator is one of the installation's administrators, and whether they can sign in: not
+// suspended, and holding a credential.
+type Administrator struct {
+	Login   string
+	SignsIn bool
+}
+
+// Administrators answers the installation's administrators, ordered by login, and locks each of
+// their rows until the transaction ends, so that two removals of administrators at once take turns
+// in one order and the second counts what the first left.
+func (w *Wide) Administrators(ctx context.Context) ([]Administrator, error) {
+	rows, err := w.tx.Query(ctx,
+		`select u.login, not u.suspended and exists (select from credentials c where c.login = u.login)
+		   from users u where u.admin order by u.login for update of u`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	admins, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Administrator])
+	if err != nil {
+		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
+	}
+	return admins, nil
+}
+
 // Group is a named set of users. Its principal is group:Name.
 type Group struct {
 	Name      string
@@ -173,6 +197,26 @@ func (w *Wide) Group(ctx context.Context, name string) (Group, error) {
 		return Group{}, fmt.Errorf("db: group %s could not be read: %w", name, err)
 	}
 	return g, nil
+}
+
+// Groups is the listing, ordered by name, each with its members ordered by login.
+func (w *Wide) Groups(ctx context.Context) ([]Group, error) {
+	rows, err := w.tx.Query(ctx,
+		`select g.name, g.created_at, coalesce(array_agg(m.login order by m.login) filter (where m.login is not null), '{}')
+		   from groups g left join group_members m on m.group_name = g.name
+		  group by g.name order by g.name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the groups could not be read: %w", err)
+	}
+	groups, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Group, error) {
+		var g Group
+		err := row.Scan(&g.Name, &g.CreatedAt, &g.Members)
+		return g, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("db: the groups could not be read: %w", err)
+	}
+	return groups, nil
 }
 
 // AddMember puts a user in a group, and answers whether they were not in it already. Membership
@@ -280,6 +324,20 @@ func (w *Wide) PrincipalKind(ctx context.Context, principal string) (string, err
 		return "", fmt.Errorf("db: principal %s could not be read: %w", principal, err)
 	}
 	return kind, nil
+}
+
+// NamespacesOwnedBy answers the namespaces whose record names principal as owner, ordered by name,
+// which is what refuses its removal.
+func (w *Wide) NamespacesOwnedBy(ctx context.Context, principal string) ([]Namespace, error) {
+	rows, err := w.tx.Query(ctx, `select `+namespaceColumns+` from namespaces where owner = $1 order by name`, principal)
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces %s owns could not be read: %w", principal, err)
+	}
+	owned, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Namespace, error) { return scanNamespace(row) })
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces %s owns could not be read: %w", principal, err)
+	}
+	return owned, nil
 }
 
 // RemovePrincipal removes a user, a group or a service account, and everything it holds with it:

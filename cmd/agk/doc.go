@@ -41,6 +41,12 @@
 //	                  administrator creates, bounds and removes, and whoever holds a grant
 //	                  in one reads
 //
+// Two more, user and group, are an administrator's, and the bootstrap token's until the first
+// administrator has enrolled:
+//
+//	agk user          create, printing the enrolment link, list, show and delete
+//	agk group         create, list, show, delete, and add and remove one member
+//
 // Five more verbs are in the documented table and wait for something that is not there
 // yet: login, whoami, share and grants for the principals v0.3.0 brings, and brick init for
 // templates released from agentiik/bricks. Each is in this table and each refuses naming
@@ -139,6 +145,7 @@
 //	logs.go          agk logs
 //	status.go        agk status
 //	namespace.go     agk namespace create, list, show, delete and quotas
+//	users.go         agk user and agk group
 //	remote.go        the installation's address, the credential, and its refusals
 //	tokens.go        agk token create, list and revoke
 //	absent.go        the five verbs that wait, each refusing by name
