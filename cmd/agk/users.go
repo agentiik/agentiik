@@ -100,7 +100,7 @@ func userRecover(ctx context.Context, e Env, args []string) int {
 		}
 		return administrationRefused(e, err, "user", login)
 	}
-	fmt.Fprintf(e.Out, "%s may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; a recovery code issued them before no longer works. Hand it over yourself:\n",
+	fmt.Fprintf(e.Out, "%s may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works. Hand it over yourself:\n",
 		login, issued.ExpiresAt.UTC().Format("15:04 UTC"))
 	fmt.Fprintln(e.Out, issued.Link)
 	return exitSucceeded

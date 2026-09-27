@@ -59,7 +59,7 @@ func recoverAdministrator(ctx context.Context, c config.Recovery, login string, 
 	case err != nil:
 		return fmt.Errorf("no recovery code was issued: %w", err)
 	}
-	fmt.Fprintf(stdout, "%s, an administrator, may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; a recovery code issued them before no longer works. Hand it over yourself:\n",
+	fmt.Fprintf(stdout, "%s, an administrator, may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works. Hand it over yourself:\n",
 		login, code.ExpiresAt.UTC().Format("15:04 UTC"))
 	fmt.Fprintln(stdout, code.Link)
 	return nil

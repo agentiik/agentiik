@@ -177,7 +177,7 @@ func TestAgkUserRecoverPrintsARecoveryCodesLink(t *testing.T) {
 		t.Fatalf("agk user recover alice left with %d: %s", code, errs)
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	before := regexp.MustCompile(`^alice may open this link once, before \d\d:\d\d UTC, to enrol a new passkey, or a password where the installation allows one; a recovery code issued them before no longer works\. Hand it over yourself:$`)
+	before := regexp.MustCompile(`^alice may open this link once, before \d\d:\d\d UTC, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works\. Hand it over yourself:$`)
 	if len(lines) != 2 || !before.MatchString(lines[0]) || !aLink.MatchString(lines[1]) {
 		t.Fatalf("agk user recover alice printed:\n%s", out)
 	}

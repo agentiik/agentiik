@@ -23,9 +23,14 @@ import (
 // in the link that carries it after its #, and it enrols a passkey, or sets a password where the
 // policy that applies to the account allows passwords, in place of the one held, as an enrolment
 // link does: every kind of code may set a password, since on an installation addressed by an IP
-// address a password is the one way back. A fresh one revokes the user's open recovery code, and
-// the session it opened. Where the account is an administrator's and the bootstrap token has not
-// ended, the enrolment it makes ends it, as the first administrator's link does (passkeys.go).
+// address a password is the one way back. A fresh one revokes the user's open recovery code. Where
+// the account is an administrator's who is not suspended and the bootstrap token has not ended, the
+// enrolment it makes ends it, as the first administrator's link does, a password's where the session
+// it opens is a full one (passkeys.go, passwords_set.go).
+//
+// It is issued whatever the user holds, a credential or none: what they lost may be all they had,
+// and a user who never enrolled is given one as surely as a fresh link, which the administrator may
+// not know to ask for instead.
 //
 // It is sent nowhere: it is answered once, to whoever issued it, who hands it over. A recovery link
 // by mail "would put the account back behind a mailbox and forfeit the passkey's phishing
@@ -33,10 +38,11 @@ import (
 //
 // An administrator issues none for themselves. A code is audited with two identities because two
 // people are meant to be behind it, one who lost what signs them in and one who vouches for them.
-// Issued to oneself, it would turn a token or a session somebody took from an administrator into a
-// passkey of their own, which outlives both. An administrator who lost theirs asks another, and
-// where nobody is left who can sign in, whoever holds the installation's settings runs agentiik-api
-// recover on its host.
+// Issued to oneself, it would let a token or a session somebody took from an administrator give
+// that administrator's own account a credential that outlives the theft, quietly, with nobody else
+// vouching for it, as a bearer token may not set a credential from /me either. An administrator who
+// lost theirs asks another, and where nobody is left who can sign in, whoever holds the
+// installation's settings runs agentiik-api recover on its host.
 //
 // The bootstrap token issues them as it administers everything else, until the first administrator
 // has enrolled, and those it issued open nothing once it has ended (db.Wide.EnrolmentCodeByHash).
@@ -55,7 +61,7 @@ type RecoveryCode struct {
 const (
 	// SelfRecovery is an administrator asking a recovery code for their own account. agk reads
 	// it to say it as it is, rather than as a caller who does not administer.
-	SelfRecovery = "you may not issue yourself a recovery code, which another administrator issues and the audit log records with both, so that a token or a session somebody took from you is no way to a passkey of their own: ask another administrator, or, where none can sign in, run agentiik-api recover on the installation's host"
+	SelfRecovery = "you may not issue yourself a recovery code, which another administrator issues and the audit log records with both, so that every recovery has somebody vouching for it and a token or a session somebody took from you cannot give your own account a credential that outlives it: ask another administrator, or, where none can sign in, run agentiik-api recover on the installation's host"
 
 	// serviceAccountRecovery is a recovery code asked for a service account, which holds nothing
 	// a code replaces.
