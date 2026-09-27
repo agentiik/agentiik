@@ -388,17 +388,53 @@ func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 	// To somebody else, a deny, or by somebody who does not administer: nothing is told.
 	before := len(in.strings(t, `select id from notifications`))
 	in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","role":"viewer"}`)
-	in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","deny":"secret:write"}`)
+	deny := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","deny":"secret:write"}`)
 	in.granted(t, "/api/v1/finance/grants", "frank", `{"principal":"frank","role":"editor"}`)
+	aliceDeny := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","deny":"run:read_data"}`)
+	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+aliceDeny.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol revoking alice's deny answered %d", w.Code)
+	}
+	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+self.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol revoking her own role answered %d", w.Code)
+	}
 	if after := len(in.strings(t, `select id from notifications`)); after != before {
 		t.Errorf("grants that widen no administrator's own access told %d notifications", after-before)
 	}
 
+	// A deny taken from her own access widens it as a role given does, and so does a role given
+	// to a service account of a namespace she owns, whose tokens she may mint; not one of a
+	// namespace she does not own.
+	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+deny.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol revoking the deny on herself answered %d", w.Code)
+	}
+	if got := in.strings(t, `select recipient || ' ' || (access_grant->>'deny') from notifications where access_grant->>'id' = $1 order by recipient`, deny.ID); !slices.Equal(got, []string{
+		"dave secret:write", "frank secret:write",
+	}) {
+		t.Errorf("carol lifting the deny on herself was told as %q", got)
+	}
+	in.query(t, &detail, `select detail from audit_log where action = 'grant.delete' and target = $1`, deny.ID)
+	if detail != `{"deny":"secret:write","notified":["dave","frank"],"principal":"carol","scope":"finance"}` {
+		t.Errorf("carol lifting the deny on herself is recorded as %s", detail)
+	}
+	if err := in.pool.In(t.Context(), "hr", func(ctx context.Context, n *db.NS) error {
+		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "group:admins", Scope: access.Scope{Namespace: "hr"}, Role: access.Owner, GrantedBy: "hank"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reports := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"hr/reports","role":"viewer"}`)
+	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1 order by recipient`, reports.ID); !slices.Equal(got, []string{"dave", "frank"}) {
+		t.Errorf("carol's grant to a service account of hr, which her group owns, was told to %q", got)
+	}
+	nightly := in.granted(t, "/api/v1/finance/workflows/payroll/grants", "carol", `{"principal":"finance/nightly","role":"viewer"}`)
+	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1`, nightly.ID); len(got) != 0 {
+		t.Errorf("carol's grant to a service account of finance, which she does not own, was told to %q", got)
+	}
+
 	// A token narrowed by a scope carries no administrator's power, and the path an administrator
 	// is let through to is still one that is there.
-	narrowed := in.token(t, "carol", nil, []string{"hr"}, in.now.Add(time.Hour))
-	if w := in.ask(t, "GET", "/api/v1/hr/grants", narrowed, ""); w.Code != http.StatusNotFound {
-		t.Errorf("an administrator's narrowed token listing hr's grants answered %d", w.Code)
+	narrowed := in.token(t, "carol", nil, []string{"finance"}, in.now.Add(time.Hour))
+	if w := in.ask(t, "GET", "/api/v1/finance/grants", narrowed, ""); w.Code != http.StatusNotFound {
+		t.Errorf("an administrator's narrowed token listing finance's grants answered %d", w.Code)
 	}
 	for _, path := range []string{"/api/v1/nowhere/grants", "/api/v1/finance/workflows/nightly/grants", "/api/v1/No-Such/grants", "/api/v1/finance/workflows/%ff/grants"} {
 		for _, method := range []string{"GET", "POST"} {

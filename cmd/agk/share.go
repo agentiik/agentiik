@@ -291,6 +291,11 @@ func permissionsLine(held []api.Permission) string {
 func noticeLine(n api.Notification) string {
 	when := n.At.UTC().Format(time.RFC3339)
 	switch {
+	case n.Kind == "admin_access_widened" && n.Grant != nil && n.Grant.Deny != "":
+		// A deny is told when an administrator took it away from their own access, since
+		// writing one widens nothing.
+		g := *n.Grant
+		return fmt.Sprintf("told %s at %s: an administrator lifted the deny of %s on %s for %s, widening their own access", n.ID, when, g.Deny, g.Scope, g.Principal)
 	case n.Kind == "admin_access_widened" && n.Grant != nil:
 		g := *n.Grant
 		gave := string(g.Role) + " on " + g.Scope.String() + " to " + g.Principal

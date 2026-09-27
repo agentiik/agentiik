@@ -24,8 +24,8 @@ import (
 // themselves owner in the same commit." So a grant is written here and nowhere else, behind
 // grant:manage at the scope the route names, and the scope is the route's and never the body's, so
 // that nobody writes one where they do not hold grant:manage. An administrator reaches every one of
-// these routes as well, since "an administrator may create grants in any namespace", and granting
-// themselves, or a group they belong to, is told to the namespace's owners.
+// these routes as well, since "an administrator may create grants in any namespace", and widening
+// their own access here is told to the namespace's owners: see ownAccess.
 //
 // Revoking is effective "from the next request and the next run creation", which nothing here has to
 // do: Principals reads a principal's grants at every request.
@@ -191,7 +191,7 @@ func (s *SharingAPI) list(w http.ResponseWriter, r *http.Request, _ Principal, o
 }
 
 // create is POST .../grants: one grant or one deny at the route's scope, audited as grant.create in
-// the transaction that writes it, and told to the namespace's owners where it widens an
+// the transaction that writes it, and told to the namespace's owners where it gives a role to an
 // administrator's own access.
 func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	at, ok := scopeAt(w, over)
@@ -231,7 +231,7 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 		fail(w, http.StatusUnprocessableEntity, namesNobody(g.Principal))
 		return
 	}
-	widening, err := s.widens(r.Context(), who, g)
+	own, err := s.ownAccess(r.Context(), who)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "the grant could not be written")
 		return
@@ -245,7 +245,7 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 			return err
 		}
 		detail := grantDetail(g)
-		if widening {
+		if g.Role != "" && own(g.Principal) {
 			told, err := n.TellOwners(ctx, g, string(who), now)
 			if err != nil {
 				return err
@@ -270,16 +270,21 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 	write(w, http.StatusCreated, answeredGrant(g))
 }
 
-// widens says whether g widens its writer's own access as an administrator: a role, not a deny, for
-// who or a group who belongs to, written by a user the installation records as an administrator.
-// Whether the route let who through as one or by a grant of their own is not asked: an owner who
-// also administers the installation is an administrator widening their own access all the same,
-// and the other owners are the ones to hear of it.
-func (s *SharingAPI) widens(ctx context.Context, who Principal, g access.Grant) (bool, error) {
-	if g.Role == "" || who == BootstrapOperator || strings.Contains(string(who), "/") {
-		return false, nil
+// ownAccess answers which principals' access is who's own, where who is an administrator: its own,
+// that of a group it belongs to, and that of a service account of a namespace it owns, whose tokens
+// it may mint. A role given to one of them, or a deny taken from one, is an administrator widening
+// their own access, which "notifies the namespace's owner", since "reading another namespace's
+// payloads means granting themselves access first". Whether the route let who through as an
+// administrator or by a grant of its own is not asked: an owner who also administers the
+// installation widens their own access all the same, and the other owners are the ones to hear of
+// it. For anybody who does not administer, it answers no principal.
+func (s *SharingAPI) ownAccess(ctx context.Context, who Principal) (func(principal string) bool, error) {
+	none := func(string) bool { return false }
+	if who == BootstrapOperator || strings.Contains(string(who), "/") {
+		return none, nil
 	}
-	var widens bool
+	var admin bool
+	var groups []string
 	err := s.pool.Installation(ctx, db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		user, err := wide.User(ctx, string(who))
 		if errors.Is(err, db.ErrNoPrincipal) || (err == nil && !user.Admin) {
@@ -288,20 +293,41 @@ func (s *SharingAPI) widens(ctx context.Context, who Principal, g access.Grant) 
 		if err != nil {
 			return err
 		}
-		if g.Principal == string(who) {
-			widens = true
-			return nil
-		}
-		groups, err := wide.GroupsOf(ctx, user.Login)
-		widens = slices.ContainsFunc(groups, func(group string) bool { return g.Principal == "group:"+group })
+		admin = true
+		groups, err = wide.GroupsOf(ctx, user.Login)
 		return err
 	})
-	return widens, err
+	if err != nil || !admin {
+		return none, err
+	}
+	principal := access.Principal{Ref: string(who), Groups: groups}
+	now := s.now()
+	var grants []access.Grant
+	err = s.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, wide *db.Wide) error {
+		var err error
+		grants, err = wide.AccessGrantsAcross(ctx, principal, now)
+		return err
+	})
+	if err != nil {
+		return none, err
+	}
+	return func(ref string) bool {
+		if ref == string(who) {
+			return true
+		}
+		if group, ok := strings.CutPrefix(ref, "group:"); ok {
+			return slices.Contains(groups, group)
+		}
+		namespace, _, account := strings.Cut(ref, "/")
+		return account && access.Owns(principal, grants, namespace, now)
+	}, nil
 }
 
 // revoke is DELETE .../grants/{id}: one grant or deny written at the route's scope, audited as
 // grant.delete in the transaction that removes it. One written at the other scope is answered as
-// one that is not there: a namespace's grant is revoked at the namespace's route.
+// one that is not there: a namespace's grant is revoked at the namespace's route. A deny taken from
+// an administrator's own access widens it as a role given does, and is told to the namespace's
+// owners the same way, with the deny as it was.
 func (s *SharingAPI) revoke(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	at, ok := scopeAt(w, over)
 	if !ok {
@@ -312,13 +338,26 @@ func (s *SharingAPI) revoke(w http.ResponseWriter, r *http.Request, who Principa
 		fail(w, http.StatusNotFound, noSuchGrant)
 		return
 	}
-	err := s.pool.In(r.Context(), at.Namespace, func(ctx context.Context, n *db.NS) error {
+	own, err := s.ownAccess(r.Context(), who)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "the grant could not be revoked")
+		return
+	}
+	err = s.pool.In(r.Context(), at.Namespace, func(ctx context.Context, n *db.NS) error {
 		gone, err := n.RevokeAccess(ctx, at.Workflow, id)
 		if err != nil {
 			return err
 		}
+		detail := grantDetail(gone)
+		if gone.Deny != "" && own(gone.Principal) {
+			told, err := n.TellOwners(ctx, gone, string(who), s.now().UTC().Truncate(time.Microsecond))
+			if err != nil {
+				return err
+			}
+			detail["notified"] = told
+		}
 		return n.Audit(ctx, audit.Record{
-			Actor: string(who), Action: audit.GrantDelete, Target: id, Result: audit.Done, Detail: grantDetail(gone),
+			Actor: string(who), Action: audit.GrantDelete, Target: id, Result: audit.Done, Detail: detail,
 		})
 	})
 	switch {

@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -203,5 +204,43 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 	in.query(t, &kept, `select count(*) from audit_log where action = 'grant.create' and target = $1`, self.ID)
 	if kept != 1 {
 		t.Error("dismissing the notification took the grant's entry from the audit log")
+	}
+}
+
+// A console session is a credential as a token is: a full one reads who its user is, and one an
+// enrolment code opened, which "enrols passkeys and nothing else", is refused on GET /api/v1/me, on
+// the dismissal and on the grant routes with the 403 openapi.json names.
+func TestASessionThatMayOnlyEnrolReadsNoIdentityAndSharesNothing(t *testing.T) {
+	in := someSessions(t)
+	rt, err := api.NewRouter(in.p, in.p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: in.pool}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewMe(rt, api.MeOptions{Pool: in.pool}); err != nil {
+		t.Fatal(err)
+	}
+	full := in.open(t, "carol", api.OpenedBy{Credential: "carol-passkey"})
+	w := httptest.NewRecorder()
+	rt.ServeHTTP(w, request(t, "GET", "/api/v1/me", "", full))
+	var me api.Me
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &me) != nil || me.Principal != "carol" || !me.Admin {
+		t.Errorf("carol's full session reading who she is answered %d: %s", w.Code, w.Body)
+	}
+	enrolling := in.open(t, "carol", api.OpenedBy{EnrolmentCode: in.recovery(t, "carol", "carol-recovery")})
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/v1/me"},
+		{"DELETE", "/api/v1/me/notifications/01JQ5P"},
+		{"GET", "/api/v1/finance/grants"},
+		{"POST", "/api/v1/finance/grants"},
+		{"DELETE", "/api/v1/finance/workflows/payroll/grants/01JQ5P"},
+	} {
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, request(t, c.method, c.path, publicOrigin, enrolling))
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "this session enrols passkeys and nothing else") {
+			t.Errorf("%s %s answered a session that may only enrol %d: %s", c.method, c.path, w.Code, w.Body)
+		}
 	}
 }

@@ -70,8 +70,8 @@
 // The grant routes take grant:manage at the scope they name, and an administrator reaches them as
 // well, holding nothing there: "an administrator may create grants in any namespace", an installation
 // power a route declares as Needs.OrAdministrator and the router asks as it asks every administrator's
-// route. A grant widening an administrator's own access is told to the namespace's owners. A grant
-// may name a service account of another namespace only where its writer sees that namespace, which
-// the router hands the handler as Sees on a route declaring Needs.Seeing, so that the answer never
-// says whether another namespace exists.
+// route. An administrator widening their own access, by a role given or a deny taken away, is told
+// to the namespace's owners. A grant may name a service account of another namespace only where its
+// writer sees that namespace, which the router hands the handler as Sees on a route declaring
+// Needs.Seeing, so that the answer never says whether another namespace exists.
 package api

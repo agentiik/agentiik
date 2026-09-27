@@ -25,8 +25,8 @@ import (
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
-	// AdminAccessWidened is an administrator having written a grant for themselves, or for a
-	// group they belong to, in a namespace, told to the namespace's owners.
+	// AdminAccessWidened is an administrator having widened their own access in a namespace,
+	// giving a role to it or taking a deny from it, told to the namespace's owners.
 	AdminAccessWidened = "admin_access_widened"
 
 	// PasskeyCounterRefused is a sign-in refused because a passkey's signature counter did not
@@ -52,9 +52,9 @@ type Notification struct {
 	At time.Time
 
 	// Namespace and Grant are where an administrator widened their own access, and the grant as
-	// it was written, on AdminAccessWidened alone. The grant is kept whole rather than referred
-	// to, since it may be revoked before its reader comes to read it, and what they are told is
-	// what was done.
+	// it was written, or the deny they revoked as it was, on AdminAccessWidened alone. It is kept
+	// whole rather than referred to, since it may be revoked before its reader comes to read it,
+	// and what they are told is what was done.
 	Namespace string
 	Grant     *access.Grant
 
@@ -63,9 +63,10 @@ type Notification struct {
 	Credential string
 }
 
-// TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote for
-// themselves in this namespace, to each of the namespace's owners but actor, and answers who was
-// told, by name.
+// TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote for their
+// own access in this namespace, or the deny g they took from it, to each of the namespace's owners
+// but actor, and answers who was told, by name. A deny in a notification is one taken away, since
+// writing one widens nothing.
 //
 // "The owner told is the principal the namespace's record names. A namespace from before v0.3.0
 // names none: it becomes shared ... and every principal holding the owner role on it is told
