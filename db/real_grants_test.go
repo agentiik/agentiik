@@ -707,6 +707,78 @@ func TestARedemptionIsHeldToThePoolAndTheHostsNamespaces(t *testing.T) {
 	}
 }
 
+// A namespace's allowed_runner_pools hold at the redemption as a pool's namespaces do: a runner of a
+// pool the task's namespace no longer allows, which accepts the namespace itself, is refused as
+// never answerable before a narrowing is asked, binds nothing, and redeems once the pool is allowed
+// again. A namespace that names no pools allows every one, as before v0.3.0.
+func TestARedemptionIsHeldToThePoolsTheNamespaceAllows(t *testing.T) {
+	pool, super := joining(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	if err := pool.Installation(ctx, RunnerInventory, func(ctx context.Context, w *Wide) error {
+		return w.CreateRunnerPool(ctx, RunnerPool{Name: "shared", AcceptedNamespaces: []string{"finance", "team-ops"}, CreatedBy: "admin"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shared := joinedTo(t, pool, "shared", nil, privateKey(1), now)
+	narrowed := joinedTo(t, pool, "shared", []string{"team-ops"}, privateKey(2), now)
+
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	const row = "01M2GHCCCCCCCCCCCCCCCCCCCC"
+	key := agk.NewTaskID(financeRun, "render", 1, agk.Shard{})
+	if _, err := conn.Exec(ctx, `
+		insert into tasks (namespace, id, run_id, step, attempt, state)
+		values ('finance', $1, $2, 'render', 1, 'dispatched')`, row, financeRun); err != nil {
+		t.Fatalf("seeding the task: %s", err)
+	}
+	var clear string
+	if err := pool.Installation(ctx, ControllerSweep, func(ctx context.Context, w *Wide) error {
+		granted, err := w.IssueGrant(ctx, "finance", key, row, GrantScope{Run: financeRun, Step: "render"}, now.Add(time.Hour))
+		clear = granted.Clear
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := conn.Exec(ctx, `update namespaces set allowed_runner_pools = '{default}' where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, runner := range []string{shared.Runner, narrowed.Runner} {
+		if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+			if _, err := w.Redeemable(ctx, clear, key, runner, now); !errors.Is(err, ErrNamespaceRefusesPool) {
+				t.Errorf("checking a redemption by %s answered %v", runner, err)
+			}
+			if _, err := w.Redeem(ctx, clear, key, runner, now); !errors.Is(err, ErrNamespaceRefusesPool) {
+				t.Errorf("a redemption by %s answered %v", runner, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var holder *string
+	if err := conn.QueryRow(ctx, `select runner from tasks where id = $1`, row).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if holder != nil {
+		t.Fatalf("a refused redemption bound the task to %s", *holder)
+	}
+
+	if _, err := conn.Exec(ctx, `update namespaces set allowed_runner_pools = null where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Installation(ctx, Redemption, func(ctx context.Context, w *Wide) error {
+		_, err := w.Redeem(ctx, clear, key, shared.Runner, now)
+		return err
+	}); err != nil {
+		t.Errorf("a redemption once finance named no pools answered %v", err)
+	}
+}
+
 // joinedTo puts a machine in a pool, narrowed to the namespaces given where there are any.
 func joinedTo(t *testing.T, pool *Pool, into string, namespaces []string, key ed25519.PrivateKey, now time.Time) Joined {
 	t.Helper()
