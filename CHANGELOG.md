@@ -196,6 +196,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk status` says why a run refused at creation was cancelled, `cancelled: ` and its reason, and `agk run` ends its report with it.
 - `agk user recover LOGIN` prints the link of a recovery code for a user, and refuses the caller's own account and a service account in the installation's words.
 - `agk whoami` says when `agentiik-api recover` issued an administrator a recovery code.
+- `agk user create LOGIN --admin` with the bootstrap token says it works until LOGIN has signed in, which is when it ends, rather than enrolled.
 
 ## v0.2.5, 2026-09-26
 
