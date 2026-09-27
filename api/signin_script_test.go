@@ -335,11 +335,14 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 // served, fetch answered as the API answers, navigator.credentials, location and history, driven
 // through what a person does. Signed out, the page offers the passkey; a session that may only
 // enrol is told what it needs and offered its sign-out; a password refused by the policy is not
-// offered again, whatever answers after; a sign-in agk login opened hands on its loopback address
-// and follows the API back to it and nowhere else; an enrolment link's code travels in the options'
-// body alone and leaves the address once spent; and every request is the page's own fetch, with
-// credentials same-origin and no mode, which the API's Origin check needs.
-func TestThePageScriptOnAStandInBrowser(t *testing.T) {
+// offered again, whatever answers after; a sign-in agk login opened, by passkey or by password,
+// hands on its loopback address and follows the API back to it and nowhere else; an enrolment
+// link's code travels in the options' body alone and leaves the address once spent; where no
+// passkey can run, an installation addressed by an IP address or a page that is not a secure
+// context, the page says why and offers none; a credential with no toJSON() is written by codec;
+// and every request is the page's own fetch, under the public URL's path, with credentials
+// same-origin and no mode, which the API's Origin check needs.
+func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 	engine := javaScript(t)
 	pages, err := template.ParseFS(signinFiles, "signin/*.html")
 	if err != nil {
@@ -358,7 +361,11 @@ func TestThePageScriptOnAStandInBrowser(t *testing.T) {
 		"sign-in-password": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
 		"sign-in-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld",
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
-		"enrol": {"enrol.html", pageData{Scripts: true, Passkeys: "available"}},
+		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered",
+			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
+		"sign-in-ip": {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
+		"enrol":      {"enrol.html", pageData{Scripts: true, Passkeys: "available"}},
+		"enrol-ip":   {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable"}},
 	} {
 		var b bytes.Buffer
 		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {

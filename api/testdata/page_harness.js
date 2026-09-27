@@ -1,10 +1,10 @@
-// Run by TestThePageScriptOnAStandInBrowser, after codec.js, page.js wrapped in loadPage(), which
-// runs it as a browser does on each page load, and the pages the test wrote: each element of a page
-// by its id, hidden or not as the HTML says, and the page's data attributes. It stands in for the
-// browser page.js reads, the DOM, fetch, navigator.credentials, location and history, drives each
-// scenario a person would, answering each request as the API would, and prints, in one line of JSON,
-// what went otherwise than a scenario says. It runs on node and on macOS's jsc, which prints with
-// print and has no console and no URL.
+// Run by TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser, after codec.js, page.js wrapped
+// in loadPage(), which runs it as a browser does on each page load, and the pages the test wrote:
+// each element of a page by its id, hidden or not as the HTML says, and the page's data attributes.
+// It stands in for the browser page.js reads, the DOM, fetch, navigator.credentials, location and
+// history, drives each scenario a person would, answering each request as the API would, and
+// prints, in one line of JSON, what went otherwise than a scenario says. It runs on node and on
+// macOS's jsc, which prints with print and has no console and no URL.
 const say = typeof print === "function" ? print : (line) => console.log(line);
 
 // A URL enough for page.js's own, "../api/v1/..." against the page's address, where there is none.
@@ -27,8 +27,10 @@ function global(name, value) {
   Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
 }
 
-// stage loads a page, as the test wrote it, at an address, and answers its browser.
-function stage(name, address, hash) {
+// stage loads a page, as the test wrote it, at an address, and answers its browser: one whose
+// address carries hash after its #, which is not a secure context where insecure is set, and whose
+// authenticator's credentials have no toJSON() where raw is set.
+function stage(name, address, { hash, insecure, raw } = {}) {
   const written = pages[name];
   const elements = {};
   for (const id of Object.keys(written.elements)) {
@@ -43,6 +45,9 @@ function stage(name, address, hash) {
     elements.page.dataset[attribute.replace(/^data-/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
   }
   const browser = { elements, requests: [], created: [], got: [], location: null };
+  // Where the page's requests go: api/v1 beside the page's own directory, under the public URL's
+  // path where it has one.
+  browser.api = address.replace(/[?#].*$/, "").replace(/\/auth\/[^/]*$/, "/api/v1/");
   const path = address.replace(/^https:\/\/[^/]+/, "");
   browser.location = {
     hash: hash || "", pathname: path.replace(/\?.*$/, ""), search: path.includes("?") ? path.slice(path.indexOf("?")) : "",
@@ -57,7 +62,7 @@ function stage(name, address, hash) {
   const PublicKeyCredential = function () {};
   global("document", { getElementById: (id) => elements[id] || null, baseURI: address });
   global("window", {
-    isSecureContext: true, PublicKeyCredential, location: browser.location,
+    isSecureContext: !insecure, PublicKeyCredential, location: browser.location,
     history: { replaceState: (_, __, to) => { browser.location.replaced = to; } },
   });
   global("PublicKeyCredential", PublicKeyCredential);
@@ -65,6 +70,14 @@ function stage(name, address, hash) {
     credentials: {
       get: async (options) => {
         browser.got.push(options);
+        if (raw) {
+          const bytes = (...b) => new Uint8Array(b).buffer;
+          return {
+            id: "AQID", rawId: bytes(1, 2, 3), type: "public-key", authenticatorAttachment: "platform",
+            response: { clientDataJSON: bytes(4), authenticatorData: bytes(5, 6), signature: bytes(7), userHandle: bytes(8, 9, 10, 11) },
+            getClientExtensionResults: () => ({}),
+          };
+        }
         return { toJSON: () => ({ id: "cred", rawId: "cred", type: "public-key", response: {} }) };
       },
       create: async (options) => {
@@ -224,7 +237,7 @@ async function scenarios() {
   }
 
   scenario = "an enrolment link";
-  b = stage("enrol", "https://agentiik.example.com/auth/enrol", "#" + code);
+  b = stage("enrol", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
   all.push(b);
   await settle();
   request(b, "me").answer(401, { error: "this request carries no credential" });
@@ -269,10 +282,123 @@ async function scenarios() {
   await fire(b, "enrol", "submit");
   check(visible(b, "problem") && !b.requests.some((q) => q.url.endsWith("auth/passkey/options")), "a code outside its grammar was sent");
 
+  scenario = "an installation addressed by an IP address, on the sign-in page";
+  b = stage("sign-in-ip", "https://192.0.2.10/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "unavailable") && /IP address/.test(text(b, "unavailable")), "the page does not say why passkeys are unavailable: " + JSON.stringify(text(b, "unavailable")));
+  check(!visible(b, "passkey") && visible(b, "password"), "the page offers a passkey, or no password");
+
+  scenario = "an installation addressed by an IP address, on the enrolment page";
+  b = stage("enrol-ip", "https://192.0.2.10/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  await fire(b, "enrol", "submit");
+  check(visible(b, "unavailable") && /IP address/.test(text(b, "unavailable")), "the page does not say why passkeys are unavailable");
+  check(!visible(b, "enrol") && !b.requests.some((q) => q.url.endsWith("auth/passkey/options")), "the page offers to enrol a passkey");
+
+  scenario = "a page served where no passkey runs";
+  b = stage("sign-in", "https://agentiik.example.com/auth/sign-in", { insecure: true });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "unavailable") && /https/.test(text(b, "unavailable")) && !visible(b, "passkey"), "the page offers a passkey where the browser runs none");
+
+  scenario = "a browser whose credentials have no toJSON()";
+  b = stage("sign-in", "https://agentiik.example.com/auth/sign-in", { raw: true });
+  all.push(b);
+  await settle();
+  await fire(b, "sign-in", "click");
+  request(b, "auth/passkey/options").answer(200, assertion);
+  await settle();
+  const converted = request(b, "auth/passkey/verify").body.credential;
+  check(JSON.stringify(converted) === JSON.stringify({
+    id: "AQID", rawId: "AQID", type: "public-key",
+    response: { clientDataJSON: "BA", authenticatorData: "BQY", signature: "Bw", userHandle: "CAkKCw" },
+    authenticatorAttachment: "platform", clientExtensionResults: {},
+  }), "the page wrote the credential " + JSON.stringify(converted));
+
+  scenario = "a page under the public URL's path";
+  b = stage("sign-in", "https://agentiik.example.com/agentiik/auth/sign-in");
+  all.push(b);
+  await settle();
+  check(b.requests.length === 1 && b.requests[0].url === "https://agentiik.example.com/agentiik/api/v1/me", "the page asked " + b.requests.map((q) => q.url).join(", "));
+
+  for (const [what, answer, name] of [
+    ["a full session agk login opened", { login: "alice", session: "full", redirect_to: "http://127.0.0.1:53682/callback?code=agkcode_hETdtl86N8K51a1xaF2Tykj9jlYJfsaq-DTMlDPeDZ0" }, "sign-in-password-terminal"],
+    ["a full session", { login: "alice", session: "full" }, "sign-in-password"],
+    ["a session that may only enrol", { login: "bob-martin", session: "enrolment" }, "sign-in-password"],
+  ]) {
+    scenario = "a password sign-in answered with " + what;
+    b = stage(name, "https://agentiik.example.com/auth/sign-in");
+    all.push(b);
+    await settle();
+    request(b, "me").answer(401, { error: "this request carries no credential" });
+    await settle();
+    b.elements.login.value = answer.login;
+    b.elements.secret.value = "correct horse battery staple";
+    b.elements.totp.value = "492039";
+    await fire(b, "password", "submit");
+    const sent = request(b, "auth/login");
+    const handedOff = name.endsWith("terminal") ? { redirect_uri: pages[name].data["data-terminal-redirect"], code_challenge: pages[name].data["data-terminal-challenge"] } : undefined;
+    check(JSON.stringify(sent.body) === JSON.stringify({ login: answer.login, password: "correct horse battery staple", totp: "492039", terminal: handedOff }),
+      "the password sign-in sent " + JSON.stringify(sent.body));
+    sent.answer(200, answer);
+    await settle();
+    if (answer.redirect_to) {
+      check(b.location.assigned === answer.redirect_to, "the page went to " + b.location.assigned);
+    } else if (answer.session === "enrolment") {
+      check(visible(b, "enrolling") && visible(b, "signed-in") && /enrol/.test(text(b, "who")), "the page does not send bob-martin to enrol a passkey");
+    } else {
+      check(visible(b, "signed-in") && text(b, "who") === "Signed in as alice." && !visible(b, "password") && !visible(b, "passkey"), "the page does not say alice signed in");
+    }
+  }
+
+  scenario = "an incomplete enrolment link";
+  b = stage("enrol", "https://agentiik.example.com/auth/enrol", { hash: "#agkenrol_oQtE7pKE" });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "problem") && /incomplete/.test(text(b, "problem")) && visible(b, "code-field"), "the page does not say the link is incomplete");
+
+  scenario = "an enrolment that opens no session";
+  b = stage("enrol", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  await fire(b, "enrol", "submit");
+  request(b, "auth/passkey/options").answer(200, registration);
+  await settle();
+  request(b, "auth/passkey/verify").answer(200, { ceremony: "registration", login: "dave", credential: { type: "passkey", id: "made", kind: "synced" } });
+  await settle();
+  request(b, "me").answer(401, { error: "that session opens nothing" });
+  await settle();
+  check(visible(b, "enrolled") && /synced/.test(text(b, "enrolled-what")), "the page does not say what was enrolled");
+  check(!visible(b, "enrol") && !visible(b, "signed-in"), "the page offers another passkey with no session to add it from");
+
+  scenario = "a sign-out on the enrolment page";
+  b = stage("enrol", "https://agentiik.example.com/auth/enrol");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  check(visible(b, "signed-in") && /alice/.test(text(b, "intro")) && !visible(b, "code-field"), "the page does not add a passkey to alice");
+  await fire(b, "sign-out", "click");
+  request(b, "auth/sign-out").answer(204);
+  await settle();
+  check(b.location.reloaded, "the page is not loaded again once signed out");
+
   scenario = "every request";
   for (const browser of all) {
     for (const q of browser.requests) {
-      check(q.url.startsWith("https://agentiik.example.com/api/v1/"), "a request went to " + q.url);
+      check(q.url.startsWith(browser.api), "a request went to " + q.url + " rather than under " + browser.api);
       check(q.init.credentials === "same-origin" && q.init.mode === undefined, "a request to " + q.url + " was sent with credentials " + q.init.credentials + " and mode " + q.init.mode);
     }
   }

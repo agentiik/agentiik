@@ -202,8 +202,8 @@ func TestThePageHoldsNoScriptOrStyleOfItsOwn(t *testing.T) {
 	}
 }
 
-// Every element the page's script names is on the page it runs on: the sign-in page's and the
-// enrolment page's own, each on its page, and those both share on both. A name the script looks up
+// Every element the page's script names, to read it, write it or show it, is on the page it runs on:
+// the sign-in page's and the enrolment page's own, each on its page, and those both share on both. A name the script looks up
 // and the page does not hold stops the script there, in a browser, which no other test runs it in.
 func TestEveryElementThePageScriptNamesIsOnItsPage(t *testing.T) {
 	in := someSessions(t)
@@ -216,7 +216,7 @@ func TestEveryElementThePageScriptNamesIsOnItsPage(t *testing.T) {
 	}
 	named := func(part string) []string {
 		var ids []string
-		for _, m := range regexp.MustCompile(`(?:\$|getElementById)\("([^"]+)"\)`).FindAllStringSubmatch(part, -1) {
+		for _, m := range regexp.MustCompile(`(?:\$|getElementById|show)\("([^"]+)"`).FindAllStringSubmatch(part, -1) {
 			ids = append(ids, m[1])
 		}
 		if len(ids) == 0 {
