@@ -295,6 +295,24 @@ func TestACancelledRunNamesWhatWasStopped(t *testing.T) {
 	}
 }
 
+// A run refused at creation, cancelled before any task, is reported with its reason, since no step
+// failed and none was stopped.
+func TestARunRefusedAtCreationIsReportedWithItsReason(t *testing.T) {
+	dir := repository(t)
+	refused := runReading(agk.Cancelled, agk.VerdictPending)
+	refused.Reason = "alice no longer holds workflow:run on finance/monthly-invoicing: it holds nothing there"
+	s := &standIn{readings: []db.RunDetail{refused}}
+	url := installationAt(t, s)
+
+	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	if code != exitNotSucceeded {
+		t.Fatalf("a run refused at creation answered %d: %s", code, errs)
+	}
+	if !strings.Contains(errs, "monthly-invoicing cancelled: "+refused.Reason) || strings.Contains(errs, "no step failed") {
+		t.Errorf("the report of a run refused at creation is:\n%s", errs)
+	}
+}
+
 // An interrupt stops the following, not the run: nothing is cancelled, the process says how to
 // read the run again, and leaves with no outcome.
 func TestAnInterruptStopsFollowingAndNotTheRun(t *testing.T) {

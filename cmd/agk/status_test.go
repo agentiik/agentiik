@@ -63,6 +63,30 @@ func TestAStatusSaysHowARunStands(t *testing.T) {
 	}
 }
 
+// A run refused at creation says why, "cancelled: " and the reason, the example the page gives: its
+// steps say nothing, since none ran.
+func TestAStatusOfARunRefusedAtCreationSaysWhy(t *testing.T) {
+	d := runReading(agk.Cancelled, agk.VerdictPending)
+	d.StartedAt, d.FinishedAt = time.Time{}, runStart.Add(40*time.Millisecond)
+	d.Trigger, d.TriggeredBy = agk.TriggerSchedule, "finance/agentiik"
+	d.Reason = "finance/agentiik no longer holds workflow:run on finance/monthly-invoicing: grant 01JQ3M8T (operator on the namespace finance) expired at 2026-10-01T00:00:00Z"
+	answer, _ := json.Marshal(d)
+
+	code, out, errs := askStatus(t, string(answer), aRun)
+	if code != exitSucceeded {
+		t.Fatalf("agk status answered %d: %s", code, errs)
+	}
+	for _, want := range []string{
+		"run " + aRun + ": finance/monthly-invoicing@a3f9c1e, cancelled before it started",
+		"schedule by finance/agentiik at 2026-09-25T10:00:00Z",
+		"cancelled: " + d.Reason,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("agk status does not say %q:\n%s", want, out)
+		}
+	}
+}
+
 // -o json is the installation's answer as it gave it, fields this binary does not know included.
 func TestAStatusInJSONIsTheAnswerAsGiven(t *testing.T) {
 	code, out, errs := askStatus(t, `{"run":"`+aRun+`","state":"running","something_new":1}`, aRun, "-o", "json")

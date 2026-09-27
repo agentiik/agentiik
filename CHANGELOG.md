@@ -15,6 +15,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 - Behind nginx, add `proxy_set_header X-Forwarded-For $remote_addr;` to the `location /` of its configuration: the API now takes a sign-in's address from the last entry of that header behind `AGK_PROXY_URL`, which Caddy and Traefik write already and nginx passes on as the client wrote it.
 - A run v0.2 finished, which carries no expiry, is given its namespace's `max_retention_days` from its end by migration 0038, at the next `docker compose up` with nothing to do by hand, so that its envelopes and logs are purged once that has run out.
+- A run v0.2.5 left queued, attributed to `operator`, is let in after the upgrade while the bootstrap token lasts; one still waiting when the first administrator enrols ends `cancelled`, naming the end of the bootstrap, and a run already let in is never asked again.
 
 ### Images
 
@@ -37,6 +38,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A namespace's record is read by an administrator and by whoever holds a role in it, its own or a group's, through the router's `api.OnNamespace` guard: the authorizer says where a principal holds a grant as `api.Holdings`, and a token's `within` narrows it (`access.TokenScope.Reaches`).
 - A route declaring `api.Needs.OrAdministrator` is reached by an administrator as well, whatever they hold at its scope, through a credential that carries the power, and its handler asks `api.Administering` whether the caller came in so; one declaring `api.Needs.Seeing` hands its handler `api.Sees`.
 - `api.Caller.Effective` answers what the caller holds at each scope through the credential it presented, resolved from what the authorizer says as `api.Standings`.
+- `access.Grant.Gives` and `access.Grant.Takes` answer what one grant gives or denies at a scope whatever its expiry, held to `access.Resolve`, and `access.BootstrapOperator` names the bootstrap token's principal for the API and the controller alike.
 
 ### API
 
@@ -76,6 +78,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `POST /api/v1/me/totp` starts a TOTP generator beside the password and answers its secret and `otpauth://` URI once; it counts for nothing until `POST /api/v1/me/totp/confirm` sends a code it shows within ten minutes, and `DELETE /api/v1/me/totp` removes it with a code it shows, counted as a guess. Audited as `credential.enrol` and `credential.remove`.
 - Setting a password or a generator where the policy that applies to the account forbids passwords is a 403 naming `password`, and a bearer token sets and removes neither (403).
 - The enrolment page sets a password from its link or a recovery code, beside the passkey or in its place on an installation addressed by an IP address, and both pages offer a signed-in browser its password and a generator, whose key they show as text and as a QR code drawn in SVG by an encoder of their own, `qr.js`.
+- `GET /api/v1/runs/{id}` answers `reason` for a run the controller cancelled at creation, its principal no longer holding `workflow:run`.
 
 ### State
 
@@ -106,6 +109,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Pool.Collecting` deletes what `Collectable` claimed through the caller, under a lock on each row; neither takes an object a live artifact names or a write holds.
 - `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused.
 - Migration 0039 adds `totp_enrolments`, the TOTP generators waiting for their first code. `db.Wide.SetPassword` sets a password in place of the one held, keeping its identifier, `db.Wide.EndSessionsOpenedBy` ends the sessions a credential opened, and `db.Wide.AddCredential` takes the step of the code confirming a generator.
+- Migration 0040 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
 
 ### Artifacts
 
@@ -118,6 +122,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agentiik_quota_used` and `agentiik_quota_limit`, by namespace and quota, for `max_concurrent_tasks`, `max_runs_per_hour` and `max_artifact_bytes`, keeping 1,000 namespaces and summing the rest under `namespace="_other"`, each quota apart (`metrics.Desc.FoldBy`).
 - The controller that leads runs the retention purges and the collection, package `purge`, as its term begins and every ten minutes, a batch a call and at most ten calls of each purge a pass, the rest left to the next: references past their `retain` are retired, a finished run's envelopes and logs go once its retention has run out, and an object leaves `AGK_OBJECTS_DIR` once nothing has counted it for the 24-hour grace, no live artifact names it and no write of it is under way. A pass that removed something says what in one line, and one that failed says why.
 - `agentiik_artifacts_expired_total`, `agentiik_runs_purged_total`, `agentiik_logs_purged_total`, `agentiik_objects_collected_total` and `agentiik_objects_collected_bytes_total` count what the purges removed.
+- A run is let in only while its principal holds `workflow:run` on its workflow, asked of package `access` on every pass until it is admitted and before its concurrency group; one that no longer does ends `cancelled` before any task. Its reason names the grant that lapsed by its identifier, role and scope, says that a deny applies or that the principal holds nothing there, or names the end of the bootstrap token; the whole account, the group, the deny, the suspension or removal and who revoked, goes to its `run.cancel` entry by `installation` alone.
 
 ### Tests
 
@@ -139,6 +144,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk user create` says its enrolment link enrols a passkey, or a password where the installation allows one.
 - `agk service-account create NS/NAME`, `list [NS]` and `delete NS/NAME`, with `-o json` on create and list. A change answered with a 5xx leaves with 4, a list with 1.
 - `agk share NS[/WORKFLOW] --user L|--group G|--service-account NS/N --role R|--deny P [--expires D]` and `agk share NS[/WORKFLOW] --revoke ID`, `agk grants NS[/WORKFLOW]`, one grant a line with its scope and what it gives there, and `agk whoami [NS[/WORKFLOW]]`, with what the installation tells where it names no scope.
+- `agk status` says why a run refused at creation was cancelled, `cancelled: ` and its reason, and `agk run` ends its report with it.
 
 ## v0.2.5, 2026-09-26
 

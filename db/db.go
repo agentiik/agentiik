@@ -152,7 +152,11 @@ type Reason string
 const (
 	// ControllerSweep is the controller looking for actionable work across the
 	// installation, which the documentation calls the correctness guarantee of the
-	// scheduler, the notification being only a latency optimisation.
+	// scheduler, the notification being only a latency optimisation. It is also what the
+	// controller reads before it lets a run in, since "authorisation is re-evaluated when a
+	// run is created": the principal the run is attributed to, its groups and its grants in
+	// the run's namespace, the bootstrap state, and the grants revoked from it, which only the
+	// audit log still holds.
 	ControllerSweep Reason = "the controller's sweep"
 
 	// Purge is one of the three sweeps, over envelopes, artifacts or logs, each

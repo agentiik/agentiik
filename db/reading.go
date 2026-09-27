@@ -119,6 +119,12 @@ type RunDetail struct {
 	// and the console says so where it would otherwise offer the step".
 	ReplayFromStartOnly bool `json:"replay_from_start_only"`
 
+	// Reason is why the run ended as it did, where nothing in its workflow is what ended it, and
+	// empty on every other run: from v0.3.0, a run its principal no longer held workflow:run for
+	// when it was created, which "ends cancelled before any task, with a reason naming the grant
+	// that lapsed".
+	Reason string `json:"reason,omitempty"`
+
 	Steps []StepSummary `json:"steps"`
 	Tasks []TaskSummary `json:"tasks"`
 }
@@ -147,10 +153,12 @@ func (n *NS) RunDetail(ctx context.Context, run agk.RunID) (RunDetail, error) {
 
 	err := n.tx.QueryRow(ctx, `
 		select namespace, id, workflow, commit, state, trigger, triggered_by,
-		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only
+		       created_at, started_at, finished_at, inputs, outputs, replay_from_start_only,
+		       coalesce(reason, '')
 		from runs where namespace = $1 and id = $2`, n.namespace, string(run)).
 		Scan(&d.Namespace, &d.Run, &d.Workflow, &d.Commit, &state, &trigger, &by,
-			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly)
+			&d.CreatedAt, &started, &finished, &inputs, &outputs, &d.ReplayFromStartOnly,
+			&d.Reason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunDetail{}, fmt.Errorf("%w: %s", ErrNoRun, run)
 	}

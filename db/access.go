@@ -2,11 +2,13 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -187,4 +189,132 @@ func (w *Wide) AccessGrantsAcross(ctx context.Context, p access.Principal, now t
 		`select `+accessColumns+` from grants
 		  where principal = any($1) and (expires_at is null or expires_at > $2)
 		  order by namespace, granted_at, id`, named(p), now))
+}
+
+// Attribution is the principal a run is attributed to, as it stands now in the namespace the run is
+// of: who it is, whether it is still there to hold anything, and the grants of the namespace written
+// for it or for one of its groups, the expired ones among them.
+//
+// It is what the controller asks package access about before it lets a run in, since "authorisation
+// is re-evaluated when a run is created", and what it names when the answer is no: the expired
+// grants are read because the one that gave the permission is the one whose expiry is the reason.
+type Attribution struct {
+	// Principal is the principal with the groups it is in now. A service account belongs to
+	// none, since a group's members are logins.
+	Principal access.Principal
+
+	// Kind is KindUser or KindServiceAccount, and empty where no principal of that name exists:
+	// one removed since, with everything it held.
+	Kind string
+
+	// Suspended is a user who holds nothing, whatever their grants, since "a suspended account
+	// opens no session".
+	Suspended bool
+
+	// Grants are every grant of the namespace naming Principal or one of its groups, on the
+	// namespace or on the workflow asked about, expired or not, in the order they were written.
+	Grants []access.Grant
+}
+
+// Attribution reads principal as it stands now in namespace, for a question about workflow, or
+// about the namespace alone where workflow is empty. principal is a login or NS/NAME, as a run's
+// triggered_by writes it; operator, which names no principal, reads as one that does not exist, and
+// so does anything else no principal is named.
+func (w *Wide) Attribution(ctx context.Context, namespace, workflow, principal string) (Attribution, error) {
+	a := Attribution{Principal: access.Principal{Ref: principal}}
+	kind, err := w.PrincipalKind(ctx, principal)
+	switch {
+	case errors.Is(err, ErrNoPrincipal):
+		return a, nil
+	case err != nil:
+		return Attribution{}, err
+	}
+	a.Kind = kind
+	if kind == KindUser {
+		user, err := w.User(ctx, principal)
+		if err != nil {
+			return Attribution{}, err
+		}
+		a.Suspended = user.Suspended
+		if a.Principal.Groups, err = w.GroupsOf(ctx, principal); err != nil {
+			return Attribution{}, err
+		}
+	}
+	a.Grants, err = collectAccess(w.tx.Query(ctx,
+		`select `+accessColumns+` from grants
+		  where namespace = $1 and principal = any($2)
+		    and (workflow is null or workflow = $3)
+		  order by granted_at, id`, namespace, named(a.Principal), workflow))
+	if err != nil {
+		return Attribution{}, err
+	}
+	return a, nil
+}
+
+// Revocation is a grant revoked, as the audit log recorded it: the grant as it was, and when and by
+// whom it was revoked.
+type Revocation struct {
+	Grant access.Grant
+	At    time.Time
+	By    string
+}
+
+// revocationsRead bounds how many revocations Revocations reads back through the log, newest first.
+// The one a caller is after is the newest that gave a permission, and a principal whose grants in one
+// namespace were revoked more often than this is one whose latest revocations say enough.
+const revocationsRead = 100
+
+// Revocations answers the grants of namespace revoked from p or from one of its groups, on the
+// namespace or on workflow, newest first, as the audit log recorded each: RevokeAccess removes a
+// grant rather than keeping it, and the log is where what it was stays. Where the principal, the
+// scope or the role an entry records cannot be read as a grant, the entry is passed over, since what is asked is which grant gave something, and an entry that cannot say gave nothing
+// anybody could name.
+func (w *Wide) Revocations(ctx context.Context, namespace, workflow string, p access.Principal) ([]Revocation, error) {
+	scopes := []string{namespace}
+	if workflow != "" {
+		scopes = append(scopes, namespace+"/"+workflow)
+	}
+	// The action is written into the statement rather than bound, since the index over the
+	// revocations is partial and PostgreSQL uses one only where the statement itself proves its
+	// predicate: a parameter, planned once for every value, proves nothing.
+	rows, err := w.tx.Query(ctx,
+		`select target, actor, at, detail from audit_log
+		  where action = '`+audit.GrantDelete+`' and namespace = $1
+		    and detail::jsonb->>'principal' = any($2) and detail::jsonb->>'scope' = any($3)
+		  order by seq desc limit $4`,
+		namespace, named(p), scopes, revocationsRead)
+	if err != nil {
+		return nil, fmt.Errorf("db: the grants revoked in %s could not be read: %w", namespace, err)
+	}
+	defer rows.Close()
+	var out []Revocation
+	for rows.Next() {
+		var r Revocation
+		var detail string
+		if err := rows.Scan(&r.Grant.ID, &r.By, &r.At, &detail); err != nil {
+			return nil, fmt.Errorf("db: the grants revoked in %s could not be read: %w", namespace, err)
+		}
+		var was struct {
+			Principal string     `json:"principal"`
+			Scope     string     `json:"scope"`
+			Role      string     `json:"role"`
+			Deny      string     `json:"deny"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		}
+		if err := json.Unmarshal([]byte(detail), &was); err != nil {
+			continue
+		}
+		scope, err := access.ParseScope(was.Scope)
+		if err != nil {
+			continue
+		}
+		r.Grant.Principal, r.Grant.Scope = was.Principal, scope
+		r.Grant.Role, r.Grant.Deny = access.Role(was.Role), access.Permission(was.Deny)
+		r.Grant.ExpiresAt = was.ExpiresAt
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: the grants revoked in %s could not be read: %w", namespace, err)
+	}
+	return out, nil
 }
