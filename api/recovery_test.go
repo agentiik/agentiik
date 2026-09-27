@@ -201,6 +201,45 @@ func TestTheBreakGlassPathRecoversAnAdministratorAndNobodyElse(t *testing.T) {
 	}
 }
 
+// The break-glass path is never used silently: every administrator, the one recovered among them, is
+// told in GET /api/v1/me that the installation's host issued that account a recovery code, and when,
+// and the entry recording the code names who was told. A user who administers nothing is told
+// nothing.
+func TestTheBreakGlassPathIsToldToEveryAdministrator(t *testing.T) {
+	in, carol := administering(t)
+	if w := in.call(t, "POST", "/api/v1/users", `{"login":"dan","admin":true}`, "", carol); w.Code != http.StatusCreated {
+		t.Fatalf("carol creating dan answered %d %s", w.Code, w.Body)
+	}
+	at := in.clock.Add(time.Minute)
+	if _, err := api.BreakGlass(t.Context(), in.pool, publicOrigin, "dan", at); err != nil {
+		t.Fatal(err)
+	}
+
+	w := in.call(t, "GET", "/api/v1/me", "", "", carol)
+	var me api.Me
+	if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("carol's GET /api/v1/me answered %d %s", w.Code, w.Body)
+	}
+	if len(me.Notifications) != 1 {
+		t.Fatalf("carol is told %+v", me.Notifications)
+	}
+	told := me.Notifications[0]
+	if want := `{"id":"` + told.ID + `","kind":"break_glass_recovery","at":"` + at.Format(time.RFC3339) + `","login":"dan"}`; !strings.Contains(w.Body.String(), want) {
+		t.Errorf("carol's GET /api/v1/me answered %s, want it to carry %s", w.Body, want)
+	}
+	for who, want := range map[string]int{"dan": 1, "bob": 0} {
+		if n := in.count(t, fmt.Sprintf(`select count(*) from notifications where recipient = '%s' and kind = 'break_glass_recovery' and login = 'dan'`, who)); n != want {
+			t.Errorf("%s is told of dan's recovery %d times", who, n)
+		}
+	}
+	entries := audited(t, in.pool)
+	last := entries[len(entries)-1]
+	if d := detailOf(t, last); last.Actor != "installation" || last.Action != "enrolment.issue" || last.Target != "dan" ||
+		fmt.Sprint(d["notified"]) != "[carol dan]" {
+		t.Errorf("the break-glass code is recorded as %s %s %s with %s", last.Actor, last.Action, last.Target, last.Detail)
+	}
+}
+
 // administering is an installation whose first administrator, carol, has enrolled a passkey from the
 // link the bootstrap token made her, which ended it, and is signed in in a browser, and whose user
 // bob has enrolled one from the link carol made him, and lost it.

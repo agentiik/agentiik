@@ -39,7 +39,8 @@ import (
 // token where it has not ended and the session the password opens is a full one: always on an
 // installation addressed by an IP address, and where the policy requires no passkey. Where it
 // requires one, the bootstrap stays until the administrator registers a passkey, from the session
-// the password opened or a later one, which ends it then (passkeys.go): ended at the password, it
+// the password opened or a later one, which ends it then (passkeys.go), or until the password signs
+// them in to a full session, the policy relaxed since (passwords.go): ended at the password, it
 // would leave the installation to somebody who can do nothing but enrol.
 //
 // A code sets the password in place of one held, which only a recovery code can meet, since the

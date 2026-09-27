@@ -169,6 +169,11 @@ func (s *UserAPI) issueRecovery(w http.ResponseWriter, r *http.Request, who Prin
 // holding no credential at all, so that no state an administrator's account can be left in keeps
 // the installation locked. It is ErrNotAdministrator for a user who is not one, and
 // db.ErrNoPrincipal for a login no user has.
+//
+// Every administrator is told, the one recovered included, with a break_glass_recovery notification
+// in their GET /api/v1/me written in the same transaction, and the entry names who was told: no
+// administrator vouches for this code, so an administrator who did not run it learns that whoever
+// holds the host did.
 func BreakGlass(ctx context.Context, pool *db.Pool, publicURL, login string, now time.Time) (RecoveryCode, error) {
 	if err := LoginName(login); err != nil {
 		return RecoveryCode{}, err
@@ -188,6 +193,11 @@ func BreakGlass(ctx context.Context, pool *db.Pool, publicURL, login string, now
 		if code, issued, err = issueCode(ctx, wide, enrolAt(publicURL), installationActor, login, db.EnrolmentRecovery, now); err != nil {
 			return err
 		}
+		told, err := wide.TellAdministrators(ctx, login, now)
+		if err != nil {
+			return err
+		}
+		issued.Detail["notified"] = told
 		return wide.Audit(ctx, issued)
 	})
 	if err != nil {

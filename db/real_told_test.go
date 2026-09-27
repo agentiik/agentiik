@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/access"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // What the installation tells a principal: an administrator's grant to themselves, told to the
@@ -195,5 +196,95 @@ func TestAnAdministratorsGrantIsToldToTheOwnersOfItsNamespace(t *testing.T) {
 	}
 	if told := read("erin", later); len(told) != 0 {
 		t.Errorf("erin is still told of a namespace removed: %+v", told)
+	}
+}
+
+// The break-glass path is told to every administrator, suspended or holding no credential, the one
+// recovered among them, naming the account and when, and to nobody else; the account is named
+// rather than referred to, so that removing it leaves what the others were told; and a notice of it
+// carries the account and nothing of the other kinds.
+func TestTheBreakGlassPathIsToldToEveryAdministrator(t *testing.T) {
+	pool := identity(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{
+			{Login: "alice", DisplayName: "Alice"}, {Login: "carol", DisplayName: "Carol", Admin: true},
+			{Login: "dan", DisplayName: "Dan", Admin: true, Suspended: true}, {Login: "erin", DisplayName: "Erin", Admin: true},
+		} {
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	var told []string
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		var err error
+		told, err = w.TellAdministrators(ctx, "dan", now)
+		return err
+	})
+	if !slices.Equal(told, []string{"carol", "dan", "erin"}) {
+		t.Errorf("the recovery of dan was told to %q", told)
+	}
+	read := func(recipient string) []Notification {
+		t.Helper()
+		var notes []Notification
+		wide(t, pool, func(ctx context.Context, w *Wide) error {
+			var err error
+			notes, err = w.NotificationsOf(ctx, recipient, now.Add(time.Second))
+			return err
+		})
+		return notes
+	}
+	for _, admin := range []string{"carol", "dan", "erin"} {
+		if n := read(admin); len(n) != 1 || n[0].Kind != BreakGlassRecovery || n[0].Login != "dan" || !n[0].At.Equal(now) ||
+			n[0].Namespace != "" || n[0].Grant != nil || n[0].Credential != "" {
+			t.Errorf("%s is told %+v", admin, n)
+		}
+	}
+	if n := read("alice"); len(n) != 0 {
+		t.Errorf("alice, who administers nothing, is told %+v", n)
+	}
+
+	for what, refused := range map[string]struct{ stmt, by string }{
+		"a recovery naming nobody": {`insert into notifications (id, recipient, kind, at)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now())`, "notifications_one_kind"},
+		"a recovery naming a namespace": {`insert into notifications (id, recipient, kind, at, namespace, login)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now(), 'finance', 'dan')`, "notifications_one_kind"},
+		"a recovery naming a passkey": {`insert into notifications (id, recipient, kind, at, credential, login)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now(), 'aVBob25lUGFzc2tleQ', 'dan')`, "notifications_one_kind"},
+		"a recovery naming no login a user can have": {`insert into notifications (id, recipient, kind, at, login)
+			values ('01JQ5A', 'carol', 'break_glass_recovery', now(), 'Dan')`, "notifications_login_check"},
+		"a passkey's refusal naming an account": {`insert into notifications (id, recipient, kind, at, credential, login)
+			values ('01JQ5A', 'carol', 'passkey_counter_refused', now(), 'aVBob25lUGFzc2tleQ', 'dan')`, "notifications_one_kind"},
+		"a widening naming an account": {`insert into notifications (id, recipient, kind, at, namespace, access_grant, login)
+			values ('01JQ5A', 'carol', 'admin_access_widened', now(), 'finance', '{}', 'dan')`, "notifications_one_kind"},
+		"a kind nobody tells": {`insert into notifications (id, recipient, kind, at, login)
+			values ('01JQ5A', 'carol', 'break_glass', now(), 'dan')`, "notifications_kind_check"},
+	} {
+		err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+			_, err := w.tx.Exec(ctx, refused.stmt)
+			return err
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.ConstraintName != refused.by {
+			t.Errorf("%s was answered %v, and %s refuses it", what, err, refused.by)
+		}
+	}
+
+	// dan is removed: what he was told goes with him, and what the others were told stays.
+	wide(t, pool, func(ctx context.Context, w *Wide) error { return w.RemovePrincipal(ctx, "dan") })
+	if n := read("carol"); len(n) != 1 || n[0].Login != "dan" {
+		t.Errorf("once dan is removed, carol is told %+v", n)
+	}
+	var left int
+	if err := pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+		return w.tx.QueryRow(ctx, `select count(*) from notifications where recipient = 'dan'`).Scan(&left)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("%d notifications of dan outlived him", left)
 	}
 }
