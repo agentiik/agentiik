@@ -360,6 +360,10 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 
 // serveOwn is the hook every route taking Own passes through: the caller is identified as on any
 // other route, a request with no credential is refused, and the handler is given who asks.
+//
+// It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
+// enrolment-only session, once sessions are served, "enrols passkeys and nothing else", and is
+// refused here, where openapi.json answers it 403 on each of them.
 func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {

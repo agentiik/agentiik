@@ -34,9 +34,9 @@
 // bus with the control plane's credential, which creates the streams and every runner pool's
 // consumer, and serves every route built so far on AGK_LISTEN: runs and versions, cancelling a run,
 // a step's log stream, the secret declarations, the runners, their pools and join tokens, the bus
-// credential, and the built-in object store at /objects on AGK_PUBLIC_URL, each request identified
-// and authorised by api.Principals from what the database holds. It takes no argument, since a flag
-// would be a second way to say what the environment says.
+// credential, the namespaces, the API tokens, and the built-in object store at /objects on
+// AGK_PUBLIC_URL, each request identified and authorised by api.Principals from what the database
+// holds. It takes no argument, since a flag would be a second way to say what the environment says.
 //
 // It serves plain HTTP, to the TLS terminator in front on a network only the terminator reaches,
 // unless AGK_TLS_CERT_FILE and AGK_TLS_KEY_FILE name a certificate and its key: then it serves TLS
