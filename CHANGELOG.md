@@ -16,7 +16,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Images
 
-- `ghcr.io/agentiik/postgres-upgrade` (`build/postgres-upgrade.Dockerfile`), published with the others, carries PostgreSQL 17 and 18 and upgrades a data directory an older major version wrote with `pg_upgrade` in copy mode, keeping the old one beside it as `postgres-17`; a new or an upgraded directory it leaves alone, and a failure changes nothing.
+- `ghcr.io/agentiik/postgres-upgrade` (`build/postgres-upgrade.Dockerfile`), published with the others, carries PostgreSQL 17 and 18 with their contrib modules, and upgrades a data directory an older major version wrote to the one it is given with `pg_upgrade` in copy mode, keeping the old one beside it as `postgres-17`. A new or an upgraded directory it leaves alone, a server killed at its stop it recovers first, one still running it refuses, and a failure changes nothing.
 
 ### Access
 

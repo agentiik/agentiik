@@ -1,18 +1,21 @@
 #!/bin/sh
 # The entry point of ghcr.io/agentiik/postgres-upgrade: it brings a PostgreSQL data directory written
-# by an older major version to the newest one this image carries, with pg_upgrade, and keeps the old
+# by an older major version to the one PostgreSQL is about to run, with pg_upgrade, and keeps the old
 # directory beside it as the way back. The Compose file of agentiik/deploy runs it before PostgreSQL
 # at every docker compose up, so that a release moving PostgreSQL to a new major version asks nothing
 # of the person upgrading.
 #
-#   postgres-upgrade [DIRECTORY]
+#   postgres-upgrade [DIRECTORY [MAJOR]]
 #
 # DIRECTORY is the cluster, /data/postgres unless named, and the container is given the directory
 # holding it, since the old cluster is renamed beside it: postgres becomes postgres-17 and the new
-# cluster, built as postgres-18.partial, takes the name postgres. By what DIRECTORY holds:
+# cluster, built as postgres-18.partial, takes the name postgres. MAJOR is the version to upgrade to,
+# the newest this image carries unless named. The Compose file names the one its postgres image runs,
+# so that an image carrying a newer version than that, as dev will before the Compose file moves to
+# it, upgrades nothing too early. By what DIRECTORY holds:
 #
 #   nothing, or no PG_VERSION     a new installation, which PostgreSQL's own image initialises: nothing
-#   the newest major version      nothing
+#   MAJOR                         nothing
 #   an older one this image has   pg_upgrade --check, pg_upgrade in copy mode, the new cluster started
 #                                 once with the old one's configuration, then the two renamed
 #   anything else                 refused
@@ -41,22 +44,30 @@ fail() {
 }
 as_postgres() { su-exec "$account" "$@"; }
 
-# The major versions this image carries, each in /usr/libexec/postgresqlNN as Alpine installs it. The
-# newest is the one it upgrades to, so that carrying 19 beside 18 is the whole of the next upgrade.
+# The major versions this image carries, each in /usr/libexec/postgresqlNN as Alpine installs it, so
+# that carrying 19 beside 18 is the whole of the next upgrade on this side.
 majors=$(for bin in /usr/libexec/postgresql[0-9]*; do
 	if [ -x "$bin/postgres" ]; then echo "${bin##*postgresql}"; fi
 done | sort -n)
-new=$(echo "$majors" | tail -n 1)
-if [ -z "$new" ]; then fail "this image carries no PostgreSQL, so it was built wrong"; fi
+if [ -z "$majors" ]; then fail "this image carries no PostgreSQL, so it was built wrong"; fi
+carried=$(echo $majors | sed 's/ /, /g')
+new=${2:-$(echo "$majors" | tail -n 1)}
+case $new in
+'' | *[!0-9]*) fail "\"$new\" is no major version of PostgreSQL to upgrade to: nothing was changed" ;;
+esac
 newbin=/usr/libexec/postgresql$new
+if [ ! -x "$newbin/postgres" ]; then
+	fail "PostgreSQL $new is to run, and this image carries $carried alone: pull the image of the same release as compose.yaml; nothing was changed"
+fi
 
 partial=$parent/$name-$new.partial # being built; whatever an earlier run left of it is discarded
 ready=$parent/$name-$new.ready     # built and proved, and about to take the name of DIRECTORY
 work=/tmp/postgres-upgrade         # pg_upgrade's socket and logs, and the servers' pg_hba.conf
 oldbin=
+stopped=
 
 # On any exit but success: a server started on the new cluster is stopped, what pg_upgrade said is
-# printed, and the new cluster is removed. The old one is never touched here, and a server pg_upgrade
+# printed where something failed rather than was stopped, and the new cluster is removed. The old one is never touched here, and a server pg_upgrade
 # left on it, which it stops itself, is stopped cleanly rather than left to a container being killed.
 cleanup() {
 	status=$?
@@ -69,7 +80,7 @@ cleanup() {
 			as_postgres "$oldbin/pg_ctl" -D "$dir" -m fast -w stop >/dev/null 2>&1 || true
 		fi
 		for log in "$partial"/pg_upgrade_output.d/*/*.txt "$partial"/pg_upgrade_output.d/*/log/*.log "$work"/*.log; do
-			if [ -s "$log" ]; then
+			if [ -z "$stopped" ] && [ -s "$log" ]; then
 				echo "--- ${log#"$parent"/}" >&2
 				tail -n 40 "$log" >&2
 			fi
@@ -79,14 +90,33 @@ cleanup() {
 	exit "$status"
 }
 trap cleanup EXIT
-trap 'exit 143' TERM
-trap 'exit 130' INT
+trap 'stopped=1; fail "stopped before it finished: the next docker compose up takes the upgrade from where it was"' TERM INT
 
 # ours says whether a postmaster.pid is one a server started here wrote, which gives pg_upgrade's port
 # and this image's socket directory. A container of this image has its own process namespace, so
 # such a server died with the container that started it, and no other container can be running it.
 ours() {
 	[ -f "$1" ] && [ "$(sed -n 4p "$1")" = 50432 ] && [ "$(sed -n 5p "$1")" = "$work" ]
+}
+
+# dead says whether the server that wrote a postmaster.pid is known to have stopped: one started
+# here, or one whose socket, in the volume the Compose file gives PostgreSQL and this container
+# both, still holds the lock the server took and refuses a connection, as a socket nobody listens on
+# does. A server that answers, however it answers, is alive, and so is one whose socket this
+# container cannot see.
+dead() {
+	if ours "$1"; then return 0; fi
+	port=$(sed -n 4p "$1")
+	sockets=$(sed -n 5p "$1")
+	if [ -z "$port" ] || [ -z "$sockets" ] || [ ! -e "$sockets/.s.PGSQL.$port.lock" ]; then return 1; fi
+	if said=$(LC_ALL=C PGCONNECT_TIMEOUT=10 su-exec "$account" "$oldbin/psql" -h "$sockets" -p "$port" \
+		-U "$user" -d template1 -XAtqc 'select 1' 2>&1); then
+		return 1
+	fi
+	case $said in
+	*"Connection refused"* | *"No such file or directory"*) return 0 ;;
+	esac
+	return 1
 }
 
 # An earlier run stopped between proving the new cluster and renaming it. Where the old one is still
@@ -122,10 +152,10 @@ if [ "$old" -eq "$new" ]; then
 	exit 0
 fi
 if [ "$old" -gt "$new" ]; then
-	fail "$name was written by PostgreSQL $old, newer than $new, the newest this image carries: it is this image that is too old, and nothing was changed"
+	fail "$name was written by PostgreSQL $old, newer than $new, which is to run on it: nothing was changed"
 fi
 if [ ! -x "/usr/libexec/postgresql$old/postgres" ]; then
-	fail "$name was written by PostgreSQL $old, and this image carries $(echo $majors | sed 's/ /, /g') alone: upgrade through a release whose image carries $old first; nothing was changed"
+	fail "$name was written by PostgreSQL $old, and this image carries $carried alone: upgrade through a release whose image carries $old first; nothing was changed"
 fi
 oldbin=/usr/libexec/postgresql$old
 
@@ -142,22 +172,23 @@ if [ "$(stat -c %d "$dir")" != "$(stat -c %d "$parent")" ]; then
 	fail "$name is mounted on its own, and the old cluster cannot be kept beside it: give this container the directory holding $name; nothing was changed"
 fi
 
-# A postmaster.pid is a server running on the cluster, or one that stopped without shutting down. A
-# server in another container, such as PostgreSQL's own, cannot be told from a dead one from here,
-# since its process is in another namespace, and pg_upgrade would take it for dead and start a second
-# server on the same files: refused. A server started here and killed with its container is recovered
-# as pg_upgrade would, by starting it once so that it replays its log, and stopping it.
+# A postmaster.pid is a server running on the cluster, or one that stopped without shutting down, as
+# one does when docker stop runs out of time. pg_upgrade would take a server in another container,
+# whose process it cannot see, for a dead one, and start a second server on the same files: so a
+# server not known to be dead is refused. A dead one is recovered as pg_upgrade would, started once
+# so that it replays its log, and stopped.
 if [ -e "$dir/postmaster.pid" ]; then
-	if ! ours "$dir/postmaster.pid"; then
-		fail "$name holds a postmaster.pid: PostgreSQL $old is running on it, or stopped without shutting down, and an upgrade now could lose what it had not written. Nothing was changed: let it shut down, starting it once more with the previous compose.yaml if it crashed, then run docker compose up -d again"
+	if ! dead "$dir/postmaster.pid"; then
+		fail "$name holds a postmaster.pid, and the server that wrote it answers on its socket, or this container cannot see that socket to know it stopped: nothing was changed. Stop PostgreSQL $old, or where it crashed, start it once more with the previous compose.yaml and stop it, then run docker compose up -d again"
 	fi
-	say "$name holds the postmaster.pid of a server an earlier upgrade started and did not stop: starting it once to recover, and stopping it"
+	say "$name holds the postmaster.pid of a server that stopped without shutting down: starting it once to recover, and stopping it"
 	mkdir -p -m 700 "$work" && chown "$account:$account" "$work"
 	printf 'local all all trust\n' >"$work/pg_hba.conf"
 	as_postgres "$oldbin/pg_ctl" -D "$dir" -w -t 300 -l "$work/recovery.log" \
 		-o "-p 50432 -c listen_addresses='' -c unix_socket_directories='$work' -c hba_file='$work/pg_hba.conf'" start >/dev/null ||
 		fail "PostgreSQL $old did not start on $name to recover it, as its log below says: nothing was changed"
-	as_postgres "$oldbin/pg_ctl" -D "$dir" -m fast -w -t 300 stop >/dev/null
+	as_postgres "$oldbin/pg_ctl" -D "$dir" -m fast -w -t 300 stop >/dev/null ||
+		fail "PostgreSQL $old did not stop after recovering $name, as its log below says: nothing was changed"
 fi
 
 # Copy mode needs room for a second cluster beside the first, and a disk filled halfway through fills
@@ -226,10 +257,12 @@ after=$(query "select string_agg(oid::text, ' ' order by oid) || ' ' from pg_dat
 if [ "$before" != "$after" ]; then
 	fail "the upgraded cluster holds the databases $after, where $name holds $before: nothing was changed"
 fi
-databases=$(query "select string_agg(datname, ', ' order by datname) from pg_database")
+databases=$(query "select string_agg(datname, ', ' order by datname) from pg_database") ||
+	fail "the upgraded cluster did not say which databases it holds: nothing was changed"
 as_postgres "$newbin/vacuumdb" -h "$work" -p 50432 -U "$user" --all --analyze-only --missing-stats-only --quiet ||
 	fail "vacuumdb could not gather the statistics of the upgraded cluster: nothing was changed"
-as_postgres "$newbin/pg_ctl" -D "$partial" -m fast -w -t 300 stop >/dev/null
+as_postgres "$newbin/pg_ctl" -D "$partial" -m fast -w -t 300 stop >/dev/null ||
+	fail "PostgreSQL $new did not stop on the upgraded cluster, as its log below says: nothing was changed"
 
 # The two renames, the new cluster first marked ready so that a run stopped between them knows what
 # it finds. A name the old cluster should take that is already taken, by one kept at an earlier
