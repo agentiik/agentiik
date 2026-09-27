@@ -75,6 +75,12 @@ type Reference struct {
 	MediaType string
 	For       time.Duration
 	Fetches   int
+
+	// WithRun is a file that lives at least as long as its run keeps the envelopes naming it,
+	// which SaveDecision makes it once the run has finished and that is known: a file of a port
+	// that declares no retain of its own, published or only a shard's. An envelope kept while
+	// the files it names are collected would be read back naming bytes that are gone.
+	WithRun bool
 }
 
 // Written is what recording a reference settled.

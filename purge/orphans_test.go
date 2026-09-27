@@ -174,8 +174,9 @@ func TestAnOrphanAWriteHoldsStays(t *testing.T) {
 }
 
 // A file an envelope of a run still under way names stays, since the step that wrote it has not
-// published yet and nothing else names it; once the run has finished without recording it, as a
-// step that failed leaves its shards' files, it goes. The envelope stays, counted by its run.
+// published yet and, a v0.2 run's next decision not having come, nothing else may name it; once the
+// run has finished with the file recorded by nothing, it goes. The envelope stays, counted by its
+// run.
 func TestAFileARunUnderWayNamesStays(t *testing.T) {
 	in := withInstallation(t)
 	run := in.run(t)

@@ -45,8 +45,8 @@ const (
 
 // Backfill records the artifact files of the finished runs whose files are not recorded: those v0.2
 // finished, which recorded no reference for a file of an output its workflow gave no retain, and
-// any a v0.2 controller finished while an upgrade replaced it. Each file the envelopes a run's
-// steps published name is recorded as an artifact of the run, expiring its namespace's
+// any a v0.2 controller finished while an upgrade replaced it. Each file the envelopes a run keeps
+// name, published or its shards', is recorded as an artifact of the run, expiring its namespace's
 // max_retention_days after the run finished, so that the purges retire it and the collection
 // deletes it in time, as they do any other. init and migrate call it at every run, before the
 // controller starts, and a run with nothing left to record reads one empty batch; the controller

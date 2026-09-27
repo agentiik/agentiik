@@ -3,11 +3,11 @@
 -- v0.2 recorded a row of artifacts only for an output its workflow gave a retain, so the files of
 -- every other output, what travelled between two steps above all, are named by the envelopes their
 -- steps published and by no row: no count holds them, nothing expires them and the collection never
--- reaches them. A controller of this release records every file its run's steps have published at
--- every decision, and says so here in the same statement; so a run that has finished and does not
--- say so was finished by a controller that did not: v0.2's, before the upgrade, or one still
--- deciding in the moments an upgrade takes to replace it. A mark taken once, as the runs finished
--- when this migration ran, would miss those last ones.
+-- reaches them. A controller of this release records every file of every envelope its run keeps,
+-- its shards' included, at every decision, and says so here in the same statement; so a run that
+-- has finished and does not say so was finished by a controller that did not: v0.2's, before the
+-- upgrade, or one still deciding in the moments an upgrade takes to replace it. A mark taken once,
+-- as the runs finished when this migration ran, would miss those last ones.
 --
 -- init, migrate and the controller that leads read the envelopes of those runs from the store and
 -- record each file they name as an artifact of its run, expiring the namespace's

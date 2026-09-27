@@ -340,3 +340,24 @@ func TestAPassRecordsABatchOfRunsACall(t *testing.T) {
 		t.Errorf("the next pass recorded %d runs, and one was left", got.Recorded)
 	}
 }
+
+// The files of every envelope a v0.2 run keeps are recorded, the envelope of a shard whose step
+// never published included, as a decision of this release records them, so that none of them is
+// taken for an orphan while the run keeps the envelope naming it.
+func TestBackfillRecordsTheFilesOfEveryEnvelopeARunKeeps(t *testing.T) {
+	in := withInstallation(t)
+	run, published := in.v02(t, 24*time.Hour, file{"out.bin", "published"})
+	in.put(t, "a shard's output")
+	shard, size := in.named(t, run, file{"shard.bin", "a shard's output"})
+	in.exec(t, fmt.Sprintf(`update runs set evaluation = '{"version": 1, "envelopes": [
+	            {"step": "archive", "shard": -1, "port": "out", "digest": "%s", "size": 1},
+	            {"step": "archive", "shard": 0, "port": "out", "digest": "%s", "size": %d}]}' where id = '%s'`, published, shard, size, run))
+
+	got, err := purge.Backfill(t.Context(), in.pool, in.store, 0)
+	if err != nil || got != (purge.Backfilled{Runs: 1, Artifacts: 2}) {
+		t.Fatalf("Backfill recorded %+v: %v", got, err)
+	}
+	if in.refs(t, "a shard's output") != 1 || in.refs(t, "published") != 1 {
+		t.Error("the files of the run's envelopes are not each counted once")
+	}
+}

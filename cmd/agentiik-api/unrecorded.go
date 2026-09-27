@@ -11,11 +11,11 @@ import (
 	"github.com/agentiik/agentiik/purge"
 )
 
-// unrecordedArtifacts records the artifact files of the runs v0.2 finished, from the envelopes
-// their steps published in the object store at objects, as purge.Backfill does, and says what it
-// recorded. v0.2 recorded no reference for a file of an output its workflow gave no retain, so
-// nothing would ever expire or collect those. init and migrate call it at every run, after the
-// migrations, as they give the built-in identities, and a run finding nothing left says nothing.
+// unrecordedArtifacts records the artifact files of the runs v0.2 finished, from the envelopes they
+// keep in the object store at objects, as purge.Backfill does, and says what it recorded. v0.2
+// recorded no reference for a file of an output its workflow gave no retain, so nothing would ever
+// expire or collect those. init and migrate call it at every run, after the migrations, as they
+// give the built-in identities, and a run finding nothing left says nothing.
 //
 // What it cannot record, a run whose objects a writer held or whose envelope the store would not
 // give back, it says and leaves for the next run and for the controller's passes, rather than fail:

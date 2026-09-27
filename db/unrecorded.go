@@ -16,16 +16,17 @@ import (
 // v0.2 recorded a reference only for an output its workflow gave a retain, so the files of every
 // other output are named by the envelopes their steps published and by no row: nothing counts
 // them, nothing expires them, and the collection never reaches them. A decision of this release
-// records every file its run's steps have published and sets runs.files_recorded, so a finished run
-// that has it unset was finished by a controller that did not, which migration 0041 sets out.
+// records every file of every envelope its run keeps and sets runs.files_recorded, so a finished
+// run that has it unset was finished by a controller that did not, which migration 0041 sets out.
 // init, migrate and the controller that leads record their files as a decision would have, an
-// artifact of the run for every file its steps published, expiring the namespace's
-// max_retention_days after the run finished, as migration 0038 dates the run's envelopes and logs,
-// which a run finished after that migration is given here too. From there the purges retire and
-// collect them as any other.
+// artifact of the run for every file its envelopes name, the shards' included, expiring the
+// namespace's max_retention_days after the run finished, as migration 0038 dates the run's
+// envelopes and logs, which a run finished after that migration is given here too: no file is
+// collected while an envelope naming it is kept. From there the purges retire and collect them as
+// any other.
 //
 // Package db does not reach the object store, where the envelopes are, so it is two calls:
-// UnrecordedRuns answers the runs and the envelopes their steps published, the caller reads the
+// UnrecordedRuns answers the runs and the envelopes they keep, the caller reads the
 // files those name, and RecordUnrecorded records them and sets the run's column in one
 // transaction. A run is recorded whole or not at all, and a caller cut short between two batches
 // leaves the runs it did not reach for its next call, which records nothing twice: a reference
@@ -47,15 +48,17 @@ type Unrecorded struct {
 	Namespace string
 	Run       agk.RunID
 
-	// Envelopes are the digests of what its steps published, the bare hexadecimal, whose files
-	// are its artifacts. A shard's envelope is left out, as a decision leaves it out: its files
-	// are the publication's, and a step that published nothing recorded none.
+	// Envelopes are the digests of the envelopes the run keeps, the bare hexadecimal, whose files
+	// are its artifacts: what its steps published, and what their shards produced, as a decision
+	// records them, which includes the shards of a step that never published because another
+	// failed.
 	Envelopes []string
 }
 
 // UnrecordedRuns answers at most batch runs whose artifact files are still to be recorded, those
 // after the run of after's namespace and identifier in that order, from the first where after's
-// namespace is empty, with the envelopes their steps published.
+// namespace is empty, with the envelopes they keep: those their decision references, published and
+// per shard, and those their steps published, each once.
 //
 // A caller goes on from the last run it was answered rather than from the first left, so that a
 // run another caller is recording at that moment, or one whose objects a writer held, is passed by
@@ -89,13 +92,22 @@ func (p *Pool) UnrecordedRuns(ctx context.Context, after Unrecorded, batch int) 
 			out = append(out, Unrecorded{Namespace: r[0], Run: agk.RunID(r[1])})
 		}
 		rows, err := w.tx.Query(ctx, `
-			select s.namespace, s.run_id, p.value->>'digest'
-			from steps s
-			join unnest($1::text[], $2::text[]) as g(namespace, run_id)
-			  on s.namespace = g.namespace and s.run_id = g.run_id,
-			lateral jsonb_each(s.ports) as p
-			where p.value ? 'digest'
-			order by s.namespace, s.run_id, s.step, p.key`, runs.first(), runs.second())
+			select namespace, run_id, digest from (
+			  select s.namespace, s.run_id, substr(p.value->>'digest', 8) as digest
+			  from steps s
+			  join unnest($1::text[], $2::text[]) as g(namespace, run_id)
+			    on s.namespace = g.namespace and s.run_id = g.run_id,
+			  lateral jsonb_each(s.ports) as p
+			  where p.value ? 'digest'
+			  union
+			  select r.namespace, r.id, e->>'digest'
+			  from runs r
+			  join unnest($1::text[], $2::text[]) as g(namespace, run_id)
+			    on r.namespace = g.namespace and r.id = g.run_id,
+			  lateral jsonb_array_elements(coalesce(r.evaluation->'envelopes', '[]'::jsonb)) as e
+			  where e ? 'digest'
+			) kept
+			order by namespace, run_id, digest`, runs.first(), runs.second())
 		if err != nil {
 			return err
 		}
@@ -106,7 +118,7 @@ func (p *Pool) UnrecordedRuns(ctx context.Context, after Unrecorded, batch int) 
 				return err
 			}
 			u := &out[index[[2]string{namespace, run}]]
-			u.Envelopes = append(u.Envelopes, trimAlgorithm(digest))
+			u.Envelopes = append(u.Envelopes, digest)
 		}
 		return rows.Err()
 	})
