@@ -342,7 +342,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 
 	// agk login: an assertion carrying its loopback address and the SHA-256 of its verifier hands
 	// it a code, which it trades once for an API token of dave's; the code presented again opens
-	// nothing, and is answered as a bearer token that opens nothing is.
+	// nothing, is answered as a bearer token that opens nothing is, and is recorded as a sign-in
+	// refused, about no account, since the code taken names none any more.
 	verifier := strings.Repeat("v", 43)
 	challenge := sha256.Sum256([]byte(verifier))
 	w = s.act("POST /api/v1/auth/passkey/options", "/api/v1/auth/passkey/options", actor{}, `{"ceremony":"assertion"}`, http.StatusOK)
@@ -361,7 +362,8 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	exchange := map[string]string{"code": handed.Query().Get("code"), "code_verifier": verifier}
 	w = s.ask("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusCreated)
 	s.holds("POST /api/v1/auth/exchange", "api_token.create dave "+s.answer(w)["api_token"].(map[string]any)["id"].(string)+" - done")
-	s.act("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusUnauthorized)
+	s.act("POST /api/v1/auth/exchange", "/api/v1/auth/exchange", actor{}, exchange, http.StatusUnauthorized,
+		"signin.fail 192.0.2.1 an unknown exchange code - done")
 
 	// dave's password signs in, and a wrong one does not.
 	s.act("POST /api/v1/auth/login", "/api/v1/auth/login", actor{},
