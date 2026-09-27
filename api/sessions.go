@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -89,11 +90,10 @@ const (
 // code in the registration's options and spend it when the passkey is recorded, and refuse a
 // session a code opened, which would register a passkey without spending it.
 //
-// A password opening a session where the policy requires a passkey the account does not hold opens
-// one that may only enrol as well, as the OpenAPI document's sessionKind says. Which policy applies
-// to an account is not settled yet, so that case is the password sign-in's to add, from the
-// credential the session records or by recording what it may do; until then a credential opens a
-// full session, and no route opens one with a password.
+// A session a password opened may only enrol as well, where the policy that applies to its account
+// requires a passkey the account does not hold, as the OpenAPI document's sessionKind says. That is
+// read from the credential the session records, at every request, and never written: see
+// identifySession.
 type OpenedBy struct {
 	Credential    string
 	EnrolmentCode []byte
@@ -147,7 +147,11 @@ func (p *Principals) AcceptSessions(publicURL string) error {
 	if err != nil {
 		return err
 	}
-	p.origin = origin
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return err
+	}
+	p.origin, p.ipAddressed = origin, net.ParseIP(u.Hostname()) != nil
 	return nil
 }
 
@@ -174,6 +178,13 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // A request changing something is refused before the session is looked up where it does not come
 // from the public URL's origin, so that a page of another host neither acts on the session nor
 // keeps it open.
+//
+// What a session a password opened may do is read from the policy that applies to its account now,
+// so that a policy changed applies from the next request, as does a first passkey enrolled from the
+// session: nothing where passwords are forbidden, since the policy says no password exists any more
+// and whatever one opened goes with it; enrolling alone where a passkey is required and the account
+// holds none; and whatever the user's grants allow otherwise. Such a session is enrolling without
+// having been opened by a code, which the registration ceremony tells apart: it registers from it.
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
 		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
@@ -191,6 +202,21 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		if err != nil {
 			return err
 		}
+		enrolling := len(s.EnrolmentCode) > 0
+		if s.CredentialType == db.CredentialPassword {
+			policy, err := passwordPolicyOf(ctx, w, s.Login, now, p.ipAddressed)
+			if err != nil {
+				return err
+			}
+			if policy.forbidden {
+				return nil
+			}
+			held, err := w.CredentialsOf(ctx, s.Login)
+			if err != nil {
+				return err
+			}
+			enrolling = policy.enrolling(passkeysIn(held))
+		}
 		ends := s.CreatedAt.Add(SessionLifetime)
 		until := now.Add(SessionIdle)
 		if until.After(ends) {
@@ -206,8 +232,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 				return err
 			}
 		}
-		coded := len(s.EnrolmentCode) > 0
-		as = Identity{Principal: Principal(s.Login), Enrolling: coded, OpenedByCode: coded}
+		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0}
 		return nil
 	})
 	if err != nil {

@@ -6,8 +6,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/secret"
 )
+
+// What the password sign-in reads a TOTP generator's secret through is this.
+var _ api.TOTPSecrets = (*secret.TOTP)(nil)
 
 // A TOTP generator's secret is sealed as a value is, opens where it was sealed and nowhere else: not
 // for another user, not in another generator's row, not under another master key, and never as a
