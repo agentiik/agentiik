@@ -105,10 +105,10 @@
 // the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has enrolled, saying so where none is set and none is kept, and minting none; and a
 // join token of the pool default for the runner beside it, issued through the database since the
-// API is not serving yet. Each service is given its own copy of what
-// it reads, owned by uid 65532 where init runs as root, but for the bus's, which runs as root, and
-// the runner's certificate, which anybody may read; the control plane's credential alone is one
-// file for two, since the API renews it while it runs.
+// API is not serving yet. Each service is given its own copy of what it reads, owned by uid 65532
+// where init runs as root, but for the bus's, which runs as root, and the runner's certificate,
+// which anybody may read; the control plane's credential alone is one file for two, since the API
+// renews it while it runs.
 //
 // It is the one program that takes a secret as a value: the bootstrap token, which a person sets
 // once in the file Docker Compose reads, and of which init writes the hash alone.
@@ -119,11 +119,11 @@
 // workflow, run or secret, refusing one that does and saying what it holds. v0.2.0 has no route
 // that makes either change, so this verb stands in for v0.3.0's until they do. It reads
 // AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE and connects as that role, the one the API
-// connects as, so it runs where the API runs with the API's environment; the name is held to what the API holds a namespace
-// to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
-// namespace.create or namespace.delete by installation, as init's own acts are, the installation
-// itself being no principal a grant names, and a namespace created again is recorded
-// unchanged and left as it was, so that an installation script can run it every time.
+// connects as, so it runs where the API runs with the API's environment; the name is held to what
+// the API holds a namespace to, reserved words refused. Each change is recorded in the audit log in
+// its own transaction, as namespace.create or namespace.delete by installation, as init's own acts
+// are, the installation itself being no principal a grant names, and a namespace created again is
+// recorded unchanged and left as it was, so that an installation script can run it every time.
 //
 // # bus-init and bus-credential
 //
