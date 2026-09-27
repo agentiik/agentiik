@@ -76,6 +76,12 @@ type Options struct {
 	// left unset and the zero an installation wrote would be one value, and one of them
 	// would be read as the other.
 	MaxRequeues *int
+
+	// MaxRunDuration is the namespace's max_run_duration, which bounds the root timeout: a
+	// workflow asking for more is held to it and one writing none is bounded by it. Zero
+	// bounds nothing, as a namespace that sets none and agk run --local, which has no
+	// namespace, bound nothing.
+	MaxRunDuration time.Duration
 }
 
 // Evaluator is a handle over a Graph and a State. It holds no progress of its own: the
@@ -89,6 +95,9 @@ type Evaluator struct {
 	// maxRequeues is the bound New was given, and zero is an installation that asked for
 	// no requeue at all.
 	maxRequeues int
+
+	// maxRunDuration is the namespace's bound on the root timeout, and zero bounds nothing.
+	maxRunDuration time.Duration
 
 	// templates is a memo and not progress. The same expression is read once per shard
 	// and again on every attempt, and compiling CEL is the expensive half of evaluating
@@ -135,20 +144,22 @@ func Start(g *Graph, run agk.Run, o Options, at time.Time) (*Evaluator, error) {
 	if o.MaxRequeues != nil {
 		most = *o.MaxRequeues
 	}
-	return New(g, s, o.Limits, most)
+	return New(g, s, o.Limits, most, o.MaxRunDuration)
 }
 
 // New resumes a run from a state. "Failover is a state resume and never a rebuild": load
 // the State, call Next, get the Plan the instance that died would have got.
 //
-// The size rules and max_requeues are arguments and not state, because neither is the
-// run's: they are the namespace's and the installation's, and a pass is decided under the
-// ones that hold when it is taken. The size rules are read as Options reads them. The bound
-// is the number itself, zero requeuing nothing, since a caller resuming a run has already
-// read the installation's setting and has nothing left unset to fill in. A negative bound
-// is refused: it counts no number of times, and reading it as none or as the default would
-// be guessing which the installation meant.
-func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) {
+// The size rules, max_requeues and max_run_duration are arguments and not state, because
+// none of them is the run's: they are the namespace's and the installation's, and a pass is
+// decided under the ones that hold when it is taken, so a run whose namespace is given a
+// lower max_run_duration is held to it from its next pass. The size rules are read as
+// Options reads them. The bound is the number itself, zero requeuing nothing, since a caller
+// resuming a run has already read the installation's setting and has nothing left unset to
+// fill in. A negative bound is refused: it counts no number of times, and reading it as none
+// or as the default would be guessing which the installation meant. A max_run_duration of
+// zero bounds nothing, and a negative one is refused for the same reason.
+func New(g *Graph, s *State, l agk.Limits, maxRequeues int, maxRunDuration time.Duration) (*Evaluator, error) {
 	switch {
 	case g == nil:
 		return nil, fmt.Errorf("graph: there is no graph to evaluate the run against")
@@ -156,6 +167,8 @@ func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) 
 		return nil, fmt.Errorf("graph: there is no state to resume")
 	case maxRequeues < 0:
 		return nil, fmt.Errorf("graph: max_requeues is how many times one key is handed out again after a loss, and %d is no number of times: zero is what requeues nothing", maxRequeues)
+	case maxRunDuration < 0:
+		return nil, fmt.Errorf("graph: max_run_duration is how long a run of the namespace may take, and %s is no length of time: zero is what bounds nothing", maxRunDuration)
 	case s.Version != StateVersion:
 		return nil, fmt.Errorf("graph: the state was written at version %d and this package reads version %d: a state is resumed and never guessed at, so a field whose meaning has moved is refused rather than read", s.Version, StateVersion)
 	}
@@ -165,7 +178,7 @@ func New(g *Graph, s *State, l agk.Limits, maxRequeues int) (*Evaluator, error) 
 	if l == (agk.Limits{}) {
 		l = agk.DefaultLimits()
 	}
-	return &Evaluator{g: g, s: s, limits: l, maxRequeues: maxRequeues, templates: map[templateKey]*expr.Template{}}, nil
+	return &Evaluator{g: g, s: s, limits: l, maxRequeues: maxRequeues, maxRunDuration: maxRunDuration, templates: map[templateKey]*expr.Template{}}, nil
 }
 
 // State is the run as a value: what a caller persists, and what New takes back.
@@ -807,10 +820,15 @@ func (e *Evaluator) wake(now time.Time) time.Time {
 }
 
 // deadline is the moment the root timeout of the entry point places the end of the run
-// at. "timeout at the root bounds the whole run", and a workflow that writes none is
-// bounded by the namespace quota instead, which is not this package's to hold.
+// at. "timeout at the root bounds the whole run", and max_run_duration bounds the root
+// timeout: a workflow asking for more is held to it, one asking for less keeps what it
+// asked for, and one writing none is bounded by it, since a run that escaped the quota by
+// leaving its timeout out would be a run holding capacity longer than the operator accepts.
 func (e *Evaluator) deadline() (time.Time, bool) {
 	d := time.Duration(e.g.Workflow().Timeout)
+	if most := e.maxRunDuration; most > 0 && (d <= 0 || d > most) {
+		d = most
+	}
 	if d <= 0 {
 		return time.Time{}, false
 	}

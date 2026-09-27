@@ -1155,6 +1155,113 @@ func TestAnArtifactLivesAsLongAsTheWorkflowDeclared(t *testing.T) {
 	}
 }
 
+// "Envelopes and logs ... live by the workflow's defaults.retain, resolved to one date when the
+// run finishes", within the namespace's max_retention_days, which also bounds a workflow that
+// declares none. The date is the one the envelope and log purges wait on.
+func TestAFinishedRunKeepsItsEnvelopesAsLongAsItsWorkflowDeclared(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		workflow string
+		days     float64
+	}{
+		{"by-defaults.retain", retainingWorkflow, 7},
+		{"by-the-namespace", theWorkflow, 90},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, c.workflow)
+			createRun(t, pool)
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			for pass := 1; pass <= 6; pass++ {
+				taken := q.taken()
+				if len(taken) == 0 {
+					break
+				}
+				for _, task := range taken {
+					core.answer(t, succeeded(t, task, core.now()))
+				}
+			}
+			var state string
+			var kept *float64
+			if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+				`select state, extract(epoch from (expires_at - finished_at)) / 86400 from runs where id = $1`,
+				string(decidedRun)).Scan(&state, &kept); err != nil {
+				t.Fatal(err)
+			}
+			if state != "succeeded" || kept == nil || *kept != c.days {
+				t.Errorf("the run is %s and keeps its envelopes %v days after it finished, want %.0f", state, kept, c.days)
+			}
+		})
+	}
+}
+
+// max_run_duration is the "Upper bound on a workflow's root timeout": a run of a workflow asking
+// for four hours in a namespace bounding runs at one is due at one hour, and timed out there. A
+// namespace that sets none leaves the workflow's own timeout, as before v0.3.0.
+func TestARunIsHeldToItsNamespacesMaxRunDuration(t *testing.T) {
+	const fourHours = `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: monthly-invoicing, namespace: finance }
+timeout: 4h
+inputs:
+  orders: { schema: { type: array } }
+steps:
+  normalize:
+    image: ` + theImage + `
+    inputs:
+      orders: ${{ workflow.inputs.orders }}
+    outputs: [ok, rejected]
+`
+	for _, c := range []struct {
+		name  string
+		bound string
+		due   time.Duration
+	}{
+		{"bounded", "1h", time.Hour},
+		{"unbounded", "", 4 * time.Hour},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			core, q, pool, super := decidingOn(t, fourHours)
+			conn := dbtest.Superuser(t, super)
+			if c.bound != "" {
+				if _, err := conn.Exec(t.Context(),
+					`update namespaces set max_run_duration = $1 where name = 'finance'`, c.bound); err != nil {
+					t.Fatal(err)
+				}
+			}
+			createRunOf(t, pool, "normalize")
+			started := core.now()
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			if taken := q.taken(); len(taken) != 1 {
+				t.Fatalf("the first pass handed out %d tasks", len(taken))
+			}
+			var wake time.Time
+			if err := conn.QueryRow(t.Context(), `select wake_at from runs where id = $1`, string(decidedRun)).Scan(&wake); err != nil {
+				t.Fatal(err)
+			}
+			if want := started.Add(c.due); !wake.Equal(want) {
+				t.Errorf("the run is due at %s, want its deadline at %s", wake, want)
+			}
+
+			clock.set(started.Add(c.due))
+			if err := core.Decide(t.Context(), decidedRun); err != nil {
+				t.Fatal(err)
+			}
+			var state string
+			if err := conn.QueryRow(t.Context(), `select state from runs where id = $1`, string(decidedRun)).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if state != "timed_out" {
+				t.Errorf("the run is %s at its deadline", state)
+			}
+		})
+	}
+}
+
 // What leaves the controller carries the three things only the controller can add: the row the
 // task is known by, the grant that turns its names into values, and the digest of every input.
 func TestWhatLeavesCarriesItsGrantAndItsDigests(t *testing.T) {
