@@ -14,7 +14,7 @@
 //
 // # Why the prefix
 //
-// agkgrant_, agkjoin_ and agkrunner_ say what a credential is before anybody tries it. That is
+// agktoken_, agkgrant_, agkjoin_ and agkrunner_ say what a credential is before anybody tries it. That is
 // worth a few bytes for two reasons: a value that leaks into a log or a bug report can be
 // recognised and revoked by whoever finds it, and a value presented to the wrong door can be
 // refused for being the wrong kind rather than for failing a lookup that the wrong door would
@@ -35,6 +35,10 @@ import (
 type Kind string
 
 const (
+	// API is an API token, what a person or a script presents on every request: "held by a user
+	// or a service account", "stored hashed, shown once, revocable one by one".
+	API Kind = "agktoken"
+
 	// Grant is the per-task bearer token, "the only thing that turns the names in a task
 	// message into values". It carries the task it belongs to in its own text, so that the
 	// API can refuse a redemption whose body names a different one "rather than believing
@@ -69,6 +73,10 @@ const secretLength = 43
 // mints another.
 func New(kind Kind, id string) (clear, hashed string, err error) {
 	switch kind {
+	case API:
+		if id != "" {
+			return "", "", fmt.Errorf("token: an API token carries no identifier in its text, and this one was given %q: the identifier it is listed and revoked by is its row's", id)
+		}
 	case Grant:
 		if id == "" {
 			return "", "", fmt.Errorf("token: a grant names the task it belongs to, and this one names none")
@@ -133,6 +141,8 @@ func KindOf(clear string) (Kind, bool) {
 	}
 	kind := Kind(prefix)
 	switch kind {
+	case API:
+		return kind, len(rest) >= secretLength
 	case Grant:
 		id, secret, ok := strings.Cut(rest, "_")
 		return kind, ok && id != "" && len(secret) >= 16

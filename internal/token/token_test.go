@@ -142,3 +142,28 @@ func TestAHashAnswersForOneCredential(t *testing.T) {
 		}
 	}
 }
+
+// An API token is minted as openapi.json's apiTokenValue writes one, agktoken_ and 256 bits, names
+// nothing inside its text, and is read back as what it is.
+func TestAnAPITokenIsWhatTheOpenAPIDocumentAccepts(t *testing.T) {
+	form := regexp.MustCompile(`^agktoken_[A-Za-z0-9_-]{43,}$`)
+	clear, hashed, err := New(API, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !form.MatchString(clear) || len(clear) != len("agktoken_")+secretLength {
+		t.Errorf("an API token is written %q, which the OpenAPI document refuses", clear)
+	}
+	if !Same(clear, hashed) {
+		t.Error("an API token does not match the hash it was minted with")
+	}
+	if kind, ok := KindOf(clear); !ok || kind != API {
+		t.Errorf("an API token is read back as %q, %v", kind, ok)
+	}
+	if _, ok := KindOf("agktoken_short"); ok {
+		t.Error("an API token too short to hold 256 bits was read as one")
+	}
+	if _, _, err := New(API, "01M2AD1R3T5W7Y9A1C3E5G7J9M"); err == nil {
+		t.Error("an API token naming an identifier inside its text was minted")
+	}
+}

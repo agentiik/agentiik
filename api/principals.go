@@ -116,7 +116,7 @@ func (p *Principals) Identify(r *http.Request) (Identity, error) {
 		if err := w.TokenUsed(ctx, token.ID, now); err != nil {
 			return err
 		}
-		as = Identity{Principal: Principal(token.Principal), Scope: scope}
+		as = Identity{Principal: Principal(token.Principal), Scope: scope, Token: token.ID}
 		return nil
 	})
 	if err != nil {

@@ -92,3 +92,17 @@ func Holds(p Principal, grants []Grant, what Permission, at Scope, now time.Time
 	}
 	return held.Has(what), nil
 }
+
+// Owns says whether p owns a namespace as of now: "one on which it holds the owner role, by a grant
+// of its own or of one of its groups, on the namespace rather than on one of its workflows". A
+// grant on one workflow owns nothing, and a grant past its expiry nothing either. A deny beside the
+// role leaves it owning the namespace, since a deny names one permission and never a role, and what
+// it takes away is taken wherever that permission is asked.
+func Owns(p Principal, grants []Grant, namespace string, now time.Time) bool {
+	if namespace == "" {
+		return false
+	}
+	return slices.ContainsFunc(grants, func(g Grant) bool {
+		return g.Role == Owner && g.Scope == Scope{Namespace: namespace} && p.named(g.Principal) && !g.Expired(now)
+	})
+}

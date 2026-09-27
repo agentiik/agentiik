@@ -310,12 +310,12 @@ func TestATokenOpensNothingOnceRevokedOrExpired(t *testing.T) {
 		if _, err := w.TokenByHash(ctx, token.Hash, now); !errors.Is(err, ErrNoToken) {
 			t.Errorf("a revoked token was answered %v", err)
 		}
-		listed, err := w.TokensOf(ctx, "alice")
+		listed, err := w.TokensOf(ctx, "alice", nil, now)
 		if err != nil {
 			return err
 		}
-		if len(listed) != 1 || !listed[0].RevokedAt.Equal(now) {
-			t.Errorf("alice's tokens are listed as %+v", listed)
+		if len(listed) != 0 {
+			t.Errorf("alice's revoked token is listed as %+v", listed)
 		}
 		return nil
 	})
@@ -772,7 +772,7 @@ func TestWhatIsSpentOrUsedIsRecordedAndNothingPastItsHour(t *testing.T) {
 		if !used.LastUsedAt.Equal(now) {
 			t.Errorf("the password reads as last used at %s", used.LastUsedAt)
 		}
-		tokens, err := w.TokensOf(ctx, "alice")
+		tokens, err := w.TokensOf(ctx, "alice", nil, now)
 		if err != nil {
 			return err
 		}

@@ -34,7 +34,8 @@ import (
 // most of them carry.
 
 // smallMaxBytes is how large the body of a route that takes a few names and numbers may be: a
-// runner pool, a join token, a join, a redemption and a request for a bus credential.
+// runner pool, a join token, a join, a redemption, a request for a bus credential and a request for
+// an API token.
 //
 // Each of those is a few hundred bytes, and sixty-four kibibytes is a hundred times the largest of
 // them: room for whatever they come to carry, and no room for a body that costs anything to read.
@@ -43,7 +44,8 @@ import (
 const smallMaxBytes = 64 << 10
 
 // namesMax is how many entries a list of names in one of those bodies may hold: the labels of a
-// pool, a token or a machine, and the namespaces a pool accepts.
+// pool, a token or a machine, the namespaces a pool accepts, and the permissions an API token keeps
+// and the namespaces and workflows it reaches.
 //
 // A label is something a step selects a runner by, zone=dmz or arch=arm64, and a machine is
 // described by a handful of them, as a pool that restricts its namespaces lists a handful. The

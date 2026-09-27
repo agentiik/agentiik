@@ -73,6 +73,15 @@ const (
 	GrantCreate = "grant.create"
 )
 
+// The API token events of v0.3.0's identity and access events: a token minted, POST
+// /api/v1/auth/tokens, recorded with whose it is, its label, its expiry and its scope, and one
+// revoked, DELETE /api/v1/auth/tokens/{id}. Each is recorded by the token's identifier, and never by
+// the token, which is shown once, in the answer that mints it.
+const (
+	APITokenCreate = "api_token.create"
+	APITokenRevoke = "api_token.revoke"
+)
+
 // The results an entry records.
 const (
 	// Done is an act that changed something.

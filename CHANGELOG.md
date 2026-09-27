@@ -11,6 +11,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### Access
 
+- A route about its caller's own credentials takes `api.Own` and is registered with `api.Router.HandleOwn`: any principal reaches it, and its handler is told who asks, the token presented, whether it is narrowed, and the namespaces it owns, which the authorizer says as `api.Owners`: those where it holds the `owner` role on the namespace, its own or a group's (`access.Owns`).
 - Package `access` resolves permissions with no database, bus or HTTP behind it, so the API and the controller share one rule. `api.Permission` and the nine are its own, under the same names.
 - The four roles are fixed permission sets: `viewer` reads, `operator` runs and follows runs without `workflow:read`, `editor` adds writing, run data and secrets, and `owner` adds `workflow:delete` and `grant:manage`. Roles held together add up.
 - A principal holds the union of its own and its groups' grants on a namespace and on a workflow. A workflow's grant only adds, and never gives `secret:use` or `secret:write`.
@@ -25,6 +26,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### API
 
+- `POST /api/v1/auth/tokens` mints an API token, `agktoken_` and 256 bits shown once and kept as its SHA-256, for the caller or a service account of a namespace it owns, expiring in 90 days unless asked otherwise and within a year, narrowed by an optional scope; a narrowed token and the bootstrap token mint none. Audited as `api_token.create`.
+- `GET /api/v1/auth/tokens` lists the tokens still accepted, the caller's and its service accounts', with last use and label, a narrowed token itself alone, and `DELETE /api/v1/auth/tokens/{id}` revokes one from its next request, audited as `api_token.revoke`. A service account's token is audited in its namespace, a user's on the installation.
 - `init` keeps the bootstrap token's hash in the database at every run, a changed token replacing it, says at every run that the token set is ignored once the bootstrap has ended, and mints none: with none set and none kept it says that nobody can create the first administrator.
 - `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
 - A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
@@ -34,6 +37,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### State
 
+- `db.Wide.TokensOf` lists only the tokens still accepted, of a principal and of the service accounts of the namespaces named, and `db.Wide.Token` reads one by its identifier.
 - Migration 0032 adds the identity and access tables and a namespace's kind, owner and four new quotas; `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
@@ -54,6 +58,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ### agk
 
+- `agk token create [--for NS/NAME] [--expires 30d] [--scope ...] [--label TEXT]` prints the token alone on standard output, and `agk token list` and `agk token revoke ID` list and revoke, with `-o json` on create and list.
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
 - `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
