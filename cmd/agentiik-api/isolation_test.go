@@ -382,8 +382,9 @@ func sameAnswer(absence, w *httptest.ResponseRecorder) string {
 // Cache-Control. A route naming several things is asked with each in turn named as it is and the rest
 // as nothing, so that an absent workflow in a namespace that exists answers as one in a namespace
 // that does not. mallory holds nothing in finance, and asks with her token, with one narrowed to hr
-// and from her browser; oscar holds a role on one of its workflows alone, which makes finance a
-// namespace he sees and every other workflow of it one he does not.
+// and from her browser, and asks as well about finance's runs, grants, workflows and service account
+// under hr, which she owns; oscar holds a role on one of finance's workflows alone, which makes
+// finance a namespace he sees and every other workflow of it one he does not.
 func TestAnAbsentNameAndAnInvisibleOneAreAnsweredAlike(t *testing.T) {
 	x := someTenants(t)
 	asked := 0
@@ -394,15 +395,16 @@ func TestAnAbsentNameAndAnInvisibleOneAreAnsweredAlike(t *testing.T) {
 			continue
 		}
 		for _, c := range []struct {
-			who string
-			// within fixes the namespace to one the caller sees something of.
-			within bool
-		}{{"mallory", false}, {"mallory's browser", false}, {"mallory's token for hr", false}, {"oscar", true}} {
+			// within fixes the namespace a path names to one the caller holds something in, where
+			// it is not empty.
+			who, within string
+		}{{"mallory", ""}, {"mallory's browser", ""}, {"mallory's token for hr", ""}, {"oscar", "finance"}, {"mallory", "hr"}} {
 			named := x.present(route.Pattern)
 			nothing := absent()
 			varying := ids
-			if c.within {
-				nothing["namespace"], nothing["ns"] = "finance", "finance"
+			if c.within != "" {
+				named["namespace"], named["ns"] = c.within, c.within
+				nothing["namespace"], nothing["ns"] = c.within, c.within
 				varying = slices.DeleteFunc(slices.Clone(ids), func(p string) bool { return p == "namespace" || p == "ns" })
 				if len(varying) == 0 {
 					continue
