@@ -1,6 +1,6 @@
-# The images an installation pulls, ghcr.io/agentiik/api, controller and runner, built for
-# linux/amd64 and linux/arm64 from the static binaries build/*.Dockerfile say they hold, and pushed
-# with the GITHUB_TOKEN, so that publishing needs no secret of its own.
+# The images an installation pulls, ghcr.io/agentiik/api, controller, runner and postgres-upgrade,
+# built for linux/amd64 and linux/arm64 from what build/*.Dockerfile say they hold, and pushed with
+# the GITHUB_TOKEN, so that publishing needs no secret of its own.
 #
 #   a v* tag        pushes X.Y.Z and vX.Y.Z, and latest when it is the highest release
 #   main            pushes dev, the same build as a release, at every commit
@@ -65,6 +65,11 @@ jobs:
           # The helper goes into the runner's image, where a script step is given it.
           - image: runner
             commands: agk-runner agk-helper
+          # No program of this module goes into it: PostgreSQL from Alpine, and the script that
+          # upgrades a data directory with it.
+          - image: postgres-upgrade
+            commands: ''
+            files: build/postgres-upgrade.sh
 
     defaults:
       run:
@@ -122,11 +127,13 @@ jobs:
           # The version go.mod requires, pinned to the minor for the reason test.yml gives.
           go-version: '1.27'
 
-      # The binaries, built as build/*.Dockerfile and cmd/*/static_test.go build them, into a
-      # context of their own outside the checkout, which a file there would leave dirty.
+      # The binaries, built as build/*.Dockerfile and cmd/*/static_test.go build them, and the files
+      # an image takes from the checkout, into a context of their own outside the checkout, which a
+      # file there would leave dirty.
       - name: binaries
         env:
           COMMANDS: ${{ matrix.commands }}
+          FILES: ${{ matrix.files }}
         run: |
           mkdir -p "$RUNNER_TEMP/context"
           for arch in amd64 arm64; do
@@ -135,6 +142,7 @@ jobs:
                 -o "$RUNNER_TEMP/context/$cmd-linux-$arch" ./cmd/$cmd
             done
           done
+          for file in $FILES; do cp -p "$file" "$RUNNER_TEMP/context/"; done
           ls -l "$RUNNER_TEMP/context"
 
       # The version the image is labelled with is the one the binary records, which is what
@@ -143,6 +151,9 @@ jobs:
       #
       # latest follows the highest release, and never a pre-release or a patch to an older minor,
       # which would move it backwards.
+      #
+      # An image holding no program of this module is labelled with what one of them records, built
+      # for that alone and left out of its context, so that every image of a commit says one version.
       - name: version
         id: version
         env:
@@ -151,7 +162,12 @@ jobs:
           COMMANDS: ${{ matrix.commands }}
         run: |
           first=${COMMANDS%% *}
-          recorded=$(go version -m "$RUNNER_TEMP/context/$first-linux-amd64" | awk '$1 == "mod" { print $3; exit }')
+          binary=$RUNNER_TEMP/context/$first-linux-amd64
+          if [ -z "$first" ]; then
+            first=agk-helper binary=$RUNNER_TEMP/version-agk-helper
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$binary" ./cmd/agk-helper
+          fi
+          recorded=$(go version -m "$binary" | awk '$1 == "mod" { print $3; exit }')
           echo "$first records $recorded"
           case "$recorded" in
             v*) ;;
@@ -179,9 +195,9 @@ jobs:
         if: steps.plan.outputs.publish != 'true'
         run: docker run -d --name registry -p 5000:5000 registry:2
 
-      # arm64 under QEMU for the one RUN step the api and controller images take from alpine; the
-      # binaries themselves are cross-compiled above. The builder shares the job's network, so a dry
-      # run reaches the registry at localhost.
+      # arm64 under QEMU for the RUN steps the api, controller and postgres-upgrade images take from
+      # alpine; the binaries themselves are cross-compiled above. The builder shares the job's
+      # network, so a dry run reaches the registry at localhost.
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3

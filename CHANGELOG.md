@@ -14,6 +14,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The operator token of a server that runs no `init`, Homebrew's or one put together by hand, goes on working too: `agentiik-api migrate` takes `AGK_OPERATOR_TOKEN` as `init` does, and with none set imports, once, the v0.2 hash in the file `AGK_OPERATOR_TOKEN_FILE` names where the database keeps no hash and the bootstrap has not ended; a file that is not there imports nothing, one in another shape or readable by others fails the run.
 - A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 
+### Images
+
+- `ghcr.io/agentiik/postgres-upgrade` (`build/postgres-upgrade.Dockerfile`), published with the others, carries PostgreSQL 17 and 18 and upgrades a data directory an older major version wrote with `pg_upgrade` in copy mode, keeping the old one beside it as `postgres-17`; a new or an upgraded directory it leaves alone, and a failure changes nothing.
+
 ### Access
 
 - A route about its caller's own credentials takes `api.Own` and is registered with `api.Router.HandleOwn`: any principal reaches it, and its handler is told who asks, the token presented, whether it is narrowed, and the namespaces it owns, which the authorizer says as `api.Owners`: those where it holds the `owner` role on the namespace, its own or a group's (`access.Owns`).
