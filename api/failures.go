@@ -11,9 +11,10 @@ import (
 
 // What a failed sign-in costs the audit log, and where a sign-in comes from.
 //
-// Every assertion and every password sign-in refused is recorded as signin.fail. An assertion
-// refused before its signature verified, and a password refused, are anybody's to send: an answer to options they asked for themselves, signed with a key
-// of their own, or with none. Unbounded, that is a row in the audit log for every request anybody
+// Every assertion refused is recorded as signin.fail, and so is every password sign-in refused once
+// it has been read and counted (passwords.go). An assertion refused before its signature verified is
+// anybody's to send: an answer to options they asked for themselves, signed with a key of their own,
+// or with none; and so is any password sign-in, with any login and any password. Unbounded, that is a row in the audit log for every request anybody
 // cares to make, each append waiting its turn at the head of the one chain every act of the
 // installation appends to, and each kept for good and exported. So what such refusals append is
 // bounded, twice: failuresRecorded entries from one address in a window of failuresWindow, and
@@ -94,7 +95,8 @@ func NewSignIns(proxied bool) *SignIns {
 	return &SignIns{proxied: proxied, failures: newFailedSignIns()}
 }
 
-// addressOf is the address a sign-in came from, as addressOf reads it.
+// addressOf is the address a sign-in came from: the connection's, or the proxy's last entry of
+// X-Forwarded-For where the API is served behind the proxy AGK_PROXY_URL names.
 func (s *SignIns) addressOf(r *http.Request) string { return addressOf(r, s.proxied) }
 
 // admit says whether a failed sign-in from address at now, one refused before its signature

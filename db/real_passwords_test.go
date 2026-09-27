@@ -146,4 +146,22 @@ func TestATOTPExistsOnlyBesideAPassword(t *testing.T) {
 		}
 		return err
 	})
+	if err := add("bob", "bob-totp"); !errors.Is(err, ErrNoPassword) {
+		t.Errorf("a TOTP for bob, his password removed, answered %v", err)
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if err := w.AddCredential(ctx, Credential{ID: "alice-password", Login: "alice", Type: CredentialPassword, PasswordHash: "$argon2id$..."}); err != nil {
+			return err
+		}
+		if err := w.AddCredential(ctx, Credential{ID: "alice-totp", Login: "alice", Type: CredentialTOTP, TOTPSealed: []byte("sealed")}); err != nil {
+			return err
+		}
+		return w.RemovePrincipal(ctx, "alice")
+	})
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		if held, err := w.CredentialsOf(ctx, "alice"); err != nil || len(held) != 0 {
+			t.Errorf("once alice was removed, %d of her credentials are left: %v", len(held), err)
+		}
+		return nil
+	})
 }

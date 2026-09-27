@@ -141,7 +141,8 @@ func TestHashingTurnsAreSizedFromTheProcessorsAndTheMemory(t *testing.T) {
 			t.Errorf("with no memory limit, hashing takes %d turns on %d processors", got, procs)
 		}
 	}
-	debug.SetMemoryLimit(hashingShare * password.MemoryBytes * 2)
+	// A quarter, as the page's sizing says, rather than whatever hashingShare holds.
+	debug.SetMemoryLimit(4 * password.MemoryBytes * 2)
 	if got := hashingTurns(); got != min(procs, 2) {
 		t.Errorf("with room for two hashes, hashing takes %d turns", got)
 	}
@@ -165,8 +166,15 @@ func TestATurnToHashIsWaitedForAndNoLonger(t *testing.T) {
 	}
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, ok := newHashing(0, time.Hour).turn(context.Background()); !ok {
+	none := newHashing(0, 10*time.Millisecond)
+	if _, ok := none.turn(context.Background()); !ok {
 		t.Error("no turn was given where none is held, a hashing of no turn having one")
+	}
+	if _, ok := none.turn(context.Background()); ok {
+		t.Error("a hashing sized to nothing gave a second turn while its one was held")
+	}
+	if hashingWait != 5*time.Second {
+		t.Errorf("a sign-in waits %s for its turn, and the page says five seconds", hashingWait)
 	}
 	busy := newHashing(1, time.Hour)
 	busy.turn(context.Background())

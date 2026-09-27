@@ -29,3 +29,7 @@ func Hashing(s *PasswordAPI, turns int, wait time.Duration) func() func() {
 		return done
 	}
 }
+
+// BetweenChecksAndSignIn has f run between the checks of every password sign-in s answers and the
+// transaction that signs it in, which is where what was checked can change.
+func BetweenChecksAndSignIn(s *PasswordAPI, f func()) { s.checked = f }

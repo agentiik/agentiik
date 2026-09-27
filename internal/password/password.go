@@ -21,8 +21,10 @@
 // comparing byte by byte and stopping at the first difference would tell whoever can time the
 // answer how many bytes they had right.
 //
-// The password is hashed as the bytes it was sent as, prepared by no profile: a password is set and
-// checked through the same route, so both sides see the same bytes.
+// The password is hashed as the bytes it was sent as, prepared by no profile, and whatever sets a
+// password hashes it with Hash, so both sides see the same bytes. Preparing it, with the PRECIS
+// OpaqueString profile of RFC 8265 for one, would change every hash made before, and is decided
+// with the route that sets a password, which v0.3.0 does not serve.
 package password
 
 import (

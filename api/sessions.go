@@ -183,7 +183,7 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // so that a policy changed applies from the next request, as does a first passkey enrolled from the
 // session: nothing where passwords are forbidden, since the policy says no password exists any more
 // and whatever one opened goes with it; enrolling alone where a passkey is required and the account
-// holds none; and whatever the user's grants allow otherwise. Such a session is enrolling without
+// holds none the policy accepts; and whatever the user's grants allow otherwise. Such a session is enrolling without
 // having been opened by a code, which the registration ceremony tells apart: it registers from it.
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
@@ -215,7 +215,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			if err != nil {
 				return err
 			}
-			enrolling = policy.enrolling(passkeysIn(held))
+			enrolling = policy.enrolling(held)
 		}
 		ends := s.CreatedAt.Add(SessionLifetime)
 		until := now.Add(SessionIdle)

@@ -532,6 +532,14 @@ func TestWhatTheSchemaRefusesIsRefusedFirst(t *testing.T) {
 	if got := in.failures(t); len(got) != 0 {
 		t.Errorf("requests refused before any sign-in were recorded as %q", got)
 	}
+	// Past alice's count of ten, and she still signs in.
+	in.policy(t, "allowed", "optional")
+	for range 12 {
+		in.login(t, `{"login":"alice","password":""}`, "")
+	}
+	if w := in.as(t, "alice", ""); w.Code != http.StatusOK {
+		t.Errorf("after twelve refusals of the schema alice signing in answered %d %s", w.Code, w.Body)
+	}
 }
 
 // Attempts are counted for each login from anywhere and for each address at any login, and one past
@@ -573,7 +581,8 @@ func TestAttemptsAreCountedForEachLoginAndEachAddress(t *testing.T) {
 			t.Fatalf("attempt %d answered %d %s", i, w.Code, w.Body)
 		}
 	}
-	*in.clock = start.Add(time.Minute)
+	// Retry-After rounds up, so that one more fits once the seconds it gives have passed.
+	*in.clock = start.Add(time.Minute + 500*time.Millisecond)
 	for _, body := range []string{wrong, `{"login":"alice","password":"correct horse battery staple"}`} {
 		w := proxied(body, "198.51.100.99")
 		wait, _ := strconv.Atoi(w.Header().Get("Retry-After"))
@@ -610,8 +619,9 @@ func TestAttemptsAreCountedForEachLoginAndEachAddress(t *testing.T) {
 	}
 }
 
-// An attempt refused before any password was compared is given back: passwords forbidden, and a
-// hash that waited too long for its turn, which is 503 and not a wrong password.
+// An attempt refused before any password was compared is given back to its login: passwords
+// forbidden, whose address keeps it, and a hash that waited too long for its turn, which is 503 and
+// not a wrong password, and is given back to its address as well.
 func TestAnAttemptThatComparedNothingIsGivenBack(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "forbidden", "optional")
@@ -635,27 +645,29 @@ func TestAnAttemptThatComparedNothingIsGivenBack(t *testing.T) {
 }
 
 // Hashing is bounded: with its one turn held, a sign-in waits for it, and signs in once it is given
-// back within the wait; a login nobody holds waits its turn as well, since it is hashed as any other.
+// back within the wait; a login nobody holds, and an account holding no password, wait their turn as
+// well, since each is hashed as any other.
 func TestHashingWaitsItsTurn(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
 	hold := api.Hashing(in.passwords, 1, 5*time.Second)
 	done := hold()
-	answered := make(chan *httptest.ResponseRecorder, 2)
+	answered := make(chan *httptest.ResponseRecorder, 3)
 	go func() { answered <- in.as(t, "alice", "") }()
 	go func() { answered <- in.login(t, `{"login":"nobody-at-all","password":"x"}`, "") }()
+	go func() { answered <- in.login(t, `{"login":"erin","password":"x"}`, "") }()
 	select {
 	case w := <-answered:
 		t.Fatalf("a sign-in was answered while the one turn to hash was held: %d %s", w.Code, w.Body)
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 	}
 	done()
 	var codes []int
-	for range 2 {
+	for range 3 {
 		codes = append(codes, (<-answered).Code)
 	}
 	slices.Sort(codes)
-	if !slices.Equal(codes, []int{http.StatusOK, http.StatusUnauthorized}) {
+	if !slices.Equal(codes, []int{http.StatusOK, http.StatusUnauthorized, http.StatusUnauthorized}) {
 		t.Errorf("once the turn was given back the two sign-ins answered %v", codes)
 	}
 }
@@ -725,7 +737,7 @@ func TestOneTOTPCodeSignsInOnceWhenSentTwiceAtOnce(t *testing.T) {
 }
 
 // A hash the API does not read, one asking for more memory than a turn to hash counts on, is the
-// installation's trouble and a 500, never a wrong password, and costs no hashing.
+// installation's trouble and a 500, never a wrong password.
 func TestAHashAboveTheBaselineIsTheInstallationsTrouble(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
@@ -784,5 +796,92 @@ func TestASuspendedAccountIsRefusedWithoutWaitingOnItsRow(t *testing.T) {
 		t.Error("dave's right password waited on his row, which a wrong one never does")
 		tx.Rollback(t.Context())
 		<-answered
+	}
+}
+
+// Where device_bound_only applies, a synced passkey signs nobody in, so it does not meet a passkey
+// required either: a password opens a session that only enrols for an account holding no other,
+// and a full one once it holds a device-bound one.
+func TestASyncedPasskeyDoesNotMeetARequiredOneWhereOnlyDeviceBoundCount(t *testing.T) {
+	in := somePasswords(t)
+	bound := true
+	in.tighten(t, db.AuthPolicy{DeviceBoundOnly: &bound})
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.AddCredential(ctx, db.Credential{ID: "alice-synced", Login: "alice", Type: db.CredentialPasskey,
+			PublicKey: []byte{1}, AAGUID: make([]byte, 16), BackupEligible: true, BackupState: true})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := in.signedIn(t, "alice", api.SessionEnrolment)
+	if code, _ := in.me(t, c); code != http.StatusForbidden {
+		t.Errorf("alice's session, her one passkey synced, read her record: %d", code)
+	}
+	in.tighten(t, db.AuthPolicy{})
+	if code, _ := in.me(t, c); code != http.StatusOK {
+		t.Errorf("with synced passkeys accepted again, alice's session answered %d", code)
+	}
+	in.tighten(t, db.AuthPolicy{DeviceBoundOnly: &bound})
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.AddCredential(ctx, db.Credential{ID: "alice-bound", Login: "alice", Type: db.CredentialPasskey,
+			PublicKey: []byte{2}, AAGUID: make([]byte, 16)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := in.me(t, c); code != http.StatusOK {
+		t.Errorf("once alice holds a device-bound passkey, her session answered %d", code)
+	}
+	in.signedIn(t, "alice", api.SessionFull)
+}
+
+// What was checked is checked again under the user's row before anybody is signed in: passwords
+// forbidden while a sign-in was checked are its 403, a password changed or a TOTP generator
+// enrolled meanwhile its 401, and each is recorded as having happened during the sign-in.
+func TestWhatChangesDuringASignInIsCheckedAgain(t *testing.T) {
+	in := somePasswords(t)
+	in.policy(t, "allowed", "optional")
+	for _, c := range []struct {
+		name   string
+		change func()
+		status int
+		reason string
+	}{
+		{"passwords forbidden", func() { in.policy(t, "forbidden", "optional") }, http.StatusForbidden,
+			"passwords were forbidden by the policy that applies to the account during the sign-in"},
+		{"the password changed", func() {
+			hash, err := password.Hash(thePasswords["alice"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.exec(t, `update credentials set password_hash = '`+hash+`' where id = 'alice-password'`)
+		}, http.StatusUnauthorized, "the password was changed or removed during the sign-in"},
+		{"a generator enrolled", func() {
+			sealed, err := in.totp.SealTOTP("alice", "alice-totp", bobsSecret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+				return w.AddCredential(ctx, db.Credential{ID: "alice-totp", Login: "alice", Type: db.CredentialTOTP, TOTPSealed: sealed})
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}, http.StatusUnauthorized, "the TOTP generator was enrolled or removed during the sign-in"},
+	} {
+		api.BetweenChecksAndSignIn(in.passwords, c.change)
+		w := in.as(t, "alice", "")
+		api.BetweenChecksAndSignIn(in.passwords, nil)
+		if w.Code != c.status || w.Header().Get("Set-Cookie") != "" {
+			t.Errorf("%s during alice's sign-in answered %d %s", c.name, w.Code, w.Body)
+		}
+		if c.status == http.StatusForbidden && !strings.Contains(w.Body.String(), `"setting":"password"`) {
+			t.Errorf("%s during alice's sign-in answered %s", c.name, w.Body)
+		}
+		if got := in.failures(t); len(got) == 0 || !strings.HasSuffix(got[len(got)-1], c.reason) {
+			t.Errorf("%s during alice's sign-in is recorded as %q", c.name, got)
+		}
+		in.policy(t, "allowed", "optional")
+		in.exec(t, `delete from credentials where id = 'alice-totp'`)
+	}
+	if n := in.count(t, `select count(*) from sessions where login = 'alice'`); n != 0 {
+		t.Errorf("%d sessions of alice were opened", n)
 	}
 }

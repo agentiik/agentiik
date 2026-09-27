@@ -112,6 +112,10 @@ type PasswordAPI struct {
 	// nobody is the hash of a password nobody knows, verified where the login names no password,
 	// so that such a sign-in takes as long as any other.
 	nobody string
+
+	// checked is run between the checks and the sign-in's transaction, where a test changes what
+	// was checked. Nil outside tests.
+	checked func()
 }
 
 // The kinds of session a password opens, as openapi.json's sessionKind writes them.
@@ -127,7 +131,7 @@ const (
 
 	// passwordsForbidden is a sign-in where the policy that applies to the account forbids
 	// passwords, answered naming the setting.
-	passwordsForbidden = "passwords are forbidden by the authentication policy that applies to this account, and none is compared: sign in with a passkey"
+	passwordsForbidden = "passwords are forbidden by the authentication policy that applies to this account, and none is accepted: sign in with a passkey"
 
 	// noPasswordSignIn is every other refusal, one sentence for every reason.
 	noPasswordSignIn = "that sign-in opens nothing: the login, the password or the TOTP code does not match, or the account opens no session. Try again, or sign in with a passkey"
@@ -243,17 +247,31 @@ type SignedIn struct {
 	Session string `json:"session"`
 }
 
-// passwordPolicy is what the policy that applies to one account says of passwords: whether they are
-// forbidden, and whether a passkey is required, each the stricter of the installation's and that of
-// every namespace the account holds a grant in.
+// passwordPolicy is what the policy that applies to one account says of passwords and of the
+// passkeys that stand for them: whether passwords are forbidden, whether a passkey is required, and
+// whether it must be device-bound, each the stricter of the installation's and that of every
+// namespace the account holds a grant in.
 type passwordPolicy struct {
 	forbidden       bool
 	passkeyRequired bool
+	deviceBoundOnly bool
 }
 
-// enrolling says whether a session a password opened for an account holding passkeys passkeys may
-// only enrol: where a passkey is required and it holds none.
-func (p passwordPolicy) enrolling(passkeys int) bool { return p.passkeyRequired && passkeys == 0 }
+// enrolling says whether a session a password opened for an account holding held may only enrol:
+// where a passkey is required and it holds none the policy accepts, a synced one counting for
+// nothing where device_bound_only applies, since it signs nobody in there and the password would
+// otherwise be the way round the requirement.
+func (p passwordPolicy) enrolling(held []db.Credential) bool {
+	if !p.passkeyRequired {
+		return false
+	}
+	for _, c := range held {
+		if c.Type == db.CredentialPasskey && !(p.deviceBoundOnly && c.BackupEligible) {
+			return false
+		}
+	}
+	return true
+}
 
 // passwordPolicyOf is the policy that applies to login's password. On an installation addressed by
 // an IP address, where a browser runs no passkey ceremony, it is passwords allowed and no passkey
@@ -266,34 +284,28 @@ func passwordPolicyOf(ctx context.Context, wide *db.Wide, login string, now time
 	if err != nil {
 		return passwordPolicy{}, err
 	}
-	p := passwordPolicy{forbidden: installation.Password == "forbidden", passkeyRequired: installation.Passkey == "required"}
+	p := passwordPolicy{
+		forbidden:       installation.Password == "forbidden",
+		passkeyRequired: installation.Passkey == "required",
+		deviceBoundOnly: installation.DeviceBoundOnly != nil && *installation.DeviceBoundOnly,
+	}
 	for _, tightened := range tightening {
 		p.forbidden = p.forbidden || tightened.Password == "forbidden"
 		p.passkeyRequired = p.passkeyRequired || tightened.Passkey == "required"
+		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
 	}
 	return p, nil
 }
 
-// passkeysIn counts the passkeys among a user's credentials.
-func passkeysIn(held []db.Credential) int {
-	n := 0
-	for _, c := range held {
-		if c.Type == db.CredentialPasskey {
-			n++
-		}
-	}
-	return n
-}
-
 // account is what a password sign-in reads of the account a login names: whether a user holds it,
-// their password and their TOTP generator where they hold one, how many passkeys they hold, and the
+// their credentials, their password and their TOTP generator among them where they hold one, and the
 // policy that applies to them.
 type account struct {
 	user     db.User
 	exists   bool
+	held     []db.Credential
 	password db.Credential
 	totp     db.Credential
-	passkeys int
 	policy   passwordPolicy
 }
 
@@ -314,11 +326,10 @@ func (s *PasswordAPI) readAccount(ctx context.Context, wide *db.Wide, login stri
 	if a.policy, err = passwordPolicyOf(ctx, wide, login, now, s.ipAddressed); err != nil || !a.exists {
 		return a, err
 	}
-	held, err := wide.CredentialsOf(ctx, login)
-	if err != nil {
+	if a.held, err = wide.CredentialsOf(ctx, login); err != nil {
 		return account{}, err
 	}
-	for _, c := range held {
+	for _, c := range a.held {
 		switch c.Type {
 		case db.CredentialPassword:
 			a.password = c
@@ -326,7 +337,6 @@ func (s *PasswordAPI) readAccount(ctx context.Context, wide *db.Wide, login stri
 			a.totp = c
 		}
 	}
-	a.passkeys = passkeysIn(held)
 	return a, nil
 }
 
@@ -466,6 +476,9 @@ func (s *PasswordAPI) login(w http.ResponseWriter, r *http.Request, _ Principal,
 		}
 	}
 
+	if s.checked != nil {
+		s.checked()
+	}
 	var cookie *http.Cookie
 	var answer SignedIn
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -539,7 +552,7 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 		return nil, SignedIn{}, err
 	}
 	kind := SessionFull
-	if a.policy.enrolling(a.passkeys) {
+	if a.policy.enrolling(a.held) {
 		kind = SessionEnrolment
 	}
 	signedIn.record.Detail["session"] = kind
@@ -555,7 +568,9 @@ func (s *PasswordAPI) refuse(r *http.Request, login, address, reason string, now
 	if !recorded {
 		return
 	}
-	detail := map[string]any{"reason": reason, "address": address, "credential": db.CredentialPassword}
+	// The credential's type rather than its identifier, which "credential" holds where a passkey's
+	// failure names one: a password's is not known for a login that names none.
+	detail := map[string]any{"reason": reason, "address": address, "credential_type": db.CredentialPassword}
 	if unrecorded > 0 {
 		detail["unrecorded"] = unrecorded
 	}

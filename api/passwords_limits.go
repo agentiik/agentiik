@@ -26,17 +26,21 @@ import (
 // addresses at one account, and the address's what stops one address guessing across many.
 //
 // An attempt is counted as it starts rather than once it has failed, so that a hundred sent at once
-// for one login are not a hundred guesses before the first is counted, and it is given back where it
-// was no guess: refused before any password was compared, or failing on the API's own account. A
-// policy forbidding passwords gives back the account's and not the address's, since its refusal
-// still answers something about the account (passwords.go). A sign-in that succeeds gives back its own, and starts its
-// account's count again, so that a person who mistyped nine times and then signed in does not begin
-// the next day one guess from the limit; the address keeps what it spent on other accounts.
+// for one login are not a hundred guesses before the first is counted, and it is given back where
+// it was no guess: refused before any password was compared, or failing on the API's own account.
+// A policy forbidding passwords gives back the account's and not the address's, since its refusal
+// still answers something about the account (passwords.go). A sign-in that succeeds gives back its
+// own, and starts its account's count again, so that a person who mistyped nine times and then
+// signed in does not begin the next day one guess from the limit; the address keeps what it spent
+// on other accounts.
 //
-// The account's count holds against the one guessing and against the account's holder alike: whoever
-// spends it shuts the account's password out for the rest of the window. That is the price of a
-// count nobody can get around by changing address, and it is a small one here, since a password is
-// the fallback: the account's passkeys, and a recovery code, are not counted.
+// The account's count holds against the one guessing and against the account's holder alike:
+// whoever spends it shuts the account's password out for the rest of the window. That is the price
+// of a count nobody can get around by changing address, and it is a small one here, since a
+// password is the fallback: the account's passkeys, and a recovery code, are not counted. So is a
+// count shared by everybody behind one address: behind a proxy the API is not told of, or a network
+// that gives its people one address, thirty mistakes among them shut the rest out for the window,
+// which is why the API reads the address from the proxy AGK_PROXY_URL names.
 //
 // Kept in memory, by each replica of the API for itself, as the bound on the audit log is: an
 // installation of three replicas lets three times the count through at most, and a restart forgets
@@ -52,9 +56,10 @@ import (
 // of nothing anybody knows, so that how long an answer takes does not tell who has an account.
 
 // The counts: ten attempts for one account in a quarter of an hour, more than a person makes
-// finding the password they meant and forty an hour at most for anybody guessing it, under the
-// hundred NIST SP 800-63B allows; and thirty from one address, so that one address guessing across
-// accounts is held too, and a few people behind one address who mistype do not hold each other up.
+// finding the password they meant, and forty an hour at most for anybody guessing it, rather than
+// a lock after so many failures in a row, which anybody could set off to shut an account out for
+// good; and thirty from one address, so that one address guessing across accounts is held too, and
+// a few people behind one address who mistype do not hold each other up.
 const (
 	attemptsPerLogin   = 10
 	attemptsPerAddress = 30
