@@ -433,20 +433,23 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 // whose record names no owner, and answers the grants it wrote: those the token owned in effect,
 // which init, agentiik-api namespace create or a v0.2 installation made, "so an upgraded or new
 // installation's first administrator owns its namespaces without an extra command". The token
-// ends at that administrator's first sign-in, and what it held would otherwise be nobody's to
-// share.
+// ends at that administrator's first sign-in, and what it held would otherwise be shared by hand
+// by the administrator it made, one namespace at a time.
 //
 // A namespace the administrator owns already is left, so that a repeat of the create, for a fresh
-// link, gives nothing twice, and hands over a namespace made since. Written in the create's
-// transaction, after its rows are locked and before it appends to the audit log, by the bootstrap
-// token as every act of the create is, and told to nobody: nobody widens their own access, and the
-// namespaces have no owner to tell. Nothing is handed over by an administrator creating a user, nor
-// to a user who does not administer.
+// link, gives nothing twice, and hands over a namespace made since. One somebody else holds the
+// owner role on through a grant, the record naming nobody, is handed over all the same, as the
+// decision reads it. Written in the create's transaction, after its rows are locked and before it
+// appends to the audit log, by the bootstrap token as every act of the create is, and told to
+// nobody, as a grant the token writes through the grant routes is: nobody widens their own access.
+// The namespaces are held while they are handed over (db.Wide.Ownerless), so that one removed at
+// the same moment is either left out or waits, and never fails the creation. Nothing is handed
+// over by an administrator creating a user, nor to a user who does not administer.
 func handOver(ctx context.Context, wide *db.Wide, who Principal, user db.User, now time.Time) ([]access.Grant, error) {
 	if who != BootstrapOperator || !user.Admin {
 		return nil, nil
 	}
-	namespaces, err := wide.Namespaces(ctx)
+	namespaces, err := wide.Ownerless(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -456,12 +459,12 @@ func handOver(ctx context.Context, wide *db.Wide, who Principal, user db.User, n
 		return nil, err
 	}
 	var handed []access.Grant
-	for _, n := range namespaces {
-		if n.Owner != "" || access.Owns(principal, held, n.Name, now) {
+	for _, name := range namespaces {
+		if access.Owns(principal, held, name, now) {
 			continue
 		}
 		g := access.Grant{
-			ID: ulid.New(), Principal: user.Login, Scope: access.Scope{Namespace: n.Name},
+			ID: ulid.New(), Principal: user.Login, Scope: access.Scope{Namespace: name},
 			Role: access.Owner, GrantedBy: string(who), GrantedAt: now,
 		}
 		if err := wide.GrantAccess(ctx, g); err != nil {

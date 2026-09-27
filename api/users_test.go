@@ -505,6 +505,51 @@ func TestTheFirstAdministratorIsHandedTheNamespacesNobodyOwns(t *testing.T) {
 	}
 }
 
+// A namespace removed while the first administrator is created is either left out of what is handed
+// over or waits for the creation, and never fails it: here the removal holds the namespace first,
+// and the creation, waiting, finds it gone and hands over the rest.
+func TestANamespaceRemovedDuringTheHandOverFailsNothing(t *testing.T) {
+	in := somePeople(t)
+	in.exec(t, `insert into namespaces (name) values ('hr')`)
+	removal := dbtest.Superuser(t, in.super)
+	tx, err := removal.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.WithoutCancel(t.Context()))
+	if _, err := tx.Exec(t.Context(), `delete from namespaces where name = 'hr'`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan int, 1)
+	go func() {
+		answered <- sent(t, in.h, "POST", "/api/v1/users", in.bootstrap, `{"login":"dan","admin":true}`).Code
+	}()
+	watcher := dbtest.Superuser(t, in.super)
+	for waited := 0; ; waited++ {
+		var waiting int
+		if err := watcher.QueryRow(t.Context(),
+			`select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if waited == 500 {
+			t.Fatal("the creation never waited on the removal")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-answered; code != http.StatusCreated {
+		t.Fatalf("the creation answered %d once the removal committed", code)
+	}
+	if n := in.count(t, `select count(*) from grants where principal = 'dan' and namespace = 'finance' and role = 'owner'`); n != 1 {
+		t.Errorf("dan was handed finance %d times", n)
+	}
+}
+
 // A user and a group an earlier build of v0.3.0 made under stats, before the migration that
 // reserved the word, keep their names, as a namespace v0.2 made under it keeps its own: the routes
 // naming them read them as before, and only a new login or group of that name is refused.
