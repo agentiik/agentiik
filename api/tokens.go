@@ -75,6 +75,11 @@ const (
 	// A token the caller may not revoke answers what one that does not exist answers.
 	noSuchToken = "no such token, or not yours"
 
+	// The built-in identity is the installation's own for the runs nobody started: a token of it
+	// would let whoever holds the token act as those runs do, with the grants an owner gave them
+	// for that alone, and outlive that person's access by up to a year.
+	builtInMintsNothing = "principal %s is the namespace's built-in identity, the installation's unattended identity, to which the runs nobody started there are attributed, and no token is minted for it: a script is given a service account of its own"
+
 	// A service account's token renews nothing of its own: "every one is renewed by someone who
 	// still means it", and a token that minted its successor would be a credential for good.
 	selfRenewal = "a service account's token mints no token for that service account, since every token is renewed by someone who still means it: an owner of its namespace mints the next one, with agk token create --for"
@@ -303,7 +308,8 @@ var errTokensMost = errors.New("api: that principal holds as many live tokens as
 //
 // What the caller presented is judged before the body is read, since no body changes it: a
 // narrowed token mints nothing, and neither does the bootstrap token. A service account's token
-// mints none for that service account, whose tokens an owner of its namespace renews, and nobody is
+// mints none for that service account, whose tokens an owner of its namespace renews, nobody mints
+// one for a namespace's built-in identity, which is the installation's own, and nobody is
 // minted a token past tokensMost live ones, counted under a lock on the principal so that two
 // mints at once cannot both take the last place.
 func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
@@ -337,7 +343,7 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		}
 		// Another principal is a service account of a namespace the caller owns, or nobody the
 		// caller may mint for, whichever it is: one sentence for the absent and the hidden.
-		namespace, _, account := strings.Cut(q.Principal, "/")
+		namespace, name, account := strings.Cut(q.Principal, "/")
 		owned, err := caller.Owned(r.Context())
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "what the caller owns could not be read")
@@ -345,6 +351,12 @@ func (t *TokenAPI) mint(w http.ResponseWriter, r *http.Request, caller Caller) {
 		}
 		if !account || !slices.Contains(owned, namespace) {
 			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("principal %s is neither you nor a service account of a namespace you own", q.Principal))
+			return
+		}
+		// Asked once the namespace is known to be the caller's, so that whoever does not own it
+		// is answered as for any other service account of it.
+		if name == db.BuiltIn {
+			fail(w, http.StatusUnprocessableEntity, fmt.Sprintf(builtInMintsNothing, q.Principal))
 			return
 		}
 		holder = q.Principal

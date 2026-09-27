@@ -706,3 +706,28 @@ func TestAPrincipalHoldsAHundredLiveTokensAtMost(t *testing.T) {
 		t.Errorf("%d of five mints racing for the last place were minted, and finance/nightly holds %d live tokens", minted, live)
 	}
 }
+
+// No token is minted for a namespace's built-in identity, whose grants are what the runs nobody
+// started may do there: its owner is told why with 422, anybody else is answered as for any service
+// account of a namespace they do not own, and nothing is minted or recorded.
+func TestNoTokenIsMintedForANamespacesBuiltInIdentity(t *testing.T) {
+	in := withBuiltIns(t)
+	for _, c := range []struct {
+		who, says string
+	}{
+		{"alice", "principal finance/agentiik is the namespace's built-in identity, the installation's unattended identity"},
+		{"bob", "principal finance/agentiik is neither you nor a service account of a namespace you own"},
+	} {
+		w := in.ask(t, "POST", "/api/v1/auth/tokens", in.values[c.who], `{"principal":"finance/agentiik"}`)
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s minting for finance/agentiik was answered %d: %s", c.who, w.Code, w.Body)
+		}
+	}
+	var minted int
+	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(), `select count(*) from api_tokens where principal like '%/agentiik'`).Scan(&minted); err != nil {
+		t.Fatal(err)
+	}
+	if minted != 0 || len(audited(t, in.pool)) != 0 {
+		t.Errorf("refusals minted %d tokens for a built-in identity and recorded %d entries", minted, len(audited(t, in.pool)))
+	}
+}
