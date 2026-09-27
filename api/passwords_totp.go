@@ -130,7 +130,7 @@ func (s *PasswordAPI) otpauth(login string, secret []byte) string {
 // and no generator held.
 func totpAllowed(a account) (int, string) {
 	switch {
-	case a.policy.forbidden:
+	case a.policy.passwordsForbidden:
 		return http.StatusForbidden, passwordsForbiddenToSet
 	case a.password.ID == "":
 		return http.StatusConflict, totpNeedsAPassword
@@ -153,6 +153,12 @@ func answerAllowed(w http.ResponseWriter, status int, why string) {
 func (s *PasswordAPI) startTOTP(w http.ResponseWriter, r *http.Request, caller Caller) {
 	login, ok := sessionUser(w, caller)
 	if !ok {
+		return
+	}
+	// A generator is a factor that outlives the session, which the session alone does not give:
+	// see proofLife.
+	if !provedSince(caller.ProvedAt, s.now()) {
+		askAgain(w)
 		return
 	}
 	if s.totp == nil {
@@ -242,6 +248,10 @@ func (s *PasswordAPI) confirmTOTP(w http.ResponseWriter, r *http.Request, caller
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the TOTP generator could not be confirmed")
+		return
+	case !provedSince(caller.ProvedAt, waiting.StartedAt):
+		// Proved within proofLife of the start, as the start asked, or since.
+		askAgain(w)
 		return
 	}
 	secret, err := s.totp.OpenTOTP(login, waiting.ID, waiting.Sealed)

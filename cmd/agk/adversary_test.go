@@ -37,7 +37,7 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 		"namespace show": true, "namespace delete": true, "namespace quotas": true,
 		"user create": true, "user recover": true, "user list": true, "user show": true, "user delete": true,
 		"group create": true, "group list": true, "group show": true, "group delete": true,
-		"group add": true, "group remove": true,
+		"group add": true, "group remove": true, "auth policy": true,
 	}
 	// And the token verbs, which mint, list and revoke API tokens on an installation, the service
 	// account verbs, which create, list and remove what the tokens are minted for, and the verbs

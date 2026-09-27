@@ -368,6 +368,10 @@ type Caller struct {
 	// credential, the bootstrap token among them.
 	Token string
 
+	// ProvedAt is when the session the request carries was opened, and zero for any other
+	// credential: see Identity.ProvedAt.
+	ProvedAt time.Time
+
 	scope  access.TokenScope
 	owners Owners
 
@@ -528,8 +532,8 @@ type Principal string
 // OpenedByCode says it is one an enrolment code opened, which no route opens since the code travels
 // in the registration's options instead, and which the ceremony refuses as well: it would register a
 // passkey without spending its code. The other, a session a password opened where the policy
-// requires a passkey the account does not hold, is Enrolling without OpenedByCode, and registers a
-// passkey, and sets its password, as any session of its user does.
+// requires a passkey, is Enrolling without OpenedByCode, and registers a passkey, and sets its
+// password, as any session of its user does.
 type Identity struct {
 	Principal    Principal
 	Scope        access.TokenScope
@@ -541,6 +545,12 @@ type Identity struct {
 	// Token is the identifier of the API token presented, which a caller revokes and lists
 	// itself by, and empty for any other credential.
 	Token string
+
+	// ProvedAt is when the session the request carries was opened, which the credential that
+	// opened it proved, and zero for any other credential. It is the last proof of possession the
+	// session holds, since every proof, a sign-in again among them, opens a session of its own:
+	// adding a credential that lasts from a session takes one within proofLife (sessions.go).
+	ProvedAt time.Time
 }
 
 // Target is what is being asked about, resolved from the request before anything is authorised.

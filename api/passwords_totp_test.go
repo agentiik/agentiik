@@ -146,9 +146,9 @@ func TestATOTPGeneratorWaitsTenMinutesBesideAPassword(t *testing.T) {
 	if w := in.call(t, "POST", "/api/v1/me/totp", "", erin); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "set a password first") {
 		t.Errorf("erin, holding no password, answered %d %s", w.Code, w.Body)
 	}
+	// carol holds one passkey of the two a passkey required asks for.
 	in.policy(t, "allowed", "required")
-	enrolling := in.signedIn(t, "carol", api.SessionFull)
-	in.exec(t, `delete from credentials where id = 'carol-passkey'`)
+	enrolling := in.signedIn(t, "carol", api.SessionEnrolment)
 	if w := in.call(t, "POST", "/api/v1/me/totp", "", enrolling); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "enrols passkeys and nothing else") {
 		t.Errorf("a session that may only enrol answered %d %s", w.Code, w.Body)
 	}

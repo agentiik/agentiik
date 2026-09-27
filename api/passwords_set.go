@@ -31,9 +31,9 @@ import (
 // an administrator gives somebody to get in with, and on an installation addressed by an IP address
 // a password is the one thing to get in with. It is spent by the password it sets, in the
 // transaction that records the password, and the password then opens the session a password opens:
-// full where the policy is met, and enrolling passkeys and nothing else where it requires a passkey
-// the account does not hold, as a password sign-in's would. A suspended user sets a password with a
-// code and opens no session, as a suspended user enrolling a passkey does.
+// full where the policy is met, and enrolling passkeys and nothing else where it requires a
+// passkey, as a password sign-in's would. A suspended user sets a password with a code and opens no
+// session, as a suspended user enrolling a passkey does.
 //
 // An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
 // token where it has not ended and the session the password opens is a full one: always on an
@@ -115,9 +115,6 @@ const (
 	// onlyCredentialHere is a password removed on an installation addressed by an IP address.
 	onlyCredentialHere = "this installation is addressed by an IP address, where no passkey signs anybody in, and the password is the one credential that does: it is not removed"
 )
-
-// The setting min_passkeys, which a removal of the password is refused naming.
-const minPasskeys = "min_passkeys"
 
 // setting registers the routes that set a password and a TOTP generator.
 func (s *PasswordAPI) setting(rt *Router) error {
@@ -265,7 +262,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 	case !a.exists:
 		refused()
 		return
-	case a.policy.forbidden:
+	case a.policy.passwordsForbidden:
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
 	}
@@ -321,7 +318,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		if err != nil {
 			return err
 		}
-		if held.policy.forbidden {
+		if held.policy.passwordsForbidden {
 			return errForbidden
 		}
 		set, replaced, err := wide.SetPassword(ctx, login, ulid.New(), hash, now)
@@ -354,7 +351,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 			Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": set.ID},
 		}})
 		kind := SessionFull
-		if held.policy.enrolling(held.held) {
+		if held.policy.enrolling() {
 			kind = SessionEnrolment
 		}
 		// The bootstrap ends where the first administrator can sign in to a full session, and
@@ -538,7 +535,7 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, noSession)
 		return
-	case a.policy.forbidden:
+	case a.policy.passwordsForbidden:
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
 	case a.password.ID != "" && !ask.current:
@@ -546,6 +543,11 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 		return
 	case a.password.ID == "" && ask.current:
 		fail(w, http.StatusBadRequest, "current_password: this account holds no password, so there is no current one to send")
+		return
+	case a.password.ID == "" && !provedSince(as.ProvedAt, now):
+		// A first password is a way in that outlives the session, which the session alone does
+		// not give; a password changed is sent beside the one it replaces, which proves it.
+		askAgain(w)
 		return
 	}
 
@@ -593,7 +595,7 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 			return err
 		case !held.exists:
 			return db.ErrNoPrincipal
-		case held.policy.forbidden:
+		case held.policy.passwordsForbidden:
 			return errForbidden
 		case held.password.ID != a.password.ID || held.password.PasswordHash != a.password.PasswordHash:
 			return &refusal{reason: passwordChanged}
@@ -628,18 +630,6 @@ func (s *PasswordAPI) setPassword(w http.ResponseWriter, r *http.Request, _ Prin
 	}
 }
 
-// errBelow is a removal of the password that would leave fewer passkeys than min_passkeys: the
-// passkeys the account holds that the policy accepts, and the minimum.
-type errBelow struct{ held, min int }
-
-func (e *errBelow) Error() string {
-	passkeys := "passkeys"
-	if e.held == 1 {
-		passkeys = "passkey"
-	}
-	return fmt.Sprintf("removing the password would leave this account with %d %s the policy accepts, and min_passkeys is %d: enrol another passkey first, on another device", e.held, passkeys, e.min)
-}
-
 // errNoPassword is a removal of a password the account does not hold.
 var errNoPassword = errors.New(noPasswordHeld)
 
@@ -647,10 +637,6 @@ var errNoPassword = errors.New(noPasswordHeld)
 func (s *PasswordAPI) removePassword(w http.ResponseWriter, r *http.Request, caller Caller) {
 	login, ok := sessionUser(w, caller)
 	if !ok {
-		return
-	}
-	if s.ipAddressed {
-		fail(w, http.StatusConflict, onlyCredentialHere)
 		return
 	}
 	now := s.now().Truncate(time.Microsecond)
@@ -664,29 +650,18 @@ func (s *PasswordAPI) removePassword(w http.ResponseWriter, r *http.Request, cal
 		case a.password.ID == "":
 			return errNoPassword
 		}
-		if held := a.policy.passkeys(a.held); held < max(a.policy.minPasskeys, 1) {
-			return &errBelow{held: held, min: max(a.policy.minPasskeys, 1)}
+		// The rule a removal of any credential is held to (credentials.go).
+		if err := removable(a.policy, a.held, a.password, s.ipAddressed); err != nil {
+			return err
 		}
 		// The TOTP generator goes with the password's row, as the table holds it.
 		if err := wide.RemoveCredential(ctx, login, a.password.ID); err != nil {
 			return err
 		}
-		entries := []entry{{record: audit.Record{
-			Actor: login, Action: audit.CredentialRemove, Target: a.password.ID, Result: audit.Done,
-			Detail: map[string]any{"type": db.CredentialPassword},
-		}}}
-		if a.totp.ID != "" {
-			entries = append(entries, entry{record: audit.Record{
-				Actor: login, Action: audit.CredentialRemove, Target: a.totp.ID, Result: audit.Done,
-				Detail: map[string]any{"type": db.CredentialTOTP, "reason": "removed with the password it stood beside"},
-			}})
-		}
-		return appendEntries(ctx, wide, entries)
+		return appendEntries(ctx, wide, removedEntries(login, a.password, a.totp))
 	})
-	var below *errBelow
 	switch {
-	case errors.As(err, &below):
-		failSetting(w, http.StatusConflict, below.Error(), minPasskeys)
+	case answerRemoval(w, err):
 	case errors.Is(err, errNoPassword), errors.Is(err, db.ErrNoCredential):
 		fail(w, http.StatusNotFound, noPasswordHeld)
 	case errors.Is(err, db.ErrNoPrincipal):

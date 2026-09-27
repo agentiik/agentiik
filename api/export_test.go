@@ -34,3 +34,11 @@ func Hashing(s *PasswordAPI, turns int, wait time.Duration) func() func() {
 // every password or TOTP generator it sets or removes, and the transaction that acts on them, which
 // is where what was checked can change.
 func BetweenChecksAndSignIn(s *PasswordAPI, f func()) { s.checked = f }
+
+// BetweenVerifyAndRegister has f run between the verification of every registration s answers and
+// the transaction that writes it, which is where the account and its policy can change.
+func BetweenVerifyAndRegister(s *PasskeyAPI, f func()) { s.checked = f }
+
+// BetweenIdentifyAndSetPolicy has f run between the checks of every policy s sets and the
+// transaction that writes it, which is where the bootstrap can end.
+func BetweenIdentifyAndSetPolicy(s *PolicyAPI, f func()) { s.checked = f }

@@ -386,6 +386,42 @@ func TestThePasswordFormIsOfferedWhereTheRouteIsServedAndThePolicyLetsPasswordsI
 	}
 }
 
+// The signed-in section's password forms are offered to the account whose session the browser
+// carries as the policy that applies to it says, read at each page, while the sign-in form is
+// offered as the installation's says, since whoever signs in next is nobody in particular: alice,
+// holding a grant in finance, which forbids passwords, is offered none, carol is, and so is a
+// browser carrying no session.
+func TestTheSignedInSectionIsOfferedAsTheAccountsPolicySays(t *testing.T) {
+	in := someSessions(t)
+	h := in.signInOn(t, "https://agentiik.example.com", true)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		return w.SetNamespacePolicy(ctx, "finance", db.AuthPolicy{Password: "forbidden"}, *in.clock)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	alice := in.open(t, "alice", api.OpenedBy{Credential: "alice-passkey"})
+	carol := in.open(t, "carol", api.OpenedBy{Credential: "carol-passkey"})
+	for who, c := range map[string]*http.Cookie{"alice": alice, "carol": carol, "nobody": nil} {
+		for _, path := range []string{"/auth/sign-in", "/auth/enrol"} {
+			r := request(t, "GET", path, "")
+			if c != nil {
+				r.AddCookie(c)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			own, _ := attribute(w.Body.String(), "data-own")
+			password, _ := attribute(w.Body.String(), "data-password")
+			want := "offered"
+			if who == "alice" {
+				want = "withheld"
+			}
+			if w.Code != http.StatusOK || own != want || (path == "/auth/sign-in" && password != "offered") {
+				t.Errorf("%s for %s answered %d, offering the signed-in section %q and the sign-in %q", path, who, w.Code, own, password)
+			}
+		}
+	}
+}
+
 // The page is served only where sessions are accepted, since it signs one out, and on a public URL
 // a browser's page can have.
 func TestTheSignInPageNeedsSessions(t *testing.T) {

@@ -224,9 +224,10 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 // routes builds every route built so far on one router: runs and versions, the step log streams,
 // the secret declarations, the runners and their pools, the bus credential, the users and groups,
 // the namespaces, the API tokens, the grants, the caller's own record, the built-in object store,
-// the service accounts, the passkey ceremonies, and the sign-in page with its sign-out. Each
-// request is identified and authorised by api.Principals, from the tokens, the grants and the
-// bootstrap state the database holds. The log streams end when stopping closes.
+// the service accounts, the passkey ceremonies, the passwords, the authentication policy, the
+// caller's credentials, and the sign-in page with its sign-out. Each request is identified and
+// authorised by api.Principals, from the tokens, the grants and the bootstrap state the database
+// holds. The log streams end when stopping closes.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
 	principals, err := api.NewPrincipals(pool, nil)
 	if err != nil {
@@ -339,6 +340,14 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		passwords.TOTP = totp
 	}
 	if _, err := api.NewPasswords(rt, passwords); err != nil {
+		return nil, err
+	}
+	// The authentication policy, the installation's and each namespace's tightening of it, which an
+	// administrator sets; and the caller's own credentials, listed and removed as the policy allows.
+	if _, err := api.NewPolicies(rt, api.PolicyOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
+		return nil, err
+	}
+	if _, err := api.NewCredentials(rt, api.CredentialOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
 		return nil, err
 	}
 	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers, with the

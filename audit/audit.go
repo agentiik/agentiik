@@ -44,8 +44,8 @@ import (
 // The acts recorded, as the documentation's audit log row names them: manual trigger,
 // cancellation, secret write, runner policy change, runner drain and revocation, and namespace
 // changes; and from v0.3.0 the identity and access events, of which users, their enrolment links,
-// groups, service accounts, API tokens and the passkey ceremonies are here so far. Approval arrives with the wait
-// step in v0.8.0.
+// groups, service accounts, API tokens, the passkey ceremonies and the authentication policy are
+// here so far. Approval arrives with the wait step in v0.8.0.
 const (
 	// RunTrigger is a run started by hand, POST /api/v1/{ns}/workflows/{workflow}/runs.
 	RunTrigger = "run.trigger"
@@ -117,15 +117,16 @@ const (
 //
 // CredentialEnrol is a passkey registered, recorded by its credential ID with its kind, its flags
 // and its label, a password set, recorded by its identifier with whether it replaced one, or a TOTP
-// generator confirmed; CredentialRemove is a password or a TOTP generator removed, recorded by its
-// identifier and its type, the generator that goes with a password among them. EnrolmentUse is the
-// enrolment link or recovery code a registration or a password spent.
-// BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded once and
-// for good. SigninSucceed is a session opened, by an assertion, by a password, or by the registration
-// or the password an enrolment link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
-// since the sign-in it records committed nothing; its actor is the address the request came from,
-// since nobody was identified, and its target the account the passkey names, or the credential ID
-// presented where it names none.
+// generator confirmed; CredentialRemove is a passkey, a password or a TOTP generator removed,
+// recorded by its identifier and its type, the generator that goes with a password among them, and
+// with the reason where the policy took it: a password its account no longer needs once it holds
+// min_passkeys. EnrolmentUse is the enrolment link or recovery code a registration or a password
+// spent. BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded
+// once and for good. SigninSucceed is a session opened, by an assertion, by a password, or by the
+// registration or the password an enrolment link started. SigninFail is an assertion refused, with
+// the reason, in a transaction of its own since the sign-in it records committed nothing; its actor
+// is the address the request came from, since nobody was identified, and its target the account the
+// passkey names, or the credential ID presented where it names none.
 const (
 	CredentialEnrol  = "credential.enrol"
 	CredentialRemove = "credential.remove"
@@ -134,6 +135,12 @@ const (
 	SigninSucceed    = "signin.succeed"
 	SigninFail       = "signin.fail"
 )
+
+// PolicyChange is the authentication policy set, PUT /api/v1/auth/policy on the installation and
+// PUT /api/v1/{ns}/auth/policy in the namespace it tightens, recorded with the policy as it was and
+// as it now stands, and, where passwords came to be forbidden, the accounts whose password went and
+// those suspended for holding no passkey.
+const PolicyChange = "policy.change"
 
 // The results an entry records.
 const (

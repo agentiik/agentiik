@@ -92,9 +92,11 @@ const (
 // code in the registration's options and spend it when the passkey is recorded, and refuse a
 // session a code opened, which would register a passkey without spending it.
 //
-// A session a password opened may only enrol as well, where the policy that applies to its account
-// requires a passkey the account does not hold, as the OpenAPI document's sessionKind says. That is
-// read from the credential the session records, at every request, and never written: see
+// A session a password opened may only enrol as well, wherever the policy that applies to its
+// account requires a passkey, whatever passkeys the account holds, where the OpenAPI document's
+// sessionKind says so of an account holding none yet: the passkey that brings the account to
+// min_passkeys takes the password, and a password found beside them opens no more (policy.go). That
+// is read from the credential the session records, at every request, and never written: see
 // identifySession.
 type OpenedBy struct {
 	Credential    string
@@ -182,11 +184,13 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // keeps it open.
 //
 // What a session a password opened may do is read from the policy that applies to its account now,
-// so that a policy changed applies from the next request, as does a first passkey enrolled from the
-// session: nothing where passwords are forbidden, since the policy says no password exists any more
-// and whatever one opened goes with it; enrolling alone where a passkey is required and the account
-// holds none the policy accepts; and whatever the user's grants allow otherwise. Such a session is enrolling without
-// having been opened by a code, which the registration ceremony tells apart: it registers from it.
+// so that a policy changed applies from the next request, as do passkeys enrolled from the session:
+// nothing where passwords are forbidden, since the policy says no password exists any more and
+// whatever one opened goes with it; enrolling alone where a passkey is required, which the
+// account's passkeys, not its password, are the way past; and whatever the user's grants allow
+// otherwise. Such a session is enrolling without having been opened by a code, which the
+// registration ceremony tells apart: it registers from it. A session a synced passkey opened opens
+// nothing where device_bound_only applies, read the same way.
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
 		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
@@ -205,19 +209,27 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			return err
 		}
 		enrolling := len(s.EnrolmentCode) > 0
-		if s.CredentialType == db.CredentialPassword {
-			policy, err := passwordPolicyOf(ctx, w, s.Login, now, p.ipAddressed)
+		switch {
+		case s.CredentialType == db.CredentialPassword:
+			policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
 			if err != nil {
 				return err
 			}
-			if policy.forbidden {
+			if policy.passwordsForbidden {
 				return nil
 			}
-			held, err := w.CredentialsOf(ctx, s.Login)
+			enrolling = policy.enrolling()
+		case s.CredentialType == db.CredentialPasskey && s.BackupEligible:
+			// A synced passkey signs nobody in where device_bound_only applies, and what it
+			// opened before the policy came to say so goes with it; a device-bound one's
+			// sessions need no policy read.
+			policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)
 			if err != nil {
 				return err
 			}
-			enrolling = policy.enrolling(held)
+			if policy.deviceBoundOnly {
+				return nil
+			}
 		}
 		ends := s.CreatedAt.Add(SessionLifetime)
 		until := now.Add(SessionIdle)
@@ -234,13 +246,41 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 				return err
 			}
 		}
-		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0}
+		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0, ProvedAt: s.CreatedAt}
 		return nil
 	})
 	if err != nil {
 		return Identity{}, err
 	}
 	return as, nil
+}
+
+// proofLife is how recently a session has to have been signed in to for a credential that lasts to
+// be added from it: a first password, a TOTP generator, a passkey registered from the session. Ten
+// minutes, the time the page's steps take from a sign-in, and short enough that a session left open
+// on a shared machine, or a cookie carried off, is not enough to give whoever holds it a way in of
+// their own that outlives the session. A sign-in again opens a session of its own, which proves
+// possession anew: see Identity.ProvedAt. A password changed proves the one it replaces instead,
+// which is sent beside it.
+const proofLife = 10 * time.Minute
+
+// signInAgain is a credential that lasts, asked for from a session signed in to longer ago than
+// proofLife.
+const signInAgain = "adding a way in takes a sign-in in the last 10 minutes, so that a session left open is not enough to add one, and this session was signed in to earlier: sign in again, then try once more"
+
+// provedSince says whether a session proved at provedAt proved possession within proofLife of at:
+// never for a request carrying no session, whose proof is the zero time.
+func provedSince(provedAt, at time.Time) bool {
+	return !provedAt.IsZero() && at.Sub(provedAt) <= proofLife
+}
+
+// askAgain answers a credential that lasts asked for without a recent enough proof: 403 with the
+// sentence saying so, and the challenge of RFC 9470, "insufficient_user_authentication" with the
+// max_age a proof may have, for the page to tell this refusal from the others by, rather than by
+// matching the sentence.
+func askAgain(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer error="insufficient_user_authentication", max_age="%d"`, int(proofLife/time.Second)))
+	fail(w, http.StatusForbidden, signInAgain)
 }
 
 // endSession ends the session a request carries, as a sign-out asks at, and answers the status and

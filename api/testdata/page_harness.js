@@ -28,10 +28,15 @@ function global(name, value) {
   Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
 }
 
-// node is an element the page's script makes, as SVG's are: its attributes and its children.
+// node is an element the page's script makes, as SVG's are and the credentials' items: its
+// attributes, its children, and for an item's text and button what the script sets on them and the
+// listeners it adds.
 function node(tag) {
   return {
-    tag, attributes: {}, children: [],
+    tag, attributes: {}, children: [], textContent: "", disabled: false, listeners: {},
+    addEventListener(type, f) {
+      (this.listeners[type] = this.listeners[type] || []).push(f);
+    },
     setAttribute(name, value) {
       this.attributes[name] = String(value);
     },
@@ -80,6 +85,7 @@ function stage(name, address, { hash, insecure, raw } = {}) {
   global("document", {
     getElementById: (id) => elements[id] || null, baseURI: address,
     createElementNS: (ns, tag) => Object.assign(node(tag), { ns }),
+    createElement: (tag) => node(tag),
   });
   global("window", {
     isSecureContext: !insecure, PublicKeyCredential, location: browser.location,
@@ -687,6 +693,155 @@ async function scenarios() {
   request(b, "me").answer(200, { principal: "alice" });
   await settle();
   check(!visible(b, "own"), "the page offers a password where the installation withholds them");
+
+  // listed is what the credentials' list shows: each item's text, and whether it has a button.
+  const listed = (b) => b.elements["credential-list"].children.map((item) => ({
+    text: item.children[0] ? item.children[0].textContent : "",
+    button: item.children[1] || null,
+  }));
+  // click clicks a button the page's script made.
+  const click = async (button) => {
+    for (const f of button.listeners.click || []) {
+      f({ preventDefault() {} });
+    }
+    await settle();
+  };
+  const theCredentials = {
+    credentials: [
+      { type: "password", id: "01M2AAZ9G62NQXFAFCXKRPJEH5", created_at: "2026-09-27T08:55:00Z" },
+      { type: "totp", id: "01M2AB3K5Q7R9T1V3X5Z7B9D1F", created_at: "2026-09-27T08:56:00Z", last_used_at: "2026-09-27T12:00:00Z" },
+      { type: "passkey", id: "Q2hyb21lUGFzc2tleTAx", label: "work laptop", backup_eligible: false, backup_state: false, kind: "device-bound", created_at: "2026-09-27T09:00:00Z" },
+      { type: "passkey", id: "aVBob25l/UGFzc2tleQ", backup_eligible: true, backup_state: true, kind: "synced", created_at: "2026-09-27T09:02:00Z", last_used_at: "2026-09-27T12:30:00Z" },
+    ],
+  };
+
+  scenario = "the credentials a full session's account holds";
+  b = stage("sign-in", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  const credentials = request(b, "me/credentials");
+  check(credentials.init.method === "GET", "the credentials were asked for with " + credentials.init.method);
+  credentials.answer(200, theCredentials);
+  await settle();
+  let items = listed(b);
+  check(visible(b, "credentials") && items.length === 4, "the page lists " + items.length + " credentials, or hides them");
+  check(/^The password, set 2026-09-27, not used yet$/.test(items[0].text) && items[0].button !== null, "the password is listed as " + JSON.stringify(items[0].text));
+  check(/one-time code generator/.test(items[1].text) && /last used 2026-09-27/.test(items[1].text) && items[1].button === null, "the generator is listed as " + JSON.stringify(items[1].text) + ", or with a button of its own");
+  check(items[2].text === "“work laptop”, a device-bound passkey, enrolled 2026-09-27, not used yet" && items[2].button !== null, "a device-bound passkey is listed as " + JSON.stringify(items[2].text));
+  check(/^A synced passkey, enrolled 2026-09-27, last used 2026-09-27$/.test(items[3].text), "a synced passkey is listed as " + JSON.stringify(items[3].text));
+  await click(items[3].button);
+  const refusedRemoval = request(b, "me/credentials/aVBob25l%2FUGFzc2tleQ");
+  check(refusedRemoval.init.method === "DELETE" && refusedRemoval.body === undefined, "the removal sent " + refusedRemoval.init.method + " " + JSON.stringify(refusedRemoval.body));
+  refusedRemoval.answer(409, { error: "removing this passkey would leave this account with 1 passkey the policy accepts, and min_passkeys is 2: enrol another passkey first, on another device", setting: "min_passkeys" });
+  await settle();
+  check(visible(b, "problem") && /min_passkeys is 2/.test(text(b, "problem")) && listed(b).length === 4, "a refused removal says nothing, or changed the list");
+  await click(listed(b)[0].button);
+  request(b, "me/credentials/01M2AAZ9G62NQXFAFCXKRPJEH5").answer(204);
+  await settle();
+  check(/password is removed/.test(text(b, "status")), "the page does not say the password is removed: " + JSON.stringify(text(b, "status")));
+  request(b, "me").answer(401, { error: "that session opens nothing" });
+  await settle();
+  check(!visible(b, "credentials") && listed(b).length === 0 && !visible(b, "signed-in") && visible(b, "passkey"),
+    "once the session the password opened ended with it, the page still lists its credentials, or offers no sign-in");
+
+  scenario = "the credentials of a session that may only enrol";
+  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  check(!visible(b, "credentials") && !b.requests.some((q) => q.url.endsWith("me/credentials")), "a session that may only enrol is offered its credentials");
+
+  scenario = "passwords forbidden to the signed-in account, allowed to whoever else signs in";
+  b = stage("sign-in-own-withheld", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  check(visible(b, "password"), "the password form is withheld from whoever signs in next");
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  check(!visible(b, "own"), "the page offers alice a password her policy forbids");
+
+  for (const [what, act, stale] of [
+    ["a first password", async (b) => {
+      b.elements["changed-password"].value = "alice's new passphrase";
+      b.elements["changed-password-again"].value = "alice's new passphrase";
+      await fire(b, "change-password", "submit");
+      return request(b, "me/password");
+    }, true],
+    ["a generator", async (b) => {
+      await fire(b, "totp-start", "click");
+      return request(b, "me/totp");
+    }, true],
+    ["a password refused for another reason", async (b) => {
+      b.elements["changed-password"].value = "alice's new passphrase";
+      b.elements["changed-password-again"].value = "alice's new passphrase";
+      await fire(b, "change-password", "submit");
+      return request(b, "me/password");
+    }, false],
+  ]) {
+    scenario = "a sign-in asked for again, adding " + what;
+    b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+    all.push(b);
+    await settle();
+    request(b, "me").answer(200, { principal: "alice" });
+    await settle();
+    check(!visible(b, "again"), "the page asks for a sign-in again before anything asked for one");
+    (await act(b)).answer(403, { error: "adding a way in takes a sign-in in the last 10 minutes" },
+      stale ? { "WWW-Authenticate": 'Bearer error="insufficient_user_authentication", max_age="600"' } : {});
+    await settle();
+    check(visible(b, "again") === stale, "the page asks for a sign-in again: " + visible(b, "again"));
+    if (!stale) {
+      continue;
+    }
+    check(visible(b, "again-passkey") && visible(b, "again-password") && /10 minutes/.test(text(b, "problem")), "the page offers no passkey or no password to sign in again with");
+    await fire(b, "again-passkey", "click");
+    const options = request(b, "auth/passkey/options");
+    check(JSON.stringify(options.body) === JSON.stringify({ ceremony: "assertion" }), "the sign-in again asked " + JSON.stringify(options.body));
+    options.answer(200, assertion);
+    await settle();
+    request(b, "auth/passkey/verify").answer(200, { ceremony: "assertion", login: "alice" });
+    await settle();
+    check(!visible(b, "again") && text(b, "status") === "Signed in again as alice. Try once more.", "the page does not say alice signed in again: " + JSON.stringify(text(b, "status")));
+    request(b, "me").answer(200, { principal: "alice" });
+    await settle();
+    check(visible(b, "own") && visible(b, "signed-in"), "the page takes the signed-in section away once alice signed in again");
+  }
+
+  scenario = "a sign-in asked for again, registering a passkey from a session that may only enrol";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  await fire(b, "enrol", "submit");
+  request(b, "auth/passkey/options").answer(403, { error: "adding a way in takes a sign-in in the last 10 minutes" }, { "WWW-Authenticate": 'Bearer error="insufficient_user_authentication", max_age="600"' });
+  await settle();
+  check(visible(b, "again") && visible(b, "again-password") && b.created.length === 0, "the page does not ask for a sign-in again, or ran the ceremony all the same");
+  b.elements["again-login"].value = " bob ";
+  b.elements["again-secret"].value = "bob's own";
+  await fire(b, "again-password", "submit");
+  const again = request(b, "auth/login");
+  check(JSON.stringify(again.body) === JSON.stringify({ login: "bob", password: "bob's own" }) && b.elements["again-secret"].value === "", "the sign-in again sent " + JSON.stringify(again.body));
+  again.answer(200, { login: "bob", session: "enrolment" });
+  await settle();
+  check(!visible(b, "again") && /Signed in again as bob/.test(text(b, "status")), "the page does not say bob signed in again");
+
+  scenario = "a passkey from a session a password opened, bringing it to min_passkeys";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  await fire(b, "enrol", "submit");
+  request(b, "auth/passkey/options").answer(200, registration);
+  await settle();
+  request(b, "auth/passkey/verify").answer(200, { ceremony: "registration", login: "bob", credential: { type: "passkey", id: "made", kind: "device-bound" } });
+  await settle();
+  request(b, "me").answer(401, { error: "that session opens nothing" });
+  await settle();
+  check(/password is removed/.test(text(b, "status")) && !visible(b, "signed-in"), "the page does not say the password went with the session: " + JSON.stringify(text(b, "status")));
 
   scenario = "every request";
   for (const browser of all) {

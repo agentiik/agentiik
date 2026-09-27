@@ -96,6 +96,10 @@ type PasskeyAPI struct {
 	rpID, origin, unavailable string
 
 	signIns *SignIns
+
+	// checked is run between a registration's verification and the transaction that writes it,
+	// where a test changes what was checked. Nil outside tests.
+	checked func()
 }
 
 // The bytes a ceremony mints: a challenge and a user handle are each 32 random bytes, 256 bits,
@@ -138,9 +142,6 @@ const (
 	// syncedRefused is a synced passkey where device_bound_only applies to the account.
 	syncedRefused = "this account signs in with device-bound passkeys alone, and this passkey is synced: its Backup Eligibility flag is set, so its provider may copy it off the device"
 )
-
-// deviceBoundOnly is the setting syncedRefused names.
-const deviceBoundOnly = "device_bound_only"
 
 // NewPasskeys registers the passkey ceremonies on a router.
 func NewPasskeys(rt *Router, o PasskeyOptions) (*PasskeyAPI, error) {
@@ -194,71 +195,6 @@ func NewPasskeys(rt *Router, o PasskeyOptions) (*PasskeyAPI, error) {
 func (s *PasskeyAPI) fromThePage(r *http.Request) bool {
 	origins := r.Header.Values("Origin")
 	return len(origins) == 1 && origins[0] == s.origin
-}
-
-// ceremonyPolicy is what the authentication policy asks of one account's passkeys.
-type ceremonyPolicy struct {
-	// userVerification is whether the UV flag is required, as it is by default.
-	userVerification bool
-
-	// deviceBoundOnly refuses a passkey whose Backup Eligibility flag is set.
-	deviceBoundOnly bool
-}
-
-// policyOf is what the policy asks of login's passkeys: the installation's user_verification and
-// device_bound_only, tightened by those of every namespace login holds a grant in, as policiesOf
-// reads them.
-//
-// The two settings a ceremony reads, and no more: the rest of the policy is the password's and the
-// credentials', and is read where they are.
-func policyOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (ceremonyPolicy, error) {
-	installation, tightening, err := policiesOf(ctx, wide, login, now)
-	if err != nil {
-		return ceremonyPolicy{}, err
-	}
-	p := ceremonyPolicy{
-		userVerification: installation.UserVerification != "preferred",
-		deviceBoundOnly:  installation.DeviceBoundOnly != nil && *installation.DeviceBoundOnly,
-	}
-	for _, tightened := range tightening {
-		p.userVerification = p.userVerification || tightened.UserVerification == "required"
-		p.deviceBoundOnly = p.deviceBoundOnly || (tightened.DeviceBoundOnly != nil && *tightened.DeviceBoundOnly)
-	}
-	return p, nil
-}
-
-// policiesOf is the policies that apply to login: the installation's, and those of every namespace
-// login holds a grant in, its own or one of its groups', since "an account signs in under the
-// installation's policy tightened by that of each namespace it holds a grant in". A deny alone is
-// not a grant, as it is nowhere else. A login no user holds holds no grant, and is under the
-// installation's alone.
-func policiesOf(ctx context.Context, wide *db.Wide, login string, now time.Time) (db.AuthPolicy, []db.AuthPolicy, error) {
-	installation, err := wide.InstallationPolicy(ctx)
-	if err != nil {
-		return db.AuthPolicy{}, nil, err
-	}
-	groups, err := wide.GroupsOf(ctx, login)
-	if err != nil {
-		return db.AuthPolicy{}, nil, err
-	}
-	grants, err := wide.AccessGrantsAcross(ctx, access.Principal{Ref: login, Groups: groups}, now)
-	if err != nil {
-		return db.AuthPolicy{}, nil, err
-	}
-	var tightening []db.AuthPolicy
-	read := map[string]bool{}
-	for _, g := range grants {
-		if g.Role == "" || read[g.Scope.Namespace] {
-			continue
-		}
-		read[g.Scope.Namespace] = true
-		tightened, err := wide.NamespacePolicy(ctx, g.Scope.Namespace)
-		if err != nil {
-			return db.AuthPolicy{}, nil, err
-		}
-		tightening = append(tightening, tightened)
-	}
-	return installation, tightening, nil
 }
 
 // verification is how a ceremony's options write the user verification asked for.
@@ -399,6 +335,12 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 			unauthenticated(w, as)
 			return
 		}
+		// A passkey registered from a session is a way in that outlives it, which the session
+		// alone does not give: see proofLife.
+		if !provedSince(as.ProvedAt, now) {
+			askAgain(w)
+			return
+		}
 		login = string(as.Principal)
 	}
 	fresh, err := randomBytes(handleBytes)
@@ -427,7 +369,7 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 		if err != nil {
 			return err
 		}
-		policy, err := policyOf(ctx, wide, login, now)
+		policy, err := policyFor(ctx, wide, login, now, false)
 		if err != nil {
 			return err
 		}
@@ -584,6 +526,9 @@ func challengeOf(clientData []byte) []byte {
 	return c
 }
 
+// errSynced is a synced passkey the policy came to refuse while its registration was verified.
+var errSynced = errors.New("api: the passkey is synced and device_bound_only applies")
+
 // refusal is a ceremony refused for a reason the request could not have been answered otherwise
 // for, rather than for a failure of the API's own.
 type refusal struct {
@@ -599,16 +544,21 @@ func (r *refusal) Error() string { return r.reason }
 //
 // The challenge is taken in a transaction of its own, so that it is spent whatever follows. The
 // attestation is verified outside any transaction, since verifying costs a signature check and
-// holds nothing. What the registration writes is then one transaction: the passkey, the code it
-// spent, the end of the bootstrap where an administrator enrols while it lives, and, where a code
-// started it, the sign-in, recorded in the audit log last.
+// holds nothing. What the registration writes is then one transaction: the lifting of a suspension
+// made for holding no passkey, where a code started it; the passkey; the password, where the passkey
+// brings its account to min_passkeys under a policy taking it off passwords (retirePassword); the
+// code it spent; the end of the bootstrap where an administrator enrols while it lives; and, where a
+// code started it, the sign-in, recorded in the audit log last.
+//
+// One registered from a session needs the session signed in to within proofLife of the options, as
+// the options did (sessions.go).
 func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
 	refused := func() {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, noRegistration)
 	}
 	var took db.Challenge
-	var policy ceremonyPolicy
+	var policy accountPolicy
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		took, err = wide.TakeChallenge(ctx, challengeOf(ask.Credential.ClientDataJSON), now)
@@ -619,7 +569,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		if err != nil {
 			return err
 		}
-		policy, err = policyOf(ctx, wide, took.Login, now)
+		policy, err = policyFor(ctx, wide, took.Login, now, false)
 		return err
 	})
 	switch {
@@ -641,6 +591,12 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 			refused()
 			return
 		}
+		// Proved within proofLife of the options, as the options asked, since the challenge
+		// they issued is what this registration answers.
+		if !provedSince(as.ProvedAt, took.IssuedAt) {
+			askAgain(w)
+			return
+		}
 	}
 	made, err := webauthn.VerifyRegistration(
 		webauthn.Ceremony{RPID: s.rpID, Origin: s.origin, Challenge: took.Value, RequireUserVerification: policy.userVerification},
@@ -656,6 +612,9 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 
 	id := b64.EncodeToString(made.ID)
 	address := s.signIns.addressOf(r)
+	if s.checked != nil {
+		s.checked()
+	}
 	var answer Verified
 	var cookie *http.Cookie
 	err = s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
@@ -671,8 +630,37 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 			return err
 		}
 		coded := took.EnrolmentCode != nil
+		// A session was read before the user's row was held, and a suspension since, forbidding
+		// passwords to an account holding no passkey, ended it: a suspended user enrols with a
+		// code alone.
+		if !coded && user.Suspended {
+			return &refusal{reason: "the user was suspended"}
+		}
+		// The policy read again under the user's row, since a synced passkey refused only by a
+		// policy read before it would be written beside a policy refusing it, and lift a
+		// suspension with a passkey that signs nobody in.
+		applies, err := policyFor(ctx, wide, user.Login, now, false)
+		if err != nil {
+			return err
+		}
+		if applies.deviceBoundOnly && made.BackupEligible {
+			return errSynced
+		}
 		// A suspended user enrols with a code, since "enrolling is how an account suspended
-		// for having no passkey comes back", and opens no session while the suspension lasts.
+		// for having no passkey comes back": a suspension made for having none is lifted by the
+		// passkey, which the policy accepts, and the user is then signed in as any other; one
+		// made for another reason is not the passkey's to lift, and its user opens no session
+		// while it lasts. The code is spent below, and a code that opens nothing rolls the
+		// lifting back with everything else.
+		lifted := false
+		if coded && user.Suspended && user.SuspendedFor == db.SuspendedNoPasskey {
+			if lifted, err = wide.LiftSuspension(ctx, user.Login, db.SuspendedNoPasskey); err != nil {
+				return err
+			}
+			if lifted {
+				user.Suspended, user.SuspendedFor = false, ""
+			}
+		}
 		signs := coded && !user.Suspended
 		var personal []entry
 		if signs {
@@ -716,13 +704,21 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		}
 		passkey := passkeyOf(recorded)
 		answer = Verified{Ceremony: db.CeremonyRegistration, Login: user.Login, Credential: &passkey}
+		enrolled := map[string]any{
+			"kind": passkey.Kind, "label": label, "backup_eligible": made.BackupEligible,
+			"backup_state": made.BackupState, "aaguid": fmt.Sprintf("%x", made.AAGUID),
+		}
+		if lifted {
+			enrolled["suspension_lifted"] = db.SuspendedNoPasskey
+		}
 		entries := []entry{{record: audit.Record{
-			Actor: user.Login, Action: audit.CredentialEnrol, Target: id, Result: audit.Done,
-			Detail: map[string]any{
-				"kind": passkey.Kind, "label": label, "backup_eligible": made.BackupEligible,
-				"backup_state": made.BackupState, "aaguid": fmt.Sprintf("%x", made.AAGUID),
-			},
+			Actor: user.Login, Action: audit.CredentialEnrol, Target: id, Result: audit.Done, Detail: enrolled,
 		}}}
+		off, err := retirePassword(ctx, wide, user.Login, now)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, off...)
 		if coded {
 			entries = append(entries, entry{record: audit.Record{
 				Actor: user.Login, Action: audit.EnrolmentUse, Target: user.Login, Result: audit.Done,
@@ -761,9 +757,13 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 	})
 	var refusedFor *refusal
 	switch {
+	case errors.Is(err, errSynced):
+		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
+		return
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode), errors.Is(err, db.ErrCredentialExists):
 		// A code spent, lapsed or replaced since the options were issued, a passkey registered
-		// already, or a user removed: nothing was written, and the ceremony starts again.
+		// already, or a user removed or suspended: nothing was written, and the ceremony starts
+		// again.
 		refused()
 		return
 	case err != nil:
@@ -790,7 +790,7 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 	var took db.Challenge
 	var stored db.Credential
 	var handle []byte
-	var policy ceremonyPolicy
+	var policy accountPolicy
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		took, err = wide.TakeChallenge(ctx, challengeOf(ask.Credential.ClientDataJSON), now)
@@ -816,7 +816,7 @@ func (s *PasskeyAPI) signIn(w http.ResponseWriter, r *http.Request, ask ceremony
 		if handle, err = wide.PasskeyHandleOf(ctx, stored.Login); err != nil {
 			return err
 		}
-		policy, err = policyOf(ctx, wide, stored.Login, now)
+		policy, err = policyFor(ctx, wide, stored.Login, now, false)
 		return err
 	})
 	if err != nil {

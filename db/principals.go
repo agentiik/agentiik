@@ -48,6 +48,10 @@ type User struct {
 	// Suspended is an account that opens no session.
 	Suspended bool
 
+	// SuspendedFor is why the authentication policy suspended it, SuspendedNoPasskey, and empty
+	// where it is not suspended or was suspended for no reason recorded.
+	SuspendedFor string
+
 	CreatedAt    time.Time
 	LastSignInAt time.Time
 }
@@ -80,12 +84,12 @@ func principalCreated(err error, what, name string) error {
 	return nil
 }
 
-const userColumns = `login, display_name, admin, suspended, created_at, last_sign_in_at`
+const userColumns = `login, display_name, admin, suspended, coalesce(suspended_for, ''), created_at, last_sign_in_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var signedIn *time.Time
-	err := row.Scan(&u.Login, &u.DisplayName, &u.Admin, &u.Suspended, &u.CreatedAt, &signedIn)
+	err := row.Scan(&u.Login, &u.DisplayName, &u.Admin, &u.Suspended, &u.SuspendedFor, &u.CreatedAt, &signedIn)
 	if signedIn != nil {
 		u.LastSignInAt = *signedIn
 	}
@@ -107,8 +111,14 @@ func (w *Wide) User(ctx context.Context, login string) (User, error) {
 // HoldUser reads one by login as User does, and holds its row until the transaction ends: an
 // enrolment takes the user's row first, as issuing a link does, so that the two take turns rather
 // than each waiting on what the other took.
+//
+// The row is held against every other act that holds or writes it, and not against a row written
+// elsewhere that refers to it, a membership, a credential or a challenge, which takes the weaker
+// lock a reference takes: an act holding many users' rows, as forbidding passwords holds every one,
+// would otherwise wait on a group created with two of them as members in the other order, while the
+// group waits on it.
 func (w *Wide) HoldUser(ctx context.Context, login string) (User, error) {
-	u, err := scanUser(w.tx.QueryRow(ctx, `select `+userColumns+` from users where login = $1 for update`, login))
+	u, err := scanUser(w.tx.QueryRow(ctx, `select `+userColumns+` from users where login = $1 for no key update`, login))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, fmt.Errorf("%w: %s", ErrNoPrincipal, login)
 	}
@@ -132,12 +142,12 @@ func (w *Wide) Users(ctx context.Context) ([]User, error) {
 }
 
 // UpdateUser writes what may change of a user: the display name, whether they administer, and
-// whether they are suspended. The login never changes, since it is also the name of their
+// whether they are suspended, and why. The login never changes, since it is also the name of their
 // personal namespace.
 func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 	tag, err := w.tx.Exec(ctx,
-		`update users set display_name = $2, admin = $3, suspended = $4 where login = $1`,
-		u.Login, u.DisplayName, u.Admin, u.Suspended)
+		`update users set display_name = $2, admin = $3, suspended = $4, suspended_for = $5 where login = $1`,
+		u.Login, u.DisplayName, u.Admin, u.Suspended, nilIfEmpty(u.SuspendedFor))
 	if err != nil {
 		return fmt.Errorf("db: user %s could not be written: %w", u.Login, err)
 	}
@@ -145,6 +155,34 @@ func (w *Wide) UpdateUser(ctx context.Context, u User) error {
 		return fmt.Errorf("%w: %s", ErrNoPrincipal, u.Login)
 	}
 	return nil
+}
+
+// SuspendedNoPasskey is the reason an account is suspended where passwords were forbidden while it
+// held no passkey the policy accepts, as users.suspended_for writes it.
+const SuspendedNoPasskey = "no_passkey"
+
+// Suspend suspends login for reason, and answers whether they were not suspended already: one
+// suspended already keeps the reason it was suspended for, which the enrolment that answers it is
+// the one to lift. Its caller holds the user's row (HoldUser), as every act on an account does.
+func (w *Wide) Suspend(ctx context.Context, login, reason string) (bool, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update users set suspended = true, suspended_for = $2 where login = $1 and not suspended`, login, nilIfEmpty(reason))
+	if err != nil {
+		return false, fmt.Errorf("db: user %s could not be suspended: %w", login, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// LiftSuspension lifts login's suspension where it was made for reason, and answers whether it did:
+// a suspension made for another reason, or for none recorded, is not the caller's to lift. Its caller
+// holds the user's row (HoldUser).
+func (w *Wide) LiftSuspension(ctx context.Context, login, reason string) (bool, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update users set suspended = false, suspended_for = null where login = $1 and suspended and suspended_for = $2`, login, reason)
+	if err != nil {
+		return false, fmt.Errorf("db: the suspension of %s could not be lifted: %w", login, err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // SignedIn records a user's sign-in.
@@ -168,11 +206,12 @@ type Administrator struct {
 
 // Administrators answers the installation's administrators, ordered by login, and locks each of
 // their rows until the transaction ends, so that two removals of administrators at once take turns
-// in one order and the second counts what the first left.
+// in one order and the second counts what the first left. The lock is HoldUser's, which a row
+// referring to a user does not wait on.
 func (w *Wide) Administrators(ctx context.Context) ([]Administrator, error) {
 	rows, err := w.tx.Query(ctx,
 		`select u.login, not u.suspended and exists (select from credentials c where c.login = u.login)
-		   from users u where u.admin order by u.login for update of u`)
+		   from users u where u.admin order by u.login for no key update of u`)
 	if err != nil {
 		return nil, fmt.Errorf("db: the administrators could not be read: %w", err)
 	}

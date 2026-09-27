@@ -5,7 +5,9 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -72,6 +74,10 @@ type UserAPI struct {
 	pool  *db.Pool
 	enrol string
 	now   func() time.Time
+
+	// ipAddressed is an installation whose public URL names an IP address, where no passkey signs
+	// anybody in, which whether an administrator can sign in depends on.
+	ipAddressed bool
 }
 
 // NewUsers registers the user and group routes on a router.
@@ -88,6 +94,9 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &UserAPI{pool: o.Pool, enrol: enrolAt(o.PublicURL), now: o.Now}
+	if u, err := url.Parse(o.PublicURL); err == nil {
+		s.ipAddressed = net.ParseIP(u.Hostname()) != nil
+	}
 
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
@@ -504,9 +513,10 @@ func (s *UserAPI) user(w http.ResponseWriter, r *http.Request, _ Principal, _ Ta
 // not: what a namespace holds is somebody's work.
 //
 // Refused too, once the bootstrap token has ended, for the last administrator who can sign in, not
-// suspended and holding a credential: nothing else makes an administrator after that, and an
-// installation nobody can administer is the lockout the bootstrap token ends at an enrolment rather
-// than at a creation to avoid. Before it has ended, the token makes another.
+// suspended and holding a credential the policy that applies to them lets them sign in with: nothing
+// else makes an administrator after that, and an installation nobody can administer is the lockout
+// the bootstrap token ends at an enrolment rather than at a creation to avoid. Before it has ended,
+// the token makes another.
 func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
 		fail(w, statusOf(err), err.Error())
@@ -523,7 +533,7 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 			return err
 		}
 		if user.Admin {
-			if err := notTheLastAdministrator(ctx, wide, login); err != nil {
+			if err := notTheLastAdministrator(ctx, wide, login, s.now(), s.ipAddressed); err != nil {
 				return err
 			}
 		}
@@ -591,11 +601,12 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 }
 
 // notTheLastAdministrator refuses the removal of login, an administrator, where the bootstrap token
-// has ended and no other administrator can sign in. Every administrator's row is locked first, in
-// one order, so that two administrators removing each other at once take turns and the second
+// has ended and no other administrator can sign in, holding a credential the policy that applies to
+// them lets them sign in with (administratorsSigningIn). Every administrator's row is locked first,
+// in one order, so that two administrators removing each other at once take turns and the second
 // finds the first gone.
-func notTheLastAdministrator(ctx context.Context, wide *db.Wide, login string) error {
-	admins, err := wide.Administrators(ctx)
+func notTheLastAdministrator(ctx context.Context, wide *db.Wide, login string, now time.Time, ipAddressed bool) error {
+	signing, err := administratorsSigningIn(ctx, wide, now, ipAddressed)
 	if err != nil {
 		return err
 	}
@@ -603,8 +614,8 @@ func notTheLastAdministrator(ctx context.Context, wide *db.Wide, login string) e
 	if err != nil || !b.Ended() {
 		return err
 	}
-	for _, a := range admins {
-		if a.Login != login && a.SignsIn {
+	for _, a := range signing {
+		if a != login {
 			return nil
 		}
 	}

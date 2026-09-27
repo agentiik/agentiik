@@ -197,6 +197,10 @@ type Session struct {
 	// what a session a password opened may do is the policy's to say at each request.
 	CredentialType string
 
+	// BackupEligible is whether the passkey that opened it, where a passkey did, is synced, which
+	// device_bound_only refuses at each request as it refuses the passkey at a sign-in.
+	BackupEligible bool
+
 	CreatedAt     time.Time
 	IdleExpiresAt time.Time
 }
@@ -256,16 +260,17 @@ const liveSession = `revoked_at is null and idle_expires_at > $2
 	       where c.hash = sessions.enrolment_code and c.revoked_at is null and c.expires_at > $2))`
 
 // SessionByHash answers the session whose identifier hashes to hash, if it is live at now, with the
-// type of the credential that opened it.
+// type of the credential that opened it, and whether that credential is a synced passkey.
 func (w *Wide) SessionByHash(ctx context.Context, hash []byte, now time.Time) (Session, error) {
 	var s Session
 	var credential *string
 	err := w.tx.QueryRow(ctx,
 		`select hash, login, credential, enrolment_code, created_at, idle_expires_at,
-		        coalesce((select type from credentials c where c.id = sessions.credential), '')
+		        coalesce((select type from credentials c where c.id = sessions.credential), ''),
+		        coalesce((select backup_eligible from credentials c where c.id = sessions.credential), false)
 		   from sessions
 		  where hash = $1 and `+liveSession, hash, now,
-	).Scan(&s.Hash, &s.Login, &credential, &s.EnrolmentCode, &s.CreatedAt, &s.IdleExpiresAt, &s.CredentialType)
+	).Scan(&s.Hash, &s.Login, &credential, &s.EnrolmentCode, &s.CreatedAt, &s.IdleExpiresAt, &s.CredentialType, &s.BackupEligible)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrNoSession
 	}
