@@ -222,6 +222,7 @@ func TestARunNobodyAskedForIsTheBuiltInIdentitys(t *testing.T) {
 		agk.TriggerManual:    "alice",
 		agk.TriggerMCP:       "alice",
 		agk.TriggerTerraform: "alice",
+		agk.TriggerWorkflow:  "alice",
 	} {
 		r := runOf(kind)
 		if err := createIn(t, pool, "finance", r); err != nil {
@@ -237,11 +238,11 @@ func TestARunNobodyAskedForIsTheBuiltInIdentitys(t *testing.T) {
 		t.Errorf("a scheduled run naming the built-in identity was answered %s", err)
 	}
 
-	editor := runOf(agk.TriggerSchedule)
+	editor := runOf(agk.TriggerEvent)
 	editor.TriggeredBy = "alice"
 	err := createIn(t, pool, "finance", editor)
-	if err == nil || !strings.Contains(err.Error(), "attributed to finance/agentiik") {
-		t.Errorf("a scheduled run attributed to the last editor was answered %v", err)
+	if err == nil || !strings.Contains(err.Error(), "of trigger kind event, is attributed to finance/agentiik, its namespace's built-in identity, and not to alice") {
+		t.Errorf("a run of an event attributed to the last editor was answered %v", err)
 	}
 	var runs int
 	if err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *NS) error {

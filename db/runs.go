@@ -156,7 +156,7 @@ func (n *NS) attributed(r NewRun) (string, error) {
 	}
 	builtIn := n.namespace + "/" + BuiltIn
 	if r.TriggeredBy != "" && r.TriggeredBy != builtIn {
-		return "", fmt.Errorf("db: run %s was started by a %s and is attributed to %s, its namespace's built-in identity, and not to %s: a run nobody asked for is nobody's but the namespace's", r.ID, r.Trigger, builtIn, r.TriggeredBy)
+		return "", fmt.Errorf("db: run %s, of trigger kind %s, is attributed to %s, its namespace's built-in identity, and not to %s: a run nobody asked for is nobody's but the namespace's", r.ID, r.Trigger, builtIn, r.TriggeredBy)
 	}
 	return builtIn, nil
 }
