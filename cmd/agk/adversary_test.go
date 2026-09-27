@@ -35,7 +35,7 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 		"validate": true, "graph": true, "run": true, "brick test": true, "push": true,
 		"logs": true, "status": true, "namespace create": true, "namespace list": true,
 		"namespace show": true, "namespace delete": true, "namespace quotas": true,
-		"user create": true, "user list": true, "user show": true, "user delete": true,
+		"user create": true, "user recover": true, "user list": true, "user show": true, "user delete": true,
 		"group create": true, "group list": true, "group show": true, "group delete": true,
 		"group add": true, "group remove": true,
 	}

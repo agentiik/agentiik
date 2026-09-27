@@ -11,6 +11,7 @@
 //	agentiik-api audit-verify FILE     verify an export of the audit log
 //	agentiik-api namespace create NAME create a namespace
 //	agentiik-api namespace remove NAME remove a namespace that holds nothing
+//	agentiik-api recover LOGIN         issue an administrator a recovery code, where none can sign in
 //
 // Every rule it follows is somebody else's. Package api authorises and answers, package secret
 // seals and reads values, package artifact signs and keeps objects, package bus mints credentials
@@ -159,6 +160,19 @@
 // itself being no principal a grant names, and a namespace created again is recorded unchanged and
 // left as it was, so that an installation script can run it every time. A namespace it creates has
 // no owner, as one v0.2 made has none.
+//
+// # recover
+//
+// recover LOGIN issues the administrator LOGIN a recovery code and prints the link to the enrolment
+// page that carries it, once: the break-glass line of recovery, for the day every administrator
+// loses their authenticator and nobody is left who can sign in to issue one. It takes no credential,
+// and runs where the API runs, with the API's environment, which is what holds it offline: it reads
+// AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE, as namespace does, and AGK_PROXY_URL, or
+// AGK_PUBLIC_URL where no proxy is named, for the link's origin, as serve does. The code is the one
+// POST /api/v1/users/{login}/recovery issues, single use and good for an hour, revoking the one
+// issued before it, recorded as enrolment.issue by installation. It recovers an administrator alone,
+// a suspended one or one holding no credential included, and refuses a user who is not one: that
+// administrator issues everybody else theirs.
 //
 // # bus-init and bus-credential
 //

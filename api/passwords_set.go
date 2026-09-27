@@ -35,11 +35,12 @@ import (
 // the account does not hold, as a password sign-in's would. A suspended user sets a password with a
 // code and opens no session, as a suspended user enrolling a passkey does.
 //
-// A first administrator's link ends the bootstrap token where the session the password opens is a
-// full one: always on an installation addressed by an IP address, and where the policy requires no
-// passkey. Where it requires one, the bootstrap stays until the first administrator registers a
-// passkey, from the session the password opened or a later one, which ends it then (passkeys.go):
-// ended at the password, it would leave the installation to somebody who can do nothing but enrol.
+// An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
+// token where it has not ended and the session the password opens is a full one: always on an
+// installation addressed by an IP address, and where the policy requires no passkey. Where it
+// requires one, the bootstrap stays until the administrator registers a passkey, from the session
+// the password opened or a later one, which ends it then (passkeys.go): ended at the password, it
+// would leave the installation to somebody who can do nothing but enrol.
 //
 // A code sets the password in place of one held, which only a recovery code can meet, since the
 // other two are issued to a user holding no credential; the TOTP generator beside the old password
@@ -358,7 +359,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		}
 		// The bootstrap ends where the first administrator can sign in to a full session, and
 		// not before: see the top of this file.
-		if code.Kind == db.EnrolmentFirstAdministrator && !user.Suspended && kind == SessionFull {
+		if user.Admin && !user.Suspended && kind == SessionFull {
 			ended, err := wide.EndBootstrap(ctx, now)
 			if err != nil {
 				return err

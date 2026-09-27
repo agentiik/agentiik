@@ -459,6 +459,7 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"GET /api/v1/users/{login}":                                      administrator,
 		"DELETE /api/v1/users/{login}":                                   administrator,
 		"POST /api/v1/users/{login}/enrolment":                           administrator,
+		"POST /api/v1/users/{login}/recovery":                            administrator,
 		"POST /api/v1/groups":                                            administrator,
 		"GET /api/v1/groups":                                             administrator,
 		"GET /api/v1/groups/{group}":                                     administrator,

@@ -728,6 +728,113 @@ func TestAFirstAdministratorsLinkEndsWithTheBootstrapToken(t *testing.T) {
 	})
 }
 
+// The recovery codes the bootstrap token issued open nothing once it has ended, as its first
+// administrators' links do, and nothing else it or anybody issued is closed by the end: an
+// administrator's recovery code, the installation's, and a new user's link the token issued. The end
+// writes to no recovery code's row, so that it waits on none a transaction holds; a code spent
+// before it stays spent. Ended a second time, it changes nothing more.
+func TestTheRecoveryCodesTheBootstrapTokenIssuedEndWithIt(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	code := func(login, kind, by, value string) EnrolmentCode {
+		return EnrolmentCode{Hash: valueHash(value), Login: login, Kind: kind, IssuedBy: by, IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	}
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{{Login: "alice", Admin: true}, {Login: "alcie", Admin: true}, {Login: "bob"}, {Login: "carol", Admin: true}, {Login: "dan"}} {
+			u.DisplayName = u.Login
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		for _, c := range []EnrolmentCode{
+			code("alcie", EnrolmentRecovery, "operator", "the token's"),
+			code("dan", EnrolmentRecovery, "operator", "spent"),
+			code("bob", EnrolmentNewUser, "operator", "a new user's"),
+			code("carol", EnrolmentRecovery, "alice", "an administrator's"),
+			code("alice", EnrolmentRecovery, "installation", "the installation's"),
+		} {
+			if _, err := w.IssueEnrolmentCode(ctx, c); err != nil {
+				return err
+			}
+		}
+		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("the token's"), now); err != nil {
+			t.Errorf("a recovery code the bootstrap token issued was answered %v while it lives", err)
+		}
+		if _, err := w.UseEnrolmentCode(ctx, valueHash("spent"), now); err != nil {
+			return err
+		}
+		if ended, err := w.EndBootstrap(ctx, now); err != nil || !ended {
+			t.Errorf("the bootstrap token ended as %v, %v", ended, err)
+		}
+		if _, err := w.EnrolmentCodeByHash(ctx, valueHash("the token's"), now); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("a recovery code the bootstrap token issued was answered %v once it ended", err)
+		}
+		if _, err := w.UseEnrolmentCode(ctx, valueHash("the token's"), now); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("a recovery code the bootstrap token issued was spent once it ended: %v", err)
+		}
+		for _, value := range []string{"a new user's", "an administrator's", "the installation's"} {
+			if _, err := w.EnrolmentCodeByHash(ctx, valueHash(value), now); err != nil {
+				t.Errorf("%s code was answered %v once the bootstrap token ended", value, err)
+			}
+		}
+		var revoked int
+		if err := w.tx.QueryRow(ctx, `select count(*) from enrolment_codes where revoked_at is not null or (used_at is not null and login <> 'dan')`).Scan(&revoked); err != nil {
+			return err
+		}
+		if revoked != 0 {
+			t.Errorf("the end of the bootstrap token wrote to %d recovery codes or links", revoked)
+		}
+		if ended, err := w.EndBootstrap(ctx, now.Add(time.Minute)); err != nil || ended {
+			t.Errorf("the bootstrap token ended a second time as %v, %v", ended, err)
+		}
+		return nil
+	})
+}
+
+// A first administrator's link and a new user's link open nothing once their user holds a
+// credential, however it came, since each enrols the first credential of an account that holds
+// none: a link left open beside a recovery code that enrolled its user would enrol a second for
+// whoever finds it. A recovery code opens its user's account whatever they hold.
+func TestALinkOpensNothingOnceItsUserHoldsACredential(t *testing.T) {
+	pool := identity(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []User{{Login: "alice", Admin: true}, {Login: "bob"}} {
+			u.DisplayName = u.Login
+			if err := w.CreateUser(ctx, u); err != nil {
+				return err
+			}
+		}
+		for _, c := range []EnrolmentCode{
+			{Hash: valueHash("alice's link"), Login: "alice", Kind: EnrolmentFirstAdministrator, IssuedBy: "operator"},
+			{Hash: valueHash("bob's link"), Login: "bob", Kind: EnrolmentNewUser, IssuedBy: "alice"},
+			{Hash: valueHash("bob's recovery"), Login: "bob", Kind: EnrolmentRecovery, IssuedBy: "alice"},
+		} {
+			c.IssuedAt, c.ExpiresAt = now, now.Add(time.Hour)
+			if _, err := w.IssueEnrolmentCode(ctx, c); err != nil {
+				return err
+			}
+		}
+		for _, login := range []string{"alice", "bob"} {
+			if err := w.AddCredential(ctx, Credential{ID: login + "-passkey", Login: login, Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {
+				return err
+			}
+		}
+		for _, value := range []string{"alice's link", "bob's link"} {
+			if _, err := w.EnrolmentCodeByHash(ctx, valueHash(value), now); !errors.Is(err, ErrNoEnrolmentCode) {
+				t.Errorf("%s was answered %v once its user held a passkey", value, err)
+			}
+			if _, err := w.UseEnrolmentCode(ctx, valueHash(value), now); !errors.Is(err, ErrNoEnrolmentCode) {
+				t.Errorf("%s was spent once its user held a passkey: %v", value, err)
+			}
+		}
+		if _, err := w.UseEnrolmentCode(ctx, valueHash("bob's recovery"), now); err != nil {
+			t.Errorf("bob's recovery code was answered %v while he holds a passkey", err)
+		}
+		return nil
+	})
+}
+
 // Two links issued for one user at once both succeed, the second replacing the first, rather than
 // the second failing on the first.
 func TestTwoLinksIssuedAtOnceTakeTurns(t *testing.T) {

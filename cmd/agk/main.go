@@ -74,6 +74,7 @@ var commands = []command{
 	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},
 	{"whoami", "Prints the current principal, its groups and its effective permissions, everywhere or on a given namespace or workflow.", whoami},
 	{"user create", "Creates a user, --admin for an administrator, and prints the enrolment link.", userCreate},
+	{"user recover", "Issues a recovery code for a user who lost what signs them in, and prints the link that carries it.", userRecover},
 	{"user list", "Lists the users of an installation.", userList},
 	{"user show", "Shows one user: display name, whether an administrator or suspended, when created and last signed in.", userShow},
 	{"user delete", "Removes a user with what they hold, and their personal namespace where it is empty.", userDelete},

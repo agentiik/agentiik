@@ -76,6 +76,36 @@ func userCreate(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
+// userRecover is agk user recover LOGIN: a recovery code for a user who lost what signs them in,
+// printed as the link that carries it, once. The person running it hands it over, and the
+// installation sends it nowhere.
+func userRecover(ctx context.Context, e Env, args []string) int {
+	fs := flags(e, "agk user recover", "agk user recover <login> [--server <url>]")
+	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	at, named, code, ok := administering(e, fs, args, server, 1, "agk user recover names one login, the user's who lost what signs them in")
+	if !ok {
+		return code
+	}
+	login := named[0]
+	var issued api.RecoveryCode
+	if _, err := at.send(ctx, http.MethodPost, "/api/v1/users/"+url.PathEscape(login)+"/recovery", nil, &issued, http.StatusCreated); err != nil {
+		// Refused for what the command line named, in the installation's own sentence, which
+		// says more than a refusal for not administering would: the caller's own account, and a
+		// service account, which no user is.
+		switch status := statusOf(err); {
+		case status == http.StatusForbidden && err.Error() == api.SelfRecovery,
+			status == http.StatusNotFound && strings.Contains(login, "/"):
+			fmt.Fprintln(e.Err, err)
+			return exitRefused
+		}
+		return administrationRefused(e, err, "user", login)
+	}
+	fmt.Fprintf(e.Out, "%s may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works. Hand it over yourself:\n",
+		login, issued.ExpiresAt.UTC().Format("15:04 UTC"))
+	fmt.Fprintln(e.Out, issued.Link)
+	return exitSucceeded
+}
+
 // userList is agk user list: every user, by login.
 func userList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk user list", "agk user list [--server <url>] [-o json]")

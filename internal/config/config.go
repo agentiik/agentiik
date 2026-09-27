@@ -540,6 +540,33 @@ func ReadNamespace(lookup Lookup) (Database, error) {
 	return d, r.err()
 }
 
+// Recovery is what agentiik-api recover reads.
+type Recovery struct {
+	// Database is the role the API connects as.
+	Database Database
+
+	// PublicURL is the address the API is reached at, with no slash at its end: AGK_PROXY_URL
+	// behind a proxy, and AGK_PUBLIC_URL otherwise, as serve reads it. The link the verb prints
+	// is the enrolment page's on it, the one origin a passkey ceremony is accepted from.
+	PublicURL string
+}
+
+// ReadRecovery reads what agentiik-api recover needs through lookup, which is os.LookupEnv when nil:
+// the role the API connects as, as ReadNamespace reads it, and the public URL, as ReadAPI reads it,
+// so that the verb runs in the API's own environment, a Compose file's api service, with nothing
+// set for it alone.
+func ReadRecovery(lookup Lookup) (Recovery, error) {
+	r := newReader(lookup)
+	var c Recovery
+	c.Database = r.database(DatabaseURL, DatabasePasswordFile, true)
+	if proxy, behind := r.proxyURL(); behind {
+		c.PublicURL = proxy
+	} else if v, set := r.required(PublicURL, "and it is the address the link to the enrolment page is written on"); set {
+		c.PublicURL = r.httpsURL(PublicURL, v, "it names whatever terminates TLS in front of it")
+	}
+	return c, r.err()
+}
+
 // Init is what agentiik-api init reads.
 type Init struct {
 	// Dir is the directory init prepares, whose subdirectories are what each service mounts.

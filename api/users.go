@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
-	"github.com/agentiik/agentiik/internal/token"
 )
 
 // The administrator's routes for people: the users of an installation, the enrolment link a user
@@ -89,7 +87,7 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 	if o.Now == nil {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
-	s := &UserAPI{pool: o.Pool, enrol: strings.TrimRight(o.PublicURL, "/") + enrolPage, now: o.Now}
+	s := &UserAPI{pool: o.Pool, enrol: enrolAt(o.PublicURL), now: o.Now}
 
 	admin := Needs{Permission: GrantManage, Scope: Installation}
 	for _, r := range []struct {
@@ -102,6 +100,7 @@ func NewUsers(rt *Router, o UserOptions) (*UserAPI, error) {
 		{"GET", "/api/v1/users/{login}", s.user},
 		{"DELETE", "/api/v1/users/{login}", s.removeUser},
 		{"POST", "/api/v1/users/{login}/enrolment", s.issueEnrolment},
+		{"POST", "/api/v1/users/{login}/recovery", s.issueRecovery},
 		{"POST", "/api/v1/groups", s.createGroup},
 		{"GET", "/api/v1/groups", s.groups},
 		{"GET", "/api/v1/groups/{group}", s.group},
@@ -401,25 +400,11 @@ func (s *UserAPI) issue(ctx context.Context, wide *db.Wide, who Principal, user 
 	if who == BootstrapOperator && user.Admin {
 		kind = db.EnrolmentFirstAdministrator
 	}
-	code, _, err := token.New(token.Enrol, "")
+	code, issued, err := issueCode(ctx, wide, s.enrol, string(who), user.Login, kind, now)
 	if err != nil {
 		return EnrolmentLink{}, audit.Record{}, err
 	}
-	hash := sha256.Sum256([]byte(code))
-	expires := now.Add(EnrolmentLife)
-	replaced, err := wide.IssueEnrolmentCode(ctx, db.EnrolmentCode{
-		Hash: hash[:], Login: user.Login, Kind: kind, IssuedBy: string(who), IssuedAt: now, ExpiresAt: expires,
-	})
-	if err != nil {
-		return EnrolmentLink{}, audit.Record{}, err
-	}
-	// Recorded with who issued it and for whom, and never with its code, which is shown once, in
-	// the answer.
-	issued := audit.Record{
-		Actor: string(who), Action: audit.EnrolmentIssue, Target: user.Login, Result: audit.Done,
-		Detail: map[string]any{"kind": kind, "expires_at": expires.UTC().Format(time.RFC3339Nano), "replaced": replaced},
-	}
-	return EnrolmentLink{Link: s.enrol + code, ExpiresAt: expires.UTC()}, issued, nil
+	return EnrolmentLink{Link: code.link, ExpiresAt: code.expires}, issued, nil
 }
 
 // issueEnrolment is POST /api/v1/users/{login}/enrolment: a fresh link for a user who holds no

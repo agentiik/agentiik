@@ -165,6 +165,49 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 	}
 }
 
+// An administrator issues a user a recovery code, printed as the link that carries it with the
+// minute it lapses at, and a fresh one each time. Their own account is refused in the installation's
+// sentence, which says who issues it instead, rather than as somebody who does not administer; so is
+// a service account, which is no user; a user who does not administer is told that; and a login no
+// user has is no user.
+func TestAgkUserRecoverPrintsARecoveryCodesLink(t *testing.T) {
+	in := anAdministeredInstallation(t)
+	code, out, errs := in.agk(t, in.carol, "user", "recover", "alice")
+	if code != exitSucceeded {
+		t.Fatalf("agk user recover alice left with %d: %s", code, errs)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	before := regexp.MustCompile(`^alice may open this link once, before \d\d:\d\d UTC, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works\. Hand it over yourself:$`)
+	if len(lines) != 2 || !before.MatchString(lines[0]) || !aLink.MatchString(lines[1]) {
+		t.Fatalf("agk user recover alice printed:\n%s", out)
+	}
+	if _, again, _ := in.agk(t, in.carol, "user", "recover", "alice"); aLink.FindString(again) == lines[1] || aLink.FindString(again) == "" {
+		t.Errorf("agk user recover alice again printed the same link, or none:\n%s", again)
+	}
+
+	for _, c := range []struct {
+		token string
+		login string
+		says  string
+		not   string
+	}{
+		{in.carol, "carol", api.SelfRecovery, "an administrator's to manage"},
+		{in.carol, "finance/robot", "a service account is no user", "no user finance/robot"},
+		{in.alice, "carol", "users and groups are an administrator's to manage", ""},
+		{in.carol, "nobody", "no user nobody", ""},
+	} {
+		code, out, errs := in.agk(t, c.token, "user", "recover", c.login)
+		if code != exitRefused || out != "" || !strings.Contains(errs, c.says) || (c.not != "" && strings.Contains(errs, c.not)) {
+			t.Errorf("agk user recover %s left with %d, printed %q and said %q, want it to say %q", c.login, code, out, errs, c.says)
+		}
+	}
+	for _, args := range [][]string{{"user", "recover"}, {"user", "recover", "alice", "bob"}} {
+		if code, _, errs := in.agk(t, in.carol, args...); code != exitUsage {
+			t.Errorf("agk %s left with %d: %s", strings.Join(args, " "), code, errs)
+		}
+	}
+}
+
 // An administrator lists, reads and removes users, and creates, reads, fills, empties and removes
 // groups, each verb saying what it did in one line.
 func TestAnAdministratorManagesUsersAndGroupsWithAgk(t *testing.T) {

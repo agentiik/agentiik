@@ -482,7 +482,7 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 // bootstrap token's operator, who is nobody's account.
 //
 // Nor does a session an enrolment code opened: the code travels in the options now and is spent by
-// the registration it starts, which ends the bootstrap where it is the first administrator's, and a
+// the registration it starts, which ends the bootstrap where it is an administrator's, and a
 // session holding a code would register a passkey without spending it. The session a password
 // opened that may only enrol is the one this reads Identify rather than the router's for, since the
 // router refuses it everywhere, and it registers here like any other.
@@ -600,10 +600,8 @@ func (r *refusal) Error() string { return r.reason }
 // The challenge is taken in a transaction of its own, so that it is spent whatever follows. The
 // attestation is verified outside any transaction, since verifying costs a signature check and
 // holds nothing. What the registration writes is then one transaction: the passkey, the code it
-// spent, the end of the bootstrap where the code was the first administrator's, or where the
-// session registering it is of a first administrator whose link set a password and left the
-// bootstrap to their first passkey, and, where a code started it, the sign-in, recorded in the
-// audit log last.
+// spent, the end of the bootstrap where an administrator enrols while it lives, and, where a code
+// started it, the sign-in, recorded in the audit log last.
 func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
 	refused := func() {
 		w.Header().Set("WWW-Authenticate", "Bearer")
@@ -731,19 +729,15 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 				Detail: map[string]any{"kind": code.Kind, "issued_by": code.IssuedBy, "credential": id},
 			}})
 		}
-		// The bootstrap ends at the enrolment of a first administrator who can sign in, and not
+		// The bootstrap ends at the enrolment of the first administrator who can sign in, and not
 		// before: ended at a suspended one's, it would leave the installation with nobody to
 		// administer it, the lockout ending it at an enrolment rather than at a creation avoids.
-		// A first administrator whose link set a password where the policy requires a passkey
-		// left it to their first passkey, which a session registers: the password's session
-		// may only enrol, and nobody administers from it (passwords_set.go).
-		first := code.Kind == db.EnrolmentFirstAdministrator
-		if !coded && !user.Suspended {
-			if first, err = wide.SpentFirstAdministratorLink(ctx, user.Login); err != nil {
-				return err
-			}
-		}
-		if first && !user.Suspended {
+		// Whatever brought them to it: the first administrator's link, a recovery code, or a
+		// session their code opened with a password where the policy requires a passkey, which
+		// may only enrol, so that nobody administers from it (passwords_set.go). Every
+		// administrator enrolling while the token lives is one it created, and once it has
+		// ended, ending it again ends nothing.
+		if user.Admin && !user.Suspended {
 			ended, err := wide.EndBootstrap(ctx, now)
 			if err != nil {
 				return err

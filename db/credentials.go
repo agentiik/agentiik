@@ -349,17 +349,3 @@ func (w *Wide) EndTOTPEnrolment(ctx context.Context, login, id string) error {
 	}
 	return nil
 }
-
-// SpentFirstAdministratorLink says whether login enrolled with a first administrator's link: the
-// one the bootstrap token issues, whose enrolment ends it. A link spent by a password where the
-// policy requires a passkey leaves the bootstrap to the first passkey its user then registers, which
-// is how that registration knows it is the first administrator's.
-func (w *Wide) SpentFirstAdministratorLink(ctx context.Context, login string) (bool, error) {
-	var spent bool
-	if err := w.tx.QueryRow(ctx,
-		`select exists (select from enrolment_codes where login = $1 and kind = 'first-administrator' and used_at is not null)`,
-		login).Scan(&spent); err != nil {
-		return false, fmt.Errorf("db: the enrolment links of %s could not be read: %w", login, err)
-	}
-	return spent, nil
-}
