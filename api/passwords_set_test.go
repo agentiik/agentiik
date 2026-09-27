@@ -450,7 +450,11 @@ func TestAPasswordThatCouldOnlyEnrolIsNotSet(t *testing.T) {
 	const body = `{"password":"frank's first passphrase"}`
 	refused := func(w *httptest.ResponseRecorder, what string) {
 		t.Helper()
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"passkey"`) || !strings.Contains(w.Body.String(), "only ever open a session that enrols") {
+		advice := "Sign in with a passkey"
+		if strings.Contains(what, "code") {
+			advice = "Register a passkey with this code instead"
+		}
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"passkey"`) || !strings.Contains(w.Body.String(), "only ever open a session that enrols one, and none is set. "+advice) {
 			t.Errorf("%s answered %d %s", what, w.Code, w.Body)
 		}
 		if in.hashHeld(t, "frank") != "" {

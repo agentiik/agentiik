@@ -105,10 +105,12 @@ const (
 	// forbids them, answered naming the setting.
 	passwordsForbiddenToSet = "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey"
 
-	// passwordOnlyEnrols is a password set where the policy that applies to the account requires
-	// a passkey and the account holds the min_passkeys passkeys it accepts, answered naming the
-	// setting.
+	// passwordOnlyEnrols is a password set from a session where the policy that applies to the
+	// account requires a passkey and the account holds the min_passkeys passkeys it accepts,
+	// answered naming the setting; codeOnlyEnrols is the same from an enrolment code, whose holder
+	// has likely lost the passkeys the account holds, and registers one with the code instead.
 	passwordOnlyEnrols = "the authentication policy that applies to this account requires a passkey, and the account holds the passkeys it asks for already: a password could only ever open a session that enrols one, and none is set. Sign in with a passkey"
+	codeOnlyEnrols     = "the authentication policy that applies to this account requires a passkey, and the account holds the passkeys it asks for already: a password could only ever open a session that enrols one, and none is set. Register a passkey with this code instead"
 
 	// credentialsFromASession is a password or a TOTP generator set or removed with a bearer
 	// token.
@@ -280,7 +282,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
 	case a.policy.enrolledPast(a.held):
-		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		failSetting(w, http.StatusConflict, codeOnlyEnrols, passkeySetting)
 		return
 	}
 	login := a.user.Login
@@ -421,7 +423,7 @@ func (s *PasswordAPI) enrol(w http.ResponseWriter, r *http.Request, _ Principal,
 		failSetting(w, http.StatusForbidden, passwordsForbiddenToSet, passwordSetting)
 		return
 	case errors.Is(err, errOnlyEnrols):
-		failSetting(w, http.StatusConflict, passwordOnlyEnrols, passkeySetting)
+		failSetting(w, http.StatusConflict, codeOnlyEnrols, passkeySetting)
 		return
 	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode):
 		// A code spent, lapsed or replaced since it was read, or a user removed: nothing was
