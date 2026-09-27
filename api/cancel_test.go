@@ -33,8 +33,19 @@ type oneRun struct {
 func withOneRun(t *testing.T) oneRun {
 	t.Helper()
 	pool, super := dbtest.Open(t)
-	if _, err := dbtest.Superuser(t, super).Exec(t.Context(), `insert into namespaces (name) values ('finance'), ('team-ops')`); err != nil {
-		t.Fatal(err)
+	// admin starts the run, and is a user holding operator on finance as well as whoever the
+	// authorizer says: the controller asks again before it lets the run in.
+	conn := dbtest.Superuser(t, super)
+	for _, stmt := range []string{
+		`insert into namespaces (name) values ('finance'), ('team-ops')`,
+		`insert into principals (id, kind) values ('admin', 'user')`,
+		`insert into users (login, display_name) values ('admin', 'Admin')`,
+		`insert into grants (id, namespace, principal, role, granted_by)
+		   values ('01M2Z8V1P9C4XQ7K2N4D6F8G00', 'finance', 'admin', 'operator', 'operator')`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
 	}
 	store, err := version.New(pool, version.Options{})
 	if err != nil {
@@ -302,5 +313,67 @@ func TestACancelledRunStopsWhatItHolds(t *testing.T) {
 	}
 	if len(q.stopped) != 1 {
 		t.Errorf("a cancelled run was stopped again: %+v", q.stopped)
+	}
+}
+
+// holdingFinance allows its one principal everything, and says it holds a grant in finance, which
+// the grant routes ask of an authorizer.
+type holdingFinance struct{ everything }
+
+func (holdingFinance) HeldIn(context.Context, api.Principal) ([]string, error) {
+	return []string{"finance"}, nil
+}
+
+// A run whose principal's grant is revoked through the API before the controller lets it in ends
+// cancelled, "with a reason naming the grant that lapsed", and the API answers the run with that
+// reason: "the reason is on the run, where GET /api/v1/runs/{id} and agk status show it". The grant
+// is named from what the revocation recorded in the audit log, since a revoked grant is gone.
+func TestARunRefusedAtCreationIsReadWithItsReason(t *testing.T) {
+	o := withOneRun(t)
+	rt, err := api.NewRouter(holdingFinance{everything{who: "bob"}}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewServer(rt, api.ServerOptions{Pool: o.pool, Versions: o.store, Objects: o.objects}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: o.pool}); err != nil {
+		t.Fatal(err)
+	}
+	const admins = "01M2Z8V1P9C4XQ7K2N4D6F8G00"
+	if w, _ := call(t, rt, "DELETE", "/api/v1/finance/grants/"+admins, "bob", nil); w.Code != http.StatusNoContent {
+		t.Fatalf("revoking admin's grant answered %d: %s", w.Code, w.Body)
+	}
+
+	c, err := controller.New(o.pool, "refusing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	term, err := o.pool.BeginTerm(t.Context(), "refusing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &heard{}
+	core, err := controller.NewCore(c, term, controller.Options{Queue: q, Versions: o.store, Objects: o.objects})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Decide(t.Context(), agk.RunID(o.run)); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.sent) != 0 {
+		t.Errorf("a run its principal may no longer start handed out %d tasks", len(q.sent))
+	}
+
+	var revoked time.Time
+	if err := dbtest.Superuser(t, o.super).QueryRow(t.Context(),
+		`select at from audit_log where action = 'grant.delete' and target = $1`, admins).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	want := "admin no longer holds workflow:run on finance/monthly-invoicing: grant " + admins +
+		" (operator on the namespace finance) was revoked at " + revoked.UTC().Format(time.RFC3339Nano)
+	w, detail := call(t, rt, "GET", "/api/v1/runs/"+o.run, "bob", nil)
+	if w.Code != http.StatusOK || detail["state"] != "cancelled" || detail["reason"] != want {
+		t.Errorf("the run reads %d, %v, for\n%v\nwant\n%s", w.Code, detail["state"], detail["reason"], want)
 	}
 }

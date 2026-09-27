@@ -21,6 +21,7 @@ import (
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/numbertest"
 	"github.com/agentiik/agentiik/internal/token"
+	"github.com/agentiik/agentiik/internal/ulid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -159,6 +160,8 @@ func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, str
 			t.Fatalf("%s: %s", stmt, err)
 		}
 	}
+	mayRun(t, conn, "alice", "finance")
+	mayRun(t, conn, "finance/agentiik", "finance")
 
 	wf, err := graph.Parse([]byte(document))
 	if err != nil {
@@ -264,6 +267,42 @@ func resumeOn(t *testing.T, pool *db.Pool, super string, like *Core) (*Core, *fa
 		t.Fatal(err)
 	}
 	return core, q, pool, super
+}
+
+// mayRun makes who a principal holding the operator role on each namespace named: alice, the user
+// who starts the runs of these tests by hand, or a namespace's built-in identity, NS/agentiik, which
+// the runs of a schedule are attributed to. It is what the API checks before it creates a run of
+// alice's, and what the controller asks again of every run before it lets it in.
+func mayRun(t *testing.T, conn *pgx.Conn, who string, namespaces ...string) {
+	t.Helper()
+	stmts := []string{
+		`insert into principals (id, kind) values ('alice', 'user') on conflict do nothing`,
+		`insert into users (login, display_name) values ('alice', 'Alice') on conflict do nothing`,
+	}
+	if ns, name, ok := strings.Cut(who, "/"); ok {
+		// The built-in identity is the installation's, created by nobody, and any other
+		// service account is somebody's.
+		by := "'alice'"
+		if name == db.BuiltIn {
+			by = "null"
+		}
+		stmts = []string{
+			`insert into principals (id, kind) values ('` + who + `', 'service_account') on conflict do nothing`,
+			`insert into service_accounts (namespace, name, created_by) values ('` + ns + `', '` + name + `', ` + by + `) on conflict do nothing`,
+		}
+	}
+	for _, stmt := range stmts {
+		if _, err := conn.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	for _, ns := range namespaces {
+		if _, err := conn.Exec(t.Context(),
+			`insert into grants (id, namespace, principal, role, granted_by) values ($1, $2, $3, 'operator', 'operator')`,
+			ulid.New(), ns, who); err != nil {
+			t.Fatalf("%s could not be given operator on %s: %s", who, ns, err)
+		}
+	}
 }
 
 func createRun(t *testing.T, pool *db.Pool) {

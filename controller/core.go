@@ -246,6 +246,18 @@ func (co *Core) Decide(ctx context.Context, run agk.RunID) error {
 		// not let in only to be called off.
 		return co.Cancel(ctx, run)
 	}
+	if len(e.Document) == 0 {
+		// Nothing has let the run in yet, so its principal is asked whether it may still start
+		// it, on every pass until one does, and a run it may not start ends here, before its
+		// concurrency group is asked about it.
+		reason, err := co.refusal(ctx, e)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			return co.refuse(ctx, run, reason)
+		}
+	}
 
 	g, err := co.versions.Graph(ctx, e.Namespace, e.Workflow, e.Commit)
 	if err != nil {

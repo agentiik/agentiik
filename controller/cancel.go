@@ -8,17 +8,19 @@ import (
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/graph"
 )
 
 // Calling a run off.
 //
-// "cancelled: Cancelled by a principal holding workflow:run, by a concurrency group or by a
-// merge: first." The third of those is the evaluator's own and arrives through an ordinary
-// pass; the first two come from outside and arrive here. A principal's arrives through the
-// database, since the API and the controller share it and nothing else: the API writes the
-// request on the run, and Decide, reading it there, calls this.
+// "cancelled: Cancelled by a principal holding workflow:run, by a concurrency group, by a merge:
+// first, or, from v0.3.0, by the controller when its principal fails the check at creation." The
+// merge is the evaluator's own and arrives through an ordinary pass; the others arrive here. A
+// principal's arrives through the database, since the API and the controller share it and nothing
+// else: the API writes the request on the run, and Decide, reading it there, calls this. The check
+// at creation is Decide's own, and refuse carries it out.
 
 // Cancel ends a run and stops what it is holding.
 //
@@ -32,6 +34,19 @@ import (
 // principal asking twice, or asking about a run that finished while they were asking, has got
 // what they wanted either way.
 func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
+	return co.cancel(ctx, run, "")
+}
+
+// refuse ends a run its principal may not start: cancelled, "before any task, with a reason naming
+// the grant that lapsed", which is written on the run, where GET /api/v1/runs/{id} and agk status
+// show it, and in the audit log, as an act of the installation's, in the transaction that ends the
+// run. cancelled rather than failed, "because nothing in the workflow failed".
+func (co *Core) refuse(ctx context.Context, run agk.RunID, reason string) error {
+	return co.cancel(ctx, run, reason)
+}
+
+// cancel ends a run as Cancel says, and where reason is not empty, as refuse says.
+func (co *Core) cancel(ctx context.Context, run agk.RunID, reason string) error {
 	var e db.Evaluation
 	if err := co.controller.Fenced(ctx, co.term, func(ctx context.Context, w *db.Wide) error {
 		var err error
@@ -41,6 +56,11 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 		return err
 	}
 	if e.State.Terminal() {
+		return nil
+	}
+	if reason != "" && len(e.Document) > 0 {
+		// Let in since its principal was asked about it, by a pass that read it first: what
+		// was decided when it was created stands, and a run let in is never asked again.
 		return nil
 	}
 
@@ -90,6 +110,7 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 			Envelopes: referencesOf(doc),
 			Artifacts: artifactsOf(g, state),
 			Retain:    runRetain(g),
+			Reason:    reason,
 		}); err != nil {
 			return err
 		}
@@ -100,8 +121,18 @@ func (co *Core) Cancel(ctx context.Context, run agk.RunID) error {
 		// cancelled, its grant no longer redeems, so no container starts for it. The rows then
 		// say more than the document does, which nothing reads again once the run has ended.
 		var err error
-		held, err = w.CancelTasks(ctx, e.Namespace, run, now)
-		return err
+		if held, err = w.CancelTasks(ctx, e.Namespace, run, now); err != nil || reason == "" {
+			return err
+		}
+		// Last, as every append is, since it holds the head of the chain until the commit.
+		detail := map[string]any{"workflow": e.Workflow, "reason": reason}
+		if e.TriggeredBy != "" {
+			detail["principal"] = e.TriggeredBy
+		}
+		return w.AuditIn(ctx, e.Namespace, audit.Record{
+			Actor: installationActor, Action: audit.RunCancel, Target: string(run), Result: audit.Done,
+			Detail: detail,
+		})
 	}); err != nil {
 		return err
 	}
