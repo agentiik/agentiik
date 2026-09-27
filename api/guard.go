@@ -312,10 +312,19 @@ type Principal string
 //
 // For nobody, it may carry the sentence a refusal says instead of that no credential came, for a
 // credential that came and opens nothing: what a caller can do about it, and nothing about which
-// credentials exist.
+// credentials exist. That refusal is a 401, or the status RefusedAs says for a credential that came
+// and is not one this request may carry: 403 for a session changing something from another origin,
+// or one that may only enrol anywhere a principal is asked about, and 400 for a request carrying
+// more than one.
+//
+// Enrolling is set for a session an enrolment code opened, which "enrols passkeys and nothing
+// else": the router refuses it on every route it authorises by who asks, with the 403 the OpenAPI
+// document names.
 type Identity struct {
 	Principal Principal
 	Scope     access.TokenScope
+	Enrolling bool
+	RefusedAs int
 	Refused   string
 }
 

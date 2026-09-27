@@ -26,6 +26,17 @@
 // route was written then. They are the page's own nine, held to it by a test, and they live in
 // package access, which resolves them from grants, with their names kept here for the routes.
 //
+// # The console's session
+//
+// A browser presents a session rather than a token: an opaque identifier in the __Host- cookie
+// OpenSession sets, which Principals reads beside the bearer token once AcceptSessions has named
+// the public URL. It ends twelve hours idle and thirty days after it opened. A request changing
+// something that a session carries comes from the public URL's origin or is a 403, since
+// SameSite=Lax leaves the other hosts of the same site free to send the cookie. A session an
+// enrolment code opened enrols passkeys and nothing else, and the router refuses it on every route
+// it authorises by who asks with a 403, which hides nothing: what is refused is the credential,
+// whatever the route names. A request carrying a bearer token and a session is a 400.
+//
 // # Absent and forbidden answer the same thing
 //
 // "An inaccessible workflow answering the same 404 as an absent one, so that probing yields

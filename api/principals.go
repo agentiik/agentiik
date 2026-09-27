@@ -45,10 +45,14 @@ const (
 type Principals struct {
 	pool *db.Pool
 	now  func() time.Time
+
+	// origin is the public URL's origin, which a request changing something that a session
+	// carries has to come from, and empty where sessions are not accepted: see AcceptSessions.
+	origin string
 }
 
-// NewPrincipals builds them over an installation's database. now is the clock tokens and grants
-// expire by, the wall clock where it is nil.
+// NewPrincipals builds them over an installation's database. now is the clock tokens, sessions and
+// grants expire by, the wall clock where it is nil.
 func NewPrincipals(pool *db.Pool, now func() time.Time) (*Principals, error) {
 	if pool == nil {
 		return nil, errors.New("api: no database, and who a request is from is written there")
@@ -60,18 +64,26 @@ func NewPrincipals(pool *db.Pool, now func() time.Time) (*Principals, error) {
 }
 
 // Identify is the router's: the principal a bearer token belongs to, with the token's scope, or
-// the bootstrap operator for the bootstrap token while it has not ended.
+// the bootstrap operator for the bootstrap token while it has not ended; or the user a session
+// belongs to, where sessions are accepted.
 //
 // A token is looked up by its SHA-256, as it is kept, and only one still live is answered: neither
 // expired nor revoked, and not a suspended user's. Its use is recorded, so that a token nobody uses
 // can be seen and revoked. The bootstrap token's hash is compared in constant time, since it is one
 // value and not an index somebody could time.
 //
-// A session cookie is the console's credential, and it is identified here beside the bearer token
-// once sessions are served. Until then a request with no bearer token carries no credential.
+// A session cookie is the console's credential, looked up the same way and kept open as it is used,
+// and one that may only enrol a passkey says so, for the router to confine. A request carrying a
+// bearer token and a session, or two sessions, is refused with 400 rather than answered as either:
+// the page names no order between them.
 func (p *Principals) Identify(r *http.Request) (Identity, error) {
 	presented, ok := bearerOf(r)
-	if !ok {
+	switch sessions := p.sessionsOf(r); {
+	case len(sessions) > 0 && ok, len(sessions) > 1:
+		return Identity{Refused: oneCredential, RefusedAs: http.StatusBadRequest}, nil
+	case len(sessions) == 1:
+		return p.identifySession(r, sessions[0])
+	case !ok:
 		return Identity{}, nil
 	}
 	hash := sha256.Sum256([]byte(presented))
