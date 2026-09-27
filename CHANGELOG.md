@@ -14,6 +14,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The operator token of a server that runs no `init`, Homebrew's or one put together by hand, goes on working too: `agentiik-api migrate` takes `AGK_OPERATOR_TOKEN` as `init` does, and with none set imports, once, the v0.2 hash in the file `AGK_OPERATOR_TOKEN_FILE` names where the database keeps no hash and the bootstrap has not ended; a file that is not there imports nothing, one in another shape or readable by others fails the run.
 - A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 - Behind nginx, add `proxy_set_header X-Forwarded-For $remote_addr;` to the `location /` of its configuration: the API now takes a sign-in's address from the last entry of that header behind `AGK_PROXY_URL`, which Caddy and Traefik write already and nginx passes on as the client wrote it.
+- A run v0.2 finished, which carries no expiry, is given its namespace's `max_retention_days` from its end by migration 0038, at the next `docker compose up` with nothing to do by hand, so that its envelopes and logs are purged once that has run out.
 
 ### Images
 
@@ -68,6 +69,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The sign-in page offers the password form where the installation's policy lets passwords in, shows a session that may only enrol the way to enrol a passkey and its sign-out and no sign-in, and says in minutes how long `Retry-After` asks to wait after too many attempts.
 - `POST /api/v1/auth/sign-out` revokes the session its request carries, one that may only enrol included, and clears its cookie, 204; from another origin it is a 403, and carrying a bearer token or two credentials a 400.
 - A write to the built-in store, a policy's form or a presigned PUT, that would take its namespace past `max_artifact_bytes` is answered 507 with nothing stored, an envelope's as an artifact's, which a runner reads as `artifact.ErrNoRoom` and fails the step on the platform's account. What counts is the namespace's live artifacts, each digest once, and its uploads not yet referenced, room being made at the request's length, or the room left up to `artifact_max_bytes` where it states none, under a lock on the namespace's room before the bytes are read, so two writes at once cannot both take the last of it. An object the namespace holds as a live artifact takes none, and a namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
+- Every write through the built-in store's routes, a policy's form or a presigned PUT, in a namespace with `max_artifact_bytes` or without, is recorded as under way before its bytes are read, until the collection's 24-hour grace past its policy, so that the collection leaves its object alone until the result that references it is heard; a write whose bytes are refused lets go of it.
+- A push writes a tree file again where its version had to record the object afresh and the store no longer holds its bytes, as a collection that died before confirming and the next one leave it.
 
 ### State
 
@@ -91,12 +94,24 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Wide.Consumption` reads what each namespace holds against its quotas, and `db.Evaluation.MaxRunDuration` its bound with the run.
 - Migration 0037 adds `credentials.totp_step`, the step a TOTP code was last accepted at, which `db.Wide.TOTPUsed` moves forward and never back (`db.ErrTOTPSpent`), and holds a TOTP beside a password: refused to a user holding none (`db.ErrNoPassword`) and removed with it however it goes.
 - `db.Session.CredentialType` says what opened a session.
+- Migration 0038 adds `runs.envelopes_purged_at` and `runs.logs_purged_at`, and indexes the runs each purge has left, so that a purge reads its work and never every run it purged.
+- `db.Pool.PurgeEnvelopes` takes a run's row and stamps it before lowering its counts, a batch in one statement, so two purges at once never lower them twice.
+- `db.Pool.ExpireArtifacts` and `db.Pool.Collected` take only rows nobody holds, and never deadlock with a decision.
+- `db.Pool.LogsGone` stamps a run none of whose tasks holds a log, once no shipment can be under way, and `db.Pool.PurgeUploads` forgets the writes that have lapsed.
+- `db.Pool.Collecting` deletes what `Collectable` claimed through the caller, under a lock on each row; neither takes an object a live artifact names or a write holds.
+- `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused.
+
+### Artifacts
+
+- `artifact.Dir` answers an `artifact.Removable`, whose `Remove` deletes an object and the log directories it leaves empty, and says whether there was one to delete.
 
 ### Controller
 
 - A step's pool is chosen among those its namespace's `allowed_runner_pools` names, where it names any: a step whose labels only a pool outside them carries fails with 125 naming the list.
 - A run's root `timeout` is held to its namespace's `max_run_duration`, read at every pass, and a workflow writing none is bounded by it; `graph.New` and `graph.Options.MaxRunDuration` take the bound, zero bounding nothing.
 - `agentiik_quota_used` and `agentiik_quota_limit`, by namespace and quota, for `max_concurrent_tasks`, `max_runs_per_hour` and `max_artifact_bytes`, keeping 1,000 namespaces and summing the rest under `namespace="_other"`, each quota apart (`metrics.Desc.FoldBy`).
+- The controller that leads runs the retention purges and the collection, package `purge`, as its term begins and every ten minutes, a batch a call and at most ten calls of each purge a pass, the rest left to the next: references past their `retain` are retired, a finished run's envelopes and logs go once its retention has run out, and an object leaves `AGK_OBJECTS_DIR` once nothing has counted it for the 24-hour grace, no live artifact names it and no write of it is under way. A pass that removed something says what in one line, and one that failed says why.
+- `agentiik_artifacts_expired_total`, `agentiik_runs_purged_total`, `agentiik_logs_purged_total`, `agentiik_objects_collected_total` and `agentiik_objects_collected_bytes_total` count what the purges removed.
 
 ### Tests
 

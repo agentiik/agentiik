@@ -20,6 +20,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/version"
 )
@@ -487,6 +488,63 @@ func TestAWritePastMaxArtifactBytesIsAnswered507(t *testing.T) {
 	large := strings.Repeat("e", 10000)
 	if w := posted(t, rt, elsewhere.URL, elsewhere.Fields, artifact.Key("team-ops", digestOf([]byte(large))), large); w.Code != http.StatusCreated {
 		t.Errorf("an object in a namespace with no quota answered %d", w.Code)
+	}
+}
+
+// Every write is recorded as under way before its bytes are read, in a namespace with no quota as in
+// one with, until the collection's grace past its policy, so that the collector leaves its object
+// alone until the result that references it has been heard.
+func TestEveryWriteIsKeptFromTheCollectorWhileItLasts(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('team-ops')`); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	policy, err := signed.Policy(t.Context(), "team-ops", "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "the bytes of an artifact"
+	digest := digestOf([]byte(content))
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("team-ops", digest), content); w.Code != http.StatusCreated {
+		t.Fatalf("the write answered %d", w.Code)
+	}
+	var held int64
+	var lasts time.Time
+	if err := conn.QueryRow(t.Context(),
+		`select bytes, until from artifact_uploads where namespace = 'team-ops' and digest = 'sha256:' || $1`, digest).Scan(&held, &lasts); err != nil {
+		t.Fatalf("no write of the object is recorded: %s", err)
+	}
+	if held != 0 || !lasts.Equal(until.Add(db.DefaultGrace)) {
+		t.Errorf("the write is recorded holding %d bytes until %s, want nothing held until %s", held, lasts, until.Add(db.DefaultGrace))
+	}
+
+	// A write whose bytes are refused leaves nothing to keep from the collector.
+	refused := digestOf([]byte("what the key names"))
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("team-ops", refused), "other bytes"); w.Code != http.StatusBadRequest {
+		t.Fatalf("bytes that are not their key's object answered %d", w.Code)
+	}
+	var left int
+	if err := conn.QueryRow(t.Context(),
+		`select count(*) from artifact_uploads where digest = 'sha256:' || $1`, refused).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Errorf("a write whose bytes were refused left %d rows", left)
 	}
 }
 

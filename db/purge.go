@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
+	"github.com/jackc/pgx/v5"
 )
 
 // The sweeps.
@@ -24,16 +25,38 @@ import (
 //
 // # Nothing here deletes an object
 //
-// Three of the four only lower counts and stamp rows. The fourth, collection, is the one
-// thing that deletes bytes, and even it does not do the deleting: package db does not reach
+// The artifact and envelope purges only lower counts and stamp rows. Collection and the log
+// purge are what delete bytes, and even they do not do the deleting: package db does not reach
 // the object store, and it answers with the keys for the caller to delete. That is not
 // squeamishness about layering, it is the only order that neither leaks nor dangles.
 //
 // The protocol is claim, delete, confirm. Collectable claims objects whose count reached
-// zero, marking them; the caller deletes those keys from the store; Collected removes the
-// rows. A caller that dies in the middle leaves rows marked and bytes gone, and the next
-// sweep claims them again and deletes what is already deleted, which costs a request. The
-// reverse order, removing the row first, would leak an object nothing can ever name again.
+// zero, marking them; Collecting hands each to the caller to delete from the store, under a
+// lock on its row; Collected removes the rows. A caller that dies in the middle leaves rows
+// marked and bytes gone, and the next sweep claims them again and deletes what is already
+// deleted, which costs a request. The reverse order, removing the row first, would leak an
+// object nothing can ever name again.
+//
+// # An object being written
+//
+// A runner writes an object before the controller hears of the result that references it, so
+// for that while nothing counts it, and an object whose count reached zero a day before is one
+// the collector would take from under the write. Nothing can write those bytes again: they were
+// the runner's, and its task is over. So the store records every write in artifact_uploads
+// before it reads a byte, Uploading, holding the object's row as it does, and neither the claim
+// nor the deletion takes an object with a write under way. The deletion holds the rows it
+// deletes the bytes of and asks about writes only once it holds them: a write that records
+// itself first is seen, and one that comes after waits for the deletion and writes its bytes
+// once they are gone. Nor is an object taken that a live artifact names, whatever its count
+// says: a count that went wrong costs an object kept, never one deleted.
+//
+// The controller and the API write objects of their own straight to the store and record no
+// write: a decision's envelopes, a task's inputs, a push's tree files. A task's inputs are written
+// again where their grant was told to, and a push's files where its version was, or where the
+// version had to create an object's row and the store no longer holds its bytes. An envelope names
+// its run, step, port, attempt and the instant it was produced, so its digest is its run's alone
+// and counted from the decision that first names it until the run's retention runs out: no
+// decision names again an envelope whose count has sat at zero.
 //
 // # The grace period
 //
@@ -41,8 +64,8 @@ import (
 // sooner than grace afterwards. The window is not caution for its own sake: content
 // addressing means a run that writes the same bytes tomorrow will reference the object that
 // is there rather than write a new one, and collecting the instant the last reference went
-// would turn every such write into an upload. A day is the usual answer, and an installation
-// that wants its store smaller sooner sets it lower.
+// would turn every such write into an upload. A day is the answer, which the controller keeps;
+// a caller may pass a shorter one, and pays for it in uploads.
 //
 // Inside the window a writer simply clears the mark. Crossing it, the writer is told to write
 // the bytes again through Written.MustWriteBytes, which is what closes the one gap the grace
@@ -82,12 +105,19 @@ type Log struct {
 	Keys []string
 }
 
-// ExpireArtifacts retires every reference whose duration has run out.
+// ExpireArtifacts retires every reference whose duration has run out, batch at a time, and
+// answers how many it retired.
 //
 // It retires the reference and lowers the count behind it, and it deletes nothing:
 // "Expiry applies to the reference, never to the object." A run that loses an artifact is
 // marked replayable from the start only in the same transaction, because the two facts are
 // one fact and a reader that saw one without the other would offer a replay that cannot run.
+//
+// It waits on nothing. A decision holds its run's row and then the objects it counts, and writes
+// its artifacts again after them, so a purge that held an artifact and then waited for the run or
+// the object would be waiting on a decision waiting on it. So the runs, then the references, then
+// the objects are taken only where nobody holds them, and a reference whose run or object is held
+// is left for the next pass, which is at most one decision away.
 func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -95,17 +125,79 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 	}
 	var retired int
 	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
+		retired = 0
+		runs, err := pairsOf(ctx, w.tx, `
+			select r.namespace, r.id from runs r
+			where (r.namespace, r.id) in (
+			  select a.namespace, a.run_id from artifacts a
+			  where a.status = 'live' and a.expires_at <= now()
+			  order by a.expires_at
+			  limit $1
+			)
+			for update of r skip locked`, batch)
+		if err != nil || len(runs) == 0 {
+			return err
+		}
+		rows, err := w.tx.Query(ctx, `
+			select a.namespace, a.run_id, a.step, a.port, a.name, a.digest
+			from artifacts a
+			join unnest($1::text[], $2::text[]) as g(namespace, run_id)
+			  on a.namespace = g.namespace and a.run_id = g.run_id
+			where a.status = 'live' and a.expires_at <= now()
+			order by a.expires_at
+			limit $3
+			for update of a skip locked`, runs.first(), runs.second(), batch)
+		if err != nil {
+			return err
+		}
+		type reference struct{ namespace, run, step, port, name, digest string }
+		var due []reference
+		for rows.Next() {
+			var r reference
+			if err := rows.Scan(&r.namespace, &r.run, &r.step, &r.port, &r.name, &r.digest); err != nil {
+				rows.Close()
+				return err
+			}
+			due = append(due, r)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(due) == 0 {
+			return err
+		}
+		var wanted pairs
+		for _, r := range due {
+			wanted = append(wanted, [2]string{r.namespace, r.digest})
+		}
+		objects, err := pairsOf(ctx, w.tx, `
+			select o.namespace, o.digest from artifact_objects o
+			join unnest($1::text[], $2::text[]) as g(namespace, digest)
+			  on o.namespace = g.namespace and o.digest = g.digest
+			for update of o skip locked`, wanted.first(), wanted.second())
+		if err != nil {
+			return err
+		}
+		held := map[[2]string]bool{}
+		for _, o := range objects {
+			held[o] = true
+		}
+		var namespaces, runIDs, steps, ports, names []string
+		for _, r := range due {
+			if !held[[2]string{r.namespace, r.digest}] {
+				continue
+			}
+			namespaces, runIDs, steps = append(namespaces, r.namespace), append(runIDs, r.run), append(steps, r.step)
+			ports, names = append(ports, r.port), append(names, r.name)
+		}
+		if len(names) == 0 {
+			return nil
+		}
 		return w.tx.QueryRow(ctx, `
 			with doomed as (
-			  update artifacts set status = 'expired', retired_at = now(), fetches_left = null
-			  where (namespace, run_id, step, port, name) in (
-			    select namespace, run_id, step, port, name from artifacts
-			    where status = 'live' and expires_at <= now()
-			    order by expires_at
-			    limit $1
-			    for update skip locked
-			  )
-			  returning namespace, run_id, digest
+			  update artifacts a set status = 'expired', retired_at = now(), fetches_left = null
+			  from unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[]) as g(namespace, run_id, step, port, name)
+			  where a.namespace = g.namespace and a.run_id = g.run_id and a.step = g.step
+			    and a.port = g.port and a.name = g.name
+			  returning a.namespace, a.run_id, a.digest
 			), marked as (
 			  update runs r set replay_from_start_only = true
 			  from (select distinct namespace, run_id from doomed) d
@@ -121,7 +213,7 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 			  where o.namespace = c.namespace and o.digest = c.digest
 			  returning 1
 			)
-			select (select count(*) from doomed)::int`, batch).Scan(&retired)
+			select (select count(*) from doomed)::int`, namespaces, runIDs, steps, ports, names).Scan(&retired)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("db: the artifact purge failed: %w", err)
@@ -129,7 +221,45 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 	return retired, nil
 }
 
-// PurgeEnvelopes drops the envelopes of runs whose retention has run out.
+// pairs are two columns of rows, namespace first.
+type pairs [][2]string
+
+func (p pairs) first() []string {
+	out := make([]string, len(p))
+	for i, r := range p {
+		out[i] = r[0]
+	}
+	return out
+}
+
+func (p pairs) second() []string {
+	out := make([]string, len(p))
+	for i, r := range p {
+		out[i] = r[1]
+	}
+	return out
+}
+
+// pairsOf reads the two text columns of each row a query answers.
+func pairsOf(ctx context.Context, tx pgx.Tx, query string, args ...any) (pairs, error) {
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out pairs
+	for rows.Next() {
+		var r [2]string
+		if err := rows.Scan(&r[0], &r[1]); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PurgeEnvelopes drops the envelopes of runs whose retention has run out, batch runs at a time,
+// and answers how many runs it dropped them of.
 //
 // A run's envelopes are what its decision document references, published and per shard alike,
 // and what each of its tasks was handed on its input ports, once per grant, because all of them
@@ -137,7 +267,14 @@ func (p *Pool) ExpireArtifacts(ctx context.Context, batch int) (int, error) {
 // collector never sees. What goes is the count on them, which is what eventually
 // lets the bytes be collected. What stays is the record: the digests in steps.ports are the
 // record of what was published, and the chapter keeps only digests and URIs in the database
-// anyway. The stamp is what keeps a sweep from taking the same run for ever.
+// anyway.
+//
+// The run's row is taken before anything is lowered and stamped in the same transaction, which
+// is what keeps a sweep from taking the same run for ever and two sweeps at once from lowering
+// its counts twice: migration 0038 says why the stamp is on the run. A run whose steps were all
+// stamped before it had one of its own is stamped and lowers nothing. The counts of the whole
+// batch are lowered in one statement, so that a run fanned out to ten thousand shards costs one
+// statement and not twenty thousand, held inside one transaction.
 func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 	batch, err := batchOf(batch)
 	if err != nil {
@@ -145,59 +282,86 @@ func (p *Pool) PurgeEnvelopes(ctx context.Context, batch int) (int, error) {
 	}
 	var purged int
 	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
+		purged = 0
 		rows, err := w.tx.Query(ctx, `
-			select r.namespace, r.id
+			select r.namespace, r.id,
+			       exists (select 1 from steps s
+			               where s.namespace = r.namespace and s.run_id = r.id
+			                 and s.envelopes_purged_at is null)
 			from runs r
 			where r.expires_at is not null and r.expires_at <= now()
-			  and exists (select 1 from steps s
-			              where s.namespace = r.namespace and s.run_id = r.id
-			                and s.envelopes_purged_at is null)
+			  and r.envelopes_purged_at is null
 			order by r.expires_at
-			limit $1`, batch)
+			limit $1
+			for update of r skip locked`, batch)
 		if err != nil {
 			return err
 		}
-		type due struct {
-			namespace string
-			run       agk.RunID
-		}
-		var expired []due
+		var namespaces, runs, dueNamespaces, dueRuns []string
 		for rows.Next() {
-			var d due
-			if err := rows.Scan(&d.namespace, &d.run); err != nil {
+			var namespace, run string
+			var due bool
+			if err := rows.Scan(&namespace, &run, &due); err != nil {
 				rows.Close()
 				return err
 			}
-			expired = append(expired, d)
+			namespaces, runs = append(namespaces, namespace), append(runs, run)
+			if due {
+				dueNamespaces, dueRuns = append(dueNamespaces, namespace), append(dueRuns, run)
+			}
 		}
 		rows.Close()
-		if err := rows.Err(); err != nil {
+		if err := rows.Err(); err != nil || len(runs) == 0 {
 			return err
 		}
 
-		for _, d := range expired {
-			held, err := w.envelopesOf(ctx, d.namespace, d.run)
+		type object struct{ namespace, digest string }
+		counted := map[object]int{}
+		for i := range dueRuns {
+			held, err := w.envelopesOf(ctx, dueNamespaces[i], agk.RunID(dueRuns[i]))
 			if err != nil {
 				return err
 			}
-			handed, err := w.inputsOf(ctx, d.namespace, d.run)
+			handed, err := w.inputsOf(ctx, dueNamespaces[i], agk.RunID(dueRuns[i]))
 			if err != nil {
 				return err
 			}
-			held = append(held, handed...)
-			for _, e := range held {
-				if err := lower(ctx, w.tx, d.namespace, "sha256:"+e.Digest, ""); err != nil {
-					return err
-				}
+			for _, e := range append(held, handed...) {
+				counted[object{dueNamespaces[i], "sha256:" + e.Digest}]++
 			}
-			if _, err := w.tx.Exec(ctx,
-				`update steps set envelopes_purged_at = now()
-				 where namespace = $1 and run_id = $2 and envelopes_purged_at is null`,
-				d.namespace, string(d.run)); err != nil {
-				return err
-			}
-			purged++
 		}
+		var objectNamespaces, digests []string
+		var by []int32
+		for o, n := range counted {
+			objectNamespaces, digests, by = append(objectNamespaces, o.namespace), append(digests, o.digest), append(by, int32(n))
+		}
+		if len(digests) > 0 {
+			if _, err := w.tx.Exec(ctx, `
+				update artifact_objects o
+				set refs = greatest(o.refs - g.n, 0),
+				    collectable_at = case when o.refs - g.n <= 0 then now() else null end
+				from unnest($1::text[], $2::text[], $3::int[]) as g(namespace, digest, n)
+				where o.namespace = g.namespace and o.digest = g.digest and o.refs > 0`,
+				objectNamespaces, digests, by); err != nil {
+				return err
+			}
+		}
+		if len(dueRuns) > 0 {
+			if _, err := w.tx.Exec(ctx, `
+				update steps s set envelopes_purged_at = now()
+				from unnest($1::text[], $2::text[]) as g(namespace, run_id)
+				where s.namespace = g.namespace and s.run_id = g.run_id and s.envelopes_purged_at is null`,
+				dueNamespaces, dueRuns); err != nil {
+				return err
+			}
+		}
+		if _, err := w.tx.Exec(ctx, `
+			update runs r set envelopes_purged_at = now()
+			from unnest($1::text[], $2::text[]) as g(namespace, id)
+			where r.namespace = g.namespace and r.id = g.id`, namespaces, runs); err != nil {
+			return err
+		}
+		purged = len(dueRuns)
 		return nil
 	})
 	if err != nil {
@@ -231,6 +395,7 @@ func (p *Pool) ExpiredLogs(ctx context.Context, batch int) ([]Log, error) {
 			from tasks t join runs r on r.namespace = t.namespace and r.id = t.run_id
 			where t.log_uri is not null
 			  and r.expires_at is not null and r.expires_at <= now()
+			  and r.logs_purged_at is null
 			order by r.expires_at
 			limit $1
 			for update of t skip locked`, batch)
@@ -343,11 +508,116 @@ func (p *Pool) LogsPurged(ctx context.Context, logs []Log) (int, error) {
 	return cleared, nil
 }
 
+// LogsGone stamps runs whose retention has run out and none of whose tasks holds a log any more,
+// batch runs at a time, so that ExpiredLogs looks no further at them, and answers how many it
+// stamped.
+//
+// A run is stamped once nothing can give one of its tasks a log again. A shipment asks the run's
+// retention once it holds its task, so the tasks of the runs are held here, waiting for any
+// shipment already under way, and whether a task holds a log is asked only then, in a statement
+// of its own: a shipment that got in first has named its log by then, and one that comes after
+// finds the retention run out and writes nothing.
+func (p *Pool) LogsGone(ctx context.Context, batch int) (int, error) {
+	batch, err := batchOf(batch)
+	if err != nil {
+		return 0, err
+	}
+	var stamped int
+	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
+		stamped = 0
+		rows, err := w.tx.Query(ctx, `
+			select r.namespace, r.id
+			from runs r
+			where r.expires_at is not null and r.expires_at <= now()
+			  and r.logs_purged_at is null
+			  and not exists (select 1 from tasks t
+			                  where t.namespace = r.namespace and t.run_id = r.id
+			                    and t.log_uri is not null)
+			order by r.expires_at
+			limit $1
+			for update of r skip locked`, batch)
+		if err != nil {
+			return err
+		}
+		var namespaces, runs []string
+		for rows.Next() {
+			var namespace, run string
+			if err := rows.Scan(&namespace, &run); err != nil {
+				rows.Close()
+				return err
+			}
+			namespaces, runs = append(namespaces, namespace), append(runs, run)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(runs) == 0 {
+			return err
+		}
+		if _, err := w.tx.Exec(ctx, `
+			select 1 from tasks t
+			join unnest($1::text[], $2::text[]) as g(namespace, run_id)
+			  on t.namespace = g.namespace and t.run_id = g.run_id
+			for update of t`, namespaces, runs); err != nil {
+			return err
+		}
+		tag, err := w.tx.Exec(ctx, `
+			update runs r set logs_purged_at = now()
+			from unnest($1::text[], $2::text[]) as g(namespace, id)
+			where r.namespace = g.namespace and r.id = g.id
+			  and not exists (select 1 from tasks t
+			                  where t.namespace = r.namespace and t.run_id = r.id
+			                    and t.log_uri is not null)`, namespaces, runs)
+		if err != nil {
+			return err
+		}
+		stamped = int(tag.RowsAffected())
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("db: the runs whose logs are gone could not be recorded: %w", err)
+	}
+	return stamped, nil
+}
+
+// PurgeUploads forgets writes that have lapsed, batch at a time, and answers how many.
+//
+// A write holds its rows from before its bytes are read: the room it was made, until a quarter of
+// an hour after the policy it was written with, and its hold on the object, until the grace after
+// it. Past that a row holds nothing back and counts nothing, and a namespace with no
+// max_artifact_bytes never counts its uploads again, so nothing but this lets them go.
+func (p *Pool) PurgeUploads(ctx context.Context, batch int) (int, error) {
+	batch, err := batchOf(batch)
+	if err != nil {
+		return 0, err
+	}
+	var forgotten int
+	err = p.Installation(ctx, Purge, func(ctx context.Context, w *Wide) error {
+		tag, err := w.tx.Exec(ctx, `
+			delete from artifact_uploads
+			where (namespace, id) in (
+			  select namespace, id from artifact_uploads
+			  where until <= now()
+			  order by until
+			  limit $1
+			  for update skip locked
+			)`, batch)
+		if err != nil {
+			return err
+		}
+		forgotten = int(tag.RowsAffected())
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("db: the lapsed uploads could not be forgotten: %w", err)
+	}
+	return forgotten, nil
+}
+
 // Collectable claims objects nothing references any more.
 //
-// Claimed and not deleted: the caller deletes the keys from the store and then calls
-// Collected. An object referenced again between the claim and the deletion is not lost,
-// because the writer that referenced it was told to write the bytes again.
+// Claimed and not deleted: the caller deletes the keys from the store through Collecting and
+// then calls Collected. An object referenced again between the claim and the deletion is not
+// lost, because the writer that referenced it was told to write the bytes again. An object a
+// write is under way for, or that a live artifact names, is not claimed at all.
 //
 // grace is how long an object must have sat at a count of zero. Zero means DefaultGrace; a
 // negative one is refused, since collecting an object before it was ever collectable is not a
@@ -368,13 +638,14 @@ func (p *Pool) Collectable(ctx context.Context, grace time.Duration, batch int) 
 		rows, err := w.tx.Query(ctx, `
 			update artifact_objects set collecting_at = now()
 			where (namespace, digest) in (
-			  select namespace, digest from artifact_objects
-			  where refs = 0
-			    and collectable_at is not null
-			    and collectable_at <= now() - ($1::bigint * interval '1 second')
-			  order by collectable_at
+			  select o.namespace, o.digest from artifact_objects o
+			  where o.refs = 0
+			    and o.collectable_at is not null
+			    and o.collectable_at <= now() - ($1::bigint * interval '1 second')
+			    and `+unheld+`
+			  order by o.collectable_at
 			  limit $2
-			  for update skip locked
+			  for update of o skip locked
 			)
 			returning namespace, digest, size_bytes`, int64(grace/time.Second), batch)
 		if err != nil {
@@ -399,12 +670,92 @@ func (p *Pool) Collectable(ctx context.Context, grace time.Duration, batch int) 
 	return out, nil
 }
 
+// unheld is what keeps an object from the collector whatever its count says, as a condition on
+// the object o: a write of it under way, whose bytes nothing else could write again, and a live
+// artifact naming it, which its count should have kept and a count gone wrong would not.
+const unheld = `not exists (select 1 from artifact_uploads u
+	                  where u.namespace = o.namespace and u.digest = o.digest and u.until > now())
+	    and not exists (select 1 from artifacts a
+	                    where a.namespace = o.namespace and a.digest = o.digest and a.status = 'live')`
+
+// Collecting hands remove each object Collectable claimed whose bytes may go, and answers those
+// remove deleted, for Collected to confirm.
+//
+// Each is handed over under a lock on its row, taken before anything else is asked and held
+// until every one is deleted: an object a writer has referenced since the claim, or one a write
+// is under way for, is passed by, and a write of one that is held waits until its bytes are
+// gone and writes them afresh. Whether a write is under way is asked in a statement of its own
+// once the rows are held, since a write that recorded itself after the first statement began
+// would be invisible to it. An object remove could not delete is left claimed for the next
+// sweep, and said in the error, with the others deleted all the same.
+//
+// remove must answer nil for bytes that are already gone, which a sweep that died after deleting
+// them and before confirming leaves.
+func (p *Pool) Collecting(ctx context.Context, claimed []Object, remove func(context.Context, Object) error) ([]Object, error) {
+	if len(claimed) == 0 {
+		return nil, nil
+	}
+	namespaces := make([]string, len(claimed))
+	digests := make([]string, len(claimed))
+	for i, o := range claimed {
+		if !hexDigest.MatchString(o.Digest) {
+			return nil, fmt.Errorf("db: %q is not a digest", o.Digest)
+		}
+		namespaces[i], digests[i] = o.Namespace, "sha256:"+o.Digest
+	}
+	var gone []Object
+	var failed []error
+	err := p.Installation(ctx, Collect, func(ctx context.Context, w *Wide) error {
+		gone, failed = nil, nil
+		held, err := pairsOf(ctx, w.tx, `
+			select o.namespace, o.digest from artifact_objects o
+			join unnest($1::text[], $2::text[]) as g(namespace, digest)
+			  on o.namespace = g.namespace and o.digest = g.digest
+			where o.refs = 0 and o.collecting_at is not null
+			for update of o skip locked`, namespaces, digests)
+		if err != nil || len(held) == 0 {
+			return err
+		}
+		free, err := pairsOf(ctx, w.tx, `
+			select o.namespace, o.digest
+			from unnest($1::text[], $2::text[]) as o(namespace, digest)
+			where `+unheld, held.first(), held.second())
+		if err != nil {
+			return err
+		}
+		deletable := map[[2]string]bool{}
+		for _, o := range free {
+			deletable[o] = true
+		}
+		for _, o := range claimed {
+			if !deletable[[2]string{o.Namespace, "sha256:" + o.Digest}] {
+				continue
+			}
+			if err := remove(ctx, o); err != nil {
+				failed = append(failed, err)
+				continue
+			}
+			gone = append(gone, o)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("db: the collected objects could not be deleted: %w", err)
+	}
+	if len(failed) > 0 {
+		return gone, fmt.Errorf("db: %d of the objects claimed could not be deleted from the store and are left for the next sweep, the first: %w", len(failed), failed[0])
+	}
+	return gone, nil
+}
+
 // Collected removes the rows of objects whose bytes are gone.
 //
 // An object referenced again since the claim is left alone, which is why the count is checked
 // here and not only when it was claimed: the row is the only thing that knows the object was
-// wanted after all, and deleting it would leave bytes nothing can name. It answers how many
-// rows it removed, so a caller can see when the two numbers differ.
+// wanted after all, and deleting it would leave bytes nothing can name. So is one a writer holds
+// at that moment, rather than waited for: the writer may be waiting on another row this holds,
+// and the row it leaves is claimed again and removed by the next sweep. It answers how many rows
+// it removed, so a caller can see when the two numbers differ.
 func (p *Pool) Collected(ctx context.Context, objects []Object) (int, error) {
 	if len(objects) == 0 {
 		return 0, nil
@@ -420,10 +771,14 @@ func (p *Pool) Collected(ctx context.Context, objects []Object) (int, error) {
 	var removed int
 	err := p.Installation(ctx, Collect, func(ctx context.Context, w *Wide) error {
 		tag, err := w.tx.Exec(ctx, `
-			delete from artifact_objects o
-			using unnest($1::text[], $2::text[]) as g(namespace, digest)
-			where o.namespace = g.namespace and o.digest = g.digest
-			  and o.refs = 0 and o.collecting_at is not null`, namespaces, digests)
+			delete from artifact_objects
+			where (namespace, digest) in (
+			  select o.namespace, o.digest from artifact_objects o
+			  join unnest($1::text[], $2::text[]) as g(namespace, digest)
+			    on o.namespace = g.namespace and o.digest = g.digest
+			  where o.refs = 0 and o.collecting_at is not null
+			  for update of o skip locked
+			)`, namespaces, digests)
 		if err != nil {
 			return err
 		}

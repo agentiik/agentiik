@@ -518,16 +518,27 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 
 	// And again for any object a sweep had claimed while this version was raising its
 	// reference onto it: the reference is safe, and the bytes may be what the sweep is about
-	// to delete. And for any this push skipped because the store held it and whose row the
-	// version then had to create: a sweep can have collected it whole between the two, bytes
-	// deleted and row confirmed gone, and the store's answer was about bytes that are not
-	// there any more. The version's reference keeps any sweep away from it now.
+	// to delete. And for any whose row the version then had to create, where this push skipped
+	// it because the store held it, or the store does not hold it now: a sweep can have
+	// collected it whole between the two, bytes deleted and row confirmed gone, and the store's
+	// answer was about bytes that are not there any more; and one that died after deleting the
+	// bytes and before confirming leaves a row the next sweep deletes again, with the bytes this
+	// push wrote meanwhile. The version's reference keeps any sweep away from it now, so the
+	// store's answer from here on is one to trust.
 	again := make(map[string][]byte, len(saved.MustWriteBytes))
 	for _, digest := range saved.MustWriteBytes {
 		again[digest] = blobs[digest]
 	}
 	for _, digest := range saved.Recorded {
-		if skipped[digest] {
+		held := !skipped[digest]
+		if held {
+			var err error
+			if held, err = s.objects.Has(r.Context(), artifact.Key(over.Namespace, digest)); err != nil {
+				fail(w, http.StatusInternalServerError, "the tree could not be stored")
+				return
+			}
+		}
+		if !held {
 			again[digest] = blobs[digest]
 		}
 	}
