@@ -214,6 +214,18 @@ const (
 	// one reads whether any of its rows remain.
 	NamespaceAdministration Reason = "a namespace created or removed on the server"
 
+	// Identity is who a request is from, and the records that say so: the principals, their
+	// credentials, tokens, sessions and enrolment codes, the authentication policy and the
+	// bootstrap state. A token, a session or a passkey names its principal before any namespace is
+	// in question, and administering them is the installation's business rather than a
+	// namespace's.
+	Identity Reason = "who a request is from, and the principals and credentials that say so"
+
+	// Authorisation is what one principal holds across the namespaces: the grants of a principal
+	// and its groups wherever they are, for a listing that spans every namespace its caller can
+	// read. A decision about one namespace reads that namespace's grants through In.
+	Authorisation Reason = "the grants one principal holds across the namespaces"
+
 	// SchemaUpgrade is the schema itself. Named for the act rather than for the file,
 	// since Migration is the file.
 	SchemaUpgrade Reason = "a schema upgrade"
