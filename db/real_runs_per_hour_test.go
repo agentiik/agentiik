@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,10 @@ func TestOneMoreRunFitsWhenTheOldestRunCountedLeaves(t *testing.T) {
 	if got := reached.Seconds(); got < 2395 || got > 2400 {
 		t.Errorf("Retry-After would read %d seconds", got)
 	}
+	// And the reason names the quota, not three runs as two.
+	if why := reached.Reason(); !strings.HasPrefix(why, "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 2, allows, and one more fits in ") {
+		t.Errorf("the refusal says %q", why)
+	}
 }
 
 // Two replicas of the API creating a run in one namespace at once count one after the other: the
@@ -190,6 +195,12 @@ func TestTwoCreationsAtOnceAreCountedOneAfterTheOther(t *testing.T) {
 				t.Fatalf("the first creation answered %v", err)
 			}
 
+			// Long enough for the second to have counted had it not waited, and far longer where it
+			// should not wait at all, so that a slow machine is not taken for a lock.
+			patience := 500 * time.Millisecond
+			if !c.waits {
+				patience = 10 * time.Second
+			}
 			second := make(chan error, 1)
 			go func() { second <- createIn(t, pool, c.namespace, c.run()) }()
 			var err error
@@ -199,7 +210,7 @@ func TestTwoCreationsAtOnceAreCountedOneAfterTheOther(t *testing.T) {
 					close(release)
 					t.Fatalf("the second creation answered %v while the first had not committed", err)
 				}
-			case <-time.After(500 * time.Millisecond):
+			case <-time.After(patience):
 				if !c.waits {
 					close(release)
 					t.Fatal("a creation in a namespace with no quota waited on another")
@@ -277,7 +288,7 @@ func TestAFiringPastTheQuotaIsSkippedWithItsReason(t *testing.T) {
 		t.Fatalf("three firings created %d runs and skipped %d", len(f.created), len(f.skipped))
 	}
 	for _, why := range f.skipped {
-		if want := "namespace finance has created 2 runs in the last 60 minutes, as many as its max_runs_per_hour allows, and one more fits in "; len(why) < len(want) || why[:len(want)] != want {
+		if !strings.HasPrefix(why, "namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 2, allows, and one more fits in ") {
 			t.Errorf("a skipped firing says %q", why)
 		}
 	}

@@ -72,9 +72,10 @@ type RunsPerHourReached struct {
 
 func (r *RunsPerHourReached) Error() string { return "db: " + r.Reason() }
 
-// Reason says why no run was created, in a sentence a person reads.
+// Reason says why no run was created, in a sentence a person reads. It names the quota and not
+// how many runs the hour holds, which is more than the quota where an administrator lowered it.
 func (r *RunsPerHourReached) Reason() string {
-	return fmt.Sprintf("namespace %s has created %d runs in the last 60 minutes, as many as its max_runs_per_hour allows, and one more fits in %d seconds", r.Namespace, r.Limit, r.Seconds())
+	return fmt.Sprintf("namespace %s has created as many runs in the last 60 minutes as its max_runs_per_hour, %d, allows, and one more fits in %d seconds", r.Namespace, r.Limit, r.Seconds())
 }
 
 // Seconds is RetryAfter in whole seconds, as Retry-After writes it: rounded up, since a client

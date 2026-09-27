@@ -478,14 +478,14 @@ func TestAFailureThatMayPassWhileStartingIsNoOutcome(t *testing.T) {
 func TestARunPastTheRunsAnHourIsRefusedSayingWhenOneMoreFits(t *testing.T) {
 	dir := repository(t)
 	s := &standIn{start: http.StatusTooManyRequests,
-		refusal: `{"error":"namespace finance has created 100 runs in the last 60 minutes, as many as its max_runs_per_hour allows, and one more fits in 42 seconds"}`}
+		refusal: `{"error":"namespace finance has created as many runs in the last 60 minutes as its max_runs_per_hour, 100, allows, and one more fits in 42 seconds"}`}
 	url := installationAt(t, s)
 
 	code, _, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
 	if code != exitRefused {
 		t.Fatalf("a 429 answering the start answered %d: %s", code, errs)
 	}
-	if !strings.Contains(errs, "the installation refused the run: namespace finance has created 100 runs") || !strings.Contains(errs, "one more fits in 42 seconds") {
+	if !strings.Contains(errs, "the installation refused the run: namespace finance has created as many runs") || !strings.Contains(errs, "one more fits in 42 seconds") {
 		t.Errorf("the 429 is said as %s", errs)
 	}
 	if strings.Contains(errs, "cannot be said") {
