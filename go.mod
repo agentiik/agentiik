@@ -86,6 +86,13 @@ require (
 	// it; and it returns a structured error whose keyword and instance location are what a
 	// refusal message names.
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	// Argon2id, used by package internal/password alone, to hash and verify the passwords of the
+	// password fallback. The documentation names the algorithm and its costs, "Argon2id at the OWASP
+	// baseline: 19 MiB of memory, 2 iterations, 1 degree of parallelism", and the standard library
+	// has no Argon2; this is the implementation the Go project maintains beside it, whose Blake2b and
+	// compression function a reviewer can read against RFC 9106. It was already here as an indirect
+	// dependency of the NATS client, its key pairs and its server.
+	golang.org/x/crypto v0.57.0
 	// The PRECIS OpaqueString profile, used by package db alone, to prepare a password before
 	// the SCRAM verifier of the role the application connects as is computed from it. pgx
 	// prepares a password with this profile when it authenticates, so the verifier is computed
@@ -108,7 +115,6 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
