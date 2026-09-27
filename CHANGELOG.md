@@ -198,7 +198,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds every table naming a namespace, asked of the catalog, behind row level security enabled and forced under the namespace's one policy, and every column of namespace names outside it to a decision.
 - Package `internal/accesstest` stands the access fixture up through the API's routes alone: finance and hr, alice, bob and an administrator, team-finance, finance/nightly-sync with its token, and grants and denies at both scopes, the page's figure among them and two that lapse.
 - A test asks every route `serve` registers, as every principal by token, narrowed token and browser session, about everything of the fixture, at the instant before a lapse and at it, and holds each answer to the page: let through, or refused as its scope refuses, and carrying no secret's value; so are `GET /api/v1/me` and the listings of runs, namespaces, service accounts, tokens and grants, and the route table the guard test reads is the suite's `accesstest.Cases`.
-- The v0.3.0 fact, a principal holding nothing in a namespace unable to establish that it exists by any route, error or timing, is a test of its own, in process and on the `e2e` installation; CI times it and the isolation test's refusals with `AGENTIIK_TEST_TIMING` set, without `-race`.
+- The v0.3.0 fact, a principal holding no permission in a namespace unable to establish that it exists by any route, error or timing, is a test of its own, in process and on the `e2e` installation; CI times it and the isolation test's refusals with `AGENTIIK_TEST_TIMING` set, without `-race`.
 
 ### agk
 
