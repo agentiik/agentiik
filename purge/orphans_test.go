@@ -190,8 +190,20 @@ func TestTheSweepTouchesNothingButObjects(t *testing.T) {
 	}
 }
 
+// opening is a store counting the walks opened on it.
+type opening struct {
+	artifact.Walkable
+	opened int
+}
+
+func (o *opening) Walk(namespace string) (artifact.Walk, error) {
+	o.opened++
+	return o.Walkable.Walk(namespace)
+}
+
 // The store is walked a batch of entries a call and a bound of calls a pass, and the next pass goes
-// on from where the last stopped rather than from the start.
+// on from where the last stopped rather than from the start: a namespace's walk is opened once a
+// round, and a round begins again once the last has ended.
 func TestTheStoreIsWalkedABatchAtATime(t *testing.T) {
 	in := withInstallation(t)
 	var keys []string
@@ -210,6 +222,8 @@ func TestTheStoreIsWalkedABatchAtATime(t *testing.T) {
 	}
 
 	p := in.purger(2, 1)
+	store := &opening{Walkable: in.store.(artifact.Walkable)}
+	p.Objects = store
 	for i, want := range []struct{ removed, left int }{{2, 3}, {2, 1}, {1, 0}} {
 		if got := in.pass(t, p); got.Orphans != want.removed || got.Objects != want.removed {
 			t.Errorf("pass %d removed %+v, and %d orphans were due", i+1, got, want.removed)
@@ -220,6 +234,13 @@ func TestTheStoreIsWalkedABatchAtATime(t *testing.T) {
 	}
 	if got := in.pass(t, p); got.Removed() {
 		t.Errorf("the pass after the store was walked through removed %+v", got)
+	}
+	if store.opened != 1 {
+		t.Errorf("the namespace was walked from its start %d times in one round", store.opened)
+	}
+	in.pass(t, p)
+	if store.opened != 2 {
+		t.Errorf("the pass after a round ended opened %d walks in all, and it begins the next round", store.opened)
 	}
 }
 
