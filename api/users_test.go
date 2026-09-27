@@ -18,6 +18,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/dbtest"
 	"github.com/agentiik/agentiik/internal/ulid"
+	"github.com/jackc/pgx/v5"
 )
 
 // The administrator's routes for users and groups, through the router serve builds, authorised by
@@ -179,6 +180,7 @@ func (in people) enrol(t *testing.T, login string) {
 // again as it was, it answers a fresh link and the one before opens nothing; asked otherwise, or
 // once the administrator has enrolled, it is refused. A first administrator's link for a mistyped
 // login is revoked by the next one, and once the bootstrap has ended the token creates nothing.
+// Each administrator it creates is handed finance, which no record names an owner of.
 func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnrol(t *testing.T) {
 	in := somePeople(t)
 	const dan = `{"login":"dan","display_name":"Dan Martin","admin":true}`
@@ -292,7 +294,12 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 	var got []string
 	entries := audited(t, in.pool)
 	for _, e := range entries {
-		got = append(got, e.Actor+" "+e.Action+" "+e.Target+" "+e.Result)
+		target := e.Target
+		if e.Action == audit.GrantCreate {
+			// A grant is named by an identifier minted at the act, and recorded in its namespace.
+			target = "in " + e.Namespace
+		}
+		got = append(got, e.Actor+" "+e.Action+" "+target+" "+e.Result)
 		for _, c := range []string{first, second, codeOf(t, erin.Enrolment.Link)} {
 			if strings.Contains(e.Detail, c) {
 				t.Errorf("entry %d carries a link's code: %s", e.Seq, e.Detail)
@@ -300,9 +307,9 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		}
 	}
 	want := []string{
-		"operator user.create dan done", "operator enrolment.issue dan done",
+		"operator user.create dan done", "operator enrolment.issue dan done", "operator grant.create in finance done",
 		"operator user.create dan unchanged", "operator enrolment.issue dan done",
-		"operator user.create dna done", "operator enrolment.issue dna done",
+		"operator user.create dna done", "operator enrolment.issue dna done", "operator grant.create in finance done",
 		"operator user.create dan unchanged", "operator enrolment.issue dan done",
 		"operator user.create erin done", "operator enrolment.issue erin done",
 		"carol user.create frank done", "carol enrolment.issue frank done",
@@ -310,12 +317,13 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 	if !slices.Equal(got, want) {
 		t.Errorf("the audit log reads\n%s\nand the acts were\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// Each with what was done: the user as created, and the link's kind, expiry and whether it
-	// replaced another.
+	// Each with what was done: the user as created, the link's kind, expiry and whether it replaced
+	// another, and the namespace handed over.
 	if len(entries) == len(want) {
 		for i, d := range []string{
 			`{"admin":true,"display_name":"Dan Martin"}`,
 			`{"expires_at":"` + in.now.Add(time.Hour).Format(time.RFC3339Nano) + `","kind":"first-administrator","replaced":false}`,
+			`{"principal":"dan","role":"owner","scope":"finance"}`,
 			`{"admin":true,"display_name":"Dan Martin"}`,
 			`{"expires_at":"` + in.now.Add(time.Hour).Format(time.RFC3339Nano) + `","kind":"first-administrator","replaced":true}`,
 		} {
@@ -426,6 +434,74 @@ func TestALoginIsHeldToTheNamespaceGrammarAndItsNameSpace(t *testing.T) {
 	}
 	if n := in.count(t, `select count(*) from users`); n != 3 {
 		t.Errorf("the refusals left %d users, and there were two before dan", n)
+	}
+}
+
+// An administrator the bootstrap token creates is handed the namespaces the token owned in effect,
+// those whose record names no owner, with the owner role on each, written by operator and recorded
+// in each namespace; a namespace somebody owns, a personal one among them, is left. A repeat of the
+// create for a fresh link gives nothing twice and hands over a namespace made since; an
+// administrator creating another, and the token creating somebody who does not administer, hand
+// over nothing.
+func TestTheFirstAdministratorIsHandedTheNamespacesNobodyOwns(t *testing.T) {
+	in := somePeople(t)
+	in.exec(t,
+		`insert into namespaces (name) values ('hr')`,
+		`insert into namespaces (name, kind, owner) values ('ops', 'shared', 'alice'), ('alice', 'personal', 'alice')`)
+	owned := func(login string) string {
+		t.Helper()
+		rows, err := dbtest.Superuser(t, in.super).Query(t.Context(),
+			`select namespace from grants where principal = $1 and role = 'owner' and workflow is null and granted_by = 'operator' order by namespace`, login)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(names, ",")
+	}
+	const dan = `{"login":"dan","display_name":"Dan Martin","admin":true}`
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, nil); w.Code != http.StatusCreated {
+		t.Fatalf("the bootstrap token creating dan answered %d: %s", w.Code, w.Body)
+	}
+	if got := owned("dan"); got != "finance,hr" {
+		t.Errorf("dan was handed %q, and finance and hr are the namespaces nobody owns", got)
+	}
+	recorded := in.count(t, `select count(*) from audit_log where action = 'grant.create' and actor = 'operator' and result = 'done'
+	                          and namespace in ('finance', 'hr') and detail::jsonb->>'principal' = 'dan' and detail::jsonb->>'role' = 'owner'
+	                          and detail::jsonb->>'scope' = namespace`)
+	if recorded != 2 {
+		t.Errorf("%d of the two namespaces handed over are recorded in their namespace", recorded)
+	}
+
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, nil); w.Code != http.StatusOK {
+		t.Fatalf("dan asked for again answered %d: %s", w.Code, w.Body)
+	}
+	if got := owned("dan"); got != "finance,hr" {
+		t.Errorf("a repeat of the create left dan holding %q", got)
+	}
+	in.exec(t, `insert into namespaces (name) values ('late')`)
+	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, dan, nil); w.Code != http.StatusOK {
+		t.Fatalf("dan asked for again answered %d: %s", w.Code, w.Body)
+	}
+	if got := owned("dan"); got != "finance,hr,late" {
+		t.Errorf("a repeat of the create after late was made left dan holding %q", got)
+	}
+	if n := in.count(t, `select count(*) from audit_log where action = 'grant.create' and detail::jsonb->>'principal' = 'dan'`); n != 3 {
+		t.Errorf("%d grants to dan are recorded, and three were written", n)
+	}
+
+	for _, c := range []struct{ as, body, login string }{
+		{in.carol, `{"login":"erin","display_name":"Erin","admin":true}`, "erin"},
+		{in.bootstrap, `{"login":"frank","display_name":"Frank"}`, "frank"},
+	} {
+		if w := in.ask(t, "POST", "/api/v1/users", c.as, c.body, nil); w.Code != http.StatusCreated {
+			t.Fatalf("creating %s answered %d: %s", c.login, w.Code, w.Body)
+		}
+		if n := in.count(t, `select count(*) from grants where principal = '`+c.login+`'`); n != 0 {
+			t.Errorf("%s was handed %d namespaces", c.login, n)
+		}
 	}
 }
 

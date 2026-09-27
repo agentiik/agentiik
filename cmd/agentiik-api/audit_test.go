@@ -264,11 +264,12 @@ func TestEveryRouteThatChangesSomethingRecordsItsActOnce(t *testing.T) {
 	}
 	s.recorded("agentiik-api namespace create", "namespace.create installation finance - done")
 
-	// The first administrator, created with the bootstrap token and given a fresh link, enrols a
-	// passkey from it, which ends the token; the link it replaced opens nothing.
+	// The first administrator, created with the bootstrap token, handed finance, which no record
+	// names an owner of, and given a fresh link, enrols a passkey from it, which ends the token; the
+	// link it replaced opens nothing.
 	boot := actor{bearer: theToken}
 	w := s.act("POST /api/v1/users", "/api/v1/users", boot, `{"login":"carol","admin":true}`, http.StatusCreated,
-		"user.create operator carol - done", "enrolment.issue operator carol - done")
+		"user.create operator carol - done", "enrolment.issue operator carol - done", "grant.create operator * finance done")
 	stale := s.code(s.answer(w)["enrolment"].(map[string]any)["link"])
 	w = s.act("POST /api/v1/users/{login}/enrolment", "/api/v1/users/carol/enrolment", boot, nil, http.StatusCreated,
 		"enrolment.issue operator carol - done")

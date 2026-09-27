@@ -18,6 +18,7 @@ import (
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/audit"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/ulid"
 )
 
 // The administrator's routes for people: the users of an installation, the enrolment link a user
@@ -362,8 +363,9 @@ func (s *UserAPI) createUser(w http.ResponseWriter, r *http.Request, who Princip
 	}
 }
 
-// create is createUser's transaction: the user, where there is none by that login, the link, and
-// both recorded.
+// create is createUser's transaction: the user, where there is none by that login, the link, the
+// namespaces handed over to an administrator the bootstrap token creates (handOver), and each
+// recorded.
 func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now time.Time) (CreatedUser, bool, error) {
 	var answer CreatedUser
 	var created bool
@@ -397,6 +399,10 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
+		handed, err := handOver(ctx, wide, who, user, now)
+		if err != nil {
+			return err
+		}
 		result := audit.Done
 		if !created {
 			result = audit.Unchanged
@@ -410,10 +416,60 @@ func (s *UserAPI) create(ctx context.Context, who Principal, ask NewUser, now ti
 		if err := wide.Audit(ctx, issued); err != nil {
 			return err
 		}
+		for _, g := range handed {
+			if err := wide.AuditIn(ctx, g.Scope.Namespace, audit.Record{
+				Actor: string(who), Action: audit.GrantCreate, Target: g.ID, Result: audit.Done, Detail: grantDetail(g),
+			}); err != nil {
+				return err
+			}
+		}
 		answer = CreatedUser{User: userOf(user), Enrolment: link}
 		return nil
 	})
 	return answer, created, err
+}
+
+// handOver gives an administrator the bootstrap token creates the owner role on every namespace
+// whose record names no owner, and answers the grants it wrote: those the token owned in effect,
+// which init, agentiik-api namespace create or a v0.2 installation made, "so an upgraded or new
+// installation's first administrator owns its namespaces without an extra command". The token
+// ends at that administrator's first sign-in, and what it held would otherwise be nobody's to
+// share.
+//
+// A namespace the administrator owns already is left, so that a repeat of the create, for a fresh
+// link, gives nothing twice, and hands over a namespace made since. Written in the create's
+// transaction, after its rows are locked and before it appends to the audit log, by the bootstrap
+// token as every act of the create is, and told to nobody: nobody widens their own access, and the
+// namespaces have no owner to tell. Nothing is handed over by an administrator creating a user, nor
+// to a user who does not administer.
+func handOver(ctx context.Context, wide *db.Wide, who Principal, user db.User, now time.Time) ([]access.Grant, error) {
+	if who != BootstrapOperator || !user.Admin {
+		return nil, nil
+	}
+	namespaces, err := wide.Namespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	principal := access.Principal{Ref: user.Login}
+	held, err := wide.AccessGrantsAcross(ctx, principal, now)
+	if err != nil {
+		return nil, err
+	}
+	var handed []access.Grant
+	for _, n := range namespaces {
+		if n.Owner != "" || access.Owns(principal, held, n.Name, now) {
+			continue
+		}
+		g := access.Grant{
+			ID: ulid.New(), Principal: user.Login, Scope: access.Scope{Namespace: n.Name},
+			Role: access.Owner, GrantedBy: string(who), GrantedAt: now,
+		}
+		if err := wide.GrantAccess(ctx, g); err != nil {
+			return nil, err
+		}
+		handed = append(handed, g)
+	}
+	return handed, nil
 }
 
 // issue issues a link for user, as who, revoking the one it replaces, and answers the entry that
