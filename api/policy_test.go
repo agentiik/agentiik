@@ -212,6 +212,18 @@ func TestForbiddingPasswordsDeletesThemAndSuspendsWhoHoldsNoPasskey(t *testing.T
 	if got := in.suspended(t); !slices.Equal(got, []string{"alice:no_passkey", "bob:no_passkey", "dave", "erin:no_passkey"}) {
 		t.Errorf("the suspended accounts are %q", got)
 	}
+	// An administrator reads why, where the policy suspended the account, and nothing where it
+	// did not.
+	for login, want := range map[string]string{"alice": "no_passkey", "dave": ""} {
+		w := in.bearing(t, "GET", "/api/v1/users/"+login, carol, "")
+		var user map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &user); err != nil || w.Code != http.StatusOK || user["suspended"] != true {
+			t.Fatalf("%s is answered %d %s", login, w.Code, w.Body)
+		}
+		if got, _ := user["suspended_for"].(string); got != want || (want == "") == (user["suspended_for"] != nil) {
+			t.Errorf("%s is answered suspended for %v, want %q", login, user["suspended_for"], want)
+		}
+	}
 	if code, _ := in.me(t, alice); code != http.StatusUnauthorized {
 		t.Errorf("the session alice's password opened answered %d", code)
 	}

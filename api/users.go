@@ -212,11 +212,17 @@ func (u NewUser) otherwise(existing db.User) bool {
 
 // User is a user as the routes answer one, $defs/user: never a credential.
 type User struct {
-	Kind         string    `json:"kind"`
-	Login        string    `json:"login"`
-	DisplayName  string    `json:"display_name"`
-	Admin        bool      `json:"admin"`
-	Suspended    bool      `json:"suspended"`
+	Kind        string `json:"kind"`
+	Login       string `json:"login"`
+	DisplayName string `json:"display_name"`
+	Admin       bool   `json:"admin"`
+	Suspended   bool   `json:"suspended"`
+
+	// SuspendedFor is why the authentication policy suspended the account, no_passkey, and absent
+	// for a suspension it did not make: an administrator reading it knows that an enrolment link
+	// or a recovery code brings the account back, which lifts that suspension and no other.
+	SuspendedFor string `json:"suspended_for,omitempty"`
+
 	CreatedAt    time.Time `json:"created_at"`
 	LastSignInAt time.Time `json:"last_sign_in_at,omitzero"`
 }
@@ -224,7 +230,7 @@ type User struct {
 func userOf(u db.User) User {
 	answered := User{
 		Kind: db.KindUser, Login: u.Login, DisplayName: u.DisplayName, Admin: u.Admin, Suspended: u.Suspended,
-		CreatedAt: u.CreatedAt.UTC(),
+		SuspendedFor: u.SuspendedFor, CreatedAt: u.CreatedAt.UTC(),
 	}
 	if !u.LastSignInAt.IsZero() {
 		answered.LastSignInAt = u.LastSignInAt.UTC()
