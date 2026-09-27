@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -36,10 +37,11 @@ import (
 // What the exchange mints is decided when it is asked, as what a session may do is decided at each
 // request: a code a password minted where the policy has since come to require a passkey the
 // account does not hold is a 403, as is one where passwords have since been forbidden, and a code
-// of a user suspended or removed since opens nothing. A sign-in whose session may only enrol mints
-// no code at all: "enrols passkeys, nothing else: cannot read a workflow, start a run or mint a
-// token". The token is minted as POST /api/v1/auth/tokens mints one for its caller, for 90 days,
-// within the same bound on live tokens, and audited as api_token.create by the user who signed in.
+// of a user suspended or removed since opens nothing, as does one of a credential removed, or of a
+// password set anew, since. A sign-in whose session may only enrol mints no code at all: "enrols
+// passkeys, nothing else: cannot read a workflow, start a run or mint a token". The token is minted
+// as POST /api/v1/auth/tokens mints one for its caller, for 90 days, within the same bound on live
+// tokens, and audited as api_token.create by the user who signed in.
 
 // exchangeCode is openapi.json's exchangeCode: agkcode_ and 256 bits of base64url.
 var exchangeCode = regexp.MustCompile(`^agkcode_[A-Za-z0-9_-]{43,}$`)
@@ -314,7 +316,7 @@ func (s *ExchangeAPI) exchange(w http.ResponseWriter, r *http.Request, _ Princip
 		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
 		return
 	case errors.Is(err, errTokensMost):
-		fail(w, http.StatusConflict, tooManyTokens(code.Login))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s holds %d live tokens, the most one principal may hold: revoke one no longer used with agk token revoke, from wherever one is kept, and run agk login again", code.Login, tokensMost))
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the token could not be minted")

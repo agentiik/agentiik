@@ -202,9 +202,9 @@ func TestACodeLapsesAfterAMinute(t *testing.T) {
 }
 
 // A code is bound to the account that signed in and the credential it signed in with: once the
-// account is suspended, removed and created again under the same login, or has lost that
-// credential, the code opens nothing, with the sentence every other code that opens nothing gets,
-// and no token is minted for anybody.
+// account is suspended, removed and created again under the same login, or has lost that credential
+// or set its password anew, the code opens nothing, with the sentence every other code that opens
+// nothing gets, and no token is minted for anybody.
 func TestACodeOpensNothingOnceItsAccountOrCredentialIsGone(t *testing.T) {
 	again := func(ctx context.Context, w *db.Wide) error {
 		if err := w.CreateUser(ctx, db.User{Login: "alice", DisplayName: "Another Alice"}); err != nil {
@@ -228,6 +228,14 @@ func TestACodeOpensNothingOnceItsAccountOrCredentialIsGone(t *testing.T) {
 				return err
 			}
 			return again(ctx, w)
+		},
+		"its password set anew": func(ctx context.Context, w *db.Wide) error {
+			hash, err := password.Hash("alice's next passphrase")
+			if err != nil {
+				return err
+			}
+			_, _, err = w.SetPassword(ctx, "alice", "unused", hash, time.Now().UTC())
+			return err
 		},
 		"its password removed and set again": func(ctx context.Context, w *db.Wide) error {
 			if err := w.RemoveCredential(ctx, "alice", "alice-password"); err != nil {
