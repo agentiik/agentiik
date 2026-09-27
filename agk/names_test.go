@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -137,8 +138,9 @@ func TestAWordReservedLateIsReservedAndStillNamesWhatCarriesIt(t *testing.T) {
 		if _, path, _ := strings.Cut(r.Route, " "); !strings.HasPrefix(path, "/api/v1/"+r.Word+"/") {
 			t.Errorf("%s is reserved for %q, which is not a route under it", r.Word, r.Route)
 		}
-		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(r.Served) {
-			t.Errorf("%s is reserved for a route served from %q, which is no release", r.Word, r.Served)
+		release := regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+		if !release.MatchString(r.Served) || !release.MatchString(r.Since) || !earlier(r.Since, r.Served) {
+			t.Errorf("%s is reserved from %q for a route served from %q, which are not two releases, the first before the second", r.Word, r.Since, r.Served)
 		}
 		if agk.NamesNoNamespace(r.Word) {
 			t.Errorf("%s names no namespace, and an installation may hold one it created before the word was reserved", r.Word)
@@ -158,11 +160,25 @@ func TestAWordReservedLateIsReservedAndStillNamesWhatCarriesIt(t *testing.T) {
 	}
 }
 
+// earlier says whether release a comes before release b, each written vX.Y.Z or X.Y.Z.
+func earlier(a, b string) bool {
+	parse := func(r string) [3]int {
+		var v [3]int
+		for i, part := range strings.SplitN(strings.TrimPrefix(r, "v"), ".", 3) {
+			v[i], _ = strconv.Atoi(part)
+		}
+		return v
+	}
+	x, y := parse(a), parse(b)
+	return slices.Compare(x[:], y[:]) < 0
+}
+
 // The words the schemas refuse as a namespace's name are the engine's: a word the schemas refuse
 // and the engine does not is a name a client refuses and the API creates, and one the engine
 // reserves and the schemas do not is a name a client offers and the API refuses. The vendored
-// schemas may lag behind a word reserved late alone, until they are vendored at the release that
-// reserves it, since the schemas' own pull request lands first.
+// schemas may lag behind a word reserved late alone, and only while they are of a release before
+// the one that reserves it, since the schemas' own pull request lands first and they are vendored
+// at the release.
 func TestTheReservedWordsAreTheSchemasOwn(t *testing.T) {
 	for _, c := range []struct{ document, definition string }{
 		{"wire.schema.json", "namespace"},
@@ -193,9 +209,10 @@ func TestTheReservedWordsAreTheSchemasOwn(t *testing.T) {
 			}
 		}
 		for _, w := range agk.ReservedNamespaces {
-			if _, late := agk.ReservedLate(w); !late && !slices.Contains(refused, w) {
-				t.Errorf("the engine reserves %s, which %s does not refuse as a namespace", w, c.document)
+			if r, late := agk.ReservedLate(w); late && earlier(fixtures.Version, r.Since) || slices.Contains(refused, w) {
+				continue
 			}
+			t.Errorf("the engine reserves %s, which %s %s does not refuse as a namespace", w, c.document, fixtures.Version)
 		}
 	}
 }

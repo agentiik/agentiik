@@ -33,10 +33,11 @@ const IdentifierMaxBytes = 255
 var ReservedNamespaces = []string{"auth", "me", "users", "groups", "service-accounts", "namespaces", "runners", "runner-pools", "bus", "tasks", "bricks", "runs", "artifacts", "stats"}
 
 // LateReservation is a word of ReservedNamespaces reserved after an installation could
-// already create a namespace under it, the route that needs it and the release that
-// serves that route.
+// already create a namespace under it: the release that reserved it, the route that needs
+// it and the release that serves that route.
 type LateReservation struct {
 	Word   string
+	Since  string
 	Route  string
 	Served string
 }
@@ -48,7 +49,7 @@ type LateReservation struct {
 // grant, a workflow, a service account or a token naming that namespace works through an
 // upgrade as it did before it.
 var LateReservations = []LateReservation{
-	{Word: "stats", Route: "GET /api/v1/stats/pools", Served: "v0.6.0"},
+	{Word: "stats", Since: "v0.3.0", Route: "GET /api/v1/stats/pools", Served: "v0.6.0"},
 }
 
 // IsReservedNamespace reports whether name is one of ReservedNamespaces, which no

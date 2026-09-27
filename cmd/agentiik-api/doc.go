@@ -137,7 +137,8 @@
 // AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does,
 // saying so and going on where a user's login holds the name, since a failed init would keep every
 // service from starting over a name somebody else holds, and leaving one named after a word
-// reserved since it was created as it is, as migrate says of it; the built-in identity of every
+// reserved since it was created as it is, as migrate says of it, or saying so and going on where
+// no namespace carries such a word; the built-in identity of every
 // namespace that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
 // envelopes in the object store's directory, as migrate records them; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has signed in, saying so where none is set and none is kept, and minting none; and a

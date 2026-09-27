@@ -692,21 +692,11 @@ func TestInitWarnsAndGoesOnWhereALoginHoldsTheNamespacesName(t *testing.T) {
 // init names the namespace AGK_INIT_NAMESPACE says at every run. On an installation of v0.2.5
 // that named stats, which v0.3.0 reserved for GET /api/v1/stats/pools, the namespace is there
 // already and is kept: init goes on, at every run, saying the route will take its paths from v0.6.0
-// and what to do. A new installation naming it is refused, naming the setting, as the API refuses
-// the name.
+// and what to do, the setting among it. Once the workflows have moved and the namespace is removed
+// with the setting still naming it, init creates none and says so, and goes on, as it does on a new
+// installation naming it: every service waits on init.
 func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
 	database := freshDatabase(t)
-	d := aPreparedDirectory(t)
-	c := config.Init{
-		Dir: d.dir, Host: "localhost", Namespace: "stats",
-		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
-	}
-	err := initialize(t.Context(), c, d.at(firstRun))
-	if err == nil || !strings.Contains(err.Error(), config.InitNamespace) || !strings.Contains(err.Error(), "from v0.6.0, for GET /api/v1/stats/pools") {
-		t.Fatalf("a new installation naming stats answered %v", err)
-	}
-
-	database = freshDatabase(t)
 	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
 	if err != nil {
 		t.Fatal(err)
@@ -718,8 +708,11 @@ func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
 	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('stats')`); err != nil {
 		t.Fatal(err)
 	}
-	d = aPreparedDirectory(t)
-	c.Dir, c.Admin, c.Application = d.dir, database.Admin, config.Database{URL: database.Application.URL, Role: database.Application.Role}
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "stats",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
 	for run := range 2 {
 		d.out.Reset()
 		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run)*time.Minute))); err != nil {
@@ -727,7 +720,7 @@ func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
 		}
 		for _, said := range []string{
 			"namespace stats already exists, and was left as it was",
-			"namespace stats is named after a word the API routes on from v0.6.0, for GET /api/v1/stats/pools, and from then its own routes under /api/v1/stats/ will not reach it: create another namespace and move its workflows there. It is served as before until then, and init says so at every run while it exists",
+			"namespace stats is named after a word the API routes on from v0.6.0, for GET /api/v1/stats/pools, and from then its own routes under /api/v1/stats/ will not reach it: create another namespace and move its workflows there, and name it in " + config.InitNamespace + ", which names this one. It is served as before until then, and init says so at every run while it exists",
 		} {
 			if !strings.Contains(d.out.String(), said) {
 				t.Errorf("run %d did not say %q:\n%s", run+1, said, d.out.String())
@@ -740,6 +733,30 @@ func TestInitKeepsANamespaceOfV025NamedAfterAWordReservedSince(t *testing.T) {
 	}
 	if accounts != 1 {
 		t.Error("stats was given no built-in identity")
+	}
+
+	// Moved and removed, with the setting still naming it.
+	if _, err := admin.Exec(t.Context(), `delete from service_accounts where namespace = 'stats'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(t.Context(), `delete from principals where id = 'stats/agentiik'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(t.Context(), `delete from namespaces where name = 'stats'`); err != nil {
+		t.Fatal(err)
+	}
+	for run := range 2 {
+		d.out.Reset()
+		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run+2)*time.Minute))); err != nil {
+			t.Fatalf("run %d once stats was removed failed: %s\n%s", run+1, err, d.out.String())
+		}
+		if !strings.Contains(d.out.String(), "did not create namespace stats, which "+config.InitNamespace+" names: stats is a word the API routes on from v0.6.0, for GET /api/v1/stats/pools") ||
+			strings.Contains(d.out.String(), "is named after a word") {
+			t.Errorf("run %d once stats was removed said:\n%s", run+1, d.out.String())
+		}
+	}
+	if exists(t, admin, "stats") {
+		t.Error("init created a namespace named stats")
 	}
 }
 

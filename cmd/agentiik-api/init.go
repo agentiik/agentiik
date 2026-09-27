@@ -774,7 +774,9 @@ include "accounts.conf"
 // less ready without it, and a run that failed there would keep every service from starting, since
 // the Compose file waits on init, over a name somebody else holds. One named after a word reserved
 // since it was created is left as it is, and said of with every other such namespace, as migrate
-// says of them; a new one of that name is refused, as the API refuses it.
+// says of them; a new one of that name is not created, as the API refuses it, and init says so and
+// goes on in the same way, so that an installation whose namespace of that name was moved and
+// removed while its settings still name it goes on starting.
 //
 // A join token at every run, rather than only before the runner first joins, because a runner that
 // joined may have to join again after a setting changed, the API's address above all, and it
@@ -791,7 +793,7 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 	case errors.As(err, &taken):
 		p.say("did not create namespace %s, which %s names: it is a user's login, and logins and namespace names share one name space, since a user's personal namespace is named after their login. init goes on without it, and says so at every run while %s names it", name, config.InitNamespace, config.InitNamespace)
 	case errors.As(err, &reserved):
-		return config.Refuse(config.InitNamespace, reserved.error)
+		p.say("did not create namespace %s, which %s names: %s. init goes on without it, and says so at every run while %s names it", name, config.InitNamespace, reserved.error, config.InitNamespace)
 	case err != nil:
 		return err
 	}
@@ -803,7 +805,7 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 	if err := builtInIdentities(ctx, pool, p.out); err != nil {
 		return err
 	}
-	reservedLater(ctx, pool, "init", p.out)
+	reservedLater(ctx, pool, "init", name, p.out)
 	if err := unrecordedArtifacts(ctx, pool, p.dir.path(objectsDir), "init", p.out); err != nil {
 		return err
 	}

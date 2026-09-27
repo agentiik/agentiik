@@ -170,9 +170,12 @@ func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) err
 // an installation is upgraded, and the person who reads either is the one who can move its
 // workflows.
 //
+// init names the namespace its settings name, which is also to be named anew there once its
+// workflows have moved, and migrate names none.
+//
 // It never fails: what it reads decides nothing, and a failed init keeps every service of the
 // installation from starting. A read that fails is said, and the next run tries again.
-func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Writer) {
+func reservedLater(ctx context.Context, pool *db.Pool, verb, named string, stdout io.Writer) {
 	var held []agk.LateReservation
 	err := pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
 		held = held[:0]
@@ -193,6 +196,10 @@ func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Wr
 		return
 	}
 	for _, r := range held {
-		fmt.Fprintf(stdout, "namespace %s is named after a word the API routes on from %s, for %s, and from then its own routes under /api/v1/%s/ will not reach it: create another namespace and move its workflows there. It is served as before until then, and %s says so at every run while it exists\n", r.Word, r.Served, r.Route, r.Word, verb)
+		also := ""
+		if r.Word == named {
+			also = fmt.Sprintf(", and name it in %s, which names this one", config.InitNamespace)
+		}
+		fmt.Fprintf(stdout, "namespace %s is named after a word the API routes on from %s, for %s, and from then its own routes under /api/v1/%s/ will not reach it: create another namespace and move its workflows there%s. It is served as before until then, and %s says so at every run while it exists\n", r.Word, r.Served, r.Route, r.Word, also, verb)
 	}
 }
