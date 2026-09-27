@@ -231,6 +231,11 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if err != nil {
 		return nil, err
 	}
+	// The console's sessions, whose requests changing something come from the pages of the public
+	// URL alone, the one origin the sign-in page is served on.
+	if err := principals.AcceptSessions(s.PublicURL); err != nil {
+		return nil, err
+	}
 	rt, err := api.NewRouter(principals, principals.Identify)
 	if err != nil {
 		return nil, err
