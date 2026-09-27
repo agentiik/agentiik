@@ -20,7 +20,11 @@
 // the tenants invent.
 //
 // A gauge is read when it is scraped rather than kept, so it holds what exists at that moment and
-// nothing that has gone: it needs no bound of this kind.
+// nothing that has gone. A gauge of what the installation holds, a pool or a runner, needs no bound
+// of this kind. One read per namespace does, since namespaces are as many as the installation's
+// users and teams: it is registered with Desc.Fold, and kept to Limit label sets as a counter is,
+// what one more would have been summed under Other and each such reading counted in
+// agentiik_metrics_folded_total.
 package metrics
 
 import (
@@ -83,6 +87,11 @@ type collector struct {
 type Desc struct {
 	Name, Help string
 	Labels     []string
+
+	// Fold keeps the family to Registry.Limit label sets at each scrape, in the order its read
+	// sets them, and sums the value of any label set past that under the one whose every value
+	// is Other: for a family whose labels take a name for every namespace.
+	Fold bool
 }
 
 // NewRegistry is a registry holding agentiik_metrics_folded_total and nothing else yet.
@@ -142,6 +151,7 @@ func (r *Registry) Gauges(read func(ctx context.Context, g *Gauges) error, famil
 
 // Gauges is what one read sets.
 type Gauges struct {
+	r      *Registry
 	descs  map[string]Desc
 	values map[string]map[string]float64
 }
@@ -149,6 +159,10 @@ type Gauges struct {
 // Set gives the gauge name the value v for the label values given, in the order its Desc names
 // the labels. A name the read was not registered for, or the wrong number of values, is a mistake
 // in the program and panics.
+//
+// A family registered with Fold that holds as many label sets as the registry keeps adds v to the
+// label set of Other instead, once for each label set it does not keep, so that a sum over the
+// family is the installation's figure however many namespaces it names.
 func (g *Gauges) Set(name string, v float64, values ...string) {
 	d, ok := g.descs[name]
 	if !ok || len(values) != len(d.Labels) {
@@ -157,7 +171,18 @@ func (g *Gauges) Set(name string, v float64, values ...string) {
 	if g.values[name] == nil {
 		g.values[name] = map[string]float64{}
 	}
-	g.values[name][key(values)] = v
+	held := g.values[name]
+	if !d.Fold {
+		held[key(values)] = v
+		return
+	}
+	k, folded := g.r.slot(name, d.Labels, values, len(held), func(k string) bool { _, ok := held[k]; return ok })
+	if !folded {
+		held[k] = v
+		return
+	}
+	held[k] += v
+	g.r.folded.Add(1, name)
 }
 
 // Counter is a family of counters that only go up.
@@ -307,7 +332,7 @@ func (r *Registry) WriteTo(ctx context.Context, out io.Writer) error {
 		f.write(w)
 	}
 	for _, c := range collectors {
-		g := &Gauges{descs: map[string]Desc{}, values: map[string]map[string]float64{}}
+		g := &Gauges{r: r, descs: map[string]Desc{}, values: map[string]map[string]float64{}}
 		names := make([]string, 0, len(c.families))
 		for _, d := range c.families {
 			g.descs[d.Name] = d

@@ -98,6 +98,42 @@ func TestALabelSetPastTheLimitIsFoldedIntoOther(t *testing.T) {
 	}
 }
 
+// A gauge family registered to fold keeps as many label sets at each scrape as a counter does, in
+// the order its read sets them, and sums the rest under _other, each counted as folded: a sum over
+// the family is still the installation's figure. One that does not fold keeps every label set, as a
+// gauge of what the installation holds needs no bound.
+func TestAGaugeThatFoldsKeepsTheLimitAndSumsTheRestUnderOther(t *testing.T) {
+	r := NewRegistry()
+	r.Limit = 2
+	r.Gauges(func(_ context.Context, g *Gauges) error {
+		for i, namespace := range []string{"finance", "hr", "legal", "ops"} {
+			g.Set("agentiik_quota_used", float64(i+1), namespace, "max_concurrent_tasks")
+			g.Set("agentiik_runner_slots", float64(i+1), namespace, "runner-1")
+		}
+		return nil
+	}, Desc{Name: "agentiik_quota_used", Help: "Held.", Labels: []string{"namespace", "quota"}, Fold: true},
+		Desc{Name: "agentiik_runner_slots", Help: "Slots.", Labels: []string{"pool", "runner"}})
+
+	got := written(t, r)
+	for _, line := range []string{
+		`agentiik_quota_used{namespace="finance",quota="max_concurrent_tasks"} 1`,
+		`agentiik_quota_used{namespace="hr",quota="max_concurrent_tasks"} 2`,
+		`agentiik_quota_used{namespace="_other",quota="_other"} 7`,
+		`agentiik_runner_slots{pool="ops",runner="runner-1"} 4`,
+	} {
+		if !strings.Contains(got, line+"\n") {
+			t.Errorf("the registry wrote no line %s:\n%s", line, got)
+		}
+	}
+	if strings.Contains(got, `namespace="legal"`) || strings.Contains(got, `namespace="ops"`) {
+		t.Errorf("a label set past the limit was kept:\n%s", got)
+	}
+	// Counted as it was folded, so the next scrape says so.
+	if got := written(t, r); !strings.Contains(got, `agentiik_metrics_folded_total{metric="agentiik_quota_used"} 2`+"\n") {
+		t.Errorf("the folds were not counted:\n%s", got)
+	}
+}
+
 // A gauge that cannot be read is left out, and said, and the rest is answered: the counters are
 // worth having without it.
 func TestAGaugeThatCannotBeReadIsLeftOutAndSaid(t *testing.T) {

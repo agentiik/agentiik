@@ -114,6 +114,17 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 		Help:   "1 where a runner takes new work: neither drained nor revoked, and it last said ready.",
 		Labels: []string{"pool", "runner"},
 	})
+	r.Gauges(c.readQuotas, metrics.Desc{
+		Name:   "agentiik_quota_used",
+		Help:   "What a namespace holds against a quota, named by its identifier: tasks in flight for max_concurrent_tasks, runs created in the last 60 minutes for max_runs_per_hour, bytes of live artifacts and uploads for max_artifact_bytes. Over agentiik_quota_limit, how full it is.",
+		Labels: []string{"namespace", "quota"},
+		Fold:   true,
+	}, metrics.Desc{
+		Name:   "agentiik_quota_limit",
+		Help:   "The quota a namespace sets, named by its identifier, for each of the three agentiik_quota_used counts that it bounds. A quota the namespace does not set has no series.",
+		Labels: []string{"namespace", "quota"},
+		Fold:   true,
+	})
 	return c
 }
 
@@ -208,6 +219,40 @@ func (c *counted) readRunners(ctx context.Context, g *metrics.Gauges) error {
 		g.Set("agentiik_runner_slots", float64(o.Slots), o.Pool, o.Runner)
 		g.Set("agentiik_runner_tasks", float64(o.Held), o.Pool, o.Runner)
 		g.Set("agentiik_runner_ready", ready, o.Pool, o.Runner)
+	}
+	return nil
+}
+
+// readQuotas reads what every namespace holds against the three quotas that count something, and
+// the quotas it sets, in namespace order, so that which namespaces a full family keeps is the same
+// from one scrape to the next.
+func (c *counted) readQuotas(ctx context.Context, g *metrics.Gauges) error {
+	l := c.term.Load()
+	if l == nil {
+		return nil
+	}
+	var held []db.Consumption
+	if err := l.ctl.Fenced(ctx, l.term, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		held, err = w.Consumption(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, n := range held {
+		for _, q := range []struct {
+			quota       string
+			used, limit int64
+		}{
+			{"max_concurrent_tasks", n.Tasks, n.MaxConcurrentTasks},
+			{"max_runs_per_hour", n.RunsLastHour, n.MaxRunsPerHour},
+			{"max_artifact_bytes", n.ArtifactBytes, n.MaxArtifactBytes},
+		} {
+			g.Set("agentiik_quota_used", float64(q.used), n.Namespace, q.quota)
+			if q.limit > 0 {
+				g.Set("agentiik_quota_limit", float64(q.limit), n.Namespace, q.quota)
+			}
+		}
 	}
 	return nil
 }
