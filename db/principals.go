@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -299,17 +300,92 @@ func (w *Wide) CreateServiceAccount(ctx context.Context, s ServiceAccount) error
 
 // ServiceAccounts answers a namespace's, ordered by name.
 func (w *Wide) ServiceAccounts(ctx context.Context, namespace string) ([]ServiceAccount, error) {
+	return w.ServiceAccountsIn(ctx, []string{namespace})
+}
+
+const serviceAccountColumns = `namespace, name, coalesce(created_by, ''), created_at`
+
+// ServiceAccountsIn answers the service accounts of the namespaces named, the built-in identity of
+// each among them, ordered by namespace and then by name: what an owner of those namespaces lists.
+func (w *Wide) ServiceAccountsIn(ctx context.Context, namespaces []string) ([]ServiceAccount, error) {
 	rows, err := w.tx.Query(ctx,
-		`select namespace, name, coalesce(created_by, ''), created_at from service_accounts
-		  where namespace = $1 order by name`, namespace)
+		`select `+serviceAccountColumns+` from service_accounts
+		  where namespace = any($1) order by namespace, name`, namespaces)
 	if err != nil {
-		return nil, fmt.Errorf("db: the service accounts of %s could not be read: %w", namespace, err)
+		return nil, fmt.Errorf("db: the service accounts of %v could not be read: %w", namespaces, err)
 	}
 	accounts, err := pgx.CollectRows(rows, pgx.RowToStructByPos[ServiceAccount])
 	if err != nil {
-		return nil, fmt.Errorf("db: the service accounts of %s could not be read: %w", namespace, err)
+		return nil, fmt.Errorf("db: the service accounts of %v could not be read: %w", namespaces, err)
 	}
 	return accounts, nil
+}
+
+// ServiceAccount reads one, or answers ErrNoPrincipal.
+func (w *Wide) ServiceAccount(ctx context.Context, namespace, name string) (ServiceAccount, error) {
+	var s ServiceAccount
+	err := w.tx.QueryRow(ctx, `select `+serviceAccountColumns+` from service_accounts where namespace = $1 and name = $2`,
+		namespace, name).Scan(&s.Namespace, &s.Name, &s.CreatedBy, &s.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ServiceAccount{}, fmt.Errorf("%w: %s/%s", ErrNoPrincipal, namespace, name)
+	}
+	if err != nil {
+		return ServiceAccount{}, fmt.Errorf("db: service account %s/%s could not be read: %w", namespace, name, err)
+	}
+	return s, nil
+}
+
+// ErrBuiltIn is a namespace's built-in identity where a service account somebody created is meant:
+// it is created with its namespace and goes with it, since the runs nobody started there are
+// attributed to it, and removing it would leave them attributed to nobody.
+var ErrBuiltIn = errors.New("db: that is a namespace's built-in identity")
+
+// RemoveServiceAccount removes a service account and everything it holds, its tokens and its grants
+// among them, and answers what it was. The built-in identity is ErrBuiltIn, one nobody created
+// ErrNoPrincipal, and one a namespace's record names as owner ErrOwnsNamespace.
+func (w *Wide) RemoveServiceAccount(ctx context.Context, namespace, name string) (ServiceAccount, error) {
+	if name == BuiltIn {
+		return ServiceAccount{}, fmt.Errorf("%w: %s/%s", ErrBuiltIn, namespace, name)
+	}
+	s, err := w.ServiceAccount(ctx, namespace, name)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	return s, w.RemovePrincipal(ctx, s.Principal())
+}
+
+// GiveBuiltInIdentities creates the built-in identity, NS/agentiik, of every namespace that has
+// none, and answers the namespaces it gave one, ordered by name. Nothing is granted to any: it
+// "holds no grant until an owner gives it one".
+//
+// A namespace is created with its built-in identity from v0.3.0, so the ones that lack it are those
+// v0.2 made, which an upgrade keeps: init and migrate give it them at every run, and a run that
+// finds none lacking gives none. Two runs at once give each namespace one, the second finding the
+// first's rows and leaving them. A namespace whose name no principal can be written with, one past
+// the 255 characters v0.2 did not bound, is left without one rather than failing the upgrade, and
+// is not in the answer.
+func (w *Wide) GiveBuiltInIdentities(ctx context.Context) ([]string, error) {
+	rows, err := w.tx.Query(ctx,
+		`with missing as (
+		   select n.name from namespaces n
+		    where not exists (select from service_accounts s where s.namespace = n.name and s.name = $1)
+		      and agentiik_given_name(n.name)
+		 ), principal as (
+		   insert into principals (id, kind) select name || '/' || $1, 'service_account' from missing
+		   on conflict (id) do nothing
+		 )
+		 insert into service_accounts (namespace, name) select name, $1 from missing
+		 on conflict (namespace, name) do nothing
+		 returning namespace`, BuiltIn)
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces could not be given their built-in identities: %w", err)
+	}
+	given, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces could not be given their built-in identities: %w", err)
+	}
+	slices.Sort(given)
+	return given, nil
 }
 
 // PrincipalKind answers what kind of principal a reference names, or ErrNoPrincipal. operator,

@@ -63,7 +63,7 @@ func createSecond(t *testing.T, pool *db.Pool) {
 	err := pool.In(t.Context(), "finance", func(ctx context.Context, ns *db.NS) error {
 		return ns.CreateRun(ctx, db.NewRun{
 			ID: second, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
-			Trigger: agk.TriggerSchedule, TriggeredBy: "schedule",
+			Trigger: agk.TriggerSchedule,
 			Inputs: json.RawMessage(`{"orders": []}`),
 			Steps:  []agk.Step{"normalize"},
 		})

@@ -62,6 +62,28 @@ func (w *Wide) MintToken(ctx context.Context, t APIToken) error {
 	return nil
 }
 
+// LiveTokens answers how many of a principal's tokens are neither revoked nor expired at now, a
+// suspended user's included, since they open again when the suspension is lifted. It locks the
+// principal's row until the transaction ends, so that two tokens minted for one principal at once
+// are counted one after the other and a bound on the count holds; a principal nobody created is
+// ErrNoPrincipal.
+func (w *Wide) LiveTokens(ctx context.Context, principal string, now time.Time) (int, error) {
+	err := w.tx.QueryRow(ctx, `select id from principals where id = $1 for no key update`, principal).Scan(new(string))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrNoPrincipal, principal)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("db: principal %s could not be read: %w", principal, err)
+	}
+	var live int
+	if err := w.tx.QueryRow(ctx,
+		`select count(*) from api_tokens where principal = $1 and revoked_at is null and expires_at > $2`,
+		principal, now).Scan(&live); err != nil {
+		return 0, fmt.Errorf("db: the tokens of %s could not be counted: %w", principal, err)
+	}
+	return live, nil
+}
+
 const tokenColumns = `id, hash, principal, scope_permissions, scope_within, coalesce(device_label, ''),
 	created_at, expires_at, last_used_at, revoked_at`
 

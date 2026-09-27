@@ -35,9 +35,9 @@ func aRun(steps ...agk.Step) NewRun {
 	}
 	return NewRun{
 		ID: theRun, Workflow: "monthly-invoicing", Commit: "a3f9c1e",
-		Trigger: agk.TriggerSchedule, TriggeredBy: "cron",
-		Inputs: json.RawMessage(`{"cycle": "2026-09"}`),
-		Steps:  steps,
+		Trigger: agk.TriggerSchedule,
+		Inputs:  json.RawMessage(`{"cycle": "2026-09"}`),
+		Steps:   steps,
 	}
 }
 
