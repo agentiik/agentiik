@@ -27,7 +27,7 @@
 //	agk brick test    a brick against a set of sample envelopes, compared against
 //	                  expected outputs
 //
-// Four reach an installation, whose address is --server or AGENTIIK_SERVER and whose
+// These reach an installation, whose address is --server or AGENTIIK_SERVER and whose
 // credential is AGENTIIK_TOKEN and never a flag:
 //
 //	agk push          a commit registered as a version, its tree carried with it
@@ -37,6 +37,9 @@
 //	                  dropped connection left them
 //	agk status        how a run there stands: its state, each step's, the digests and
 //	                  what failed
+//	agk namespace     create, list, show, delete and quotas: the namespaces an
+//	                  administrator creates, bounds and removes, and whoever holds a grant
+//	                  in one reads
 //
 // Five more verbs are in the documented table and wait for something that is not there
 // yet: login, whoami, share and grants for the principals v0.3.0 brings, and brick init for
@@ -128,6 +131,7 @@
 //	serverrun.go     agk run on an installation
 //	logs.go          agk logs
 //	status.go        agk status
+//	namespace.go     agk namespace create, list, show, delete and quotas
 //	remote.go        the installation's address, the credential, and its refusals
 //	absent.go        the five verbs that wait, each refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot

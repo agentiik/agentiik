@@ -70,6 +70,11 @@ type command struct {
 var commands = []command{
 	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
 	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation has no route yet that says who a token belongs to", withPrincipals)},
+	{"namespace create", "Creates a namespace with its owner and its quotas. Administrator only.", namespaceCreate},
+	{"namespace list", "Lists the namespaces the caller holds a grant in, and every one for an administrator.", namespaceList},
+	{"namespace show", "Shows one namespace: its kind, its owner and its quotas.", namespaceShow},
+	{"namespace delete", "Removes a namespace that holds nothing but its built-in identity. Administrator only.", namespaceDelete},
+	{"namespace quotas", "Shows a namespace's quotas, and with quotas given, sets them as the whole set. Administrator only to set.", namespaceQuotas},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},
@@ -135,7 +140,8 @@ func run(ctx context.Context, e Env, args []string) int {
 //
 // brick test and brick init are two words because the documentation writes them as two, and
 // a binary that answered to brick-test would be a binary whose help and whose documentation
-// spell one thing differently.
+// spell one thing differently. The namespace verbs are two words for the same reason agk
+// auth policy and agk user create are: a noun, then what is done to it.
 func verb(args []string) (*command, []string) {
 	if len(args) >= 2 {
 		two := args[0] + " " + args[1]
@@ -157,8 +163,8 @@ func verb(args []string) (*command, []string) {
 // line: brick frobnicate is a second word of a verb that has one, and anything else is its
 // first word alone.
 func typed(args []string) string {
-	if args[0] == "brick" && len(args) >= 2 {
-		return "brick " + args[1]
+	if len(args) >= 2 && slices.ContainsFunc(commands, func(c command) bool { return strings.HasPrefix(c.name, args[0]+" ") }) {
+		return args[0] + " " + args[1]
 	}
 	return args[0]
 }
