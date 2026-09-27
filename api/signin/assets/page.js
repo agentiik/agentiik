@@ -137,9 +137,13 @@
     return r.status === 403 ? "" : null;
   }
 
+  // showSignedIn says who this browser is signed in as, as signedIn answers it, with the button
+  // that signs it out: a session that may only enrol is one to sign out of too, on a shared machine
+  // above all, since whoever comes next could enrol a passkey of their own on the account.
   function showSignedIn(login) {
-    $("who").textContent = login || "";
-    show("signed-in", !!login);
+    const signed = login !== null && login !== undefined;
+    $("who").textContent = login ? "Signed in as " + login + "." : signed ? "Signed in to enrol a passkey, and nothing else." : "";
+    show("signed-in", signed);
   }
 
   // busy runs work for a button, which stays disabled until it is done, and shows what went wrong.
@@ -186,14 +190,16 @@
 
     // render shows what is left to do: signing in, where nobody is or where agk login waits for a
     // sign-in of its own, and otherwise who is signed in. Once a sign-in or a sign-out on the page
-    // has said who that is, settled keeps the page's first question from answering over it.
+    // has said who that is, settled keeps the page's first question from answering over it; once
+    // the API has refused this account a password, withdrawn keeps the form from coming back.
     let settled = false;
+    let withdrawn = false;
     function render(login) {
       showSignedIn(login);
       show("enrolling", login === "");
       const signing = !login || !!handOff;
       show("passkey", signing && !why);
-      show("password", signing && offered);
+      show("password", signing && offered && !withdrawn);
     }
 
     // signedInAs follows a sign-in: back to agk login where it opened the page, at the address the
@@ -262,6 +268,7 @@
       const r = await call("POST", "auth/login", body);
       if (r.status === 403 && r.answer && r.answer.setting === "password") {
         // Passwords are forbidden to this account, and the form is not offered to it again.
+        withdrawn = true;
         show("password", false);
         problem(refusal(r));
         return;
