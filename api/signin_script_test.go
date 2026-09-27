@@ -6,11 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"html"
+	"html/template"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -18,16 +21,12 @@ import (
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 )
 
-// The page's conversions, codec.js, between the JSON of a ceremony and what navigator.credentials
-// takes and answers, run on a JavaScript engine against what the API writes and reads: base64url
-// as Go's strict decoder reads it, byte for byte and refusal for refusal; the options the API
-// issues, their bytes decoded and every other member passed on as written; and a browser's
-// credentials, written as toJSON() writes them and read back by the API's own reader into the bytes
-// they started as. page.js is parsed on the same engine, which is what a syntax error would stop.
+// The page's scripts, run on a JavaScript engine: codec.js against what the API writes and reads,
+// and page.js on a stand-in for the browser it runs in.
 //
-// A browser is not needed for any of it, and no JavaScript engine is a dependency of the module:
-// the test runs where node is, as it is on the hosted runners CI uses, or macOS's own jsc, and
-// skips elsewhere, saying so.
+// A browser is not needed for either, and no JavaScript engine is a dependency of the module: the
+// tests run where node is, as it is on the hosted runners CI uses, or macOS's own jsc, and skip
+// elsewhere, saying so.
 
 // jsc is where macOS keeps JavaScriptCore's shell.
 const jsc = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
@@ -115,6 +114,12 @@ func readBack(t *testing.T, ceremony string, credential []byte) *publicKeyCreden
 	return ask.Credential
 }
 
+// The page's conversions, codec.js, between the JSON of a ceremony and what navigator.credentials
+// takes and answers: base64url as Go's strict decoder reads it, byte for byte and refusal for
+// refusal; the options the API issues, their bytes decoded and every other member passed on as
+// written; and a browser's credentials, written as toJSON() writes them and read back by the API's
+// own reader into the bytes they started as. page.js is parsed on the same engine, which is what a
+// syntax error would stop.
 func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 	engine := javaScript(t)
 	b64 := base64.RawURLEncoding
@@ -323,5 +328,96 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 				t.Errorf("the API reads the %s's %s the page wrote as %s, and the authenticator answered %s", c.ceremony, name, pair[0], pair[1])
 			}
 		}
+	}
+}
+
+// The page's script on a stand-in browser, testdata/page_harness.js: the DOM of each page as it is
+// served, fetch answered as the API answers, navigator.credentials, location and history, driven
+// through what a person does. Signed out, the page offers the passkey; a session that may only
+// enrol is told what it needs and offered its sign-out; a password refused by the policy is not
+// offered again, whatever answers after; a sign-in agk login opened hands on its loopback address
+// and follows the API back to it and nowhere else; an enrolment link's code travels in the options'
+// body alone and leaves the address once spent; and every request is the page's own fetch, with
+// credentials same-origin and no mode, which the API's Origin check needs.
+func TestThePageScriptOnAStandInBrowser(t *testing.T) {
+	engine := javaScript(t)
+	pages, err := template.ParseFS(signinFiles, "signin/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := regexp.MustCompile(`<[a-z]+\s[^>]*>`)
+	id := regexp.MustCompile(`\sid="([^"]+)"`)
+	hidden := regexp.MustCompile(`\shidden[\s>]`)
+	data := regexp.MustCompile(`\s(data-[a-z-]+)="([^"]*)"`)
+	written := map[string]any{}
+	for name, page := range map[string]struct {
+		file string
+		data pageData
+	}{
+		"sign-in":          {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld"}},
+		"sign-in-password": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
+		"sign-in-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld",
+			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
+		"enrol": {"enrol.html", pageData{Scripts: true, Passkeys: "available"}},
+	} {
+		var b bytes.Buffer
+		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {
+			t.Fatal(err)
+		}
+		elements, attributes := map[string]any{}, map[string]string{}
+		for _, element := range tag.FindAllString(b.String(), -1) {
+			named := id.FindStringSubmatch(element)
+			if named == nil {
+				continue
+			}
+			elements[named[1]] = map[string]bool{"hidden": hidden.MatchString(element)}
+			if named[1] == "page" {
+				for _, d := range data.FindAllStringSubmatch(element, -1) {
+					attributes[d[1]] = html.UnescapeString(d[2])
+				}
+			}
+		}
+		written[name] = map[string]any{"elements": elements, "data": attributes}
+	}
+	vectors, err := json.Marshal(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(b []byte, err error) []byte {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	var script bytes.Buffer
+	for _, part := range [][]byte{
+		read(signinFiles.ReadFile("signin/assets/codec.js")),
+		[]byte("function loadPage() {"), read(signinFiles.ReadFile("signin/assets/page.js")), []byte("}"),
+		[]byte("const pages = " + string(vectors) + ";"),
+		read(os.ReadFile("testdata/page_harness.js")),
+	} {
+		script.Write(part)
+		script.WriteString("\n")
+	}
+	file := filepath.Join(t.TempDir(), "page.js")
+	if err := os.WriteFile(file, script.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), engine, file)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%s ran the page's script and failed: %s\n%s%s", filepath.Base(engine), err, stderr.String(), stdout.String())
+	}
+	var out struct {
+		Failures []string `json:"failures"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
+		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
+	}
+	for _, f := range out.Failures {
+		t.Error(f)
 	}
 }
