@@ -103,11 +103,18 @@ func (w *Wide) TokenUsed(ctx context.Context, id string, at time.Time) error {
 	return nil
 }
 
-// TokensOf answers a principal's, revoked and expired ones included, newest first, so that a
-// listing shows what was minted and what became of it.
-func (w *Wide) TokensOf(ctx context.Context, principal string) ([]APIToken, error) {
+// TokensOf answers the tokens of a principal, and of the service accounts of the namespaces named,
+// that are still accepted at now, newest first: what a listing shows, since "an expired or revoked
+// token is gone from the list". A suspended user's are gone from it too, since none of them opens
+// anything while the suspension lasts.
+func (w *Wide) TokensOf(ctx context.Context, principal string, namespaces []string, now time.Time) ([]APIToken, error) {
 	rows, err := w.tx.Query(ctx,
-		`select `+tokenColumns+` from api_tokens where principal = $1 order by created_at desc, id`, principal)
+		`select `+tokenColumns+` from api_tokens
+		  where (principal = $1
+		         or (principal_kind = 'service_account' and split_part(principal, '/', 1) = any($2)))
+		    and revoked_at is null and expires_at > $3
+		    and `+fmt.Sprintf(liveUser, "api_tokens.principal")+`
+		  order by created_at desc, id`, principal, namespaces, now)
 	if err != nil {
 		return nil, fmt.Errorf("db: the tokens of %s could not be read: %w", principal, err)
 	}
@@ -116,6 +123,19 @@ func (w *Wide) TokensOf(ctx context.Context, principal string) ([]APIToken, erro
 		return nil, fmt.Errorf("db: the tokens of %s could not be read: %w", principal, err)
 	}
 	return all, nil
+}
+
+// Token answers one token by its identifier, revoked and expired ones included, or ErrNoToken: whose
+// it is decides who may revoke it.
+func (w *Wide) Token(ctx context.Context, id string) (APIToken, error) {
+	t, err := scanToken(w.tx.QueryRow(ctx, `select `+tokenColumns+` from api_tokens where id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return APIToken{}, ErrNoToken
+	}
+	if err != nil {
+		return APIToken{}, fmt.Errorf("db: token %s could not be read: %w", id, err)
+	}
+	return t, nil
 }
 
 // RevokeToken revokes one of a principal's tokens, and answers whether it was live until now. A
