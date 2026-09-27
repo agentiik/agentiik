@@ -137,7 +137,62 @@ func TestDirRefusesAKeyThatLeavesItsRoot(t *testing.T) {
 			if _, err := objects.Open(t.Context(), key); err == nil {
 				t.Errorf("Open: accepted %q", key)
 			}
+			if err := objects.Remove(t.Context(), key); err == nil {
+				t.Errorf("Remove: accepted %q", key)
+			}
 		})
+	}
+}
+
+// Remove deletes an object, answers nil for one already gone, and takes with its last object each
+// directory the key made below its first two segments: a log's run, task and dispatch go, and the
+// namespace's logs and sha256 directories stay, as does a directory still holding something.
+func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
+	root := t.TempDir()
+	objects := artifact.Dir(root)
+	artifactKey := artifact.Key("acme", sha256OfHello)
+	logs := []string{
+		"acme/logs/run-1/task-a/dispatch-1/0000000001-" + sha256OfHello,
+		"acme/logs/run-1/task-a/dispatch-1/0000000002-" + sha256OfHello,
+		"acme/logs/run-1/task-b/dispatch-1/0000000001-" + sha256OfHello,
+	}
+	for _, key := range append([]string{artifactKey}, logs...) {
+		if err := objects.Put(t.Context(), key, strings.NewReader("hello")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(rel string) bool {
+		_, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+		return err == nil
+	}
+
+	if err := objects.Remove(t.Context(), artifactKey); err != nil {
+		t.Fatal(err)
+	}
+	if exists(artifactKey) || !exists("acme/sha256") {
+		t.Errorf("after removing the only artifact: the object held %t, acme/sha256 held %t", exists(artifactKey), exists("acme/sha256"))
+	}
+	if err := objects.Remove(t.Context(), artifactKey); err != nil {
+		t.Errorf("removing an object already gone: %v", err)
+	}
+
+	if err := objects.Remove(t.Context(), logs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if exists(logs[0]) || !exists("acme/logs/run-1/task-a/dispatch-1") {
+		t.Error("removing one chunk of two took the other's directory, or left the chunk")
+	}
+	if err := objects.Remove(t.Context(), logs[1]); err != nil {
+		t.Fatal(err)
+	}
+	if exists("acme/logs/run-1/task-a") || !exists("acme/logs/run-1/task-b/dispatch-1") {
+		t.Error("removing a task's last chunk left its directories, or took another task's")
+	}
+	if err := objects.Remove(t.Context(), logs[2]); err != nil {
+		t.Fatal(err)
+	}
+	if exists("acme/logs/run-1") || !exists("acme/logs") {
+		t.Errorf("removing a run's last chunk: the run's directory held %t, acme/logs held %t", exists("acme/logs/run-1"), exists("acme/logs"))
 	}
 }
 
