@@ -293,6 +293,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool}); err != nil {
 		return nil, err
 	}
+	// The service accounts themselves, created, listed and removed by whoever owns their namespace.
+	if _, err := api.NewServiceAccounts(rt, api.ServiceAccountOptions{Pool: pool}); err != nil {
+		return nil, err
+	}
 	return rt, nil
 }
 

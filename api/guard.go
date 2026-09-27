@@ -297,7 +297,8 @@ func (ForRunner) guards() guard { return guard{runner: true} }
 // Own is a route about the caller's own credentials, and those of the service accounts of the
 // namespaces it owns: "an API token for the caller or a service account of a namespace it owns",
 // the listing of "the caller's tokens and those of the service accounts of namespaces it owns",
-// and the revocation of one of them.
+// and the revocation of one of them; and about those service accounts themselves, "the service
+// accounts of the namespaces the caller owns, and a new one in one of them", and the removal of one.
 //
 // Any principal reaches it and it needs no permission, since what it answers is the caller's own,
 // and holding a credential or owning a namespace is none of the nine. It is registered with

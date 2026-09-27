@@ -26,7 +26,8 @@ import (
 // use and device label", "expires after 90 days unless asked otherwise, and after a year at most",
 // and a scope that "can only narrow".
 
-// tokened is an installation for the token routes, on a clock the test moves.
+// tokened is an installation for the token routes and the service account routes, on a clock the
+// test moves.
 //
 // finance holds monthly-invoicing, and hr holds nothing. alice owns finance, and bob's personal
 // namespace, which bob shares with her as owner; bob edits finance and owns monthly-invoicing alone,
@@ -141,6 +142,9 @@ func tokenedInstallation(t *testing.T) *tokened {
 		t.Fatal(err)
 	}
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewServiceAccounts(rt, api.ServiceAccountOptions{Pool: pool}); err != nil {
 		t.Fatal(err)
 	}
 	// A route needing grant:manage in a namespace, to see what a minted token opens.

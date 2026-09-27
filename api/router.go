@@ -325,7 +325,10 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 // Separate from Handle for the reason HandleAcross is: the handler is given a Caller in place of a
 // target, since what it answers is the caller's own and there is nothing in its path to authorise.
 // Its pattern names no namespace, workflow, run or artifact, each of which is a target a handler
-// could be handed unauthorised, and the authorizer has to say what a principal owns.
+// could be handed unauthorised, and the authorizer has to say what a principal owns. The one
+// namespace such a path names is {ns}, the namespace of a service account, which is no target of a
+// permission but something the caller owns or does not, and its handler answers one the caller does
+// not own as absent: see NewServiceAccounts.
 func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
 	if h == nil {
 		return fmt.Errorf("api: %s %s has no handler", method, pattern)
