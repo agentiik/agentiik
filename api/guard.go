@@ -557,19 +557,15 @@ type Principal string
 //
 // Enrolling is set for a session that may only enrol, which "enrols passkeys and nothing else": the
 // router refuses it on every route it authorises by who asks, with the 403 the OpenAPI document
-// names, and the registration ceremony reads it itself, as setting the password that opened it does.
-// OpenedByCode says it is one an enrolment code opened, which no route opens since the code travels
-// in the registration's options instead, and which the ceremony refuses as well: it would register a
-// passkey without spending its code. The other, a session a password opened where the policy
-// requires a passkey, is Enrolling without OpenedByCode, and registers a passkey, and sets its
-// password, as any session of its user does.
+// names, and the registration ceremony reads it itself, as setting the password that opened it does:
+// such a session, one a password opened where the policy requires a passkey, registers a passkey
+// and sets its password, as any session of its user does.
 type Identity struct {
-	Principal    Principal
-	Scope        access.TokenScope
-	Enrolling    bool
-	OpenedByCode bool
-	RefusedAs    int
-	Refused      string
+	Principal Principal
+	Scope     access.TokenScope
+	Enrolling bool
+	RefusedAs int
+	Refused   string
 
 	// Token is the identifier of the API token presented, which a caller revokes and lists
 	// itself by, and empty for any other credential.

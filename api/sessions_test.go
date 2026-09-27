@@ -18,16 +18,16 @@ import (
 
 // The console's session, against a real PostgreSQL: an opaque identifier in a __Host- cookie, kept
 // as its SHA-256, which lives twelve hours idle and thirty days at most, is revoked at once, is
-// confined to enrolling where an enrolment code opened it, changes something only from the public
-// URL's origin, and is never presented beside a bearer token.
+// confined to enrolling where a password opened it and a passkey is required, changes something
+// only from the public URL's origin, and is never presented beside a bearer token.
 
 // publicOrigin is the origin of the public URL the sessions of these tests are accepted on,
 // https://Agentiik.Example.com:443/console/, as a browser writes it.
 const publicOrigin = "https://agentiik.example.com"
 
 // sessions is the installation of principals, its Principals accepting sessions on a clock the test
-// moves. alice and carol hold a passkey each and alice a password as well; dave, suspended, holds
-// nothing.
+// moves. alice and carol hold a passkey and a password each, and a password session of either may
+// only enrol under the default policy, which requires two passkeys; dave, suspended, holds nothing.
 type sessions struct {
 	principals
 	clock *time.Time
@@ -51,6 +51,7 @@ func someSessions(t *testing.T) sessions {
 			{ID: "alice-passkey", Login: "alice", Type: db.CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)},
 			{ID: "alice-password", Login: "alice", Type: db.CredentialPassword, PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"},
 			{ID: "carol-passkey", Login: "carol", Type: db.CredentialPasskey, PublicKey: []byte{2}, AAGUID: make([]byte, 16)},
+			{ID: "carol-password", Login: "carol", Type: db.CredentialPassword, PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"},
 		} {
 			if err := w.AddCredential(ctx, c); err != nil {
 				return err
@@ -83,20 +84,6 @@ func (in sessions) opening(t *testing.T, login string, by api.OpenedBy) (*http.C
 		return err
 	})
 	return c, err
-}
-
-// recovery issues a recovery code for login and answers the hash it is kept as.
-func (in sessions) recovery(t *testing.T, login, value string) []byte {
-	t.Helper()
-	code := db.EnrolmentCode{Hash: hashOf(value), Login: login, Kind: db.EnrolmentRecovery, IssuedBy: "carol",
-		IssuedAt: *in.clock, ExpiresAt: in.clock.Add(time.Hour)}
-	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		_, err := w.IssueEnrolmentCode(ctx, code)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return code.Hash
 }
 
 // request is a request to path by method, carrying the cookies given and the Origin header where
@@ -168,14 +155,13 @@ func TestASessionIsAnOpaqueHostCookieKeptAsItsHash(t *testing.T) {
 
 	var credential string
 	var created, idle time.Time
-	var code []byte
 	if err := dbtest.Superuser(t, in.super).QueryRow(t.Context(),
-		`select credential, enrolment_code, created_at, idle_expires_at from sessions where hash = $1 and login = 'alice'`,
-		hashOf(c.Value)).Scan(&credential, &code, &created, &idle); err != nil {
+		`select credential, created_at, idle_expires_at from sessions where hash = $1 and login = 'alice'`,
+		hashOf(c.Value)).Scan(&credential, &created, &idle); err != nil {
 		t.Fatalf("no session is kept under the SHA-256 of the cookie's value: %s", err)
 	}
-	if credential != "alice-passkey" || code != nil || !created.Equal(in.now) || !idle.Equal(in.now.Add(12*time.Hour)) {
-		t.Errorf("the session is kept as opened by %q and %x at %s, idle at %s", credential, code, created, idle)
+	if credential != "alice-passkey" || !created.Equal(in.now) || !idle.Equal(in.now.Add(12*time.Hour)) {
+		t.Errorf("the session is kept as opened by %q at %s, idle at %s", credential, created, idle)
 	}
 
 	if as := in.asked(t, "GET", "", c); as.Principal != "alice" || as.Enrolling || as.Refused != "" {
@@ -300,12 +286,11 @@ func TestASessionRevokedOpensNothingFromTheNextRequest(t *testing.T) {
 	}
 }
 
-// A session an enrolment code opened is known as one, and the router refuses it on every route it
-// authorises by who asks, with the 403 the OpenAPI document names rather than the 404 a namespaced
-// route answers anything else with; the same user's full session reaches them. A suspended user's
-// code still opens one, since enrolling is how such an account comes back, and their credential
-// opens none.
-func TestASessionAnEnrolmentCodeOpenedEnrolsAndReachesNothingElse(t *testing.T) {
+// A session a password opened where a passkey is required may only enrol: the router refuses it on
+// every route it authorises by who asks, with the 403 the OpenAPI document names rather than the 404
+// a namespaced route answers anything else with, and the same user's full session reaches them. A
+// suspended user's credential opens no session at all.
+func TestASessionThatMayOnlyEnrolReachesNothingElse(t *testing.T) {
 	in := someSessions(t)
 	rt, err := api.NewRouter(in.p, in.p.Identify)
 	if err != nil {
@@ -322,10 +307,10 @@ func TestASessionAnEnrolmentCodeOpenedEnrolsAndReachesNothingElse(t *testing.T) 
 			w.WriteHeader(http.StatusOK)
 		})
 
-	carolEnrolling := in.open(t, "carol", api.OpenedBy{EnrolmentCode: in.recovery(t, "carol", "carol-recovery")})
-	aliceEnrolling := in.open(t, "alice", api.OpenedBy{EnrolmentCode: in.recovery(t, "alice", "alice-recovery")})
+	carolEnrolling := in.open(t, "carol", api.OpenedBy{Credential: "carol-password"})
+	aliceEnrolling := in.open(t, "alice", api.OpenedBy{Credential: "alice-password"})
 	if as := in.asked(t, "GET", "", aliceEnrolling); as.Principal != "alice" || !as.Enrolling {
-		t.Errorf("a session a recovery code opened identified %+v", as)
+		t.Errorf("a session a password opened where a passkey is required identified %+v", as)
 	}
 	for _, c := range []struct {
 		method, path string
@@ -352,17 +337,7 @@ func TestASessionAnEnrolmentCodeOpenedEnrolsAndReachesNothingElse(t *testing.T) 
 		}
 	}
 
-	// dave is suspended: his recovery code opens a session that may only enrol, and his passkey
-	// none.
-	daves := in.open(t, "dave", api.OpenedBy{EnrolmentCode: in.recovery(t, "dave", "dave-recovery")})
-	if as := in.asked(t, "GET", "", daves); as.Principal != "dave" || !as.Enrolling {
-		t.Errorf("a suspended user's recovery session identified %+v", as)
-	}
-	w := httptest.NewRecorder()
-	rt.ServeHTTP(w, request(t, "GET", "/api/v1/namespaces", "", daves))
-	if w.Code != http.StatusForbidden {
-		t.Errorf("a suspended user's recovery session was answered %d on a listing", w.Code)
-	}
+	// dave is suspended: his passkey opens no session.
 	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
 		return w.AddCredential(ctx, db.Credential{ID: "dave-passkey", Login: "dave", Type: db.CredentialPasskey, PublicKey: []byte{3}, AAGUID: make([]byte, 16)})
 	}); err != nil {
@@ -373,49 +348,15 @@ func TestASessionAnEnrolmentCodeOpenedEnrolsAndReachesNothingElse(t *testing.T) 
 	}
 }
 
-// A session is opened by a credential of its own user or by an enrolment code, one of the two, and
-// a code opens one session at most.
-func TestASessionIsOpenedByOneThingOfItsOwnUser(t *testing.T) {
+// A session is opened by a credential of its own user: none named is refused before the database is
+// asked, saying so, and another user's is refused by the database.
+func TestASessionIsOpenedByACredentialOfItsOwnUser(t *testing.T) {
 	in := someSessions(t)
-	code := in.recovery(t, "alice", "alice-recovery")
-	// Neither, or both, is refused before the database is asked, saying so.
-	for what, by := range map[string]api.OpenedBy{
-		"nothing": {}, "a credential and a code": {Credential: "alice-passkey", EnrolmentCode: code},
-	} {
-		if c, err := in.opening(t, "alice", by); c != nil || err == nil || !strings.Contains(err.Error(), "one of the two") {
-			t.Errorf("a session opened by %s was answered %v, %v", what, c, err)
-		}
+	if c, err := in.opening(t, "alice", api.OpenedBy{}); c != nil || err == nil || !strings.Contains(err.Error(), "none was named") {
+		t.Errorf("a session opened by nothing was answered %v, %v", c, err)
 	}
-	for what, c := range map[string]struct {
-		login string
-		by    api.OpenedBy
-		want  error
-	}{
-		"another user's credential":    {"alice", api.OpenedBy{Credential: "carol-passkey"}, db.ErrNoCredential},
-		"another user's code":          {"carol", api.OpenedBy{EnrolmentCode: code}, db.ErrSessionRefused},
-		"a code that was never issued": {"alice", api.OpenedBy{EnrolmentCode: hashOf("never")}, db.ErrSessionRefused},
-	} {
-		if cookie, err := in.opening(t, c.login, c.by); cookie != nil || !errors.Is(err, c.want) {
-			t.Errorf("a session opened by %s was answered %v, %v", what, cookie, err)
-		}
-	}
-	in.open(t, "alice", api.OpenedBy{EnrolmentCode: code})
-	if _, err := in.opening(t, "alice", api.OpenedBy{EnrolmentCode: code}); !errors.Is(err, db.ErrSessionRefused) {
-		t.Errorf("a code opened a second session, answered %v", err)
-	}
-
-	// A code a registration spent with no session behind it opens none afterwards, to whoever
-	// finds the link in a browser's history.
-	spent := in.recovery(t, "carol", "carol-recovery")
-	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
-		_, err := w.UseEnrolmentCode(ctx, spent, *in.clock)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	*in.clock = in.clock.Add(time.Minute)
-	if c, err := in.opening(t, "carol", api.OpenedBy{EnrolmentCode: spent}); c != nil || !errors.Is(err, db.ErrSessionRefused) {
-		t.Errorf("a code spent a minute before opened a session: %v, %v", c, err)
+	if c, err := in.opening(t, "alice", api.OpenedBy{Credential: "carol-passkey"}); c != nil || !errors.Is(err, db.ErrNoCredential) {
+		t.Errorf("a session opened by another user's credential was answered %v, %v", c, err)
 	}
 }
 

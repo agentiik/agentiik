@@ -303,10 +303,10 @@ func TestAPasswordOpensAFullSessionWhereThePolicyIsMet(t *testing.T) {
 	if code, body := in.me(t, c); code != http.StatusOK || !strings.Contains(body, `"finance"`) {
 		t.Errorf("GET /api/v1/me with the session answered %d %s", code, body)
 	}
-	if as, err := in.p.Identify(request(t, "GET", "/api/v1/me", "", c)); err != nil || as.Principal != "alice" || as.Enrolling || as.OpenedByCode {
+	if as, err := in.p.Identify(request(t, "GET", "/api/v1/me", "", c)); err != nil || as.Principal != "alice" || as.Enrolling {
 		t.Errorf("the session identified %+v: %v", as, err)
 	}
-	if n := in.count(t, `select count(*) from sessions where login = 'alice' and credential = 'alice-password' and enrolment_code is null`); n != 1 {
+	if n := in.count(t, `select count(*) from sessions where login = 'alice' and credential = 'alice-password'`); n != 1 {
 		t.Errorf("%d sessions of alice were opened by her password", n)
 	}
 	if n := in.count(t, `select count(*) from credentials where id = 'alice-password' and last_used_at = $1`, *in.clock); n != 1 {
@@ -326,8 +326,7 @@ func TestAPasswordOpensAFullSessionWhereThePolicyIsMet(t *testing.T) {
 
 // Where a passkey is required, the defaults, a password opens a session that enrols passkeys and
 // nothing else until its account holds min_passkeys the policy accepts: it reads nothing and mints
-// no token, as a session an enrolment link opened, and is told apart from one by not being opened by
-// a code. A first passkey registered from it leaves it confined, one of the two min_passkeys asks
+// no token. A first passkey registered from it leaves it confined, one of the two min_passkeys asks
 // for; the second takes the password, recorded as credential.remove, and the session it opened goes
 // with it, since the account signs in with its passkeys from then on. An account holding one passkey
 // of two signs in to a session that only enrols, and so does one holding one of one, while a passkey
@@ -336,7 +335,7 @@ func TestAPasswordOpensASessionThatOnlyEnrolsUntilMinPasskeysAreHeld(t *testing.
 	in := somePasswords(t)
 	c := in.signedIn(t, "alice", api.SessionEnrolment)
 
-	if as, err := in.p.Identify(request(t, "GET", "/api/v1/me", "", c)); err != nil || as.Principal != "alice" || !as.Enrolling || as.OpenedByCode {
+	if as, err := in.p.Identify(request(t, "GET", "/api/v1/me", "", c)); err != nil || as.Principal != "alice" || !as.Enrolling {
 		t.Errorf("the session identified %+v: %v", as, err)
 	}
 	if code, body := in.me(t, c); code != http.StatusForbidden || !strings.Contains(body, "this session enrols passkeys and nothing else") {

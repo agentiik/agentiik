@@ -244,7 +244,7 @@ func TestAnEnrolmentCodeSetsOnePasswordWhenSentTwiceAtOnce(t *testing.T) {
 		t.Errorf("two passwords set with one code answered %v", codes)
 	}
 	if n := in.count(t, `select count(*) from sessions where login = 'erin'`); n != 1 {
-		t.Errorf("one code opened %d sessions", n)
+		t.Errorf("the password one code set opened %d sessions", n)
 	}
 	if n := in.count(t, `select count(*) from audit_log where action = 'enrolment.use'`); n != 1 {
 		t.Errorf("one code was used %d times", n)
@@ -571,7 +571,7 @@ func TestAPasswordIsChangedWithTheCurrentOne(t *testing.T) {
 
 // A session a passkey opened sets a first password with no current one, and one sent there is 400,
 // as a password that is the login is 422; a session that may only enrol, which a password opened,
-// changes it with the current one; a session an enrolment code opened sets nothing.
+// changes it with the current one.
 func TestAPasswordIsSetFromAnySessionOfItsUser(t *testing.T) {
 	in := somePasswords(t)
 	in.policy(t, "allowed", "optional")
@@ -606,14 +606,6 @@ func TestAPasswordIsSetFromAnySessionOfItsUser(t *testing.T) {
 	}
 	if !in.matches(t, "alice", "alice's new passphrase") {
 		t.Error("alice's password is not the new one")
-	}
-
-	coded, err := in.opening(t, "carol", api.OpenedBy{EnrolmentCode: hashOf(in.enrolCode(t, "carol", db.EnrolmentRecovery))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w := in.call(t, "PUT", "/api/v1/me/password", `{"password":"carol's new passphrase","current_password":"carol's own"}`, coded); w.Code != http.StatusForbidden {
-		t.Errorf("a session a code opened answered %d %s", w.Code, w.Body)
 	}
 }
 

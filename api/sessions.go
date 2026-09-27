@@ -19,16 +19,16 @@ import (
 )
 
 // The console's session: "an opaque session identifier in a cookie: HttpOnly, Secure, SameSite=Lax.
-// Revocable server-side, idle expiry. Records the credential or the enrolment link that opened it,
-// so an enrolment-only session is known server-side, not by convention."
+// Revocable server-side, idle expiry. Records the credential that opened it, so that what it may do
+// is read at every request from that credential and the policy that applies then, not by
+// convention."
 //
 // OpenSession opens one, for the sign-in routes to call once a passkey or a password has proved who
 // is there; Principals.Identify reads it back on every request, beside the bearer token.
 //
 // A session ends when its holder signs out, POST /api/v1/auth/sign-out, which the sign-in page
-// offers; idle, at its lifetime, with its credential, while its user is suspended, and, for one a
-// link opened, with the link or the one replacing it. The identifier is 256 bits from the operating
-// system's generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the
+// offers; idle, at its lifetime, with its credential, and while its user is suspended. The
+// identifier is 256 bits from the operating system's generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the
 // table opens nothing to whoever reads it.
 
 // SessionCookie is the cookie a session travels in, as the OpenAPI document's session scheme names
@@ -86,22 +86,20 @@ const (
 	tokenSignsNothingOut = "a sign-out ends the session a browser's cookie carries, and this request carries a bearer token: a token is revoked with DELETE /api/v1/auth/tokens/{id}"
 )
 
-// OpenedBy is what opens a session, one of the two: a credential of its user, named by its
-// identifier, which opens a session reaching what the user's grants allow; or an enrolment code,
-// named by the SHA-256 its value is kept as, which opens one that enrols passkeys and nothing else
-// and ends with the code's hour. No route opens one with a code: the passkey ceremonies take the
-// code in the registration's options and spend it when the passkey is recorded, and refuse a
-// session a code opened, which would register a passkey without spending it.
+// OpenedBy is what opens a session: a credential of its user, named by its identifier, which opens
+// a session reaching what the user's grants allow. An enrolment code opens none: the passkey
+// ceremonies take the code in the registration's options and spend it when the passkey is recorded,
+// which signs its user in with that passkey, and a password set from a code signs them in with the
+// password.
 //
-// A session a password opened may only enrol as well, wherever the policy that applies to its
-// account requires a passkey, whatever passkeys the account holds, where the OpenAPI document's
+// A session a password opened may only enrol, wherever the policy that applies to its account
+// requires a passkey, whatever passkeys the account holds, where the OpenAPI document's
 // sessionKind says so of an account holding none yet: the passkey that brings the account to
 // min_passkeys takes the password, and a password found beside them opens no more (policy.go). That
 // is read from the credential the session records, at every request, and never written: see
 // identifySession.
 type OpenedBy struct {
-	Credential    string
-	EnrolmentCode []byte
+	Credential string
 }
 
 // OpenSession opens a session of login at now, in the transaction w is, and answers the cookie that
@@ -114,13 +112,10 @@ type OpenedBy struct {
 // carries no expiry, as the OpenAPI document's example carries none, so that a browser closed ends
 // it too: the server ends it after SessionIdle without a request and SessionLifetime at most.
 //
-// A suspended user opens none with a credential, which is db.ErrSessionRefused, and opens one with
-// an enrolment code all the same, since "enrolling is how an account suspended for having no
-// passkey comes back"; a code revoked, past its hour, spent before now or that opened a session
-// already opens none.
+// A suspended user opens none, which is db.ErrSessionRefused.
 func OpenSession(ctx context.Context, w *db.Wide, login string, by OpenedBy, now time.Time) (*http.Cookie, error) {
-	if (by.Credential == "") == (len(by.EnrolmentCode) == 0) {
-		return nil, errors.New("api: a session is opened by a credential or by an enrolment code, one of the two")
+	if by.Credential == "" {
+		return nil, errors.New("api: a session is opened by a credential of its user, and none was named")
 	}
 	raw := make([]byte, sessionBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -129,7 +124,7 @@ func OpenSession(ctx context.Context, w *db.Wide, login string, by OpenedBy, now
 	value := base64.RawURLEncoding.EncodeToString(raw)
 	hash := sha256.Sum256([]byte(value))
 	err := w.OpenSession(ctx, db.Session{
-		Hash: hash[:], Login: login, Credential: by.Credential, EnrolmentCode: by.EnrolmentCode,
+		Hash: hash[:], Login: login, Credential: by.Credential,
 		CreatedAt: now, IdleExpiresAt: now.Add(SessionIdle),
 	})
 	if err != nil {
@@ -189,9 +184,8 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // nothing where passwords are forbidden, since the policy says no password exists any more and
 // whatever one opened goes with it; enrolling alone where a passkey is required, which the
 // account's passkeys, not its password, are the way past; and whatever the user's grants allow
-// otherwise. Such a session is enrolling without having been opened by a code, which the
-// registration ceremony tells apart: it registers from it. A session a synced passkey opened opens
-// nothing where device_bound_only applies, read the same way.
+// otherwise. Such a session is enrolling, and the registration ceremony registers from it. A session
+// a synced passkey opened opens nothing where device_bound_only applies, read the same way.
 //
 // The first request of an administrator's full session ends the bootstrap token where it has not
 // ended, recorded as bootstrap.end: a session a password opened while the policy required a passkey
@@ -230,7 +224,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 		if until.Sub(s.IdleExpiresAt) >= sessionTouch {
 			err := w.TouchSession(ctx, hash[:], now, until)
 			if errors.Is(err, db.ErrNoSession) {
-				// Revoked, or ended with its code, since it was read.
+				// Revoked since it was read.
 				return nil
 			}
 			if err != nil {
@@ -244,7 +238,7 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 			}
 			ending = !b.Ended()
 		}
-		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, OpenedByCode: len(s.EnrolmentCode) > 0, ProvedAt: s.CreatedAt}
+		as = Identity{Principal: Principal(s.Login), Enrolling: enrolling, ProvedAt: s.CreatedAt}
 		return nil
 	})
 	if err != nil {
@@ -261,7 +255,6 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 // sessionOpens says whether s opens anything at now, and whether it may only enrol, read from the
 // credential that opened it and the policy that applies to its account now: see identifySession.
 func (p *Principals) sessionOpens(ctx context.Context, w *db.Wide, s db.Session, now time.Time) (opens, enrolling bool, err error) {
-	enrolling = len(s.EnrolmentCode) > 0
 	switch {
 	case s.CredentialType == db.CredentialPassword:
 		policy, err := policyFor(ctx, w, s.Login, now, p.ipAddressed)

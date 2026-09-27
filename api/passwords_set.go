@@ -116,9 +116,6 @@ const (
 	// token.
 	credentialsFromASession = "a password and a TOTP generator are set and removed from a browser's session, on the sign-in page, and this request carries a bearer token: a token that leaked would otherwise be a way to a credential that outlives it"
 
-	// sessionOfACodeSets is a password set from a session an enrolment code opened.
-	sessionOfACodeSets = "this session was opened by an enrolment link, and sets nothing: open the link again, whose code sets the password"
-
 	// currentMismatch is a password changed with a current one that does not match.
 	currentMismatch = "the current password does not match, and the password is left as it was"
 
@@ -497,8 +494,7 @@ func sessionUser(w http.ResponseWriter, caller Caller) (string, bool) {
 // setter is who a request setting a password is from: the user whose browser's session it carries,
 // a full one or one that may only enrol, and false where it has answered the request already. A
 // bearer token is refused whatever it names, as a request carrying one and a session is refused
-// everywhere; a session an enrolment code opened is refused as the registration ceremony refuses it,
-// since the code, not the session, is what sets a password from a link.
+// everywhere.
 func (s *PasswordAPI) setter(w http.ResponseWriter, r *http.Request) (Identity, bool) {
 	as, err := s.identify(r)
 	switch {
@@ -510,9 +506,6 @@ func (s *PasswordAPI) setter(w http.ResponseWriter, r *http.Request) (Identity, 
 		return Identity{}, false
 	case as.Token != "" || as.Principal == BootstrapOperator:
 		fail(w, http.StatusForbidden, credentialsFromASession)
-		return Identity{}, false
-	case as.OpenedByCode:
-		fail(w, http.StatusForbidden, sessionOfACodeSets)
 		return Identity{}, false
 	}
 	return as, true

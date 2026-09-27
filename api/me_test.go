@@ -207,9 +207,9 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 	}
 }
 
-// A console session is a credential as a token is: a full one reads who its user is, and one an
-// enrolment code opened, which "enrols passkeys and nothing else", is refused on GET /api/v1/me, on
-// the dismissal and on the grant routes with the 403 openapi.json names.
+// A console session is a credential as a token is: a full one reads who its user is, and one a
+// password opened where a passkey is required, which "enrols passkeys and nothing else", is refused
+// on GET /api/v1/me, on the dismissal and on the grant routes with the 403 openapi.json names.
 func TestASessionThatMayOnlyEnrolReadsNoIdentityAndSharesNothing(t *testing.T) {
 	in := someSessions(t)
 	rt, err := api.NewRouter(in.p, in.p.Identify)
@@ -229,7 +229,7 @@ func TestASessionThatMayOnlyEnrolReadsNoIdentityAndSharesNothing(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &me) != nil || me.Principal != "carol" || !me.Admin {
 		t.Errorf("carol's full session reading who she is answered %d: %s", w.Code, w.Body)
 	}
-	enrolling := in.open(t, "carol", api.OpenedBy{EnrolmentCode: in.recovery(t, "carol", "carol-recovery")})
+	enrolling := in.open(t, "carol", api.OpenedBy{Credential: "carol-password"})
 	for _, c := range []struct{ method, path string }{
 		{"GET", "/api/v1/me"},
 		{"DELETE", "/api/v1/me/notifications/01JQ5P"},

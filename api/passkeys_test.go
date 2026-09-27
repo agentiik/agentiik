@@ -723,9 +723,7 @@ func TestAnEnrolmentCodeIsSpentByTheRegistrationItStarted(t *testing.T) {
 
 // A signed-in user registers another passkey from their session, one the options exclude the
 // first from, and the registration opens no other session. Without a session or a code, or with a
-// bearer token, nothing is registered, and neither with a session an enrolment code opened, which
-// would register a passkey without spending the code, and without ending the bootstrap where the
-// code is the first administrator's.
+// bearer token, nothing is registered.
 func TestASignedInUserRegistersAnotherPasskeyFromTheirSession(t *testing.T) {
 	in := someCeremonies(t)
 	phone := newBrowser()
@@ -783,22 +781,6 @@ func TestASignedInUserRegistersAnotherPasskeyFromTheirSession(t *testing.T) {
 		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "carries neither") {
 			t.Errorf("a registration carrying %s answered %d %s", name, w.Code, w.Body)
 		}
-	}
-
-	code := in.user(t, "alice", true)
-	var coded *http.Cookie
-	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
-		var err error
-		coded, err = api.OpenSession(ctx, wide, "alice", api.OpenedBy{EnrolmentCode: hashOf(code)}, *in.clock)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", `{"ceremony":"registration"}`, "", coded); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "opened by an enrolment link") {
-		t.Errorf("a registration from a session an enrolment code opened answered %d %s", w.Code, w.Body)
-	}
-	if w := in.bearer(t, "GET", "/api/v1/users", in.bootstrap, ""); w.Code != http.StatusOK {
-		t.Errorf("the bootstrap token answered %d once a session of the first administrator's code was refused", w.Code)
 	}
 }
 
@@ -1170,8 +1152,8 @@ func TestADenyAloneBringsNoNamespacesPolicyToASignIn(t *testing.T) {
 	}
 }
 
-// A session that may only enrol, and that no enrolment code opened, as the password sign-in's will
-// be, registers a passkey: the router refuses it everywhere else, and the ceremony reads it itself.
+// A session that may only enrol, as the password sign-in's is where a passkey is required,
+// registers a passkey: the router refuses it everywhere else, and the ceremony reads it itself.
 func TestASessionThatMayOnlyEnrolRegistersAPasskey(t *testing.T) {
 	pool, _ := dbtest.Open(t)
 	now := time.Now().UTC().Truncate(time.Second)
