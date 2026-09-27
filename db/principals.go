@@ -175,6 +175,26 @@ func (w *Wide) Group(ctx context.Context, name string) (Group, error) {
 	return g, nil
 }
 
+// Groups is the listing, ordered by name, each with its members ordered by login.
+func (w *Wide) Groups(ctx context.Context) ([]Group, error) {
+	rows, err := w.tx.Query(ctx,
+		`select g.name, g.created_at, coalesce(array_agg(m.login order by m.login) filter (where m.login is not null), '{}')
+		   from groups g left join group_members m on m.group_name = g.name
+		  group by g.name order by g.name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the groups could not be read: %w", err)
+	}
+	groups, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Group, error) {
+		var g Group
+		err := row.Scan(&g.Name, &g.CreatedAt, &g.Members)
+		return g, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("db: the groups could not be read: %w", err)
+	}
+	return groups, nil
+}
+
 // AddMember puts a user in a group, and answers whether they were not in it already. Membership
 // touches no grant: the group's grants are what its members gain.
 func (w *Wide) AddMember(ctx context.Context, group, login string) (bool, error) {
@@ -280,6 +300,20 @@ func (w *Wide) PrincipalKind(ctx context.Context, principal string) (string, err
 		return "", fmt.Errorf("db: principal %s could not be read: %w", principal, err)
 	}
 	return kind, nil
+}
+
+// NamespacesOwnedBy answers the namespaces whose record names principal as owner, ordered by name,
+// which is what refuses its removal.
+func (w *Wide) NamespacesOwnedBy(ctx context.Context, principal string) ([]Namespace, error) {
+	rows, err := w.tx.Query(ctx, `select `+namespaceColumns+` from namespaces where owner = $1 order by name`, principal)
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces %s owns could not be read: %w", principal, err)
+	}
+	owned, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Namespace, error) { return scanNamespace(row) })
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces %s owns could not be read: %w", principal, err)
+	}
+	return owned, nil
 }
 
 // RemovePrincipal removes a user, a group or a service account, and everything it holds with it:

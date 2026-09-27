@@ -179,6 +179,53 @@ func TestAUserAGroupAndAServiceAccountAreEachOnePrincipal(t *testing.T) {
 	}
 }
 
+// The groups are listed by name, each with its members by login and an empty one with none, and
+// the namespaces a principal owns are the ones whose record names it.
+func TestGroupsAreListedWithTheirMembersAndWhatAPrincipalOwnsIsFound(t *testing.T) {
+	pool := identity(t)
+	var groups []Group
+	var owned, none []Namespace
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		for _, u := range []string{"bob", "alice"} {
+			if err := w.CreateUser(ctx, User{Login: u, DisplayName: u}); err != nil {
+				return err
+			}
+		}
+		for _, g := range []string{"team-finance", "finance-leads"} {
+			if err := w.CreateGroup(ctx, g); err != nil {
+				return err
+			}
+		}
+		for _, u := range []string{"bob", "alice"} {
+			if _, err := w.AddMember(ctx, "team-finance", u); err != nil {
+				return err
+			}
+		}
+		if _, err := w.tx.Exec(ctx, `update namespaces set owner = 'group:team-finance' where name in ('team-ops', 'finance')`); err != nil {
+			return err
+		}
+		var err error
+		if groups, err = w.Groups(ctx); err != nil {
+			return err
+		}
+		if owned, err = w.NamespacesOwnedBy(ctx, "group:team-finance"); err != nil {
+			return err
+		}
+		none, err = w.NamespacesOwnedBy(ctx, "alice")
+		return err
+	})
+	if len(groups) != 2 || groups[0].Name != "finance-leads" || len(groups[0].Members) != 0 || groups[0].Members == nil ||
+		groups[1].Name != "team-finance" || !slices.Equal(groups[1].Members, []string{"alice", "bob"}) || groups[1].CreatedAt.IsZero() {
+		t.Errorf("the groups are listed as %+v", groups)
+	}
+	if len(owned) != 2 || owned[0].Name != "finance" || owned[1].Name != "team-ops" || owned[0].Owner != "group:team-finance" {
+		t.Errorf("the group owns %+v", owned)
+	}
+	if len(none) != 0 {
+		t.Errorf("alice, who owns nothing, owns %+v", none)
+	}
+}
+
 func TestACredentialIsARowOfItsOwn(t *testing.T) {
 	pool := identity(t)
 	ctx := t.Context()
