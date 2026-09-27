@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html"
 	"html/template"
 	"net/http"
@@ -544,5 +546,134 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 	}
 	for _, f := range out.Failures {
 		t.Error(f)
+	}
+}
+
+// qrCase is one case of testdata/qr_vectors.json: a text, the version and the mask asked for where
+// one is, and what the reference encoder drew, its version, its mask, and the SHA-256 of its rows
+// joined by line feeds, with the rows themselves for a short text.
+type qrCase struct {
+	Text    string `json:"text"`
+	Version *int   `json:"version"`
+	Mask    *int   `json:"mask"`
+	Want    struct {
+		Version int      `json:"version"`
+		Mask    int      `json:"mask"`
+		SHA256  string   `json:"sha256"`
+		Rows    []string `json:"rows"`
+	} `json:"want"`
+}
+
+type qrCases struct {
+	Source string   `json:"source"`
+	Cases  []qrCase `json:"cases"`
+}
+
+func qrVectors(t *testing.T) qrCases {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/qr_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v qrCases
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// drawn is what the reference encoder drew for text with nothing forced, as the page draws it.
+func (v qrCases) drawn(text string) (qrCase, bool) {
+	for _, c := range v.Cases {
+		if c.Text == text && c.Version == nil && c.Mask == nil {
+			return c, true
+		}
+	}
+	return qrCase{}, false
+}
+
+func rowsHash(rows []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// The page's QR code encoder, qr.js, on a JavaScript engine, against what a reference encoder draws
+// for the same texts, testdata/qr_vectors.json, whose source says which and how: under each of the
+// eight masks; in each of the forty versions, at the most bytes it holds, and one byte past that,
+// which takes the next; in a version larger than the text needs; UTF-8 past ASCII; and nothing at
+// all. Every module is compared, the finders, timing, alignment, format and version information and
+// the codewords with their error correction, and so is the mask chosen by the penalty where none is
+// asked for. A text too long for any version is refused rather than drawn.
+func TestTheQRCodeIsTheReferenceEncoders(t *testing.T) {
+	engine := javaScript(t)
+	raw, err := os.ReadFile("testdata/qr_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := qrVectors(t)
+	var script bytes.Buffer
+	for _, part := range [][]byte{
+		func() []byte {
+			b, err := signinFiles.ReadFile("signin/assets/qr.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}(),
+		[]byte("const vectors = " + string(raw) + ";"),
+		func() []byte {
+			b, err := os.ReadFile("testdata/qr_harness.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}(),
+	} {
+		script.Write(part)
+		script.WriteString("\n")
+	}
+	file := filepath.Join(t.TempDir(), "qr.js")
+	if err := os.WriteFile(file, script.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), engine, file)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%s ran qr.js and failed: %s\n%s%s", filepath.Base(engine), err, stderr.String(), stdout.String())
+	}
+	var out struct {
+		Results []struct {
+			Version int      `json:"version"`
+			Mask    int      `json:"mask"`
+			Rows    []string `json:"rows"`
+			Error   string   `json:"error"`
+		} `json:"results"`
+		Refused bool `json:"refused"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
+		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
+	}
+	if len(out.Results) != len(vectors.Cases) || len(vectors.Cases) < 50 {
+		t.Fatalf("qr.js answered %d of %d cases", len(out.Results), len(vectors.Cases))
+	}
+	for i, c := range vectors.Cases {
+		got := out.Results[i]
+		name := fmt.Sprintf("case %d, %d bytes", i, len(c.Text))
+		switch {
+		case got.Error != "":
+			t.Errorf("%s: qr.js refused it: %s", name, got.Error)
+		case got.Version != c.Want.Version || got.Mask != c.Want.Mask:
+			t.Errorf("%s: qr.js drew version %d under mask %d, and the reference version %d under mask %d", name, got.Version, got.Mask, c.Want.Version, c.Want.Mask)
+		case rowsHash(got.Rows) != c.Want.SHA256:
+			if c.Want.Rows != nil {
+				t.Errorf("%s: qr.js drew\n%s\nand the reference\n%s", name, strings.Join(got.Rows, "\n"), strings.Join(c.Want.Rows, "\n"))
+			} else {
+				t.Errorf("%s: qr.js drew modules other than the reference's", name)
+			}
+		}
+	}
+	if !out.Refused {
+		t.Error("a text too long for any version was not refused with a RangeError")
 	}
 }
