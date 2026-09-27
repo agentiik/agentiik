@@ -78,8 +78,10 @@ func (c *Client) ContainerAttach(ctx context.Context, id string, o AttachOptions
 	// context is given a hand on it: cancelling closes the connection, which is what
 	// unblocks a read that would otherwise wait for a container that will never
 	// write again.
-	hijacked := &attached{conn: conn}
+	// stop is set before the watcher starts, since the watcher may close the connection,
+	// and so read stop, before this function returns.
 	stop := make(chan struct{})
+	hijacked := &attached{conn: conn, stop: stop}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -87,7 +89,6 @@ func (c *Client) ContainerAttach(ctx context.Context, id string, o AttachOptions
 		case <-stop:
 		}
 	}()
-	hijacked.stop = stop
 
 	var stdin io.WriteCloser
 	if o.Stdin {

@@ -4,6 +4,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
+### Driver
+
+- Attaching to a container no longer races its context watcher, which could read the stop channel before it was set.
+
 ### Upgrading
 
 - The v0.2.5 operator token is the bootstrap token and goes on working after the upgrade, with nothing to do by hand: `init` keeps its hash in the database from `AGK_OPERATOR_TOKEN`, the API no longer reads `AGK_OPERATOR_TOKEN_FILE`, which a v0.2.5 `compose.yaml` may go on setting, and `operator-token.sha256` is left where it was.
