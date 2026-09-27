@@ -668,7 +668,7 @@ func TestInitWarnsAndGoesOnWhereALoginHoldsTheNamespacesName(t *testing.T) {
 		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run+1)*time.Minute))); err != nil {
 			t.Fatalf("run %d with a login holding the namespace's name failed: %s\n%s", run+2, err, d.out.String())
 		}
-		if !strings.Contains(d.out.String(), "did not create namespace alice, which the settings name: it is a user's login") {
+		if !strings.Contains(d.out.String(), "did not create namespace alice, which "+config.InitNamespace+" names: it is a user's login") {
 			t.Errorf("run %d said:\n%s", run+2, d.out.String())
 		}
 	}

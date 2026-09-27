@@ -783,7 +783,7 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 	}
 	var taken loginHoldsName
 	if err := namespace(ctx, m.Application, "create", name, p.out); errors.As(err, &taken) {
-		p.say("did not create namespace %s, which the settings name: it is a user's login, and logins and namespace names share one name space, since a user's personal namespace is named after their login. init goes on without it, and says so at every run while the settings name it", name)
+		p.say("did not create namespace %s, which %s names: it is a user's login, and logins and namespace names share one name space, since a user's personal namespace is named after their login. init goes on without it, and says so at every run while %s names it", name, config.InitNamespace, config.InitNamespace)
 	} else if err != nil {
 		return err
 	}
