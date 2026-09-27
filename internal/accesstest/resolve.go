@@ -81,12 +81,12 @@ func sameSet(a, b []string) bool {
 }
 
 // Refuses holds the refusals no single route is about, each asked once: a request carrying two
-// credentials, a browser's request changing something from another origin, a token revoked, the
-// tokens nobody but a namespace's owner mints for its service account, and a version naming a
-// secret, pushed by whoever holds workflow:write on its workflow and not secret:use in its
-// namespace, and run by whoever holds workflow:run whatever else it holds. It changes nothing the
-// fixture holds but the versions it pushes, a second commit of each workflow, and the run it starts
-// of one.
+// credentials, a browser's request changing something from another origin, a deny of grant:manage
+// written on a workflow, a token revoked, the tokens nobody but a namespace's owner mints for its
+// service account, and a version naming a secret, pushed by whoever holds workflow:write on its
+// workflow and not secret:use in its namespace, and run by whoever holds workflow:run whatever else
+// it holds. It changes nothing the fixture holds but the versions it pushes, a second commit of
+// each workflow, and the run it starts of one.
 func (f *Fixture) Refuses(t testing.TB) {
 	t.Helper()
 
@@ -104,6 +104,18 @@ func (f *Fixture) Refuses(t testing.TB) {
 	if a := f.ask(t, t.Context(), "POST", "/api/v1/"+Finance+"/grants", elsewhere, refusedBody); a.Status != http.StatusForbidden {
 		t.Errorf("POST /api/v1/finance/grants from %s answered %d: %s", elsewhere.Name, a.Status, a.Body)
 	}
+
+	// A deny of grant:manage is refused on a workflow, whoever writes it: it would take from the
+	// principal it names the permission that revokes it there, and nobody locks a namespace's
+	// owners out of one of its workflows. On the namespace it is written, and revoked.
+	for _, by := range []Asker{f.Carol, f.CarolsBrowser} {
+		path := "/api/v1/" + Finance + "/workflows/" + Invoicing + "/grants"
+		if a := f.ask(t, t.Context(), "POST", path, by, api.GrantRequest{Principal: "carol", Deny: "grant:manage"}); a.Status != http.StatusUnprocessableEntity {
+			t.Errorf("POST %s denying grant:manage, as %s, answered %d, want 422: %s", path, by.Name, a.Status, a.Body)
+		}
+	}
+	denied := f.grant(t, f.Carol, Finance, api.GrantRequest{Principal: "alice", Deny: "grant:manage"})
+	f.must(t, "DELETE", "/api/v1/"+Finance+"/grants/"+denied, f.Carol, nil, http.StatusNoContent)
 
 	// A token revoked opens nothing, from its next request.
 	revoked := f.mint(t, f.BobsBrowser, "bob", api.TokenRequest{DeviceLabel: "a lost phone"})
