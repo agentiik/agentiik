@@ -158,6 +158,11 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 			func(l int64) []byte {
 				return []byte(`{"provider":"builtin","value":"` + strings.Repeat("A", int(l)-33) + `"}`)
 			}, 2, 6.0, 4.667},
+		// The namespace routes came after the reader, so encoding/json never read them.
+		{"a namespace of empty pools", func() request { return new(NamespaceRecord) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"quotas":{"allowed_runner_pools":[`, `]}}`, l, empty) }, 0, 0, 0.141},
+		{"quotas of empty pools", func() request { return new(Quotas) }, smallMaxBytes,
+			func(l int64) []byte { return filled(`{"allowed_runner_pools":[`, `]}`, l, empty) }, 0, 0, 0.141},
 	} {
 		body := c.body(c.limit)
 		if int64(len(body)) > c.limit || int64(len(body)) < c.limit-64 {
@@ -166,8 +171,13 @@ func TestNoBodyCostsMoreThanTwiceAndAHalfItsCapToRead(t *testing.T) {
 		for how, ask := range map[string]func() *http.Request{"declaring its length": declaring(body), "in chunks": chunked(body)} {
 			n, _ := spent(ask, c.into, c.limit)
 			cost := float64(n) / float64(c.limit)
-			t.Logf("%s, %s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; encoding/json spent %.1f MiB at %v MiB (x%.1f)",
-				c.name, how, float64(n)/mib, float64(c.limit)/mib, cost, c.after, c.before, c.was, c.before/c.was)
+			if c.was == 0 {
+				t.Logf("%s, %s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; a route encoding/json never read",
+					c.name, how, float64(n)/mib, float64(c.limit)/mib, cost, c.after)
+			} else {
+				t.Logf("%s, %s: %.3f MiB at a cap of %.3f MiB (x%.1f), recorded as %.3f; encoding/json spent %.1f MiB at %v MiB (x%.1f)",
+					c.name, how, float64(n)/mib, float64(c.limit)/mib, cost, c.after, c.before, c.was, c.before/c.was)
+			}
 			if cost > costsAtMost {
 				t.Errorf("%s, %s, costs %.1f MiB to read, %.1f times its cap of %.3f MiB", c.name, how, float64(n)/mib, cost, float64(c.limit)/mib)
 			}
@@ -218,6 +228,12 @@ func TestEveryBodyReadsWhatEncodingJSONWrites(t *testing.T) {
 		&Redemption{Grant: "agkgrant_x", TaskID: "01M2Z8V1P9C4XQ7K2N4D6F8H0C", IdempotencyKey: "01M2Z8V1P9C4XQ7K2N4D6F8H0B/normalize/1"},
 		&Declare{Provider: "builtin", Value: &value, Encoding: "utf-8"},
 		&Declare{Provider: "env", Path: "AGK_DEV_FINANCE_BILLING"},
+		&NamespaceRecord{Name: "finance", Kind: "shared", Owner: "group:finance-leads", Quotas: &Quotas{
+			MaxConcurrentTasks: 20, MaxRunsPerHour: 500, MaxArtifactBytes: 536870912000, MaxRetentionDays: 180,
+			MaxRunDuration: "24h", AllowedRunnerPools: []string{"default", "dmz"},
+		}},
+		&NamespaceRecord{Name: "team-ops", Owner: "bob-martin"},
+		&Quotas{MaxRunsPerHour: 60},
 	} {
 		encoded, err := json.Marshal(want)
 		if err != nil {
@@ -397,6 +413,7 @@ func TestACollectionPastItsCountIsTooLarge(t *testing.T) {
 		{"a join token's labels", namesMax, labels("labels"), func() request { return new(Issue) }, smallMaxBytes},
 		{"a machine's labels", namesMax, labels("labels"), func() request { return new(Join) }, smallMaxBytes},
 		{"a heartbeat's tasks", beatMaxTasks, labels("tasks"), func() request { return new(Beat) }, beatMaxBytes},
+		{"a namespace's allowed pools", namesMax, labels("allowed_runner_pools"), func() request { return new(Quotas) }, smallMaxBytes},
 		{"the values of a run's inputs", inputsMaxValues, func(n int) string {
 			// The inputs object is a value itself, so it holds n-1 more.
 			return entries(`{"inputs":{"a":[`, n-2, func(int) string { return `0` }) + `]}}`

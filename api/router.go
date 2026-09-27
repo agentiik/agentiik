@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -43,13 +44,18 @@ type Identify func(r *http.Request) (Identity, error)
 // either. So a route whose path goes on from /api/v1/ with a word of its own, runs, artifacts,
 // runners and the like, is held apart from those under /api/v1/{namespace}/, and a request whose
 // first segment there is one of those words is answered by the first and never by the second. The
-// words are the API's: a namespace of that name is one whose routes under /api/v1/ nothing reaches.
-// Nothing creates a namespace through the API yet; what does, and the personal namespace a login
-// is given, has to refuse them.
+// words are the API's: a namespace of that name is one whose routes under /api/v1/ nothing reaches,
+// so NamespaceName refuses them to a namespace created through the API or on the server, and the
+// personal namespace a login is given has to refuse them too.
 type Router struct {
 	mux      *http.ServeMux
 	auth     Authorizer
 	identify Identify
+
+	// holdings is what a route taking OnNamespace asks which namespaces its caller holds a grant
+	// in: the authorizer, where it says, and nil where it does not, which such a route is refused
+	// registration on.
+	holdings Holdings
 
 	// namespaced holds every route under /api/v1/{namespace}/, and words are the first
 	// segments after /api/v1/ of the routes mux holds, which a request is routed to mux by.
@@ -83,12 +89,14 @@ type Route struct {
 	// workflow the route is authorised against are the ones the run in its path is of, named by
 	// its identifier or by an artifact's URI. Across is set where the route answers what its
 	// caller holds Permission over, across the installation or across the namespace its pattern
-	// names.
-	Public bool
-	Runner bool
-	OfRun  bool
-	Across bool
-	Why    string
+	// names. Members is set where the route is answered to an administrator and to whoever holds
+	// a grant in the namespace, and needs no permission: see OnNamespace.
+	Public  bool
+	Runner  bool
+	OfRun   bool
+	Across  bool
+	Members bool
+	Why     string
 
 	// Reveals is the permission whose holder the route answers more than Permission alone
 	// is answered, where it declares one.
@@ -97,6 +105,10 @@ type Route struct {
 	// Also is the permission the route needs besides Permission where what a request carries
 	// calls for it, where it declares one.
 	Also Permission
+
+	// Own is set where the route answers about its caller's own credentials and those of the
+	// service accounts of the namespaces it owns, and needs no permission: see Own.
+	Own bool
 }
 
 // RunnerHandler is a route a runner reaches, given the machine the credential named.
@@ -111,9 +123,10 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 	if identify == nil {
 		return nil, errors.New("api: no way to say who is asking, and a request with no principal is not the same as a request from nobody")
 	}
+	holdings, _ := auth.(Holdings)
 	return &Router{
 		mux: http.NewServeMux(), namespaced: http.NewServeMux(), words: map[string]bool{},
-		auth: auth, identify: identify,
+		auth: auth, identify: identify, holdings: holdings,
 	}, nil
 }
 
@@ -204,13 +217,27 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		return fmt.Errorf("api: %s %s has no guard, and every request is authorised at the API boundary", method, pattern)
 	}
 	guard := g.guards()
+	if guard.own {
+		return fmt.Errorf("api: %s %s answers about its caller's own credentials, and is registered with HandleOwn, whose handler is given who asks and what they own", method, pattern)
+	}
 	if err := guard.check(method, pattern); err != nil {
 		return err
 	}
 	if guard.across {
 		return fmt.Errorf("api: %s %s answers across what its caller holds, and is registered with HandleAcross, whose handler is given what it may ask", method, pattern)
 	}
-	if !guard.public && !guard.run {
+	if guard.members {
+		if rt.holdings == nil {
+			return fmt.Errorf("api: %s %s is answered to whoever holds a grant in a namespace, and the authorizer does not say who does", method, pattern)
+		}
+		for _, named := range []string{"{workflow}", "{run}", "{uri}"} {
+			if strings.Contains(pattern, named) {
+				return fmt.Errorf("api: %s %s is about a namespace's record and names %s, which the record is not authorised against", method, pattern, named)
+			}
+		}
+		guard.within = strings.Contains(pattern, "{namespace}")
+	}
+	if !guard.public && !guard.run && !guard.members {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
 			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
 		}
@@ -248,7 +275,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 	rt.routes = append(rt.routes, Route{
 		Method: method, Pattern: pattern,
 		Permission: guard.permission, Scope: guard.scope,
-		Public: guard.public, OfRun: guard.run, Why: guard.why,
+		Public: guard.public, OfRun: guard.run, Members: guard.members, Why: guard.why,
 		Reveals: guard.reveals, Also: guard.also,
 	})
 	return nil
@@ -291,6 +318,63 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 	if err := rt.HandleAcross(method, pattern, g, h); err != nil {
 		panic(err.Error())
 	}
+}
+
+// HandleOwn registers one route about its caller's own credentials and what it owns.
+//
+// Separate from Handle for the reason HandleAcross is: the handler is given a Caller in place of a
+// target, since what it answers is the caller's own and there is nothing in its path to authorise.
+// Its pattern names no namespace, workflow, run or artifact, each of which is a target a handler
+// could be handed unauthorised, and the authorizer has to say what a principal owns.
+func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
+	if h == nil {
+		return fmt.Errorf("api: %s %s has no handler", method, pattern)
+	}
+	for _, named := range []string{"{namespace}", "{workflow}", "{run}", "{uri}"} {
+		if strings.Contains(pattern, named) {
+			return fmt.Errorf("api: %s %s answers about its caller's own credentials and names %s, which is a target to authorise before the handler runs rather than something the caller owns", method, pattern, named)
+		}
+	}
+	owners, ok := rt.auth.(Owners)
+	if !ok {
+		return fmt.Errorf("api: %s %s answers about the service accounts of the namespaces its caller owns, and the authorizer does not say who owns what", method, pattern)
+	}
+	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
+		rt.serveOwn(w, r, owners, h)
+	}); err != nil {
+		return err
+	}
+	rt.routes = append(rt.routes, Route{Method: method, Pattern: pattern, Scope: Installation, Own: true})
+	return nil
+}
+
+// MustHandleOwn is HandleOwn for a caller that builds its routes at start-up.
+func (rt *Router) MustHandleOwn(method, pattern string, g Own, h OwnHandler) {
+	if err := rt.HandleOwn(method, pattern, g, h); err != nil {
+		panic(err.Error())
+	}
+}
+
+// OwnHandler is a route about its caller's own credentials, given who asks, as Caller says.
+type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
+
+// serveOwn is the hook every route taking Own passes through: the caller is identified as on any
+// other route, a request with no credential is refused, and the handler is given who asks.
+//
+// It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
+// enrolment-only session, once sessions are served, "enrols passkeys and nothing else", and is
+// refused here, where openapi.json answers it 403 on each of them.
+func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
+	as, err := rt.identify(r)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
+		return
+	}
+	if as.Principal == "" {
+		unauthenticated(w, as)
+		return
+	}
+	h(w, r, Caller{Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners})
 }
 
 // AcrossHandler is a route answering across the installation or one namespace, given who asks,
@@ -452,7 +536,16 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	if g.scope == Installation {
 		asked = Target{}
 	}
-	allowed, err := rt.allow(r.Context(), as, g.permission, asked)
+	// A route taking OnNamespace asks who sees which namespace instead of a permission, and
+	// refuses one naming a namespace its caller does not see.
+	var allowed bool
+	sees := seesNothing
+	if g.members {
+		sees, err = rt.seeing(r.Context(), as)
+		allowed = err == nil && (!g.within || sees(target.Namespace))
+	} else {
+		allowed, err = rt.allow(r.Context(), as, g.permission, asked)
+	}
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
 		return
@@ -461,6 +554,9 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		rt.deny(w, g.scope)
 		return
 	}
+	// Set on every route, seeing nothing where the route does not take OnNamespace, for the
+	// reason the questions below are.
+	r = r.WithContext(context.WithValue(r.Context(), seesKey{}, sees))
 	// Set on every route, to a question answered false where the route declares none, so that a
 	// request built from this one and served again, as a facade over the API would serve one,
 	// asks what its own route declared rather than what this one did.
@@ -490,6 +586,10 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		again, err := rt.identify(request.WithContext(ctx))
 		if err != nil || again.Principal != who {
 			return false, err
+		}
+		if g.members {
+			sees, err := rt.seeing(ctx, again)
+			return err == nil && (!g.within || sees(target.Namespace)), err
 		}
 		return rt.allow(ctx, again, g.permission, asked)
 	}))
@@ -539,6 +639,29 @@ func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over 
 		return false, nil
 	}
 	return rt.auth.Allow(ctx, as.Principal, what, over)
+}
+
+// seeing is what a caller sees of the namespaces' records: every one where it administers the
+// installation through a credential that carries the power, which is asked as grant:manage there is
+// for any other administrator's route, and otherwise the namespaces it holds a grant in that its
+// credential reaches. Whether it administers is asked first, and the namespaces only where it does
+// not, since an administrator sees them all.
+func (rt *Router) seeing(ctx context.Context, as Identity) (func(string) bool, error) {
+	administers, err := rt.allow(ctx, as, GrantManage, Target{})
+	if err != nil {
+		return nil, err
+	}
+	if administers {
+		return func(namespace string) bool { return namespace != "" }, nil
+	}
+	held, err := rt.holdings.HeldIn(ctx, as.Principal)
+	if err != nil {
+		return nil, err
+	}
+	held = slices.Clone(held)
+	return func(namespace string) bool {
+		return slices.Contains(held, namespace) && as.Scope.Reaches(namespace)
+	}, nil
 }
 
 // unauthenticated answers a caller nobody was identified as: with what its identification said

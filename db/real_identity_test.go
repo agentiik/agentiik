@@ -414,12 +414,12 @@ func TestATokenOpensNothingOnceRevokedOrExpired(t *testing.T) {
 		if _, err := w.TokenByHash(ctx, token.Hash, now); !errors.Is(err, ErrNoToken) {
 			t.Errorf("a revoked token was answered %v", err)
 		}
-		listed, err := w.TokensOf(ctx, "alice")
+		listed, err := w.TokensOf(ctx, "alice", nil, now)
 		if err != nil {
 			return err
 		}
-		if len(listed) != 1 || !listed[0].RevokedAt.Equal(now) {
-			t.Errorf("alice's tokens are listed as %+v", listed)
+		if len(listed) != 0 {
+			t.Errorf("alice's revoked token is listed as %+v", listed)
 		}
 		return nil
 	})
@@ -781,7 +781,7 @@ func TestANameIsALoginOrANamespaceAndACounterMovesForward(t *testing.T) {
 		return w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"})
 	})
 	err = pool.Installation(t.Context(), NamespaceAdministration, func(ctx context.Context, w *Wide) error {
-		_, err := w.CreateNamespace(ctx, "alice")
+		_, err := w.CreateNamespace(ctx, Namespace{Name: "alice"})
 		return err
 	})
 	if !errors.Is(err, ErrNameTaken) {
@@ -876,7 +876,7 @@ func TestWhatIsSpentOrUsedIsRecordedAndNothingPastItsHour(t *testing.T) {
 		if !used.LastUsedAt.Equal(now) {
 			t.Errorf("the password reads as last used at %s", used.LastUsedAt)
 		}
-		tokens, err := w.TokensOf(ctx, "alice")
+		tokens, err := w.TokensOf(ctx, "alice", nil, now)
 		if err != nil {
 			return err
 		}

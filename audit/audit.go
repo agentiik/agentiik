@@ -62,11 +62,16 @@ const (
 	// RunnerDrain and RunnerRevoke are POST /api/v1/runners/{runner}/drain and /revoke.
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
-	// NamespaceCreate and NamespaceDelete are the namespace changes, made by agentiik-api
-	// namespace create and remove until v0.3.0's routes make them. A user's empty personal
-	// namespace removed with them is a NamespaceDelete too.
+	// NamespaceCreate, NamespaceDelete and NamespaceUpdate are the namespace changes, made by an
+	// administrator through /api/v1/namespaces or on the server by agentiik-api namespace: a
+	// namespace created, one removed, and its quotas set. A user's empty personal namespace removed
+	// with them is a NamespaceDelete too.
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
+	NamespaceUpdate = "namespace.update"
+	// GrantCreate is a grant or a deny written. The first written is a namespace's owner's, which
+	// its creation writes.
+	GrantCreate = "grant.create"
 
 	// UserCreate and UserDelete are a user created, POST /api/v1/users, and removed with what
 	// they held, DELETE /api/v1/users/{login}. EnrolmentIssue is an enrolment link issued, with
@@ -82,6 +87,15 @@ const (
 	GroupDelete       = "group.delete"
 	GroupMemberAdd    = "group_member.add"
 	GroupMemberRemove = "group_member.remove"
+)
+
+// The API token events of v0.3.0's identity and access events: a token minted, POST
+// /api/v1/auth/tokens, recorded with whose it is, its label, its expiry and its scope, and one
+// revoked, DELETE /api/v1/auth/tokens/{id}. Each is recorded by the token's identifier, and never by
+// the token, which is shown once, in the answer that mints it.
+const (
+	APITokenCreate = "api_token.create"
+	APITokenRevoke = "api_token.revoke"
 )
 
 // The results an entry records.

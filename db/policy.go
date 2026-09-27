@@ -167,6 +167,22 @@ func (w *Wide) SetBootstrapToken(ctx context.Context, hash []byte) (bool, error)
 	return true, nil
 }
 
+// ImportBootstrapToken keeps hash as the bootstrap token's where no hash is kept and the token has
+// not ended, and answers whether it did. It is how migrate brings in, once, the hash a v0.2
+// installation kept in a file: a hash kept already is the one the installation's settings gave
+// since, which an old file never replaces, and an ended token stays ended.
+//
+// One statement, so that a hash another run writes between the caller's read and this write is
+// kept rather than overwritten.
+func (w *Wide) ImportBootstrapToken(ctx context.Context, hash []byte) (bool, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update bootstrap set token_hash = $1 where token_hash is null and enrolled_at is null`, hash)
+	if err != nil {
+		return false, fmt.Errorf("db: the bootstrap token could not be imported: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // EndBootstrap ends the bootstrap token at the first administrator's enrolment, forgetting its
 // hash, and answers whether this was the end of it: a second enrolment ends nothing more. Every
 // first administrator's link still open is revoked with it, and the session each opened, since a

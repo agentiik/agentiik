@@ -1,7 +1,12 @@
 package config_test
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -9,8 +14,9 @@ import (
 	"github.com/agentiik/agentiik/internal/config"
 )
 
-// What agentiik-api init reads, and how the API reads a proxy in front of it: every setting from
-// the environment alone, since a Compose file has no other place to put one.
+// What agentiik-api init reads, the bootstrap token migrate reads as init does, and how the API
+// reads a proxy in front of it: every setting from the environment alone, since a Compose file has
+// no other place to put one.
 
 func anInit(t *testing.T) map[string]string {
 	t.Helper()
@@ -48,9 +54,9 @@ func TestInitIsReadFromItsSettings(t *testing.T) {
 		t.Errorf("with no token set, init read %q: %v", c.OperatorToken, err)
 	}
 
-	// No other program is given it, and none is told to put it in a file instead: there is no
-	// file any program reads it from, since the API reads its hash from the database.
-	for _, p := range everyProgram {
+	// No other program is given it but migrate, and none is told to put it in a file instead:
+	// there is no file any program reads it from, since the API reads its hash from the database.
+	for _, p := range []program{theAPI, theController} {
 		i := anInstallation(t)
 		token := "agk_op_" + strings.Repeat("0a", 24)
 		i.env[config.OperatorToken] = token
@@ -63,6 +69,106 @@ func TestInitIsReadFromItsSettings(t *testing.T) {
 			t.Errorf("%s refuses the bootstrap token pointing at a file nothing reads, or repeating it: %v", p.name, err)
 		}
 	}
+}
+
+// migrate takes the bootstrap token as init does, held to the same rules, since an installation
+// that runs no init, Homebrew's or one put together by hand, runs migrate in its place.
+func TestMigrateTakesTheBootstrapTokenAsInitDoes(t *testing.T) {
+	i := anInstallation(t)
+	token := "agk_op_" + strings.Repeat("0a", 24)
+	i.env[config.OperatorToken] = token
+	c, err := config.ReadMigration(migrating.environment(i))
+	if err != nil || string(c.OperatorToken) != token {
+		t.Errorf("migrate read the bootstrap token as %q: %v", c.OperatorToken, err)
+	}
+	for what, value := range map[string]string{
+		"a short token":        "agk_op_short",
+		"a token with a space": "Zm9yIGEgdGVzdCwgYSB0b2tlbiB3aXRoIGEgc3BhY2UgaW4= it",
+	} {
+		i.env[config.OperatorToken] = value
+		_, err := config.ReadMigration(migrating.environment(i))
+		if !slices.Equal(refused(err), []string{config.OperatorToken}) {
+			t.Errorf("%s: migrate's start was refused naming %v: %v", what, refused(err), err)
+			continue
+		}
+		saysNothingOf(t, err, value)
+	}
+}
+
+// migrate reads the path AGK_OPERATOR_TOKEN_FILE holds and nothing of the file at its start: the
+// file is opened where there is a hash to import and never again, so one that is not there, or
+// holds anything, or that anybody may read, starts it.
+func TestMigrateOpensNoOperatorTokenFileAtItsStart(t *testing.T) {
+	i := anInstallation(t)
+	for what, path := range map[string]string{
+		"not there":         filepath.Join(i.dir, "gone.sha256"),
+		"holding anything":  chmod(t, i.write(t, "anything", []byte("not a hash")), 0o644),
+		"a relative path":   "operator-token.sha256",
+		"a directory":       i.dir,
+		"the token instead": "agk_op_" + strings.Repeat("0a", 24),
+	} {
+		i.env[config.OperatorTokenFile] = path
+		if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.OperatorTokenFile != path {
+			t.Errorf("with the operator token's file %s, migrate read %q: %v", what, c.OperatorTokenFile, err)
+		}
+	}
+}
+
+// The v0.2 operator token's hash is read as v0.2's API read it: 64 lowercase hexadecimal
+// characters, a newline after them or not, in a file its owner alone may read. A file that is not
+// there is none, and is no refusal; any other is refused naming the variable, and the refusal
+// repeats neither the path nor what the file holds.
+func TestTheV02OperatorTokensHashIsReadAsV02WroteIt(t *testing.T) {
+	i := &installation{dir: t.TempDir()}
+	token := "agk_op_" + strings.Repeat("0a", 24)
+	sum := sha256.Sum256([]byte(token))
+	hashed := hex.EncodeToString(sum[:])
+	for what, content := range map[string]string{
+		"with a newline, as v0.2's init and agentiik-setup wrote it": hashed + "\n",
+		"with none": hashed,
+	} {
+		path := i.write(t, strings.ReplaceAll(what, " ", "-"), []byte(content))
+		if hash, err := (config.Migration{OperatorTokenFile: path}).OperatorTokenHash(); err != nil || !bytes.Equal(hash, sum[:]) {
+			t.Errorf("a hash written %s reads as %x: %v", what, hash, err)
+		}
+	}
+	for what, path := range map[string]string{
+		"no file named":                "",
+		"a file that is not there":     filepath.Join(i.dir, "gone.sha256"),
+		"in a directory that is not":   filepath.Join(i.dir, "gone", "operator-token.sha256"),
+		"a link to a file that is not": link(t, filepath.Join(i.dir, "gone.sha256"), filepath.Join(i.dir, "dangling")),
+	} {
+		if hash, err := (config.Migration{OperatorTokenFile: path}).OperatorTokenHash(); err != nil || hash != nil {
+			t.Errorf("%s reads as %x: %v", what, hash, err)
+		}
+	}
+	for what, path := range map[string]string{
+		"readable by its group": chmod(t, i.write(t, "group", []byte(hashed+"\n")), 0o640),
+		"readable by anybody":   chmod(t, i.write(t, "anybody", []byte(hashed+"\n")), 0o644),
+		"holding the token":     i.write(t, "token", []byte(token+"\n")),
+		"in uppercase":          i.write(t, "uppercase", []byte(strings.ToUpper(hashed)+"\n")),
+		"one character short":   i.write(t, "short", []byte(hashed[:63]+"\n")),
+		"holding two hashes":    i.write(t, "two", []byte(hashed+"\n"+hashed+"\n")),
+		"empty":                 i.write(t, "empty", nil),
+		"a relative path":       "operator-token.sha256",
+		"a directory":           i.dir,
+	} {
+		_, err := (config.Migration{OperatorTokenFile: path}).OperatorTokenHash()
+		if !slices.Equal(refused(err), []string{config.OperatorTokenFile}) {
+			t.Errorf("a file %s was refused naming %v: %v", what, refused(err), err)
+			continue
+		}
+		saysNothingOf(t, err, append(i.secrets, hashed, token, path)...)
+	}
+}
+
+// link makes a symbolic link at name to target, and answers name.
+func link(t *testing.T, target, name string) string {
+	t.Helper()
+	if err := os.Symlink(target, name); err != nil {
+		t.Fatal(err)
+	}
+	return name
 }
 
 // A setting init needs, missing or malformed, refuses the start and names its variable, without

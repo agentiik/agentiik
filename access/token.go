@@ -1,8 +1,12 @@
 package access
 
 import (
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
+
+	"github.com/agentiik/agentiik/agk"
 )
 
 // TokenScope is what an API token is narrowed to: the wire's apiToken.scope.
@@ -23,6 +27,39 @@ type TokenScope struct {
 	// Within are the namespaces and workflows the token reaches, and nil reaches everywhere
 	// its principal does.
 	Within []Scope
+}
+
+// Narrows says whether the scope narrows anything: whether a token of it keeps less than its
+// principal holds somewhere. A token that does is refused what reaches past the nine, as minting
+// another token does, since "a scope can only narrow" and a credential it made would not be
+// narrowed by it.
+func (s TokenScope) Narrows() bool { return s.Permissions != nil || s.Within != nil }
+
+// TokenHolder refuses a principal no token can be minted for, on the wire's apiToken.principal: a
+// login, on the namespace grammar and none of its reserved words since each user's personal
+// namespace is named after it, and never operator or installation; or NS/NAME for a service
+// account, both halves on the namespace grammar. Never a group, which "holds no credential of its
+// own": a group's token would be a way in that belongs to nobody.
+//
+// A reserved word in either half of a service account is left to whoever looks it up, as the wire
+// leaves it: a reserved word never names a namespace, so the reference names nobody, which is what
+// it is answered as.
+func TokenHolder(ref string) error {
+	if strings.HasPrefix(ref, "group:") {
+		return fmt.Errorf("%.64q is a group, which holds no token of its own: a token belongs to a user or to a service account, written NS/NAME", ref)
+	}
+	if ns, name, ok := strings.Cut(ref, "/"); ok {
+		for _, half := range []string{ns, name} {
+			if len(half) > agk.IdentifierMaxBytes || !namespaceForm.MatchString(half) {
+				return fmt.Errorf("%.64q names no service account: one is written NS/NAME, both in lowercase words joined by hyphens, such as finance/nightly-sync", ref)
+			}
+		}
+		return nil
+	}
+	if ref == "installation" {
+		return errors.New("installation names the installation itself, as the author of the pool default, and holds no token")
+	}
+	return principalRef(ref)
 }
 
 // ParseTokenScope reads a scope as the store keeps it, each half as the wire writes it, and nil
@@ -74,4 +111,19 @@ func (s TokenScope) Keeps(what Permission, at Scope) bool {
 		return true
 	}
 	return slices.ContainsFunc(s.Within, func(w Scope) bool { return w.covers(at) })
+}
+
+// Reaches says whether a token of this scope reaches anything in one namespace: the namespace
+// itself, or a workflow of it. It is what a namespace's record is read through, to an administrator
+// and to "a principal holding a grant in it": reading it is none of the nine, so the permissions a
+// scope keeps do not narrow it, and a within naming one workflow of the namespace reaches its
+// record, since the workflow cannot be reached without it.
+func (s TokenScope) Reaches(namespace string) bool {
+	if namespace == "" {
+		return false
+	}
+	if s.Within == nil {
+		return true
+	}
+	return slices.ContainsFunc(s.Within, func(w Scope) bool { return w.Namespace == namespace })
 }

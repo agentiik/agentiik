@@ -69,6 +69,9 @@ type command struct {
 // writes it.
 var commands = []command{
 	{"login", "Signs in against an installation and stores an API token in the local profile.", absent("login", "an installation has no sign-in route yet, and is administered with its bootstrap token until its first administrator has enrolled", withPrincipals)},
+	{"token create", "Mints an API token for you, or for a service account of a namespace you own, and prints it this once.", tokenCreate},
+	{"token list", "Lists the API tokens you may revoke, with their expiry, last use, scope and device label.", tokenList},
+	{"token revoke", "Revokes one API token, from its next request.", tokenRevoke},
 	{"whoami", "Prints the current principal, its groups and its effective permissions on a given workflow.", absent("whoami", "an installation has no route yet that says who a token belongs to", withPrincipals)},
 	{"user create", "Creates a user, --admin for an administrator, and prints the enrolment link.", userCreate},
 	{"user list", "Lists the users of an installation.", userList},
@@ -80,6 +83,11 @@ var commands = []command{
 	{"group delete", "Removes a group with its memberships and grants.", groupDelete},
 	{"group add", "Puts a user in a group, touching no grant.", groupAdd},
 	{"group remove", "Takes a user out of a group, touching no grant.", groupRemove},
+	{"namespace create", "Creates a namespace with its owner and its quotas. Administrator only.", namespaceCreate},
+	{"namespace list", "Lists the namespaces the caller holds a grant in, and every one for an administrator.", namespaceList},
+	{"namespace show", "Shows one namespace: its kind, its owner and its quotas.", namespaceShow},
+	{"namespace delete", "Removes a namespace that holds nothing but its built-in identity. Administrator only.", namespaceDelete},
+	{"namespace quotas", "Shows a namespace's quotas, and with quotas given, sets them as the whole set. Administrator only to set.", namespaceQuotas},
 	{"validate", "Validates the YAML, resolves includes and inheritance, detects cycles, checks ports against the manifests of the referenced images.", validate},
 	{"graph", "Writes the resolved graph as DOT or Mermaid, for review inside a merge request.", drawing},
 	{"push", "Registers the workflow in a namespace on a server.", push},
@@ -143,9 +151,10 @@ func run(ctx context.Context, e Env, args []string) int {
 
 // verb reads the command out of the arguments, the two-word verbs first.
 //
-// brick test and brick init are two words because the documentation writes them as two, as it
-// writes user create, and a binary that answered to brick-test would be a binary whose help and
-// whose documentation spell one thing differently.
+// brick test and brick init are two words because the documentation writes them as two, and
+// a binary that answered to brick-test would be a binary whose help and whose documentation
+// spell one thing differently. The namespace verbs are two words for the same reason agk
+// auth policy and agk user create are: a noun, then what is done to it.
 func verb(args []string) (*command, []string) {
 	if len(args) >= 2 {
 		two := args[0] + " " + args[1]
@@ -167,20 +176,10 @@ func verb(args []string) (*command, []string) {
 // line: brick frobnicate is a second word of a verb that has one, and anything else is its
 // first word alone.
 func typed(args []string) string {
-	if len(args) >= 2 && twoWords(args[0]) {
+	if len(args) >= 2 && slices.ContainsFunc(commands, func(c command) bool { return strings.HasPrefix(c.name, args[0]+" ") }) {
 		return args[0] + " " + args[1]
 	}
 	return args[0]
-}
-
-// twoWords says whether a word is the first of a verb written in two, brick, user or group.
-func twoWords(first string) bool {
-	for _, c := range commands {
-		if strings.HasPrefix(c.name, first+" ") {
-			return true
-		}
-	}
-	return false
 }
 
 // usage is the table, and nothing that is not in the table.

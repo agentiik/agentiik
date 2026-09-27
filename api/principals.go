@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -103,7 +104,7 @@ func (p *Principals) Identify(r *http.Request) (Identity, error) {
 		if err := w.TokenUsed(ctx, token.ID, now); err != nil {
 			return err
 		}
-		as = Identity{Principal: Principal(token.Principal), Scope: scope}
+		as = Identity{Principal: Principal(token.Principal), Scope: scope, Token: token.ID}
 		return nil
 	})
 	if err != nil {
@@ -137,9 +138,78 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		return false, nil
 	}
 	now := p.now()
-	principal := access.Principal{Ref: string(who)}
-	var admin, bootstrapped bool
-	err := p.pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+	principal, admin, bootstrapped, err := p.resolve(ctx, who)
+	switch {
+	case err != nil:
+		return false, err
+	case who == BootstrapOperator:
+		if over.Namespace == "" {
+			return bootstrapped && what == GrantManage, nil
+		}
+		return bootstrapped && access.Owner.Permissions().Has(what), nil
+	case principal.Ref == "":
+		return false, nil
+	case over.Namespace == "":
+		return admin && what == GrantManage, nil
+	}
+
+	var grants []access.Grant
+	err = p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
+		var err error
+		grants, err = n.AccessGrantsFor(ctx, principal, over.Workflow, now)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
+}
+
+// HeldIn is the router's Holdings: the namespaces who holds a grant in, its own or one of its
+// groups', on the namespace or on a workflow of it, not expired, ordered by name. It is what a
+// namespace's record is shown to besides an administrator, "a principal holding a grant in it".
+//
+// A grant here is one carrying a role. A deny gives nothing, and a namespace where who holds
+// nothing but denies is one it can do nothing in, which it is answered as one it cannot see; a deny
+// beside a role takes nothing from the record either, since a deny names one permission and reading
+// the record is none of them. The bootstrap operator holds no grant, and sees every namespace as
+// the administrator it is while it has not ended; a suspended user, and a login removed since, hold
+// none.
+func (p *Principals) HeldIn(ctx context.Context, who Principal) ([]string, error) {
+	if who == "" || who == BootstrapOperator {
+		return nil, nil
+	}
+	principal, _, _, err := p.resolve(ctx, who)
+	if err != nil || principal.Ref == "" {
+		return nil, err
+	}
+	now := p.now()
+	var grants []access.Grant
+	err = p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
+		var err error
+		grants, err = w.AccessGrantsAcross(ctx, principal, now)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	var held []string
+	for _, g := range grants {
+		if g.Role != "" && !slices.Contains(held, g.Scope.Namespace) {
+			held = append(held, g.Scope.Namespace)
+		}
+	}
+	slices.Sort(held)
+	return held, nil
+}
+
+// resolve reads who who is now: the principal its grants are asked for, with its groups, whether
+// it administers the installation, and, for the bootstrap operator, whether the bootstrap token has
+// not ended. A principal holding nothing, a suspended user or a login removed since, is answered
+// with an empty Ref.
+func (p *Principals) resolve(ctx context.Context, who Principal) (principal access.Principal, admin, bootstrapped bool, err error) {
+	principal = access.Principal{Ref: string(who)}
+	err = p.pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
 		if who == BootstrapOperator {
 			bootstrap, err := w.Bootstrap(ctx)
 			bootstrapped = err == nil && !bootstrap.Ended()
@@ -166,30 +236,7 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 		principal.Groups, err = w.GroupsOf(ctx, user.Login)
 		return err
 	})
-	switch {
-	case err != nil:
-		return false, err
-	case who == BootstrapOperator:
-		if over.Namespace == "" {
-			return bootstrapped && what == GrantManage, nil
-		}
-		return bootstrapped && access.Owner.Permissions().Has(what), nil
-	case principal.Ref == "":
-		return false, nil
-	case over.Namespace == "":
-		return admin && what == GrantManage, nil
-	}
-
-	var grants []access.Grant
-	err = p.pool.In(ctx, over.Namespace, func(ctx context.Context, n *db.NS) error {
-		var err error
-		grants, err = n.AccessGrantsFor(ctx, principal, over.Workflow, now)
-		return err
-	})
-	if err != nil {
-		return false, err
-	}
-	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
+	return principal, admin, bootstrapped, err
 }
 
 // nameable says whether a grant could name the target: the installation, or a namespace and a

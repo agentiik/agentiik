@@ -117,3 +117,31 @@ func TestAScopeThatDoesNotReadIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A token reaches a namespace's record through the namespace or any workflow of it, whatever
+// permissions it keeps, since reading the record is none of them; and no token reaches the record
+// of no namespace.
+func TestATokenReachesTheNamespacesItsWithinNames(t *testing.T) {
+	for _, c := range []struct {
+		permissions, within []string
+		finance, hr         bool
+	}{
+		{nil, nil, true, true},
+		{[]string{"workflow:run"}, nil, true, true},
+		{nil, []string{"finance"}, true, false},
+		{[]string{"workflow:run"}, []string{"finance/monthly-invoicing"}, true, false},
+		{nil, []string{"hr/onboarding", "finance/payroll"}, true, true},
+	} {
+		s, err := access.ParseTokenScope(c.permissions, c.within)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Reaches("finance") != c.finance || s.Reaches("hr") != c.hr {
+			t.Errorf("a token keeping %v within %v reaches finance %v and hr %v, want %v and %v",
+				c.permissions, c.within, s.Reaches("finance"), s.Reaches("hr"), c.finance, c.hr)
+		}
+		if s.Reaches("") {
+			t.Errorf("a token keeping %v within %v reaches the record of no namespace", c.permissions, c.within)
+		}
+	}
+}

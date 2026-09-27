@@ -15,10 +15,12 @@
 // An Authorizer is asked whether one principal holds one permission at one scope, and Principals
 // is the installation's: it identifies a bearer token from the database, an API token or the
 // bootstrap token, and answers from the grants of the principal and its groups, which package
-// access resolves, with the installation an administrator's alone. What a token's scope narrows
-// is intersected by the router, which saw the credential, with every answer it asks for. DenyAll
-// stays the answer of an installation with no access model, and what a test of the routes
-// alone is given: deny by default when there is nothing to grant.
+// access resolves, with the installation an administrator's alone. It also says which namespaces a
+// principal holds a grant in, as Holdings, since a namespace's record is shown to them and to an
+// administrator, and to nobody else. What a token's scope narrows is intersected by the router,
+// which saw the credential, with every answer it asks for. DenyAll stays the answer of an
+// installation with no access model, and what a test of the routes alone is given: deny by default
+// when there is nothing to grant.
 //
 // The permissions themselves arrived before v0.3.0, because a route declares what it needs and a
 // route was written then. They are the page's own nine, held to it by a test, and they live in
@@ -33,6 +35,18 @@
 // to hide: the caller is authenticated, the resource is the installation itself, and saying no
 // tells them nothing they did not already know.
 //
-// A push refused for naming a secret its pusher holds no secret:use for is the other 403: the
-// route let the pusher through on workflow:write, so the workflow is one they already reach.
+// A push refused for naming a secret its pusher holds no secret:use for is a 403 too: the route let
+// the pusher through on workflow:write, so the workflow is one they already reach. So is a token
+// refused by the token routes for what the credential presenting it is, below.
+//
+// # A caller's own credentials
+//
+// The API token routes answer about their caller: "an API token for the caller or a service account
+// of a namespace it owns", and the listing and revocation of those. No permission names that, since
+// holding a credential is none of the nine, so each takes Own, and its handler is given a Caller:
+// who asks, the token presented, whether its scope narrows it, and the namespaces it owns, which
+// Principals says as Owners. A token narrowed by a scope mints none and reaches no credential but
+// itself, and the bootstrap token mints none, its one lasting use being the first administrator:
+// each is refused with 403, since the caller is known and nothing about the installation is hidden
+// from them by saying so.
 package api

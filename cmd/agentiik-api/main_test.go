@@ -58,7 +58,8 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 }
 
 // With nothing configured, serve and migrate refuse their start and name every setting they need,
-// and serve no longer the operator token's file, which it reads nothing from since v0.3.0.
+// and neither names the operator token's file, which neither needs to start: serve reads nothing
+// from it since v0.3.0, and migrate reads it only to import a v0.2 hash, where one is named.
 func TestServeAndMigrateNameEverySettingTheyNeed(t *testing.T) {
 	for verb, variables := range map[string][]string{
 		"serve": {
@@ -77,7 +78,7 @@ func TestServeAndMigrateNameEverySettingTheyNeed(t *testing.T) {
 			}
 		}
 		if strings.Contains(stderr.String(), config.OperatorTokenFile) {
-			t.Errorf("%s's refusal names %s, which it reads nothing from:\n%s", verb, config.OperatorTokenFile, stderr.String())
+			t.Errorf("%s's refusal names %s, which it does not need to start:\n%s", verb, config.OperatorTokenFile, stderr.String())
 		}
 	}
 }

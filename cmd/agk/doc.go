@@ -27,8 +27,8 @@
 //	agk brick test    a brick against a set of sample envelopes, compared against
 //	                  expected outputs
 //
-// Four reach an installation to run a workflow there, whose address is --server or
-// AGENTIIK_SERVER and whose credential is AGENTIIK_TOKEN and never a flag:
+// These reach an installation, whose address is --server or AGENTIIK_SERVER and whose
+// credential is AGENTIIK_TOKEN and never a flag:
 //
 //	agk push          a commit registered as a version, its tree carried with it
 //	agk run           with --namespace instead of --local, a run of a pushed commit
@@ -37,6 +37,9 @@
 //	                  dropped connection left them
 //	agk status        how a run there stands: its state, each step's, the digests and
 //	                  what failed
+//	agk namespace     create, list, show, delete and quotas: the namespaces an
+//	                  administrator creates, bounds and removes, and whoever holds a grant
+//	                  in one reads
 //
 // Two more, user and group, are an administrator's, and the bootstrap token's until the first
 // administrator has enrolled:
@@ -49,6 +52,13 @@
 // templates released from agentiik/bricks. Each is in this table and each refuses naming
 // what is missing, because a verb the documentation lists and the binary does not know is a
 // binary that looks broken.
+//
+// Three manage the API tokens of whoever runs them, and of the service accounts of the
+// namespaces they own:
+//
+//	agk token create  a token minted and printed on standard output, this once
+//	agk token list    the tokens still accepted, with expiry, last use, scope and label
+//	agk token revoke  one token, by the identifier the list prints, from its next request
 //
 // --version is a flag rather than a command, reporting what runtime/debug.ReadBuildInfo
 // says, so the documented table stays exactly the table.
@@ -134,8 +144,10 @@
 //	serverrun.go     agk run on an installation
 //	logs.go          agk logs
 //	status.go        agk status
+//	namespace.go     agk namespace create, list, show, delete and quotas
 //	users.go         agk user and agk group
 //	remote.go        the installation's address, the credential, and its refusals
+//	tokens.go        agk token create, list and revoke
 //	absent.go        the five verbs that wait, each refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid

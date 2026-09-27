@@ -402,15 +402,17 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // answer a runner, a pool or an object with the mux's 404, which a test of the routes alone would
 // never see, and one whose guard drifted from the page would grant what the page does not.
 //
-// The page's words, route by route: the administration routes are "Administrator only", and drain
-// and revoke "require grant:manage at installation scope", which is what an administrator holds
-// there; a secret's declarations take workflow:read at namespace scope and writing one
+// The page's words, route by route: the administration routes are "Administrator only", a
+// namespace's record is read "to an administrator and to a principal holding a grant in it", and
+// drain and revoke "require grant:manage at installation scope", which is what an administrator
+// holds there; a secret's declarations take workflow:read at namespace scope and writing one
 // secret:write there; a push workflow:write, and secret:use where it names a secret; starting a run
 // and cancelling one workflow:run; reading runs, one run and a step's log run:read, a run's inputs
 // being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
 // runner's own routes by the runner credential alone, and the object store by the signature in the
-// URL or the form.
+// URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
+// namespace it owns", which no permission names.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -429,6 +431,9 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	administrator := api.Route{Permission: api.GrantManage, Scope: api.Installation}
 	runner := api.Route{Runner: true}
 	public := api.Route{Public: true}
+	// A namespace's record is "to an administrator and to a principal holding a grant in it".
+	members := api.Route{Scope: api.Namespace, Members: true}
+	own := api.Route{Own: true}
 	onRun := func(p, reveals api.Permission) api.Route {
 		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
 	}
@@ -456,6 +461,9 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/tasks/redeem":                                      runner,
 		"POST /api/v1/tasks/logs":                                        runner,
 		"POST /api/v1/bus/token":                                         runner,
+		"POST /api/v1/auth/tokens":                                       own,
+		"GET /api/v1/auth/tokens":                                        own,
+		"DELETE /api/v1/auth/tokens/{id}":                                own,
 		"GET /api/v1/runs":                                               {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/{namespace}/runs":                                   {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/runs/{run}":                                         onRun(api.RunRead, api.RunReadData),
@@ -472,6 +480,12 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"DELETE /api/v1/{namespace}/secrets/{name}":                      {Permission: api.SecretWrite, Scope: api.Namespace},
 		"POST /api/v1/{namespace}/workflows/{workflow}/runs":             {Permission: api.WorkflowRun, Scope: api.Workflow},
 		"PUT /api/v1/{namespace}/workflows/{workflow}/versions/{commit}": {Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse},
+		"POST /api/v1/namespaces":                                        administrator,
+		"GET /api/v1/namespaces":                                         members,
+		"GET /api/v1/namespaces/{namespace}":                             members,
+		"DELETE /api/v1/namespaces/{namespace}":                          administrator,
+		"GET /api/v1/namespaces/{namespace}/quotas":                      members,
+		"PUT /api/v1/namespaces/{namespace}/quotas":                      administrator,
 		"GET /objects/{key...}":                                          public,
 		"PUT /objects/{key...}":                                          public,
 		"POST /objects/{namespace}":                                      public,

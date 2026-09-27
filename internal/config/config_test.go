@@ -293,11 +293,15 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantMigration := config.Migration{
-		Admin:       config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: config.Secret(i.adminPassword)},
-		Application: wantDatabase,
+		Admin:             config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: config.Secret(i.adminPassword)},
+		Application:       wantDatabase,
+		OperatorTokenFile: i.env[config.OperatorTokenFile],
 	}
 	if migration != wantMigration {
 		t.Errorf("migrating reads %#v", migration)
+	}
+	if hash, err := migration.OperatorTokenHash(); err != nil || hex.EncodeToString(hash) != i.operatorToken {
+		t.Errorf("the v0.2 operator token's hash reads as %x: %v", hash, err)
 	}
 }
 
@@ -724,7 +728,7 @@ func TestASecretPassedAsAValueIsRefused(t *testing.T) {
 		"the account seed":           {"AGK_BUS_ACCOUNT_SEED", func(i *installation) string { return i.accountSeed }, everyProgram},
 		"the presign key":            {"AGK_PRESIGN_KEY", as("c2lnbmluZyBrZXkgb2YgdGhpcnR5IHR3byBieXRlcyE="), everyProgram},
 		"the master key":             {"AGK_MASTER_KEY", as("id: 2026-09 key: c2VjcmV0"), everyProgram},
-		"the operator token":         {"AGK_OPERATOR_TOKEN", as("agkoperator_" + strings.Repeat("Z", 43)), everyProgram},
+		"the operator token":         {"AGK_OPERATOR_TOKEN", as("agkoperator_" + strings.Repeat("Z", 43)), []program{theAPI, theController}},
 		"the metrics token":          {"AGK_METRICS_TOKEN", as("s3cr3t-scrape-token"), everyProgram},
 		"a password in the database": {config.DatabaseURL, as("postgres://agentiik:hunter2@db/agentiik"), everyProgram},
 
@@ -859,7 +863,8 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 	neverAsked := map[string][]string{
 		// The operator token's file among them: the API reads the bootstrap token's hash
 		// from the database since v0.3.0, and a file a v0.2 Compose file still names is never
-		// opened, whatever it holds or wherever it is not.
+		// opened, whatever it holds or wherever it is not. migrate alone asks for it, to import
+		// that hash once.
 		theAPI.name: {
 			config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile,
 			config.AuditExportURL, config.AuditExportTokenFile, config.MetricsListen, config.MetricsTokenFile,
@@ -872,9 +877,9 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 		},
 		migrating.name: {
 			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile, config.ObjectsDir,
-			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.OperatorTokenFile,
-			config.EnvPrefixes, config.Listen, config.MaxRequeues, config.TaskCeiling,
-			config.JoinRotation, config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
+			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.EnvPrefixes,
+			config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
+			config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,
 			config.MetricsListen, config.MetricsTokenFile, config.OTLPEndpoint, config.TLSCertFile,
 			config.TLSKeyFile,
 		},
