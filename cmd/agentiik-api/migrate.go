@@ -51,7 +51,7 @@ func migrateAndBootstrap(ctx context.Context, c config.Migration, stdout io.Writ
 	if err := builtInIdentities(ctx, pool, stdout); err != nil {
 		return err
 	}
-	reservedLater(ctx, pool, "migrate", "", stdout)
+	reservedLater(ctx, pool, "migrate", stdout)
 	if err := unrecordedArtifacts(ctx, pool, c.Objects, "migrate", stdout); err != nil {
 		return err
 	}

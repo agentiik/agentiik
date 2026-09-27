@@ -105,11 +105,10 @@
 // init does: a namespace is created with one from v0.3.0, so those that lack it are the ones v0.2
 // made, and the runs nobody starts there are attributed to it. Each is recorded as
 // service_account.create by installation in its namespace, and a run finding none lacking says
-// nothing of it. Then it says, for every namespace named after a word reserved since it was
-// created, stats among them (agk.LateReservations), that the route the word was reserved for will
-// take its paths from the release that serves it, and that its workflows are to move to another
-// namespace: nothing renames a namespace, so the installation keeps it and serves it as before, and
-// migrate goes on.
+// nothing of it. Then it says, in one line for every namespace named after a word reserved since
+// it was created, stats among them (agk.LateReservations), that it keeps its name and is served as
+// before, with nothing to do: nothing renames a namespace, and the word is refused to anything new
+// alone.
 //
 // And it records the artifact files of the runs v0.2 finished, as init does, where AGK_OBJECTS_DIR
 // is set, as it is among the API's settings, and names a directory it can read, which is all it
@@ -137,8 +136,8 @@
 // AGK_MIGRATE_DATABASE_URL names; the namespace AGK_INIT_NAMESPACE names, as namespace create does,
 // saying so and going on where a user's login holds the name, since a failed init would keep every
 // service from starting over a name somebody else holds, and leaving one named after a word
-// reserved since it was created as it is, as migrate says of it, or saying so and going on where
-// no namespace carries such a word; the built-in identity of every
+// reserved since it was created as it is, as migrate says of it, or saying so, asking for another
+// name, and going on where no namespace carries such a word; the built-in identity of every
 // namespace that has none, as migrate gives it; the artifact files of the runs v0.2 finished, from their
 // envelopes in the object store's directory, as migrate records them; the hash of the bootstrap token AGK_OPERATOR_TOKEN holds, in the database, until the first
 // administrator has signed in, saying so where none is set and none is kept, and minting none; and a

@@ -163,19 +163,17 @@ func builtInIdentities(ctx context.Context, pool *db.Pool, stdout io.Writer) err
 	return nil
 }
 
-// reservedLater says, for every namespace named after a word reserved since it was created
-// (agk.LateReservations), that the route the word was reserved for will take its paths, and what
-// to do about it. Nothing renames a namespace, so the installation keeps it and serves it as
-// before; init and migrate say so at every run while it exists, since one of the two runs wherever
-// an installation is upgraded, and the person who reads either is the one who can move its
-// workflows.
-//
-// init names the namespace its settings name, which is also to be named anew there once its
-// workflows have moved, and migrate names none.
+// reservedLater says, in one line for each namespace named after a word reserved since it was
+// created (agk.LateReservations), that it keeps its name and is served as before, with nothing to
+// do: nothing renames a namespace, an upgrade asks nothing beyond compose.yaml and .env, and the
+// route the word was reserved for is served at its own path alone, which no route of a namespace
+// takes. init and migrate say it at every run while the namespace exists, since one of the two runs
+// wherever an installation is upgraded, so that whoever reads either knows why that name is
+// refused to anything new.
 //
 // It never fails: what it reads decides nothing, and a failed init keeps every service of the
 // installation from starting. A read that fails is said, and the next run tries again.
-func reservedLater(ctx context.Context, pool *db.Pool, verb, named string, stdout io.Writer) {
+func reservedLater(ctx context.Context, pool *db.Pool, verb string, stdout io.Writer) {
 	var held []agk.LateReservation
 	err := pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
 		held = held[:0]
@@ -196,10 +194,6 @@ func reservedLater(ctx context.Context, pool *db.Pool, verb, named string, stdou
 		return
 	}
 	for _, r := range held {
-		also := ""
-		if r.Word == named {
-			also = fmt.Sprintf(", and name it in %s, which names this one", config.InitNamespace)
-		}
-		fmt.Fprintf(stdout, "namespace %s is named after a word the API routes on from %s, for %s, and from then its own routes under /api/v1/%s/ will not reach it: create another namespace and move its workflows there%s. It is served as before until then, and %s says so at every run while it exists\n", r.Word, r.Served, r.Route, r.Word, also, verb)
+		fmt.Fprintf(stdout, "namespace %s keeps its name and is served as before, with nothing to do: %s is reserved from %s, so no new namespace, login, group or service account takes it\n", r.Word, r.Word, r.Since)
 	}
 }
