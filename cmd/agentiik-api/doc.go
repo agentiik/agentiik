@@ -81,10 +81,10 @@
 // AGK_OPERATOR_TOKEN, which init reads, and migrate where no init runs, and keeps the SHA-256 of in
 // the database. api.Principals takes it as the bootstrap operator, written operator as the v0.2
 // operator was, an administrator owning every namespace, until the first administrator has signed
-// in; from then on it is refused, and init and migrate say at every run that the line is
-// ignored. AGK_OPERATOR_TOKEN_FILE, which named the file a v0.2 installation kept the hash in, is
-// read by migrate alone, to import that hash once: a v0.2 Compose file still sets it, and serve
-// starts as though it did not.
+// in; from then on it is refused, and init and migrate say at every run that the line is ignored.
+// AGK_OPERATOR_TOKEN_FILE, which named the file a v0.2 installation kept the hash in, is read by
+// migrate alone, to import that hash once: a v0.2 Compose file still sets it, and serve starts as
+// though it did not.
 //
 // # migrate
 //
