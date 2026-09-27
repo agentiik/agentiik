@@ -43,11 +43,12 @@ type LateReservation struct {
 }
 
 // LateReservations are the words reserved late, stats from v0.3.0 among them. Nothing
-// renames a namespace, so one an installation created under such a word before it was
-// reserved keeps its name, and is served as before until the route arrives: the word is
-// refused where a name is given, and read wherever an existing one is named, so that a
-// grant, a workflow, a service account or a token naming that namespace works through an
-// upgrade as it did before it.
+// renames a namespace, and an upgrade asks nothing beyond compose.yaml and .env, so one an
+// installation created under such a word before it was reserved keeps its name and is
+// served as before, the route needing the word being served at its own path alone, which
+// no route of a namespace takes: the word is refused where a name is given, and read
+// wherever an existing one is named, so that a grant, a workflow, a service account or a
+// token naming that namespace works through an upgrade as it did before it.
 var LateReservations = []LateReservation{
 	{Word: "stats", Since: "v0.3.0", Route: "GET /api/v1/stats/pools", Served: "v0.6.0"},
 }
