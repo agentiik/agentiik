@@ -137,7 +137,10 @@ func writeArtifact(ctx context.Context, tx pgx.Tx, namespace string, r Reference
 	if r.Size < 0 {
 		return Written{}, fmt.Errorf("db: an artifact of %d bytes", r.Size)
 	}
-	if r.For < 0 || (r.For == 0 && r.Fetches > 0) {
+	if r.For < 0 {
+		return Written{}, fmt.Errorf("db: a reference living %s", r.For)
+	}
+	if r.For == 0 && r.Fetches > 0 {
 		return Written{}, errors.New("db: the reference says how many fetches it survives and not how long it lives: retain always carries for, and a one-shot artifact still has a duration, which is what expires it when nobody ever comes for it")
 	}
 	if r.Fetches < 0 {

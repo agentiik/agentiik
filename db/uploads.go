@@ -37,8 +37,8 @@ const uploadGrace = 15 * time.Minute
 
 // recountAfter is how old the count in artifact_room may be before a write counts again, and
 // recountBeforeRefusing how old it may be before a write is refused on it rather than counted
-// again: between two counts a write adds its room to what was counted, and what expired or was
-// given back is only found by the next.
+// again: between two counts a write adds its room to what was counted and a settlement takes off
+// what it gives back, and what expired or lapsed meanwhile is only found by the next.
 const (
 	recountAfter          = time.Minute
 	recountBeforeRefusing = time.Second

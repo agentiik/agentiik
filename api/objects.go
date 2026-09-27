@@ -188,8 +188,9 @@ func (s *ObjectAPI) fetch(w http.ResponseWriter, r *http.Request, key string) {
 
 // store writes one object, held to its namespace's max_artifact_bytes: room is made for it before
 // its bytes are read and settled once they are stored or refused, and an object that would take the
-// namespace past the quota is answered 507 with nothing read. until is when the policy or the URL it
-// is written with expires, which the room lapses with.
+// namespace past the quota is answered 507 with nothing stored, before any of it is read where its
+// request states its length and as soon as it outgrows its room where it does not. until is when
+// the policy or the URL it is written with expires, which the room lapses after.
 //
 // The room is made at the length of the request, which is the most the object may be: a form's
 // length counts its fields and its boundaries as well, a few hundred bytes more than the file, and

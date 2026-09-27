@@ -42,7 +42,7 @@ func TestTheFamiliesAreWrittenInTheTextFormat(t *testing.T) {
 	took.Observe(42, "invoice", "succeeded")
 	took.Observe(3, `say "hi"`, "failed")
 
-	want := `# HELP agentiik_metrics_folded_total Observations counted under the label set _other because their family already held as many label sets as it keeps.
+	want := `# HELP agentiik_metrics_folded_total Observations counted under _other because their family was full: for a counter or a histogram, the label set whose every value is _other once it held as many label sets as it keeps; for a gauge read per namespace, the namespace _other once it held as many namespaces, counted at every scrape.
 # TYPE agentiik_metrics_folded_total counter
 # HELP agentiik_tasks_lost_total Dispatches declared lost.
 # TYPE agentiik_tasks_lost_total counter

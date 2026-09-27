@@ -168,7 +168,7 @@ func (o *Objects) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 // their key, which Store.Put hashed itself: both are this side's failure and never the brick's.
 // 413 is artifact_max_bytes, which Store.Put has already held the bytes to, so the store holds a
 // lower limit than the runner does. 507 is the namespace's max_artifact_bytes, which its live
-// artifacts leave no room under for this object. Any other answer, a 5xx among them, is the store's
+// artifacts and the objects being written leave no room under for this one. Any other answer, a 5xx among them, is the store's
 // trouble.
 func (o *Objects) Put(ctx context.Context, key string, r io.Reader) error {
 	digest, under := strings.CutPrefix(key, o.policy.KeyPrefix)

@@ -22,10 +22,11 @@
 // A gauge is read when it is scraped rather than kept, so it holds what exists at that moment and
 // nothing that has gone. A gauge of what the installation holds, a pool or a runner, needs no bound
 // of this kind. One read per namespace does, since namespaces are as many as the installation's
-// users and teams: it is registered with Desc.FoldBy naming the label, and keeps Limit values of it,
-// what another value would have been summed under Other with its other labels as they are, and each
-// such reading counted in agentiik_metrics_folded_total. The other labels are kept because they may
-// say what is counted, and a sum of tasks and bytes is no figure at all.
+// users and teams: it is registered with Desc.FoldBy naming that label. At each scrape it keeps the
+// first Limit values of the label its read sets, and writes the label as Other for any value past
+// them, its other labels as they are and the values of what folds together summed, each reading so
+// folded counted in agentiik_metrics_folded_total at every scrape. The other labels are kept because
+// they may say what is counted, and a sum of tasks and bytes is no figure at all.
 package metrics
 
 import (
@@ -45,7 +46,7 @@ import (
 const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 
 // Other is the value every label takes in the label set an observation is folded into once its
-// family holds Limit label sets.
+// family holds Limit label sets, and the value a gauge's FoldBy label takes past Limit values.
 const Other = "_other"
 
 // DefaultLimit is how many label sets a family keeps where Registry.Limit is zero.
@@ -59,7 +60,8 @@ const DefaultLimit = 1000
 
 // Registry is every family one program exports.
 type Registry struct {
-	// Limit is how many label sets one counter or histogram keeps, and DefaultLimit where zero.
+	// Limit is how many label sets one counter or histogram keeps, and how many values of its
+	// FoldBy label a gauge keeps at each scrape, and DefaultLimit where zero.
 	Limit int
 
 	// Trouble hears of a gauge that could not be read, which a scrape leaves out rather than
@@ -100,7 +102,7 @@ type Desc struct {
 func NewRegistry() *Registry {
 	r := &Registry{names: map[string]bool{}}
 	r.folded = r.Counter("agentiik_metrics_folded_total",
-		"Observations counted under the label set _other because their family already held as many label sets as it keeps.",
+		"Observations counted under _other because their family was full: for a counter or a histogram, the label set whose every value is _other once it held as many label sets as it keeps; for a gauge read per namespace, the namespace _other once it held as many namespaces, counted at every scrape.",
 		"metric")
 	return r
 }
