@@ -77,7 +77,7 @@ func TestATermExportsTheAuditLog(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
 	go func() {
-		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), export, nil, logger(&log))
+		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), export, nil, nil, logger(&log))
 	}()
 
 	record := func(target string) {
@@ -183,7 +183,7 @@ func (a *auditTerms) lead(t *testing.T, name string) string {
 	ctx, stop := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
 	go func() {
-		ended <- lead(ctx, ctl, tm, a.queue, options(c, a.queue, versionsOf(t, a.pool)), nil, verifier(a.pool.AuditTrail(), 2, logger(&a.log)), logger(&a.log))
+		ended <- lead(ctx, ctl, tm, a.queue, options(c, a.queue, versionsOf(t, a.pool)), nil, verifier(a.pool.AuditTrail(), 2, logger(&a.log)), nil, logger(&a.log))
 	}()
 	defer func() {
 		stop()
@@ -283,7 +283,7 @@ func TestATermTakesResultsWhileTheChainIsVerified(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	ended := make(chan error, 1)
 	go func() {
-		ended <- lead(ctx, ctl, tm, a.queue, options(c, a.queue, versionsOf(t, a.pool)), nil, verify, logger(&a.log))
+		ended <- lead(ctx, ctl, tm, a.queue, options(c, a.queue, versionsOf(t, a.pool)), nil, verify, nil, logger(&a.log))
 	}()
 	<-reading
 	js := a.bus.streams(t)

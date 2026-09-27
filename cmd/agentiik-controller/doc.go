@@ -80,6 +80,16 @@
 // nothing while looking alive. A renewed one is taken with no restart: the bus drops the connection
 // when the old one expires, and the connection comes back with what the file holds then.
 //
+// # Purging
+//
+// The controller that leads runs the retention purges and the collection, as package purge does
+// them: once as its term begins, and every ten minutes after, each a batch at a time, so that the
+// object store and the database shrink by what has run out and a backlog is worked through a pass
+// at a time rather than in one transaction. One controller at a time, asking the fence before
+// every call, so that two never delete the same bytes. A pass that removed something says what in
+// one line, and what each pass removed is counted in the metrics; one that failed says why, holds
+// nothing up, and is taken up again by the next.
+//
 // # Metrics
 //
 // Where AGK_METRICS_LISTEN is set, the program answers GET /metrics there in the Prometheus text
@@ -104,5 +114,6 @@
 // than on the flags passed.
 //
 // The controller writes in the object store's directory as well as reading it, since it puts every
-// task's inputs there, so internal/config refuses a directory the program cannot write in.
+// task's inputs there and deletes what the purges and the collection let go of, so internal/config
+// refuses a directory the program cannot write in.
 package main
