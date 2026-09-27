@@ -75,14 +75,18 @@ create table if not exists schema_migrations (
 // then creates the role the application does connect as. Two calls at once race on the
 // catalogue, so Provision holds a lock around this one.
 func Migrate(ctx context.Context, conn *pgx.Conn) ([]string, error) {
-	return migrateThrough(ctx, conn, "")
+	return MigrateThrough(ctx, conn, "")
 }
 
-// migrateThrough is Migrate, stopping after the migration named last, or applying every one where
-// last is empty. A test of an upgrade migrates a database as far as the release it upgrades from
-// had, fills it as that release did, and then lets Provision apply the rest, as the next release's
-// init does.
-func migrateThrough(ctx context.Context, conn *pgx.Conn, last string) ([]string, error) {
+// MigrateThrough is Migrate, stopping after the migration named last, or applying every one where
+// last is empty.
+//
+// An installation never stops part way, and nothing but a test calls it with a name: a test of an
+// upgrade migrates a database as far as the release it upgrades from had, fills it as that release
+// did, and then lets Provision apply the rest, as the next release's init does. Exported for the
+// tests that upgrade through the programs rather than through this package, since an upgrade is
+// only proved where the programs that read the database afterwards are the ones that ship.
+func MigrateThrough(ctx context.Context, conn *pgx.Conn, last string) ([]string, error) {
 	if _, err := conn.Exec(ctx, schemaTable); err != nil {
 		return nil, fmt.Errorf("db: the migration record could not be created: %w", err)
 	}

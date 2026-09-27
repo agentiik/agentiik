@@ -29,7 +29,7 @@ func migratedAt(t *testing.T, last string) (super, role string) {
 		t.Fatal(err)
 	}
 	defer conn.Close(t.Context())
-	if _, err := migrateThrough(t.Context(), conn, last); err != nil {
+	if _, err := MigrateThrough(t.Context(), conn, last); err != nil {
 		t.Fatalf("the database could not be migrated as far as %s: %s", last, err)
 	}
 	return super, role
