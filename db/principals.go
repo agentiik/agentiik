@@ -292,6 +292,29 @@ func (w *Wide) AddMember(ctx context.Context, group, login string) (bool, error)
 	return tag.RowsAffected() == 1, nil
 }
 
+// HoldMember holds for key share what removing login takes before their user row, in the order it
+// takes them: their personal namespace, where there is one, and then their principal. A membership
+// telling the owners of the namespaces its group holds a role in, among whom the member may now be,
+// holds the member's principal as each recipient's, and their personal namespace where the group
+// holds a role there, after the insert took the member's user row; the removal takes the namespace,
+// the principal and then the user row. Held first, a membership and a removal of its member take
+// turns, where otherwise each would hold what the other waits for. A login whose principal is gone
+// is ErrNoPrincipal.
+func (w *Wide) HoldMember(ctx context.Context, login string) error {
+	if _, err := w.tx.Exec(ctx, `select from namespaces where name = $1 for key share`, login); err != nil {
+		return fmt.Errorf("db: the personal namespace of %s could not be held: %w", login, err)
+	}
+	var held string
+	err := w.tx.QueryRow(ctx, `select id from principals where id = $1 for key share`, login).Scan(&held)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	}
+	if err != nil {
+		return fmt.Errorf("db: principal %s could not be held: %w", login, err)
+	}
+	return nil
+}
+
 // RemoveMember takes a user out of a group, and answers whether they were in it.
 func (w *Wide) RemoveMember(ctx context.Context, group, login string) (bool, error) {
 	tag, err := w.tx.Exec(ctx, `delete from group_members where group_name = $1 and login = $2`, group, login)

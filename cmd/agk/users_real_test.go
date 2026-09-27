@@ -104,7 +104,7 @@ func agkAt(t *testing.T, url, token string, args ...string) (int, string, string
 var aLink = regexp.MustCompile(`(?m)^https://agentiik\.example\.com/auth/enrol#agkenrol_[A-Za-z0-9_-]{43,}$`)
 
 // The first administrator is created with the bootstrap token and the link printed, with the line
-// that says the token ends at their enrolment; run again, a fresh link, saying the one before no
+// that says the token ends at their first sign-in; run again, a fresh link, saying the one before no
 // longer works. A user who is not an administrator, or an administrator created with an API token,
 // is printed the link alone.
 func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(t *testing.T) {
@@ -116,7 +116,7 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	before := regexp.MustCompile(`^dan is an administrator with no credential yet\. Open this link once, before \d\d:\d\d UTC, to enrol a passkey, or a password where the installation allows one:$`)
 	if len(lines) != 3 || !before.MatchString(lines[0]) || !aLink.MatchString(lines[1]) ||
-		lines[2] != "the bootstrap token works until dan has enrolled; then sign in as dan with agk login" {
+		lines[2] != "the bootstrap token works until dan has signed in; then sign in as dan with agk login" {
 		t.Fatalf("agk user create dan --admin printed:\n%s", out)
 	}
 
@@ -146,7 +146,7 @@ func TestTheFirstAdministratorIsCreatedWithTheBootstrapTokenAndPrintedTheirLink(
 	// printed a fresh link; with another display name, refused in the installation's words.
 	for _, args := range [][]string{{"user", "create", "dan"}, {"user", "create", "dan", "--admin"}} {
 		code, out, errs := in.agk(t, in.bootstrap, args...)
-		if code != exitSucceeded || !strings.HasPrefix(out, "dan is an administrator who has not enrolled yet") || !strings.Contains(out, "the bootstrap token works until dan has enrolled") {
+		if code != exitSucceeded || !strings.HasPrefix(out, "dan is an administrator who has not enrolled yet") || !strings.Contains(out, "the bootstrap token works until dan has signed in") {
 			t.Errorf("agk %s left with %d:\n%s%s", strings.Join(args, " "), code, out, errs)
 		}
 	}

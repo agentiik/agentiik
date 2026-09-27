@@ -126,9 +126,11 @@ func TestAWorkflowIsSharedListedAndRevokedWithAgk(t *testing.T) {
 	if code, out, _ := agkWithToken(t, in.url, in.bob, "whoami", "finance"); code != exitSucceeded || out != "bob, in group:team-ops\non finance: nothing\n" {
 		t.Errorf("agk whoami on the namespace printed %q", out)
 	}
-	// A workflow with no grant of its own holds what its namespace gives.
+	// A workflow with no grant of its own holds what its namespace gives, unless denies there take
+	// all of it, which the installation does not say, since it names no workflow its caller cannot
+	// read.
 	if code, out, _ := agkWithToken(t, in.url, in.alice, "whoami", "finance/monthly-invoicing"); code != exitSucceeded ||
-		out != "alice\non finance/monthly-invoicing: workflow:read, workflow:run, workflow:write, workflow:delete, run:read, run:read_data, secret:use, secret:write, grant:manage\n" {
+		out != "alice\non finance/monthly-invoicing: workflow:read, workflow:run, workflow:write, workflow:delete, run:read, run:read_data, secret:use, secret:write, grant:manage, from finance, unless denies there take all of it\n" {
 		t.Errorf("agk whoami on a workflow alice owns through its namespace printed %q", out)
 	}
 	// A namespace nobody shares lists nothing, and says so.

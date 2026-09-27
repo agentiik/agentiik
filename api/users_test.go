@@ -731,6 +731,8 @@ func TestAGroupsMembershipChangesWhatItsGrantsReachAndTouchesNoGrant(t *testing.
 	if n := in.count(t, `select count(*) from grants where principal = 'group:team-finance'`); n != 1 {
 		t.Errorf("a membership change left %d grants of the group, and there was one", n)
 	}
+	// Putting her back is told to finance's owners, of whom there are none, and carol is the one
+	// administrator: recorded as telling nobody there.
 	for range 2 {
 		if w := in.ask(t, "PUT", "/api/v1/groups/team-finance/members/alice", in.carol, "", &now); w.Code != http.StatusOK || !slices.Equal(now.Members, []string{"alice", "bob-martin"}) {
 			t.Errorf("putting alice back answered %d: %s", w.Code, w.Body)
@@ -803,7 +805,7 @@ func TestAGroupsMembershipChangesWhatItsGrantsReachAndTouchesNoGrant(t *testing.
 		`group.create group:team-finance done {"members":["alice","bob-martin"]}`,
 		`group.create group:finance-leads done {"members":[]}`,
 		`group_member.remove group:team-finance done {"member":"alice"}`,
-		`group_member.add group:team-finance done {"member":"alice"}`,
+		`group_member.add group:team-finance done {"member":"alice","notified":{"finance":[]}}`,
 		`group_member.add group:team-finance unchanged {"member":"alice"}`,
 		`group_member.remove group:finance-leads unchanged {"member":"alice"}`,
 		`group.delete group:team-finance done {"members":["alice","bob-martin"]}`,

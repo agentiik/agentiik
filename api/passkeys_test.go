@@ -812,6 +812,53 @@ func TestStartingACeremonyWaitsOnNoOtherCeremony(t *testing.T) {
 	}
 }
 
+// The open challenges are bounded across the installation: with db.ChallengesLive open, starting a
+// ceremony, an assertion or a registration from a code, is a 503 whose Retry-After is the seconds
+// until the oldest lapses, and writes nothing, no challenge, no passkey handle for the user a code
+// names, and no sweep of those past their minutes. A challenge past its minutes counts for nothing,
+// and once the oldest open one has lapsed the next ceremony starts.
+func TestTheOpenChallengesAreBoundedAcrossTheInstallation(t *testing.T) {
+	in := someCeremonies(t)
+	code := in.user(t, "bob", false)
+	now := in.clock.Format(time.RFC3339Nano)
+	in.exec(t,
+		`insert into webauthn_challenges (challenge, ceremony, issued_at, expires_at)
+		 values (sha256('lapsed'), 'assertion', '`+now+`'::timestamptz - interval '10 minutes', '`+now+`'::timestamptz - interval '6 minutes')`,
+		fmt.Sprintf(`insert into webauthn_challenges (challenge, ceremony, issued_at, expires_at)
+		 select sha256(int4send(i)), 'assertion', '%[1]s'::timestamptz - interval '200 seconds',
+		        '%[1]s'::timestamptz + interval '90 seconds' + i * interval '1 millisecond'
+		   from generate_series(0, %[2]d - 1) i`, now, db.ChallengesLive))
+	held := db.ChallengesLive + 1
+
+	for _, body := range []string{`{"ceremony":"assertion"}`, fmt.Sprintf(`{"ceremony":"registration","code":%q}`, code)} {
+		w := in.call(t, "POST", "/api/v1/auth/passkey/options", body, "")
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "90" || !strings.Contains(w.Body.String(), "try again then") {
+			t.Errorf("the options %s with %d challenges open answered %d, Retry-After %q: %s", body, db.ChallengesLive, w.Code, w.Header().Get("Retry-After"), w.Body)
+		}
+	}
+	if n := in.count(t, `select count(*) from webauthn_challenges`); n != held {
+		t.Errorf("the refused ceremonies left %d challenges, and %d were there", n, held)
+	}
+	if n := in.count(t, `select count(*) from users where webauthn_handle is not null`); n != 0 {
+		t.Errorf("a refused registration kept a passkey handle for %d users", n)
+	}
+	if got := in.actions(t); len(got) != 2 {
+		t.Errorf("the refused ceremonies were recorded: %q", got)
+	}
+
+	// At 90 seconds the oldest lapses, and one ceremony starts in its place; a second later a
+	// thousand more have lapsed.
+	*in.clock = in.clock.Add(90 * time.Second)
+	in.options(t, `{"ceremony":"assertion"}`)
+	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", `{"ceremony":"assertion"}`, ""); w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" {
+		t.Errorf("with the lapsed challenge's place taken, the options answered %d, Retry-After %q", w.Code, w.Header().Get("Retry-After"))
+	}
+	*in.clock = in.clock.Add(time.Second)
+	if w := in.enrol(t, newBrowser(), code, ""); w.Code != http.StatusOK {
+		t.Errorf("once the oldest challenges lapsed, the registration answered %d %s", w.Code, w.Body)
+	}
+}
+
 // The policy's user_verification is asked for and held to: required by default, so an
 // authenticator that did not verify its user registers nothing; preferred, and it does.
 // device_bound_only refuses a synced passkey with 403 naming the setting, and spends no code.

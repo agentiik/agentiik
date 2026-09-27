@@ -142,6 +142,12 @@ type Joined struct {
 	Pool       string
 	Credential string
 	RotateBy   time.Time
+
+	// Labels are the labels the runner joined with, those it claimed, and IssuedBy who issued
+	// the join token it spent: what the join is recorded with, since the machine is nobody a
+	// grant names and the token is how somebody let it in.
+	Labels   []string
+	IssuedBy string
 }
 
 // Join redeems a token and creates the runner.
@@ -164,14 +170,14 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 		return Joined{}, errors.New("db: a runner reporting its containment names the runtime its daemon uses")
 	}
 
-	var id, pool, hashed string
+	var id, pool, hashed, issuer string
 	var permitted []string
 	var expires time.Time
 	var redeemed *time.Time
 	err := w.tx.QueryRow(ctx,
-		`select id, pool, labels, hash, expires_at, redeemed_at from join_tokens
+		`select id, pool, labels, hash, issued_by, expires_at, redeemed_at from join_tokens
 		 where hash = $1 for update`, token.Hash(j.Token)).
-		Scan(&id, &pool, &permitted, &hashed, &expires, &redeemed)
+		Scan(&id, &pool, &permitted, &hashed, &issuer, &expires, &redeemed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Joined{}, ErrNoJoinToken
 	}
@@ -246,7 +252,10 @@ func (w *Wide) Join(ctx context.Context, j Joining, rotateAfter time.Duration, n
 		id, now, runner); err != nil {
 		return Joined{}, fmt.Errorf("db: the join token could not be spent: %w", err)
 	}
-	return Joined{Runner: runner, Pool: pool, Credential: clear, RotateBy: rotate}, nil
+	return Joined{
+		Runner: runner, Pool: pool, Credential: clear, RotateBy: rotate,
+		Labels: orEmptyStrings(j.Labels), IssuedBy: issuer,
+	}, nil
 }
 
 // Runner is one host, as the inventory holds it.

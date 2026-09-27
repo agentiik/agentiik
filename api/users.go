@@ -823,7 +823,7 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 			if err != nil {
 				return err
 			}
-			if err := widened(ctx, wide, denies, who, s.now(), detail); err != nil {
+			if err := widened(ctx, wide, denies, db.Widening{Act: db.ActGroupRemoved, By: string(who)}, s.now(), detail); err != nil {
 				return err
 			}
 		}
@@ -858,6 +858,8 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 // grant. Put in twice is the same answer, and recorded as unchanged. Refused with 409 naming the
 // setting where, once the bootstrap token has ended, it would leave no administrator able to sign in,
 // the group holding a role in a namespace whose policy takes their way in (keepAnAdministrator).
+// Whoever is put in, the owners of each namespace where the group holds a role are told, as of a
+// grant written there by the installation's power: the user now holds what that role gives.
 func (s *UserAPI) addMember(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	s.membership(w, r, who, true)
 }
@@ -903,6 +905,11 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		action := audit.GroupMemberAdd
 		if in {
 			err = keepAnAdministrator(ctx, wide, s.now(), s.ipAddressed, func() error {
+				// Held before the insert, as the removal of the member takes them, since the
+				// owners told below may count the member among them (db.Wide.HoldMember).
+				if err := wide.HoldMember(ctx, login); err != nil {
+					return err
+				}
 				var err error
 				changed, err = wide.AddMember(ctx, name, login)
 				return err
@@ -917,19 +924,28 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		if now, err = wide.Group(ctx, name); err != nil {
 			return err
 		}
-		// An administrator putting themselves in a group widens their own access wherever its
-		// grants give something, and taking themselves out of one wherever its denies took
-		// something away: "an administrator widening their own access notifies the namespace
-		// owners", however they came to it.
+		// Putting somebody in a group widens their access wherever its grants give a role, which
+		// the namespace's owners are told of as of a grant the installation's power wrote, whoever
+		// is put in; and an administrator taking themselves out of one widens their own wherever
+		// its denies took something away: "an administrator widening their own access notifies
+		// the namespace owners", however they came to it. Every caller here administers the
+		// installation, the bootstrap token included.
 		detail := map[string]any{"member": login}
-		if changed && string(who) == login {
-			reach, err := groupGrants(ctx, wide, name, in, s.now())
-			if err != nil {
-				return err
-			}
-			if err := widened(ctx, wide, reach, who, s.now(), detail); err != nil {
-				return err
-			}
+		var reach []access.Grant
+		var what db.Widening
+		switch {
+		case changed && in:
+			reach, err = groupGrants(ctx, wide, name, true, s.now())
+			what = db.Widening{Act: db.ActJoinedGroup, By: string(who), Member: login}
+		case changed && string(who) == login:
+			reach, err = groupGrants(ctx, wide, name, false, s.now())
+			what = db.Widening{Act: db.ActLeftGroup, By: string(who)}
+		}
+		if err != nil {
+			return err
+		}
+		if err := widened(ctx, wide, reach, what, s.now(), detail); err != nil {
+			return err
 		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
@@ -976,19 +992,21 @@ func groupGrants(ctx context.Context, wide *db.Wide, group string, gives bool, n
 	return reach, nil
 }
 
-// widened tells the owners of the namespace of each grant that who, an administrator, widened their
-// own access there by it, the grant given or the deny taken away, as TellOwners tells them of a grant
-// they wrote themselves, and writes who was told into detail as notified, by namespace. A namespace
-// whose owners are who alone is written with nobody, so that the entry says the act widened who's
-// access there all the same. It writes nothing where grants is empty.
-func widened(ctx context.Context, wide *db.Wide, grants []access.Grant, who Principal, now time.Time, detail map[string]any) error {
+// widened tells the owners of the namespace of each grant that an administrator widened access there
+// by it, the group's role given to a member or its deny taken from them, as what says, the act, who
+// did it and the member put in, as TellOwners tells them of a grant written there by the
+// installation's power, and writes who was told into detail as notified, by namespace. A namespace
+// whose owners are the administrator alone is written with nobody, so that the entry says the act
+// widened access there all the same. It writes nothing where grants is empty.
+func widened(ctx context.Context, wide *db.Wide, grants []access.Grant, what db.Widening, now time.Time, detail map[string]any) error {
 	if len(grants) == 0 {
 		return nil
 	}
-	at := now.UTC().Truncate(time.Microsecond)
+	what.At = now.UTC().Truncate(time.Microsecond)
 	notified := map[string][]string{}
 	for _, g := range grants {
-		told, err := wide.TellOwnersIn(ctx, g.Scope.Namespace, g, string(who), at)
+		what.Grant = g
+		told, err := wide.TellOwnersIn(ctx, g.Scope.Namespace, what)
 		if err != nil {
 			return err
 		}

@@ -114,8 +114,9 @@ func TestMeIsTheCallersIdentityGroupsAndPermissions(t *testing.T) {
 
 // What a token's scope narrows is narrowed here too: a workflow it reaches holds what the namespace
 // gives there, which its namespace's key, outside it, no longer says; and a workflow whose denies
-// take everything its namespace gives is written holding nothing, since leaving it out would read
-// as the namespace's permissions applying to it.
+// take everything its namespace gives is left out, as one the caller cannot read, whose name the
+// answer does not give them, though leaving it out reads as the namespace's permissions applying
+// to it.
 func TestMeIsNarrowedByTheCredential(t *testing.T) {
 	in := someSharing(t)
 	narrowed := in.token(t, "alice", []string{"workflow:run", "run:read_data", "grant:manage"}, []string{"finance/payroll", "hr"}, in.now.Add(time.Hour))
@@ -135,8 +136,8 @@ func TestMeIsNarrowedByTheCredential(t *testing.T) {
 	for _, deny := range []string{"workflow:read", "run:read"} {
 		in.granted(t, "/api/v1/hr/workflows/onboarding/grants", "carol", `{"principal":"ivan","deny":"`+deny+`"}`)
 	}
-	if _, raw := in.me(t, "ivan"); !slices.Equal(permissionsOf(raw), []string{"hr/onboarding: ", "hr: workflow:read,run:read"}) {
-		t.Errorf("ivan, viewing hr and denied all of it on onboarding, holds %q", permissionsOf(raw))
+	if _, raw := in.me(t, "ivan"); !slices.Equal(permissionsOf(raw), []string{"hr: workflow:read,run:read"}) || strings.Contains(string(raw), "onboarding") {
+		t.Errorf("ivan, viewing hr and denied all of it on onboarding, is answered %s", raw)
 	}
 }
 
@@ -155,7 +156,8 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 		t.Fatalf("frank is told %s", raw)
 	}
 	passkey, widened := me.Notifications[0], me.Notifications[1]
-	if passkey.Kind != "passkey_counter_refused" || passkey.Credential != "aVBob25lUGFzc2tleQ" || passkey.Grant != nil || passkey.Namespace != "" {
+	if passkey.Kind != "passkey_counter_refused" || passkey.Credential != "aVBob25lUGFzc2tleQ" || passkey.Grant != nil || passkey.Namespace != "" ||
+		passkey.Act != "" || passkey.By != "" || strings.Contains(string(raw), `"act":"",`) {
 		t.Errorf("frank is told of a passkey as %+v", passkey)
 	}
 	if widened.Kind != "admin_access_widened" || widened.Namespace != "finance" || !widened.At.Equal(in.at) || widened.Credential != "" ||
@@ -170,7 +172,7 @@ func TestAnOwnerReadsAndDismissesWhatTheyAreTold(t *testing.T) {
 	}
 	json.Unmarshal(raw, &told)
 	valid(t, "/$defs/accessGrant", told.Notifications[1].Grant)
-	if want := `{"id":"` + widened.ID + `","kind":"admin_access_widened","at":"` + in.at.Format(time.RFC3339) + `","namespace":"finance","grant":`; !strings.Contains(string(raw), want) {
+	if want := `{"id":"` + widened.ID + `","kind":"admin_access_widened","at":"` + in.at.Format(time.RFC3339) + `","act":"granted","by":"carol","namespace":"finance","grant":`; !strings.Contains(string(raw), want) {
 		t.Errorf("the notification is written\n%s\nwant it to hold\n%s", raw, want)
 	}
 
