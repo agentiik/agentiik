@@ -40,9 +40,10 @@
 //	agk namespace     create, list, show, delete and quotas: the namespaces an
 //	                  administrator creates, bounds and removes, and whoever holds a grant
 //	                  in one reads
-//	agk auth policy   the authentication policy, the installation's or a namespace's
-//	                  tightening of it, which anybody signed in reads and an administrator
-//	                  sets, the settings given on top of those held
+//	agk auth policy   the authentication policy: the installation's, which anybody signed in
+//	                  reads, or a namespace's tightening of it, which whoever holds a grant
+//	                  in the namespace reads; an administrator sets either, the settings
+//	                  given on top of those held
 //
 // Two more, user and group, are an administrator's, and the bootstrap token's until the first
 // administrator has enrolled:

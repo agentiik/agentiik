@@ -92,10 +92,11 @@ const (
 // code in the registration's options and spend it when the passkey is recorded, and refuse a
 // session a code opened, which would register a passkey without spending it.
 //
-// A session a password opened may only enrol as well, where the policy that applies to its account
-// requires a passkey, as the OpenAPI document's sessionKind says of a passkey not held yet: the
-// passkey that brings the account to min_passkeys takes the password (policy.go). That is
-// read from the credential the session records, at every request, and never written: see
+// A session a password opened may only enrol as well, wherever the policy that applies to its
+// account requires a passkey, whatever passkeys the account holds, where the OpenAPI document's
+// sessionKind says so of an account holding none yet: the passkey that brings the account to
+// min_passkeys takes the password, and a password found beside them opens no more (policy.go). That
+// is read from the credential the session records, at every request, and never written: see
 // identifySession.
 type OpenedBy struct {
 	Credential    string
@@ -185,11 +186,11 @@ func (p *Principals) sessionsOf(r *http.Request) []string {
 // What a session a password opened may do is read from the policy that applies to its account now,
 // so that a policy changed applies from the next request, as do passkeys enrolled from the session:
 // nothing where passwords are forbidden, since the policy says no password exists any more and
-// whatever one opened goes with it; enrolling alone where a passkey is required, which the account's
-// passkeys, not its password, are the way past; and whatever the user's grants allow otherwise. Such a
-// session is enrolling without having been opened by a code, which the registration ceremony tells
-// apart: it registers from it. A session a synced passkey opened opens nothing where
-// device_bound_only applies, read the same way.
+// whatever one opened goes with it; enrolling alone where a passkey is required, which the
+// account's passkeys, not its password, are the way past; and whatever the user's grants allow
+// otherwise. Such a session is enrolling without having been opened by a code, which the
+// registration ceremony tells apart: it registers from it. A session a synced passkey opened opens
+// nothing where device_bound_only applies, read the same way.
 func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
 	if !safe(r.Method) {
 		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {

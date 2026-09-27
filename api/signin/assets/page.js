@@ -1,10 +1,9 @@
 // The sign-in and enrolment page: the two passkey ceremonies, the password fallback where the
 // installation offers it, a password set from an enrolment code or from a session and a one-time
-// code generator enrolled beside it, the credentials a signed-in account holds and their removal,
-// a sign-in again where adding a way in asks for a recent one, who this browser is signed in as,
-// and signing out. codec.js,
-// loaded before it, converts what a browser without WebAuthn Level 3's JSON methods cannot, and
-// qr.js draws a generator's key as a QR code.
+// code generator enrolled beside it, the credentials a signed-in account holds and their removal, a
+// sign-in again where adding a way in asks for a recent one, who this browser is signed in as, and
+// signing out. codec.js, loaded before it, converts what a browser without WebAuthn Level 3's JSON
+// methods cannot, and qr.js draws a generator's key as a QR code.
 //
 // Every request is a fetch to the API on this page's own origin, with credentials same-origin, so
 // that the session cookie travels with it and nowhere else, and in fetch's default mode, cors. The

@@ -31,9 +31,9 @@ import (
 // an administrator gives somebody to get in with, and on an installation addressed by an IP address
 // a password is the one thing to get in with. It is spent by the password it sets, in the
 // transaction that records the password, and the password then opens the session a password opens:
-// full where the policy is met, and enrolling passkeys and nothing else where it requires a passkey,
-// as a password sign-in's would. A suspended user sets a password with a
-// code and opens no session, as a suspended user enrolling a passkey does.
+// full where the policy is met, and enrolling passkeys and nothing else where it requires a
+// passkey, as a password sign-in's would. A suspended user sets a password with a code and opens no
+// session, as a suspended user enrolling a passkey does.
 //
 // An administrator's code, the first administrator's link or a recovery code, ends the bootstrap
 // token where it has not ended and the session the password opens is a full one: always on an

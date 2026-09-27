@@ -1196,8 +1196,8 @@ func TestASessionThatMayOnlyEnrolRegistersAPasskey(t *testing.T) {
 	if err := p.AcceptSessions(publicOrigin); err != nil {
 		t.Fatal(err)
 	}
-	// Every session may only enrol here, as a password's does where the policy requires a passkey
-	// its account does not hold.
+	// Every session may only enrol here, as a password's does where the policy requires a
+	// passkey.
 	enrolling := func(r *http.Request) (api.Identity, error) {
 		as, err := p.Identify(r)
 		as.Enrolling = as.Principal != "" && as.Token == ""

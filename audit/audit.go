@@ -120,14 +120,13 @@ const (
 // generator confirmed; CredentialRemove is a passkey, a password or a TOTP generator removed,
 // recorded by its identifier and its type, the generator that goes with a password among them, and
 // with the reason where the policy took it: a password its account no longer needs once it holds
-// min_passkeys. EnrolmentUse is the
-// enrolment link or recovery code a registration or a password spent.
-// BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded once and
-// for good. SigninSucceed is a session opened, by an assertion, by a password, or by the registration
-// or the password an enrolment link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
-// since the sign-in it records committed nothing; its actor is the address the request came from,
-// since nobody was identified, and its target the account the passkey names, or the credential ID
-// presented where it names none.
+// min_passkeys. EnrolmentUse is the enrolment link or recovery code a registration or a password
+// spent. BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded
+// once and for good. SigninSucceed is a session opened, by an assertion, by a password, or by the
+// registration or the password an enrolment link started. SigninFail is an assertion refused, with
+// the reason, in a transaction of its own since the sign-in it records committed nothing; its actor
+// is the address the request came from, since nobody was identified, and its target the account the
+// passkey names, or the credential ID presented where it names none.
 const (
 	CredentialEnrol  = "credential.enrol"
 	CredentialRemove = "credential.remove"

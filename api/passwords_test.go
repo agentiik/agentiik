@@ -32,9 +32,9 @@ import (
 
 // passwordsOf is an installation serving the password sign-in, the passkey ceremonies, GET
 // /api/v1/me, the API tokens, the authentication policy, the caller's credentials and the users on
-// https://agentiik.example.com, on a clock the test moves. alice
-// holds a password; bob a password and a TOTP generator; carol a password and a passkey; dave, who
-// is suspended, a password; and erin nothing. alice holds a grant in finance.
+// https://agentiik.example.com, on a clock the test moves. alice holds a password; bob a password
+// and a TOTP generator; carol a password and a passkey; dave, who is suspended, a password; and
+// erin nothing. alice holds a grant in finance.
 type passwordsOf struct {
 	origin    string
 	pool      *db.Pool
