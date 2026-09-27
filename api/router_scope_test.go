@@ -69,7 +69,10 @@ func narrowed(t *testing.T, rt *api.Router, method, path, as, keeps, within stri
 // A route refuses what the token does not keep, at the scope the route answers at, whatever the
 // principal holds: a permission the token leaves out, a workflow outside what it reaches, and the
 // installation for a token reaching some namespaces. Absent and forbidden stay the same 404 in a
-// namespace, and the installation's refusal a 403.
+// namespace, and the installation's refusal a 403. The authorizer is asked what it is asked when the
+// token keeps the permission, one question about the same target, so that a refusal by the token
+// takes as long as one by the grants: answered sooner, it told a token's holder which targets outside
+// its reach exist.
 func TestTheRouterRefusesWhatATokenDoesNotKeep(t *testing.T) {
 	auth := &recording{}
 	rt, err := api.NewRouter(auth, scoped)
@@ -106,8 +109,8 @@ func TestTheRouterRefusesWhatATokenDoesNotKeep(t *testing.T) {
 		if w.Code != c.want {
 			t.Errorf("%s %s keeping %q within %q answered %d, want %d", c.method, c.path, c.keeps, c.within, w.Code, c.want)
 		}
-		if c.want != http.StatusOK && len(auth.asked) > 0 {
-			t.Errorf("%s %s keeping %q within %q asked the authorizer about %v, which the token had answered already", c.method, c.path, c.keeps, c.within, auth.asked)
+		if len(auth.asked) != 1 {
+			t.Errorf("%s %s keeping %q within %q asked the authorizer about %v, and every request is one question", c.method, c.path, c.keeps, c.within, auth.asked)
 		}
 	}
 }

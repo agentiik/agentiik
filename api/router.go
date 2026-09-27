@@ -553,7 +553,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		of, err := rt.runs.RunOf(r.Context(), run)
 		switch {
 		case errors.Is(err, ErrNoRun):
-			rt.deny(w, g.scope)
+			rt.denyAfterAsking(r.Context(), w, as, g, target)
 			return
 		case err != nil:
 			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
@@ -562,7 +562,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		if g.within && of.Namespace != target.Namespace {
 			// A run asked for under a namespace it is not in is not there, and is refused
 			// before anything is asked about the namespace it is in.
-			rt.deny(w, g.scope)
+			rt.denyAfterAsking(r.Context(), w, as, g, target)
 			return
 		}
 		target = of
@@ -667,26 +667,73 @@ func (rt *Router) serveAcross(w http.ResponseWriter, r *http.Request, g guard, h
 			return
 		}
 	}
-	h(w, r, who, within, func(ctx context.Context, over Target) (bool, error) {
+	askable := func(over Target) error {
 		switch {
 		case over.Namespace == "":
-			return false, errors.New("api: a route answering across the installation asked about a target naming no namespace, which is the installation itself")
+			return errors.New("api: a route answering across the installation asked about a target naming no namespace, which is the installation itself")
 		case within.Namespace != "" && over.Namespace != within.Namespace:
-			return false, fmt.Errorf("api: a route answering across namespace %q asked about %q, which its path does not name", within.Namespace, over.Namespace)
+			return fmt.Errorf("api: a route answering across namespace %q asked about %q, which its path does not name", within.Namespace, over.Namespace)
+		}
+		return nil
+	}
+	r = r.WithContext(context.WithValue(r.Context(), eachKey{}, func(ctx context.Context, over []Target) ([]bool, error) {
+		for _, target := range over {
+			if err := askable(target); err != nil {
+				return nil, err
+			}
+		}
+		return rt.allowAmong(ctx, as, g.permission, over)
+	}))
+	h(w, r, who, within, func(ctx context.Context, over Target) (bool, error) {
+		if err := askable(over); err != nil {
+			return false, err
 		}
 		return rt.allow(ctx, as, g.permission, over)
 	})
 }
 
-// allow is the one place the router asks the authorizer: what the principal holds over the target,
-// intersected with what its credential narrows it to. The narrowing is asked first, and a token
-// that does not keep the permission there is refused without a question the principal's grants
-// would have answered yes to, since "a scope can only narrow".
+// allow is the one place the router asks the authorizer about one target: what the principal holds
+// over it, intersected with what its credential narrows it to, since "a scope can only narrow".
+//
+// The authorizer is asked whether or not the credential keeps the permission there, and its answer
+// is then narrowed. Refused without the question, a target outside a token's scope was answered in
+// less time than one inside it, which told the token's holder, from how long a refusal took, which
+// runs outside its scope exist: a run that is not there is refused after a question too.
 func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over Target) (bool, error) {
-	if !as.Scope.Keeps(what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}) {
-		return false, nil
+	held, err := rt.auth.Allow(ctx, as.Principal, what, over)
+	if err != nil {
+		return false, err
 	}
-	return rt.auth.Allow(ctx, as.Principal, what, over)
+	return held && as.Scope.Keeps(what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}), nil
+}
+
+// allowAmong is allow about several targets as one question, in the order given: of an authorizer
+// implementing Among, at a cost that does not depend on the targets; of any other, one target at a
+// time.
+func (rt *Router) allowAmong(ctx context.Context, as Identity, what Permission, over []Target) ([]bool, error) {
+	var held []bool
+	if among, ok := rt.auth.(Among); ok {
+		var err error
+		if held, err = among.AllowAmong(ctx, as.Principal, what, over); err != nil {
+			return nil, err
+		}
+		if len(held) != len(over) {
+			return nil, fmt.Errorf("api: the authorizer answered about %d targets when it was asked about %d", len(held), len(over))
+		}
+	} else {
+		held = make([]bool, len(over))
+		for i, target := range over {
+			allowed, err := rt.auth.Allow(ctx, as.Principal, what, target)
+			if err != nil {
+				return nil, err
+			}
+			held[i] = allowed
+		}
+	}
+	for i, target := range over {
+		held[i] = held[i] && as.Scope.Keeps(what, access.Scope{Namespace: target.Namespace, Workflow: target.Workflow})
+	}
+	return held, nil
 }
 
 // admits is whether a route taking Needs lets the caller through, and whether it did so by an
@@ -762,6 +809,24 @@ func (rt *Router) deny(w http.ResponseWriter, scope Scope) {
 		return
 	}
 	refuse(w, http.StatusForbidden, "you do not hold what this needs")
+}
+
+// standIn is what the authorizer is asked about in place of a run that is not there: a workflow in
+// the namespace the path names, or in one of this name where it names none, whose answer is not read.
+var standIn = Target{Namespace: "absent", Workflow: "absent"}
+
+// denyAfterAsking refuses a request naming a run that is not there, or not under the namespace its
+// path names, once the authorizer has been asked what a run that is there would have been asked,
+// about standIn. Refused at once, a run that is not there was answered in the time of one lookup and
+// a run the caller may not reach in the time of a lookup and a question, which a caller measures, so
+// how long a 404 took said which runs exist.
+func (rt *Router) denyAfterAsking(ctx context.Context, w http.ResponseWriter, as Identity, g guard, path Target) {
+	asked := standIn
+	if path.Namespace != "" {
+		asked.Namespace = path.Namespace
+	}
+	rt.allow(ctx, as, g.permission, asked)
+	rt.deny(w, g.scope)
 }
 
 // refuse writes one refusal, and says nothing a caller could learn from.

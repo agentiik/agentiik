@@ -42,6 +42,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A route declaring `api.Needs.OrAdministrator` is reached by an administrator as well, whatever they hold at its scope, through a credential that carries the power, and its handler asks `api.Administering` whether the caller came in so; one declaring `api.Needs.Seeing` hands its handler `api.Sees`.
 - `api.Caller.Effective` answers what the caller holds at each scope through the credential it presented, resolved from what the authorizer says as `api.Standings`.
 - `access.Grant.Gives` and `access.Grant.Takes` answer what one grant gives or denies at a scope whatever its expiry, held to `access.Resolve`, and `access.BootstrapOperator` names the bootstrap token's principal for the API and the controller alike.
+- A 404 takes as long whatever it refuses: a route naming a run that is not there, or not under the namespace its path names, asks the authorizer about a stand-in before refusing it, and the router asks the authorizer whether or not a token keeps the permission, narrowing the answer after.
+- `GET /api/v1/runs` and `GET /api/v1/{ns}/runs` ask about every workflow they could list as one question, `api.HoldsEach`, which `api.Principals` answers as `api.Among` from the principal and its grants read once, so that a namespace's workflows no longer tell by how long their refusal takes that it exists.
 
 ### API
 

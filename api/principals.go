@@ -181,6 +181,52 @@ func (p *Principals) Allow(ctx context.Context, who Principal, what Permission, 
 	return access.Holds(principal, grants, what, access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}, now)
 }
 
+// AllowAmong is the router's Among: what Allow answers about each target, as one question. Who who
+// is is read once, and its grants and its groups' across the namespaces once, whatever the targets
+// are and however many, none included, so that refusing a listing of a namespace holding a hundred
+// workflows takes what refusing one of a namespace nobody created takes. The grants of every
+// namespace are read where Allow reads one namespace's, and package access passes over those that do
+// not apply to a target, as it does to Allow's.
+func (p *Principals) AllowAmong(ctx context.Context, who Principal, what Permission, over []Target) ([]bool, error) {
+	held := make([]bool, len(over))
+	if who == "" || !what.Valid() {
+		return held, nil
+	}
+	now := p.now()
+	principal, admin, bootstrapped, err := p.resolve(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	var grants []access.Grant
+	if who != BootstrapOperator && principal.Ref != "" {
+		err := p.pool.Installation(ctx, db.Authorisation, func(ctx context.Context, w *db.Wide) error {
+			var err error
+			grants, err = w.AccessGrantsAcross(ctx, principal, now)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i, target := range over {
+		switch {
+		case !nameable(target):
+		case who == BootstrapOperator && target.Namespace == "":
+			held[i] = bootstrapped && what == GrantManage
+		case who == BootstrapOperator:
+			held[i] = bootstrapped && access.Owner.Permissions().Has(what)
+		case principal.Ref == "":
+		case target.Namespace == "":
+			held[i] = admin && what == GrantManage
+		default:
+			if held[i], err = access.Holds(principal, grants, what, access.Scope{Namespace: target.Namespace, Workflow: target.Workflow}, now); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return held, nil
+}
+
 // HeldIn is the router's Holdings: the namespaces who holds a grant in, its own or one of its
 // groups', on the namespace or on a workflow of it, not expired, ordered by name. It is what a
 // namespace's record is shown to besides an administrator, "a principal holding a grant in it".
