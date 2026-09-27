@@ -314,6 +314,17 @@ func (w *Wide) IssueEnrolmentCode(ctx context.Context, c EnrolmentCode) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("db: the enrolment codes of %s could not be revoked: %w", c.Login, err)
 	}
+	// The sessions the codes it replaces opened end with them, those of a code spent as its
+	// session opened included: a spent code is not revoked, since it opens nothing more, but its
+	// session "ends when a fresh link replaces it" all the same, so that a link that leaked and was
+	// opened first is shut by issuing another.
+	if _, err := w.tx.Exec(ctx,
+		`update sessions set revoked_at = $3
+		  where revoked_at is null
+		    and enrolment_code in (select hash from enrolment_codes where `+replaced+`)`,
+		c.Login, c.Kind, c.IssuedAt); err != nil {
+		return false, fmt.Errorf("db: the sessions the enrolment codes of %s opened could not be ended: %w", c.Login, err)
+	}
 	_, err = w.tx.Exec(ctx,
 		`insert into enrolment_codes (hash, login, kind, issued_by, issued_at, expires_at)
 		 values ($1, $2, $3, $4, $5, $6)`,
