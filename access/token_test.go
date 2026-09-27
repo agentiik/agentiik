@@ -48,13 +48,10 @@ func TestEachHalfOfAScopeNarrowsAlone(t *testing.T) {
 			t.Errorf("a token keeping two permissions answers otherwise at %q", at)
 		}
 	}
-	// With no within, the installation is reached like anywhere else: whether the principal
-	// administers it is the principal's question, and the token keeps grant:manage or not.
-	if reading.Keeps(access.GrantManage, installation) {
-		t.Error("a token not keeping grant:manage keeps it at the installation")
-	}
-	if manages, _ := access.ParseTokenScope([]string{"grant:manage"}, nil); !manages.Keeps(access.GrantManage, installation) {
-		t.Error("a token keeping grant:manage and reaching everywhere does not keep it at the installation")
+	// "A permissions list keeps only the permissions it names, and administering is none of the
+	// nine": a list naming grant:manage administers nothing either.
+	if manages, _ := access.ParseTokenScope([]string{"grant:manage"}, nil); manages.Keeps(access.GrantManage, installation) || reading.Keeps(access.GrantManage, installation) {
+		t.Error("a token keeping a list of permissions keeps something at the installation")
 	}
 
 	inFinance, err := access.ParseTokenScope(nil, []string{"finance"})

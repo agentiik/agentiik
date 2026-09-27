@@ -58,10 +58,15 @@ func ParseTokenScope(permissions, within []string) (TokenScope, error) {
 // workflow of it, as a grant on the namespace does; a workflow it reaches is not its namespace,
 // so a question about the namespace is outside it.
 //
-// The installation is the zero Scope, which no scope reaches, since within is written as a grant's
-// scope is and no grant names the installation: a token narrowed to some namespaces administers
-// nothing, whoever its principal is.
+// The installation, the zero Scope, is kept by a token with no scope alone: "an administrator's
+// powers pass through a token only where its scope does not narrow them away. A token with no scope
+// carries them. A within takes them away, since it names namespaces and workflows and administering
+// is the installation's. A permissions list keeps only the permissions it names, and administering
+// is none of the nine. So a token an administrator mints to run one workflow never creates a user."
 func (s TokenScope) Keeps(what Permission, at Scope) bool {
+	if at.Namespace == "" {
+		return s.Permissions == nil && s.Within == nil
+	}
 	if s.Permissions != nil && !slices.Contains(s.Permissions, what) {
 		return false
 	}

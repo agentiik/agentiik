@@ -416,11 +416,12 @@ func TestThroughTheRouterATokenReachesOnlyWhatItsScopeKeeps(t *testing.T) {
 		t.Errorf("a token naming what alice lacks read hr answering %d", w.Code)
 	}
 
-	// carol administers with a token reaching everywhere, and not with one narrowed to a
-	// namespace, nor with one not keeping grant:manage.
+	// carol administers with a token of no scope, and with no narrowed one, a list naming
+	// grant:manage included: "a token an administrator mints to run one workflow never creates a
+	// user".
 	for value, want := range map[string]int{
 		in.token(t, "carol", nil, nil, in.now.Add(time.Hour)):                      http.StatusOK,
-		in.token(t, "carol", []string{"grant:manage"}, nil, in.now.Add(time.Hour)): http.StatusOK,
+		in.token(t, "carol", []string{"grant:manage"}, nil, in.now.Add(time.Hour)): http.StatusForbidden,
 		in.token(t, "carol", nil, []string{"finance"}, in.now.Add(time.Hour)):      http.StatusForbidden,
 		in.token(t, "carol", []string{"run:read"}, nil, in.now.Add(time.Hour)):     http.StatusForbidden,
 		whole: http.StatusForbidden,

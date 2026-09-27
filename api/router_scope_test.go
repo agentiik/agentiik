@@ -97,7 +97,7 @@ func TestTheRouterRefusesWhatATokenDoesNotKeep(t *testing.T) {
 		{"GET", "/api/v1/finance/secrets", "", "finance", http.StatusOK},
 		{"GET", "/api/v1/finance/secrets", "", "finance/monthly-invoicing", http.StatusNotFound},
 		{"GET", "/api/v1/runners", "", "", http.StatusOK},
-		{"GET", "/api/v1/runners", "grant:manage", "", http.StatusOK},
+		{"GET", "/api/v1/runners", "grant:manage", "", http.StatusForbidden},
 		{"GET", "/api/v1/runners", "workflow:run", "", http.StatusForbidden},
 		{"GET", "/api/v1/runners", "", "finance", http.StatusForbidden},
 	} {
