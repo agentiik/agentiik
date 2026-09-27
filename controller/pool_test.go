@@ -69,6 +69,12 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 			[]string{"runner pool ops", "not among the allowed_runner_pools of the namespace finance (default)"},
 		},
 		{
+			"a pool that neither accepts finance nor is among its allowed pools", onPool("site=ops", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('ops', '{site=ops}', '{team-ops}', 'admin');
+			 update namespaces set allowed_runner_pools = '{default}' where name = 'finance'`,
+			[]string{"runner pool ops", "does not accept the namespace finance and is not among its allowed_runner_pools (default)"},
+		},
+		{
 			"no label, and a pool default finance's allowed pools leave out", theWorkflow,
 			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin');
 			 update namespaces set allowed_runner_pools = '{ops}' where name = 'finance'`,

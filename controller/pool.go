@@ -76,6 +76,11 @@ func poolOf(namespace string, allowed []string, t graph.Task, pools []db.RunnerP
 			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which is not among the allowed_runner_pools of the namespace %s (%s), so no runner may be handed it: the step fails on the infrastructure's account until an administrator allows the pool", t.Step, other, namespace, strings.Join(allowed, ", "))}
 		}
 		if other, err := bus.Route(t.RunsOn, refusing); err == nil {
+			// Both sides named where both refuse, so that the administrator who mends one is not
+			// told of the other only by the next run.
+			if allowed != nil && !slices.Contains(allowed, other) {
+				return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s and is not among its allowed_runner_pools (%s), so no runner may be handed it: the step fails on the infrastructure's account until an administrator both lets the pool accept it and allows the pool", t.Step, other, namespace, strings.Join(allowed, ", "))}
+			}
 			return db.RunnerPool{}, unpublishable{fmt.Sprintf("step %s runs on the runner pool %s, which does not accept the namespace %s, so no runner may be handed it: the step fails on the infrastructure's account until an administrator lets the pool accept it", t.Step, other, namespace)}
 		}
 	}
