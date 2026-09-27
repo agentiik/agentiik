@@ -84,6 +84,21 @@ type Objects interface {
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// Removable is a byte layer an object can also be deleted from, which the directory Dir opens is:
+// the built-in store, whose objects the controller that leads collects once nothing references
+// them, and whose logs it purges once their run's retention has run out.
+//
+// Objects stays three methods wide, since nothing that reads or writes an object has any business
+// deleting one, and a runner's store never does. Remove answers whether it deleted the object, and
+// no error for a key that is absent, which a purge that died after deleting and before recording it
+// leaves, so that what was deleted is counted once. It removes nothing but the object: a directory
+// a key made is removed with its last object only below the key's first two segments,
+// <namespace>/sha256 or <namespace>/logs, since other objects arrive under those at any moment.
+type Removable interface {
+	Objects
+	Remove(ctx context.Context, key string) (bool, error)
+}
+
 // defaultMediaType is what an artifact is written as when the caller names no media
 // type. The envelope requires media_type on every file entry, and a store that emitted
 // an entry without one would be handing back a document the runner then refuses, so the

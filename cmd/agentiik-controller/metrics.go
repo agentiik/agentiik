@@ -20,6 +20,7 @@ import (
 	"github.com/agentiik/agentiik/db"
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/metrics"
+	"github.com/agentiik/agentiik/purge"
 )
 
 // The metrics, which this program exports and the API does not.
@@ -51,6 +52,13 @@ type counted struct {
 	retried    *metrics.Counter
 	ended      *metrics.Histogram
 	runs       *metrics.Histogram
+
+	// What the purges and the collection removed, pass after pass.
+	artifactsExpired *metrics.Counter
+	runsPurged       *metrics.Counter
+	logsPurged       *metrics.Counter
+	objectsCollected *metrics.Counter
+	bytesCollected   *metrics.Counter
 
 	// term is the term this process leads under, and nil while it stands by. The gauges are read
 	// through its fence, as every read of a controller is.
@@ -87,6 +95,21 @@ func newCounted(b *bus.Bus, log *slog.Logger) *counted {
 	c.runs = r.Histogram("agentiik_run_duration_seconds",
 		"End-to-end latency of a run, from its creation to its verdict, waits for its concurrency group and its quota included.",
 		durationBuckets, "namespace", "workflow", "state")
+	c.artifactsExpired = r.Counter("agentiik_artifacts_expired_total",
+		"References to artifacts past their retain that the artifact purge retired, each lowering its object's count by one.")
+	c.runsPurged = r.Counter("agentiik_runs_purged_total",
+		"Finished runs past their retention whose envelopes the envelope purge let go of, published and handed alike. The run and its record stay.")
+	c.logsPurged = r.Counter("agentiik_logs_purged_total",
+		"Task logs past their run's retention deleted from the object store whole. The line count stays.")
+	c.objectsCollected = r.Counter("agentiik_objects_collected_total",
+		"Objects the collection deleted from the object store: counted by nothing for the grace period, named by no live artifact, and written by no upload under way.")
+	c.bytesCollected = r.Counter("agentiik_objects_collected_bytes_total",
+		"The bytes of the objects the collection deleted from the object store.")
+	// Written at zero from the start, since they carry no label to be first seen with, so that a
+	// rate over them is one from the first scrape.
+	for _, counter := range []*metrics.Counter{c.artifactsExpired, c.runsPurged, c.logsPurged, c.objectsCollected, c.bytesCollected} {
+		counter.Add(0)
+	}
 
 	r.Gauges(c.readLeading, metrics.Desc{
 		Name: "agentiik_controller_leading",
@@ -145,6 +168,15 @@ func (c *counted) Ended(brick, version string, state agk.TaskState, ran time.Dur
 // RunEnded counts a run's end-to-end latency.
 func (c *counted) RunEnded(namespace, workflow string, state agk.RunState, took time.Duration) {
 	c.runs.Observe(took.Seconds(), namespace, workflow, state.String())
+}
+
+// purged counts what one pass of the purges removed.
+func (c *counted) purged(p purge.Purged) {
+	c.artifactsExpired.Add(float64(p.Artifacts))
+	c.runsPurged.Add(float64(p.Runs))
+	c.logsPurged.Add(float64(p.Logs))
+	c.objectsCollected.Add(float64(p.Objects))
+	c.bytesCollected.Add(float64(p.Bytes))
 }
 
 // lead says this process leads under term, until the function it answers is called.

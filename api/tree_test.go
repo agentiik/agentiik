@@ -620,6 +620,80 @@ func TestATreeObjectASweepCollectedWholeIsWrittenAgain(t *testing.T) {
 	}
 }
 
+// resweeping is an object store in memory whose one watched object is collected whole the moment a
+// push has written it: a sweep that died after deleting the bytes of an object it had claimed, and
+// before confirming, leaves the row claimed, and the next one takes it again, bytes the push has
+// just written included, before the version raises its reference.
+type resweeping struct {
+	sweeping
+}
+
+func (s *resweeping) Put(ctx context.Context, key string, r io.Reader) error {
+	if err := s.sweeping.Put(ctx, key, r); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	sweep := s.sweep
+	if key == s.watched {
+		s.sweep = nil
+	}
+	s.mu.Unlock()
+	if key == s.watched && sweep != nil {
+		sweep(func(key string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.held, key)
+		})
+	}
+	return nil
+}
+
+// A push that writes an object whose row a sweep that died left claimed writes it again once the
+// version has recorded it afresh, where the next sweep took the bytes it had just written.
+func TestATreeObjectASweepTookAfterThePushWroteItIsWrittenAgain(t *testing.T) {
+	store := &resweeping{sweeping{held: map[string][]byte{}}}
+	h, pool, super := servingOn(t, store)
+
+	script := []byte("#!/bin/sh\necho again\n")
+	key := keyOf("finance", script)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into artifact_objects (namespace, digest, size_bytes, media_type, refs, collectable_at, collecting_at)
+		 values ('finance', $1, $2, 'application/octet-stream', 0, now() - interval '2 days', now())`,
+		"sha256:"+digestOf(script), len(script)); err != nil {
+		t.Fatal(err)
+	}
+	store.watched = key
+	store.sweep = func(delete func(string)) {
+		claimed, err := pool.Collectable(t.Context(), 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gone, err := pool.Collecting(t.Context(), claimed, func(_ context.Context, o db.Object) error {
+			delete(o.Key)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed, err := pool.Collected(t.Context(), gone); err != nil || removed != 1 {
+			t.Fatalf("the sweep confirmed %d objects gone: %v", removed, err)
+		}
+	}
+
+	w, _ := call(t, h, "PUT", pushTo, "alice", pushed(t, map[string]api.PushFile{
+		"scripts/render.sh": {Content: script, Mode: "0755"},
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("the push answered %d: %s", w.Code, w.Body)
+	}
+	if store.sweep != nil {
+		t.Fatal("the sweep never ran, so this proves nothing")
+	}
+	if held, _ := store.Has(t.Context(), key); !held {
+		t.Error("the version names an object whose bytes a sweep deleted after the push wrote them, and the push answered 200")
+	}
+}
+
 // "A version is a commit": the same commit pushed again with the same files is the same version
 // and changes nothing, and the same commit with other files is a conflict, said out loud rather
 // than answered 200 while nothing was recorded.

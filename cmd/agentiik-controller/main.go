@@ -21,6 +21,7 @@ import (
 	"github.com/agentiik/agentiik/internal/config"
 	"github.com/agentiik/agentiik/internal/otlp"
 	"github.com/agentiik/agentiik/internal/stopsignal"
+	"github.com/agentiik/agentiik/purge"
 	"github.com/agentiik/agentiik/version"
 )
 
@@ -229,7 +230,7 @@ func serve(ctx context.Context, c config.Controller, log *slog.Logger) error {
 		defer counts.lead(ctl, term)()
 		o := o
 		o.Observer = counts
-		return lead(ctx, ctl, term, queue, o, export, verifier(pool.AuditTrail(), 0, log), log)
+		return lead(ctx, ctl, term, queue, o, export, verifier(pool.AuditTrail(), 0, log), purger(pool, c.Objects, ctl, term, counts, log), log)
 	})
 	return ended(err)
 }
@@ -321,12 +322,39 @@ func verifier(trail db.AuditTrail, batch int, log *slog.Logger) func(context.Con
 	}
 }
 
+// purger runs the purges and the collection on the built-in store at dir for as long as term lasts,
+// asking the fence before every call, counting what each pass removed in counts, where there are
+// any, and saying it in log where it removed anything.
+func purger(pool *db.Pool, dir string, ctl *controller.Controller, term db.Term, counts *counted, log *slog.Logger) *purge.Purger {
+	return &purge.Purger{
+		Pool: pool, Objects: artifact.Dir(dir),
+		Leading: func(ctx context.Context) error {
+			return ctl.Fenced(ctx, term, func(context.Context, *db.Wide) error { return nil })
+		},
+		Passed: func(p purge.Purged) {
+			if counts != nil {
+				counts.purged(p)
+			}
+			if p.Removed() {
+				log.Info("the purges removed what had run out",
+					"artifacts", p.Artifacts, "runs", p.Runs, "logs", p.Logs, "uploads", p.Uploads,
+					"objects", p.Objects, "bytes", p.Bytes)
+			}
+		},
+		Trouble: func(err error) {
+			log.Warn("a purge could not finish, and the next pass comes round to it", "error", err)
+		},
+	}
+}
+
 // lead is one term: watching and sweeping on one side, taking results and progress back on the
 // other, until the fence refuses a write, either of them fails, or ctx is done. The audit log is
 // exported beside them for as long as the term lasts, by the one controller that leads, so that two
 // never race each other to the sink; a sink that fails ends nothing, and is tried again. Its chain
 // in the database is verified beside them too, once at the start of the term where verify is not
-// nil, and a break found holds nothing up.
+// nil, and a break found holds nothing up. And the purges run beside them where purges is not nil,
+// once at the start of the term and then on their interval, by the one controller that leads, so
+// that two never delete the same bytes; a pass that fails ends nothing, and the next comes round.
 //
 // Each goes through the core of the term, and neither ends it for a run or a result it could not
 // handle. Watch returns whatever the function it calls returns, so a notification about one run
@@ -334,7 +362,7 @@ func verifier(trail db.AuditTrail, batch int, log *slog.Logger) func(context.Con
 // the same run, would end the term, and the program with it, over one run; a sweep reports such a
 // run and moves on, and a notification is only a shortcut to what a sweep finds. So both are
 // reported and left to the next sweep, and only the fence ends the term.
-func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), log *slog.Logger) error {
+func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *control.Queue, o controller.Options, export *audit.Exporter, verify func(context.Context), purges *purge.Purger, log *slog.Logger) error {
 	core, err := controller.NewCore(ctl, term, o)
 	if err != nil {
 		return err
@@ -368,6 +396,19 @@ func lead(ctx context.Context, ctl *controller.Controller, term db.Term, queue *
 		defer func() {
 			cancel(nil)
 			<-verified
+		}()
+	}
+
+	if purges != nil {
+		purged := make(chan struct{})
+		go func() {
+			defer close(purged)
+			purges.Run(ctx)
+		}()
+		// As the export's: a term never ends with a pass still deleting.
+		defer func() {
+			cancel(nil)
+			<-purged
 		}()
 	}
 
