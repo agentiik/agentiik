@@ -82,6 +82,12 @@ const (
 // identifier, which opens a session reaching what the user's grants allow; or an enrolment code,
 // named by the SHA-256 its value is kept as, which opens one that enrols passkeys and nothing else
 // and ends with the code's hour.
+//
+// A password opening a session where the policy requires a passkey the account does not hold opens
+// one that may only enrol as well, as the OpenAPI document's sessionKind says. Which policy applies
+// to an account is not settled yet, so that case is the password sign-in's to add, from the
+// credential the session records or by recording what it may do; until then a credential opens a
+// full session, and no route opens one with a password.
 type OpenedBy struct {
 	Credential    string
 	EnrolmentCode []byte
@@ -216,6 +222,10 @@ func safe(method string) bool {
 // originOf is the origin of a public URL's pages as a browser writes it in an Origin header: https,
 // the host in lower case, and the port only where it is not 443, with no path, since the API may be
 // served under one and an origin carries none.
+//
+// A host outside ASCII is compared as it is written, where a browser writes its punycode, and the
+// standard library converts neither way: an installation on such a name writes its public URL in
+// punycode, or its sessions change nothing, which refuses rather than admits.
 //
 // The URL is never repeated in the refusal, since a URL can carry a password.
 func originOf(publicURL string) (string, error) {
