@@ -185,13 +185,11 @@ func (w *Wide) RevokeToken(ctx context.Context, principal, id string, at time.Ti
 // ErrNoSession is a session that opens nothing: never opened, revoked, or idle past its expiry.
 var ErrNoSession = errors.New("db: no live session of that identifier")
 
-// Session is a console session, without its identifier. It was opened by a credential or, for a
-// session that may only enrol a passkey, by an enrolment code.
+// Session is a console session, without its identifier, opened by a credential of its user.
 type Session struct {
-	Hash          []byte
-	Login         string
-	Credential    string
-	EnrolmentCode []byte
+	Hash       []byte
+	Login      string
+	Credential string
 
 	// CredentialType is the type of the credential that opened it, as SessionByHash reads it:
 	// what a session a password opened may do is the policy's to say at each request.
@@ -210,36 +208,21 @@ type Session struct {
 	IdleExpiresAt time.Time
 }
 
-// ErrSessionRefused is a session nothing may open: one a credential opens for a suspended user,
-// or one naming an enrolment code that is revoked, past its hour, spent before it, or has opened a
-// session already.
+// ErrSessionRefused is a session nothing may open: one a credential opens for a suspended user.
 var ErrSessionRefused = errors.New("db: nothing opens that session")
 
-// OpenSession writes one. CreatedAt is the caller's, as IdleExpiresAt is. One opened by an
-// enrolment code is refused where the code is revoked or past its hour at CreatedAt, or was spent
-// before CreatedAt, so that the code may be spent as the session opens or when the enrolment
-// completes, and a link is used once: a code a registration spent with no session behind it opens
-// none afterwards to whoever finds the link in a browser's history. A code opens one session at
-// most.
-//
-// A suspended user opens no session with a credential, and one with an enrolment code all the
-// same: "its enrolment links and recovery codes still work, since enrolling is how an account
-// suspended for having no passkey comes back", and such a session enrols a passkey and nothing
-// else.
+// OpenSession writes one. CreatedAt is the caller's, as IdleExpiresAt is. A suspended user opens
+// none: an enrolment link or a recovery code still works for them, "since enrolling is how an
+// account suspended for having no passkey comes back", through the registration it starts rather
+// than through a session.
 func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 	tag, err := w.tx.Exec(ctx,
-		`insert into sessions (hash, login, credential, enrolment_code, created_at, idle_expires_at)
-		 select $1, $2, $3, $4, $5, $6
-		  where ($4::bytea is not null or `+fmt.Sprintf(liveUser, "$2")+`)
-		    and ($4::bytea is null or exists (
-		          select from enrolment_codes c
-		           where c.hash = $4 and c.login = $2 and c.revoked_at is null and c.expires_at > $5
-		             and (c.used_at is null or c.used_at >= $5)))`,
-		s.Hash, s.Login, nilIfEmpty(s.Credential), nilIfNone(s.EnrolmentCode), s.CreatedAt, s.IdleExpiresAt)
+		`insert into sessions (hash, login, credential, created_at, idle_expires_at)
+		 select $1, $2, $3, $4, $5
+		  where `+fmt.Sprintf(liveUser, "$2"),
+		s.Hash, s.Login, s.Credential, s.CreatedAt, s.IdleExpiresAt)
 	var pg *pgconn.PgError
 	switch {
-	case errors.As(err, &pg) && pg.ConstraintName == "sessions_enrolment_code_key":
-		return fmt.Errorf("%w: that code opened a session already", ErrSessionRefused)
 	case errors.As(err, &pg) && pg.ConstraintName == "sessions_login_fkey":
 		return fmt.Errorf("%w: %s", ErrNoPrincipal, s.Login)
 	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
@@ -253,39 +236,28 @@ func (w *Wide) OpenSession(ctx context.Context, s Session) error {
 }
 
 // liveSession is the condition a session is answered and kept open on at $2: neither revoked nor
-// idle past its expiry, and either opened by a credential of a user not suspended, or by an
-// enrolment code neither revoked nor past its hour. A session that may only enrol lives no longer
-// than the link that opened it, and a link issued again ends it; a suspension does not, since the
-// link is how a suspended account comes back.
+// idle past its expiry, and its user not suspended.
 const liveSession = `revoked_at is null and idle_expires_at > $2
-	and (enrolment_code is not null
-	     or not exists (select from users u where u.login = sessions.login and u.suspended))
-	and (enrolment_code is null or exists (
-	      select from enrolment_codes c
-	       where c.hash = sessions.enrolment_code and c.revoked_at is null and c.expires_at > $2))`
+	and not exists (select from users u where u.login = sessions.login and u.suspended)`
 
 // SessionByHash answers the session whose identifier hashes to hash, if it is live at now, with the
 // type of the credential that opened it, whether that credential is a synced passkey, and whether
 // its user administers the installation.
 func (w *Wide) SessionByHash(ctx context.Context, hash []byte, now time.Time) (Session, error) {
 	var s Session
-	var credential *string
 	err := w.tx.QueryRow(ctx,
-		`select hash, login, credential, enrolment_code, created_at, idle_expires_at,
+		`select hash, login, credential, created_at, idle_expires_at,
 		        coalesce((select type from credentials c where c.id = sessions.credential), ''),
 		        coalesce((select backup_eligible from credentials c where c.id = sessions.credential), false),
 		        coalesce((select admin from users u where u.login = sessions.login), false)
 		   from sessions
 		  where hash = $1 and `+liveSession, hash, now,
-	).Scan(&s.Hash, &s.Login, &credential, &s.EnrolmentCode, &s.CreatedAt, &s.IdleExpiresAt, &s.CredentialType, &s.BackupEligible, &s.Admin)
+	).Scan(&s.Hash, &s.Login, &s.Credential, &s.CreatedAt, &s.IdleExpiresAt, &s.CredentialType, &s.BackupEligible, &s.Admin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrNoSession
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("db: a session could not be read: %w", err)
-	}
-	if credential != nil {
-		s.Credential = *credential
 	}
 	return s, nil
 }
@@ -363,8 +335,7 @@ type EnrolmentCode struct {
 }
 
 // IssueEnrolmentCode writes a code, revoking at its IssuedAt the code it replaces, and answers
-// whether there was one: a link issued again leaves the one before it unusable, and the session it
-// opened with it. A new user's link or a recovery code replaces the user's open code of its kind. A
+// whether there was one: a link issued again leaves the one before it unusable. A new user's link or a recovery code replaces the user's open code of its kind. A
 // first administrator's
 // link replaces every open one, whoever it was for, and is ErrBootstrapEnded once the first
 // administrator has enrolled.
@@ -410,17 +381,6 @@ func (w *Wide) IssueEnrolmentCode(ctx context.Context, c EnrolmentCode) (bool, e
 		c.Login, c.Kind, c.IssuedAt)
 	if err != nil {
 		return false, fmt.Errorf("db: the enrolment codes of %s could not be revoked: %w", c.Login, err)
-	}
-	// The sessions the codes it replaces opened end with them, those of a code spent as its
-	// session opened included: a spent code is not revoked, since it opens nothing more, but its
-	// session "ends when a fresh link replaces it" all the same, so that a link that leaked and was
-	// opened first is shut by issuing another.
-	if _, err := w.tx.Exec(ctx,
-		`update sessions set revoked_at = $3
-		  where revoked_at is null
-		    and enrolment_code in (select hash from enrolment_codes where `+replaced+`)`,
-		c.Login, c.Kind, c.IssuedAt); err != nil {
-		return false, fmt.Errorf("db: the sessions the enrolment codes of %s opened could not be ended: %w", c.Login, err)
 	}
 	_, err = w.tx.Exec(ctx,
 		`insert into enrolment_codes (hash, login, kind, issued_by, issued_at, expires_at)

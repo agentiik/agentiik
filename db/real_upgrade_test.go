@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -342,5 +343,61 @@ func TestANamespaceOfV025IsHeldToNoBoundItNeverSet(t *testing.T) {
 	}
 	if got := expires.Sub(finished); got != 30*24*time.Hour {
 		t.Errorf("a run of a namespace keeping 30 days keeps its envelopes %s after it finished", got)
+	}
+}
+
+// A build of v0.3.0 before the passkey ceremonies could open a session with an enrolment code, and
+// an installation following dev may hold one. The migration that retires them removes each, since
+// what it could do lasted no longer than its code's hour, and leaves every session a credential
+// opened as it was, still answered to the application.
+func TestSessionsAnEnrolmentCodeOpenedGoAtTheUpgrade(t *testing.T) {
+	super, role := migratedAt(t, "0047_reserve_stats.sql")
+	ctx := t.Context()
+	hexed := func(value string) string { return hex.EncodeToString(valueHash(value)) }
+	conn, err := pgx.Connect(ctx, super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	for _, stmt := range []string{
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+		`insert into credentials (id, login, type, public_key, aaguid, sign_count, backup_eligible, backup_state)
+		   values ('cGFzc2tleQ', 'alice', 'passkey', '\x01', '\x00000000000000000000000000000000', 0, false, false)`,
+		`insert into enrolment_codes (hash, login, kind, issued_by, issued_at, expires_at)
+		   values ('\x` + hexed("code") + `', 'alice', 'recovery', 'operator', now(), now() + interval '1 hour')`,
+		`insert into sessions (hash, login, enrolment_code, idle_expires_at)
+		   values ('\x` + hexed("by-code") + `', 'alice', '\x` + hexed("code") + `', now() + interval '1 hour')`,
+		`insert into sessions (hash, login, credential, idle_expires_at)
+		   values ('\x` + hexed("by-passkey") + `', 'alice', 'cGFzc2tleQ', now() + interval '1 hour')`,
+	} {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("filling the database as that build would have: %s", err)
+		}
+	}
+	if _, err := Provision(ctx, conn, role, "test"); err != nil {
+		t.Fatalf("the upgrade was refused: %s", err)
+	}
+	var kept int
+	if err := conn.QueryRow(ctx, `select count(*) from sessions`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 {
+		t.Errorf("%d sessions are kept, and the passkey's alone was to be", kept)
+	}
+	pool, err := Open(ctx, withCredentials(super, role, "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	err = pool.Installation(ctx, Identity, func(ctx context.Context, w *Wide) error {
+		s, err := w.SessionByHash(ctx, valueHash("by-passkey"), time.Now())
+		if err != nil || s.Credential != "cGFzc2tleQ" || s.CredentialType != CredentialPasskey {
+			t.Errorf("the passkey's session reads as %+v, %v", s, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

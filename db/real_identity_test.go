@@ -435,7 +435,7 @@ func TestATokenOpensNothingOnceRevokedOrExpired(t *testing.T) {
 	}
 }
 
-func TestAnEnrolmentCodeIsSpentOnceAndASessionIsNotOpenedAgain(t *testing.T) {
+func TestAnEnrolmentCodeIsSpentOnceAndAnIdleSessionIsNotOpenedAgain(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	first := EnrolmentCode{Hash: valueHash("first"), Login: "alice", Kind: EnrolmentFirstAdministrator,
@@ -463,21 +463,25 @@ func TestAnEnrolmentCodeIsSpentOnceAndASessionIsNotOpenedAgain(t *testing.T) {
 		if _, err := w.EnrolmentCodeByHash(ctx, again.Hash, again.ExpiresAt); !errors.Is(err, ErrNoEnrolmentCode) {
 			t.Errorf("a link at its expiry was answered %v", err)
 		}
-		return w.OpenSession(ctx, Session{Hash: valueHash("enrolling"), Login: "alice", EnrolmentCode: again.Hash,
+		if used, err := w.UseEnrolmentCode(ctx, again.Hash, now.Add(2*time.Minute)); err != nil || !used.UsedAt.Equal(now.Add(2*time.Minute)) {
+			t.Errorf("the link was spent as %+v, %v", used, err)
+		}
+		if _, err := w.UseEnrolmentCode(ctx, again.Hash, now.Add(3*time.Minute)); !errors.Is(err, ErrNoEnrolmentCode) {
+			t.Errorf("the link was spent twice, answered %v", err)
+		}
+		// The passkey the link enrolled opens a session.
+		if err := w.AddCredential(ctx, Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {
+			return err
+		}
+		return w.OpenSession(ctx, Session{Hash: valueHash("signed-in"), Login: "alice", Credential: "cGFzc2tleQ",
 			CreatedAt: now, IdleExpiresAt: now.Add(10 * time.Minute)})
 	})
 
 	var session Session
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		var err error
-		if session, err = w.SessionByHash(ctx, valueHash("enrolling"), now); err != nil {
+		if session, err = w.SessionByHash(ctx, valueHash("signed-in"), now); err != nil {
 			return err
-		}
-		if used, err := w.UseEnrolmentCode(ctx, again.Hash, now.Add(2*time.Minute)); err != nil || !used.UsedAt.Equal(now.Add(2*time.Minute)) {
-			t.Errorf("the link was spent as %+v, %v", used, err)
-		}
-		if _, err := w.UseEnrolmentCode(ctx, again.Hash, now.Add(3*time.Minute)); !errors.Is(err, ErrNoEnrolmentCode) {
-			t.Errorf("the link was spent twice, answered %v", err)
 		}
 		// Kept open while it is live, and never opened again once it has gone idle.
 		if err := w.TouchSession(ctx, session.Hash, now, now.Add(20*time.Minute)); err != nil {
@@ -494,8 +498,8 @@ func TestAnEnrolmentCodeIsSpentOnceAndASessionIsNotOpenedAgain(t *testing.T) {
 		}
 		return nil
 	})
-	if session.Credential != "" || !bytes.Equal(session.EnrolmentCode, again.Hash) {
-		t.Errorf("the session reads as opened by %q and %x, and an enrolment code opened it", session.Credential, session.EnrolmentCode)
+	if session.Credential != "cGFzc2tleQ" || session.CredentialType != CredentialPasskey {
+		t.Errorf("the session reads as opened by %q, a %q, and the passkey opened it", session.Credential, session.CredentialType)
 	}
 }
 
@@ -558,125 +562,70 @@ func TestASuspendedUserOpensNothing(t *testing.T) {
 	})
 }
 
-// A suspended account's enrolment link still opens its session, and a session it opened before the
-// suspension stays open, since "enrolling is how an account suspended for having no passkey comes
-// back"; a credential of the same account opens nothing all the while.
+// A suspended account's enrolment link and recovery code still open and are spent, since
+// "enrolling is how an account suspended for having no passkey comes back", through the
+// registration they start; a credential of the same account opens no session all the while, and a
+// session it opened before the suspension is answered no more.
 func TestASuspendedUserStillEnrolsThroughALink(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	code := func(value string, at time.Time) EnrolmentCode {
-		return EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentNewUser, IssuedBy: "bob",
-			IssuedAt: at, ExpiresAt: at.Add(time.Hour)}
-	}
-	before, during := code("before", now), code("during", now.Add(time.Minute))
+	link := EnrolmentCode{Hash: valueHash("link"), Login: "alice", Kind: EnrolmentNewUser, IssuedBy: "bob",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	recovery := EnrolmentCode{Hash: valueHash("recovery"), Login: "alice", Kind: EnrolmentRecovery, IssuedBy: "bob",
+		IssuedAt: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour + time.Minute)}
 	passkey := Credential{ID: "cGFzc2tleQ", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
 		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
 			return err
 		}
-		if _, err := w.IssueEnrolmentCode(ctx, before); err != nil {
-			return err
-		}
-		if err := w.OpenSession(ctx, Session{Hash: valueHash("opened-before"), Login: "alice", EnrolmentCode: before.Hash,
-			CreatedAt: now, IdleExpiresAt: now.Add(30 * time.Minute)}); err != nil {
+		if _, err := w.IssueEnrolmentCode(ctx, link); err != nil {
 			return err
 		}
 		return w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true})
 	})
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if _, err := w.SessionByHash(ctx, valueHash("opened-before"), now.Add(time.Second)); err != nil {
-			t.Errorf("a link's session opened before the suspension was answered %v once suspended", err)
+		if _, err := w.EnrolmentCodeByHash(ctx, link.Hash, now.Add(time.Second)); err != nil {
+			t.Errorf("a link issued before the suspension was answered %v once suspended", err)
 		}
-		if err := w.TouchSession(ctx, valueHash("opened-before"), now.Add(time.Second), now.Add(40*time.Minute)); err != nil {
-			t.Errorf("a link's session was not kept open once its user was suspended: %v", err)
+		if _, err := w.UseEnrolmentCode(ctx, link.Hash, now.Add(time.Second)); err != nil {
+			t.Errorf("a suspended user's link was not spent: %v", err)
 		}
-
-		// A link issued during the suspension opens its session, which is live and kept open.
-		if _, err := w.IssueEnrolmentCode(ctx, during); err != nil {
-			return err
-		}
-		opened := now.Add(2 * time.Minute)
-		if err := w.OpenSession(ctx, Session{Hash: valueHash("opened-during"), Login: "alice", EnrolmentCode: during.Hash,
-			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)}); err != nil {
-			t.Errorf("a suspended user's link opened no session: %v", err)
-		}
-		if _, err := w.SessionByHash(ctx, valueHash("opened-during"), opened); err != nil {
-			t.Errorf("a suspended user's link session was answered %v", err)
-		}
-		if err := w.TouchSession(ctx, valueHash("opened-during"), opened, opened.Add(30*time.Minute)); err != nil {
-			t.Errorf("a suspended user's link session was not kept open: %v", err)
-		}
-
-		// And a credential of the same account opens nothing.
 		if err := w.AddCredential(ctx, passkey); err != nil {
 			return err
 		}
+
+		// A recovery code issued during the suspension opens and is spent as well.
+		if _, err := w.IssueEnrolmentCode(ctx, recovery); err != nil {
+			return err
+		}
+		if _, err := w.UseEnrolmentCode(ctx, recovery.Hash, now.Add(2*time.Minute)); err != nil {
+			t.Errorf("a suspended user's recovery code was not spent: %v", err)
+		}
+
+		// And a credential of the same account opens no session.
 		err := w.OpenSession(ctx, Session{Hash: valueHash("by-passkey"), Login: "alice", Credential: passkey.ID,
-			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)})
+			CreatedAt: now.Add(2 * time.Minute), IdleExpiresAt: now.Add(32 * time.Minute)})
 		if !errors.Is(err, ErrSessionRefused) {
 			t.Errorf("a suspended user's passkey opened a session, answered %v", err)
 		}
 		return nil
 	})
-}
 
-// A session opened by an enrolment code lives no longer than the code: a link issued again ends
-// it, and it ends with the code's hour however often it is kept open.
-func TestASessionOpenedByALinkEndsWithTheLink(t *testing.T) {
-	pool := identity(t)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	code := func(value string, at time.Time) EnrolmentCode {
-		return EnrolmentCode{Hash: valueHash(value), Login: "alice", Kind: EnrolmentRecovery, IssuedBy: "bob",
-			IssuedAt: at, ExpiresAt: at.Add(time.Hour)}
-	}
-	session := func(value string, c EnrolmentCode, at time.Time) Session {
-		return Session{Hash: valueHash(value), Login: "alice", EnrolmentCode: c.Hash, CreatedAt: at, IdleExpiresAt: at.Add(30 * time.Minute)}
-	}
-	unopened, first, second := code("unopened", now), code("first", now), code("second", now.Add(time.Minute))
+	// A session the passkey opened before a suspension is answered no more once it comes.
 	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if err := w.CreateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice"}); err != nil {
 			return err
 		}
-		for _, c := range []EnrolmentCode{unopened, first} {
-			if _, err := w.IssueEnrolmentCode(ctx, c); err != nil {
-				return err
-			}
-		}
-		if err := w.OpenSession(ctx, session("by-unopened", unopened, now)); !errors.Is(err, ErrSessionRefused) {
-			t.Errorf("a code replaced before it opened anything opened a session, answered %v", err)
-		}
-		return w.OpenSession(ctx, session("by-first", first, now))
-	})
-	err := pool.Installation(t.Context(), Identity, func(ctx context.Context, w *Wide) error {
-		return w.OpenSession(ctx, session("by-first-again", first, now))
-	})
-	if !errors.Is(err, ErrSessionRefused) {
-		t.Errorf("a code opened a second session, answered %v", err)
-	}
-	wide(t, pool, func(ctx context.Context, w *Wide) error {
-		if _, err := w.IssueEnrolmentCode(ctx, second); err != nil {
+		opened := now.Add(3 * time.Minute)
+		if err := w.OpenSession(ctx, Session{Hash: valueHash("opened-before"), Login: "alice", Credential: passkey.ID,
+			CreatedAt: opened, IdleExpiresAt: opened.Add(30 * time.Minute)}); err != nil {
 			return err
 		}
-		if _, err := w.SessionByHash(ctx, valueHash("by-first"), now.Add(2*time.Minute)); !errors.Is(err, ErrNoSession) {
-			t.Errorf("the session of a link issued again was answered %v", err)
-		}
-
-		// Spent as the session opens, and kept open every twenty minutes: live within the hour,
-		// and not a moment past it.
-		opened := now.Add(2 * time.Minute)
-		if _, err := w.UseEnrolmentCode(ctx, second.Hash, opened); err != nil {
+		if err := w.UpdateUser(ctx, User{Login: "alice", DisplayName: "Alice", Suspended: true}); err != nil {
 			return err
 		}
-		if err := w.OpenSession(ctx, session("by-second", second, opened)); err != nil {
-			return err
-		}
-		for at := opened.Add(20 * time.Minute); at.Before(second.ExpiresAt); at = at.Add(20 * time.Minute) {
-			if err := w.TouchSession(ctx, valueHash("by-second"), at, at.Add(30*time.Minute)); err != nil {
-				t.Errorf("the session was not kept open at %s, within its code's hour: %v", at.Sub(now), err)
-			}
-		}
-		if _, err := w.SessionByHash(ctx, valueHash("by-second"), second.ExpiresAt); !errors.Is(err, ErrNoSession) {
-			t.Errorf("a session outlived the hour of the code that opened it, answered %v", err)
+		if _, err := w.SessionByHash(ctx, valueHash("opened-before"), opened.Add(time.Second)); !errors.Is(err, ErrNoSession) {
+			t.Errorf("a session opened before the suspension was answered %v once suspended", err)
 		}
 		return nil
 	})
@@ -1002,10 +951,6 @@ func TestWhatIsSpentOrUsedIsRecordedAndNothingPastItsHour(t *testing.T) {
 		do   func(context.Context, *Wide) error
 		want error
 	}{
-		{"a session opened at the end of its code's hour", func(ctx context.Context, w *Wide) error {
-			return w.OpenSession(ctx, Session{Hash: valueHash("late"), Login: "alice", EnrolmentCode: link.Hash,
-				CreatedAt: link.ExpiresAt, IdleExpiresAt: link.ExpiresAt.Add(time.Hour)})
-		}, ErrSessionRefused},
 		{"a session of nobody", func(ctx context.Context, w *Wide) error {
 			return w.OpenSession(ctx, Session{Hash: valueHash("nobody"), Login: "carol", Credential: password.ID,
 				CreatedAt: now, IdleExpiresAt: now.Add(time.Hour)})

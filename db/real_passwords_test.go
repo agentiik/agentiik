@@ -71,7 +71,7 @@ func TestATOTPStepIsRecordedOnceAndNeverGoesBack(t *testing.T) {
 	})
 }
 
-// A session answers the type of the credential that opened it, and none where a code opened it.
+// A session answers the type of the credential that opened it.
 func TestASessionSaysWhatOpenedIt(t *testing.T) {
 	pool := identity(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -85,21 +85,16 @@ func TestASessionSaysWhatOpenedIt(t *testing.T) {
 		if err := w.AddCredential(ctx, Credential{ID: "alice-passkey", Login: "alice", Type: CredentialPasskey, PublicKey: []byte{1}, AAGUID: make([]byte, 16)}); err != nil {
 			return err
 		}
-		if _, err := w.IssueEnrolmentCode(ctx, EnrolmentCode{Hash: valueHash("alice-recovery"), Login: "alice", Kind: EnrolmentRecovery,
-			IssuedBy: "carol", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
-			return err
-		}
 		for _, s := range []Session{
 			{Hash: valueHash("by-password"), Login: "alice", Credential: "alice-password"},
 			{Hash: valueHash("by-passkey"), Login: "alice", Credential: "alice-passkey"},
-			{Hash: valueHash("by-code"), Login: "alice", EnrolmentCode: valueHash("alice-recovery")},
 		} {
 			s.CreatedAt, s.IdleExpiresAt = now, now.Add(time.Hour)
 			if err := w.OpenSession(ctx, s); err != nil {
 				return err
 			}
 		}
-		for value, want := range map[string]string{"by-password": CredentialPassword, "by-passkey": CredentialPasskey, "by-code": ""} {
+		for value, want := range map[string]string{"by-password": CredentialPassword, "by-passkey": CredentialPasskey} {
 			s, err := w.SessionByHash(ctx, valueHash(value), now)
 			if err != nil {
 				return err
