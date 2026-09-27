@@ -97,6 +97,21 @@ func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at ti
 	if err != nil {
 		return nil, fmt.Errorf("db: grant %s could not be written into a notification: %w", g.ID, err)
 	}
+	// The namespace is held first, for key share, as the row every notification about it refers to,
+	// so that a removal of the namespace, which holds it for update and then takes the rows naming
+	// it, the grant this act is about among them, waits for this act rather than for a row this act
+	// took before; or has ended before it, when nobody is told of a namespace no longer there.
+	held, err := n.tx.Query(ctx, `select name from namespaces where name = $1 for key share`, n.namespace)
+	if err != nil {
+		return nil, fmt.Errorf("db: namespace %s could not be held: %w", n.namespace, err)
+	}
+	names, err := pgx.CollectRows(held, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: namespace %s could not be held: %w", n.namespace, err)
+	}
+	if len(names) == 0 {
+		return []string{}, nil
+	}
 	rows, err := n.tx.Query(ctx, `
 		with record as (select owner from namespaces where name = $1),
 		owners as (
@@ -114,7 +129,11 @@ func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at ti
 		    join groups g on g.principal = o.principal
 		    join group_members m on m.group_name = g.name
 		)
-		select principal from told where principal <> $3 order by principal`,
+		-- Each held for key share as the principal its notification refers to, in one order, so
+		-- that one removed since the owners were read, whose removal this waits for, is told
+		-- nothing rather than failing the act.
+		select p.id from principals p join told t on t.principal = p.id
+		 where p.id <> $3 order by p.id for key share of p`,
 		n.namespace, at, actor)
 	if err != nil {
 		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", n.namespace, err)

@@ -795,18 +795,21 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 			return &ownsNamespaces{principal: principal, namespaces: names}
 		}
 		// An administrator removing a group they are in lifts the group's denies from their own
-		// access, as revoking one of them would: read before the removal takes them.
-		var denies []access.Grant
+		// access, as revoking one of them would. The owners are told before the removal takes the
+		// denies, since telling them holds each namespace, which a removal of the namespace holds
+		// before it takes the grants in it: taken the other way round, the two would each wait on
+		// what the other holds.
+		detail := map[string]any{"members": orEmpty(held.Members)}
 		if slices.Contains(held.Members, string(who)) {
-			if denies, err = groupGrants(ctx, wide, name, false, s.now()); err != nil {
+			denies, err := groupGrants(ctx, wide, name, false, s.now())
+			if err != nil {
+				return err
+			}
+			if err := widened(ctx, wide, denies, who, s.now(), detail); err != nil {
 				return err
 			}
 		}
 		if err := wide.RemovePrincipal(ctx, principal); err != nil {
-			return err
-		}
-		detail := map[string]any{"members": orEmpty(held.Members)}
-		if err := widened(ctx, wide, denies, who, s.now(), detail); err != nil {
 			return err
 		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {

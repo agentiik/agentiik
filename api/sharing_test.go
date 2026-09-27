@@ -641,3 +641,98 @@ func TestAnAdministratorJoiningOrLeavingAGroupTellsTheOwnersWhereItWidensTheirAc
 		t.Error(err)
 	}
 }
+
+// Telling the owners holds the namespace told about before the grants in it, as its removal takes
+// them, so that an administrator's act beside a removal of that namespace waits for it and then tells
+// nobody of a namespace no longer there, rather than being refused as a deadlock or failing on a
+// namespace gone: removing a group they are in holding a deny there, putting themselves in a group
+// holding a role there, and revoking a deny on themselves there.
+func TestAnAlertBesideTheRemovalOfItsNamespaceWaitsForIt(t *testing.T) {
+	in := someSharing(t)
+	rt, err := api.NewRouter(in.p, in.p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewUsers(rt, api.UserOptions{Pool: in.pool, PublicURL: "https://agentiik.example.com", Now: func() time.Time { return in.at }}); err != nil {
+		t.Fatal(err)
+	}
+	groups := in
+	groups.h = rt
+	if _, err := dbtest.Superuser(t, in.super).Exec(t.Context(), `insert into namespaces (name) values ('ops1'), ('ops2'), ('ops3')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, name := range []string{"auditors", "readers"} {
+			if err := w.CreateGroup(ctx, name); err != nil {
+				return err
+			}
+		}
+		_, err := w.AddMember(ctx, "auditors", "carol")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deny := ulid.New()
+	for namespace, grants := range map[string][]access.Grant{
+		"ops1": {{Principal: "group:auditors", Deny: access.RunReadData}, {Principal: "frank", Role: access.Owner}},
+		"ops2": {{Principal: "group:readers", Role: access.Viewer}, {Principal: "frank", Role: access.Owner}},
+		"ops3": {{ID: deny, Principal: "carol", Deny: access.RunReadData}, {Principal: "carol", Role: access.Owner}, {Principal: "frank", Role: access.Owner}},
+	} {
+		if err := in.pool.In(t.Context(), namespace, func(ctx context.Context, n *db.NS) error {
+			for _, g := range grants {
+				if g.ID == "" {
+					g.ID = ulid.New()
+				}
+				g.Scope, g.GrantedBy = access.Scope{Namespace: namespace}, "frank"
+				if err := n.GrantAccess(ctx, g); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, c := range []struct {
+		namespace string
+		act       func() *httptest.ResponseRecorder
+		want      int
+	}{
+		{"ops1", func() *httptest.ResponseRecorder {
+			return groups.ask(t, "DELETE", "/api/v1/groups/auditors", "carol", "")
+		}, http.StatusNoContent},
+		{"ops2", func() *httptest.ResponseRecorder {
+			return groups.ask(t, "PUT", "/api/v1/groups/readers/members/carol", "carol", "")
+		}, http.StatusOK},
+		{"ops3", func() *httptest.ResponseRecorder {
+			return in.ask(t, "DELETE", "/api/v1/ops3/grants/"+deny, "carol", "")
+		}, http.StatusNotFound},
+	} {
+		removing, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := removing.Exec(t.Context(), `select from namespaces where name = $1 for update`, c.namespace); err != nil {
+			t.Fatal(err)
+		}
+		answered := make(chan *httptest.ResponseRecorder, 1)
+		go func() { answered <- c.act() }()
+		if err := waitForLocks(t, in.super, 1); err != nil {
+			removing.Rollback(t.Context())
+			t.Fatal(err)
+		}
+		if _, err := removing.Exec(t.Context(), `delete from namespaces where name = $1`, c.namespace); err != nil {
+			t.Errorf("removing %s beside the act on it: %s", c.namespace, err)
+		}
+		if err := removing.Commit(t.Context()); err != nil {
+			t.Errorf("removing %s beside the act on it: %s", c.namespace, err)
+		}
+		if w := <-answered; w.Code != c.want {
+			t.Errorf("the act on %s beside its removal answered %d: %s", c.namespace, w.Code, w.Body)
+		}
+	}
+	if got := in.strings(t, `select recipient || ' ' || namespace from notifications`); len(got) != 0 {
+		t.Errorf("the acts told %q of namespaces removed", got)
+	}
+}
