@@ -514,7 +514,9 @@ func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 
 // Where a namespace's record names no owner and nobody holds its owner role, an administrator's
 // grant there is told to the other administrators rather than to nobody, each reading who did what,
-// and recorded naming them.
+// and recorded naming them; so is an administrator giving themselves the owner role there, which the
+// namespace had nobody holding before. Once they are its one owner, what they do there is told to
+// nobody.
 func TestAnAdministratorsGrantWhereNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T) {
 	in := someSharing(t)
 	for _, stmt := range []string{`insert into namespaces (name) values ('ops')`, `update users set admin = true where login = 'ivan'`} {
@@ -535,6 +537,15 @@ func TestAnAdministratorsGrantWhereNobodyOwnsIsToldToTheOtherAdministrators(t *t
 	if len(me.Notifications) != 1 || me.Notifications[0].Act != "granted" || me.Notifications[0].By != "carol" ||
 		me.Notifications[0].Namespace != "ops" || me.Notifications[0].Grant == nil || me.Notifications[0].Grant.ID != g.ID {
 		t.Errorf("ivan is told %s", raw)
+	}
+
+	owner := in.granted(t, "/api/v1/ops/grants", "carol", `{"principal":"carol","role":"owner"}`)
+	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1`, owner.ID); !slices.Equal(got, []string{"ivan"}) {
+		t.Errorf("carol giving herself the owner role on ops, which nobody held, was told to %q", got)
+	}
+	then := in.granted(t, "/api/v1/ops/grants", "carol", `{"principal":"alice","role":"editor"}`)
+	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1`, then.ID); len(got) != 0 {
+		t.Errorf("carol's grant in ops, which she alone owns, was told to %q", got)
 	}
 }
 

@@ -216,8 +216,10 @@ func TestAnAdministratorsGrantIsToldToTheOwnersOfItsNamespace(t *testing.T) {
 
 // Where a namespace's record names no owner and nobody holds its owner role, or only a group with no
 // members does, an administrator's act there is told to every other administrator, a suspended one
-// included, since the act is told to nobody otherwise; where the one who acted is the only owner,
-// nobody is told, as before. A membership's widening names the member put in.
+// included, since the act is told to nobody otherwise; so is the act that makes somebody its owner,
+// the administrator themselves or anybody, as the namespace stood before it, and the owner it made
+// is told too. Once the one who acted is the only owner, nobody is told. A membership's widening
+// names the member put in.
 func TestAnActInANamespaceNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T) {
 	pool := identity(t)
 	ctx := t.Context()
@@ -272,14 +274,44 @@ func TestAnActInANamespaceNobodyOwnsIsToldToTheOtherAdministrators(t *testing.T)
 		t.Errorf("dan is told %+v", dan)
 	}
 
-	// Once carol owns finance, she is its one owner, and what she does there is told to nobody.
-	if err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error {
-		return n.GrantAccess(ctx, access.Grant{ID: "01JQ6E", Principal: "carol", Scope: finance, Role: access.Owner, GrantedBy: "carol", GrantedAt: now})
-	}); err != nil {
+	// carol joining the group of nobody that owns team-ops makes her its owner, which the others
+	// hear of as the namespace stood before.
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		_, err := w.AddMember(ctx, "nobody", "carol")
+		return err
+	})
+	owning := access.Grant{ID: "01JQ6A", Principal: "group:nobody", Scope: ops, Role: access.Owner, GrantedBy: "carol", GrantedAt: now}
+	if told := tell(Widening{Grant: owning, Act: ActJoinedGroup, By: "carol", Member: "carol", At: now}); !slices.Equal(told, []string{"dan", "erin"}) {
+		t.Errorf("carol joining the group that owns team-ops, of which it had no member, was told to %q", told)
+	}
+	// gina put in it next joins somebody who owned team-ops already, carol, and is told of it as
+	// an owner now.
+	wide(t, pool, func(ctx context.Context, w *Wide) error {
+		_, err := w.AddMember(ctx, "nobody", "gina")
+		return err
+	})
+	if told := tell(Widening{Grant: owning, Act: ActJoinedGroup, By: "carol", Member: "gina", At: now}); !slices.Equal(told, []string{"gina"}) {
+		t.Errorf("gina put in the group carol owns team-ops through was told to %q", told)
+	}
+	// carol giving herself the owner role on finance, which nobody owned, is told to the others;
+	// once she is its one owner, what she does there is told to nobody; and her giving gina the
+	// role is told to gina, as an owner now.
+	owner := access.Grant{ID: "01JQ6E", Principal: "carol", Scope: finance, Role: access.Owner, GrantedBy: "carol", GrantedAt: now}
+	if err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error { return n.GrantAccess(ctx, owner) }); err != nil {
 		t.Fatal(err)
+	}
+	if told := tell(Widening{Grant: owner, Act: ActGranted, By: "carol", At: now}); !slices.Equal(told, []string{"dan", "erin"}) {
+		t.Errorf("carol's owner role on finance, which nobody owned, was told to %q", told)
 	}
 	if told := tell(Widening{Grant: editor, Act: ActGranted, By: "carol", At: now}); len(told) != 0 {
 		t.Errorf("carol's grant in finance, which she alone owns, was told to %q", told)
+	}
+	ginaOwns := access.Grant{ID: "01JQ6F", Principal: "gina", Scope: finance, Role: access.Owner, GrantedBy: "carol", GrantedAt: now}
+	if err := pool.In(ctx, "finance", func(ctx context.Context, n *NS) error { return n.GrantAccess(ctx, ginaOwns) }); err != nil {
+		t.Fatal(err)
+	}
+	if told := tell(Widening{Grant: ginaOwns, Act: ActGranted, By: "carol", At: now}); !slices.Equal(told, []string{"gina"}) {
+		t.Errorf("carol giving gina the owner role on finance, which carol owns, was told to %q", told)
 	}
 
 	for what, refused := range map[string]Widening{

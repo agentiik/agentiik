@@ -90,7 +90,7 @@ func (what Widening) check() error {
 	case !slices.Contains([]string{ActGranted, ActDenyLifted, ActJoinedGroup, ActLeftGroup, ActGroupRemoved}, what.Act):
 		return fmt.Errorf("db: a widening whose act is %q, and it is granted, deny_lifted, joined_group, left_group or group_removed", what.Act)
 	case (what.Member != "") != (what.Act == ActJoinedGroup):
-		return fmt.Errorf("db: a widening whose act is %s names a member, and only one whose act is joined_group names the member put in a group", what.Act)
+		return fmt.Errorf("db: a widening names the member put in a group where its act is joined_group, and only there, and this one's act is %s", what.Act)
 	}
 	return nil
 }
@@ -138,10 +138,11 @@ type Notification struct {
 // held. A group among them is told as each of its members, since a group reads nothing: one row for
 // each, so that one member dismissing it dismisses it for nobody else. A service account holding
 // the role is told as itself, since its token reads GET /api/v1/me as a user's does. Where that
-// reaches nobody, no owner on the record and nobody holding the role, or only a group with no
-// members, every administrator is told instead, suspended ones included, since each may be the one
-// who comes back to read it: an administrator's act goes untold only where they are the one owner
-// there.
+// reached nobody before the act, no owner on the record and nobody holding the role, or only a group
+// with no members, every administrator is told as well, suspended ones included, since each may be
+// the one who comes back to read it: an act that makes an owner of a namespace nobody owned, the
+// administrator themselves among others, is not told only to the owner it made. An administrator's
+// act goes untold only where they are the one owner there.
 //
 // It is written in the transaction of the act, so that no act commits untold, and before the audit
 // entry that records it, which is the last statement of the transaction.
@@ -179,6 +180,12 @@ func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, what Widening)
 	if len(names) == 0 {
 		return []string{}, nil
 	}
+	// The grant this act wrote, which was not there before it: a grant granted, and no other, since
+	// a deny lifted or a membership changed wrote none.
+	written := ""
+	if what.Act == ActGranted {
+		written = g.ID
+	}
 	rows, err := tx.Query(ctx, `
 		with record as (select owner from namespaces where name = $1),
 		owners as (
@@ -196,19 +203,39 @@ func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, what Widening)
 		    join groups g on g.principal = o.principal
 		    join group_members m on m.group_name = g.name
 		),
-		-- Nobody to tell, and the administrators are told instead; the one who acted among the
-		-- owners is somebody, and leaves nobody else to tell.
+		-- Who was told as the namespace stood before the act: without the grant just written,
+		-- and without the member just put in the group whose grant it is. An act that makes
+		-- somebody an owner of a namespace nobody owned is one the administrators hear of, since
+		-- the owner it made may be the one who acted.
+		owners_before as (
+		  select owner as principal from record where owner is not null
+		  union
+		  select principal from grants
+		   where namespace = $1 and workflow is null and role = 'owner' and id::text <> $4::text
+		     and (expires_at is null or expires_at > $2)
+		     and not exists (select from record where owner is not null)
+		),
+		told_before as (
+		  select principal from owners_before where principal not like 'group:%'
+		  union
+		  select m.login from owners_before o
+		    join groups g on g.principal = o.principal
+		    join group_members m on m.group_name = g.name
+		   where not (g.principal = $5::text and m.login = $6::text)
+		),
+		-- Nobody to tell before the act, and the administrators are told as well; the one who
+		-- acted among the owners is somebody, and leaves nobody else to tell.
 		readers as (
 		  select principal from told
 		  union
-		  select login from users where admin and not exists (select from told)
+		  select login from users where admin and not exists (select from told_before)
 		)
 		-- Each held for key share as the principal its notification refers to, in one order, so
 		-- that one removed since the owners were read, whose removal this waits for, is told
 		-- nothing rather than failing the act.
 		select p.id from principals p join readers r on r.principal = p.id
 		 where p.id <> $3 order by p.id for key share of p`,
-		namespace, what.At, what.By)
+		namespace, what.At, what.By, written, g.Principal, what.Member)
 	if err != nil {
 		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", namespace, err)
 	}
