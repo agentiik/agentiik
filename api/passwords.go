@@ -644,6 +644,15 @@ func (s *PasswordAPI) refuse(r *http.Request, login, address, reason string, now
 	}
 }
 
+// refuseCode records a password set from an enrolment code refused, as a failed sign-in
+// (SignIns.refuseCode), telling Trouble where it could not be recorded: the refusal is answered all
+// the same.
+func (s *PasswordAPI) refuseCode(r *http.Request, f codeFailure, now time.Time) {
+	if err := s.signIns.refuseCode(r.Context(), s.pool, s.signIns.addressOf(r), f, now); err != nil {
+		s.report(fmt.Errorf("a failed sign-in could not be recorded: %w", err))
+	}
+}
+
 // report says one thing, through whatever Trouble was given.
 func (s *PasswordAPI) report(err error) {
 	if s.trouble != nil {

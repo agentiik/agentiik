@@ -467,6 +467,49 @@ func (w *Wide) EnrolmentCodeByHash(ctx context.Context, hash []byte, now time.Ti
 	return c, nil
 }
 
+// Why an enrolment code opens nothing, as ShutEnrolmentCode answers it: the part of openCode it
+// fails, in the order openCode reads them.
+const (
+	CodeUsed           = "used"
+	CodeReplaced       = "replaced"
+	CodeLapsed         = "lapsed"
+	CodeEnrolled       = "enrolled"
+	CodeBootstrapEnded = "bootstrap_ended"
+)
+
+// ShutEnrolmentCode answers the code whose value hashes to hash whatever its state, and why it
+// opens nothing at now: CodeUsed, CodeReplaced, CodeLapsed, CodeEnrolled for a link whose user holds
+// a credential already, CodeBootstrapEnded for a recovery code of the bootstrap token that has
+// ended, or the empty string for one open still. It is ErrNoEnrolmentCode where no code of that value
+// was issued, or its user was removed with it. What a refused sign-in records, which names the
+// account a code was issued for and why it opened nothing, and never the code.
+func (w *Wide) ShutEnrolmentCode(ctx context.Context, hash []byte, now time.Time) (EnrolmentCode, string, error) {
+	var c EnrolmentCode
+	var used *time.Time
+	var why string
+	err := w.tx.QueryRow(ctx,
+		`select `+enrolmentColumns+`, used_at,
+		        case when used_at is not null then $4
+		             when revoked_at is not null then $5
+		             when expires_at <= $2 then $6
+		             when kind <> 'recovery' and exists (select from credentials cr where cr.login = enrolment_codes.login) then $7
+		             when kind = 'recovery' and issued_by = $3 and not exists (select from bootstrap where enrolled_at is null) then $8
+		             else '' end
+		   from enrolment_codes where hash = $1`,
+		hash, now, access.BootstrapOperator, CodeUsed, CodeReplaced, CodeLapsed, CodeEnrolled, CodeBootstrapEnded,
+	).Scan(&c.Hash, &c.Login, &c.Kind, &c.IssuedBy, &c.IssuedAt, &c.ExpiresAt, &used, &why)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EnrolmentCode{}, "", ErrNoEnrolmentCode
+	}
+	if err != nil {
+		return EnrolmentCode{}, "", fmt.Errorf("db: an enrolment code could not be read: %w", err)
+	}
+	if used != nil {
+		c.UsedAt = *used
+	}
+	return c, why, nil
+}
+
 // UseEnrolmentCode spends an open code at now and answers it. Of two uses at once, one spends it
 // and the other is answered ErrNoEnrolmentCode.
 func (w *Wide) UseEnrolmentCode(ctx context.Context, hash []byte, now time.Time) (EnrolmentCode, error) {

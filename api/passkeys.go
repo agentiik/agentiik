@@ -399,18 +399,22 @@ func (s *PasskeyAPI) options(w http.ResponseWriter, r *http.Request, _ Principal
 		return nil
 	})
 	switch {
-	case errors.Is(err, db.ErrNoEnrolmentCode):
+	case ask.coded && (errors.Is(err, db.ErrNoEnrolmentCode) || errors.Is(err, db.ErrNoPrincipal)):
+		// A code that opens nothing, or whose user was removed between the code being read and
+		// the challenge being issued: a sign-in refused, since a registration a code starts signs
+		// its user in.
+		reason := ""
+		if errors.Is(err, db.ErrNoPrincipal) {
+			reason = "the code's user was removed"
+		}
+		s.refuseCode(r, codeFailure{code: codeHash, reason: reason, detail: map[string]any{"credential_type": db.CredentialPasskey}}, now)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, codeOpensNothing)
 	case errors.Is(err, db.ErrNoPrincipal):
-		// A user removed between the session or the code being read and the challenge being
-		// issued, which the removal ended.
+		// A user removed between the session being read and the challenge being issued, which
+		// the removal ended.
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		if ask.coded {
-			fail(w, http.StatusUnauthorized, codeOpensNothing)
-		} else {
-			fail(w, http.StatusUnauthorized, noSession)
-		}
+		fail(w, http.StatusUnauthorized, noSession)
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the registration could not be started")
 	default:
@@ -557,21 +561,50 @@ func (r *refusal) Error() string { return r.reason }
 // One registered from a session needs the session signed in to within proofLife of the options, as
 // the options did (sessions.go).
 func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremonyAnswered, now time.Time) {
-	refused := func() {
+	var took db.Challenge
+	presented := b64.EncodeToString(ask.Credential.RawID)
+	if len(presented) > presentedMax {
+		presented = presented[:presentedMax]
+	}
+	// signedIn records a refusal as a failed sign-in where the registration would have signed
+	// somebody in, one an enrolment code started, and where nothing says what started it, a
+	// challenge that names nothing, which is anybody's to answer as an assertion's is. One a
+	// session started signs nobody in: its user is signed in already, and is told in the answer.
+	signedIn := func(reason string) {
+		if took.EnrolmentCode == nil && took.Login != "" {
+			return
+		}
+		f := codeFailure{code: took.EnrolmentCode, reason: reason, detail: map[string]any{
+			"credential_type": db.CredentialPasskey, "credential": presented,
+		}}
+		if f.code == nil {
+			f.target = presented
+		}
+		s.refuseCode(r, f, now)
+	}
+	refused := func(reason string) {
+		signedIn(reason)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		fail(w, http.StatusUnauthorized, noRegistration)
 	}
-	var took db.Challenge
+	synced := func() {
+		signedIn("the passkey is synced and device_bound_only applies to the account")
+		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
+	}
 	var policy accountPolicy
+	unanswered := ""
 	err := s.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, wide *db.Wide) error {
 		var err error
 		took, err = wide.TakeChallenge(ctx, challengeOf(ask.Credential.ClientDataJSON), now)
-		if errors.Is(err, db.ErrNoChallenge) || (err == nil && took.Ceremony != db.CeremonyRegistration) {
-			took = db.Challenge{}
+		switch {
+		case errors.Is(err, db.ErrNoChallenge):
+			took, unanswered = db.Challenge{}, "the challenge was never issued, was answered already or lapsed"
 			return nil
-		}
-		if err != nil {
+		case err != nil:
 			return err
+		case took.Ceremony != db.CeremonyRegistration:
+			took, unanswered = db.Challenge{}, "the challenge was issued for an assertion"
+			return nil
 		}
 		policy, err = policyFor(ctx, wide, took.Login, now, false)
 		return err
@@ -581,7 +614,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 		fail(w, http.StatusInternalServerError, "the passkey could not be registered")
 		return
 	case took.Login == "":
-		refused()
+		refused(unanswered)
 		return
 	}
 	if took.EnrolmentCode == nil {
@@ -592,7 +625,7 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 			return
 		}
 		if string(as.Principal) != took.Login {
-			refused()
+			refused("")
 			return
 		}
 		// Proved within proofLife of the options, as the options asked, since the challenge
@@ -605,12 +638,15 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 	made, err := webauthn.VerifyRegistration(
 		webauthn.Ceremony{RPID: s.rpID, Origin: s.origin, Challenge: took.Value, RequireUserVerification: policy.userVerification},
 		webauthn.Registration{ClientDataJSON: ask.Credential.ClientDataJSON, AttestationObject: ask.Credential.AttestationObject})
-	if err != nil || !bytes.Equal(made.ID, ask.Credential.RawID) {
-		refused()
+	switch {
+	case err != nil:
+		refused("the registration does not verify: " + err.Error())
 		return
-	}
-	if policy.deviceBoundOnly && made.BackupEligible {
-		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
+	case !bytes.Equal(made.ID, ask.Credential.RawID):
+		refused("the credential ID is not the one the attestation names")
+		return
+	case policy.deviceBoundOnly && made.BackupEligible:
+		synced()
 		return
 	}
 
@@ -762,13 +798,19 @@ func (s *PasskeyAPI) register(w http.ResponseWriter, r *http.Request, ask ceremo
 	var refusedFor *refusal
 	switch {
 	case errors.Is(err, errSynced):
-		failSetting(w, http.StatusForbidden, syncedRefused, deviceBoundOnly)
+		synced()
 		return
-	case errors.As(err, &refusedFor), errors.Is(err, db.ErrNoEnrolmentCode), errors.Is(err, db.ErrCredentialExists):
-		// A code spent, lapsed or replaced since the options were issued, a passkey registered
-		// already, or a user removed or suspended: nothing was written, and the ceremony starts
-		// again.
-		refused()
+	case errors.As(err, &refusedFor):
+		// A user removed or suspended, or a bootstrap ended: nothing was written, and the
+		// ceremony starts again.
+		refused(refusedFor.reason)
+		return
+	case errors.Is(err, db.ErrNoEnrolmentCode):
+		// A code spent, lapsed or replaced since the options were issued, which its row says.
+		refused("")
+		return
+	case errors.Is(err, db.ErrCredentialExists):
+		refused("the passkey is registered already")
 		return
 	case err != nil:
 		fail(w, http.StatusInternalServerError, "the passkey could not be registered")
@@ -1085,6 +1127,15 @@ func (s *PasskeyAPI) refuseSignIn(w http.ResponseWriter, r *http.Request, f sign
 	}
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	fail(w, http.StatusUnauthorized, noSignIn)
+}
+
+// refuseCode records a sign-in an enrolment code started, or a registration answering a challenge
+// that names nothing, refused (SignIns.refuseCode), telling Trouble where it could not be recorded:
+// the refusal is answered all the same.
+func (s *PasskeyAPI) refuseCode(r *http.Request, f codeFailure, now time.Time) {
+	if err := s.signIns.refuseCode(r.Context(), s.pool, s.signIns.addressOf(r), f, now); err != nil && s.trouble != nil {
+		s.trouble(fmt.Errorf("a failed sign-in could not be recorded: %w", err))
+	}
 }
 
 // failSetting answers a refusal whose reason is one setting of the authentication policy, which
