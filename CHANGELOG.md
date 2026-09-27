@@ -16,15 +16,21 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### State
 
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
-
-### State
-
-- Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
+- `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
+
+### API
+
+- A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits, and `agk run` says it as a refusal.
+
+### Controller
+
+- A step's pool is chosen among those its namespace's `allowed_runner_pools` names, where it names any: a step whose labels only a pool outside them carries fails with 125 naming the list, and a redemption by a runner of a pool the namespace does not allow is answered 422.
 
 ### Tests
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
+- A fan-out of ten thousand items is handed its namespace's `max_concurrent_tasks` and no more, and another namespace's run is handed its task on the same sweep.
 
 
 ## v0.2.5, 2026-09-26
