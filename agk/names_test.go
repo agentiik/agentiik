@@ -1,10 +1,15 @@
 package agk_test
 
 import (
+	"encoding/json"
+	"io/fs"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/internal/fixtures"
 )
 
 // TestTheIdentifierGrammar is the grammar the schema writes as
@@ -115,5 +120,82 @@ func TestNewRunIDMintsAULID(t *testing.T) {
 	}
 	if agk.NewRunID() == id {
 		t.Fatal("NewRunID minted the same identifier twice")
+	}
+}
+
+// A word reserved late is one of the reserved words, needed by a route under it that a later
+// release serves, and it is the only kind a reference may still name: every other reserved
+// word was reserved before any namespace could take it, so no namespace carries one.
+func TestAWordReservedLateIsReservedAndStillNamesWhatCarriesIt(t *testing.T) {
+	if len(agk.LateReservations) == 0 {
+		t.Fatal("no word is reserved late, and stats is, for GET /api/v1/stats/pools")
+	}
+	for _, r := range agk.LateReservations {
+		if !agk.IsReservedNamespace(r.Word) {
+			t.Errorf("%s is reserved late and is not one of the reserved words", r.Word)
+		}
+		if _, path, _ := strings.Cut(r.Route, " "); !strings.HasPrefix(path, "/api/v1/"+r.Word+"/") {
+			t.Errorf("%s is reserved for %q, which is not a route under it", r.Word, r.Route)
+		}
+		if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(r.Served) {
+			t.Errorf("%s is reserved for a route served from %q, which is no release", r.Word, r.Served)
+		}
+		if agk.NamesNoNamespace(r.Word) {
+			t.Errorf("%s names no namespace, and an installation may hold one it created before the word was reserved", r.Word)
+		}
+		if got, late := agk.ReservedLate(r.Word); !late || got != r {
+			t.Errorf("the late reservation of %s reads %+v, %v", r.Word, got, late)
+		}
+	}
+	if !agk.NamesNoNamespace("runs") || !agk.IsReservedNamespace("runs") {
+		t.Error("runs, reserved since namespaces were first created, names a namespace")
+	}
+	if _, late := agk.ReservedLate("runs"); late {
+		t.Error("runs reads as reserved late")
+	}
+	if agk.NamesNoNamespace("finance") || agk.IsReservedNamespace("finance") {
+		t.Error("finance, which no route takes, is refused")
+	}
+}
+
+// The words the schemas refuse as a namespace's name are the engine's: a word the schemas refuse
+// and the engine does not is a name a client refuses and the API creates, and one the engine
+// reserves and the schemas do not is a name a client offers and the API refuses. The vendored
+// schemas may lag behind a word reserved late alone, until they are vendored at the release that
+// reserves it, since the schemas' own pull request lands first.
+func TestTheReservedWordsAreTheSchemasOwn(t *testing.T) {
+	for _, c := range []struct{ document, definition string }{
+		{"wire.schema.json", "namespace"},
+		{"workflow.schema.json", "namespace"},
+	} {
+		raw, err := fs.ReadFile(fixtures.FS, c.document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Defs map[string]struct {
+				Not struct {
+					Pattern string `json:"pattern"`
+				} `json:"not"`
+			} `json:"$defs"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		words, ok := strings.CutPrefix(doc.Defs[c.definition].Not.Pattern, "^(")
+		if words, ok = strings.CutSuffix(words, ")$"); !ok {
+			t.Fatalf("%s $defs/%s refuses %q, which is not a list of words", c.document, c.definition, doc.Defs[c.definition].Not.Pattern)
+		}
+		refused := strings.Split(words, "|")
+		for _, w := range refused {
+			if !agk.IsReservedNamespace(w) {
+				t.Errorf("%s refuses %s as a namespace, which the engine does not reserve", c.document, w)
+			}
+		}
+		for _, w := range agk.ReservedNamespaces {
+			if _, late := agk.ReservedLate(w); !late && !slices.Contains(refused, w) {
+				t.Errorf("the engine reserves %s, which %s does not refuse as a namespace", w, c.document)
+			}
+		}
 	}
 }

@@ -316,16 +316,17 @@ func TestOneNamespaceCannotSeeAnothersGrants(t *testing.T) {
 
 // agentiik_reserved refuses the words the API routes on, which agk.ReservedNamespaces lists: no
 // fewer, so that no login takes a route, and no more, so that no login is refused for a word the
-// API does not route on.
+// API does not route on. The last migration to write the function is the one that holds.
 func TestTheReservedWordsAreTheAPIs(t *testing.T) {
 	all, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
+	written := regexp.MustCompile(`create (or replace )?function agentiik_reserved`)
 	var body string
 	for _, m := range all {
-		if i := strings.Index(m.SQL, "create function agentiik_reserved"); i >= 0 {
-			body = m.SQL[i:]
+		if at := written.FindStringIndex(m.SQL); at != nil {
+			body = m.SQL[at[0]:]
 			body = body[:strings.Index(body, "$$;")]
 		}
 	}
