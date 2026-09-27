@@ -18,9 +18,9 @@ import (
 // Guard is what stands in front of one route.
 //
 // The interface is closed: the only things that implement it are Needs, OnRun, OnArtifact, Across,
-// Public and ForRunner, because its one method is unexported. A further kind of guard is therefore a change
-// to this file, which is a change somebody reads, rather than a struct somebody writes in a
-// handler package.
+// OnNamespace, Public and ForRunner, because its one method is unexported. A further kind of guard
+// is therefore a change to this file, which is a change somebody reads, rather than a struct
+// somebody writes in a handler package.
 type Guard interface {
 	guards() guard
 }
@@ -34,10 +34,11 @@ type guard struct {
 	run        bool
 	artifact   bool
 	across     bool
+	members    bool
 	why        string
 
-	// within is set by the router on a route taking OnRun or Across whose pattern names
-	// {namespace}, which then answers about that namespace and no other.
+	// within is set by the router on a route taking OnRun, Across or OnNamespace whose pattern
+	// names {namespace}, which then answers about that namespace and no other.
 	within bool
 
 	// reveals is the permission a handler may ask about to decide what its answer holds,
@@ -197,6 +198,48 @@ type FindRun interface {
 // ErrNoRun is no run of that identifier.
 var ErrNoRun = errors.New("api: no run of that identifier")
 
+// OnNamespace is a route about namespaces' records, which an administrator reads of every namespace
+// and anybody else of the namespaces it holds a grant in: "to an administrator and to a principal
+// holding a grant in it; anyone else is answered the 404 of one that does not exist."
+//
+// It needs no permission, because reading a namespace's record, its kind, its owner and its quotas,
+// is none of the nine: whoever holds a role on one workflow of a namespace reads its record as its
+// owner does. So the router asks two things instead: whether the caller administers the
+// installation, which the Authorizer answers as grant:manage there, through a credential that
+// carries the power; and otherwise which namespaces it holds a grant in, which the Authorizer
+// answers where it implements Holdings, as Principals does. A route taking OnNamespace on a router
+// whose authorizer does not is refused at registration, since it could answer nobody.
+//
+// Where its pattern names a {namespace}, a namespace the caller does not see is refused before the
+// handler runs, as the absence it is to them. Where it names none, as the listing of namespaces
+// does, its handler is given Sees and answers only what it lets through.
+type OnNamespace struct{}
+
+func (OnNamespace) guards() guard { return guard{scope: Namespace, members: true} }
+
+// Holdings says which namespaces a principal holds a grant in, its own or one of its groups', on
+// the namespace or on a workflow of it: what a route taking OnNamespace answers a caller who does
+// not administer the installation. An Authorizer implements it where it can say.
+type Holdings interface {
+	HeldIn(ctx context.Context, who Principal) ([]string, error)
+}
+
+// Sees answers, for the route serving r, whether its caller sees one namespace's record: every
+// namespace for an administrator, through a credential that carries the power, and otherwise one it
+// holds a grant in and its credential reaches. A route not taking OnNamespace, and a request the
+// router did not serve, see nothing.
+func Sees(r *http.Request) func(namespace string) bool {
+	if sees, ok := r.Context().Value(seesKey{}).(func(string) bool); ok {
+		return sees
+	}
+	return seesNothing
+}
+
+func seesNothing(string) bool { return false }
+
+// seesKey is where the router leaves what Sees answers.
+type seesKey struct{}
+
 // Public is a route that is not authorised by a principal, and says what authorises it instead.
 //
 // There are four of these in the whole design and each has its own answer: registration is
@@ -215,7 +258,7 @@ func (p Public) guards() guard {
 
 // check refuses a guard that says nothing.
 func (g guard) check(method, pattern string) error {
-	if g.runner {
+	if g.runner || g.members {
 		return nil
 	}
 	if g.public {

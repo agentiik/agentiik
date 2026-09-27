@@ -208,11 +208,12 @@ const (
 	// installation itself, which no namespace's handle could read whole.
 	AuditLog Reason = "the audit log, one chain across the installation"
 
-	// NamespaceAdministration is a namespace created or removed by agentiik-api namespace, the
-	// server-side verb that stands in for v0.3.0's routes. A namespace is the scope every other
-	// handle is opened in, so creating one is not something a handle on one can do, and removing
-	// one reads whether any of its rows remain.
-	NamespaceAdministration Reason = "a namespace created or removed on the server"
+	// NamespaceAdministration is a namespace created, removed or given its quotas by an
+	// administrator through the API, or by agentiik-api namespace on the server. A namespace is the
+	// scope every other handle is opened in, so creating one is not something a handle on one can
+	// do, removing one reads whether any of its rows remain, and a listing of them spans the
+	// installation.
+	NamespaceAdministration Reason = "a namespace created, removed or given its quotas"
 
 	// Identity is who a request is from, and the records that say so: the principals, their
 	// credentials, tokens, sessions and enrolment codes, the authentication policy and the

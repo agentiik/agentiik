@@ -187,7 +187,7 @@ func TestAnInstallationOfV025UpgradesWithEverythingItHeld(t *testing.T) {
 		}
 	}
 	err = pool.Installation(ctx, NamespaceAdministration, func(ctx context.Context, w *Wide) error {
-		if _, err := w.CreateNamespace(ctx, "team-ops"); err != nil {
+		if _, err := w.CreateNamespace(ctx, Namespace{Name: "team-ops"}); err != nil {
 			return err
 		}
 		return w.Audit(ctx, audit.Record{Actor: "operator", Action: audit.NamespaceCreate, Target: "team-ops", Result: audit.Done})

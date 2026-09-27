@@ -19,6 +19,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward, where it is not zero on both sides, is `ErrPossibleClone`, for the caller to decide on.
 - Every request is authorised from the database by `api.Principals`: a bearer token is found by its SHA-256 among the live API tokens, its use recorded, and a route is allowed what the grants of the principal and its groups give, intersected by the router with the token's scope (`access.TokenScope`, carried in `api.Identity`). The installation is an administrator's `grant:manage`, through a token with no scope alone, with no implicit `run:read_data` anywhere.
 - The bootstrap token is an administrator owning every namespace, writing as `operator` as the v0.2 operator did, until the first administrator has enrolled; from then on it is a 401 that says so. The interim operator is gone.
+- A namespace's record is read by an administrator and by whoever holds a role in it, its own or a group's, through the router's `api.OnNamespace` guard: the authorizer says where a principal holds a grant as `api.Holdings`, and a token's `within` narrows it (`access.TokenScope.Reaches`).
 
 ### API
 
@@ -26,6 +27,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
 - A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
 - A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
+- `/api/v1/namespaces`: an administrator creates a shared namespace with an owner, given the owner role on it in the same act, and quotas naming pools that exist, sets its quotas whole with `PUT .../quotas`, and removes one holding nothing, audited as `namespace.create` beside the owner's `grant.create`, `namespace.update` and `namespace.delete`; whoever holds a grant in one reads it and its quotas.
+- A namespace is created with its built-in identity, `NS/agentiik`, holding no grant, and removed with it, its grants and its authentication policy. `agentiik-api namespace` writes through the same store, refuses a user's personal namespace, and counts stored objects and service accounts in what a namespace holds.
 
 ### State
 
@@ -33,6 +36,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 - Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
+- `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
 
 ### Controller
 
@@ -48,6 +52,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
+- `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
 
 ## v0.2.5, 2026-09-26
 

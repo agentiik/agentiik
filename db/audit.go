@@ -29,6 +29,16 @@ func (w *Wide) Audit(ctx context.Context, r audit.Record) error {
 	return appendAudit(ctx, w.tx, "", r)
 }
 
+// AuditIn appends r to the audit log as an act done in namespace, in this handle's transaction: for
+// an act the installation does in a namespace no handle on it could be opened for yet, as the grant
+// that makes a new namespace's owner one, written in the transaction that creates the namespace.
+func (w *Wide) AuditIn(ctx context.Context, namespace string, r audit.Record) error {
+	if namespace == "" {
+		return fmt.Errorf("db: a %s done in no namespace is an act on the installation, which Audit records", r.Action)
+	}
+	return appendAudit(ctx, w.tx, namespace, r)
+}
+
 func appendAudit(ctx context.Context, tx pgx.Tx, namespace string, r audit.Record) error {
 	if err := r.Check(); err != nil {
 		return err

@@ -75,3 +75,18 @@ func (s TokenScope) Keeps(what Permission, at Scope) bool {
 	}
 	return slices.ContainsFunc(s.Within, func(w Scope) bool { return w.covers(at) })
 }
+
+// Reaches says whether a token of this scope reaches anything in one namespace: the namespace
+// itself, or a workflow of it. It is what a namespace's record is read through, to an administrator
+// and to "a principal holding a grant in it": reading it is none of the nine, so the permissions a
+// scope keeps do not narrow it, and a within naming one workflow of the namespace reaches its
+// record, since the workflow cannot be reached without it.
+func (s TokenScope) Reaches(namespace string) bool {
+	if namespace == "" {
+		return false
+	}
+	if s.Within == nil {
+		return true
+	}
+	return slices.ContainsFunc(s.Within, func(w Scope) bool { return w.Namespace == namespace })
+}

@@ -15,10 +15,12 @@
 // An Authorizer is asked whether one principal holds one permission at one scope, and Principals
 // is the installation's: it identifies a bearer token from the database, an API token or the
 // bootstrap token, and answers from the grants of the principal and its groups, which package
-// access resolves, with the installation an administrator's alone. What a token's scope narrows
-// is intersected by the router, which saw the credential, with every answer it asks for. DenyAll
-// stays the answer of an installation with no access model, and what a test of the routes
-// alone is given: deny by default when there is nothing to grant.
+// access resolves, with the installation an administrator's alone. It also says which namespaces a
+// principal holds a grant in, as Holdings, since a namespace's record is shown to them and to an
+// administrator, and to nobody else. What a token's scope narrows is intersected by the router,
+// which saw the credential, with every answer it asks for. DenyAll stays the answer of an
+// installation with no access model, and what a test of the routes alone is given: deny by default
+// when there is nothing to grant.
 //
 // The permissions themselves arrived before v0.3.0, because a route declares what it needs and a
 // route was written then. They are the page's own nine, held to it by a test, and they live in

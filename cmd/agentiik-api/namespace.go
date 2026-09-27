@@ -45,8 +45,10 @@ func namespaceVerb(ctx context.Context, lookup config.Lookup, action, name strin
 // the audit log in the same transaction. It says what it did.
 //
 // It reads AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE, as serve does, and runs where the API
-// runs, because v0.2.0 has no route that creates a namespace: this verb stands in for v0.3.0's,
-// which an administrator reaches through the API. Creating a namespace that exists changes nothing and says so, so that an
+// runs, for an installation script and for init, which create a namespace before anybody could ask
+// the API for one; an administrator creates and removes them through /api/v1/namespaces. Both write
+// through the same store and refuse the same names, and a namespace is created with its built-in
+// identity either way. Creating a namespace that exists changes nothing and says so, so that an
 // installation script run twice succeeds twice.
 func namespace(ctx context.Context, d config.Database, action, name string, stdout io.Writer) error {
 	pool, err := db.Open(ctx, d.ConnString())
@@ -56,33 +58,32 @@ func namespace(ctx context.Context, d config.Database, action, name string, stdo
 	defer pool.Close()
 
 	var created bool
-	err = pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
-		r := audit.Record{Actor: namespaceActor, Target: name, Result: audit.Done}
-		switch action {
-		case "create":
-			made, err := w.CreateNamespace(ctx, name)
-			if err != nil {
+	switch action {
+	case "create":
+		err = pool.Installation(ctx, db.NamespaceAdministration, func(ctx context.Context, w *db.Wide) error {
+			var err error
+			if created, err = w.CreateNamespace(ctx, db.Namespace{Name: name}); err != nil {
 				return err
 			}
-			created = made
-			r.Action = audit.NamespaceCreate
+			r := audit.Record{Actor: namespaceActor, Action: audit.NamespaceCreate, Target: name, Result: audit.Done}
 			if !created {
 				r.Result = audit.Unchanged
 			}
-		case "remove":
-			if err := w.RemoveNamespace(ctx, name); err != nil {
-				return err
-			}
-			r.Action = audit.NamespaceDelete
-		default:
-			return fmt.Errorf("%q is not something done to a namespace, which is created or removed", action)
-		}
-		return w.Audit(ctx, r)
-	})
+			return w.Audit(ctx, r)
+		})
+	case "remove":
+		err = api.RemoveNamespace(ctx, pool, name, namespaceActor)
+	default:
+		return fmt.Errorf("%q is not something done to a namespace, which is created or removed", action)
+	}
 	var holds *db.NamespaceHolds
 	switch {
 	case errors.Is(err, db.ErrNoNamespace):
 		return fmt.Errorf("there is no namespace %s, so nothing was removed", name)
+	case errors.Is(err, api.ErrPersonalNamespace):
+		return fmt.Errorf("%s, so it was not removed", api.PersonalRefusal(name))
+	case errors.Is(err, db.ErrNameTaken):
+		return fmt.Errorf("%s is a user's login, and logins and namespace names share one name space, so no namespace %s was created", name, name)
 	case errors.As(err, &holds):
 		return fmt.Errorf("%s, so it was not removed", holds.Held())
 	case err != nil:
