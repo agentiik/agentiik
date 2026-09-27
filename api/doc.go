@@ -35,6 +35,18 @@
 // to hide: the caller is authenticated, the resource is the installation itself, and saying no
 // tells them nothing they did not already know.
 //
-// A push refused for naming a secret its pusher holds no secret:use for is the other 403: the
-// route let the pusher through on workflow:write, so the workflow is one they already reach.
+// A push refused for naming a secret its pusher holds no secret:use for is a 403 too: the route let
+// the pusher through on workflow:write, so the workflow is one they already reach. So is a token
+// refused by the token routes for what the credential presenting it is, below.
+//
+// # A caller's own credentials
+//
+// The API token routes answer about their caller: "an API token for the caller or a service account
+// of a namespace it owns", and the listing and revocation of those. No permission names that, since
+// holding a credential is none of the nine, so each takes Own, and its handler is given a Caller:
+// who asks, the token presented, whether its scope narrows it, and the namespaces it owns, which
+// Principals says as Owners. A token narrowed by a scope mints none and reaches no credential but
+// itself, and the bootstrap token mints none, its one lasting use being the first administrator:
+// each is refused with 403, since the caller is known and nothing about the installation is hidden
+// from them by saying so.
 package api

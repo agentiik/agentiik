@@ -36,6 +36,10 @@ func TestNoRefusalSaysThereIsNoASomething(t *testing.T) {
 		"logs": true, "status": true, "namespace create": true, "namespace list": true,
 		"namespace show": true, "namespace delete": true, "namespace quotas": true,
 	}
+	// And the token verbs, which mint, list and revoke API tokens on an installation.
+	for _, verb := range []string{"token create", "token list", "token revoke"} {
+		built[verb] = true
+	}
 	for _, c := range commands {
 		if built[c.name] {
 			continue

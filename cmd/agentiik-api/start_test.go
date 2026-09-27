@@ -411,7 +411,8 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // being envelope contents that run:read_data alone reveals; outputs, a step's inputs and outputs and
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
 // runner's own routes by the runner credential alone, and the object store by the signature in the
-// URL or the form.
+// URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
+// namespace it owns", which no permission names.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -432,6 +433,7 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	public := api.Route{Public: true}
 	// A namespace's record is "to an administrator and to a principal holding a grant in it".
 	members := api.Route{Scope: api.Namespace, Members: true}
+	own := api.Route{Own: true}
 	onRun := func(p, reveals api.Permission) api.Route {
 		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
 	}
@@ -448,6 +450,9 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/tasks/redeem":                                      runner,
 		"POST /api/v1/tasks/logs":                                        runner,
 		"POST /api/v1/bus/token":                                         runner,
+		"POST /api/v1/auth/tokens":                                       own,
+		"GET /api/v1/auth/tokens":                                        own,
+		"DELETE /api/v1/auth/tokens/{id}":                                own,
 		"GET /api/v1/runs":                                               {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/{namespace}/runs":                                   {Permission: api.RunRead, Scope: api.Workflow, Across: true},
 		"GET /api/v1/runs/{run}":                                         onRun(api.RunRead, api.RunReadData),
