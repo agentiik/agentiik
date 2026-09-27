@@ -36,6 +36,10 @@ func migrateAndBootstrap(ctx context.Context, c config.Migration, stdout io.Writ
 	if err := migrate(ctx, c, stdout); err != nil {
 		return err
 	}
+	// As the application role, as init writes the hash, rather than over the connection that
+	// migrated: db.Open refuses a role that walks through the policies, since a superuser is for
+	// migrations and nothing else. migrate is run where the API runs, with its environment, as
+	// namespace create is, which signs in as that role too.
 	pool, err := db.Open(ctx, c.Application.ConnString())
 	if err != nil {
 		return fmt.Errorf("the database %s names could not be reached as %s: %w", config.DatabaseURL, c.Application.Role, err)
