@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
 )
 
 // Recovery codes, over a real PostgreSQL: issued by an administrator at POST
@@ -393,4 +394,90 @@ func TestARecoveryCodeEndsTheBootstrapWhereAnAdministratorEnrolsWithIt(t *testin
 			t.Error("a user's recovery ended the bootstrap")
 		}
 	})
+}
+
+// A new user's link enrols the first credential of an account that holds none, and opens nothing
+// once the account holds one: dave, issued a recovery code beside the link he was created with,
+// enrols a passkey with the code, and the link, which may sit in whatever it was sent through,
+// then enrols no passkey and sets no password on his account.
+func TestAnEnrolmentLinkOpensNothingOnceARecoveryCodeHasEnrolledItsUser(t *testing.T) {
+	in, carol := administering(t)
+	created := in.call(t, "POST", "/api/v1/users", `{"login":"dave"}`, "", carol)
+	var dave api.CreatedUser
+	if err := json.Unmarshal(created.Body.Bytes(), &dave); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("carol creating dave answered %d %s", created.Code, created.Body)
+	}
+	link := codeOf(t, dave.Enrolment.Link)
+	code := recoveryOf(t, in.call(t, "POST", "/api/v1/users/dave/recovery", "", "", carol), *in.clock)
+	if w := in.enrol(t, newBrowser(), code.Code, ""); w.Code != http.StatusOK {
+		t.Fatalf("dave's registration with his recovery code answered %d %s", w.Code, w.Body)
+	}
+	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", fmt.Sprintf(`{"ceremony":"registration","code":%q}`, link), ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("dave's link, once he held a passkey, started a registration: %d %s", w.Code, w.Body)
+	}
+	if w := in.call(t, "POST", "/api/v1/auth/password/enrol", fmt.Sprintf(`{"code":%q,"password":"somebody else's passphrase"}`, link), ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("dave's link, once he held a passkey, set a password: %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from credentials where login = 'dave'`); n != 1 {
+		t.Errorf("dave holds %d credentials, and he enrolled one", n)
+	}
+}
+
+// The bootstrap token's end and a recovery code it issues, as it ends, never wait on each other: the
+// end revokes no recovery code, and the codes the token issued open nothing from then on, so that
+// the first administrator's enrolment, holding the bootstrap state, never waits on a code the
+// issue holds while the issue waits on the state. The enrolment ends the token, the issue finds it
+// ended and issues nothing, and the code the token issued bob before opens nothing.
+//
+// The bootstrap state is held until both wait on it, the enrolment first, so that the order does
+// not depend on the scheduler.
+func TestTheBootstrapsEndAndARecoveryCodeItIssuesTakeTurns(t *testing.T) {
+	in := someCeremonies(t)
+	in.user(t, "bob", false)
+	before := recoveryOf(t, in.bearer(t, "POST", "/api/v1/users/bob/recovery", in.bootstrap, ""), *in.clock)
+	code := in.user(t, "alice", true)
+	made, _, err := newBrowser().Create(in.options(t, fmt.Sprintf(`{"ceremony":"registration","code":%q}`, code)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(t.Context(), `select from bootstrap for update`); err != nil {
+		t.Fatal(err)
+	}
+	waiting := func(n int) error {
+		for deadline := time.Now().Add(10 * time.Second); ; {
+			if in.count(t, `select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`) >= n {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("%d transactions were expected to wait on a lock", n)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	enrolment, issue := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+	go func() { enrolment <- in.verify(t, "registration", made, "", "") }()
+	err = waiting(1)
+	if err == nil {
+		go func() { issue <- in.bearer(t, "POST", "/api/v1/users/bob/recovery", in.bootstrap, "") }()
+		err = waiting(2)
+	}
+	if err := holder.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := <-enrolment; w.Code != http.StatusOK {
+		t.Errorf("the first administrator's enrolment answered %d %s", w.Code, w.Body)
+	}
+	if w := <-issue; w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") {
+		t.Errorf("the recovery code the bootstrap token asked for as it ended answered %d %s", w.Code, w.Body)
+	}
+	if w := in.call(t, "POST", "/api/v1/auth/passkey/options", fmt.Sprintf(`{"ceremony":"registration","code":%q}`, before.Code), ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("the recovery code the bootstrap token issued bob opened a registration once it ended: %d %s", w.Code, w.Body)
+	}
 }

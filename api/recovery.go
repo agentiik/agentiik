@@ -39,7 +39,9 @@ import (
 // recover on its host.
 //
 // The bootstrap token issues them as it administers everything else, until the first administrator
-// has enrolled, and those it issued end with it (db.Wide.EndBootstrap).
+// has enrolled, and those it issued open nothing once it has ended (db.Wide.EnrolmentCodeByHash).
+// And once a recovery code has enrolled its user, the link they were created with, if still open,
+// opens nothing either: a link enrols the first credential of an account that holds none.
 
 // RecoveryCode is a recovery code, shown once: openapi.json's recoveryCode, the code to read out or
 // type, and the link to the enrolment page that carries it.

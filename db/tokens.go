@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentiik/agentiik/access"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -431,12 +432,27 @@ func scanEnrolment(row pgx.Row) (EnrolmentCode, error) {
 	return c, err
 }
 
-// EnrolmentCodeByHash answers the code whose value hashes to hash, if it is open at now: neither
-// used, revoked nor expired.
+// openCode is the condition an enrolment code opens something on at $2, $3 being the bootstrap
+// token's principal: neither used, revoked nor expired; a first administrator's link or a new user's
+// link only while its user holds no credential, since each enrols the first credential of an account
+// that holds none, and one left open beside a recovery code that enrolled its user would otherwise
+// enrol a second for whoever finds it; and a recovery code the bootstrap token issued only while the
+// token lives, since it issued the code as the one who administers and its reach ends with it.
+//
+// The last is read here rather than written as a revocation at the end, so that the end, which holds
+// the bootstrap state, takes no code's row: a recovery code the token issues takes the code's row
+// before the state, and an administrator enrolling with one spends it before ending the token, each
+// of which would wait on the end while the end waited on it.
+const openCode = `used_at is null and revoked_at is null and expires_at > $2
+	and (kind = 'recovery' or not exists (select from credentials cr where cr.login = enrolment_codes.login))
+	and (kind <> 'recovery' or issued_by <> $3 or exists (select from bootstrap where enrolled_at is null))`
+
+// EnrolmentCodeByHash answers the code whose value hashes to hash, if it is open at now, as openCode
+// says.
 func (w *Wide) EnrolmentCodeByHash(ctx context.Context, hash []byte, now time.Time) (EnrolmentCode, error) {
 	c, err := scanEnrolment(w.tx.QueryRow(ctx,
 		`select `+enrolmentColumns+` from enrolment_codes
-		  where hash = $1 and used_at is null and revoked_at is null and expires_at > $2`, hash, now))
+		  where hash = $1 and `+openCode, hash, now, access.BootstrapOperator))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EnrolmentCode{}, ErrNoEnrolmentCode
 	}
@@ -451,8 +467,8 @@ func (w *Wide) EnrolmentCodeByHash(ctx context.Context, hash []byte, now time.Ti
 func (w *Wide) UseEnrolmentCode(ctx context.Context, hash []byte, now time.Time) (EnrolmentCode, error) {
 	c, err := scanEnrolment(w.tx.QueryRow(ctx,
 		`update enrolment_codes set used_at = $2
-		  where hash = $1 and used_at is null and revoked_at is null and expires_at > $2
-		 returning `+enrolmentColumns, hash, now))
+		  where hash = $1 and `+openCode+`
+		 returning `+enrolmentColumns, hash, now, access.BootstrapOperator))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return EnrolmentCode{}, ErrNoEnrolmentCode
 	}

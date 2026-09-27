@@ -116,7 +116,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Migration 0040 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
 - Migration 0041 adds `runs.files_recorded`, which every decision sets, so that a finished run without it is one whose files a v0.2 controller left unrecorded: `db.Pool.UnrecordedRuns` reads those with the envelopes their steps published, and `db.Pool.RecordUnrecorded` records the files and sets the column in one transaction, giving a run with no expiry its namespace's `max_retention_days`, and leaves a run whose object a writer holds rather than wait for it.
 - `db.Pool.Sweepable`, `Unnamed`, `LiveEnvelopes` and `Orphaned` find the files of the store no row names, in a namespace with no finished run still to be recorded, and hand them to the collection as rows counting nothing, collectable from then.
-- `db.Wide.EndBootstrap` revokes the recovery codes the bootstrap token issued beside its first administrators' links, and `db.Wide.SpentFirstAdministratorLink` is gone.
+- `db.Wide.EnrolmentCodeByHash` and `db.Wide.UseEnrolmentCode` answer no recovery code the bootstrap token issued once it has ended, and no first administrator's or new user's link whose user holds a credential; `db.Wide.SpentFirstAdministratorLink` is gone.
 
 ### Artifacts
 

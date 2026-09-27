@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agentiik/agentiik/access"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -203,10 +202,12 @@ func (w *Wide) ImportBootstrapToken(ctx context.Context, hash []byte) (bool, err
 
 // EndBootstrap ends the bootstrap token at the first administrator's enrolment, forgetting its
 // hash, and answers whether this was the end of it: a second enrolment ends nothing more. Every
-// first administrator's link and every recovery code the token issued still open is revoked with
-// it, and the session each opened, since each is the token acting as the one who administers,
-// whose reach ends where the token does. A new user's link it issued stays open, as the link that
-// user was created with, so that a user created before the end enrols after it.
+// first administrator's link still open is revoked with it, and the session each opened, since a
+// link made with the token is the token's reach and ends where it does. The recovery codes the
+// token issued end with it too, and are not revoked here but read as ended (openCode), so that the
+// end takes the row of no code another transaction may hold while it waits on the bootstrap state.
+// A new user's link it issued stays open, as the link that user was created with, so that a user
+// created before the end enrols after it.
 func (w *Wide) EndBootstrap(ctx context.Context, at time.Time) (bool, error) {
 	tag, err := w.tx.Exec(ctx,
 		`update bootstrap set enrolled_at = $1, token_hash = null where enrolled_at is null`, at)
@@ -219,9 +220,8 @@ func (w *Wide) EndBootstrap(ctx context.Context, at time.Time) (bool, error) {
 	}
 	if _, err := w.tx.Exec(ctx,
 		`update enrolment_codes set revoked_at = $1
-		  where (kind = 'first-administrator' or (kind = 'recovery' and issued_by = $2))
-		    and used_at is null and revoked_at is null`, at, access.BootstrapOperator); err != nil {
-		return false, fmt.Errorf("db: the codes the bootstrap token issued could not be revoked: %w", err)
+		  where kind = 'first-administrator' and used_at is null and revoked_at is null`, at); err != nil {
+		return false, fmt.Errorf("db: the first administrator's links could not be revoked: %w", err)
 	}
 	return true, nil
 }
