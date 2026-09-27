@@ -252,10 +252,15 @@ func whoami(ctx context.Context, e Env, args []string) int {
 	fmt.Fprintln(e.Out, who)
 	if at.Namespace != "" {
 		// What applies to a workflow is its own key where a grant, a deny or the credential makes
-		// it other than its namespace's, and its namespace's otherwise.
+		// it other than its namespace's. With none, it is its namespace's, or nothing where denies
+		// on it take all of that: the installation leaves out a workflow the caller cannot read,
+		// rather than name it to them, so which of the two is not agk's to say.
 		held, written := me.Permissions[at.String()]
 		if !written && at.Workflow != "" {
-			held = me.Permissions[at.Namespace]
+			if inherited := me.Permissions[at.Namespace]; len(inherited) > 0 {
+				fmt.Fprintf(e.Out, "on %s: %s, from %s, unless denies there take all of it\n", at, permissionsLine(inherited), at.Namespace)
+				return exitSucceeded
+			}
 		}
 		fmt.Fprintf(e.Out, "on %s: %s\n", at, permissionsLine(held))
 		return exitSucceeded

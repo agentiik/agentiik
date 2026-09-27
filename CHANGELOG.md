@@ -215,6 +215,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `agk whoami` says when `agentiik-api recover` issued an administrator a recovery code.
 - `agk user create LOGIN --admin` with the bootstrap token says it works until LOGIN has signed in, which is when it ends, rather than enrolled.
 - `agk whoami` says which act widened access and who did it, and whom an administrator put in a group.
+- `agk whoami NS/WORKFLOW` says a workflow with no permissions of its own holds its namespace's unless denies there take all of it, since the installation names no workflow its caller cannot read.
 
 ## v0.2.5, 2026-09-26
 
