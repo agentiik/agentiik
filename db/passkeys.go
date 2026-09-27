@@ -48,11 +48,22 @@ type Challenge struct {
 	ExpiresAt time.Time
 }
 
-// IssueChallenge keeps a challenge until it is taken or its minutes pass, and removes those whose
-// minutes passed before c was issued, so that the table holds what the last few minutes of
-// ceremonies started and nothing older.
+// lapsedSwept is how many challenges past their minutes issuing one removes at most: more than
+// one, so that the sweep outruns what lapses, since every challenge lapses once and is issued once.
+const lapsedSwept = 16
+
+// IssueChallenge keeps a challenge until it is taken or its minutes pass, and removes some of those
+// whose minutes passed before c was issued, so that the table holds what the last few minutes of
+// ceremonies started and little older.
+//
+// The removal skips a row another transaction holds rather than waiting for it: two ceremonies
+// started at once each find the same lapsed rows, and one waiting on the other's removal, or the
+// two taking them in two orders, would make ceremonies anybody may start wait on each other.
 func (w *Wide) IssueChallenge(ctx context.Context, c Challenge) error {
-	if _, err := w.tx.Exec(ctx, `delete from webauthn_challenges where expires_at <= $1`, c.IssuedAt); err != nil {
+	if _, err := w.tx.Exec(ctx,
+		`delete from webauthn_challenges
+		  where challenge in (select challenge from webauthn_challenges where expires_at <= $1
+		                       limit $2 for update skip locked)`, c.IssuedAt, lapsedSwept); err != nil {
 		return fmt.Errorf("db: the challenges past their minutes could not be removed: %w", err)
 	}
 	_, err := w.tx.Exec(ctx,
