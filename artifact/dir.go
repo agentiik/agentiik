@@ -18,10 +18,13 @@ import (
 //
 // A key becomes a path under root, so the objects of two namespaces sit in two
 // directories and an existence check still cannot reach across one. It is also the
-// built-in store of a server, AGK_OBJECTS_DIR, which is why it can remove an object.
+// built-in store of a server, AGK_OBJECTS_DIR, which is why it can remove an object, and why
+// it is Walkable, for the collector to find the objects nothing names.
 func Dir(root string) Removable {
 	return dir{root: root}
 }
+
+var _ Walkable = dir{}
 
 type dir struct {
 	root string
@@ -154,4 +157,83 @@ func (d dir) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("artifact: object %s: %w", key, err)
 	}
 	return f, nil
+}
+
+// Walk lists the objects of one namespace: the files of its sha256 directory named as a digest is,
+// and nothing else. A directory, a link, a write being staged and a name that is not sixty-four
+// lowercase hexadecimal characters are passed over, and the logs are in another directory, which a
+// walk never opens. A namespace that holds no object yet is a walk that answers none.
+//
+// The directory is held open for as long as the walk is, so that a walk taken up again a pass later
+// goes on from where it stopped rather than reading a million names again to find its place.
+func (d dir) Walk(namespace string) (Walk, error) {
+	if err := checkNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if d.root == "" {
+		return nil, errors.New("artifact: no root directory")
+	}
+	f, err := os.Open(filepath.Join(d.root, namespace, "sha256"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return &dirWalk{}, nil
+	case err != nil:
+		return nil, fmt.Errorf("artifact: the objects of namespace %s: %w", namespace, err)
+	}
+	return &dirWalk{f: f, namespace: namespace}, nil
+}
+
+type dirWalk struct {
+	f         *os.File
+	namespace string
+}
+
+func (w *dirWalk) Next(ctx context.Context, n int) ([]Stored, bool, error) {
+	if w.f == nil {
+		return nil, false, nil
+	}
+	if n <= 0 {
+		return nil, false, fmt.Errorf("artifact: a walk asked for %d objects", n)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	entries, err := w.f.ReadDir(n)
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("artifact: the objects of namespace %s: %w", w.namespace, err)
+	}
+	out := make([]Stored, 0, len(entries))
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !digestName(e.Name()) {
+			continue
+		}
+		// Asked of the entry itself and never through a link, and an entry removed since the
+		// directory was read is one the walk no longer has to answer.
+		info, err := e.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("artifact: object %s: %w", Key(w.namespace, e.Name()), err)
+		}
+		out = append(out, Stored{Digest: e.Name(), Size: info.Size(), Written: info.ModTime()})
+	}
+	return out, true, nil
+}
+
+func (w *dirWalk) Close() error {
+	if w.f == nil {
+		return nil
+	}
+	err := w.f.Close()
+	w.f = nil
+	return err
+}
+
+// digestName is sixty-four lowercase hexadecimal characters, the one name Key gives an object.
+func digestName(name string) bool {
+	return len(name) == 64 && strings.Trim(name, "0123456789abcdef") == ""
 }

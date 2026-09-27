@@ -26,6 +26,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 )
@@ -97,6 +98,39 @@ type Objects interface {
 type Removable interface {
 	Objects
 	Remove(ctx context.Context, key string) (bool, error)
+}
+
+// Walkable is a byte layer whose objects can be listed, one namespace at a time, which the directory
+// Dir opens is: the built-in store, whose collector looks for the files no row of the database
+// names, since nothing else could find them. What Objects owes forbids a caller enumerating across
+// keys, and this is no door through that rule: a walk lists the objects of one namespace and
+// nothing else, the logs and anything that is not an object left out, and it is opened by the
+// controller that leads and by no route.
+type Walkable interface {
+	Removable
+	Walk(namespace string) (Walk, error)
+}
+
+// Walk lists the objects of one namespace, a few at a time, in no order.
+//
+// Next answers at most n objects not answered before, fewer where it passed over entries that are
+// not objects, and false once there are none left. An object written or removed while a walk is
+// under way may be answered or not, and none is answered twice: the next walk finds what this one
+// missed. Close lets go of what the walk holds open.
+type Walk interface {
+	Next(ctx context.Context, n int) ([]Stored, bool, error)
+	Close() error
+}
+
+// Stored is one object a walk found.
+type Stored struct {
+	// Digest is the bare hexadecimal the object's key ends with.
+	Digest string
+
+	Size int64
+
+	// Written is when its bytes were last written, as the store records it.
+	Written time.Time
 }
 
 // defaultMediaType is what an artifact is written as when the caller names no media

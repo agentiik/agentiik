@@ -2,6 +2,7 @@ package artifact_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/artifact"
@@ -193,6 +195,108 @@ func TestDirRemovesAnObjectAndTheDirectoriesItLeavesEmpty(t *testing.T) {
 	}
 	if exists("acme/logs/run-1") || !exists("acme/logs") {
 		t.Errorf("removing a run's last chunk: the run's directory held %t, acme/logs held %t", exists("acme/logs/run-1"), exists("acme/logs"))
+	}
+}
+
+// A walk answers the objects of one namespace, each once, a batch at a time, with its size and when
+// it was written, and nothing else in its directory: not a write being staged, a link, a directory,
+// a name that is not a digest, a log or another namespace's object.
+func TestDirWalksTheObjectsOfOneNamespaceAndNothingElse(t *testing.T) {
+	root := t.TempDir()
+	objects := artifact.Dir(root)
+	walkable, ok := objects.(artifact.Walkable)
+	if !ok {
+		t.Fatal("the directory store cannot be walked")
+	}
+	want := map[string]int64{}
+	for i := range 5 {
+		content := strings.Repeat("x", i+1)
+		digest := fmt.Sprintf("%064x", i+1)
+		if err := objects.Put(t.Context(), artifact.Key("acme", digest), strings.NewReader(content)); err != nil {
+			t.Fatal(err)
+		}
+		want[digest] = int64(len(content))
+	}
+	old := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	aged := fmt.Sprintf("%064x", 1)
+	if err := os.Chtimes(filepath.Join(root, "acme", "sha256", aged), old, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		artifact.Key("other", fmt.Sprintf("%064x", 9)),
+		"acme/logs/run-1/task-a/dispatch-1/0000000001-" + sha256OfHello,
+	} {
+		if err := objects.Put(t.Context(), key, strings.NewReader("not acme's object")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := filepath.Join(root, "acme", "sha256")
+	for _, name := range []string{".staging-123", "README", strings.Repeat("A", 64)} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("not an object"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("%064x", 7)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("somebody else's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, fmt.Sprintf("%064x", 8))); err != nil {
+		t.Fatal(err)
+	}
+
+	walk, err := walkable.Walk("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer walk.Close()
+	got := map[string]artifact.Stored{}
+	for calls := 0; ; calls++ {
+		if calls > 20 {
+			t.Fatal("the walk never ended")
+		}
+		found, more, err := walk.Next(t.Context(), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(found) > 2 {
+			t.Fatalf("a walk asked for 2 answered %d", len(found))
+		}
+		for _, s := range found {
+			if _, twice := got[s.Digest]; twice {
+				t.Errorf("%s was answered twice", s.Digest)
+			}
+			got[s.Digest] = s
+		}
+		if !more {
+			break
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("the walk answered %d objects, and acme holds %d: %v", len(got), len(want), got)
+	}
+	for digest, size := range want {
+		if s, ok := got[digest]; !ok || s.Size != size {
+			t.Errorf("the object %s of %d bytes was answered as %+v", digest, size, s)
+		}
+	}
+	if !got[aged].Written.Equal(old) {
+		t.Errorf("an object written three days ago was answered as written %s", got[aged].Written)
+	}
+
+	none, err := walkable.Walk("nobody")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, more, err := none.Next(t.Context(), 10); len(found) != 0 || more || err != nil {
+		t.Errorf("a namespace holding no object answered %v, %t, %v", found, more, err)
+	}
+	for _, namespace := range []string{"", "..", "a/b"} {
+		if _, err := walkable.Walk(namespace); err == nil {
+			t.Errorf("a walk of namespace %q was opened", namespace)
+		}
 	}
 }
 
