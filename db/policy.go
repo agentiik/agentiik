@@ -103,6 +103,44 @@ func (w *Wide) SetNamespacePolicy(ctx context.Context, namespace string, p AuthP
 	return nil
 }
 
+// UsersUnderPolicy answers the logins of the users a namespace's authentication policy applies to,
+// ordered by login: those holding a grant carrying a role in it at now, their own or one of their
+// groups', on the namespace or on one of its workflows, since "a namespace's policy applies at
+// sign-in, to every account holding a grant in the namespace". A deny alone is not a grant here, as
+// it is nowhere else.
+func (w *Wide) UsersUnderPolicy(ctx context.Context, namespace string, now time.Time) ([]string, error) {
+	rows, err := w.tx.Query(ctx,
+		`select u.login from users u
+		  where exists (select from grants g
+		                 where g.namespace = $1 and g.role is not null
+		                   and (g.expires_at is null or g.expires_at > $2)
+		                   and (g.principal = u.login
+		                        or g.principal in (select 'group:' || m.group_name from group_members m where m.login = u.login)))
+		  order by u.login`, namespace, now)
+	if err != nil {
+		return nil, fmt.Errorf("db: the users holding a grant in %s could not be read: %w", namespace, err)
+	}
+	logins, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: the users holding a grant in %s could not be read: %w", namespace, err)
+	}
+	return logins, nil
+}
+
+// Logins answers the login of every user, ordered by login: those an installation's policy applies
+// to.
+func (w *Wide) Logins(ctx context.Context) ([]string, error) {
+	rows, err := w.tx.Query(ctx, `select login from users order by login`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the users could not be read: %w", err)
+	}
+	logins, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("db: the users could not be read: %w", err)
+	}
+	return logins, nil
+}
+
 // ErrBootstrapEnded is the bootstrap token asked for after the first administrator enrolled,
 // which ended it for good.
 var ErrBootstrapEnded = errors.New("db: the bootstrap token ended when the first administrator enrolled")
