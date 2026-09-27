@@ -313,9 +313,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 	// The passkey ceremonies, on the public URL's host as the Relying Party, reading a session
 	// that may only enrol, which the router refuses everywhere else; and the password sign-in,
-	// opening a TOTP generator's secret with the master key. The two share where a sign-in comes
-	// from, the proxy's X-Forwarded-For behind AGK_PROXY_URL, and the bound on the failures they
-	// record.
+	// opening a TOTP generator's secret with the master key, with the routes that set a password,
+	// from an enrolment code or a session, one that may only enrol included, and enrol a TOTP
+	// generator beside it. The two share where a sign-in comes from, the proxy's X-Forwarded-For
+	// behind AGK_PROXY_URL, and the bound on the failures they record.
 	signIns := api.NewSignIns(s.Proxied)
 	if _, err := api.NewPasskeys(rt, api.PasskeyOptions{
 		Pool: pool, PublicURL: s.PublicURL, Identify: principals.Identify, SignIns: signIns,
@@ -324,12 +325,12 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	passwords := api.PasswordOptions{
-		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns,
+		Pool: pool, PublicURL: s.PublicURL, SignIns: signIns, Identify: principals.Identify,
 		Trouble: func(err error) { log.Warn("a password sign-in was answered with trouble", "error", err) },
 	}
 	// A nil keyring is not reachable, since the master key is required, and would open no TOTP
 	// generator, which refuses the sign-in of an account holding one rather than admit it with its
-	// password alone.
+	// password alone, and would enrol none.
 	if s.keys != nil {
 		totp, err := secret.NewTOTP(s.keys)
 		if err != nil {
@@ -341,7 +342,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers, with the
-	// password form where the policy lets passwords in, now that POST /api/v1/auth/login is served.
+	// password forms where the policy lets passwords in, now that the password routes are served.
 	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true}); err != nil {
 		return nil, err
 	}

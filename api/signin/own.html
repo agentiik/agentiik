@@ -1,0 +1,37 @@
+{{define "own"}}
+<section id="own" hidden>
+<h2>Password and one-time codes</h2>
+<form id="change-password" method="post">
+<label for="current-password">Current password <span class="hint">only if your account has one</span></label>
+<input id="current-password" name="current_password" type="password" autocomplete="current-password" maxlength="1024">
+<label for="changed-password">New password <span class="hint">at least 12 characters; a few words together are easy to remember</span></label>
+<input id="changed-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required>
+<label for="changed-password-again">The same password again</label>
+<input id="changed-password-again" type="password" autocomplete="new-password" maxlength="1024" required>
+<button type="submit" id="change-password-button">Set the password</button>
+</form>
+<div id="own-more">
+<p class="note">Removing the password leaves the passkeys you hold, once you hold as many as the installation asks.</p>
+<button type="button" id="remove-password" class="quiet">Remove the password</button>
+<h2>One-time codes</h2>
+<p class="note">A generator in an authenticator application adds its code to every sign-in with the password.</p>
+<button type="button" id="totp-start">Add a one-time code generator</button>
+<div id="totp-enrolling" hidden>
+<p>Scan this with an authenticator application, or type the key into it, then type the code it shows. Nothing changes until you do.</p>
+<div id="totp-qr" class="qr"></div>
+<p class="note">Key <code id="totp-secret" class="key"></code></p>
+<p class="note">URI <code id="totp-uri" class="key"></code></p>
+<form id="totp-confirm" method="post">
+<label for="totp-code">Code the application shows</label>
+<input id="totp-code" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+<button type="submit" id="totp-confirm-button">Turn one-time codes on</button>
+</form>
+</div>
+<form id="totp-remove" method="post">
+<label for="totp-remove-code">To remove your generator, a code it shows <span class="hint">only if your account has one</span></label>
+<input id="totp-remove-code" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+<button type="submit" id="totp-remove-button" class="quiet">Remove the generator</button>
+</form>
+</div>
+</section>
+{{end}}

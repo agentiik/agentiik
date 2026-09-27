@@ -3,8 +3,9 @@
 // each element of a page by its id, hidden or not as the HTML says, and the page's data attributes.
 // It stands in for the browser page.js reads, the DOM, fetch, navigator.credentials, location and
 // history, drives each scenario a person would, answering each request as the API would, and
-// prints, in one line of JSON, what went otherwise than a scenario says. It runs on node and on
-// macOS's jsc, which prints with print and has no console and no URL.
+// prints, in one line of JSON, what went otherwise than a scenario says, and the QR codes the page
+// drew, read back from its SVG, for the test to compare with a reference encoder's. It runs on node
+// and on macOS's jsc, which prints with print and has no console and no URL.
 const say = typeof print === "function" ? print : (line) => console.log(line);
 
 // A URL enough for page.js's own, "../api/v1/..." against the page's address, where there is none.
@@ -27,6 +28,22 @@ function global(name, value) {
   Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
 }
 
+// node is an element the page's script makes, as SVG's are: its attributes and its children.
+function node(tag) {
+  return {
+    tag, attributes: {}, children: [],
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    appendChild(child) {
+      this.children.push(child);
+    },
+    replaceChildren(...children) {
+      this.children = children;
+    },
+  };
+}
+
 // stage loads a page, as the test wrote it, at an address, and answers its browser: one whose
 // address carries hash after its #, which is not a secure context where insecure is set, and whose
 // authenticator's credentials have no toJSON() where raw is set.
@@ -34,12 +51,12 @@ function stage(name, address, { hash, insecure, raw } = {}) {
   const written = pages[name];
   const elements = {};
   for (const id of Object.keys(written.elements)) {
-    elements[id] = {
+    elements[id] = Object.assign(node(id), {
       id, hidden: written.elements[id].hidden, textContent: "", value: "", disabled: false, dataset: {}, listeners: {},
       addEventListener(type, f) {
         (this.listeners[type] = this.listeners[type] || []).push(f);
       },
-    };
+    });
   }
   for (const [attribute, value] of Object.entries(written.data)) {
     elements.page.dataset[attribute.replace(/^data-/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
@@ -60,7 +77,10 @@ function stage(name, address, { hash, insecure, raw } = {}) {
     },
   };
   const PublicKeyCredential = function () {};
-  global("document", { getElementById: (id) => elements[id] || null, baseURI: address });
+  global("document", {
+    getElementById: (id) => elements[id] || null, baseURI: address,
+    createElementNS: (ns, tag) => Object.assign(node(tag), { ns }),
+  });
   global("window", {
     isSecureContext: !insecure, PublicKeyCredential, location: browser.location,
     history: { replaceState: (_, __, to) => { browser.location.replaced = to; } },
@@ -150,6 +170,42 @@ const registration = {
 };
 const code = "agkenrol_oQtE7pKEuHkJTWZiELmHaW4Bc1fH6P_xBs51HPJ6f9U";
 const all = [];
+
+// drawnCodes are the QR codes the page drew, by the text it drew them for, as rows of 1 for dark.
+const drawnCodes = {};
+
+// drawnQR reads back the QR code the page drew in totp-qr: one SVG, a light square the size of its
+// view box and the dark modules as runs of one row each, four modules in from its edge; and answers
+// its rows, null where there is none.
+function drawnQR(b) {
+  const box = b.elements["totp-qr"];
+  if (box.children.length !== 1) {
+    return null;
+  }
+  const svg = box.children[0];
+  check(svg.tag === "svg" && svg.ns === "http://www.w3.org/2000/svg", "the QR code is not SVG: " + svg.tag);
+  const side = Number((svg.attributes.viewBox || "").split(" ")[2]);
+  const [ground, dark] = svg.children;
+  check(!!ground && ground.tag === "rect" && ground.attributes.fill === "#fff" && Number(ground.attributes.width) === side && Number(ground.attributes.height) === side,
+    "the QR code's ground is " + JSON.stringify(ground && ground.attributes));
+  check(!!dark && dark.tag === "path" && dark.attributes.fill === "#000", "the QR code's modules are " + JSON.stringify(dark && dark.attributes));
+  const n = side - 8;
+  const rows = Array.from({ length: n }, () => new Array(n).fill(0));
+  const d = dark ? dark.attributes.d : "";
+  const run = /M(\d+) (\d+)h(\d+)v1h-(\d+)z/g;
+  let read = 0;
+  for (let m = run.exec(d); m !== null; m = run.exec(d)) {
+    read += m[0].length;
+    const x = Number(m[1]) - 4;
+    const y = Number(m[2]) - 4;
+    check(m[3] === m[4] && x >= 0 && y >= 0 && y < n && x + Number(m[3]) <= n, "the QR code draws " + m[0] + " outside its modules");
+    for (let i = 0; i < Number(m[3]) && y < n; i++) {
+      rows[y][x + i] = 1;
+    }
+  }
+  check(read === d.length, "the QR code's path holds what is not a run of modules");
+  return rows.map((row) => row.join(""));
+}
 
 async function scenarios() {
   if (answers) {
@@ -415,6 +471,209 @@ async function scenarios() {
   await settle();
   check(b.location.reloaded, "the page is not loaded again once signed out");
 
+  scenario = "an enrolment link, with a password";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "enrol") && visible(b, "set-password") && !visible(b, "code-field") && /or set a password/.test(text(b, "intro")),
+    "the page does not offer a passkey and a password from the link: " + JSON.stringify(text(b, "intro")));
+  check(!visible(b, "own"), "the page offers the signed-in section to nobody");
+  b.elements["new-password"].value = "erin's own passphrase";
+  b.elements["new-password-again"].value = "erin's own passphrase, mistyped";
+  await fire(b, "set-password", "submit");
+  check(visible(b, "problem") && /differ/.test(text(b, "problem")) && !b.requests.some((q) => q.url.endsWith("auth/password/enrol")),
+    "two passwords that differ were sent, or the page said nothing");
+  check(b.elements["new-password"].value === "" && b.elements["new-password-again"].value === "", "the passwords are left in their fields");
+  b.elements["new-password"].value = "erin's own passphrase";
+  b.elements["new-password-again"].value = "erin's own passphrase";
+  await fire(b, "set-password", "submit");
+  let set = request(b, "auth/password/enrol");
+  check(JSON.stringify(set.body) === JSON.stringify({ code, password: "erin's own passphrase" }) && set.init.method === "POST" && !set.url.includes(code),
+    "the password set sent " + JSON.stringify(set.body) + " to " + set.url);
+  set.answer(200, { login: "erin", session: "full", credential: { type: "password", id: "01M2AAZ9G62NQXFAFCXKRPJEH5", created_at: "2026-09-27T09:00:00Z" } });
+  await settle();
+  check(b.location.replaced === "/auth/enrol", "the spent code is left in the address: " + b.location.replaced);
+  request(b, "me").answer(200, { principal: "erin" });
+  await settle();
+  check(visible(b, "signed-in") && text(b, "who") === "Signed in as erin." && text(b, "status") === "Password set for erin.", "the page does not say erin's password is set: " + JSON.stringify(text(b, "status")));
+  check(!visible(b, "set-password") && !visible(b, "code-field") && visible(b, "enrol") && visible(b, "own") && visible(b, "own-more"),
+    "the page does not offer erin a passkey and the signed-in section once her code is spent");
+
+  scenario = "an enrolment link, with a password, where a passkey is required";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  b.elements["new-password"].value = "erin's own passphrase";
+  b.elements["new-password-again"].value = "erin's own passphrase";
+  await fire(b, "set-password", "submit");
+  request(b, "auth/password/enrol").answer(200, { login: "erin", session: "enrolment", credential: { type: "password", id: "x", created_at: "2026-09-27T09:00:00Z" } });
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  check(/passkey before anything else/.test(text(b, "status")) && visible(b, "enrol") && !visible(b, "set-password"), "the page does not send erin on to a passkey: " + JSON.stringify(text(b, "status")));
+  check(visible(b, "own") && !visible(b, "own-more"), "a session that may only enrol is offered more than setting its password");
+
+  scenario = "an enrolment link where passwords are forbidden to the account";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  b.elements["new-password"].value = "erin's own passphrase";
+  b.elements["new-password-again"].value = "erin's own passphrase";
+  await fire(b, "set-password", "submit");
+  request(b, "auth/password/enrol").answer(403, { error: "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey", setting: "password" });
+  await settle();
+  check(!visible(b, "set-password") && visible(b, "enrol") && /passwords are forbidden/i.test(text(b, "problem")), "the password is still offered once the API forbade it");
+  check(b.location.replaced === null, "a refused password took the code out of the address");
+
+  scenario = "an installation addressed by an IP address, with a password";
+  b = stage("enrol-ip-password", "https://192.0.2.10/auth/enrol", { hash: "#" + code });
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "set-password") && !visible(b, "enrol") && visible(b, "unavailable") && /Set a password/.test(text(b, "intro")), "the page does not offer a password in place of the passkey");
+  b.elements["new-password"].value = "a long enough passphrase";
+  b.elements["new-password-again"].value = "a long enough passphrase";
+  await fire(b, "set-password", "submit");
+  check(request(b, "auth/password/enrol").body.code === code && !b.requests.some((q) => q.url.endsWith("auth/passkey/options")), "the password was not set from the link");
+  await fire(b, "enrol", "submit");
+  check(!b.requests.some((q) => q.url.endsWith("auth/passkey/options")), "a passkey ceremony was started where none runs");
+
+  scenario = "a recovery code typed in, for a password";
+  b = stage("enrol-password", "https://agentiik.example.com/auth/enrol");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(401, { error: "this request carries no credential" });
+  await settle();
+  check(visible(b, "code-field") && visible(b, "set-password"), "the page does not take a recovery code for a password");
+  b.elements["new-password"].value = "a long enough passphrase";
+  b.elements["new-password-again"].value = "a long enough passphrase";
+  await fire(b, "set-password", "submit");
+  check(visible(b, "problem") && !b.requests.some((q) => q.url.endsWith("auth/password/enrol")), "a password was sent with no code");
+  b.elements.code.value = " " + code + " ";
+  b.elements["new-password"].value = "a long enough passphrase";
+  b.elements["new-password-again"].value = "a long enough passphrase";
+  await fire(b, "set-password", "submit");
+  check(request(b, "auth/password/enrol").body.code === code, "the code typed in was not sent");
+
+  scenario = "the signed-in section: the password";
+  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  check(visible(b, "own") && visible(b, "own-more") && !visible(b, "totp-enrolling"), "the page offers alice no section setting her password");
+  b.elements["current-password"].value = "correct horse battery staple";
+  b.elements["changed-password"].value = "alice's new passphrase";
+  b.elements["changed-password-again"].value = "alice's new passphrase";
+  await fire(b, "change-password", "submit");
+  const changed = request(b, "me/password");
+  check(changed.init.method === "PUT" && JSON.stringify(changed.body) === JSON.stringify({ password: "alice's new passphrase", current_password: "correct horse battery staple" }),
+    "the change sent " + changed.init.method + " " + JSON.stringify(changed.body));
+  check(["current-password", "changed-password", "changed-password-again"].every((id) => b.elements[id].value === ""), "a password is left in its field");
+  changed.answer(200, { type: "password", id: "alice-password", created_at: "2026-09-27T09:00:00Z" });
+  await settle();
+  check(/^Password set/.test(text(b, "status")), "the page does not say the password is set: " + JSON.stringify(text(b, "status")));
+  b.elements["changed-password"].value = "alice's other passphrase";
+  b.elements["changed-password-again"].value = "alice's other passphrase";
+  await fire(b, "change-password", "submit");
+  const first = request(b, "me/password");
+  check(!("current_password" in first.body), "a current password left empty was sent: " + JSON.stringify(first.body));
+  first.answer(429, { error: "too many password sign-ins were tried for this account or from this address in the last quarter of an hour: try again later, or sign in with a passkey" }, { "Retry-After": "600" });
+  await settle();
+  check(text(b, "problem").endsWith(" Try again in 10 minutes."), "the page says " + JSON.stringify(text(b, "problem")));
+  await fire(b, "remove-password", "click");
+  const removed = request(b, "me/password");
+  check(removed.init.method === "DELETE" && removed.body === undefined, "the removal sent " + removed.init.method + " " + JSON.stringify(removed.body));
+  removed.answer(204);
+  await settle();
+  request(b, "me").answer(401, { error: "that session opens nothing" });
+  await settle();
+  check(!visible(b, "own") && !visible(b, "signed-in") && visible(b, "password") && visible(b, "passkey") && /Password removed/.test(text(b, "status")),
+    "once the session the password opened ended with it, the page does not offer a sign-in again");
+
+  for (const [from, act] of [
+    ["starting a generator", async (b) => {
+      await fire(b, "totp-start", "click");
+      return request(b, "me/totp");
+    }],
+    ["setting the password", async (b) => {
+      b.elements["changed-password"].value = "alice's new passphrase";
+      b.elements["changed-password-again"].value = "alice's new passphrase";
+      await fire(b, "change-password", "submit");
+      return request(b, "me/password");
+    }],
+  ]) {
+    scenario = "the signed-in section where passwords are forbidden to the account, " + from;
+    b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+    all.push(b);
+    await settle();
+    request(b, "me").answer(200, { principal: "alice" });
+    await settle();
+    (await act(b)).answer(403, { error: "passwords are forbidden by the authentication policy that applies to this account, and none is set: enrol a passkey", setting: "password" });
+    await settle();
+    check(!visible(b, "own") && /passwords are forbidden/i.test(text(b, "problem")), "the section is still offered once the API forbade passwords");
+  }
+
+  scenario = "the signed-in section: a one-time code generator";
+  const uri = "otpauth://totp/Agentiik:alice@agentiik.example.com?algorithm=SHA1&digits=6&issuer=Agentiik&period=30&secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  await fire(b, "totp-start", "click");
+  const started = request(b, "me/totp");
+  check(started.init.method === "POST" && started.body === undefined, "the generator was started with " + started.init.method + " " + JSON.stringify(started.body));
+  started.answer(200, { id: "01M2AB3K5Q7R9T1V3X5Z7B9D1F", secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", uri, expires_at: "2026-09-27T09:10:00Z" });
+  await settle();
+  check(visible(b, "totp-enrolling") && !visible(b, "totp-start") && text(b, "totp-secret") === "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" && text(b, "totp-uri") === uri,
+    "the page does not show the key and its URI as text");
+  drawnCodes[uri] = drawnQR(b);
+  check(drawnCodes[uri] !== null, "the page drew no QR code");
+  b.elements["totp-code"].value = " 492039 ";
+  await fire(b, "totp-confirm", "submit");
+  let confirmed = request(b, "me/totp/confirm");
+  check(JSON.stringify(confirmed.body) === JSON.stringify({ totp: "492039" }), "the confirmation sent " + JSON.stringify(confirmed.body));
+  confirmed.answer(422, { error: "that code is not the one the generator shows now: check that the device's clock is right, and send the code it shows next" });
+  await settle();
+  check(visible(b, "totp-enrolling") && visible(b, "problem") && text(b, "totp-secret") !== "", "a code refused took the key away, or said nothing");
+  b.elements["totp-code"].value = "492040";
+  await fire(b, "totp-confirm", "submit");
+  request(b, "me/totp/confirm").answer(200, { type: "totp", id: "01M2AB3K5Q7R9T1V3X5Z7B9D1F", created_at: "2026-09-27T09:00:00Z" });
+  await settle();
+  check(!visible(b, "totp-enrolling") && visible(b, "totp-start") && text(b, "totp-secret") === "" && text(b, "totp-uri") === "" && drawnQR(b) === null && /One-time codes are on/.test(text(b, "status")),
+    "the key is left on the page once the generator is on, or the page does not say so");
+  b.elements["totp-remove-code"].value = "492041";
+  await fire(b, "totp-remove", "submit");
+  const gone = request(b, "me/totp");
+  check(gone.init.method === "DELETE" && JSON.stringify(gone.body) === JSON.stringify({ totp: "492041" }), "the removal sent " + gone.init.method + " " + JSON.stringify(gone.body));
+  gone.answer(204);
+  await settle();
+  check(/removed/.test(text(b, "status")), "the page does not say the generator is removed");
+
+  scenario = "the signed-in section, for a session that may only enrol";
+  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  check(visible(b, "own") && visible(b, "change-password") && !visible(b, "own-more"), "a session that may only enrol is not offered its password alone");
+
+  scenario = "the signed-in section where passwords are withheld";
+  b = stage("sign-in", "https://agentiik.example.com/auth/sign-in");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  check(!visible(b, "own"), "the page offers a password where the installation withholds them");
+
   scenario = "every request";
   for (const browser of all) {
     for (const q of browser.requests) {
@@ -469,9 +728,43 @@ async function passwordAnswers() {
     await settle();
     then(b);
   }
+
+  // The enrolment page's password, each answer of POST /api/v1/auth/password/enrol followed by what
+  // GET /api/v1/me would answer the session it opened.
+  const enrolled = [
+    ["enrolFull", [200, { principal: "erin" }], (b) => {
+      check(text(b, "status") === "Password set for erin." && visible(b, "signed-in") && text(b, "who") === "Signed in as erin.", "the page says " + JSON.stringify(text(b, "status")));
+      check(visible(b, "own") && visible(b, "own-more") && !visible(b, "set-password") && !visible(b, "problem"), "the page does not offer erin the signed-in section");
+    }],
+    ["enrolEnrolment", [403, { error: "this session enrols passkeys and nothing else" }], (b) => {
+      check(/passkey before anything else/.test(text(b, "status")) && visible(b, "enrol") && !visible(b, "set-password"), "the page does not send frank on to a passkey: " + JSON.stringify(text(b, "status")));
+    }],
+    ["enrolForbidden", null, (b) => {
+      check(!visible(b, "set-password") && visible(b, "enrol") && /passwords are forbidden/i.test(text(b, "problem")), "the page says " + JSON.stringify(text(b, "problem")) + " and offers the password again");
+    }],
+  ];
+  for (const [name, me, then] of enrolled) {
+    const real = answers[name];
+    scenario = "a password set from a link answered as the route answered " + name + " (" + real.status + ")";
+    const b = stage("enrol-password", "https://agentiik.example.com/auth/enrol", { hash: "#" + code });
+    all.push(b);
+    await settle();
+    request(b, "me").answer(401, { error: "this request carries no credential" });
+    await settle();
+    b.elements["new-password"].value = real.login + "'s own passphrase";
+    b.elements["new-password-again"].value = real.login + "'s own passphrase";
+    await fire(b, "set-password", "submit");
+    request(b, "auth/password/enrol").answer(real.status, real.body);
+    await settle();
+    if (me) {
+      request(b, "me").answer(me[0], me[1]);
+      await settle();
+    }
+    then(b);
+  }
 }
 
 scenarios().then(
-  () => say(JSON.stringify({ failures })),
-  (e) => say(JSON.stringify({ failures: failures.concat(["the harness failed: " + (e && e.stack ? e.stack : e)]) })),
+  () => say(JSON.stringify({ failures, drawn: drawnCodes })),
+  (e) => say(JSON.stringify({ failures: failures.concat(["the harness failed: " + (e && e.stack ? e.stack : e)]), drawn: drawnCodes })),
 );

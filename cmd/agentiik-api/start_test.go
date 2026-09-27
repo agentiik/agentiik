@@ -510,6 +510,12 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"POST /api/v1/auth/passkey/options":                              public,
 		"POST /api/v1/auth/passkey/verify":                               public,
 		"POST /api/v1/auth/login":                                        public,
+		"POST /api/v1/auth/password/enrol":                               public,
+		"PUT /api/v1/me/password":                                        public,
+		"DELETE /api/v1/me/password":                                     own,
+		"POST /api/v1/me/totp":                                           own,
+		"POST /api/v1/me/totp/confirm":                                   own,
+		"DELETE /api/v1/me/totp":                                         own,
 		"POST /api/v1/auth/sign-out":                                     public,
 		"GET /auth/sign-in":                                              public,
 		"GET /auth/enrol":                                                public,
@@ -539,13 +545,15 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		}
 	}
 
-	// The sign-in page offers the password form, since the route it calls is served and the
-	// policy an installation starts with lets passwords in.
-	page := httptest.NewRecorder()
-	in.router.ServeHTTP(page, httptest.NewRequestWithContext(t.Context(), "GET", "/auth/sign-in", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-password="offered"`) {
-		t.Errorf("the sign-in page served answered %d, with the password form %s", page.Code,
-			regexp.MustCompile(`data-password="[^"]*"`).FindString(page.Body.String()))
+	// The sign-in and enrolment pages offer the password forms, since the routes they call are
+	// served and the policy an installation starts with lets passwords in.
+	for _, path := range []string{"/auth/sign-in", "/auth/enrol"} {
+		page := httptest.NewRecorder()
+		in.router.ServeHTTP(page, httptest.NewRequestWithContext(t.Context(), "GET", path, nil))
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-password="offered"`) {
+			t.Errorf("%s served answered %d, with the password form %s", path, page.Code,
+				regexp.MustCompile(`data-password="[^"]*"`).FindString(page.Body.String()))
+		}
 	}
 }
 

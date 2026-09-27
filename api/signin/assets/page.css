@@ -99,6 +99,12 @@ input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid 
 
 a { color: var(--accent); }
 code { padding: 1px 4px; font-family: var(--mono); font-size: .9em; background: var(--sunken); border-radius: 3px; }
+/* A generator's key and URI, long words a narrow screen breaks anywhere rather than scrolls. */
+code.key { overflow-wrap: anywhere; }
+
+/* A QR code is dark on light whatever the page's colours, which qr.js's SVG says itself; the frame
+   keeps its quiet zone clear of the page around it in the dark. */
+.qr svg { display: block; width: min(100%, 16rem); height: auto; margin: 8px 0 12px; border: 1px solid var(--line); }
 
 .note { color: var(--muted); }
 .problem { color: var(--signal); }

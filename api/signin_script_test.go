@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"html"
 	"html/template"
 	"net/http"
@@ -340,14 +342,18 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 // The page's script on a stand-in browser, testdata/page_harness.js: the DOM of each page as it is
 // served, fetch answered as the API answers, navigator.credentials, location and history, driven
 // through what a person does. Signed out, the page offers the passkey; a session that may only
-// enrol is told what it needs and offered its sign-out, and no sign-in, agk login's included; a password refused by the policy is not
-// offered again, whatever answers after; a sign-in agk login opened, by passkey or by password,
-// hands on its loopback address and follows the API back to it and nowhere else; an enrolment
-// link's code travels in the options' body alone and leaves the address once spent; where no
+// enrol is told what it needs and offered its sign-out and its password, and no sign-in, agk
+// login's included; a password refused by the policy is not offered again, whatever answers after;
+// a sign-in agk login opened, by passkey or by password, hands on its loopback address and follows
+// the API back to it and nowhere else; an enrolment link's code travels in the body alone, of the
+// passkey's options or of the password it sets, and leaves the address once spent; where no
 // passkey can run, an installation addressed by an IP address or a page that is not a secure
-// context, the page says why and offers none; a credential with no toJSON() is written by codec;
-// and every request is the page's own fetch, under the public URL's path, with credentials
-// same-origin and no mode, which the API's Origin check needs.
+// context, the page says why and offers none, and a password in its place where passwords are
+// offered; a credential with no toJSON() is written by codec; a signed-in browser sets its
+// password, with the current one where it sends one, removes it, and enrols a TOTP generator whose
+// key is shown as text and as a QR code, the one the reference encoder draws, and forgotten once
+// the generator is on, and removes it; and every request is the page's own fetch, under the public
+// URL's path, with credentials same-origin and no mode, which the API's Origin check needs.
 func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 	onAStandInBrowser(t, javaScript(t), "null")
 }
@@ -357,6 +363,9 @@ func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 // other sign-in; one that may only enrol offers the way to enrol a passkey and the sign-out, and no
 // sign-in; a wrong password keeps both forms and says so; passwords forbidden take the form away
 // and keep the passkey; and too many attempts say, in minutes, how long Retry-After asks to wait.
+// And the enrolment page's password, against what POST /api/v1/auth/password/enrol answers: a full
+// session says whose password is set and offers the signed-in section; one that may only enrol sends
+// its holder on to a passkey; and passwords forbidden take the form away.
 func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	engine := javaScript(t)
 	answers, err := json.Marshal(passwordAnswers(t))
@@ -394,7 +403,7 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock, Identify: p.Identify}); err != nil {
 		t.Fatal(err)
 	}
 	policy := func(passwords, passkeys string) {
@@ -406,6 +415,11 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 		}
 	}
 	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, login := range []string{"erin", "frank", "gail"} {
+			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+				return err
+			}
+		}
 		for _, login := range []string{"alice", "bob", "carol"} {
 			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
 				return err
@@ -432,28 +446,56 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 		return routeAnswer{Login: login, Status: w.Code, Body: bytes.TrimSpace(w.Body.Bytes()), RetryAfter: w.Header().Get("Retry-After")}
 	}
 
+	enrol := func(login string) routeAnswer {
+		t.Helper()
+		value := "agkenrol_" + base64.RawURLEncoding.EncodeToString(random(t, 32))
+		if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			_, err := w.IssueEnrolmentCode(ctx, db.EnrolmentCode{
+				Hash: sha256Of(value), Login: login, Kind: db.EnrolmentNewUser, IssuedBy: "alice", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(map[string]string{"code": value, "password": login + "'s own passphrase"})
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/auth/password/enrol", bytes.NewReader(body))
+		r.Header.Set("Origin", publicURL)
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, r)
+		return routeAnswer{Login: login, Status: w.Code, Body: bytes.TrimSpace(w.Body.Bytes())}
+	}
+
 	answers := map[string]routeAnswer{}
 	policy("allowed", "optional")
 	answers["full"] = signIn("alice", "alice's own")
 	answers["wrong"] = signIn("alice", "not alice's")
+	answers["enrolFull"] = enrol("erin")
 	policy("allowed", "required")
 	answers["enrolment"] = signIn("bob", "bob's own")
+	answers["enrolEnrolment"] = enrol("frank")
 	for range 10 {
 		signIn("carol", "a guess")
 	}
 	answers["tooMany"] = signIn("carol", "carol's own")
 	policy("forbidden", "required")
 	answers["forbidden"] = signIn("alice", "alice's own")
+	answers["enrolForbidden"] = enrol("gail")
 
 	for name, want := range map[string]int{
 		"full": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
 		"forbidden": http.StatusForbidden, "tooMany": http.StatusTooManyRequests,
+		"enrolFull": http.StatusOK, "enrolEnrolment": http.StatusOK, "enrolForbidden": http.StatusForbidden,
 	} {
 		if answers[name].Status != want {
 			t.Fatalf("the route answered %s with %d %s", name, answers[name].Status, answers[name].Body)
 		}
 	}
 	return answers
+}
+
+func sha256Of(value string) []byte {
+	sum := sha256.Sum256([]byte(value))
+	return sum[:]
 }
 
 // onAStandInBrowser runs page.js on testdata/page_harness.js, with the pages as the templates write
@@ -480,9 +522,11 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
 		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered",
 			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
-		"sign-in-ip": {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
-		"enrol":      {"enrol.html", pageData{Scripts: true, Passkeys: "available"}},
-		"enrol-ip":   {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable"}},
+		"sign-in-ip":        {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
+		"enrol":             {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld"}},
+		"enrol-ip":          {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "withheld"}},
+		"enrol-password":    {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "offered"}},
+		"enrol-ip-password": {"enrol.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered"}},
 	} {
 		var b bytes.Buffer
 		if err := pages.ExecuteTemplate(&b, page.file, page.data); err != nil {
@@ -518,6 +562,7 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 	var script bytes.Buffer
 	for _, part := range [][]byte{
 		read(signinFiles.ReadFile("signin/assets/codec.js")),
+		read(signinFiles.ReadFile("signin/assets/qr.js")),
 		[]byte("function loadPage() {"), read(signinFiles.ReadFile("signin/assets/page.js")), []byte("}"),
 		[]byte("const pages = " + string(vectors) + ";"),
 		[]byte("const answers = " + answers + ";"),
@@ -537,12 +582,153 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 		t.Fatalf("%s ran the page's script and failed: %s\n%s%s", filepath.Base(engine), err, stderr.String(), stdout.String())
 	}
 	var out struct {
-		Failures []string `json:"failures"`
+		Failures []string            `json:"failures"`
+		Drawn    map[string][]string `json:"drawn"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
 		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
 	}
 	for _, f := range out.Failures {
 		t.Error(f)
+	}
+	// Every QR code the page drew is the one the reference encoder draws for its text.
+	reference := qrVectors(t)
+	for text, rows := range out.Drawn {
+		want, ok := reference.drawn(text)
+		switch {
+		case !ok:
+			t.Errorf("the page drew a QR code of %q, for which testdata/qr_vectors.json holds none", text)
+		case rowsHash(rows) != want.Want.SHA256:
+			t.Errorf("the page drew %q as\n%s\nwhich is not the reference encoder's", text, strings.Join(rows, "\n"))
+		}
+	}
+}
+
+// qrCase is one case of testdata/qr_vectors.json: a text, the version and the mask asked for where
+// one is, and what the reference encoder drew, its version, its mask, and the SHA-256 of its rows
+// joined by line feeds, with the rows themselves for a short text.
+type qrCase struct {
+	Text    string `json:"text"`
+	Version *int   `json:"version"`
+	Mask    *int   `json:"mask"`
+	Want    struct {
+		Version int      `json:"version"`
+		Mask    int      `json:"mask"`
+		SHA256  string   `json:"sha256"`
+		Rows    []string `json:"rows"`
+	} `json:"want"`
+}
+
+type qrCases struct {
+	Source string   `json:"source"`
+	Cases  []qrCase `json:"cases"`
+}
+
+func qrVectors(t *testing.T) qrCases {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/qr_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v qrCases
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// drawn is what the reference encoder drew for text with nothing forced, as the page draws it.
+func (v qrCases) drawn(text string) (qrCase, bool) {
+	for _, c := range v.Cases {
+		if c.Text == text && c.Version == nil && c.Mask == nil {
+			return c, true
+		}
+	}
+	return qrCase{}, false
+}
+
+func rowsHash(rows []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// The page's QR code encoder, qr.js, on a JavaScript engine, against what a reference encoder draws
+// for the same texts, testdata/qr_vectors.json, whose source says which and how: under each of the
+// eight masks; in each of the forty versions, at the most bytes it holds, and one byte past that,
+// which takes the next; in a version larger than the text needs; UTF-8 past ASCII; and nothing at
+// all. Every module is compared, the finders, timing, alignment, format and version information and
+// the codewords with their error correction, and so is the mask chosen by the penalty where none is
+// asked for. A text too long for any version is refused rather than drawn.
+func TestTheQRCodeIsTheReferenceEncoders(t *testing.T) {
+	engine := javaScript(t)
+	raw, err := os.ReadFile("testdata/qr_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := qrVectors(t)
+	var script bytes.Buffer
+	for _, part := range [][]byte{
+		func() []byte {
+			b, err := signinFiles.ReadFile("signin/assets/qr.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}(),
+		[]byte("const vectors = " + string(raw) + ";"),
+		func() []byte {
+			b, err := os.ReadFile("testdata/qr_harness.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}(),
+	} {
+		script.Write(part)
+		script.WriteString("\n")
+	}
+	file := filepath.Join(t.TempDir(), "qr.js")
+	if err := os.WriteFile(file, script.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), engine, file)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%s ran qr.js and failed: %s\n%s%s", filepath.Base(engine), err, stderr.String(), stdout.String())
+	}
+	var out struct {
+		Results []struct {
+			Version int      `json:"version"`
+			Mask    int      `json:"mask"`
+			Rows    []string `json:"rows"`
+			Error   string   `json:"error"`
+		} `json:"results"`
+		Refused bool `json:"refused"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
+		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
+	}
+	if len(out.Results) != len(vectors.Cases) || len(vectors.Cases) < 50 {
+		t.Fatalf("qr.js answered %d of %d cases", len(out.Results), len(vectors.Cases))
+	}
+	for i, c := range vectors.Cases {
+		got := out.Results[i]
+		name := fmt.Sprintf("case %d, %d bytes", i, len(c.Text))
+		switch {
+		case got.Error != "":
+			t.Errorf("%s: qr.js refused it: %s", name, got.Error)
+		case got.Version != c.Want.Version || got.Mask != c.Want.Mask:
+			t.Errorf("%s: qr.js drew version %d under mask %d, and the reference version %d under mask %d", name, got.Version, got.Mask, c.Want.Version, c.Want.Mask)
+		case rowsHash(got.Rows) != c.Want.SHA256:
+			if c.Want.Rows != nil {
+				t.Errorf("%s: qr.js drew\n%s\nand the reference\n%s", name, strings.Join(got.Rows, "\n"), strings.Join(c.Want.Rows, "\n"))
+			} else {
+				t.Errorf("%s: qr.js drew modules other than the reference's", name)
+			}
+		}
+	}
+	if !out.Refused {
+		t.Error("a text too long for any version was not refused with a RangeError")
 	}
 }

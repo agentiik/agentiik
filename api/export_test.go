@@ -30,6 +30,7 @@ func Hashing(s *PasswordAPI, turns int, wait time.Duration) func() func() {
 	}
 }
 
-// BetweenChecksAndSignIn has f run between the checks of every password sign-in s answers and the
-// transaction that signs it in, which is where what was checked can change.
+// BetweenChecksAndSignIn has f run between the checks of every password sign-in s answers, and of
+// every password or TOTP generator it sets or removes, and the transaction that acts on them, which
+// is where what was checked can change.
 func BetweenChecksAndSignIn(s *PasswordAPI, f func()) { s.checked = f }

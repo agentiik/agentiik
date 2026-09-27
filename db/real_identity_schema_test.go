@@ -236,6 +236,7 @@ func TestWhatAPrincipalOrAWorkflowHoldsGoesWithIt(t *testing.T) {
 		`insert into grants (id, namespace, workflow, principal, role, granted_by) values ('01JQ3M8B', 'finance', 'monthly-invoicing', 'bob', 'operator', 'alice')`,
 		`insert into api_tokens (id, hash, principal, principal_kind, created_at, expires_at) values ('01JQ3M8C', `+aHash+`, 'alice', 'user', now(), now() + interval '90 days')`,
 		`insert into sessions (hash, login, credential, idle_expires_at) values (`+aHash+`, 'alice', 'cGFzc2tleQ', now() + interval '1 hour')`,
+		`insert into totp_enrolments (login, id, totp_sealed, started_at, expires_at) values ('alice', 'totp-alice', '\x01', now(), now() + interval '10 minutes')`,
 		`delete from principals where id = 'alice'`,
 		`delete from workflows where namespace = 'finance' and name = 'monthly-invoicing'`,
 	) {
@@ -246,6 +247,7 @@ func TestWhatAPrincipalOrAWorkflowHoldsGoesWithIt(t *testing.T) {
 	for table, where := range map[string]string{
 		"users": "login = 'alice'", "credentials": "login = 'alice'", "group_members": "login = 'alice'",
 		"api_tokens": "principal = 'alice'", "sessions": "login = 'alice'", "grants": "true",
+		"totp_enrolments": "login = 'alice'",
 	} {
 		var left int
 		if err := conn.QueryRow(ctx, `select count(*) from `+table+` where `+where).Scan(&left); err != nil {

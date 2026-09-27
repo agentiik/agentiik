@@ -61,7 +61,8 @@ type Credential struct {
 }
 
 // AddCredential enrols one. A TOTP generator is enrolled beside a password alone, and is
-// ErrNoPassword for a user holding none.
+// ErrNoPassword for a user holding none; one enrolled with a step, the step of the code that
+// confirmed it, accepts no code of that step or of one before it.
 //
 // Enrolling a TOTP locks its user's password, which a sign-in writes once it holds the user's row:
 // its caller holds the user's row first (HoldUser), as every act on an account does, or the two wait
@@ -73,12 +74,16 @@ func (w *Wide) AddCredential(ctx context.Context, c Credential) error {
 		n := int64(c.SignCount)
 		count, eligible, state = &n, &c.BackupEligible, &c.BackupState
 	}
+	var step *int64
+	if c.TOTPStep != 0 {
+		step = &c.TOTPStep
+	}
 	_, err := w.tx.Exec(ctx,
 		`insert into credentials (id, login, type, label, public_key, sign_count, aaguid,
-		                          backup_eligible, backup_state, password_hash, totp_sealed)
-		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		                          backup_eligible, backup_state, password_hash, totp_sealed, totp_step)
+		 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		c.ID, c.Login, c.Type, nilIfEmpty(c.Label), nilIfNone(c.PublicKey), count, nilIfNone(c.AAGUID),
-		eligible, state, nilIfEmpty(c.PasswordHash), nilIfNone(c.TOTPSealed))
+		eligible, state, nilIfEmpty(c.PasswordHash), nilIfNone(c.TOTPSealed), step)
 	var pg *pgconn.PgError
 	switch {
 	case errors.As(err, &pg) && pg.ConstraintName == "credentials_totp_beside_a_password":
@@ -231,4 +236,130 @@ func (w *Wide) RemoveCredential(ctx context.Context, login, id string) error {
 		return ErrNoCredential
 	}
 	return nil
+}
+
+// SetPassword sets login's password to hash at at, and answers it as recorded and whether it
+// replaced one. A password held is replaced in its row, which keeps its identifier, and so the
+// sessions it opened, which its caller ends or keeps, and the TOTP generator beside it, which goes
+// wherever the password's row goes; it is recorded as set at at and used by nobody since, as
+// $defs/passwordCredential's created_at is "when the password was last set". Where none is held,
+// one is enrolled under id.
+//
+// Its caller holds the user's row first (HoldUser), as every act on an account does, so that two
+// settings at once take turns rather than both enrolling one.
+func (w *Wide) SetPassword(ctx context.Context, login, id, hash string, at time.Time) (Credential, bool, error) {
+	c, err := scanCredential(w.tx.QueryRow(ctx,
+		`update credentials set password_hash = $2, created_at = $3, last_used_at = null
+		  where login = $1 and type = 'password'
+		 returning `+credentialColumns, login, hash, at))
+	switch {
+	case err == nil:
+		return c, true, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return Credential{}, false, fmt.Errorf("db: the password of %s could not be set: %w", login, err)
+	}
+	c, err = scanCredential(w.tx.QueryRow(ctx,
+		`insert into credentials (id, login, type, password_hash, created_at) values ($1, $2, 'password', $3, $4)
+		 returning `+credentialColumns, id, login, hash, at))
+	var pg *pgconn.PgError
+	switch {
+	case errors.As(err, &pg) && pg.Code == uniqueViolation:
+		return Credential{}, false, fmt.Errorf("%w: %s", ErrCredentialExists, id)
+	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
+		return Credential{}, false, fmt.Errorf("%w: %s", ErrNoPrincipal, login)
+	case err != nil:
+		return Credential{}, false, fmt.Errorf("db: the password of %s could not be set: %w", login, err)
+	}
+	return c, false, nil
+}
+
+// EndSessionsOpenedBy revokes at at the live sessions of login that credential opened, but the one
+// whose identifier hashes to kept where it is given, and answers how many it revoked: what a
+// password set anew ends, since whoever knew the one before may be who holds them, and the person
+// setting it keeps the session they set it from.
+func (w *Wide) EndSessionsOpenedBy(ctx context.Context, login, credential string, kept []byte, at time.Time) (int, error) {
+	tag, err := w.tx.Exec(ctx,
+		`update sessions set revoked_at = $4
+		  where login = $1 and credential = $2 and revoked_at is null and ($3::bytea is null or hash <> $3)`,
+		login, credential, nilIfNone(kept), at)
+	if err != nil {
+		return 0, fmt.Errorf("db: the sessions credential %s opened could not be ended: %w", credential, err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// TOTPEnrolmentLife is how long a TOTP generator waits for the code that confirms it: ten minutes,
+// the time a person takes to find their phone, open an authenticator application and scan, as the
+// table's constraint holds it.
+const TOTPEnrolmentLife = 10 * time.Minute
+
+// ErrNoTOTPEnrolment is a TOTP generator nobody started, or one whose minutes are up.
+var ErrNoTOTPEnrolment = errors.New("db: no TOTP generator is waiting for its first code")
+
+// TOTPEnrolment is a TOTP generator started and not confirmed: its secret, sealed as the row of
+// credentials it becomes will hold it, under the identifier it will be enrolled with. It signs
+// nobody in and asks no sign-in for a code until its first code confirms it.
+type TOTPEnrolment struct {
+	Login     string
+	ID        string
+	Sealed    []byte
+	StartedAt time.Time
+	ExpiresAt time.Time
+}
+
+// StartTOTP keeps a generator started, in place of the one its user had started before, whose
+// secret was shown and may never have reached an application.
+func (w *Wide) StartTOTP(ctx context.Context, e TOTPEnrolment) error {
+	_, err := w.tx.Exec(ctx,
+		`insert into totp_enrolments (login, id, totp_sealed, started_at, expires_at) values ($1, $2, $3, $4, $5)
+		 on conflict (login) do update
+		   set id = excluded.id, totp_sealed = excluded.totp_sealed,
+		       started_at = excluded.started_at, expires_at = excluded.expires_at`,
+		e.Login, e.ID, e.Sealed, e.StartedAt, e.ExpiresAt)
+	var pg *pgconn.PgError
+	switch {
+	case errors.As(err, &pg) && pg.Code == foreignKeyViolation:
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, e.Login)
+	case err != nil:
+		return fmt.Errorf("db: a TOTP generator of %s could not be started: %w", e.Login, err)
+	}
+	return nil
+}
+
+// TOTPEnrolmentOf answers the generator login started, if it is still waiting at now.
+func (w *Wide) TOTPEnrolmentOf(ctx context.Context, login string, now time.Time) (TOTPEnrolment, error) {
+	var e TOTPEnrolment
+	err := w.tx.QueryRow(ctx,
+		`select login, id, totp_sealed, started_at, expires_at from totp_enrolments where login = $1 and expires_at > $2`,
+		login, now).Scan(&e.Login, &e.ID, &e.Sealed, &e.StartedAt, &e.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TOTPEnrolment{}, ErrNoTOTPEnrolment
+	}
+	if err != nil {
+		return TOTPEnrolment{}, fmt.Errorf("db: the TOTP generator %s started could not be read: %w", login, err)
+	}
+	return e, nil
+}
+
+// EndTOTPEnrolment forgets the generator login started under id, once confirmed; one started since
+// under another identifier is kept.
+func (w *Wide) EndTOTPEnrolment(ctx context.Context, login, id string) error {
+	if _, err := w.tx.Exec(ctx, `delete from totp_enrolments where login = $1 and id = $2`, login, id); err != nil {
+		return fmt.Errorf("db: the TOTP generator %s started could not be forgotten: %w", login, err)
+	}
+	return nil
+}
+
+// SpentFirstAdministratorLink says whether login enrolled with a first administrator's link: the
+// one the bootstrap token issues, whose enrolment ends it. A link spent by a password where the
+// policy requires a passkey leaves the bootstrap to the first passkey its user then registers, which
+// is how that registration knows it is the first administrator's.
+func (w *Wide) SpentFirstAdministratorLink(ctx context.Context, login string) (bool, error) {
+	var spent bool
+	if err := w.tx.QueryRow(ctx,
+		`select exists (select from enrolment_codes where login = $1 and kind = 'first-administrator' and used_at is not null)`,
+		login).Scan(&spent); err != nil {
+		return false, fmt.Errorf("db: the enrolment links of %s could not be read: %w", login, err)
+	}
+	return spent, nil
 }

@@ -24,9 +24,11 @@ import (
 //
 // "A passkey ceremony runs in a browser, on a page whose origin the browser checks against the
 // Relying Party Identifier", and the console comes in its own releases, so the API serves a page of
-// its own on the public URL's origin: HTML, one stylesheet and two scripts, embedded here, which
+// its own on the public URL's origin: HTML, one stylesheet and three scripts, embedded here, which
 // load nothing from anywhere else and do the two ceremonies and the password fallback, nothing
-// more. Each answer of it carries a Content-Security-Policy letting it load its own files and reach
+// more: signing in with a password, setting one from an enrolment code or a session, and enrolling
+// a TOTP generator beside it, whose key the page draws as a QR code with a script of its own, qr.js.
+// Each answer of it carries a Content-Security-Policy letting it load its own files and reach
 // its own origin and nothing else: no script or style written into the page, no form posted
 // anywhere, never framed. The HTML is never cached, since it says what the installation offers when
 // it is asked; the stylesheet and the scripts are revalidated at every load, so that an upgrade never
@@ -37,7 +39,7 @@ import (
 //
 // What the page is told rather than finds out, written into it as it is served: whether a passkey
 // ceremony can run here at all, which it cannot on an installation addressed by an IP address;
-// whether it offers the password form; and agk login's loopback address and challenge, held to
+// whether it offers the password forms; and agk login's loopback address and challenge, held to
 // their grammar first, so that a page that would hand a code to another host than the loopback is
 // never served.
 
@@ -67,8 +69,10 @@ type SignInOptions struct {
 	// read and revoked there.
 	Sessions *Principals
 
-	// Passwords is whether POST /api/v1/auth/login is served, which the password form calls. The
-	// form is offered only where it is, and the policy lets passwords in.
+	// Passwords is whether the password routes are served: POST /api/v1/auth/login, which the
+	// sign-in form calls, and those that set a password and a TOTP generator, which the enrolment
+	// form and the signed-in section call. The forms are offered only where they are, and the
+	// policy lets passwords in.
 	Passwords bool
 
 	// Now is the clock a session ends by, the wall clock where it is nil.
@@ -226,9 +230,26 @@ func (s *SignInAPI) signInPage(w http.ResponseWriter, r *http.Request, _ Princip
 }
 
 // enrolPage is GET /auth/enrol. The code of the link that opened it is after its #, which a browser
-// never sends: the page reads it from its own address and hands it to the registration's options.
+// never sends: the page reads it from its own address and hands it to the registration's options,
+// or to the password it sets, which the page offers beside the passkey where the policy lets
+// passwords in, and in its place on an installation addressed by an IP address.
 func (s *SignInAPI) enrolPage(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
-	s.page(w, http.StatusOK, "enrol.html", pageData{Title: "Enrol a passkey", Scripts: true, Passkeys: s.passkeys()})
+	offered, err := s.passwordOffered(r.Context())
+	if err != nil {
+		s.page(w, http.StatusInternalServerError, "refused.html", pageData{
+			Title: "Cannot enrol", Reason: "The page could not read the installation's authentication policy.",
+			Next: "Try again in a moment.",
+		})
+		return
+	}
+	data := pageData{Title: "Enrol a passkey", Scripts: true, Passkeys: s.passkeys(), Password: "withheld"}
+	if offered {
+		data.Password = "offered"
+		if s.ipAddressed {
+			data.Title = "Set a password"
+		}
+	}
+	s.page(w, http.StatusOK, "enrol.html", data)
 }
 
 // page answers one page of the HTML, written whole before anything is sent, so that a template
@@ -272,12 +293,12 @@ func pageHeaders(h http.Header) {
 	h.Set("X-Content-Type-Options", "nosniff")
 }
 
-// passwordOffered says whether the page offers the password form: where POST /api/v1/auth/login is
+// passwordOffered says whether the page offers the password forms: where the password routes are
 // served and the policy lets passwords in. On an installation addressed by an IP address the policy
 // the API applies lets them in, whatever the stored one says; elsewhere the installation's policy
 // says, read at each page so that a change applies from the next one. A namespace's policy may forbid
 // them to the accounts holding a grant in it, which a page served before anybody signs in cannot
-// know: the route refuses such an account with a 403 naming the setting, and the page then takes
+// know: the routes refuse such an account with a 403 naming the setting, and the page then takes
 // the form away.
 func (s *SignInAPI) passwordOffered(ctx context.Context) (bool, error) {
 	if !s.passwords {

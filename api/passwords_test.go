@@ -95,7 +95,7 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	if in.passwords, err = api.NewPasswords(rt, api.PasswordOptions{
-		Pool: pool, PublicURL: publicURL, TOTP: in.totp, SignIns: signIns, Now: clock,
+		Pool: pool, PublicURL: publicURL, TOTP: in.totp, SignIns: signIns, Now: clock, Identify: in.p.Identify,
 		Trouble: func(err error) {
 			mu.Lock()
 			defer mu.Unlock()
