@@ -20,6 +20,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward, where it is not zero on both sides, is `ErrPossibleClone`, for the caller to decide on.
 - Every request is authorised from the database by `api.Principals`: a bearer token is found by its SHA-256 among the live API tokens, its use recorded, and a route is allowed what the grants of the principal and its groups give, intersected by the router with the token's scope (`access.TokenScope`, carried in `api.Identity`). The installation is an administrator's `grant:manage`, through a token with no scope alone, with no implicit `run:read_data` anywhere.
 - The bootstrap token is an administrator owning every namespace, writing as `operator` as the v0.2 operator did, until the first administrator has enrolled; from then on it is a 401 that says so. The interim operator is gone.
+- `api.OpenSession` opens a browser's session, `__Host-agentiik_session`, 256 bits kept as its SHA-256, HttpOnly, Secure and SameSite=Lax, which `api.Principals` reads beside the bearer token: it ends 12 hours idle and 30 days after it opened, and a revocation, a removed credential, or a suspension where a credential opened it, ends it from the next request.
+- A request changing something that a session carries is a 403 unless its `Origin` is the public URL's, a session an enrolment code opened is a 403 on every route the router authorises, and a bearer token beside a session is a 400.
 - A namespace's record is read by an administrator and by whoever holds a role in it, its own or a group's, through the router's `api.OnNamespace` guard: the authorizer says where a principal holds a grant as `api.Holdings`, and a token's `within` narrows it (`access.TokenScope.Reaches`).
 
 ### API
@@ -45,6 +47,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A suspended user's enrolment link still opens its session, and one it opened stays open, since enrolling is how such an account comes back; a credential of theirs opens nothing.
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
+- A fresh enrolment link ends the sessions every earlier link of its kind opened, spent or not, and a code spent before a session opens opens none.
 
 ### Controller
 

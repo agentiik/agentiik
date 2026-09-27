@@ -1,0 +1,256 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/agentiik/agentiik/db"
+)
+
+// The console's session: "an opaque session identifier in a cookie: HttpOnly, Secure, SameSite=Lax.
+// Revocable server-side, idle expiry. Records the credential or the enrolment link that opened it,
+// so an enrolment-only session is known server-side, not by convention."
+//
+// OpenSession opens one, for the sign-in routes to call once a passkey or a password has proved who
+// is there, or once an enrolment link has been opened; Principals.Identify reads it back on every
+// request, beside the bearer token.
+//
+// No route ends a session its holder asks to end: the page names no sign-out, so none is served.
+// A session ends idle, at its lifetime, with its credential, while its user is suspended, and, for
+// one a link opened, with the link or the one replacing it; db.Wide.RevokeSessions is what a
+// sign-out would call. The identifier is 256 bits from the operating system's
+// generator, shown in the cookie alone and kept as its SHA-256, as a token is, so that the table
+// opens nothing to whoever reads it.
+
+// SessionCookie is the cookie a session travels in, as the OpenAPI document's session scheme names
+// it. The __Host- prefix makes a browser refuse the cookie unless it is Secure, set for the whole
+// origin and bound to no Domain, so that no other host under the same domain can set one the API
+// would read.
+const SessionCookie = "__Host-agentiik_session"
+
+// SessionIdle is how long a session lives without a request: twelve hours. The page asks for an
+// idle expiry and names none, so this is the reading taken: a working day with its breaks is one
+// sign-in, and a browser left overnight is signed out by the morning, which is what somebody who
+// walked away from a shared machine is owed.
+const SessionIdle = 12 * time.Hour
+
+// SessionLifetime is how long a session lives at most, however often it is used: thirty days. A
+// session that never goes idle, a tab left open on a dashboard, would otherwise be a credential for
+// good, which the page refuses a token for; so a person proves again who they are at least once a
+// month, with the passkey and the policy of that day, and a stolen cookie kept busy lives no longer.
+const SessionLifetime = 30 * 24 * time.Hour
+
+// sessionTouch is how far a request has to move a session's idle expiry for the move to be
+// written: a minute. A log stream asks who its caller is again as it goes, and a page asks several
+// things at once; writing the session's row for each would be a write per read, where an expiry
+// left a minute short of where it could be ends a session a minute early at most.
+const sessionTouch = time.Minute
+
+// sessionBytes is how much of the operating system's generator a session identifier is: 256 bits,
+// what every credential of the installation carries, written in the 43 base64url characters the
+// OpenAPI document's example shows.
+const sessionBytes = 32
+
+// The sentences a session refused is answered with.
+const (
+	// noSession is a session that opens nothing, one sentence for every reason, as noToken is.
+	noSession = "that session opens nothing: it is no session this installation opened, or it was revoked, has ended or was left idle too long, or its holder is suspended. Sign in again, or open a fresh enrolment link"
+
+	// crossOrigin is a request changing something that a session carries from another origin.
+	// SameSite=Lax keeps another site's page from carrying the cookie on a POST, a PUT or a
+	// DELETE, but not a page of another host of the same site, which a browser counts as the same
+	// site; the Origin header it sends names the page, so a request is accepted from the public
+	// URL's pages alone.
+	crossOrigin = "a session changes something only from the pages of this installation's public URL, and this request's Origin header names another or none"
+
+	// enrolsOnly is a session opened to enrol a passkey, anywhere else, the OpenAPI document's
+	// sentence for it.
+	enrolsOnly = "this session enrols passkeys and nothing else"
+
+	// oneCredential is a request carrying more than one credential. Which of two to believe is
+	// not something the API guesses: a request is answered as one principal, and one carrying a
+	// bearer token beside a browser's session, or two sessions, is a client confused about which
+	// it means.
+	oneCredential = "this request carries more than one credential, a bearer token beside a session cookie or two session cookies, and a request is answered as one principal: send the one meant"
+)
+
+// OpenedBy is what opens a session, one of the two: a credential of its user, named by its
+// identifier, which opens a session reaching what the user's grants allow; or an enrolment code,
+// named by the SHA-256 its value is kept as, which opens one that enrols passkeys and nothing else
+// and ends with the code's hour.
+//
+// A password opening a session where the policy requires a passkey the account does not hold opens
+// one that may only enrol as well, as the OpenAPI document's sessionKind says. Which policy applies
+// to an account is not settled yet, so that case is the password sign-in's to add, from the
+// credential the session records or by recording what it may do; until then a credential opens a
+// full session, and no route opens one with a password.
+type OpenedBy struct {
+	Credential    string
+	EnrolmentCode []byte
+}
+
+// OpenSession opens a session of login at now, in the transaction w is, and answers the cookie that
+// carries it, for the answer that opened it to set once that transaction has committed: a cookie
+// set before would name a session that may never have been written.
+//
+// It is the one way a session is opened, so the value is minted here, shown in this cookie alone,
+// and the cookie's attributes are written in one place: HttpOnly, so that no script of the page
+// reads it; Secure and SameSite=Lax; Path=/ and no Domain, which the __Host- prefix requires. It
+// carries no expiry, as the OpenAPI document's example carries none, so that a browser closed ends
+// it too: the server ends it after SessionIdle without a request and SessionLifetime at most.
+//
+// A suspended user opens none with a credential, which is db.ErrSessionRefused, and opens one with
+// an enrolment code all the same, since "enrolling is how an account suspended for having no
+// passkey comes back"; a code revoked, past its hour, spent before now or that opened a session
+// already opens none.
+func OpenSession(ctx context.Context, w *db.Wide, login string, by OpenedBy, now time.Time) (*http.Cookie, error) {
+	if (by.Credential == "") == (len(by.EnrolmentCode) == 0) {
+		return nil, errors.New("api: a session is opened by a credential or by an enrolment code, one of the two")
+	}
+	raw := make([]byte, sessionBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("api: a session could not be opened: %w", err)
+	}
+	value := base64.RawURLEncoding.EncodeToString(raw)
+	hash := sha256.Sum256([]byte(value))
+	err := w.OpenSession(ctx, db.Session{
+		Hash: hash[:], Login: login, Credential: by.Credential, EnrolmentCode: by.EnrolmentCode,
+		CreatedAt: now, IdleExpiresAt: now.Add(SessionIdle),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Cookie{
+		Name: SessionCookie, Value: value,
+		Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	}, nil
+}
+
+// AcceptSessions has Identify read the console's session cookie beside the bearer token, for an
+// installation whose public URL is publicURL: AGK_PUBLIC_URL, or AGK_PROXY_URL behind a proxy. A
+// request changing something that a session carries is accepted from that URL's origin alone.
+// Without it a session cookie is not read, and a request carrying one carries no credential.
+//
+// It is called once, before the router serves anything.
+func (p *Principals) AcceptSessions(publicURL string) error {
+	origin, err := originOf(publicURL)
+	if err != nil {
+		return err
+	}
+	p.origin = origin
+	return nil
+}
+
+// sessionsOf is the session identifiers a request carries, none where sessions are not accepted.
+// Every one of the name, so that a request carrying two is refused rather than answered as
+// whichever a parser read first; an empty one is none, as an empty bearer token is.
+func (p *Principals) sessionsOf(r *http.Request) []string {
+	if p.origin == "" {
+		return nil
+	}
+	var values []string
+	for _, c := range r.CookiesNamed(SessionCookie) {
+		if c.Value != "" {
+			values = append(values, c.Value)
+		}
+	}
+	return values
+}
+
+// identifySession is who the session a request carries belongs to, if it is live, and keeps it
+// open: its idle expiry moves to SessionIdle from now, and never past SessionLifetime from its
+// opening, so that the idle expiry the table holds is the one end the lookup has to ask about.
+//
+// A request changing something is refused before the session is looked up where it does not come
+// from the public URL's origin, so that a page of another host neither acts on the session nor
+// keeps it open.
+func (p *Principals) identifySession(r *http.Request, value string) (Identity, error) {
+	if !safe(r.Method) {
+		if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
+			return Identity{Refused: crossOrigin, RefusedAs: http.StatusForbidden}, nil
+		}
+	}
+	hash := sha256.Sum256([]byte(value))
+	now := p.now()
+	as := Identity{Refused: noSession}
+	err := p.pool.Installation(r.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		s, err := w.SessionByHash(ctx, hash[:], now)
+		if errors.Is(err, db.ErrNoSession) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ends := s.CreatedAt.Add(SessionLifetime)
+		until := now.Add(SessionIdle)
+		if until.After(ends) {
+			until = ends
+		}
+		if until.Sub(s.IdleExpiresAt) >= sessionTouch {
+			err := w.TouchSession(ctx, hash[:], now, until)
+			if errors.Is(err, db.ErrNoSession) {
+				// Revoked, or ended with its code, since it was read.
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
+		as = Identity{Principal: Principal(s.Login), Enrolling: len(s.EnrolmentCode) > 0}
+		return nil
+	})
+	if err != nil {
+		return Identity{}, err
+	}
+	return as, nil
+}
+
+// safe says whether a method only reads, which a request of another origin may carry a session on:
+// SameSite=Lax lets a link followed from another site carry the cookie, and what it reads is not
+// the other site's to see, since the API answers no cross-origin read.
+func safe(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	return false
+}
+
+// originOf is the origin of a public URL's pages as a browser writes it in an Origin header: https,
+// the host in lower case, and the port only where it is not 443, with no path, since the API may be
+// served under one and an origin carries none.
+//
+// A host outside ASCII is compared as it is written, where a browser writes its punycode, and the
+// standard library converts neither way: an installation on such a name writes its public URL in
+// punycode, or its sessions change nothing, which refuses rather than admits.
+//
+// The URL is never repeated in the refusal, since a URL can carry a password.
+func originOf(publicURL string) (string, error) {
+	u, err := url.Parse(publicURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", errors.New("api: sessions are accepted on the pages of an https URL with a host, and the public URL given is not one")
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil {
+			return "", errors.New("api: sessions are accepted on the pages of an https URL with a host, and the public URL given names a port no origin can")
+		}
+		if n != 443 {
+			host += ":" + strconv.FormatUint(n, 10)
+		}
+	}
+	return "https://" + host, nil
+}

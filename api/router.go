@@ -126,8 +126,24 @@ func NewRouter(auth Authorizer, identify Identify) (*Router, error) {
 	holdings, _ := auth.(Holdings)
 	return &Router{
 		mux: http.NewServeMux(), namespaced: http.NewServeMux(), words: map[string]bool{},
-		auth: auth, identify: identify, holdings: holdings,
+		auth: auth, identify: confined(identify), holdings: holdings,
 	}, nil
+}
+
+// confined is identify with a session that may only enrol a passkey refused, as a 403 saying so:
+// such a session "enrols passkeys and nothing else: it cannot read a workflow, start a run or mint
+// a token". The router identifies every caller it authorises through it, whatever the route and
+// whichever hook serves it, so that no route reaches such a session by being written without the
+// check; the registration ceremony, the one thing it may do, is not a route the router authorises
+// by who asks.
+func confined(identify Identify) Identify {
+	return func(r *http.Request) (Identity, error) {
+		as, err := identify(r)
+		if err == nil && as.Enrolling {
+			return Identity{Refused: enrolsOnly, RefusedAs: http.StatusForbidden}, nil
+		}
+		return as, err
+	}
 }
 
 // ServeRunners says what a runner credential is checked against. Without it, a route taking
@@ -362,8 +378,8 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 // other route, a request with no credential is refused, and the handler is given who asks.
 //
 // It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
-// enrolment-only session, once sessions are served, "enrols passkeys and nothing else", and is
-// refused here, where openapi.json answers it 403 on each of them.
+// enrolment-only session "enrols passkeys and nothing else", and is refused by rt.identify, which
+// confined makes of the router's Identify, with the 403 openapi.json answers it on each of them.
 func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {
@@ -664,9 +680,15 @@ func (rt *Router) seeing(ctx context.Context, as Identity) (func(string) bool, e
 	}, nil
 }
 
-// unauthenticated answers a caller nobody was identified as: with what its identification said
-// where a credential came and opened nothing, and otherwise with the absence of one.
+// unauthenticated answers a caller nobody was identified as: with the status and the sentence its
+// identification said where a credential came that this request may not carry, which no other
+// credential would put right and so asks for none; with what it said where a credential came and
+// opened nothing; and otherwise with the absence of one.
 func unauthenticated(w http.ResponseWriter, as Identity) {
+	if as.RefusedAs != 0 {
+		refuse(w, as.RefusedAs, as.Refused)
+		return
+	}
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	why := as.Refused
 	if why == "" {
