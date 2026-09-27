@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -49,9 +50,14 @@ func (h *NamespaceHolds) Held() string {
 }
 
 // CreateNamespace creates a namespace, and answers whether it did: false is one that already
-// existed, which is left as it was, so that an installation script run twice creates it once.
+// existed, which is left as it was, so that an installation script run twice creates it once. A
+// name that is a user's login is ErrNameTaken.
 func (w *Wide) CreateNamespace(ctx context.Context, name string) (bool, error) {
 	tag, err := w.tx.Exec(ctx, `insert into namespaces (name) values ($1) on conflict (name) do nothing`, name)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.ConstraintName == namesShared {
+		return false, fmt.Errorf("%w: %s", ErrNameTaken, name)
+	}
 	if err != nil {
 		return false, fmt.Errorf("db: namespace %s could not be created: %w", name, err)
 	}
@@ -98,4 +104,124 @@ func (w *Wide) RemoveNamespace(ctx context.Context, name string) error {
 		return fmt.Errorf("db: namespace %s could not be removed: %w", name, err)
 	}
 	return nil
+}
+
+// The kinds of namespace, as namespaces.kind writes them.
+const (
+	// NamespacePersonal is the namespace a user is given, named after their login and owned by
+	// them.
+	NamespacePersonal = "personal"
+	// NamespaceShared is one an administrator creates for a team, and every namespace v0.2 made.
+	NamespaceShared = "shared"
+)
+
+// Namespace is a namespace as an administrator creates it and the API lists it.
+type Namespace struct {
+	Name string
+	Kind string
+
+	// Owner is the principal it is reported to when an administrator grants themselves access,
+	// and empty where nobody owns it yet, as nobody owns a namespace v0.2 made.
+	Owner string
+
+	Quotas    Quotas
+	CreatedAt time.Time
+}
+
+// Quotas are what one namespace may consume.
+type Quotas struct {
+	// MaxConcurrentTasks and MaxRetentionDays are always set, at 20 and 90 unless an
+	// administrator set them otherwise.
+	MaxConcurrentTasks int
+	MaxRetentionDays   int
+
+	// The others bound nothing where they are zero, or nil for AllowedRunnerPools, which then
+	// allows every pool that accepts the namespace. MaxRunDuration is written on a timeout's
+	// grammar, 4h, as the administrator wrote it.
+	MaxRunsPerHour     int
+	MaxArtifactBytes   int64
+	MaxRunDuration     string
+	AllowedRunnerPools []string
+}
+
+const namespaceColumns = `name, kind, coalesce(owner, ''), max_concurrent_tasks, max_retention_days,
+	coalesce(max_runs_per_hour, 0), coalesce(max_artifact_bytes, 0), coalesce(max_run_duration, ''),
+	allowed_runner_pools, created_at`
+
+func scanNamespace(row pgx.Row) (Namespace, error) {
+	var n Namespace
+	q := &n.Quotas
+	err := row.Scan(&n.Name, &n.Kind, &n.Owner, &q.MaxConcurrentTasks, &q.MaxRetentionDays,
+		&q.MaxRunsPerHour, &q.MaxArtifactBytes, &q.MaxRunDuration, &q.AllowedRunnerPools, &n.CreatedAt)
+	return n, err
+}
+
+// NamespaceNamed reads one.
+func (w *Wide) NamespaceNamed(ctx context.Context, name string) (Namespace, error) {
+	n, err := scanNamespace(w.tx.QueryRow(ctx, `select `+namespaceColumns+` from namespaces where name = $1`, name))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Namespace{}, fmt.Errorf("%w: %s", ErrNoNamespace, name)
+	}
+	if err != nil {
+		return Namespace{}, fmt.Errorf("db: namespace %s could not be read: %w", name, err)
+	}
+	return n, nil
+}
+
+// Namespaces is the listing, ordered by name.
+func (w *Wide) Namespaces(ctx context.Context) ([]Namespace, error) {
+	rows, err := w.tx.Query(ctx, `select `+namespaceColumns+` from namespaces order by name`)
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces could not be read: %w", err)
+	}
+	all, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Namespace, error) { return scanNamespace(row) })
+	if err != nil {
+		return nil, fmt.Errorf("db: the namespaces could not be read: %w", err)
+	}
+	return all, nil
+}
+
+// SetOwner gives a namespace an owner, a principal that exists. A personal namespace is its
+// user's, and handing it to anybody else is refused by the table.
+func (w *Wide) SetOwner(ctx context.Context, name, owner string) error {
+	tag, err := w.tx.Exec(ctx, `update namespaces set owner = $2 where name = $1`, name, owner)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == foreignKeyViolation {
+		return fmt.Errorf("%w: %s", ErrNoPrincipal, owner)
+	}
+	if err != nil {
+		return fmt.Errorf("db: the owner of namespace %s could not be set: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrNoNamespace, name)
+	}
+	return nil
+}
+
+// SetQuotas writes a namespace's quotas whole: a zero MaxConcurrentTasks or MaxRetentionDays keeps
+// the value it has, and any other zero, or a nil AllowedRunnerPools, bounds nothing.
+func (w *Wide) SetQuotas(ctx context.Context, name string, q Quotas) error {
+	tag, err := w.tx.Exec(ctx,
+		`update namespaces
+		    set max_concurrent_tasks = coalesce($2, max_concurrent_tasks),
+		        max_retention_days   = coalesce($3, max_retention_days),
+		        max_runs_per_hour = $4, max_artifact_bytes = $5, max_run_duration = $6,
+		        allowed_runner_pools = $7
+		  where name = $1`,
+		name, zeroIsNull(q.MaxConcurrentTasks), zeroIsNull(q.MaxRetentionDays), zeroIsNull(q.MaxRunsPerHour),
+		zeroIsNull64(q.MaxArtifactBytes), nilIfEmpty(q.MaxRunDuration), q.AllowedRunnerPools)
+	if err != nil {
+		return fmt.Errorf("db: the quotas of namespace %s could not be set: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrNoNamespace, name)
+	}
+	return nil
+}
+
+func zeroIsNull64(n int64) *int64 {
+	if n == 0 {
+		return nil
+	}
+	return &n
 }

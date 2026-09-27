@@ -17,6 +17,11 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
 
+### State
+
+- Migration 0032 adds the identity and access tables, and a namespace's kind, owner and four new quotas; nothing reads them yet, and `init` upgrades a v0.2.5 database at the next `docker compose up` with its rows as they were.
+- Package `db` reads and writes them, finding tokens, sessions and enrolment codes by the SHA-256 of their value and only while they are live, and grants as package `access` resolves them, under two new reasons, `Identity` and `Authorisation`.
+
 ### Tests
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
