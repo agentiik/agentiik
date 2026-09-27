@@ -87,6 +87,7 @@ var commands = []command{
 	{"service-account create", "Creates a service account, NS/NAME, in a namespace you own.", serviceAccountCreate},
 	{"service-account list", "Lists the service accounts of the namespaces you own, or of the one named.", serviceAccountList},
 	{"service-account delete", "Removes a service account with its tokens and grants.", serviceAccountDelete},
+	{"auth policy", "Prints the authentication policy, of the installation or of --namespace, and with settings given, sets them on top of those held. Administrator only to set.", authPolicy},
 	{"namespace create", "Creates a namespace with its owner and its quotas. Administrator only.", namespaceCreate},
 	{"namespace list", "Lists the namespaces the caller holds a grant in, and every one for an administrator.", namespaceList},
 	{"namespace show", "Shows one namespace: its kind, its owner and its quotas.", namespaceShow},
