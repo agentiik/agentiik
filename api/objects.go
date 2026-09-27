@@ -28,13 +28,15 @@ import (
 type ObjectAPI struct {
 	signed *artifact.Signed
 
-	// pool is where a write is held to its namespace's max_artifact_bytes, and nil holds none to
-	// it: a store with no database behind it, which only a test builds.
+	// pool is where a write is held to its namespace's max_artifact_bytes and recorded as under
+	// way, which keeps the collector from the object, and nil does neither: a store with no
+	// database behind it, which only a test builds.
 	pool *db.Pool
 }
 
 // NewObjects registers the object routes: the GET and the PUT a presigned URL does, and the POST a
-// policy does. Every write is held to its namespace's max_artifact_bytes through pool.
+// policy does. Every write is held to its namespace's max_artifact_bytes through pool, and kept
+// from the collector while it lasts.
 func NewObjects(rt *Router, signed *artifact.Signed, pool *db.Pool) (*ObjectAPI, error) {
 	switch {
 	case rt == nil:
@@ -233,9 +235,10 @@ type heldRoom struct {
 	namespace string
 }
 
-// makeRoom makes room for the object key names, of up to length bytes where length is not
-// negative, in its namespace. Nothing is held where the store has no database behind it, or where
-// the key is not one an object is written under, which the store then refuses by itself.
+// makeRoom records the write of the object key names as under way and makes room for it, of up to
+// length bytes where length is not negative, in its namespace. Nothing is recorded or held where
+// the store has no database behind it, or where the key is not one an object is written under,
+// which the store then refuses by itself.
 func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, until time.Time) (heldRoom, error) {
 	namespace, digest, ok := strings.Cut(key, "/sha256/")
 	if s.pool == nil || !ok || !lowerHex(digest) || until.IsZero() {
@@ -249,6 +252,11 @@ func (s *ObjectAPI) makeRoom(ctx context.Context, key string, length int64, unti
 	}
 	var room db.Room
 	err := s.pool.In(ctx, namespace, func(ctx context.Context, ns *db.NS) error {
+		// Recorded as under way first, whatever the quota, so that the collector leaves the
+		// object alone until the result that references it has been heard.
+		if err := ns.Uploading(ctx, digest, until); err != nil {
+			return err
+		}
 		var err error
 		room, err = ns.MakeRoom(ctx, db.Upload{Digest: digest, Length: length, Most: most, Until: until})
 		return err

@@ -490,6 +490,49 @@ func TestAWritePastMaxArtifactBytesIsAnswered507(t *testing.T) {
 	}
 }
 
+// Every write is recorded as under way before its bytes are read, in a namespace with no quota as in
+// one with, for as long as its room would last, so that the collector leaves its object alone until
+// the result that references it has been heard.
+func TestEveryWriteIsKeptFromTheCollectorWhileItLasts(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	conn := dbtest.Superuser(t, super)
+	if _, err := conn.Exec(t.Context(), `insert into namespaces (name) values ('team-ops')`); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	policy, err := signed.Policy(t.Context(), "team-ops", "01JMZ8W4K2R7Q0E3N5T9", until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "the bytes of an artifact"
+	digest := digestOf([]byte(content))
+	if w := posted(t, rt, policy.URL, policy.Fields, artifact.Key("team-ops", digest), content); w.Code != http.StatusCreated {
+		t.Fatalf("the write answered %d", w.Code)
+	}
+	var held int64
+	var lasts time.Time
+	if err := conn.QueryRow(t.Context(),
+		`select bytes, until from artifact_uploads where namespace = 'team-ops' and digest = 'sha256:' || $1`, digest).Scan(&held, &lasts); err != nil {
+		t.Fatalf("no write of the object is recorded: %s", err)
+	}
+	if held != 0 || !lasts.Equal(until.Add(15*time.Minute)) {
+		t.Errorf("the write is recorded holding %d bytes until %s, want nothing held until %s", held, lasts, until.Add(15*time.Minute))
+	}
+}
+
 // A write of no stated length is given the room left, up to artifact_max_bytes, and held to it as
 // its bytes arrive: past it, nothing is stored and the write is answered 507.
 func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {

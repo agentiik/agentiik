@@ -216,6 +216,37 @@ func (n *NS) MakeRoom(ctx context.Context, u Upload) (Room, error) {
 	return Room{namespace: n.namespace, id: id, digest: stored, bound: bound, held: true}, nil
 }
 
+// Uploading holds an object back from the collector while it is written, in every namespace,
+// with max_artifact_bytes or without: its bytes are read after this commits, and a write lasts
+// until a quarter of an hour after until, as the room MakeRoom makes does.
+//
+// A runner writes an object before the controller hears of the result that references it, and
+// the object may be one whose count reached zero a day before: the collector would take it from
+// under the write, and nothing could write the bytes again. So the write is recorded as a row of
+// artifact_uploads counting no byte against any quota, which the collector passes by, and the
+// object's row is held while it is, so that a collector deleting the object's bytes at that
+// moment finishes first and the write comes after it. Package db's purge.go sets out the rest.
+func (n *NS) Uploading(ctx context.Context, digest string, until time.Time) error {
+	if !hexDigest.MatchString(digest) {
+		return fmt.Errorf("db: %q is not a digest", digest)
+	}
+	stored := "sha256:" + digest
+	if _, err := n.tx.Exec(ctx,
+		`select 1 from artifact_objects where namespace = $1 and digest = $2 for key share`,
+		n.namespace, stored); err != nil {
+		return fmt.Errorf("db: %s could not be held against the collector: %w", stored, err)
+	}
+	// Not where the namespace is not there, which holds no object a collector could take, and whose
+	// writes MakeRoom refuses nothing either.
+	if _, err := n.tx.Exec(ctx,
+		`insert into artifact_uploads (namespace, id, digest, bytes, until)
+		 select $1, $2, $3, 0, $4 where exists (select 1 from namespaces where name = $1)`,
+		n.namespace, ulid.New(), stored, until.UTC().Add(uploadGrace)); err != nil {
+		return fmt.Errorf("db: the write of %s could not be recorded: %w", stored, err)
+	}
+	return nil
+}
+
 // recount counts what the namespace holds, whole, and writes it down as held now: the uploads that
 // lapsed go first, since they count nothing any more.
 func (n *NS) recount(ctx context.Context) (int64, error) {
