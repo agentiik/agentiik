@@ -11,6 +11,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A principal holds the union of its own and its groups' grants on a namespace and on a workflow. A workflow's grant only adds, and never gives `secret:use` or `secret:write`.
 - A deny names one permission and wins over any allow at any scope, and a grant or a deny lapses at its `expires_at`.
 - A push of a version naming a secret is refused with 403 unless the pusher holds `secret:use` in the namespace, and a deny of it on the workflow counts; running the version takes `workflow:run` alone. A route declares such a second permission as `api.Needs.Also`, and its handler asks it with `api.HoldsAlso`.
+- Package `internal/webauthn` verifies passkey registrations and assertions (Web Authentication Level 3) with the standard library alone: a CBOR decoder of its own, fuzzed, COSE keys ES256, EdDSA and RS256, and the attestation format `none` alone. A signature counter that does not move forward, where it is not zero on both sides, is `ErrPossibleClone`, for the caller to decide on.
 
 ### State
 
@@ -19,6 +20,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### Tests
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
+
 
 ## v0.2.5, 2026-09-26
 
