@@ -506,6 +506,7 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 		}
 		detail := map[string]any{"policy": set, "was": policyOf(was)}
 		forbids := set.Password == "forbidden" && was.Password != "forbidden"
+		var removed []entry
 		if err := s.guarding(ctx, wide, now, func() error {
 			if err := wide.SetInstallationPolicy(ctx, set.stored(), now); err != nil {
 				return err
@@ -517,16 +518,17 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 			if err != nil {
 				return err
 			}
-			return s.forbidPasswords(ctx, wide, logins, now, detail)
+			removed, err = s.forbidPasswords(ctx, wide, who, logins, now, detail)
+			return err
 		}); err != nil {
 			return err
 		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
-		return wide.Audit(ctx, audit.Record{
+		return appendEntries(ctx, wide, append([]entry{{record: audit.Record{
 			Actor: string(who), Action: audit.PolicyChange, Target: "installation", Result: audit.Done, Detail: detail,
-		})
+		}}}, removed...))
 	})
 	var locked *errLockedOut
 	switch {
@@ -618,6 +620,7 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 		}
 		detail := map[string]any{"policy": ask, "was": policyOf(was)}
 		forbids := ask.Password == "forbidden" && was.Password != "forbidden" && installation.Password != "forbidden"
+		var removed []entry
 		if err := s.guarding(ctx, wide, now, func() error {
 			if err := wide.SetNamespacePolicy(ctx, name, ask.stored(), now); err != nil {
 				return err
@@ -629,16 +632,17 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 			if err != nil {
 				return err
 			}
-			return s.forbidPasswords(ctx, wide, logins, now, detail)
+			removed, err = s.forbidPasswords(ctx, wide, who, logins, now, detail)
+			return err
 		}); err != nil {
 			return err
 		}
 		if err := stillBootstrapping(ctx, wide, who); err != nil {
 			return err
 		}
-		return wide.AuditIn(ctx, name, audit.Record{
+		return appendEntries(ctx, wide, append([]entry{{namespace: name, record: audit.Record{
 			Actor: string(who), Action: audit.PolicyChange, Target: name, Result: audit.Done, Detail: detail,
-		})
+		}}}, removed...))
 	})
 	var loose *loosened
 	var locked *errLockedOut
@@ -663,14 +667,18 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 // applying to it forbids passwords to, its password goes, as a row, and the TOTP generator beside it
 // with it, which ends every session the password opened; and the account is suspended where it holds
 // no passkey the policy accepts, recorded as suspended for that, unless it is suspended already.
-// What it did is written into detail, for the entry recording the change.
+// What it did is written into detail, for the entry recording the change, and each credential that
+// went is answered as the credential.remove entry recording it, by who, whose change took it, for
+// its caller to append after that entry: a password the policy took is recorded as one its holder
+// removed is, so that whoever looks for what became of it finds it under its own identifier.
 //
 // Each account's row is held before its credentials are read, as every act on an account holds it,
 // so that a passkey registered at the same moment is seen or waits, and an account is never
 // suspended beside the passkey that would have kept it in. The accounts are taken in the order of
 // their logins, the order the administrators are read in, whose rows guarding holds already.
-func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins []string, now time.Time, detail map[string]any) error {
+func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, who Principal, logins []string, now time.Time, detail map[string]any) ([]entry, error) {
 	deleted, suspended := []string{}, []string{}
+	var removed []entry
 	for _, login := range logins {
 		user, err := wide.HoldUser(ctx, login)
 		if errors.Is(err, db.ErrNoPrincipal) {
@@ -678,18 +686,18 @@ func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins [
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		policy, err := policyFor(ctx, wide, login, now, s.ipAddressed)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !policy.passwordsForbidden {
 			continue
 		}
 		held, err := wide.CredentialsOf(ctx, login)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, c := range held {
 			if c.Type != db.CredentialPassword {
@@ -698,20 +706,36 @@ func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins [
 			// The TOTP generator goes with the password's row, as the table holds it, and the
 			// sessions the password opened with it.
 			if err := wide.RemoveCredential(ctx, login, c.ID); err != nil {
-				return err
+				return nil, err
 			}
 			deleted = append(deleted, login)
+			removed = append(removed, entry{record: audit.Record{
+				Actor: string(who), Action: audit.CredentialRemove, Target: c.ID, Result: audit.Done,
+				Detail: map[string]any{"type": db.CredentialPassword, "login": login, "reason": forbiddenTakes},
+			}})
+			for _, totp := range held {
+				if totp.Type == db.CredentialTOTP {
+					removed = append(removed, entry{record: audit.Record{
+						Actor: string(who), Action: audit.CredentialRemove, Target: totp.ID, Result: audit.Done,
+						Detail: map[string]any{"type": db.CredentialTOTP, "login": login, "reason": "removed with the password it stood beside"},
+					}})
+				}
+			}
 		}
 		if policy.passkeys(held) == 0 && !user.Suspended {
 			if _, err := wide.Suspend(ctx, login, db.SuspendedNoPasskey); err != nil {
-				return err
+				return nil, err
 			}
 			suspended = append(suspended, login)
 		}
 	}
 	detail["passwords_deleted"], detail["suspended"] = deleted, suspended
-	return nil
+	return removed, nil
 }
+
+// forbiddenTakes is why a password goes when a policy change comes to forbid passwords to its
+// account.
+const forbiddenTakes = "the authentication policy came to forbid passwords to the account"
 
 // retired is why a password goes once its account holds min_passkeys, as its entry says.
 const retired = "the account holds min_passkeys passkeys the policy accepts, and the policy takes it off passwords"
