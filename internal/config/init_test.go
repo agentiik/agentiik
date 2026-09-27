@@ -114,6 +114,37 @@ func TestMigrateOpensNoOperatorTokenFileAtItsStart(t *testing.T) {
 	}
 }
 
+// migrate reads the object store's directory where it is set, since it reads the envelopes of the
+// runs v0.2 finished from there, and asks only that it can read it, since it writes nothing there;
+// it starts without it, since the migrations and the bootstrap token need no store; and it refuses
+// one that is not there, which would answer every envelope as gone.
+func TestMigrateReadsTheObjectStoreWhereItIsSet(t *testing.T) {
+	i := anInstallation(t)
+	if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.Objects != i.env[config.ObjectsDir] {
+		t.Errorf("migrate read the object store as %q: %v", c.Objects, err)
+	}
+	if os.Geteuid() != 0 {
+		readOnly := filepath.Join(t.TempDir(), "objects")
+		if err := os.Mkdir(readOnly, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		i.env[config.ObjectsDir] = readOnly
+		if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.Objects != readOnly {
+			t.Errorf("with an object store it cannot write in, migrate read %q: %v", c.Objects, err)
+		}
+	}
+	delete(i.env, config.ObjectsDir)
+	if c, err := config.ReadMigration(migrating.environment(i)); err != nil || c.Objects != "" {
+		t.Errorf("with no object store set, migrate read %q: %v", c.Objects, err)
+	}
+	for _, dir := range []string{"objects", filepath.Join(t.TempDir(), "gone")} {
+		i.env[config.ObjectsDir] = dir
+		if _, err := config.ReadMigration(migrating.environment(i)); !slices.Equal(refused(err), []string{config.ObjectsDir}) {
+			t.Errorf("with the object store %s, migrate's start was refused naming %v: %v", dir, refused(err), err)
+		}
+	}
+}
+
 // The v0.2 operator token's hash is read as v0.2's API read it: 64 lowercase hexadecimal
 // characters, a newline after them or not, in a file its owner alone may read. A file that is not
 // there is none, and is no refusal; any other is refused naming the variable, and the refusal

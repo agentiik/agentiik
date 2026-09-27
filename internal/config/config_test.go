@@ -296,6 +296,7 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 		Admin:             config.Database{URL: i.env[config.MigrateDatabaseURL], Role: "postgres", Password: config.Secret(i.adminPassword)},
 		Application:       wantDatabase,
 		OperatorTokenFile: i.env[config.OperatorTokenFile],
+		Objects:           i.env[config.ObjectsDir],
 	}
 	if migration != wantMigration {
 		t.Errorf("migrating reads %#v", migration)
@@ -891,8 +892,10 @@ func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 			config.EnvPrefixes, config.Listen, config.JoinRotation, config.RevocationGrace,
 			config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile,
 		},
+		// The object store's directory is migrate's too, since it reads the envelopes of the
+		// runs v0.2 finished there, to record the files they name.
 		migrating.name: {
-			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile, config.ObjectsDir,
+			config.BusURL, config.BusCredentialsFile, config.BusAccountSeedFile,
 			config.PublicURL, config.PresignKeyFile, config.MasterKeyFile, config.EnvPrefixes,
 			config.Listen, config.MaxRequeues, config.TaskCeiling, config.JoinRotation,
 			config.RevocationGrace, config.AuditExportURL, config.AuditExportTokenFile,

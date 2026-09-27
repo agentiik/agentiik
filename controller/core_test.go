@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/agentiik/agentiik/internal/numbertest"
 	"github.com/agentiik/agentiik/internal/token"
 	"github.com/agentiik/agentiik/internal/ulid"
+	"github.com/agentiik/agentiik/purge"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -211,8 +213,13 @@ func decidingOn(t *testing.T, document string) (*Core, *fakeQueue, *db.Pool, str
 	if err != nil {
 		t.Fatal(err)
 	}
+	objectRoots[core] = root
 	return core, q, pool, super
 }
+
+// objectRoots is the directory each core's store keeps its objects in, for a test that dates a
+// file as one written a while ago is dated.
+var objectRoots = map[*Core]string{}
 
 // clock is the one a test moves. A backoff places an attempt at a moment in the future and a
 // deadline places the end of a run at one, so a test that could not move time would be a test
@@ -1383,6 +1390,172 @@ func TestAnArtifactOfAWorkflowDeclaringNoRetainLivesAsLongAsTheNamespaceAllows(t
 		if days < 89.99 || days > 90.01 {
 			t.Errorf("the artifact of %s lives %.2f days, and the namespace keeps 90", step, days)
 		}
+	}
+}
+
+// An intermediate lives as long as its run keeps the envelope naming it, from the run's end, while
+// a workflow output declaring its own retain keeps the instant it declared, from when it was
+// written, however much longer the run keeps its envelopes.
+func TestAnIntermediateLivesAsLongAsItsRunAndAnOutputAsItDeclared(t *testing.T) {
+	core, q, pool, super := decidingOn(t, strings.Replace(strings.Replace(retainingWorkflow, "retain: 90d", "retain: 1d", 1), "retain: 7d", "retain: 30d", 1))
+	clock.set(time.Now().UTC().Truncate(time.Second))
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	intermediate, output := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for pass := 1; pass <= 6; pass++ {
+		taken := q.taken()
+		if len(taken) == 0 {
+			break
+		}
+		for _, task := range taken {
+			digest := intermediate
+			if task.Step == "archive" {
+				digest = output
+			}
+			clock.advance(10 * time.Minute)
+			core.answer(t, withAFile(t, task, core.now(), digest))
+		}
+	}
+	if got := stateOf(t, core); got != agk.Succeeded {
+		t.Fatalf("the run is %s", got)
+	}
+	conn := dbtest.Superuser(t, super)
+	var runExpires, intermediateExpires time.Time
+	var outputLives float64
+	if err := conn.QueryRow(t.Context(),
+		`select r.expires_at,
+		        (select expires_at from artifacts where run_id = r.id and step = 'normalize'),
+		        (select extract(epoch from (expires_at - created_at)) / 86400 from artifacts where run_id = r.id and step = 'archive')
+		 from runs r where r.id = $1`, string(decidedRun)).Scan(&runExpires, &intermediateExpires, &outputLives); err != nil {
+		t.Fatal(err)
+	}
+	if !intermediateExpires.Equal(runExpires) {
+		t.Errorf("the intermediate expires at %s, and its run keeps the envelope naming it until %s", intermediateExpires, runExpires)
+	}
+	if outputLives < 0.99 || outputLives > 1.01 {
+		t.Errorf("the output declaring a day lives %.2f days", outputLives)
+	}
+}
+
+// shardFileOf answers the status and the expiry of the artifact recorded for the file a shard of
+// invoice wrote, digest, beside the date its run keeps its envelopes until.
+func shardFileOf(t *testing.T, super, digest string) (status string, lives, runExpires time.Time) {
+	t.Helper()
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select a.status, a.expires_at, r.expires_at from artifacts a join runs r on r.namespace = a.namespace and r.id = a.run_id
+		 where a.run_id = $1 and a.step = 'invoice' and a.digest = 'sha256:' || $2`, string(decidedRun), digest).Scan(&status, &lives, &runExpires); err != nil {
+		t.Fatalf("the file of the shard is not recorded: %s", err)
+	}
+	return status, lives, runExpires
+}
+
+// A step fanned out whose one shard succeeded and whose other failed publishes what the first
+// produced, and its run keeps that envelope until its retention runs out: the file it names, which
+// lives by the workflow's defaults, is kept exactly as long, rather than from the moment it was
+// published, so that nothing collects it from under an envelope still kept. The purges leave it
+// for the whole of the run's retention, the orphan sweep included, and take it once that has run
+// out and the grace has passed.
+func TestTheFilesOfAFailedStepsShardsLiveAsLongAsTheirRun(t *testing.T) {
+	core, q, pool, super := decidingOn(t, fanningWorkflow)
+	clock.set(time.Now().UTC().Truncate(time.Second))
+	createFannedRun(t, pool, "invoice", "archive")
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	shards := q.taken()
+	if len(shards) != 2 {
+		t.Fatalf("the first pass published %d tasks, want both shards of invoice", len(shards))
+	}
+	kept := strings.Repeat("d", 64)
+	core.answer(t, withAFile(t, shards[0], core.now(), kept))
+	clock.advance(30 * time.Minute)
+	core.answer(t, failed(shards[1], 1, core.now()))
+	if got := stateOf(t, core); got != agk.Failed {
+		t.Fatalf("a run whose fanned step failed is %s", got)
+	}
+	if status, lives, runExpires := shardFileOf(t, super, kept); status != "live" || !lives.Equal(runExpires) {
+		t.Fatalf("the file of the shard that succeeded is %s until %s, and its run keeps the envelope naming it until %s", status, lives, runExpires)
+	}
+
+	// Its bytes, written a while ago, as a runner wrote them.
+	conn := dbtest.Superuser(t, super)
+	key := artifact.Key("finance", kept)
+	if err := core.objects.Put(t.Context(), key, strings.NewReader("a purchase order")); err != nil {
+		t.Fatal(err)
+	}
+	store := core.objects.(artifact.Removable)
+	then := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(filepath.Join(objectRoots[core], filepath.FromSlash(key)), then, then); err != nil {
+		t.Fatal(err)
+	}
+	p := &purge.Purger{Pool: pool, Objects: store}
+	past := func() {
+		t.Helper()
+		if _, err := conn.Exec(t.Context(), `update artifact_objects set collectable_at = now() - interval '2 days' where collectable_at is not null`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if _, err := p.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		past()
+	}
+	if held, _ := store.Has(t.Context(), key); !held {
+		t.Fatal("the file of the shard went within its run's retention")
+	}
+
+	if _, err := conn.Exec(t.Context(), `update runs set expires_at = now() - interval '1 minute' where id = $1`, string(decidedRun)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), `update artifacts set expires_at = now() - interval '1 minute' where run_id = $1`, string(decidedRun)); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := p.Pass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		past()
+	}
+	if held, _ := store.Has(t.Context(), key); held {
+		t.Error("the file of the shard is still held once its run's retention has run out and the grace has passed")
+	}
+}
+
+// A run cancelled while a step's shards are still running ends that step before it publishes, and
+// keeps the envelope its finished shard produced until its retention runs out: the file that
+// envelope names is recorded all the same, as a publication would have recorded it, and kept as
+// long, so the orphan sweep never takes it for a file no row names.
+func TestTheFilesOfAShardWhoseStepNeverPublishedAreRecorded(t *testing.T) {
+	core, q, pool, super := decidingOn(t, fanningWorkflow)
+	clock.set(time.Now().UTC().Truncate(time.Second))
+	createFannedRun(t, pool, "invoice", "archive")
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	shards := q.taken()
+	if len(shards) != 2 {
+		t.Fatalf("the first pass published %d tasks, want both shards of invoice", len(shards))
+	}
+	kept := strings.Repeat("e", 64)
+	core.answer(t, withAFile(t, shards[0], core.now(), kept))
+	clock.advance(30 * time.Minute)
+	askedToCancel(t, pool, core, decidedRun)
+	if err := core.Wake(t.Context(), Wake{Swept: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(t, core); got != agk.Cancelled {
+		t.Fatalf("a run asked to cancel is %s", got)
+	}
+	var published int
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select count(*) from steps, jsonb_each(ports) where run_id = $1 and step = 'invoice'`, string(decidedRun)).Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+	if status, lives, runExpires := shardFileOf(t, super, kept); status != "live" || !lives.Equal(runExpires) {
+		t.Errorf("the file of the shard whose step published %d ports is %s until %s, and its run keeps the envelope naming it until %s", published, status, lives, runExpires)
 	}
 }
 

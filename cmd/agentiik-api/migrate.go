@@ -24,8 +24,9 @@ func migrateVerb(ctx context.Context, lookup config.Lookup, stdout, stderr io.Wr
 }
 
 // migrateAndBootstrap is the whole of migrate: the migrations and the role, then the built-in
-// identity of every namespace made before v0.3.0 and the bootstrap token's hash, as init gives and
-// keeps them, for an installation that runs no init.
+// identity of every namespace made before v0.3.0, the artifact files of the runs v0.2 finished,
+// where AGK_OBJECTS_DIR names the store holding their envelopes, and the bootstrap token's hash, as
+// init gives, records and keeps them, for an installation that runs no init.
 //
 // Homebrew's server and one put together by hand run migrate where a Compose file runs init, at
 // every start, so migrate keeps the hash of the token their settings set, as init does. And an
@@ -47,6 +48,9 @@ func migrateAndBootstrap(ctx context.Context, c config.Migration, stdout io.Writ
 	}
 	defer pool.Close()
 	if err := builtInIdentities(ctx, pool, stdout); err != nil {
+		return err
+	}
+	if err := unrecordedArtifacts(ctx, pool, c.Objects, "migrate", stdout); err != nil {
 		return err
 	}
 	var imported func() ([]byte, error)

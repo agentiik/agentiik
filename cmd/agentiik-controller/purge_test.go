@@ -146,12 +146,12 @@ func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 	if err := c.registry.WriteTo(t.Context(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !has("\n"+out.String(), "agentiik_objects_collected_total 0") {
+	if !has("\n"+out.String(), "agentiik_objects_collected_total 0") || !has("\n"+out.String(), "agentiik_orphans_found_total 0") {
 		t.Errorf("a controller that has purged nothing says:\n%s", out.String())
 	}
-	c.purged(purge.Purged{Artifacts: 3, Runs: 2, Logs: 4, Uploads: 7, Objects: 5, Bytes: 4096})
+	c.purged(purge.Purged{Artifacts: 3, Runs: 2, Logs: 4, Uploads: 7, Orphans: 2, Objects: 5, Bytes: 4096})
 	c.purged(purge.Purged{})
-	c.purged(purge.Purged{Artifacts: 1, Objects: 1, Bytes: 1024})
+	c.purged(purge.Purged{Artifacts: 1, Orphans: 1, Objects: 1, Bytes: 1024})
 	out.Reset()
 	if err := c.registry.WriteTo(t.Context(), &out); err != nil {
 		t.Fatal(err)
@@ -160,6 +160,7 @@ func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 		`agentiik_artifacts_expired_total 4`,
 		`agentiik_runs_purged_total 2`,
 		`agentiik_logs_purged_total 4`,
+		`agentiik_orphans_found_total 3`,
 		`agentiik_objects_collected_total 6`,
 		`agentiik_objects_collected_bytes_total 5120`,
 	} {
@@ -221,5 +222,11 @@ func TestAPassSaysWhatItRemovedAndOnlyThat(t *testing.T) {
 	p.Passed(purge.Purged{Objects: 2, Bytes: 10, Uploads: 1})
 	if said := log.String(); strings.Count(said, "the purges removed what had run out") != 1 || !strings.Contains(said, "objects=2 bytes=10") {
 		t.Errorf("a pass that collected two objects said:\n%s", said)
+	}
+	var recorded output
+	p = purger(nil, t.TempDir(), nil, db.Term{}, newCounted(nil, logger(io.Discard)), logger(&recorded))
+	p.Passed(purge.Purged{Recorded: 3})
+	if said := recorded.String(); strings.Contains(said, "removed") || !strings.Contains(said, "left unrecorded") || !strings.Contains(said, "runs=3") {
+		t.Errorf("a pass that recorded the files of three runs and removed nothing said:\n%s", said)
 	}
 }

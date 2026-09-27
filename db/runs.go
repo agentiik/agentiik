@@ -513,11 +513,13 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 		return err
 	}
 
+	// files_recorded says that every file of every envelope the run keeps has a row of artifacts,
+	// which the artifacts written below this make true: migration 0041 says who reads it.
 	tag, err := w.tx.Exec(ctx,
 		`update runs
 		 set evaluation = $4, seq = $5, state = $6,
 		     started_at = coalesce(started_at, $7), finished_at = $8,
-		     wake_at = $9, expires_at = $10, outputs = $11, reason = coalesce($12, reason)
+		     wake_at = $9, expires_at = $10, outputs = $11, reason = coalesce($12, reason), files_recorded = true
 		 where namespace = $1 and id = $2 and seq = $3`,
 		d.Namespace, string(d.Run), d.Was,
 		d.Document, d.Seq, d.State.String(),
@@ -570,9 +572,26 @@ func (w *Wide) SaveDecision(ctx context.Context, d Decision) error {
 	if err := w.setEnvelopes(ctx, d.Namespace, d.Run, was, d.Envelopes); err != nil {
 		return err
 	}
+	var withRun [3][]string
 	for _, a := range d.Artifacts {
 		if _, err := writeArtifact(ctx, w.tx, d.Namespace, a); err != nil {
 			return fmt.Errorf("db: the artifact %s of run %s: %w", a.URI, d.Run, err)
+		}
+		if a.WithRun && a.URI.Run == d.Run {
+			withRun[0], withRun[1], withRun[2] = append(withRun[0], string(a.URI.Step)), append(withRun[1], string(a.URI.Port)), append(withRun[2], a.URI.Name)
+		}
+	}
+	// A file living by the workflow's defaults lives as long as the run keeps the envelopes naming
+	// it, which is known once the run has finished, and never less than it was given when it was
+	// written. One whose instant is past already is not revived.
+	if len(withRun[0]) > 0 && !expires.IsZero() {
+		if _, err := w.tx.Exec(ctx, `
+			update artifacts a set expires_at = $3
+			from unnest($4::text[], $5::text[], $6::text[]) as g(step, port, name)
+			where a.namespace = $1 and a.run_id = $2 and a.step = g.step and a.port = g.port and a.name = g.name
+			  and a.status = 'live' and a.expires_at > now() and a.expires_at < $3`,
+			d.Namespace, string(d.Run), expires, withRun[0], withRun[1], withRun[2]); err != nil {
+			return fmt.Errorf("db: the artifacts of run %s could not be kept as long as the run keeps its envelopes: %w", d.Run, err)
 		}
 	}
 	return w.emit(ctx, d.Namespace, d.Run, before, d.State, startedBy)

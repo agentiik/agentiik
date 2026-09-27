@@ -16,6 +16,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Behind nginx, add `proxy_set_header X-Forwarded-For $remote_addr;` to the `location /` of its configuration: the API now takes a sign-in's address from the last entry of that header behind `AGK_PROXY_URL`, which Caddy and Traefik write already and nginx passes on as the client wrote it.
 - A run v0.2 finished, which carries no expiry, is given its namespace's `max_retention_days` from its end by migration 0038, at the next `docker compose up` with nothing to do by hand, so that its envelopes and logs are purged once that has run out.
 - A run v0.2.5 left queued, attributed to `operator`, is let in after the upgrade while the bootstrap token lasts; one still waiting when the first administrator enrols ends `cancelled`, naming the end of the bootstrap, and a run already let in is never asked again.
+- The artifact files v0.2 recorded no reference for, those of every output given no `retain`, are recorded by the next `init`, or `agentiik-api migrate` where `AGK_OBJECTS_DIR` is set, from the envelopes of the runs it finished, each expiring its namespace's `max_retention_days` after its run finished, with nothing to do by hand; what either leaves, the controller records.
 
 ### Images
 
@@ -110,10 +111,13 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused.
 - Migration 0039 adds `totp_enrolments`, the TOTP generators waiting for their first code. `db.Wide.SetPassword` sets a password in place of the one held, keeping its identifier, `db.Wide.EndSessionsOpenedBy` ends the sessions a credential opened, and `db.Wide.AddCredential` takes the step of the code confirming a generator.
 - Migration 0040 adds `runs.reason`, written by `db.Decision.Reason` and read as `db.RunDetail.Reason`, and indexes the audit log's `grant.delete` entries; `db.Wide.Attribution` reads a run's principal as it stands in a namespace, and `db.Wide.Revocations` the grants revoked from it, as the audit log recorded them.
+- Migration 0041 adds `runs.files_recorded`, which every decision sets, so that a finished run without it is one whose files a v0.2 controller left unrecorded: `db.Pool.UnrecordedRuns` reads those with the envelopes their steps published, and `db.Pool.RecordUnrecorded` records the files and sets the column in one transaction, giving a run with no expiry its namespace's `max_retention_days`, and leaves a run whose object a writer holds rather than wait for it.
+- `db.Pool.Sweepable`, `Unnamed`, `LiveEnvelopes` and `Orphaned` find the files of the store no row names, in a namespace with no finished run still to be recorded, and hand them to the collection as rows counting nothing, collectable from then.
 
 ### Artifacts
 
 - `artifact.Dir` answers an `artifact.Removable`, whose `Remove` deletes an object and the log directories it leaves empty, and says whether there was one to delete.
+- `artifact.Walkable`, which the store `artifact.Dir` opens is, lists the objects of one namespace a batch at a time, with their size and when they were written, and nothing else in their directory.
 
 ### Controller
 
@@ -123,6 +127,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The controller that leads runs the retention purges and the collection, package `purge`, as its term begins and every ten minutes, a batch a call and at most ten calls of each purge a pass, the rest left to the next: references past their `retain` are retired, a finished run's envelopes and logs go once its retention has run out, and an object leaves `AGK_OBJECTS_DIR` once nothing has counted it for the 24-hour grace, no live artifact names it and no write of it is under way. A pass that removed something says what in one line, and one that failed says why.
 - `agentiik_artifacts_expired_total`, `agentiik_runs_purged_total`, `agentiik_logs_purged_total`, `agentiik_objects_collected_total` and `agentiik_objects_collected_bytes_total` count what the purges removed.
 - A run is let in only while its principal holds `workflow:run` on its workflow, asked of package `access` on every pass until it is admitted and before its concurrency group; one that no longer does ends `cancelled` before any task. Its reason names the grant that lapsed by its identifier, role and scope, says that a deny applies or that the principal holds nothing there, or names the end of the bootstrap token; the whole account, the group, the deny, the suspension or removal and who revoked, goes to its `run.cancel` entry by `installation` alone.
+- A decision records the files of every envelope its run keeps, a shard's included where its step never published, and a file living by the workflow's defaults is kept as long as its run keeps the envelopes naming it, from the run's end rather than from when it was written; an output declaring its own `retain` keeps the instant it declared.
+- A purge pass also records what `init` and `migrate` left of those files, and hands the collection each file of `AGK_OBJECTS_DIR` that no row, no write and no envelope of a run under way names once it is a day old, for deletion a day later; `agentiik_orphans_found_total` counts them.
 
 ### Tests
 

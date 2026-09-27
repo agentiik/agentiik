@@ -35,6 +35,24 @@
 // not finish. A log's objects are deleted once its run's retention
 // has run out, since nothing is added to a log past it. Each deletion is recorded only once the
 // store has answered it, and one the store refused is left for the next pass and said.
+//
+// # Orphans
+//
+// The collection finds its work in the database, and a file whose row was never written is one it
+// would never see: the outputs of an attempt that failed or was lost, and whatever v0.2 left. So a
+// pass also walks the store, a batch of entries a call, a namespace's sha256 directory at a time
+// and never its logs, and hands the collection each file that no row names, no live artifact
+// names, no write holds and no envelope of a run still under way names, once its bytes are older
+// than the grace; the collection deletes it a grace later, as any other. A round of the whole store
+// may take many passes, each going on from where the last stopped. A namespace with a finished run
+// whose files are still to be recorded is not walked, since those files would be taken for
+// orphans.
+//
+// # What v0.2 left
+//
+// Backfill records the files v0.2 recorded nothing for, from the envelopes of the runs it finished,
+// and is what init and migrate call: see its comment. A pass records what they left, a batch of
+// runs a call, before the orphan sweep.
 package purge
 
 import (
@@ -87,21 +105,31 @@ type Purged struct {
 	// Uploads are the writes whose room had lapsed that were forgotten.
 	Uploads int
 
+	// Recorded are the finished runs whose artifact files were recorded, which v0.2 had left
+	// unrecorded: see Backfill.
+	Recorded int
+
+	// Orphans are the files of the store no row named that were handed to the collection, which
+	// deletes them among the Objects.
+	Orphans int
+
 	// Objects are the objects deleted from the store, and Bytes their size.
 	Objects int
 	Bytes   int64
 }
 
 // Removed says whether the pass removed anything retention decides: a reference, a run's
-// envelopes, a log or an object. Forgetting writes that have lapsed is bookkeeping, and is not.
-func (p Purged) Removed() bool { return p.Artifacts+p.Runs+p.Logs+p.Objects > 0 }
+// envelopes, a log, an orphan or an object. Forgetting writes that have lapsed is bookkeeping, and
+// is not.
+func (p Purged) Removed() bool { return p.Artifacts+p.Runs+p.Logs+p.Orphans+p.Objects > 0 }
 
 // Purger runs the purges and the collection.
 type Purger struct {
 	Pool *db.Pool
 
 	// Objects is the built-in store, AGK_OBJECTS_DIR, which the logs and the collected objects
-	// are deleted from.
+	// are deleted from, and which is walked for orphans and read for the envelopes naming the
+	// files still to be recorded, where it is Walkable.
 	Objects artifact.Removable
 
 	// Leading answers nil while this process may purge, and is asked before every call, which a
@@ -124,10 +152,16 @@ type Purger struct {
 	// finish, before Passed is told of it.
 	Passed  func(Purged)
 	Trouble func(error)
+
+	// recording is the run the recording of what v0.2 left stopped at, and walking where the
+	// orphan sweep stands in the store, both kept from one pass to the next.
+	recording db.Unrecorded
+	walking   walking
 }
 
 // Run passes at once and every Every after, until ctx is done.
 func (p *Purger) Run(ctx context.Context) {
+	defer p.walking.stop()
 	every := p.Every
 	if every <= 0 {
 		every = Every
@@ -150,7 +184,8 @@ func (p *Purger) Run(ctx context.Context) {
 	}
 }
 
-// Pass runs each purge in turn, then the collection, and answers what it removed.
+// Pass runs each purge in turn, then records what v0.2 left, then the orphan sweep and the
+// collection, and answers what it removed. A Purger passes once at a time.
 //
 // A purge that fails is said in the error and ends that purge's part of the pass, and the next
 // one goes on: an object store refusing to delete a log is no reason to leave references past
@@ -171,6 +206,8 @@ func (p *Purger) Pass(ctx context.Context) (Purged, error) {
 		{"the log purge", p.logs},
 		{"the log purge", p.logsGone},
 		{"the purge of lapsed writes", p.uploads},
+		{"the recording of the files v0.2 left", p.backfill},
+		{"the orphan sweep", p.orphans},
 		{"the collection", p.collect},
 	} {
 		for range p.calls() {

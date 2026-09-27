@@ -21,7 +21,7 @@ The specification is the documentation at <https://agentiik.github.io/docs>; whe
 | `api` | The HTTP boundary, where every request is authorised, deny by default. |
 | `secret` | The built-in secret store, on envelope encryption. |
 | `version` | A stored workflow version turned back into a graph. |
-| `purge` | The retention purges and the collection, run by the controller that leads, a batch at a time. |
+| `purge` | The retention purges, the collection and the orphan sweep, run by the controller that leads, a batch at a time, and the recording of the files v0.2 left. |
 | `cmd/agk` | The command line. The loop of `agk run --local` is `cmd/agk/internal/local`. |
 | `cmd/agk-helper` | The static helper bound read-only at `/agk/bin/agk` for a script step. |
 

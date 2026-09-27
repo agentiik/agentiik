@@ -763,9 +763,10 @@ include "accounts.conf"
 `
 
 // database migrates as the role that may change the schema, creates the namespace, gives every
-// namespace made before v0.3.0 its built-in identity, keeps the hash of the bootstrap token, and
-// issues the runner beside the installation a join token of the pool default, written where it
-// reads it.
+// namespace made before v0.3.0 its built-in identity, records the artifact files of the runs v0.2
+// finished from their envelopes in the object store's directory, keeps the hash of the bootstrap
+// token, and issues the runner beside the installation a join token of the pool default, written
+// where it reads it.
 //
 // The namespace is created at every run, since the settings name it. Where a user's login has
 // taken its name, the two sharing one name space, init says so and goes on: the installation is no
@@ -793,6 +794,9 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 	}
 	defer pool.Close()
 	if err := builtInIdentities(ctx, pool, p.out); err != nil {
+		return err
+	}
+	if err := unrecordedArtifacts(ctx, pool, p.dir.path(objectsDir), "init", p.out); err != nil {
 		return err
 	}
 	if err := bootstrapToken(ctx, pool, "init", bootstrap, nil, p.out); err != nil {

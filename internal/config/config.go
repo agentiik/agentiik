@@ -369,6 +369,11 @@ type Migration struct {
 	// the SHA-256 of its operator token, and is empty where it is unset. Nothing is read from it
 	// here: OperatorTokenHash reads it, where migrate has a hash to import.
 	OperatorTokenFile string
+
+	// Objects is the built-in object store's directory, AGK_OBJECTS_DIR, where it is set, which
+	// migrate reads the envelopes of the runs v0.2 finished from, to record the files they name.
+	// Empty, migrate records none and says so.
+	Objects string
 }
 
 // ReadAPI reads the API's configuration through lookup, which is os.LookupEnv when nil.
@@ -473,6 +478,14 @@ func ReadController(lookup Lookup) (Controller, error) {
 // imports once where no token is set and the database keeps no hash, and never reads again. So
 // the file is opened by OperatorTokenHash, at that one moment, rather than at every start, when
 // nothing it holds would be used and a file left to rot would refuse the start for nothing.
+//
+// AGK_OBJECTS_DIR is read where it is set, since migrate is run with the API's settings: the store
+// holds the envelopes of the runs v0.2 finished, whose files migrate records. Unset, it is no
+// refusal, since the migrations and the bootstrap token need no store. Set, it is held to being a
+// directory migrate can read, and not one it can write in, as the API's is, since migrate writes
+// nothing there and may be run where the store is mounted read only: a directory that is not there
+// would answer every envelope as gone, which is what an envelope the collection took answers, and
+// the files it names would be recorded by nothing.
 func ReadMigration(lookup Lookup) (Migration, error) {
 	r := newReader(lookup, OperatorToken)
 	var c Migration
@@ -480,6 +493,9 @@ func ReadMigration(lookup Lookup) (Migration, error) {
 	c.Application = r.database(DatabaseURL, DatabasePasswordFile, true)
 	c.OperatorToken = r.operatorTokenValue()
 	c.OperatorTokenFile, _ = r.value(OperatorTokenFile)
+	if _, set := r.value(ObjectsDir); set {
+		c.Objects = r.readableDirectory(ObjectsDir, "and it is the directory the built-in object store keeps every object in, which migrate reads the envelopes of the runs v0.2 finished from")
+	}
 	return c, r.err()
 }
 
@@ -870,6 +886,39 @@ func (r *reader) directory(name, why string) string {
 	}
 	probe.Close()
 	os.Remove(probe.Name())
+	return v
+}
+
+// readableDirectory is directory for a program that only reads there: an absolute path to a
+// directory it can list, written to or not.
+func (r *reader) readableDirectory(name, why string) string {
+	v, set := r.required(name, why)
+	if !set {
+		return ""
+	}
+	if !filepath.IsAbs(v) {
+		r.refuse(name, fmt.Sprintf("is %q, and it is an absolute path, so that where the objects are does not depend on the directory the program was started from", v))
+		return ""
+	}
+	f, err := os.Open(v)
+	if err == nil {
+		_, err = f.Readdirnames(1)
+		f.Close()
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+	}
+	switch info, statErr := os.Stat(v); {
+	case statErr != nil:
+		r.refuse(name, "names a directory that cannot be read: "+reasonOf(statErr))
+		return ""
+	case !info.IsDir():
+		r.refuse(name, fmt.Sprintf("names %s, which is not a directory", v))
+		return ""
+	case err != nil:
+		r.refuse(name, "names a directory this program cannot read: "+reasonOf(err))
+		return ""
+	}
 	return v
 }
 

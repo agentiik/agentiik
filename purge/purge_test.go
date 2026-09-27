@@ -35,13 +35,18 @@ type installation struct {
 	conn  *pgx.Conn
 	dir   string
 	store artifact.Removable
+
+	// super is the superuser's address, for a test that holds a transaction open on a
+	// connection of its own while another goroutine works, since a pgx.Conn is not safe for
+	// concurrent use.
+	super string
 }
 
 func withInstallation(t *testing.T) *installation {
 	t.Helper()
 	pool, super := dbtest.Open(t)
 	conn := dbtest.Superuser(t, super)
-	in := &installation{pool: pool, conn: conn, dir: t.TempDir()}
+	in := &installation{pool: pool, conn: conn, dir: t.TempDir(), super: super}
 	in.store = artifact.Dir(in.dir)
 	in.exec(t,
 		`insert into namespaces (name) values ('finance')`,
@@ -87,16 +92,16 @@ func (in *installation) run(t *testing.T) agk.RunID {
 	return id
 }
 
-// finish ends a run, and puts its retention a minute in the past where expired, a day ahead
-// otherwise.
+// finish ends a run as a decision of this release ends one, its files recorded, and puts its
+// retention a minute in the past where expired, a day ahead otherwise.
 func (in *installation) finish(t *testing.T, run agk.RunID, expired bool) {
 	t.Helper()
 	expires := "now() + interval '1 day'"
 	if expired {
 		expires = "now() - interval '1 minute'"
 	}
-	in.exec(t, `update runs set state = 'succeeded', finished_at = now() - interval '1 day', expires_at = `+expires+`
-	            where id = '`+string(run)+`'`)
+	in.exec(t, `update runs set state = 'succeeded', finished_at = now() - interval '1 day', expires_at = `+expires+`,
+	            files_recorded = true where id = '`+string(run)+`'`)
 }
 
 // put writes content to the store and answers its digest and key.
