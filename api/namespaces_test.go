@@ -147,12 +147,19 @@ func TestAnAdministratorCreatesANamespaceItsOwnerOwns(t *testing.T) {
 	if n := in.count(t, `select count(*) from service_accounts where namespace = 'team-ops' and name = 'agentiik' and created_by is null`); n != 1 {
 		t.Error("the new namespace has no built-in identity")
 	}
-	if got := in.entries(t); len(got) != 1 || got[0] != "carol namespace.create team-ops done" {
+	// The owner's grant is recorded as the grant it is, and the creation names it.
+	var grant string
+	in.query(t, &grant, `select id from grants where namespace = 'team-ops'`)
+	if got := in.entries(t); len(got) != 2 || got[0] != "carol grant.create "+grant+" done" || got[1] != "carol namespace.create team-ops done" {
 		t.Errorf("the audit log holds %q", got)
 	}
 	var detail string
+	in.query(t, &detail, `select detail from audit_log where action = 'grant.create'`)
+	if detail != `{"principal":"group:team-finance","role":"owner","scope":"team-ops"}` {
+		t.Errorf("the owner's grant is recorded with %s", detail)
+	}
 	in.query(t, &detail, `select detail from audit_log where action = 'namespace.create'`)
-	if !strings.Contains(detail, `"owner_grant":"`) || !strings.Contains(detail, `"owner":"group:team-finance"`) {
+	if !strings.Contains(detail, `"owner_grant":"`+grant+`"`) || !strings.Contains(detail, `"owner":"group:team-finance"`) {
 		t.Errorf("the creation is recorded with %s", detail)
 	}
 
@@ -433,7 +440,7 @@ func TestANamespaceIsRemovedOnlyWhenItHoldsNothing(t *testing.T) {
 		t.Errorf("the removed built-in identity's token answered %d", w.Code)
 	}
 	got := in.entries(t)
-	if len(got) != 3 || got[1] != "carol namespace.delete team-ops done" || got[2] != "carol namespace.delete legacy done" {
+	if len(got) != 4 || got[2] != "carol namespace.delete team-ops done" || got[3] != "carol namespace.delete legacy done" {
 		t.Errorf("the audit log holds %q", got)
 	}
 
@@ -455,5 +462,54 @@ func valid(t *testing.T, pointer string, answer []byte) {
 	}
 	if err := wire(t, pointer).Validate(v); err != nil {
 		t.Errorf("the answer is not what %s describes: %s\n%s", pointer, err, answer)
+	}
+}
+
+// An owner removed while the namespace naming it is being created is the owner that names nobody,
+// found by the namespace's reference to it rather than by the check before: 422, and nothing written
+// or recorded.
+func TestAnOwnerRemovedDuringACreationNamesNobody(t *testing.T) {
+	in := someNamespaces(t)
+	removing, err := dbtest.Superuser(t, in.super).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removing.Rollback(context.WithoutCancel(t.Context()))
+	if _, err := removing.Exec(t.Context(), `delete from principals where id = 'bob'`); err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- in.ask(t, "POST", "/api/v1/namespaces", in.carol, `{"name":"team-ops","owner":"bob"}`)
+	}()
+	// The creation read bob before the removal committed, and waits on the removal's lock to
+	// refer to him: the one session of this test's database waiting on a lock. PostgreSQL is
+	// shared, so the wait is looked for in this database alone.
+	watching := dbtest.Superuser(t, in.super)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting int
+		if err := watching.QueryRow(t.Context(), `select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the creation never waited on the removal")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := removing.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w := <-answered
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "names no user or group") {
+		t.Errorf("a creation whose owner was removed under it answered %d %s", w.Code, w.Body)
+	}
+	if n := in.count(t, `select count(*) from namespaces where name = 'team-ops'`); n != 0 {
+		t.Error("the namespace was created with an owner removed under it")
+	}
+	if got := in.entries(t); len(got) != 0 {
+		t.Errorf("a refused creation was recorded: %q", got)
 	}
 }

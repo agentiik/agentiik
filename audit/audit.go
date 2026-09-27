@@ -68,6 +68,9 @@ const (
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 	NamespaceUpdate = "namespace.update"
+	// GrantCreate is a grant or a deny written. The first written is a namespace's owner's, which
+	// its creation writes.
+	GrantCreate = "grant.create"
 )
 
 // The results an entry records.

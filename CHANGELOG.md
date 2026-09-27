@@ -26,7 +26,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
 - A run past `max_runs_per_hour` is answered 429 with `Retry-After`, the seconds until one more fits.
 - A redemption by a runner of a pool the task's namespace leaves out of its `allowed_runner_pools` is answered 422, as one by a pool that does not accept the namespace is.
-- `/api/v1/namespaces`: an administrator creates a shared namespace with an owner, given the owner role on it in the same act, and quotas naming pools that exist, sets its quotas whole with `PUT .../quotas`, and removes one holding nothing, audited as `namespace.create`, `namespace.update` and `namespace.delete`; whoever holds a grant in one reads it and its quotas.
+- `/api/v1/namespaces`: an administrator creates a shared namespace with an owner, given the owner role on it in the same act, and quotas naming pools that exist, sets its quotas whole with `PUT .../quotas`, and removes one holding nothing, audited as `namespace.create` beside the owner's `grant.create`, `namespace.update` and `namespace.delete`; whoever holds a grant in one reads it and its quotas.
 - A namespace is created with its built-in identity, `NS/agentiik`, holding no grant, and removed with it, its grants and its authentication policy. `agentiik-api namespace` writes through the same store, refuses a user's personal namespace, and counts stored objects and service accounts in what a namespace holds.
 
 ### State
@@ -51,7 +51,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
 - `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
-- `agk namespace create`, `list`, `show`, `delete` and `quotas`, the last sending the quotas given as the whole set, as the route reads them, and printing them as they then stand.
+- `agk namespace create`, `list`, `show`, `delete` and `quotas`, the last sending the quotas given as the whole set, as the route reads them, and printing them as they then stand. A change answered with a failure that may pass leaves with 4, since whether it was made cannot be told.
 
 ## v0.2.5, 2026-09-26
 

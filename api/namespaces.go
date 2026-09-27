@@ -387,9 +387,15 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 		if created, err = wide.NamespaceNamed(ctx, ask.Name); err != nil {
 			return err
 		}
-		// Recorded with the namespace as it was created and the grant that made its owner one,
-		// so that who could act in it from the start stays in the log after the namespace and
-		// its grants are gone.
+		// The owner's grant is a grant written like any other, and recorded as one, so that
+		// whoever reads the log for who was given what finds it there; the namespace's entry
+		// names it too, so that who could act in it from the start reads off one entry.
+		if err := wide.Audit(ctx, audit.Record{
+			Actor: string(who), Action: audit.GrantCreate, Target: grant.ID, Result: audit.Done,
+			Detail: map[string]any{"principal": grant.Principal, "scope": grant.Scope.String(), "role": string(grant.Role)},
+		}); err != nil {
+			return err
+		}
 		return wide.Audit(ctx, audit.Record{
 			Actor: string(who), Action: audit.NamespaceCreate, Target: ask.Name, Result: audit.Done,
 			Detail: map[string]any{"namespace": recordOf(created), "owner_grant": grant.ID},
@@ -403,7 +409,9 @@ func (s *NamespaceAPI) create(w http.ResponseWriter, r *http.Request, who Princi
 	case errors.Is(err, db.ErrNameTaken):
 		fail(w, http.StatusConflict, ask.Name+" is a user's login, and logins and namespace names share one name space: a user's personal namespace is named after their login, and a namespace created first would take it from them")
 		return
-	case errors.Is(err, errNoOwner):
+	case errors.Is(err, errNoOwner), errors.Is(err, db.ErrNoPrincipal):
+		// The second is an owner removed between its check and the namespace's insert, which
+		// the insert's reference to it refuses: the same absence, found later.
 		fail(w, http.StatusUnprocessableEntity, "the owner "+ask.Owner+" names no user or group of this installation")
 		return
 	case errors.As(err, &missing):

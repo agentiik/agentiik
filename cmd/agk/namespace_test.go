@@ -196,3 +196,40 @@ func TestAgkNamespaceOfAnInstallationThatDoesNotAnswerIsNoOutcome(t *testing.T) 
 		t.Errorf("an installation that does not answer answered %d: %s", code, errs)
 	}
 }
+
+// A change answered with a failure that may pass is no outcome, since a gateway answering after the
+// API committed says nothing of whether the change was made, and the sentence says how to read it
+// back; a refusal is refused. A listing answered 404 says what the installation said, since it names
+// no namespace to be absent.
+func TestAgkNamespaceTellsNoOutcomeFromARefusal(t *testing.T) {
+	status := atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+		w.Write([]byte(`{"error":"said by the installation"}`))
+	}))
+	t.Cleanup(srv.Close)
+	for _, args := range [][]string{
+		{"namespace", "create", "team-ops", "--owner", "alice"},
+		{"namespace", "delete", "team-ops"},
+		{"namespace", "quotas", "team-ops", "--max-runs-per-hour", "5"},
+	} {
+		for _, c := range []struct {
+			status int
+			want   int
+			says   string
+		}{
+			{http.StatusGatewayTimeout, exitNoOutcome, "agk namespace show team-ops reads it back"},
+			{http.StatusServiceUnavailable, exitNoOutcome, "cannot be told"},
+			{http.StatusConflict, exitRefused, "said by the installation"},
+		} {
+			status.Store(int64(c.status))
+			if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, args...); code != c.want || !strings.Contains(errs, c.says) {
+				t.Errorf("agk %s answered %d by the installation left with %d: %s", strings.Join(args, " "), c.status, code, errs)
+			}
+		}
+	}
+	status.Store(http.StatusNotFound)
+	if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, "namespace", "list"); code != exitRefused || strings.TrimSpace(errs) != "said by the installation" {
+		t.Errorf("a listing answered 404 left with %d: %s", code, errs)
+	}
+}

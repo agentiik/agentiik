@@ -363,16 +363,26 @@ func countOf(n int64) string {
 // A namespace the caller may not read answers what one that does not exist answers, which is the
 // point, so the sentence says both rather than guessing; and a change, which only an administrator
 // makes, is said to be one where it is refused, since the installation's own sentence names no
-// route.
+// route. A listing names no namespace, so its 404 is the installation's own sentence, which is an
+// installation serving no /api/v1/namespaces.
+//
+// A change answered with a failure that may pass is no outcome rather than a refusal: a gateway
+// answering 504 after the API committed is a namespace removed that a script told otherwise would
+// try to remove again, and be refused for it. So the sentence says the change may have been made,
+// and how to read it back.
 func namespaceRefused(e Env, name string, change bool, err error) int {
 	said := err.Error()
-	switch status := statusOf(err); {
+	status := statusOf(err)
+	switch {
 	case status == http.StatusUnauthorized:
 		said = fmt.Sprintf("the installation did not accept the credential in %s: %s", tokenVariable, said)
 	case status == http.StatusForbidden && change:
 		said = "creating, bounding and removing a namespace are an administrator's, through a token with no scope: " + said
-	case status == http.StatusNotFound:
+	case status == http.StatusNotFound && name != "":
 		said = fmt.Sprintf("no namespace %s, or not yours", name)
+	case change && passing(err) && !errors.Is(err, errUnreachable):
+		fmt.Fprintf(e.Err, "the installation answered %s, and whether namespace %s was changed cannot be told from it: agk namespace show %s reads it back\n", said, name, name)
+		return exitNoOutcome
 	}
 	fmt.Fprintln(e.Err, said)
 	if errors.Is(err, errUnreachable) {
