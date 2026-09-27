@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -129,7 +130,8 @@ func TestAServiceAccountIsCreatedListedAndRemovedWithAgk(t *testing.T) {
 }
 
 // What the installation refuses is said in its sentence, or the command line's where it says more,
-// and left with 1; a command line naming no NS/NAME is a usage error, left with 2.
+// and left with 1; a command line naming no NS/NAME is a usage error, left with 2. A namespace listed
+// that holds nothing the caller may see is said on standard error, and is no failure.
 func TestAgkSaysWhyAServiceAccountVerbCameToNothing(t *testing.T) {
 	in := anInstallationWithServiceAccounts(t)
 	for _, c := range []struct {
@@ -144,6 +146,7 @@ func TestAgkSaysWhyAServiceAccountVerbCameToNothing(t *testing.T) {
 		{in.bob, []string{"service-account", "delete", "finance/agentiik"}, exitRefused, "no service account finance/agentiik, or not of a namespace you own"},
 		{in.alice, []string{"service-account", "delete", "finance/ghost"}, exitRefused, "no service account finance/ghost, or not of a namespace you own"},
 		{"agktoken_nobody" + strings.Repeat("G", 40), []string{"service-account", "list"}, exitRefused, "did not accept the credential"},
+		{in.bob, []string{"service-account", "list", "finance"}, exitSucceeded, "no service account of namespace finance: it does not exist, or is not one you own"},
 		{in.alice, []string{"service-account", "list", "finance", "team-ops"}, exitUsage, "one namespace at most"},
 		{in.alice, []string{"service-account", "list", "-o", "yaml"}, exitUsage, "json is the one format"},
 		{in.alice, []string{"service-account", "create"}, exitUsage, "names one service account"},
@@ -192,5 +195,38 @@ func TestAgkServiceAccountTellsNoOutcomeFromARefusal(t *testing.T) {
 		if code, _, errs := against(t.Context(), t.TempDir(), srv.URL, args...); code != exitNoOutcome || !strings.Contains(errs, "could not be reached") {
 			t.Errorf("agk %s of an installation that does not answer left with %d: %s", strings.Join(args, " "), code, errs)
 		}
+	}
+}
+
+// -o json writes the installation's answer as it gave it, whatever it says beyond what agk reads,
+// and with a namespace named, the service accounts of that namespace as the installation wrote each.
+func TestAgkServiceAccountListWritesTheAnswerAsItWasGiven(t *testing.T) {
+	const answer = `{"service_accounts":[` +
+		`{"kind":"service_account","namespace":"finance","name":"agentiik","created_at":"2026-09-27T09:00:00Z","description":"built in"},` +
+		`{"kind":"service_account","namespace":"hr","name":"sync","created_by":"erin","created_at":"2026-09-27T09:05:00Z"}` +
+		`],"next":"abc"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(answer))
+	}))
+	t.Cleanup(srv.Close)
+	compact := func(out string) string {
+		t.Helper()
+		var b bytes.Buffer
+		if err := json.Compact(&b, []byte(out)); err != nil {
+			t.Fatalf("%q is not JSON: %s", out, err)
+		}
+		return b.String()
+	}
+	code, out, errs := against(t.Context(), t.TempDir(), srv.URL, "service-account", "list", "-o", "json")
+	if code != exitSucceeded || compact(out) != answer {
+		t.Errorf("agk service-account list -o json left with %d, writing %s: %s", code, out, errs)
+	}
+	code, out, errs = against(t.Context(), t.TempDir(), srv.URL, "service-account", "list", "finance", "-o", "json")
+	if want := `{"service_accounts":[{"kind":"service_account","namespace":"finance","name":"agentiik","created_at":"2026-09-27T09:00:00Z","description":"built in"}]}`; code != exitSucceeded || compact(out) != want {
+		t.Errorf("agk service-account list finance -o json left with %d, writing %s: %s", code, out, errs)
+	}
+	code, out, errs = against(t.Context(), t.TempDir(), srv.URL, "service-account", "list", "team-ops", "-o", "json")
+	if code != exitSucceeded || compact(out) != `{"service_accounts":[]}` {
+		t.Errorf("agk service-account list team-ops -o json left with %d, writing %s: %s", code, out, errs)
 	}
 }

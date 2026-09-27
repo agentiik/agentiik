@@ -72,27 +72,44 @@ func serviceAccountList(ctx context.Context, e Env, args []string) int {
 	if !ok {
 		return exitUsage
 	}
-	var listed api.ServiceAccountList
-	if err := at.getJSON(ctx, "/api/v1/service-accounts", &listed); err != nil {
+	var raw json.RawMessage
+	if err := at.getJSON(ctx, "/api/v1/service-accounts", &raw); err != nil {
 		return serviceAccountRefused(e, "", false, "", err)
 	}
-	// The route lists every namespace the caller owns, and one of them is chosen here.
-	if len(named) == 1 {
-		within := listed.ServiceAccounts[:0]
-		for _, sa := range listed.ServiceAccounts {
-			if sa.Namespace == named[0] {
-				within = append(within, sa)
-			}
+	// The route lists every namespace the caller owns, and one of them is chosen here, each
+	// service account kept as the installation wrote it, so that -o json writes its answer as it
+	// gave it, whatever it says of each beyond what this command reads.
+	var answer struct {
+		ServiceAccounts []json.RawMessage `json:"service_accounts"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		fmt.Fprintf(e.Err, "the installation's list of service accounts could not be read: %s\n", err)
+		return exitNoOutcome
+	}
+	var listed api.ServiceAccountList
+	kept := answer.ServiceAccounts[:0]
+	for _, one := range answer.ServiceAccounts {
+		var sa api.ServiceAccount
+		if err := json.Unmarshal(one, &sa); err != nil {
+			fmt.Fprintf(e.Err, "the installation's list of service accounts could not be read: %s\n", err)
+			return exitNoOutcome
 		}
-		listed.ServiceAccounts = within
+		if len(named) == 1 && sa.Namespace != named[0] {
+			continue
+		}
+		kept = append(kept, one)
+		listed.ServiceAccounts = append(listed.ServiceAccounts, sa)
 	}
 	if *output == "json" {
-		raw, err := json.Marshal(listed)
+		if len(named) == 0 {
+			return indented(e, raw)
+		}
+		within, err := json.Marshal(map[string][]json.RawMessage{"service_accounts": append([]json.RawMessage{}, kept...)})
 		if err != nil {
 			fmt.Fprintf(e.Err, "the list of service accounts could not be written: %s\n", err)
 			return exitNoOutcome
 		}
-		return indented(e, raw)
+		return indented(e, within)
 	}
 	if len(listed.ServiceAccounts) == 0 {
 		switch {
