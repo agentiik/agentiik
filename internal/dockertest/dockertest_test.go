@@ -843,7 +843,7 @@ func TestAnExitedContainerStartsAgainAndARunningOneDoesNot(t *testing.T) {
 // its code, and does not have its attach closed under it.
 func TestAKilledRunThatReturnsLateDoesNotEndTheNextOne(t *testing.T) {
 	var runs atomic.Int32
-	late, returned, second := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	entered, late, returned, second := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	_, c := start(t, dockertest.With(dockertest.Options{
 		Images: anImage(),
 		Run: func(container dockertest.Container) (int, error) {
@@ -851,6 +851,7 @@ func TestAKilledRunThatReturnsLateDoesNotEndTheNextOne(t *testing.T) {
 				// The first run takes no notice of the kill, and returns only
 				// once the second has started.
 				defer close(returned)
+				close(entered)
 				<-late
 				return 0, nil
 			}
@@ -869,6 +870,9 @@ func TestAKilledRunThatReturnsLateDoesNotEndTheNextOne(t *testing.T) {
 	if err := c.ContainerStart(ctx, created.ID); err != nil {
 		t.Fatal(err)
 	}
+	// The kill lands once the first run's function is under way, so that the function called
+	// first is the first run's, whatever the scheduler does between the start and the call.
+	<-entered
 	if err := c.ContainerKill(ctx, created.ID, "SIGKILL"); err != nil {
 		t.Fatalf("kill: %v", err)
 	}

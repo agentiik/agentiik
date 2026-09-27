@@ -310,6 +310,10 @@ func noticeLine(n api.Notification) string {
 		return fmt.Sprintf("told %s at %s: %s, an administrator, granted %s", n.ID, when, g.GrantedBy, gave)
 	case n.Kind == "passkey_counter_refused":
 		return fmt.Sprintf("told %s at %s: a sign-in with your passkey %s was refused because its signature counter did not move forward, as a copy of it would; remove it if the other copy is not yours", n.ID, when, n.Credential)
+	case n.Kind == "break_glass_recovery":
+		// Told to every administrator, the one recovered among them: whoever did not run it learns
+		// that whoever holds the host did.
+		return fmt.Sprintf("told %s at %s: agentiik-api recover, run on the installation's host, issued %s, an administrator, a recovery code", n.ID, when, n.Login)
 	}
 	return fmt.Sprintf("told %s at %s: %s", n.ID, when, n.Kind)
 }

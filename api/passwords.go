@@ -57,6 +57,12 @@ import (
 // reads it itself as well. A sign-in is a sign-in, so the first one gives the user their personal
 // namespace whatever the session may do.
 //
+// An administrator's sign-in to a full session ends the bootstrap token where it has not ended, as
+// the enrolment that first gives an administrator one does: a password set while the policy required
+// a passkey opened a session that only enrols and left the token going, and once the policy no
+// longer requires one, the next sign-in of that password ends it. A session opened before, full from
+// the same moment, ends nothing by itself: a sign-in or an enrolment is what ends the token.
+//
 // # Setting one
 //
 // A password is set from an enrolment code, on the enrolment page, and from a browser's session,
@@ -556,10 +562,11 @@ func (s *PasswordAPI) passwordGoes(r *http.Request, login string, now time.Time)
 var errForbidden = errors.New("api: passwords are forbidden")
 
 // signIn signs a checked account in at now, in the transaction wide is: the code's step, the
-// password's use, the sign-in, the personal namespace where it is the first, a session opened by the
-// password, full or enrolment-only as the policy says, recorded as signin.succeed, and, for a sign-in
-// agk login started that opened a full session, its one-time code. It answers the cookie to set once
-// the transaction commits, and what the answer says.
+// password's use, the sign-in, the personal namespace where it is the first, the end of the bootstrap
+// token where an administrator's session is a full one, a session opened by the password, full or
+// enrolment-only as the policy says, recorded as signin.succeed, and, for a sign-in agk login started
+// that opened a full session, its one-time code. It answers the cookie to set once the transaction
+// commits, and what the answer says.
 func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, address string, step int64, terminal *TerminalSignIn, now time.Time) (*http.Cookie, SignedIn, error) {
 	login := a.user.Login
 	if a.totp.ID != "" {
@@ -570,17 +577,37 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 	if err := wide.CredentialUsed(ctx, a.password.ID, now); err != nil {
 		return nil, SignedIn{}, err
 	}
-	entries, err := personalNamespace(ctx, wide, login)
-	if err != nil {
-		return nil, SignedIn{}, err
-	}
-	cookie, signedIn, err := openSignedIn(ctx, wide, login, a.password.ID, address, now)
+	personal, err := personalNamespace(ctx, wide, login)
 	if err != nil {
 		return nil, SignedIn{}, err
 	}
 	kind := SessionFull
 	if a.policy.enrolling() {
 		kind = SessionEnrolment
+	}
+	// An administrator whose password opens a full session can administer from it, so the
+	// bootstrap token ends here, as it ends at the enrolment that first gives an administrator a
+	// full session (passkeys.go, passwords_set.go). Setting the password did not end it where the
+	// policy then required a passkey; ended at none of this administrator's sign-ins once the
+	// policy relaxed, the token would go on beside the administrator it made. Taken after the rows
+	// the sign-in writes and before the audit log, and ending nothing once ended. A suspended
+	// account never reaches here.
+	var entries []entry
+	if a.user.Admin && kind == SessionFull {
+		ended, err := wide.EndBootstrap(ctx, now)
+		if err != nil {
+			return nil, SignedIn{}, err
+		}
+		if ended {
+			entries = append(entries, entry{record: audit.Record{
+				Actor: login, Action: audit.BootstrapEnd, Target: string(BootstrapOperator), Result: audit.Done,
+				Detail: map[string]any{"first_administrator": login, "credential": a.password.ID},
+			}})
+		}
+	}
+	cookie, signedIn, err := openSignedIn(ctx, wide, login, a.password.ID, address, now)
+	if err != nil {
+		return nil, SignedIn{}, err
 	}
 	signedIn.record.Detail["session"] = kind
 	answer := SignedIn{Login: login, Session: kind}
@@ -589,7 +616,7 @@ func (s *PasswordAPI) signIn(ctx context.Context, wide *db.Wide, a account, addr
 			return nil, SignedIn{}, err
 		}
 	}
-	return cookie, answer, appendEntries(ctx, wide, append(entries, signedIn))
+	return cookie, answer, appendEntries(ctx, wide, append(append(entries, personal...), signedIn))
 }
 
 // refuse records a password sign-in refused, as signin.fail in a transaction of its own, since the

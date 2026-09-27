@@ -20,8 +20,9 @@ import (
 // through an administrator who can sign in, and on that day there is none. What it takes instead is
 // the installation's host, where it runs with the API's own settings, as namespace create does, so
 // that the network brings nobody to it; whoever holds the host could write the code's row by hand,
-// and this does it for them, audited, as enrolment.issue by installation. The link is handed over
-// by whoever ran it, as an administrator hands over the one the API answers, and never by mail.
+// and this does it for them, audited, as enrolment.issue by installation, and told to every
+// administrator, so that its use is never silent. The link is handed over by whoever ran it, as an
+// administrator hands over the one the API answers, and never by mail.
 func recoverVerb(ctx context.Context, lookup config.Lookup, login string, now time.Time, stdout, stderr io.Writer) int {
 	// The login is checked before the settings are read, so that one no user can have is refused
 	// as that wherever the verb is run.
@@ -59,7 +60,7 @@ func recoverAdministrator(ctx context.Context, c config.Recovery, login string, 
 	case err != nil:
 		return fmt.Errorf("no recovery code was issued: %w", err)
 	}
-	fmt.Fprintf(stdout, "%s, an administrator, may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works. Hand it over yourself:\n",
+	fmt.Fprintf(stdout, "%s, an administrator, may open this link once, before %s, to enrol a new passkey, or a password where the installation allows one; any recovery code issued them before no longer works, and every administrator is told of this one in agk whoami. Hand it over yourself:\n",
 		login, code.ExpiresAt.UTC().Format("15:04 UTC"))
 	fmt.Fprintln(stdout, code.Link)
 	return nil
