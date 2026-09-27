@@ -621,6 +621,23 @@ func TestAGrantOrAMembershipLeavingNoAdministratorAbleToSignInIsRefused(t *testi
 	}
 }
 
+// The setting a refusal names is the one the act took the way in by: alice's synced passkey was
+// refused before the grant, by the installation's device_bound_only, and her password is what a role
+// in hr, forbidding passwords, takes, so the grant's 409 names password.
+func TestALockoutNamesTheSettingTheActTookTheWayInBy(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "alice")
+	in.passkeyed(t, "alice", "alice-synced", true)
+	in.endBootstrap(t)
+	bound := true
+	in.setPolicy(t, db.AuthPolicy{Password: "allowed", Passkey: "optional", UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2})
+	in.exec(t, `insert into namespaces (name) values ('hr')`, `insert into auth_policy (namespace, password) values ('hr', 'forbidden')`)
+	w := in.bearing(t, "POST", "/api/v1/hr/grants", in.token(t, "alice", nil, nil), `{"principal":"alice","role":"viewer"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"password"`) {
+		t.Errorf("a role for alice in hr answered %d %s", w.Code, w.Body)
+	}
+}
+
 // On an installation addressed by an IP address passwords are allowed whatever a namespace's policy
 // says, so a role there takes nobody's password: the one administrator, holding a password alone, is
 // given one in a namespace whose stored policy forbids them.

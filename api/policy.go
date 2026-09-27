@@ -392,11 +392,13 @@ type errLockedOut struct{ setting string }
 func (e *errLockedOut) Error() string { return lockedOut }
 
 // lockingSetting is the setting a change that left none of the administrators of before able to sign
-// in takes their way in away by, read under the policy the change wrote: device_bound_only where one
-// of them holds a synced passkey it now refuses, since with synced passkeys accepted that one would
-// still sign in, and forbidding passwords would neither delete it nor suspend its holder; password
-// otherwise. The other settings take no credential away from anybody that this can know of.
-func lockingSetting(ctx context.Context, wide *db.Wide, before []string, now time.Time, ipAddressed bool) (string, error) {
+// in takes their way in away by, read under the policy the change wrote against was, what applied
+// to each before it: device_bound_only where the change came to refuse a synced passkey one of them
+// holds, since with synced passkeys accepted that one would still sign in, and forbidding passwords
+// would neither delete it nor suspend its holder; password otherwise. A synced passkey refused before
+// the change took nothing that the change took, and is not named for it. The other settings take no
+// credential away from anybody that this can know of.
+func lockingSetting(ctx context.Context, wide *db.Wide, before []string, was map[string]accountPolicy, now time.Time, ipAddressed bool) (string, error) {
 	for _, login := range before {
 		policy, err := policyFor(ctx, wide, login, now, ipAddressed)
 		if err != nil {
@@ -407,7 +409,7 @@ func lockingSetting(ctx context.Context, wide *db.Wide, before []string, now tim
 			return "", err
 		}
 		synced := slices.ContainsFunc(held, func(c db.Credential) bool { return c.Type == db.CredentialPasskey && c.BackupEligible })
-		if policy.deviceBoundOnly && synced && !ipAddressed {
+		if policy.deviceBoundOnly && !was[login].deviceBoundOnly && synced && !ipAddressed {
 			return deviceBoundOnly, nil
 		}
 	}
@@ -470,6 +472,12 @@ func keepAnAdministrator(ctx context.Context, wide *db.Wide, now time.Time, ipAd
 	if err != nil {
 		return err
 	}
+	was := map[string]accountPolicy{}
+	for _, login := range before {
+		if was[login], err = policyFor(ctx, wide, login, now, ipAddressed); err != nil {
+			return err
+		}
+	}
 	if err := change(); err != nil {
 		return err
 	}
@@ -482,7 +490,7 @@ func keepAnAdministrator(ctx context.Context, wide *db.Wide, now time.Time, ipAd
 		return err
 	}
 	if bootstrap.Ended() && len(before) > 0 && len(after) == 0 {
-		setting, err := lockingSetting(ctx, wide, before, now, ipAddressed)
+		setting, err := lockingSetting(ctx, wide, before, was, now, ipAddressed)
 		if err != nil {
 			return err
 		}
