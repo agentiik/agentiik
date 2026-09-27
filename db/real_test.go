@@ -27,7 +27,7 @@ import (
 // unprivileged role the application uses; what is under test is what that role can see.
 //
 //	docker run -d --name agk-pg -e POSTGRES_PASSWORD=agk -e POSTGRES_DB=agk \
-//	  -p 55432:5432 postgres:17-alpine
+//	  -p 55432:5432 postgres:18-alpine
 //	AGENTIIK_TEST_DATABASE_URL=postgres://postgres:agk@127.0.0.1:55432/agk go test ./db/
 
 // database prepares a schema of this test's own, with the application role, and answers

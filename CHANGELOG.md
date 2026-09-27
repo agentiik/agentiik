@@ -14,6 +14,10 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - The operator token of a server that runs no `init`, Homebrew's or one put together by hand, goes on working too: `agentiik-api migrate` takes `AGK_OPERATOR_TOKEN` as `init` does, and with none set imports, once, the v0.2 hash in the file `AGK_OPERATOR_TOKEN_FILE` names where the database keeps no hash and the bootstrap has not ended; a file that is not there imports nothing, one in another shape or readable by others fails the run.
 - A namespace v0.2 made is given its built-in identity, `NS/agentiik`, holding no grant, by the next `init` or `agentiik-api migrate`, with nothing to do by hand; each run gives it to any namespace still without one, recorded as `service_account.create` by `installation` in the namespace.
 
+### Images
+
+- `ghcr.io/agentiik/postgres-upgrade` (`build/postgres-upgrade.Dockerfile`), published with the others, carries PostgreSQL 17 and 18 with their contrib modules, and upgrades a data directory an older major version wrote to the one it is given with `pg_upgrade` in copy mode, keeping the old one beside it as `postgres-17`. A new or an upgraded directory it leaves alone, a server killed at its stop it recovers first, one still running it refuses, and a failure changes nothing.
+
 ### Access
 
 - A route about its caller's own credentials takes `api.Own` and is registered with `api.Router.HandleOwn`: any principal reaches it, and its handler is told who asks, the token presented, whether it is narrowed, and the namespaces it owns, which the authorizer says as `api.Owners`: those where it holds the `owner` role on the namespace, its own or a group's (`access.Owns`).
@@ -89,6 +93,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
 - Package `internal/webauthn/webauthntest` is a software authenticator answering the API's options as a browser would, held to `internal/webauthn` by its tests.
 - A test holds every record a person signs in with or through, credentials, sessions and enrolment codes, refused to a service account; a sign-in path added later joins it.
+- The tests, CI and `e2e` run PostgreSQL 18, and a job upgrades with `postgres-upgrade` a cluster the official 17 image wrote, starts 18 on it, and checks what it refuses and what it recovers from.
 
 ### agk
 

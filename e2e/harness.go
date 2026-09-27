@@ -40,7 +40,7 @@ const Variable = "AGENTIIK_E2E"
 // docker:29-dind is the major the rest of the project runs, the first whose bridge keeps the
 // host out of an internal network being 28.
 const (
-	postgresImage = "postgres:17-alpine"
+	postgresImage = "postgres:18-alpine"
 	natsImage     = "nats:2-alpine"
 	registryImage = "registry:2"
 	dindImage     = "docker:29-dind"

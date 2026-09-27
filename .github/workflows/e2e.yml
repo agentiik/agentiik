@@ -38,7 +38,7 @@ jobs:
       # a wait inside the test that times out.
       - name: images
         run: |
-          for image in postgres:17-alpine nats:2-alpine registry:2 docker:29-dind alpine:3.21; do
+          for image in postgres:18-alpine nats:2-alpine registry:2 docker:29-dind alpine:3.21; do
             docker pull --quiet "$image"
           done
 
