@@ -412,7 +412,8 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // an artifact run:read_data. Registration is authenticated by the join token in its body, the
 // runner's own routes by the runner credential alone, and the object store by the signature in the
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
-// namespace it owns", which no permission names.
+// namespace it owns", which no permission names, and so is GET /api/v1/me with the caller's
+// notifications. Sharing takes grant:manage at its scope, or an administrator.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -436,6 +437,12 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	own := api.Route{Own: true}
 	onRun := func(p, reveals api.Permission) api.Route {
 		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
+	}
+	// Sharing "requires grant:manage" at the scope the route names, and "an administrator may
+	// create grants in any namespace"; writing one is handed what its writer sees, for a service
+	// account of another namespace.
+	sharing := func(at api.Scope, writes bool) api.Route {
+		return api.Route{Permission: api.GrantManage, Scope: at, OrAdministrator: true, Seeing: writes}
 	}
 	want := map[string]api.Route{
 		"GET /api/v1/runner-pools":                                       administrator,
@@ -486,6 +493,14 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 		"DELETE /api/v1/namespaces/{namespace}":                          administrator,
 		"GET /api/v1/namespaces/{namespace}/quotas":                      members,
 		"PUT /api/v1/namespaces/{namespace}/quotas":                      administrator,
+		"GET /api/v1/{namespace}/grants":                                 sharing(api.Namespace, false),
+		"POST /api/v1/{namespace}/grants":                                sharing(api.Namespace, true),
+		"DELETE /api/v1/{namespace}/grants/{id}":                         sharing(api.Namespace, false),
+		"GET /api/v1/{namespace}/workflows/{workflow}/grants":            sharing(api.Workflow, false),
+		"POST /api/v1/{namespace}/workflows/{workflow}/grants":           sharing(api.Workflow, true),
+		"DELETE /api/v1/{namespace}/workflows/{workflow}/grants/{id}":    sharing(api.Workflow, false),
+		"GET /api/v1/me":                                                 own,
+		"DELETE /api/v1/me/notifications/{id}":                           own,
 		"GET /objects/{key...}":                                          public,
 		"PUT /objects/{key...}":                                          public,
 		"POST /objects/{namespace}":                                      public,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/agentiik/agentiik/access"
@@ -49,6 +50,11 @@ type guard struct {
 	// also is the permission a handler may ask about to decide whether what a request carries
 	// is accepted, and is empty on a route that asks about none.
 	also Permission
+
+	// administered is set where an administrator reaches the route whatever they hold at its
+	// scope, and seeing where its handler is given Sees: see Needs.
+	administered bool
+	seeing       bool
 }
 
 // Needs is a route that requires one permission at one scope.
@@ -63,10 +69,28 @@ type Needs struct {
 	// Also is a permission the route needs besides Permission where what a request carries
 	// calls for it, which only its handler can tell: see HoldsAlso.
 	Also Permission
+
+	// OrAdministrator is set where an administrator reaches the route as well, whatever they
+	// hold at its scope: an installation power over every namespace, asked as every
+	// administrator's route asks it, as grant:manage at the installation through a credential
+	// that carries it. The grant routes are the ones that take it, since "an administrator may
+	// create grants in any namespace", which is how they read another namespace's payloads when
+	// they must: by granting themselves access first, where the grant is audited and the
+	// namespace's owners are told.
+	OrAdministrator bool
+
+	// Seeing is set where the handler is given Sees, what its caller sees of the namespaces'
+	// records, as a route taking OnNamespace is: for a route whose body may name something of
+	// another namespace, which it answers as absent where the caller does not see that
+	// namespace, so that asking teaches nobody a namespace exists.
+	Seeing bool
 }
 
 func (n Needs) guards() guard {
-	return guard{permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also}
+	return guard{
+		permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also,
+		administered: n.OrAdministrator, seeing: n.Seeing,
+	}
 }
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
@@ -227,8 +251,8 @@ type Holdings interface {
 
 // Sees answers, for the route serving r, whether its caller sees one namespace's record: every
 // namespace for an administrator, through a credential that carries the power, and otherwise one it
-// holds a grant in and its credential reaches. A route not taking OnNamespace, and a request the
-// router did not serve, see nothing.
+// holds a grant in and its credential reaches. A route neither taking OnNamespace nor declaring
+// Needs.Seeing, and a request the router did not serve, see nothing.
 func Sees(r *http.Request) func(namespace string) bool {
 	if sees, ok := r.Context().Value(seesKey{}).(func(string) bool); ok {
 		return sees
@@ -294,16 +318,17 @@ type ForRunner struct{}
 
 func (ForRunner) guards() guard { return guard{runner: true} }
 
-// Own is a route about the caller's own credentials, and those of the service accounts of the
-// namespaces it owns: "an API token for the caller or a service account of a namespace it owns",
-// the listing of "the caller's tokens and those of the service accounts of namespaces it owns",
-// and the revocation of one of them.
+// Own is a route about the caller itself: its own credentials, and those of the service accounts of
+// the namespaces it owns, "an API token for the caller or a service account of a namespace it
+// owns", the listing of "the caller's tokens and those of the service accounts of namespaces it
+// owns", and the revocation of one of them; and who it is, GET /api/v1/me, with the notifications
+// told to it.
 //
 // Any principal reaches it and it needs no permission, since what it answers is the caller's own,
-// and holding a credential or owning a namespace is none of the nine. It is registered with
-// HandleOwn, whose handler is given a Caller in place of a target: who asks, how the credential it
-// presented narrows it, and what it owns through that credential, which the router asks the
-// authorizer rather than leaving to the handler, as it asks everything else.
+// and holding a credential, owning a namespace or being told something is none of the nine. It is
+// registered with HandleOwn, whose handler is given a Caller in place of a target: who asks, how the
+// credential it presented narrows it, and what it owns and holds through that credential, which the
+// router asks the authorizer rather than leaving to the handler, as it asks everything else.
 type Own struct{}
 
 func (Own) guards() guard { return guard{own: true} }
@@ -328,6 +353,11 @@ type Caller struct {
 
 	scope  access.TokenScope
 	owners Owners
+
+	// standings is what the authorizer says the caller is granted, nil where it does not say,
+	// and allow is the router's question about the caller, through the credential it presented.
+	standings Standings
+	allow     func(ctx context.Context, what Permission, over Target) (bool, error)
 }
 
 // Narrowed says whether the credential the caller presented carries a scope. A narrowed token
@@ -344,6 +374,110 @@ func (c Caller) Owned(ctx context.Context) ([]string, error) {
 		return nil, nil
 	}
 	return c.owners.Owned(ctx, c.Principal)
+}
+
+// Standings says what a principal is granted wherever it is granted anything: what GET /api/v1/me
+// resolves the caller's permissions from. An Authorizer implements it where it can say, as
+// Principals does.
+type Standings interface {
+	Standing(ctx context.Context, who Principal) (Standing, error)
+}
+
+// Standing is what a principal is granted, read at one moment.
+type Standing struct {
+	// Groups are the groups the principal belongs to, by name.
+	Groups []string
+
+	// Grants are the grants of the principal and of its groups in every namespace, at both
+	// scopes, that had not expired At. The bootstrap operator's, while it has not ended, are the
+	// owner role on every namespace, written as the grants they would be, since that is what
+	// Allow answers it; a principal that holds nothing, a suspended user among them, has none.
+	Grants []access.Grant
+
+	// At is when they were read, and what they are resolved as of.
+	At time.Time
+}
+
+// Effective is what a caller holds through the credential it presented, as GET /api/v1/me answers
+// it.
+type Effective struct {
+	// Admin is whether the caller administers the installation through this credential: an
+	// administrator's powers "pass through a token only where its scope does not narrow them
+	// away".
+	Admin bool
+
+	// Groups are the groups the caller belongs to, by name.
+	Groups []string
+
+	// Permissions are what the caller holds at each scope where it holds anything: every
+	// namespace, and every workflow where a grant or a deny on it, or the credential's scope,
+	// makes what applies there other than what its namespace gives, with the whole of what
+	// applies there. A workflow whose denies take away all its namespace gives is kept, holding
+	// nothing, since leaving it out would read as the namespace's permissions applying to it.
+	Permissions map[access.Scope]access.Set
+}
+
+// Effective answers what the caller holds through the credential it presented: the permissions its
+// grants resolve to now, each intersected with what the credential keeps at its scope, and whether
+// it administers, which the router asks the authorizer as it asks every administrator's route.
+//
+// The scopes asked about are those a grant of the caller's is written at, and those the credential's
+// within names, since a token narrowed to one workflow holds there what the namespace's grants give,
+// which no grant on that workflow says, and nothing on the namespace itself.
+func (c Caller) Effective(ctx context.Context) (Effective, error) {
+	if c.standings == nil || c.allow == nil {
+		return Effective{}, errors.New("api: the authorizer does not say what a principal is granted, and who the caller is answers it")
+	}
+	admin, err := c.allow(ctx, GrantManage, Target{})
+	if err != nil {
+		return Effective{}, err
+	}
+	standing, err := c.standings.Standing(ctx, c.Principal)
+	if err != nil {
+		return Effective{}, err
+	}
+	var asked []access.Scope
+	ask := func(at access.Scope) {
+		if namespace := (access.Scope{Namespace: at.Namespace}); !slices.Contains(asked, namespace) {
+			asked = append(asked, namespace)
+		}
+		if at.Workflow != "" && !slices.Contains(asked, at) {
+			asked = append(asked, at)
+		}
+	}
+	for _, g := range standing.Grants {
+		ask(g.Scope)
+	}
+	for _, at := range c.scope.Within {
+		ask(at)
+	}
+
+	principal := access.Principal{Ref: string(c.Principal), Groups: standing.Groups}
+	held := map[access.Scope]access.Set{}
+	for _, at := range asked {
+		set, err := access.Resolve(principal, standing.Grants, at, standing.At)
+		if err != nil {
+			return Effective{}, err
+		}
+		var kept []Permission
+		for _, p := range set.Permissions() {
+			if c.scope.Keeps(p, at) {
+				kept = append(kept, p)
+			}
+		}
+		held[at] = access.SetOf(kept...)
+	}
+	out := Effective{Admin: admin, Groups: standing.Groups, Permissions: map[access.Scope]access.Set{}}
+	for at, set := range held {
+		namespace := held[access.Scope{Namespace: at.Namespace}]
+		switch {
+		case at.Workflow == "" && set == (access.Set{}):
+		case at.Workflow != "" && set == namespace:
+		default:
+			out.Permissions[at] = set
+		}
+	}
+	return out, nil
 }
 
 // Principal is who is asking, written as a grant, the API, agk and the audit log write it: a login,

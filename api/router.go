@@ -106,6 +106,11 @@ type Route struct {
 	// calls for it, where it declares one.
 	Also Permission
 
+	// OrAdministrator is set where an administrator reaches the route as well, whatever they hold
+	// at its scope, and Seeing where its handler is given Sees: see Needs.
+	OrAdministrator bool
+	Seeing          bool
+
 	// Own is set where the route answers about its caller's own credentials and those of the
 	// service accounts of the namespaces it owns, and needs no permission: see Own.
 	Own bool
@@ -253,6 +258,12 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		}
 		guard.within = strings.Contains(pattern, "{namespace}")
 	}
+	if guard.seeing && rt.holdings == nil {
+		return fmt.Errorf("api: %s %s is handed what its caller sees of the namespaces, and the authorizer does not say who holds a grant where", method, pattern)
+	}
+	if guard.administered && guard.scope == Installation {
+		return fmt.Errorf("api: %s %s is an administrator's already, at the installation, and says an administrator reaches it as well", method, pattern)
+	}
 	if !guard.public && !guard.run && !guard.members {
 		if guard.scope >= Namespace && !strings.Contains(pattern, "{namespace}") {
 			return fmt.Errorf("api: %s %s is scoped to a %s and its pattern names no {namespace}", method, pattern, guard.scope)
@@ -293,6 +304,7 @@ func (rt *Router) Handle(method, pattern string, g Guard, h Handler) error {
 		Permission: guard.permission, Scope: guard.scope,
 		Public: guard.public, OfRun: guard.run, Members: guard.members, Why: guard.why,
 		Reveals: guard.reveals, Also: guard.also,
+		OrAdministrator: guard.administered, Seeing: guard.seeing,
 	})
 	return nil
 }
@@ -355,8 +367,9 @@ func (rt *Router) HandleOwn(method, pattern string, g Own, h OwnHandler) error {
 	if !ok {
 		return fmt.Errorf("api: %s %s answers about the service accounts of the namespaces its caller owns, and the authorizer does not say who owns what", method, pattern)
 	}
+	standings, _ := rt.auth.(Standings)
 	if err := rt.register(method, pattern, func(w http.ResponseWriter, r *http.Request) {
-		rt.serveOwn(w, r, owners, h)
+		rt.serveOwn(w, r, owners, standings, h)
 	}); err != nil {
 		return err
 	}
@@ -380,7 +393,7 @@ type OwnHandler func(w http.ResponseWriter, r *http.Request, caller Caller)
 // It asks the authorizer nothing, so a refusal added to allow reaches none of these routes: an
 // enrolment-only session "enrols passkeys and nothing else", and is refused by rt.identify, which
 // confined makes of the router's Identify, with the 403 openapi.json answers it on each of them.
-func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, h OwnHandler) {
+func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners, standings Standings, h OwnHandler) {
 	as, err := rt.identify(r)
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authenticated")
@@ -390,7 +403,12 @@ func (rt *Router) serveOwn(w http.ResponseWriter, r *http.Request, owners Owners
 		unauthenticated(w, as)
 		return
 	}
-	h(w, r, Caller{Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners})
+	h(w, r, Caller{
+		Principal: as.Principal, Token: as.Token, scope: as.Scope, owners: owners, standings: standings,
+		allow: func(ctx context.Context, what Permission, over Target) (bool, error) {
+			return rt.allow(ctx, as, what, over)
+		},
+	})
 }
 
 // AcrossHandler is a route answering across the installation or one namespace, given who asks,
@@ -560,7 +578,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 		sees, err = rt.seeing(r.Context(), as)
 		allowed = err == nil && (!g.within || sees(target.Namespace))
 	} else {
-		allowed, err = rt.allow(r.Context(), as, g.permission, asked)
+		allowed, err = rt.admits(r.Context(), as, g, asked)
 	}
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
@@ -569,6 +587,12 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	if !allowed {
 		rt.deny(w, g.scope)
 		return
+	}
+	if g.seeing {
+		if sees, err = rt.seeing(r.Context(), as); err != nil {
+			refuse(w, http.StatusInternalServerError, "the request could not be authorised")
+			return
+		}
 	}
 	// Set on every route, seeing nothing where the route does not take OnNamespace, for the
 	// reason the questions below are.
@@ -607,7 +631,7 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			sees, err := rt.seeing(ctx, again)
 			return err == nil && (!g.within || sees(target.Namespace)), err
 		}
-		return rt.allow(ctx, again, g.permission, asked)
+		return rt.admits(ctx, again, g, asked)
 	}))
 	h(w, r, who, target)
 }
@@ -655,6 +679,26 @@ func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over 
 		return false, nil
 	}
 	return rt.auth.Allow(ctx, as.Principal, what, over)
+}
+
+// admits is whether a route taking Needs lets the caller through: the permission it needs over the
+// target, and for a route an administrator reaches as well, the administrator's power where the
+// permission is not held, asked as every administrator's route asks it. The power reaches a target
+// a grant could name and nothing else, since a path naming a namespace no grant could name is the
+// absence it is to everybody, and its handler would be handed a name the database cannot hold.
+func (rt *Router) admits(ctx context.Context, as Identity, g guard, over Target) (bool, error) {
+	allowed, err := rt.allow(ctx, as, g.permission, over)
+	if err != nil || allowed || !g.administered || !grantable(over) {
+		return allowed, err
+	}
+	return rt.allow(ctx, as, GrantManage, Target{})
+}
+
+// grantable says whether a grant's scope could name the target: a namespace, or a workflow of one,
+// each on its grammar.
+func grantable(over Target) bool {
+	_, err := access.ParseScope(access.Scope{Namespace: over.Namespace, Workflow: over.Workflow}.String())
+	return over.Namespace != "" && err == nil
 }
 
 // seeing is what a caller sees of the namespaces' records: every one where it administers the
