@@ -221,16 +221,15 @@ func (p *Principals) identifySession(r *http.Request, value string) (Identity, e
 // endSession ends the session a request carries, as a sign-out asks at, and answers the status and
 // the sentence it is refused with, a zero status where it is not.
 //
-// It comes from the public URL's origin, whatever it carries, since ending a session changes
-// something: a page of another host of the same site could otherwise sign a browser out. It carries
-// one session and nothing else: a bearer token is no session, and two credentials are refused as
-// they are everywhere. A session that opens nothing now, idle, revoked or its user's suspended, is
+// It carries one session and nothing else: a bearer token is no session, and two credentials are
+// refused as they are everywhere. It comes from the public URL's origin, whatever it carries, since
+// ending a session changes something: a page of another host of the same site could otherwise sign
+// a browser out. A session that opens nothing now, idle, revoked or its user's suspended, is
 // ended all the same, and a request carrying none ends nothing: either way the browser is signed
 // out, which is what was asked, and its cookie is cleared.
 func (p *Principals) endSession(r *http.Request, now time.Time) (int, string, error) {
-	if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
-		return http.StatusForbidden, crossOrigin, nil
-	}
+	// What a request carries is refused first, since refusing it changes nothing, so that a script
+	// presenting a token, with no Origin header, is told how a token is revoked.
 	_, bearer := bearerOf(r)
 	values := p.sessionsOf(r)
 	switch {
@@ -238,7 +237,11 @@ func (p *Principals) endSession(r *http.Request, now time.Time) (int, string, er
 		return http.StatusBadRequest, oneCredential, nil
 	case bearer:
 		return http.StatusBadRequest, tokenSignsNothingOut, nil
-	case len(values) == 0:
+	}
+	if origins := r.Header.Values("Origin"); len(origins) != 1 || origins[0] != p.origin {
+		return http.StatusForbidden, crossOrigin, nil
+	}
+	if len(values) == 0 {
 		return 0, "", nil
 	}
 	hash := sha256.Sum256([]byte(values[0]))

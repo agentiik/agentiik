@@ -143,7 +143,16 @@ func TestThePageIsServedUnderAPolicyThatLoadsNothingFromElsewhere(t *testing.T) 
 			t.Errorf("%s asked after again by its ETag answered %d", name, again.Code)
 		}
 	}
-	for _, path := range []string{"/auth/assets/nothing.js", "/auth/assets/sign-in.html", "/auth/assets/", "/auth/signin/assets/page.js"} {
+	// A file the page does not have is refused under the same policy; a path no route serves is the
+	// router's 404.
+	for _, path := range []string{"/auth/assets/nothing.js", "/auth/assets/sign-in.html"} {
+		w := fetched(t, h, path)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d", path, w.Code)
+		}
+		held(path, w)
+	}
+	for _, path := range []string{"/auth/assets/", "/auth/signin/assets/page.js"} {
 		if w := fetched(t, h, path); w.Code != http.StatusNotFound {
 			t.Errorf("%s answered %d", path, w.Code)
 		}
@@ -517,7 +526,8 @@ func TestASessionSignedOutOfWhileItsUserIsSuspendedStaysEnded(t *testing.T) {
 }
 
 // A sign-out carries one session and nothing else: a bearer token is no session, and signs nothing
-// out, and two credentials are refused as they are everywhere, ending neither.
+// out, and two credentials are refused as they are everywhere, ending neither. A script presenting
+// a token sends no Origin header, and is told all the same how a token is revoked.
 func TestASignOutCarryingATokenOrTwoSessionsIsRefused(t *testing.T) {
 	in := someSessions(t)
 	h := in.signInOn(t, "https://agentiik.example.com", false)
@@ -525,23 +535,23 @@ func TestASignOutCarryingATokenOrTwoSessionsIsRefused(t *testing.T) {
 	second := in.open(t, "carol", api.OpenedBy{Credential: "carol-passkey"})
 	token := in.token(t, "alice", nil, nil, in.clock.Add(time.Hour))
 
-	bearing := func(cookies ...*http.Cookie) *httptest.ResponseRecorder {
-		r := request(t, "POST", "/api/v1/auth/sign-out", publicOrigin, cookies...)
+	bearing := func(origin string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+		r := request(t, "POST", "/api/v1/auth/sign-out", origin, cookies...)
 		r.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w
 	}
 	for what, w := range map[string]*httptest.ResponseRecorder{
-		"a bearer token":                 bearing(),
-		"a bearer token beside a cookie": bearing(first),
+		"a bearer token":                 bearing(""),
+		"a bearer token beside a cookie": bearing(publicOrigin, first),
 		"two cookies":                    signOut(t, h, publicOrigin, first, second),
 	} {
 		if w.Code != http.StatusBadRequest || len(w.Result().Cookies()) != 0 {
 			t.Errorf("a sign-out carrying %s answered %d, Set-Cookie %q: %s", what, w.Code, w.Header().Values("Set-Cookie"), w.Body)
 		}
 	}
-	if w := bearing(); !strings.Contains(w.Body.String(), "DELETE /api/v1/auth/tokens/{id}") {
+	if w := bearing(""); !strings.Contains(w.Body.String(), "DELETE /api/v1/auth/tokens/{id}") {
 		t.Errorf("a sign-out carrying a bearer token does not say how a token is revoked: %s", w.Body)
 	}
 	for login, c := range map[string]*http.Cookie{"alice": first, "carol": second} {

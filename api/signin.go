@@ -235,12 +235,12 @@ func (s *SignInAPI) enrolPage(w http.ResponseWriter, r *http.Request, _ Principa
 // that fails answers a 500 rather than half a page.
 func (s *SignInAPI) page(w http.ResponseWriter, status int, name string, data pageData) {
 	var b bytes.Buffer
+	h := w.Header()
+	pageHeaders(h)
 	if err := s.pages.ExecuteTemplate(&b, name, data); err != nil {
 		fail(w, http.StatusInternalServerError, "the page could not be written")
 		return
 	}
-	h := w.Header()
-	pageHeaders(h)
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
@@ -250,13 +250,13 @@ func (s *SignInAPI) page(w http.ResponseWriter, status int, name string, data pa
 // asset is GET /auth/assets/{name}: one of the page's files, the same bytes to everybody, which a
 // browser may keep and asks after again at every load, by its ETag.
 func (s *SignInAPI) asset(w http.ResponseWriter, r *http.Request, _ Principal, _ Target) {
+	h := w.Header()
+	pageHeaders(h)
 	a, ok := s.assets[r.PathValue("name")]
 	if !ok {
 		fail(w, http.StatusNotFound, "no such thing, or not yours")
 		return
 	}
-	h := w.Header()
-	pageHeaders(h)
 	h.Set("Content-Type", a.contentType)
 	h.Set("Cache-Control", "no-cache")
 	h.Set("ETag", a.etag)
