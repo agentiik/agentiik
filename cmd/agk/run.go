@@ -81,7 +81,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	isLocal := fs.Bool("local", false, "Runs against the Docker daemon of this machine.")
 	entry := fs.String("f", "", "The entry point to run. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "Runs on an installation instead, in this namespace, the workflow the commit holds, as agk push registered it.")
-	server := fs.String("server", "", "The installation to run on. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation to run on. "+serverDefault)
 	commit := fs.String("commit", "", "The commit to run on an installation: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
 
 	var inputs, inputFiles, secretValues, secretFiles pairs

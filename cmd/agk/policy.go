@@ -74,7 +74,7 @@ func authPolicy(ctx context.Context, e Env, args []string) int {
 	minimum := fs.Int("min-passkeys", 0, "How many passkeys an account holds before its password goes, and below which none is removed: a whole number from 1.")
 	var inherit inherited
 	fs.Var(&inherit, "inherit", "A setting of --namespace's policy to drop, which it then inherits from the installation's, by its identifier; repeated for each.")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	words, code, ok := positional(fs, args)
 	if !ok {

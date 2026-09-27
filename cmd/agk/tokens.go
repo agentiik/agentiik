@@ -38,7 +38,7 @@ func tokenCreate(ctx context.Context, e Env, args []string) int {
 	var scope scopeEntries
 	fs.Var(&scope, "scope", "What the token keeps: a permission such as workflow:run, or a namespace or a workflow it reaches, such as finance or finance/monthly-invoicing. Repeated, or separated by commas. Defaults to everything its principal holds.")
 	label := fs.String("label", "", "What the token is for or on, listed beside it, so that the one on a lost machine can be revoked.")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -89,7 +89,7 @@ func tokenCreate(ctx context.Context, e Env, args []string) int {
 // tokenList is agk token list: the tokens still accepted, one a line, newest first.
 func tokenList(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk token list", "agk token list [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	named, code, ok := positional(fs, args)
 	if !ok {
@@ -146,7 +146,7 @@ func tokenList(ctx context.Context, e Env, args []string) int {
 // tokenRevoke is agk token revoke ID: one token, from its next request.
 func tokenRevoke(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk token revoke", "agk token revoke <id> [--server <url>]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	named, code, ok := positional(fs, args)
 	if !ok {
 		return code

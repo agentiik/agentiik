@@ -61,13 +61,16 @@ const (
 	// serverVariable is the installation, so that a repository does not carry one and a
 	// person working against two does not edit a file between pushes.
 	serverVariable = "AGENTIIK_SERVER"
+
+	// serverDefault is what --server defaults to, wherever a verb takes it (installationOf).
+	serverDefault = "Defaults to " + serverVariable + ", then the installation agk login last signed in to."
 )
 
 func push(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk push", "agk push [-f <path>] --namespace <namespace> [--server <url>] [--commit <commit>] [--allow-dirty]")
 	entry := fs.String("f", "", "The entry point to push. Defaults to "+entryPoint+" in the directory the command is run in.")
 	namespace := fs.String("namespace", "", "The namespace to register the workflow in.")
-	server := fs.String("server", "", "The installation to push to. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation to push to. "+serverDefault)
 	commit := fs.String("commit", "", "The commit to push: a hash, a branch or a tag the repository holds. Defaults to HEAD.")
 	dirty := fs.Bool("allow-dirty", false, "Push although the working tree has uncommitted changes. The commit is pushed as it was committed either way, so this says the changes are meant to stay behind.")
 	if code, ok := parse(fs, args); !ok {

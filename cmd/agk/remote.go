@@ -34,8 +34,9 @@ type remote struct {
 	kept bool
 }
 
-// reach reads which installation a command talks to, --server where it was given and
-// AGENTIIK_SERVER where it was not, and the credential: AGENTIIK_TOKEN where it is set, and
+// reach reads which installation a command talks to, --server where it was given, AGENTIIK_SERVER
+// where it was not, and the installation agk login last signed in to where neither names one, and
+// the credential: AGENTIIK_TOKEN where it is set, and
 // otherwise the token agk login stored for that installation in the local profile, so that a
 // script's token set in its environment is never passed over for a person's. It answers false once
 // it has said what is missing, and the command leaves with exitUsage.
@@ -83,15 +84,25 @@ func (r remote) refusedCredential() string { return credentialRefused(r.kept) }
 // at hand.
 func (e Env) presentsKept() bool { return e.getenv(tokenVariable) == "" }
 
-// installationOf reads which installation a command talks to, --server where it was given and
-// AGENTIIK_SERVER where it was not, and answers false once it has said what is wrong with it.
+// installationOf reads which installation a command talks to, --server where it was given,
+// AGENTIIK_SERVER where it was not, and the installation agk login last signed in to, as the local
+// profile keeps it, where neither names one; and answers false once it has said what is wrong with
+// it. A profile agk cannot read is said as the credential's would be, rather than taken for none.
 func installationOf(e Env, server string) (string, bool) {
 	where := server
 	if where == "" {
 		where = e.getenv(serverVariable)
 	}
 	if where == "" {
-		fmt.Fprintf(e.Err, "no installation to talk to: pass --server or set %s\n", serverVariable)
+		last, err := lastSignedIn(e)
+		if err != nil {
+			fmt.Fprintf(e.Err, "%s\n", err)
+			return "", false
+		}
+		where = last
+	}
+	if where == "" {
+		fmt.Fprintf(e.Err, "no installation to talk to: pass --server or set %s, or sign in once with agk login --server, which agk then talks to\n", serverVariable)
 		return "", false
 	}
 	if err := checkAddress(where); err != nil {

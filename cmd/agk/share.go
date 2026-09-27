@@ -37,7 +37,7 @@ func shareVerb(ctx context.Context, e Env, args []string) int {
 	deny := fs.String("deny", "", "The one permission taken away, such as run:read_data, instead of a role.")
 	expires := fs.String("expires", "", "How long it lasts, in days such as 30d or as a duration such as 12h, or the instant it ends, in RFC 3339. Defaults to until it is revoked.")
 	revoke := fs.String("revoke", "", "A grant to revoke instead, by the identifier agk grants prints.")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	at, code, ok := oneScope(e, fs, args)
 	if !ok {
@@ -124,7 +124,7 @@ func revokeGrant(ctx context.Context, e Env, at access.Scope, id, server string)
 // deny a line.
 func grantsVerb(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk grants", "agk grants <ns>[/<workflow>] [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	at, code, ok := oneScope(e, fs, args)
 	if !ok {
@@ -204,7 +204,7 @@ func where(g access.Grant) string {
 // that is not about any one of them.
 func whoami(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk whoami", "agk whoami [<ns>[/<workflow>]] [--server <url>] [-o json]")
-	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
+	server := fs.String("server", "", "The installation. "+serverDefault)
 	output := fs.String("o", "", "json writes the installation's answer as it gave it.")
 	named, code, ok := positional(fs, args)
 	if !ok {

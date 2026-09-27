@@ -27,9 +27,10 @@
 //	agk brick test    a brick against a set of sample envelopes, compared against
 //	                  expected outputs
 //
-// These reach an installation, whose address is --server or AGENTIIK_SERVER and whose
-// credential is AGENTIIK_TOKEN, or where it is not set the token agk login kept for that
-// installation in the local profile, and never a flag:
+// These reach an installation, whose address is --server or AGENTIIK_SERVER, or where neither
+// names one the installation agk login last signed in to, and whose credential is AGENTIIK_TOKEN,
+// or where it is not set the token agk login kept for that installation in the local profile, and
+// never a flag:
 //
 //	agk push          a commit registered as a version, its tree carried with it
 //	agk run           with --namespace instead of --local, a run of a pushed commit
@@ -176,6 +177,7 @@
 //	login.go         agk login and agk logout, and the loopback address the browser comes
 //	                 back to
 //	profile.go       the local profile, the token agk login keeps for each installation
+//	                 and the installation it last signed in to
 //	tokens.go        agk token create, list and revoke
 //	serviceaccounts.go  agk service-account create, list and delete
 //	absent.go        brick init, which waits, refusing by name
