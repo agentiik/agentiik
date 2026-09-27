@@ -22,6 +22,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 ### API
 
 - `init` keeps the bootstrap token's hash in the database at every run, a changed token replacing it, says at every run that the token set is ignored once the bootstrap has ended, and mints none: with none set and none kept it says that nobody can create the first administrator.
+- `init` and `agentiik-api namespace` record their acts, a namespace created and the runner's join token, as `installation` rather than `operator`, which names the bootstrap token from now on.
 
 ### State
 

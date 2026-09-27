@@ -598,13 +598,13 @@ func TestInitMigratesCreatesTheNamespaceAndIssuesAJoinTokenAtEveryRun(t *testing
 		}
 		return pool, by, expires, at != nil
 	}
-	if pool, by, expires, redeemed := joinToken(firstToken); pool != "default" || by != "operator" || !expires.Equal(firstRun.Add(time.Hour)) || redeemed {
+	if pool, by, expires, redeemed := joinToken(firstToken); pool != "default" || by != "installation" || !expires.Equal(firstRun.Add(time.Hour)) || redeemed {
 		t.Errorf("the join token is of %s, by %s, until %s, redeemed %v", pool, by, expires, redeemed)
 	}
 	if !exists(t, admin, "demo") {
 		t.Error("the namespace was not created")
 	}
-	if got := audited(t, admin); !slices.Contains(got, "operator namespace.create demo done") || !strings.HasPrefix(got[len(got)-1], "operator join_token.issue ") {
+	if got := audited(t, admin); !slices.Contains(got, "installation namespace.create demo done") || !strings.HasPrefix(got[len(got)-1], "installation join_token.issue ") {
 		t.Errorf("the audit log holds %q", got)
 	}
 

@@ -121,7 +121,8 @@
 // AGK_DATABASE_URL and AGK_DATABASE_PASSWORD_FILE and connects as that role, the one the API
 // connects as, so it runs where the API runs with the API's environment; the name is held to what the API holds a namespace
 // to, reserved words refused. Each change is recorded in the audit log in its own transaction, as
-// namespace.create or namespace.delete by the operator, and a namespace created again is recorded
+// namespace.create or namespace.delete by installation, as init's own acts are, the installation
+// itself being no principal a grant names, and a namespace created again is recorded
 // unchanged and left as it was, so that an installation script can run it every time.
 //
 // # bus-init and bus-credential

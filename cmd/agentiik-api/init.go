@@ -788,7 +788,7 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 		return err
 	}
 	now := p.now.UTC()
-	issued, _, err := api.IssueJoinToken(ctx, pool, defaultPool, nil, api.BootstrapOperator, now, now.Add(api.TokenDefaultLife))
+	issued, _, err := api.IssueJoinToken(ctx, pool, defaultPool, nil, namespaceActor, now, now.Add(api.TokenDefaultLife))
 	if err != nil {
 		return fmt.Errorf("the runner's join token could not be issued: %w", err)
 	}

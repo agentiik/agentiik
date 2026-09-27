@@ -70,7 +70,7 @@ func TestNamespaceCreateCreatesItOnceAndSaysWhatItDid(t *testing.T) {
 	if !strings.Contains(out.String(), "already exists") {
 		t.Errorf("creating it again said %q", out.String())
 	}
-	want := []string{"operator namespace.create finance done", "operator namespace.create finance unchanged"}
+	want := []string{"installation namespace.create finance done", "installation namespace.create finance unchanged"}
 	if got := audited(t, admin); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("the audit log holds %q, want %q", got, want)
 	}
@@ -155,7 +155,7 @@ func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 
 	// The removal is recorded, and the refusals are not acts.
 	got := audited(t, admin)
-	if len(got) != 5 || got[4] != "operator namespace.delete empty done" {
+	if len(got) != 5 || got[4] != "installation namespace.delete empty done" {
 		t.Errorf("the audit log holds %q", got)
 	}
 }
