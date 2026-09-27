@@ -102,10 +102,11 @@ func anInstallation(t *testing.T) *installation {
 		config.TaskCeiling:                 "2h",
 		config.JoinRotation:                "240h",
 		config.RevocationGrace:             "90m",
-		config.OperatorTokenFile:           i.write(t, "operator.token", []byte(i.operatorToken+"\n")),
-		config.MetricsListen:               "10.0.0.5:9464",
-		config.MetricsTokenFile:            i.write(t, "metrics.token", []byte(i.metricsToken+"\n")),
-		config.OTLPEndpoint:                "http://127.0.0.1:4318/",
+		// Read by no program since v0.3.0, and still set, as a v0.2 Compose file sets it.
+		config.OperatorTokenFile: i.write(t, "operator.token", []byte(i.operatorToken+"\n")),
+		config.MetricsListen:     "10.0.0.5:9464",
+		config.MetricsTokenFile:  i.write(t, "metrics.token", []byte(i.metricsToken+"\n")),
+		config.OTLPEndpoint:      "http://127.0.0.1:4318/",
 	}
 	i.secrets = append(i.secrets,
 		i.databasePassword, i.adminPassword, i.busJWT, i.busSeed, i.accountSeed,
@@ -263,7 +264,6 @@ func TestAWholeInstallationIsRead(t *testing.T) {
 		"the listen address":    {api.Listen, "127.0.0.1:9090"},
 		"the join rotation":     {api.JoinRotation, 240 * time.Hour},
 		"the revocation grace":  {api.RevocationGrace, 90 * time.Minute},
-		"the operator token":    {api.OperatorToken, i.operatorToken},
 		"the presign key":       {string(api.PresignKey), string(i.presignKey)},
 		"the master key's file": {string(api.MasterKey), string(i.masterKey)},
 	} {
@@ -368,7 +368,6 @@ func TestAFileThatCannotBeReadRefusesTheStart(t *testing.T) {
 		config.BusAccountSeedFile:          {theAPI},
 		config.PresignKeyFile:              {theAPI},
 		config.MasterKeyFile:               {theAPI},
-		config.OperatorTokenFile:           {theAPI},
 	}
 	faults := map[string]func(t *testing.T, i *installation, path string) string{
 		// Relative to the directory the program starts in, where the file is, so that only the
@@ -570,10 +569,6 @@ func TestASettingMissingOrMalformedRefusesTheStart(t *testing.T) {
 		"a presign key of sixteen bytes":        {config.PresignKeyFile, holding(base64.StdEncoding.EncodeToString(make([]byte, 16))), api},
 		"no master key":                         {config.MasterKeyFile, unset, api},
 		"a master key given to the controller":  {config.MasterKeyFile, func(_ *testing.T, i *installation) string { return i.dir + "/master.key" }, controller},
-		"no operator token":                     {config.OperatorTokenFile, unset, api},
-		"the operator token itself":             {config.OperatorTokenFile, holding("agkoperator_" + strings.Repeat("A", 43) + "\n"), api},
-		"an operator token hash in capitals":    {config.OperatorTokenFile, holding(strings.Repeat("AB", 32)), api},
-		"an operator token hash cut short":      {config.OperatorTokenFile, holding(strings.Repeat("ab", 31) + "a"), api},
 		"env prefixes with no prefix":           {config.EnvPrefixes, is("finance"), api},
 		"env prefixes with an empty prefix":     {config.EnvPrefixes, is("finance="), api},
 		"env prefixes with no namespace":        {config.EnvPrefixes, is("=AGK_DEV_FINANCE_"), api},
@@ -749,7 +744,6 @@ func TestASecretPassedAsAValueIsRefused(t *testing.T) {
 		// The secret pasted into the variable that should name its file. A seed or a hash is
 		// not an absolute path, and base64 that begins with a slash names no file there is.
 		"a seed for its file":              {config.BusAccountSeedFile, func(i *installation) string { return i.accountSeed }, []program{theAPI}},
-		"a hash for its file":              {config.OperatorTokenFile, func(i *installation) string { return i.operatorToken }, []program{theAPI}},
 		"a key beginning with a slash":     {config.PresignKeyFile, as("/k3yM4t3r1al+0f/th1rty/tw0/byt3s+w0rth="), []program{theAPI}},
 		"a password for its file":          {config.DatabasePasswordFile, as("hunter2"), everyProgram},
 		"a credential for its file":        {config.BusCredentialsFile, func(i *installation) string { return i.busJWT }, []program{theAPI, theController}},
@@ -863,10 +857,13 @@ func TestEverySettingThatRefusesTheStartIsNamedOnIt(t *testing.T) {
 // are asked for too, and only to be refused.
 func TestEachProgramReadsOnlyWhatItNeeds(t *testing.T) {
 	neverAsked := map[string][]string{
+		// The operator token's file among them: the API reads the bootstrap token's hash
+		// from the database since v0.3.0, and a file a v0.2 Compose file still names is never
+		// opened, whatever it holds or wherever it is not.
 		theAPI.name: {
 			config.MaxRequeues, config.MigrateDatabaseURL, config.MigrateDatabasePasswordFile,
 			config.AuditExportURL, config.AuditExportTokenFile, config.MetricsListen, config.MetricsTokenFile,
-			config.OTLPEndpoint,
+			config.OTLPEndpoint, config.OperatorTokenFile,
 		},
 		theController.name: {
 			config.PublicURL, config.PresignKeyFile, config.BusAccountSeedFile, config.OperatorTokenFile,

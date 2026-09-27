@@ -48,11 +48,20 @@ func TestInitIsReadFromItsSettings(t *testing.T) {
 		t.Errorf("with no token set, init read %q: %v", c.OperatorToken, err)
 	}
 
-	// The API is never given it.
-	i := anInstallation(t)
-	i.env[config.OperatorToken] = "agk_op_" + strings.Repeat("0a", 24)
-	if _, err := config.ReadAPI(theAPI.environment(i)); !slices.Equal(refused(err), []string{config.OperatorToken}) {
-		t.Errorf("the API took the operator token as a value: %v", err)
+	// No other program is given it, and none is told to put it in a file instead: there is no
+	// file any program reads it from, since the API reads its hash from the database.
+	for _, p := range everyProgram {
+		i := anInstallation(t)
+		token := "agk_op_" + strings.Repeat("0a", 24)
+		i.env[config.OperatorToken] = token
+		err := p.read(p.environment(i))
+		if !slices.Equal(refused(err), []string{config.OperatorToken}) {
+			t.Errorf("%s took the bootstrap token as a value: %v", p.name, err)
+			continue
+		}
+		if strings.Contains(err.Error(), config.OperatorTokenFile) || strings.Contains(err.Error(), token) {
+			t.Errorf("%s refuses the bootstrap token pointing at a file nothing reads, or repeating it: %v", p.name, err)
+		}
 	}
 }
 

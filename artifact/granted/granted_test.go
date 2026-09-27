@@ -59,7 +59,7 @@ func serve(t *testing.T, limits agk.Limits) *store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := api.NewRouter(api.DenyAll{}, func(*http.Request) (api.Principal, error) { return "", nil })
+	rt, err := api.NewRouter(api.DenyAll{}, func(*http.Request) (api.Identity, error) { return api.Identity{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

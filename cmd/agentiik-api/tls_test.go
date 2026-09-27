@@ -27,6 +27,7 @@ func TestGivenACertificateTheAPIServesTLSItself(t *testing.T) {
 	if err := migrate(t.Context(), database, &out); err != nil {
 		t.Fatalf("migrating failed: %s\n%s", err, out.String())
 	}
+	bootstrapped(t, database.Application)
 	dir := filepath.Join(t.TempDir(), "bus")
 	var stderr bytes.Buffer
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, &stderr); code != exitStopped {

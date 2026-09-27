@@ -56,7 +56,7 @@ const (
 // layout is where init writes everything, under one directory.
 //
 //	api/           mounted at /agentiik in the API, owned by agent, 0700
-//	  master-key, presign-key, database-password, operator-token.sha256
+//	  master-key, presign-key, database-password
 //	  bus/          accounts.conf and account.seed, as bus-init writes them
 //	  tls/          server.pem and server.key, the certificate the API and the bus serve
 //	  trust/        agentiik.pem, the certificate, trusted through SSL_CERT_DIR
@@ -156,13 +156,7 @@ func initialize(ctx context.Context, c config.Init, p *preparer) error {
 	}
 	application := c.Application
 	application.Password = password
-	if err := p.database(ctx, config.Migration{Admin: c.Admin, Application: application}, c.Namespace); err != nil {
-		return err
-	}
-	// Last, so that a token init mints is printed by the run that succeeds: one printed by a
-	// run that then failed would be in the log of a container the next docker compose up
-	// replaces, with its hash kept and nobody holding it.
-	return p.operatorToken(c.OperatorToken)
+	return p.database(ctx, config.Migration{Admin: c.Admin, Application: application}, c.Namespace, c.OperatorToken)
 }
 
 // directories makes every directory of the layout, or puts back the mode and the owner of one that
@@ -468,55 +462,6 @@ func (p *preparer) once(path string, content func() ([]byte, error)) (bool, erro
 	return true, p.write(path, data, 0o600, true)
 }
 
-// operatorTokenPrefix begins the operator token init mints, as setup did, so that a person tells it
-// from the other credentials of the installation at a glance.
-const operatorTokenPrefix = "agk_op_"
-
-// operatorToken writes the hash of the operator token and never the token.
-//
-// What it says names no variable, since the one a person sets is not always AGK_OPERATOR_TOKEN: a
-// Compose file hands it on from a variable of its own, and the installation's settings are
-// wherever that file reads them.
-//
-// A token set is hashed at every run, and a hash that differs from it is replaced, so a token
-// changed in .env, or set after one init minted, is the one the API takes at its next start. With
-// none set, the hash stored is kept; where none was ever stored, init mints a token, prints it
-// once, and keeps its hash. Printed before the hash is written, so that a run cut off between the
-// two leaves a token nobody can use rather than a hash nobody has the token of.
-func (p *preparer) operatorToken(token config.Secret) error {
-	path := p.dir.path(apiDir, "operator-token.sha256")
-	stored, err := readRegular(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("the operator token's hash could not be read: %w", err)
-	}
-	stored = bytes.TrimSpace(stored)
-	switch {
-	case token != "":
-		sum := sha256.Sum256([]byte(token))
-		hash := hex.EncodeToString(sum[:])
-		if string(stored) == hash {
-			p.say("kept the hash of the operator token set")
-			return p.settle(path, 0o600, true)
-		}
-		if err := p.write(path, []byte(hash+"\n"), 0o600, true); err != nil {
-			return err
-		}
-		p.say("wrote the hash of the operator token set, which the API takes from its next start")
-		return nil
-	case len(stored) > 0:
-		p.say("kept the hash of the operator token stored, since none is set")
-		return p.settle(path, 0o600, true)
-	}
-	minted, err := random(24, hex.EncodeToString)
-	if err != nil {
-		return err
-	}
-	plain := operatorTokenPrefix + strings.TrimSpace(string(minted))
-	p.say("minted an operator token, since none is set and none was stored. It is shown this once, and only its hash is kept. To keep it, set it as the operator token where the installation's settings are; to use a token of your own, set that there instead, and run init again.\n\n  %s\n", plain)
-	sum := sha256.Sum256([]byte(plain))
-	return p.write(path, []byte(hex.EncodeToString(sum[:])+"\n"), 0o600, true)
-}
-
 // bus writes the installation's bus identity once, as bus-init does, gives the control plane its
 // credential where the API and the controller read it, renewing it where it is near its expiry, as
 // the API does while it runs, and gives the bus its copy of the accounts, with its configuration.
@@ -818,15 +763,16 @@ jetstream {
 include "accounts.conf"
 `
 
-// database migrates as the role that may change the schema, creates the namespace, and issues the
-// runner beside the installation a join token of the pool default, written where it reads it.
+// database migrates as the role that may change the schema, creates the namespace, keeps the hash
+// of the bootstrap token, and issues the runner beside the installation a join token of the pool
+// default, written where it reads it.
 //
 // A join token at every run, rather than only before the runner first joins, because a runner that
 // joined may have to join again after a setting changed, the API's address above all, and it
 // decides that itself. Each token lives the hour a join token lives by default and is spent by
 // the one join that uses it; the one it replaces in the file is left to expire, since a runner
 // that read it a moment ago may be presenting it.
-func (p *preparer) database(ctx context.Context, m config.Migration, name string) error {
+func (p *preparer) database(ctx context.Context, m config.Migration, name string, bootstrap config.Secret) error {
 	if err := migrate(ctx, m, p.out); err != nil {
 		return err
 	}
@@ -838,8 +784,11 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 		return fmt.Errorf("the database %s names could not be reached as %s: %w", config.DatabaseURL, m.Application.Role, err)
 	}
 	defer pool.Close()
+	if err := p.bootstrapToken(ctx, pool, bootstrap); err != nil {
+		return err
+	}
 	now := p.now.UTC()
-	issued, _, err := api.IssueJoinToken(ctx, pool, defaultPool, nil, theOperator, now, now.Add(api.TokenDefaultLife))
+	issued, _, err := api.IssueJoinToken(ctx, pool, defaultPool, nil, api.BootstrapOperator, now, now.Add(api.TokenDefaultLife))
 	if err != nil {
 		return fmt.Errorf("the runner's join token could not be issued: %w", err)
 	}
@@ -853,6 +802,67 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 
 // defaultPool is the pool every installation is migrated with, where a step naming no label goes.
 const defaultPool = "default"
+
+// bootstrapToken keeps the SHA-256 of the bootstrap token set in the database, where the API reads
+// it, and never the token. It is the v0.2 operator token under its v0.3.0 name, set where it was.
+//
+// What it says names no variable, since the one a person sets is not always AGK_OPERATOR_TOKEN: a
+// Compose file hands it on from a variable of its own, and the installation's settings are
+// wherever that file reads them.
+//
+// A token set is hashed at every run, and a hash that differs from the one kept replaces it, so a
+// token changed in .env is the one the API takes from its next request, until the first
+// administrator has enrolled. That ends the bootstrap token for good: from then on a token set is
+// ignored, and init says so at every run while one is, which is no error, since the Compose file
+// still requires the line. With none set, the hash kept is kept. Where none is kept either,
+// nobody can create the first administrator, and init says so; it mints none, since a token
+// printed in a log is read by everybody the log reaches.
+//
+// operator-token.sha256, where a v0.2 init wrote the hash, is neither written, nor read, nor
+// removed: the API reads the database, and the file is left as the release before left it.
+func (p *preparer) bootstrapToken(ctx context.Context, pool *db.Pool, token config.Secret) error {
+	var hash []byte
+	if token != "" {
+		sum := sha256.Sum256([]byte(token))
+		hash = sum[:]
+	}
+	var said string
+	err := pool.Installation(ctx, db.Identity, func(ctx context.Context, w *db.Wide) error {
+		if hash == nil {
+			kept, err := w.Bootstrap(ctx)
+			switch {
+			case err != nil:
+				return err
+			case kept.Ended():
+			case kept.TokenHash != nil:
+				said = "kept the hash of the bootstrap token stored, since none is set"
+			default:
+				said = "no bootstrap token is set and none is stored, so nobody can create the first administrator: set one where the installation's settings are, and run init again"
+			}
+			return nil
+		}
+		changed, err := w.SetBootstrapToken(ctx, hash)
+		switch {
+		case errors.Is(err, db.ErrBootstrapEnded):
+			said = "ignored the bootstrap token set: it ended when the first administrator enrolled a passkey, and the API refuses it. That is no error, and the line may stay where the installation's settings are"
+			return nil
+		case err != nil:
+			return err
+		case changed:
+			said = "wrote the hash of the bootstrap token set, which the API takes from its next request"
+		default:
+			said = "kept the hash of the bootstrap token set"
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("the bootstrap token's hash could not be kept: %w", err)
+	}
+	if said != "" {
+		p.say("%s", said)
+	}
+	return nil
+}
 
 // write puts data at path in one step, written beside it and renamed over it, with mode, and owned
 // by the agent's account where toAgent is true: a program starting at that moment reads the old

@@ -27,6 +27,7 @@ func TestARevokedRunnerFinishesItsGraceOnTheInstallationsBus(t *testing.T) {
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	bootstrapped(t, database.Application)
 	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
 	if err != nil {
 		t.Fatal(err)

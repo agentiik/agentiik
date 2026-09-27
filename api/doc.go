@@ -10,14 +10,15 @@
 // handler that skips it. A route that needs nothing has to say so out loud and say why, and a
 // test reads the list back.
 //
-// # What v0.3.0 fills
+// # Who asks, and what they hold
 //
-// Principals, groups, grants and roles are a later milestone. What this milestone builds is the
-// shape they arrive into: an Authorizer is asked whether one principal holds one permission at
-// one scope, and until there is anything to ask, the answer is no. That is not a placeholder
-// standing in for a decision; it is the decision. An installation with no access model refuses
-// every request that needs one, which is what deny by default means when there is nothing to
-// grant yet.
+// An Authorizer is asked whether one principal holds one permission at one scope, and Principals
+// is the installation's: it identifies a bearer token from the database, an API token or the
+// bootstrap token, and answers from the grants of the principal and its groups, which package
+// access resolves, with the installation an administrator's alone. What a token's scope narrows
+// is intersected by the router, which saw the credential, with every answer it asks for. DenyAll
+// stays the answer of an installation with no access model, and what a test of the routes
+// alone is given: deny by default when there is nothing to grant.
 //
 // The permissions themselves arrived before v0.3.0, because a route declares what it needs and a
 // route was written then. They are the page's own nine, held to it by a test, and they live in

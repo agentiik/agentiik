@@ -44,10 +44,11 @@ import (
 )
 
 // An installation as a person makes one, against a real PostgreSQL and a real NATS: migrate a
-// database nobody prepared, create the bus identity with bus-init, start a NATS server on the
-// configuration it wrote, and serve. Then the operator pushes, starts a run and makes a pool, a
-// machine joins it, heartbeats and gets a bus credential the server takes, and nobody without the
-// token gets anywhere.
+// database nobody prepared, keep the bootstrap token's hash as init does, create the bus identity
+// with bus-init, start a NATS server on the configuration it wrote, and serve. Then the bootstrap
+// token, the v0.2 operator's, pushes, starts a run and makes a pool, a machine joins it,
+// heartbeats and gets a bus credential the server takes, and nobody without the token gets
+// anywhere.
 //
 // serve is handed its settings rather than reading them, because the test's database and bus
 // speak plaintext and config.ReadAPI refuses both, as it should: what reading refuses is
@@ -106,6 +107,7 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 	if strings.Contains(out.String(), "applied 0") || !strings.Contains(out.String(), "already applied") {
 		t.Errorf("migrating again said:\n%s", out.String())
 	}
+	bootstrapped(t, database.Application)
 
 	// A namespace, which v0.2.0 has no route to create, so namespace create does.
 	out.Reset()
@@ -163,7 +165,7 @@ func TestAnInstallationIsMigratedThenServedAndTheOperatorAloneGetsIn(t *testing.
 		t.Fatalf("the operator's run answered %d: %v", code, answer)
 	}
 	runID, _ := answer["run"].(string)
-	if code, answer := c.do("GET", "/api/v1/finance/runs/"+runID, theToken, nil); code != http.StatusOK || answer["triggered_by"] != string(theOperator) {
+	if code, answer := c.do("GET", "/api/v1/finance/runs/"+runID, theToken, nil); code != http.StatusOK || answer["triggered_by"] != string(api.BootstrapOperator) {
 		t.Errorf("reading the run answered %d: %v", code, answer)
 	}
 	if code, _ := c.do("POST", "/api/v1/runs/"+runID+"/cancel", "", nil); code != http.StatusUnauthorized {
@@ -260,6 +262,7 @@ func TestARunnerKeepsTheBusOnceTheControlPlanesCredentialHasExpired(t *testing.T
 	if err := migrate(t.Context(), database, &out); err != nil {
 		t.Fatalf("migrating failed: %s\n%s", err, out.String())
 	}
+	bootstrapped(t, database.Application)
 	dir := filepath.Join(t.TempDir(), "bus")
 	var stderr bytes.Buffer
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, &stderr); code != exitStopped {
@@ -347,6 +350,7 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	bootstrapped(t, database.Application)
 	dir := filepath.Join(t.TempDir(), "bus")
 	if code := run(t.Context(), []string{"bus-init", dir}, empty, io.Discard, io.Discard); code != exitStopped {
 		t.Fatal("bus-init failed")
@@ -621,7 +625,6 @@ func (c instanceConfig) settings() (settings, error) {
 		Listen:          c.Listen,
 		JoinRotation:    config.DefaultJoinRotation,
 		RevocationGrace: config.DefaultTaskCeiling,
-		OperatorToken:   theHash,
 	}
 	return settings{API: api, keys: keys}, nil
 }

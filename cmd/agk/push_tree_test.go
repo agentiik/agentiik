@@ -82,8 +82,8 @@ func (alice) Allow(_ context.Context, who api.Principal, _ api.Permission, _ api
 	return who == "alice", nil
 }
 
-func bearerOf(r *http.Request) (api.Principal, error) {
-	return api.Principal(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")), nil
+func bearerOf(r *http.Request) (api.Identity, error) {
+	return api.Identity{Principal: api.Principal(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))}, nil
 }
 
 // dispatched keeps what the controller published instead of putting it on a bus.

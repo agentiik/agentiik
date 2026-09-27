@@ -151,8 +151,8 @@ func anInstallationRotating(t *testing.T, rotation time.Duration, key ed25519.Pu
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Principal, error) {
-		return "", errors.New("this installation speaks to runners and to nobody else")
+	rt, err := server.NewRouter(server.DenyAll{}, func(*http.Request) (server.Identity, error) {
+		return server.Identity{}, errors.New("this installation speaks to runners and to nobody else")
 	})
 	if err != nil {
 		t.Fatal(err)

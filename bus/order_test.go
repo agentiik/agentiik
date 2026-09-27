@@ -183,8 +183,8 @@ func dispatched(t *testing.T) taking {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := api.NewRouter(api.DenyAll{}, func(*http.Request) (api.Principal, error) {
-		return "", errors.New("these tests speak as runners and as nobody else")
+	rt, err := api.NewRouter(api.DenyAll{}, func(*http.Request) (api.Identity, error) {
+		return api.Identity{}, errors.New("these tests speak as runners and as nobody else")
 	})
 	if err != nil {
 		t.Fatal(err)

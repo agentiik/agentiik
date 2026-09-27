@@ -174,10 +174,6 @@ type installation struct {
 
 // open connects to what the API stands on and builds every route on it.
 func open(ctx context.Context, s settings, log *slog.Logger) (*installation, error) {
-	operator, err := newOperator(s.OperatorToken)
-	if err != nil {
-		return nil, err
-	}
 	issuer, err := bus.NewIssuer(string(s.AccountSeed), s.Bus.URL)
 	if err != nil {
 		return nil, err
@@ -217,7 +213,7 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 
 	// The log streams end when the stop is asked for rather than when the grace runs out, so
 	// that their readers reconnect to another API at once.
-	router, err := routes(s, pool, b, issuer, operator, log, ctx.Done())
+	router, err := routes(s, pool, b, issuer, log, ctx.Done())
 	if err != nil {
 		closeAll()
 		return nil, err
@@ -227,9 +223,14 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,
 // the secret declarations, the runners and their pools, the bus credential, and the built-in object
-// store. The log streams end when stopping closes.
-func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, operator *operator, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
-	rt, err := api.NewRouter(operator, operator.identify)
+// store. Each request is identified and authorised by api.Principals, from the tokens, the grants
+// and the bootstrap state the database holds. The log streams end when stopping closes.
+func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
+	principals, err := api.NewPrincipals(pool, nil)
+	if err != nil {
+		return nil, err
+	}
+	rt, err := api.NewRouter(principals, principals.Identify)
 	if err != nil {
 		return nil, err
 	}

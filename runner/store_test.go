@@ -37,7 +37,7 @@ func newObjectStore(t *testing.T) *objectStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := apiserver.NewRouter(apiserver.DenyAll{}, func(*http.Request) (apiserver.Principal, error) { return "", nil })
+	rt, err := apiserver.NewRouter(apiserver.DenyAll{}, func(*http.Request) (apiserver.Identity, error) { return apiserver.Identity{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

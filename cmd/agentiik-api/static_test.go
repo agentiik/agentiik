@@ -144,7 +144,7 @@ func TestTheImageRunsTheBinaryAsAUserThatIsNotRoot(t *testing.T) {
 	if !errors.As(err, &exit) || exit.ExitCode() != exitFailed {
 		t.Fatalf("with nothing configured, the image exited %v, want %d:\n%s%s", err, exitFailed, stdout.String(), stderr.String())
 	}
-	for _, variable := range []string{config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.ObjectsDir, config.MasterKeyFile, config.OperatorTokenFile} {
+	for _, variable := range []string{config.DatabaseURL, config.BusURL, config.BusCredentialsFile, config.ObjectsDir, config.MasterKeyFile} {
 		if !strings.Contains(stderr.String(), variable) {
 			t.Errorf("the image's refusal does not name %s:\n%s", variable, stderr.String())
 		}
