@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentiik/agentiik/agk"
+	"github.com/agentiik/agentiik/artifact"
 	"github.com/agentiik/agentiik/bus"
 	"github.com/agentiik/agentiik/bus/control"
 	"github.com/agentiik/agentiik/controller"
@@ -51,13 +53,9 @@ func expiredArtifact(t *testing.T, pool *db.Pool, super string) func() bool {
 	}
 }
 
-// A term purges from its start: an artifact past its retain is retired, the pass says so in one
-// line, and the metrics count it.
-func TestATermPurgesWhatHasRunOut(t *testing.T) {
-	pool, super := dbtest.Open(t)
-	seeded(t, pool, super)
-	live := expiredArtifact(t, pool, super)
-
+// inTerm begins a term on pool with a bus of its own, and answers what lead is given for it.
+func inTerm(t *testing.T, pool *db.Pool) (*controller.Controller, db.Term, *control.Queue) {
+	t.Helper()
 	b := withInstallationBus(t)
 	credential := b.controlPlane(t, "agentiik-controller")
 	connected, err := bus.Open(t.Context(), bus.Options{URL: b.url, Name: "leading", Credentials: &credential})
@@ -65,8 +63,6 @@ func TestATermPurgesWhatHasRunOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(connected.Close)
-	queue := control.New(connected)
-
 	ctl, err := controller.New(pool, "leading")
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +72,17 @@ func TestATermPurgesWhatHasRunOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ctl, tm, control.New(connected)
+}
+
+// A term purges from its start: an artifact past its retain is retired, the pass says so in one
+// line, and the metrics count it.
+func TestATermPurgesWhatHasRunOut(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	seeded(t, pool, super)
+	live := expiredArtifact(t, pool, super)
+	ctl, tm, queue := inTerm(t, pool)
+
 	var log output
 	counts := newCounted(nil, logger(io.Discard))
 	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
@@ -131,8 +138,8 @@ func TestAControllerThatNoLongerLeadsPurgesNothing(t *testing.T) {
 	}
 }
 
-// What a pass removed is counted under the families the documentation names, and a pass that
-// removed nothing counts nothing: each is written from the start, at zero.
+// What a pass removed is counted under the controller's families, and a pass that removed nothing
+// counts nothing: each is written from the start, at zero.
 func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 	c := newCounted(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	var out bytes.Buffer
@@ -159,5 +166,60 @@ func TestWhatThePurgesRemovedIsCounted(t *testing.T) {
 		if !has("\n"+out.String(), line) {
 			t.Errorf("no line %s in\n%s", line, out.String())
 		}
+	}
+}
+
+// A term does not end with a pass still under way: the pass is waited for, and stops at its next
+// call.
+func TestATermEndsOnlyOnceItsPassHasStopped(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	seeded(t, pool, super)
+	ctl, tm, queue := inTerm(t, pool)
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once, letGo sync.Once
+	free := func() { letGo.Do(func() { close(release) }) }
+	defer free()
+	p := &purge.Purger{Pool: pool, Objects: artifact.Dir(t.TempDir()), Leading: func(context.Context) error {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		return nil
+	}}
+	c := config.Controller{Objects: t.TempDir(), MaxRequeues: graph.DefaultMaxRequeues, TaskCeiling: time.Hour}
+	ctx, stop := context.WithCancel(t.Context())
+	ended := make(chan error, 1)
+	go func() {
+		ended <- lead(ctx, ctl, tm, queue, options(c, queue, versionsOf(t, pool)), nil, nil, p, logger(io.Discard))
+	}()
+	<-entered
+	stop()
+	select {
+	case <-ended:
+		t.Fatal("the term ended with a pass under way")
+	case <-time.After(300 * time.Millisecond):
+	}
+	free()
+	select {
+	case <-ended:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the term did not end once its pass had stopped")
+	}
+}
+
+// A pass says what it removed in one line, and says nothing where it removed nothing retention
+// decides: forgetting writes that have lapsed, which most passes do, is not worth a line.
+func TestAPassSaysWhatItRemovedAndOnlyThat(t *testing.T) {
+	var log output
+	p := purger(nil, t.TempDir(), nil, db.Term{}, newCounted(nil, logger(io.Discard)), logger(&log))
+	p.Passed(purge.Purged{})
+	p.Passed(purge.Purged{Uploads: 12})
+	if said := log.String(); said != "" {
+		t.Errorf("passes that removed nothing retention decides said:\n%s", said)
+	}
+	p.Passed(purge.Purged{Objects: 2, Bytes: 10, Uploads: 1})
+	if said := log.String(); strings.Count(said, "the purges removed what had run out") != 1 || !strings.Contains(said, "objects=2 bytes=10") {
+		t.Errorf("a pass that collected two objects said:\n%s", said)
 	}
 }

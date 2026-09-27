@@ -345,6 +345,47 @@ func TestABacklogIsTakenABatchAtATime(t *testing.T) {
 	}
 }
 
+// A backlog of logs, one object a chunk, is taken a batch of objects a call, a log being deleted
+// across calls where it holds more than one takes, and the runs whose logs are all gone are stamped
+// a batch of runs a call; a bound of calls a pass for each.
+func TestALogBacklogIsTakenABatchAtATime(t *testing.T) {
+	in := withInstallation(t)
+	var runs []agk.RunID
+	for range 4 {
+		run := in.run(t)
+		in.log(t, run, 3)
+		in.finish(t, run, true)
+		runs = append(runs, run)
+	}
+	p := in.purger(5, 2)
+	p.Runs = 2
+	stamped := func() int {
+		return in.count(t, `select count(*) from runs where logs_purged_at is not null`)
+	}
+
+	// Two calls of five objects: the first log whole and two of the second, then the rest of the
+	// second, the third and one of the fourth. Two calls of two runs stamp the three whose logs
+	// are gone.
+	if got := in.pass(t, p); got.Logs != 3 {
+		t.Errorf("the first pass deleted %d logs whole, want 3", got.Logs)
+	}
+	if n := stamped(); n != 3 {
+		t.Errorf("the first pass stamped %d runs done with their logs, want 3", n)
+	}
+	if got := in.pass(t, p); got.Logs != 1 {
+		t.Errorf("the second pass deleted %d logs whole, want 1", got.Logs)
+	}
+	if n := stamped(); n != 4 {
+		t.Errorf("after the second pass %d runs are stamped done with their logs, want 4", n)
+	}
+	if n := in.count(t, `select count(*) from task_log_objects`); n != 0 {
+		t.Errorf("%d objects of logs are left", n)
+	}
+	if entries, err := os.ReadDir(filepath.Join(in.dir, "finance", "logs")); err != nil || len(entries) != 0 {
+		t.Errorf("the directories of the logs left are %v (%v)", entries, err)
+	}
+}
+
 // blocking is a store whose removals wait to be let through, for a test to look at the database
 // while a pass is in the middle of deleting.
 type blocking struct {
@@ -352,7 +393,11 @@ type blocking struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	letGo   sync.Once
 }
+
+// free lets every removal through, and may be called any number of times.
+func (b *blocking) free() { b.letGo.Do(func() { close(b.release) }) }
 
 func (b *blocking) Remove(ctx context.Context, key string) (bool, error) {
 	b.once.Do(func() { close(b.entered) })
@@ -372,6 +417,7 @@ func TestAPassInTheMiddleOfDeletingHoldsUpNothingElse(t *testing.T) {
 	in.past(t)
 
 	store := &blocking{Removable: in.store, entered: make(chan struct{}), release: make(chan struct{})}
+	defer store.free()
 	p.Objects = store
 	passed := make(chan purge.Purged, 1)
 	go func() {
@@ -399,7 +445,7 @@ func TestAPassInTheMiddleOfDeletingHoldsUpNothingElse(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a write waited on the pass: %s", err)
 	}
-	close(store.release)
+	store.free()
 	if got := <-passed; got.Objects != 1 {
 		t.Errorf("the pass collected %d objects", got.Objects)
 	}
@@ -586,5 +632,14 @@ func TestRunPassesAtOnceAndOnItsInterval(t *testing.T) {
 	passes, troubles = running(p, 3)
 	if passes[1].Removed() || len(troubles) != 0 {
 		t.Errorf("the passes removed %+v, and met %v", passes, troubles)
+	}
+
+	// A pass that could not finish is said, each time.
+	p = in.purger(0, 0)
+	p.Every = 20 * time.Millisecond
+	p.Leading = func(context.Context) error { return errors.New("the database did not answer") }
+	_, troubles = running(p, 2)
+	if len(troubles) < 2 || !strings.Contains(troubles[0].Error(), "the database did not answer") {
+		t.Errorf("the passes that could not finish said %v", troubles)
 	}
 }

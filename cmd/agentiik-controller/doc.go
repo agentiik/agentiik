@@ -86,9 +86,10 @@
 // them: once as its term begins, and every ten minutes after, each a batch at a time, so that the
 // object store and the database shrink by what has run out and a backlog is worked through a pass
 // at a time rather than in one transaction. One controller at a time, asking the fence before
-// every call, so that two never delete the same bytes. A pass that removed something says what in
-// one line, and what each pass removed is counted in the metrics; one that failed says why, holds
-// nothing up, and is taken up again by the next.
+// every call: a call a controller began before it lost its term still finishes, and every sweep is
+// safe to have done twice, but two controllers purging side by side would do all of it twice. A
+// pass that removed something says what in one line, and what each pass removed is counted in the
+// metrics; one that failed says why, holds nothing up, and is taken up again by the next.
 //
 // # Metrics
 //

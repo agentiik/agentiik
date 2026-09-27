@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,6 +183,11 @@ func TestAWriteOfAnObjectBeingDeletedWaitsForTheDeletion(t *testing.T) {
 	}
 
 	deleting, release := make(chan struct{}), make(chan struct{})
+	// Let go on every way out, so that a failure below ends the test rather than leaving the
+	// deletion holding its transaction until the binary times out.
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	defer letGo()
 	deleted := make(chan []Object, 1)
 	go func() {
 		gone, err := pool.Collecting(t.Context(), claimed, func(context.Context, Object) error {
@@ -208,7 +214,7 @@ func TestAWriteOfAnObjectBeingDeletedWaitsForTheDeletion(t *testing.T) {
 		t.Fatalf("a write was recorded while the object's bytes were being deleted: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	close(release)
+	letGo()
 	if gone := <-deleted; len(gone) != 1 {
 		t.Errorf("the deletion under way deleted %q", keysOf(gone))
 	}

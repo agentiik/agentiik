@@ -25,8 +25,8 @@ import (
 //
 // # Nothing here deletes an object
 //
-// Three of the four only lower counts and stamp rows. The fourth, collection, is the one
-// thing that deletes bytes, and even it does not do the deleting: package db does not reach
+// The artifact and envelope purges only lower counts and stamp rows. Collection and the log
+// purge are what delete bytes, and even they do not do the deleting: package db does not reach
 // the object store, and it answers with the keys for the caller to delete. That is not
 // squeamishness about layering, it is the only order that neither leaks nor dangles.
 //
@@ -50,11 +50,13 @@ import (
 // once they are gone. Nor is an object taken that a live artifact names, whatever its count
 // says: a count that went wrong costs an object kept, never one deleted.
 //
-// The controller writes objects of its own, the envelopes of a decision and a task's inputs,
-// straight to the store and records no write. A task's inputs are written again where their grant
-// was told to. An envelope names its run, step, port, attempt and the instant it was produced, so
-// its digest is its run's alone and counted from the decision that first names it until the run's
-// retention runs out: no decision names again an envelope whose count has sat at zero.
+// The controller and the API write objects of their own straight to the store and record no
+// write: a decision's envelopes, a task's inputs, a push's tree files. A task's inputs are written
+// again where their grant was told to, and a push's files where its version was, or where the
+// version had to create an object's row and the store no longer holds its bytes. An envelope names
+// its run, step, port, attempt and the instant it was produced, so its digest is its run's alone
+// and counted from the decision that first names it until the run's retention runs out: no
+// decision names again an envelope whose count has sat at zero.
 //
 // # The grace period
 //
@@ -62,8 +64,8 @@ import (
 // sooner than grace afterwards. The window is not caution for its own sake: content
 // addressing means a run that writes the same bytes tomorrow will reference the object that
 // is there rather than write a new one, and collecting the instant the last reference went
-// would turn every such write into an upload. A day is the usual answer, and an installation
-// that wants its store smaller sooner sets it lower.
+// would turn every such write into an upload. A day is the answer, which the controller keeps;
+// a caller may pass a shorter one, and pays for it in uploads.
 //
 // Inside the window a writer simply clears the mark. Crossing it, the writer is told to write
 // the bytes again through Written.MustWriteBytes, which is what closes the one gap the grace

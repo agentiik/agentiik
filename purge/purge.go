@@ -30,9 +30,9 @@
 //
 // An object is deleted from the store only once its count has sat at zero for the grace, no live
 // artifact names it, and no write of it has held it within the grace, which a result heard late
-// still finds its bytes by: package db's purge.go sets out the claim,
-// the deletion under a lock and the confirmation, and why a crash between any two of them leaves
-// nothing that the next pass does not finish. A log's objects are deleted once its run's retention
+// still finds its bytes by: package db's purge.go sets out the claim, the deletion under a lock and
+// the confirmation, and why a crash between any two of them leaves nothing that the next pass does
+// not finish. A log's objects are deleted once its run's retention
 // has run out, since nothing is added to a log past it. Each deletion is recorded only once the
 // store has answered it, and one the store refused is left for the next pass and said.
 package purge
@@ -47,9 +47,9 @@ import (
 	"github.com/agentiik/agentiik/db"
 )
 
-// Every is how often a pass comes round.
+// Every is how often a pass comes round, a constant rather than a setting.
 //
-// The documentation names no schedule, so this is one. Nothing waits on a purge: an artifact past
+// Ten minutes because nothing waits on a purge: an artifact past
 // its expiry is refused whichever pass retires it, a quota counts by the expiry rather than by what
 // was retired, and an object is collected a day after its count reached zero at the soonest. A pass
 // more often buys load and nothing else, and one far rarer lets more gather between two passes than
@@ -92,8 +92,9 @@ type Purged struct {
 	Bytes   int64
 }
 
-// Removed says whether the pass removed anything at all.
-func (p Purged) Removed() bool { return p != Purged{} }
+// Removed says whether the pass removed anything retention decides: a reference, a run's
+// envelopes, a log or an object. Forgetting writes that have lapsed is bookkeeping, and is not.
+func (p Purged) Removed() bool { return p.Artifacts+p.Runs+p.Logs+p.Objects > 0 }
 
 // Purger runs the purges and the collection.
 type Purger struct {

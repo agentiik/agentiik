@@ -60,6 +60,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - A user's first sign-in creates their personal namespace, owned by them with the owner role and its `NS/agentiik`, recorded as the installation's act.
 - A write to the built-in store, a policy's form or a presigned PUT, that would take its namespace past `max_artifact_bytes` is answered 507 with nothing stored, an envelope's as an artifact's, which a runner reads as `artifact.ErrNoRoom` and fails the step on the platform's account. What counts is the namespace's live artifacts, each digest once, and its uploads not yet referenced, room being made at the request's length, or the room left up to `artifact_max_bytes` where it states none, under a lock on the namespace's room before the bytes are read, so two writes at once cannot both take the last of it. An object the namespace holds as a live artifact takes none, and a namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - Every write through the built-in store's routes, a policy's form or a presigned PUT, in a namespace with `max_artifact_bytes` or without, is recorded as under way before its bytes are read, until the collection's 24-hour grace past its policy, so that the collection leaves its object alone until the result that references it is heard; a write whose bytes are refused lets go of it.
+- A push writes a tree file again where its version had to record the object afresh and the store no longer holds its bytes, as a collection that died before confirming and the next one leave it.
 
 ### State
 
@@ -80,8 +81,16 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - An artifact of a workflow that declares no `retain` is recorded, kept as long as the namespace's `max_retention_days`, rather than left for nothing to expire, collect or count.
 - A finished run's envelopes and logs expire once its `defaults.retain` has run, capped at the namespace's `max_retention_days`, which also bounds a workflow declaring none: `db.Decision.Retain` replaces `ExpiresAt`, which nothing set.
 - `db.Wide.Consumption` reads what each namespace holds against its quotas, and `db.Evaluation.MaxRunDuration` its bound with the run.
-- Migration 0037 stamps on a run where the envelope and log purges stand, `envelopes_purged_at` and `logs_purged_at`, and indexes the runs left, so that a purge reads its work and never every run it purged. The envelope purge takes a run's row before lowering its counts, a batch in one statement, so two purges at once never lower them twice, and the artifact purge and the confirmation of a collection take only rows nobody holds, so neither deadlocks with a decision; `db.Pool.LogsGone` stamps a run none of whose tasks holds a log once no shipment can be under way, and `db.Pool.PurgeUploads` forgets the writes whose room lapsed.
-- `db.Pool.Collecting` deletes what `Collectable` claimed through the caller, under a lock on each row, and passes by an object a write is under way for or a live artifact names, as `Collectable` now does; `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused. `artifact.Dir` answers an `artifact.Removable`, whose `Remove` deletes an object and the log directories it leaves empty, and says whether there was one to delete.
+- Migration 0037 adds `runs.envelopes_purged_at` and `runs.logs_purged_at`, and indexes the runs each purge has left, so that a purge reads its work and never every run it purged.
+- `db.Pool.PurgeEnvelopes` takes a run's row and stamps it before lowering its counts, a batch in one statement, so two purges at once never lower them twice.
+- `db.Pool.ExpireArtifacts` and `db.Pool.Collected` take only rows nobody holds, and never deadlock with a decision.
+- `db.Pool.LogsGone` stamps a run none of whose tasks holds a log, once no shipment can be under way, and `db.Pool.PurgeUploads` forgets the writes that have lapsed.
+- `db.Pool.Collecting` deletes what `Collectable` claimed through the caller, under a lock on each row; neither takes an object a live artifact names or a write holds.
+- `db.NS.Uploading` records a write before its bytes are read, holding the object's row, and `db.NS.NotWritten` lets go of one refused.
+
+### Artifacts
+
+- `artifact.Dir` answers an `artifact.Removable`, whose `Remove` deletes an object and the log directories it leaves empty, and says whether there was one to delete.
 
 ### Controller
 
