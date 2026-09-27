@@ -93,11 +93,21 @@ type Notification struct {
 // untold, and before the audit entry that records it, which is the last statement of the
 // transaction.
 func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at time.Time) ([]string, error) {
+	return tellOwners(ctx, n.tx, n.namespace, g, actor, at)
+}
+
+// TellOwners writes what NS.TellOwners does, about g in the namespace its scope names, for a grant
+// the installation's handle writes, as Wide.GrantAccess does.
+func (w *Wide) TellOwners(ctx context.Context, g access.Grant, actor string, at time.Time) ([]string, error) {
+	return tellOwners(ctx, w.tx, g.Scope.Namespace, g, actor, at)
+}
+
+func tellOwners(ctx context.Context, tx pgx.Tx, namespace string, g access.Grant, actor string, at time.Time) ([]string, error) {
 	grant, err := json.Marshal(g)
 	if err != nil {
 		return nil, fmt.Errorf("db: grant %s could not be written into a notification: %w", g.ID, err)
 	}
-	rows, err := n.tx.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		with record as (select owner from namespaces where name = $1),
 		owners as (
 		  select owner as principal from record where owner is not null
@@ -115,19 +125,19 @@ func (n *NS) TellOwners(ctx context.Context, g access.Grant, actor string, at ti
 		    join group_members m on m.group_name = g.name
 		)
 		select principal from told where principal <> $3 order by principal`,
-		n.namespace, at, actor)
+		namespace, at, actor)
 	if err != nil {
-		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", n.namespace, err)
+		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", namespace, err)
 	}
 	told, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", n.namespace, err)
+		return nil, fmt.Errorf("db: the owners of %s could not be read: %w", namespace, err)
 	}
 	for _, recipient := range told {
-		if _, err := n.tx.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`insert into notifications (id, recipient, kind, at, namespace, access_grant)
 			 values ($1, $2, $3, $4, $5, $6)`,
-			ulid.New(), recipient, AdminAccessWidened, at, n.namespace, grant); err != nil {
+			ulid.New(), recipient, AdminAccessWidened, at, namespace, grant); err != nil {
 			return nil, fmt.Errorf("db: %s could not be told of grant %s: %w", recipient, g.ID, err)
 		}
 	}

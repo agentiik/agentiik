@@ -302,7 +302,7 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 		return nil, err
 	}
 	// The grants of each namespace and workflow, and who the caller is, with what it is told.
-	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool}); err != nil {
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool, PublicURL: s.PublicURL}); err != nil {
 		return nil, err
 	}
 	if _, err := api.NewMe(rt, api.MeOptions{Pool: pool}); err != nil {

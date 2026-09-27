@@ -536,6 +536,105 @@ func TestRefusingEveryAdministratorsSyncedPasskeyIsRefused(t *testing.T) {
 	}
 }
 
+// A role, or a group holding one, brings who it reaches under its namespace's policy, so that giving
+// the one administrator who can sign in a role where their way in is refused, or putting them in a
+// group holding one there, is a 409 naming the setting once the bootstrap token has ended, and
+// writes nothing: hr forbids passwords, which alice alone holds, and ops refuses synced passkeys,
+// erin's only one. A deny brings nobody under a policy, nor does a role given somebody who
+// administers nothing; and beside carol, who holds a passkey, neither act is refused.
+func TestAGrantOrAMembershipLeavingNoAdministratorAbleToSignInIsRefused(t *testing.T) {
+	in := somePasswords(t)
+	in.administrator(t, "alice")
+	in.endBootstrap(t)
+	alice := in.token(t, "alice", nil, nil)
+	bound := true
+	in.exec(t, `insert into namespaces (name) values ('hr'), ('ops')`)
+	if err := in.pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		if err := w.SetNamespacePolicy(ctx, "hr", db.AuthPolicy{Password: "forbidden"}, *in.clock); err != nil {
+			return err
+		}
+		if err := w.SetNamespacePolicy(ctx, "ops", db.AuthPolicy{DeviceBoundOnly: &bound}, *in.clock); err != nil {
+			return err
+		}
+		for _, group := range []string{"hr-team", "ops-team"} {
+			if err := w.CreateGroup(ctx, group); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for namespace, group := range map[string]string{"hr": "group:hr-team", "ops": "group:ops-team"} {
+		if err := in.pool.In(t.Context(), namespace, func(ctx context.Context, n *db.NS) error {
+			return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: group, Scope: access.Scope{Namespace: namespace}, Role: access.Viewer, GrantedBy: "carol"})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grants := func() int {
+		t.Helper()
+		return in.count(t, `select count(*) from grants where namespace in ('hr', 'ops') and principal in ('alice', 'erin')`)
+	}
+	refused := func(w *httptest.ResponseRecorder, setting, what string) {
+		t.Helper()
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"setting":"`+setting+`"`) || !strings.Contains(w.Body.String(), "no administrator able to sign in") {
+			t.Errorf("%s answered %d %s", what, w.Code, w.Body)
+		}
+	}
+
+	refused(in.bearing(t, "POST", "/api/v1/hr/grants", alice, `{"principal":"alice","role":"viewer"}`), "password", "a role for alice in hr")
+	refused(in.bearing(t, "PUT", "/api/v1/groups/hr-team/members/alice", alice, ""), "password", "alice put in hr-team")
+	if n := grants(); n != 0 {
+		t.Errorf("%d grants refused were written", n)
+	}
+	if n := in.count(t, `select count(*) from group_members where login = 'alice'`); n != 0 {
+		t.Error("alice was put in hr-team")
+	}
+	if n := in.count(t, `select count(*) from audit_log where action in ('grant.create', 'group_member.add')`); n != 0 {
+		t.Errorf("%d acts refused were recorded", n)
+	}
+	if w := in.bearing(t, "POST", "/api/v1/hr/grants", alice, `{"principal":"alice","deny":"run:read_data"}`); w.Code != http.StatusCreated {
+		t.Errorf("a deny for alice in hr answered %d %s", w.Code, w.Body)
+	}
+	if w := in.bearing(t, "POST", "/api/v1/hr/grants", alice, `{"principal":"bob","role":"viewer"}`); w.Code != http.StatusCreated {
+		t.Errorf("a role for bob, who administers nothing, answered %d %s", w.Code, w.Body)
+	}
+
+	in.administrator(t, "erin")
+	in.passkeyed(t, "erin", "erin-synced", true)
+	in.exec(t, `update users set admin = false where login = 'alice'`)
+	erin := in.token(t, "erin", nil, nil)
+	refused(in.bearing(t, "POST", "/api/v1/ops/grants", erin, `{"principal":"erin","role":"viewer"}`), "device_bound_only", "a role for erin in ops")
+	refused(in.bearing(t, "PUT", "/api/v1/groups/ops-team/members/erin", erin, ""), "device_bound_only", "erin put in ops-team")
+	if n := grants(); n != 1 {
+		t.Errorf("%d grants are written, the deny alone expected", n)
+	}
+
+	in.exec(t, `update users set admin = true where login = 'alice'`)
+	in.administrator(t, "carol")
+	if w := in.bearing(t, "POST", "/api/v1/hr/grants", alice, `{"principal":"alice","role":"viewer"}`); w.Code != http.StatusCreated {
+		t.Errorf("beside carol, a role for alice in hr answered %d %s", w.Code, w.Body)
+	}
+	if w := in.bearing(t, "PUT", "/api/v1/groups/ops-team/members/erin", alice, ""); w.Code != http.StatusOK {
+		t.Errorf("beside carol, erin put in ops-team answered %d %s", w.Code, w.Body)
+	}
+}
+
+// On an installation addressed by an IP address passwords are allowed whatever a namespace's policy
+// says, so a role there takes nobody's password: the one administrator, holding a password alone, is
+// given one in a namespace whose stored policy forbids them.
+func TestAGrantTakesNoPasswordWhereTheInstallationIsAddressedByAnIPAddress(t *testing.T) {
+	in := passwordsAt(t, "https://192.0.2.10", false)
+	in.administrator(t, "alice")
+	in.endBootstrap(t)
+	in.exec(t, `insert into namespaces (name) values ('hr')`)
+	in.exec(t, `insert into auth_policy (namespace, password) values ('hr', 'forbidden')`)
+	if w := in.bearing(t, "POST", "/api/v1/hr/grants", in.token(t, "alice", nil, nil), `{"principal":"alice","role":"viewer"}`); w.Code != http.StatusCreated {
+		t.Errorf("a role for alice in hr answered %d %s", w.Code, w.Body)
+	}
+}
+
 // A change is not refused for taking a way in from administrators where none had one to take: erin,
 // the one administrator, holds nothing but a token.
 func TestAPolicyChangeWhereNoAdministratorCouldSignInIsNotRefused(t *testing.T) {

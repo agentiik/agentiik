@@ -38,7 +38,8 @@ func (n *NS) GrantAccess(ctx context.Context, g access.Grant) error {
 // GrantAccess writes a grant in whichever namespace its scope names, as NS.GrantAccess does in its
 // own: for the installation's acts on a namespace, the grant that makes a new namespace's owner one
 // among them, which is written in the transaction that creates the namespace, before any handle on
-// it could be opened.
+// it could be opened; and a grant carrying a role, written in the transaction that asks whether an
+// administrator can still sign in once it applies, which reads their grants in every namespace.
 func (w *Wide) GrantAccess(ctx context.Context, g access.Grant) error {
 	return grantAccess(ctx, w.tx, g, "")
 }
@@ -99,18 +100,28 @@ func (n *NS) RevokeAccess(ctx context.Context, workflow, id string) (access.Gran
 // workflow, and ErrNoNamespace or ErrNoWorkflow where not. A route an administrator may reach for a
 // namespace nobody created tells the absent from the empty with it.
 func (n *NS) Present(ctx context.Context, workflow string) error {
-	var namespace, held bool
-	err := n.tx.QueryRow(ctx,
+	return present(ctx, n.tx, n.namespace, workflow)
+}
+
+// Present answers what NS.Present does of namespace, for an act on it the installation's handle
+// writes, as a grant written with GrantAccess is.
+func (w *Wide) Present(ctx context.Context, namespace, workflow string) error {
+	return present(ctx, w.tx, namespace, workflow)
+}
+
+func present(ctx context.Context, tx pgx.Tx, namespace, workflow string) error {
+	var there, held bool
+	err := tx.QueryRow(ctx,
 		`select exists (select from namespaces where name = $1),
 		        exists (select from workflows where namespace = $1 and name = $2)`,
-		n.namespace, workflow).Scan(&namespace, &held)
+		namespace, workflow).Scan(&there, &held)
 	switch {
 	case err != nil:
-		return fmt.Errorf("db: whether %s is there could not be read: %w", n.namespace, err)
-	case !namespace:
-		return fmt.Errorf("%w: %s", ErrNoNamespace, n.namespace)
+		return fmt.Errorf("db: whether %s is there could not be read: %w", namespace, err)
+	case !there:
+		return fmt.Errorf("%w: %s", ErrNoNamespace, namespace)
 	case workflow != "" && !held:
-		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, n.namespace, workflow)
+		return fmt.Errorf("%w: %s/%s", ErrNoWorkflow, namespace, workflow)
 	}
 	return nil
 }

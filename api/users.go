@@ -827,7 +827,9 @@ func (s *UserAPI) removeGroup(w http.ResponseWriter, r *http.Request, who Princi
 }
 
 // addMember is PUT /api/v1/groups/{group}/members/{login}: one user put in the group, touching no
-// grant. Put in twice is the same answer, and recorded as unchanged.
+// grant. Put in twice is the same answer, and recorded as unchanged. Refused with 409 naming the
+// setting where, once the bootstrap token has ended, it would leave no administrator able to sign in,
+// the group holding a role in a namespace whose policy takes their way in (keepAnAdministrator).
 func (s *UserAPI) addMember(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	s.membership(w, r, who, true)
 }
@@ -872,7 +874,11 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 		var err error
 		action := audit.GroupMemberAdd
 		if in {
-			changed, err = wide.AddMember(ctx, name, login)
+			err = keepAnAdministrator(ctx, wide, s.now(), s.ipAddressed, func() error {
+				var err error
+				changed, err = wide.AddMember(ctx, name, login)
+				return err
+			})
 		} else {
 			action = audit.GroupMemberRemove
 			changed, err = wide.RemoveMember(ctx, name, login)
@@ -895,12 +901,15 @@ func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Princip
 			Detail: map[string]any{"member": login},
 		})
 	})
+	var locked *errLockedOut
 	switch {
 	// A group removed between the read and the insert is refused by the table, naming it.
 	case errors.Is(err, errNoGroup), errors.Is(err, db.ErrNoPrincipal) && strings.HasSuffix(err.Error(), ": "+groupPrincipal(name)):
 		fail(w, http.StatusNotFound, noGroup)
 	case errors.Is(err, db.ErrNoPrincipal):
 		fail(w, http.StatusNotFound, noUser)
+	case errors.As(err, &locked):
+		failSetting(w, http.StatusConflict, fmt.Sprintf("putting %s in %s would leave no administrator able to sign in: it brings those who can now under the authentication policy of a namespace where %s holds a role, which accepts none of the passkeys or passwords they hold, and nobody would be left to administer this installation. Enrol a passkey that policy accepts first", login, groupPrincipal(name), groupPrincipal(name)), locked.setting)
 	case errors.Is(err, db.ErrBootstrapEnded):
 		bootstrapEnded(w)
 	case err != nil:

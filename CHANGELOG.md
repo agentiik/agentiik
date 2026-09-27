@@ -95,6 +95,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - Forbidding passwords, on the installation or in a namespace, deletes the passwords and TOTP generators it reaches as rows in the same transaction, ending their sessions, and suspends each account it reaches that holds no passkey the policy accepts, recorded as `no_passkey`; it is a 409 naming `password` on an installation addressed by an IP address.
 - A user's record, in `GET /api/v1/users`, `GET /api/v1/users/{login}` and `GET /api/v1/me`, answers `suspended_for`, `no_passkey`, where the policy suspended the account, and nothing for a suspension it did not make.
 - A change of the policy that would leave no administrator able to sign in, once the bootstrap token has ended, is a 409 naming `password` or `device_bound_only`, whichever takes their way in.
+- A grant carrying a role, and a user put in a group, that would leave no administrator able to sign in once the bootstrap token has ended, the last of them brought under a namespace's policy that refuses their way in, is a 409 naming `password` or `device_bound_only`, and writes nothing.
 - The last administrator who can sign in, not removed, is counted as the policy that applies to them says: a synced passkey where `device_bound_only` applies, or a passkey on an installation addressed by an IP address, signs nobody in.
 - A sign-in refused because passwords are forbidden to its account deletes the password it was offered, and the generator beside it, which a grant given since in a namespace forbidding them had left.
 - The passkey that brings an account to `min_passkeys` passkeys the policy accepts, where a passkey is required or passwords are forbidden, deletes its password and the generator beside it, and the session the password opened.
@@ -139,6 +140,7 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.Wide.EnrolmentCodeByHash` and `db.Wide.UseEnrolmentCode` answer no recovery code the bootstrap token issued once it has ended, and no first administrator's or new user's link whose user holds a credential; `db.Wide.SpentFirstAdministratorLink` is gone.
 - Migration 0042 adds `users.suspended_for`, why the policy suspended an account: `db.Wide.Suspend` writes it, `db.Wide.LiftSuspension` lifts a suspension made for that reason alone, and `db.Wide.UsersUnderPolicy` answers who holds a role in a namespace. `db.Session.BackupEligible` says whether a synced passkey opened a session. `db.Wide.HoldUser` and `db.Wide.Administrators` hold a user's row as a reference to it does not wait on, so that a membership written with two users never deadlocks with an act holding every user.
 - Migration 0043 adds `notifications.login` and the kind `break_glass_recovery`, which `db.Wide.TellAdministrators` writes to every administrator.
+- `db.Wide.Present` and `db.Wide.TellOwners` do what `db.NS`'s do, for a grant written through the installation's handle, which reads who can sign in across the namespaces in the same transaction; `db.Session.Admin` says whether a session's user administers the installation.
 
 ### Artifacts
 

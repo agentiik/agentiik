@@ -453,21 +453,27 @@ func administratorsSigningIn(ctx context.Context, wide *db.Wide, now time.Time, 
 	return signing, nil
 }
 
-// guarding runs change, which writes a policy in the transaction wide is, and refuses it with
-// errLockedOut where, once the bootstrap token has ended, it would leave no administrator able to
-// sign in of those who could before it: the installation would have nobody to administer it, as the
-// removal of the last administrator who can sign in is refused. The bootstrap token, while it lasts,
-// administers it and makes another; and a change where nobody could sign in before takes nothing
-// away that was there.
-func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, change func() error) error {
-	before, err := administratorsSigningIn(ctx, wide, now, s.ipAddressed)
+// keepAnAdministrator runs change, which writes something in the transaction wide is, and refuses
+// it with errLockedOut where, once the bootstrap token has ended, it would leave no administrator
+// able to sign in of those who could before it: the installation would have nobody to administer it,
+// as the removal of the last administrator who can sign in is refused. The bootstrap token, while it
+// lasts, administers it and makes another; and a change where nobody could sign in before takes
+// nothing away that was there.
+//
+// A policy changed is one such change. A grant carrying a role and a user put in a group are the
+// others, since each brings who it reaches under the policy of the namespaces the role is held in:
+// the only administrator given a role in a namespace forbidding passwords, or put in a group holding
+// one there, would find their password refused at their next sign-in, as the policy's own change
+// would have made it.
+func keepAnAdministrator(ctx context.Context, wide *db.Wide, now time.Time, ipAddressed bool, change func() error) error {
+	before, err := administratorsSigningIn(ctx, wide, now, ipAddressed)
 	if err != nil {
 		return err
 	}
 	if err := change(); err != nil {
 		return err
 	}
-	after, err := administratorsSigningIn(ctx, wide, now, s.ipAddressed)
+	after, err := administratorsSigningIn(ctx, wide, now, ipAddressed)
 	if err != nil {
 		return err
 	}
@@ -476,7 +482,7 @@ func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, 
 		return err
 	}
 	if bootstrap.Ended() && len(before) > 0 && len(after) == 0 {
-		setting, err := lockingSetting(ctx, wide, before, now, s.ipAddressed)
+		setting, err := lockingSetting(ctx, wide, before, now, ipAddressed)
 		if err != nil {
 			return err
 		}
@@ -491,8 +497,9 @@ func (s *PolicyAPI) guarding(ctx context.Context, wide *db.Wide, now time.Time, 
 // Where it forbids passwords that were allowed, every password goes in the same transaction and
 // every account holding no passkey the policy accepts is suspended. A change that would leave no
 // administrator able to sign in once the bootstrap token has ended is refused whole, whichever
-// setting would: forbidding passwords, or refusing the synced passkeys they hold (guarding). The
-// bootstrap token's change is refused once the bootstrap has ended, as its every act is.
+// setting would: forbidding passwords, or refusing the synced passkeys they hold
+// (keepAnAdministrator). The bootstrap token's change is refused once the bootstrap has ended, as
+// its every act is.
 func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who Principal, _ Target) {
 	var ask AuthPolicy
 	if err := readObject(r, &ask, smallMaxBytes, "the authentication policy"); err != nil {
@@ -515,7 +522,7 @@ func (s *PolicyAPI) setInstallation(w http.ResponseWriter, r *http.Request, who 
 		}
 		detail := map[string]any{"policy": set, "was": policyOf(was)}
 		forbids := set.Password == "forbidden" && was.Password != "forbidden"
-		if err := s.guarding(ctx, wide, now, func() error {
+		if err := keepAnAdministrator(ctx, wide, now, s.ipAddressed, func() error {
 			if err := wide.SetInstallationPolicy(ctx, set.stored(), now); err != nil {
 				return err
 			}
@@ -627,7 +634,7 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 		}
 		detail := map[string]any{"policy": ask, "was": policyOf(was)}
 		forbids := ask.Password == "forbidden" && was.Password != "forbidden" && installation.Password != "forbidden"
-		if err := s.guarding(ctx, wide, now, func() error {
+		if err := keepAnAdministrator(ctx, wide, now, s.ipAddressed, func() error {
 			if err := wide.SetNamespacePolicy(ctx, name, ask.stored(), now); err != nil {
 				return err
 			}
@@ -677,7 +684,8 @@ func (s *PolicyAPI) setNamespace(w http.ResponseWriter, r *http.Request, who Pri
 // Each account's row is held before its credentials are read, as every act on an account holds it,
 // so that a passkey registered at the same moment is seen or waits, and an account is never
 // suspended beside the passkey that would have kept it in. The accounts are taken in the order of
-// their logins, the order the administrators are read in, whose rows guarding holds already.
+// their logins, the order the administrators are read in, whose rows keepAnAdministrator holds
+// already.
 func (s *PolicyAPI) forbidPasswords(ctx context.Context, wide *db.Wide, logins []string, now time.Time, detail map[string]any) error {
 	deleted, suspended := []string{}, []string{}
 	for _, login := range logins {

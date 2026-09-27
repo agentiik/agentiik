@@ -31,8 +31,8 @@ import (
 // address; hashing waits its turn; and a TOTP code is accepted one step either side and never twice.
 
 // passwordsOf is an installation serving the password sign-in, the passkey ceremonies, GET
-// /api/v1/me, the API tokens, the authentication policy, the caller's credentials and the users on
-// https://agentiik.example.com, on a clock the test moves. alice holds a password; bob a password
+// /api/v1/me, the API tokens, the authentication policy, the caller's credentials, the users and the
+// grants on https://agentiik.example.com, on a clock the test moves. alice holds a password; bob a password
 // and a TOTP generator; carol a password and a passkey; dave, who is suspended, a password; and
 // erin nothing. alice holds a grant in finance.
 type passwordsOf struct {
@@ -120,6 +120,9 @@ func passwordsAt(t *testing.T, publicURL string, proxied bool) passwordsOf {
 		t.Fatal(err)
 	}
 	if _, err := api.NewUsers(rt, api.UserOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	in.h = rt
