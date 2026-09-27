@@ -385,3 +385,86 @@ func TestARefusalSaysNothingUseful(t *testing.T) {
 		}
 	}
 }
+
+// A route that needs a second permission for some requests asks about the one its guard names as
+// Also, for its own caller, over the target it was authorised against. A route naming none, and a
+// request no router served, are answered false, so a handler asking where nothing was declared
+// refuses. A permission nobody documents is refused at registration, and the surface lists it.
+func TestARouteAsksOnlyAboutWhatItAlsoNeeds(t *testing.T) {
+	finance := api.Target{Namespace: "finance"}
+	auth := &asked{Authorizer: denying{
+		allowed: granted{
+			"alice": {{api.WorkflowWrite, finance}, {api.SecretUse, finance}},
+			"bob":   {{api.WorkflowWrite, finance}},
+		},
+	}}
+	rt := router(t, auth)
+
+	var answer bool
+	var failure error
+	asking := func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+		answer, failure = api.HoldsAlso(r)(r.Context())
+	}
+	rt.MustHandle("PUT", "/api/v1/{namespace}/workflows/{workflow}/versions/{commit}", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse}, asking)
+	rt.MustHandle("PUT", "/api/v1/{namespace}/workflows/{workflow}/triggers", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow}, asking)
+
+	for _, c := range []struct {
+		who, path string
+		want      bool
+	}{
+		{"alice", "/api/v1/finance/workflows/monthly-invoicing/versions/" + aCommit, true},
+		{"bob", "/api/v1/finance/workflows/monthly-invoicing/versions/" + aCommit, false},
+		{"alice", "/api/v1/finance/workflows/monthly-invoicing/triggers", false},
+	} {
+		auth.questions = nil
+		if code, body := reached(t, rt, "PUT", c.path, c.who); code != http.StatusOK {
+			t.Fatalf("%s reaching %s was answered %d: %s", c.who, c.path, code, body)
+		}
+		if answer != c.want || failure != nil {
+			t.Errorf("%s at %s was answered %v, %v", c.who, c.path, answer, failure)
+		}
+		// Asked over the workflow the route was authorised against, and only where declared.
+		also := 0
+		for _, q := range auth.questions {
+			if q.what == api.SecretUse {
+				also++
+				if q.over != (api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}) {
+					t.Errorf("secret:use was asked over %v", q.over)
+				}
+			}
+		}
+		if declared := strings.Contains(c.path, "/versions/"); (also == 1) != declared {
+			t.Errorf("%s at %s asked about secret:use %d times", c.who, c.path, also)
+		}
+	}
+	if held, err := api.HoldsAlso(httptest.NewRequest("PUT", "/api/v1/finance/workflows/monthly-invoicing/triggers", nil))(t.Context()); held || err != nil {
+		t.Errorf("a request no router served was answered %t, %v", held, err)
+	}
+
+	// A request built from one a route needing secret:use was given, and served again as a
+	// facade over the API serves one, asks what its own route declared: nothing.
+	rt.MustHandle("PUT", "/api/v1/{namespace}/workflows/{workflow}/facade", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow, Also: api.SecretUse},
+		func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+			again := r.Clone(r.Context())
+			again.URL.Path = "/api/v1/finance/workflows/monthly-invoicing/triggers"
+			rt.ServeHTTP(w, again)
+		})
+	answer = true
+	if code, _ := reached(t, rt, "PUT", "/api/v1/finance/workflows/monthly-invoicing/facade", "alice"); code != http.StatusOK || answer || failure != nil {
+		t.Errorf("a route needing nothing more, reached through one needing secret:use, was answered %v, %v", answer, failure)
+	}
+
+	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
+	if err := rt.Handle("PUT", "/api/v1/{namespace}/workflows/{workflow}/other", api.Needs{Permission: api.WorkflowWrite, Scope: api.Workflow, Also: "secret:everything"}, ok); err == nil {
+		t.Error("a route was registered needing as well a permission nobody documents")
+	}
+	for _, route := range rt.Routes() {
+		want := api.Permission("")
+		if strings.Contains(route.Pattern, "/versions/") || strings.HasSuffix(route.Pattern, "/facade") {
+			want = api.SecretUse
+		}
+		if route.Also != want {
+			t.Errorf("the surface lists %s as needing %q as well", route.Pattern, route.Also)
+		}
+	}
+}

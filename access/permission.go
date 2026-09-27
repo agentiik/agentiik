@@ -23,7 +23,7 @@ const (
 	// namespaces the principal owns on both sides."
 	WorkflowWrite Permission = "workflow:write"
 
-	// WorkflowDelete: "Delete the workflow and its versions."
+	// WorkflowDelete: "Delete the workflow and its versions. Only owner holds it."
 	WorkflowDelete Permission = "workflow:delete"
 
 	// RunRead: "See run state, per-step state, timings and log lines."
@@ -35,8 +35,10 @@ const (
 	// anywhere."
 	RunReadData Permission = "run:read_data"
 
-	// SecretUse: "Let a step reference a namespace secret. Never allows reading its value." It
-	// counts at namespace scope only, as SecretWrite does.
+	// SecretUse: "Push a version that names a namespace secret, for its steps to mount. Checked
+	// at the push, against the principal pushing; running the workflow afterwards takes
+	// workflow:run alone. Never allows reading a value." It counts at namespace scope only, as
+	// SecretWrite does.
 	SecretUse Permission = "secret:use"
 
 	// SecretWrite: "Declare, change and delete the namespace's secrets, and write a builtin

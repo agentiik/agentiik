@@ -31,4 +31,7 @@
 // a namespaced or workflow scope is a 404, and 403 is kept for the case where there is nothing
 // to hide: the caller is authenticated, the resource is the installation itself, and saying no
 // tells them nothing they did not already know.
+//
+// A push refused for naming a secret its pusher holds no secret:use for is the other 403: the
+// route let the pusher through on workflow:write, so the workflow is one they already reach.
 package api

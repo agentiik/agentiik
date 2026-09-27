@@ -197,14 +197,14 @@ func TestCancellingTwiceIsAskingOnce(t *testing.T) {
 }
 
 // The answer says nothing of how the run stands, in its body or its status: the route is guarded
-// by workflow:run, and a run's state is what run:read guards. operator holds the first and not the
-// second, and reads the same answer about a run going and one that failed, while GET refuses it
-// both. A run that has ended is asked nothing.
+// by workflow:run, and a run's state is what run:read guards. A holder of workflow:run alone, such
+// as a token narrowed to it or anybody denied run:read, reads the same answer about a run going and
+// one that failed, while GET refuses them both. A run that has ended is asked nothing.
 func TestCancellingSaysNothingOfHowTheRunStands(t *testing.T) {
 	o := withOneRun(t)
 	h := o.servedTo(t, holder{who: "olivia", what: api.WorkflowRun, over: api.Target{Namespace: "finance", Workflow: "monthly-invoicing"}})
 	if w, _ := call(t, h, "GET", "/api/v1/finance/runs/"+o.run, "olivia", nil); w.Code != http.StatusNotFound {
-		t.Fatalf("reading the run without run:read answered %d, so the case under test is not an operator's", w.Code)
+		t.Fatalf("reading the run without run:read answered %d, so the case under test is not one holding workflow:run alone", w.Code)
 	}
 
 	going, _ := call(t, h, "POST", o.cancel(), "olivia", nil)

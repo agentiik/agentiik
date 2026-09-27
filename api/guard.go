@@ -41,6 +41,10 @@ type guard struct {
 	// reveals is the permission a handler may ask about to decide what its answer holds,
 	// and is empty on a route that asks about none.
 	reveals Permission
+
+	// also is the permission a handler may ask about to decide whether what a request carries
+	// is accepted, and is empty on a route that asks about none.
+	also Permission
 }
 
 // Needs is a route that requires one permission at one scope.
@@ -51,10 +55,14 @@ type Needs struct {
 	// Reveals is a permission the route does not need and whose holder it answers more:
 	// see Revealing.
 	Reveals Permission
+
+	// Also is a permission the route needs besides Permission where what a request carries
+	// calls for it, which only its handler can tell: see HoldsAlso.
+	Also Permission
 }
 
 func (n Needs) guards() guard {
-	return guard{permission: n.Permission, scope: n.Scope, reveals: n.Reveals}
+	return guard{permission: n.Permission, scope: n.Scope, reveals: n.Reveals, also: n.Also}
 }
 
 // OnRun is a route about one run, which requires one permission over the workflow that run is of.
@@ -152,6 +160,26 @@ func Revealing(r *http.Request) Holds {
 // revealingKey is where the router leaves the question a route declared for its handler.
 type revealingKey struct{}
 
+// HoldsAlso answers, for the route serving r, whether its caller holds the permission its guard
+// names as Also over the target the route was authorised against.
+//
+// Some routes need a second permission for some requests and not for others, and only the handler
+// knows which request is which: a push needs workflow:write, and secret:use as well where the
+// version it carries names a secret, since "secret:use is checked when a version is pushed, against
+// whoever pushes it". The handler decides whether to ask, and the router is still what asks: about
+// the one permission the guard declared, for the caller it identified, over the target it
+// authorised, and nothing else. A route declaring none, or a request the router did not serve, is
+// answered false, so a handler that asks where nothing was declared refuses rather than accepts.
+func HoldsAlso(r *http.Request) func(context.Context) (bool, error) {
+	if held, ok := r.Context().Value(alsoKey{}).(func(context.Context) (bool, error)); ok {
+		return held
+	}
+	return func(context.Context) (bool, error) { return false, nil }
+}
+
+// alsoKey is where the router leaves the question HoldsAlso asks.
+type alsoKey struct{}
+
 // FindRun says which namespace and workflow a run is of, which is what a route taking OnRun is
 // authorised against. A run nobody minted is ErrNoRun.
 //
@@ -199,6 +227,9 @@ func (g guard) check(method, pattern string) error {
 	}
 	if g.reveals != "" && !g.reveals.Valid() {
 		return fmt.Errorf("api: %s %s reveals more to %q, which is not one of the permissions the documentation names", method, pattern, g.reveals)
+	}
+	if g.also != "" && !g.also.Valid() {
+		return fmt.Errorf("api: %s %s needs %q as well for some requests, which is not one of the permissions the documentation names", method, pattern, g.also)
 	}
 	return nil
 }
