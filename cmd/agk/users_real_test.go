@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
@@ -268,5 +269,26 @@ func TestAgkSaysWhyAUserOrGroupVerbCameToNothing(t *testing.T) {
 	}
 	if code, _, errs := in.agk(t, in.bootstrap, "user", "create", "dan", "--admin"); code != exitRefused || !strings.Contains(errs, "first administrator enrolled") {
 		t.Errorf("the ended bootstrap token creating dan left with %d: %s", code, errs)
+	}
+}
+
+// An installation, or a gateway in front of it, that answers it could not answer now is no outcome,
+// exit 4, and never a refusal: a gateway's 502 in front of an API that had already acted would
+// otherwise tell a script, "refused, and nothing ran", that a user removed was still there.
+func TestAnAnswerThatCouldNotBeGivenIsNoOutcome(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusInternalServerError} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		for _, args := range [][]string{
+			{"user", "create", "dan", "--admin"}, {"user", "delete", "dan"}, {"user", "list"},
+			{"group", "add", "team-finance", "dan"}, {"group", "delete", "team-finance"},
+		} {
+			code, out, errs := agkAt(t, srv.URL, "agktoken_"+strings.Repeat("C", 43), args...)
+			if code != exitNoOutcome || out != "" || !strings.Contains(errs, "whether it did what was asked is not known") {
+				t.Errorf("agk %s answered %d left with %d, printed %q and said %q", strings.Join(args, " "), status, code, out, errs)
+			}
+		}
+		srv.Close()
 	}
 }

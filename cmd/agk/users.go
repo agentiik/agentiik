@@ -381,11 +381,18 @@ func (r remote) send(ctx context.Context, method, path string, body, out any, wa
 }
 
 // administrationRefused says why a request to administer users or groups came to nothing, and
-// answers the code to leave with: exit 4 where the installation did not answer, exit 1 where it
-// said no, in its own sentence, save where a sentence of the command line's says more.
+// answers the code to leave with: exit 1 where the installation said no, in its own sentence, save
+// where a sentence of the command line's says more, and exit 4 where it did not answer, or answered
+// that it could not answer now. A gateway's 502 in front of an API that had already acted is no
+// refusal, and a script told exit 1, "refused, and nothing ran", would believe a user removed was
+// still there.
 func administrationRefused(e Env, err error, what, name string) int {
 	if errors.Is(err, errUnreachable) {
 		fmt.Fprintf(e.Err, "%s\n", err)
+		return exitNoOutcome
+	}
+	if passing(err) {
+		fmt.Fprintf(e.Err, "the installation answered %d, %s, and whether it did what was asked is not known: read it back, or ask again\n", statusOf(err), err)
 		return exitNoOutcome
 	}
 	said := err.Error()
