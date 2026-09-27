@@ -42,7 +42,7 @@ The Docker Engine API is spoken with the standard library.
 
 ## Status
 
-`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. Since v0.2.0 a server runs it instead: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it, as the operator whose token is in `AGENTIIK_TOKEN`. `login`, `whoami`, `share` and `grants` refuse and say why until principals arrive in v0.3.0, and `brick init` until its templates are released from `agentiik/bricks`. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
+`agk run --local` runs a whole workflow on one machine, and `agk validate`, `agk graph` and `agk brick test` work beside it. Since v0.2.0 a server runs it instead: `agentiik-api`, `agentiik-controller` and `agk-runner` are the installation, and `agk push`, `agk run --namespace`, `agk status` and `agk logs` send a workflow to it, run it and follow it, as the operator whose token is in `AGENTIIK_TOKEN`. `agk share`, `agk grants` and `agk whoami` say who may do what; `login` refuses and says why until its sign-in arrives in v0.3.0, and `brick init` until its templates are released from `agentiik/bricks`. The [roadmap](https://agentiik.github.io/docs/roadmap) has the rest, and [CHANGELOG.md](CHANGELOG.md) what each release shipped.
 
 ## Building and testing
 

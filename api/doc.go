@@ -60,4 +60,21 @@
 // itself, and the bootstrap token mints none, its one lasting use being the first administrator:
 // each is refused with 403, since the caller is known and nothing about the installation is hidden
 // from them by saying so.
+//
+// GET /api/v1/me is the caller's own as well: who it is, its groups, what its grants resolve to at
+// each scope, narrowed by its credential, which the router computes as Caller.Effective from what
+// the authorizer says as Standings, and the notifications the installation tells it.
+//
+// # Sharing
+//
+// The grant routes take grant:manage at the scope they name. An administrator writes a grant as
+// well, holding nothing there: "an administrator may create a grant in any namespace, for anybody,
+// as a power of the installation rather than through grant:manage there", which a route declares as
+// Needs.OrAdministrator, the router asks as it asks every administrator's route, and its handler
+// learns of through Administering, since "the namespace's owner is told of each". Listing and
+// revoking are not the power's: "in a namespace, an administrator holds what their grants give". An
+// administrator widening their own access, by a role given or a deny taken away, is told the same
+// way however they came to share. A grant may name a service account of another namespace only
+// where its writer sees that namespace, which the router hands the handler as Sees on a route
+// declaring Needs.Seeing, so that the answer never says whether another namespace exists.
 package api

@@ -223,9 +223,9 @@ func open(ctx context.Context, s settings, log *slog.Logger) (*installation, err
 
 // routes builds every route built so far on one router: runs and versions, the step log streams,
 // the secret declarations, the runners and their pools, the bus credential, the users and groups,
-// the namespaces, the API tokens, and the built-in object store. Each request is identified and
-// authorised by api.Principals, from the tokens, the grants and the bootstrap state the database
-// holds. The log streams end when stopping closes.
+// the namespaces, the API tokens, the grants, the caller's own record, and the built-in object
+// store. Each request is identified and authorised by api.Principals, from the tokens, the grants
+// and the bootstrap state the database holds. The log streams end when stopping closes.
 func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.BusIssuer, log *slog.Logger, stopping <-chan struct{}) (*api.Router, error) {
 	principals, err := api.NewPrincipals(pool, nil)
 	if err != nil {
@@ -296,6 +296,13 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	}
 	// The API tokens of whoever asks, and of the service accounts of the namespaces they own.
 	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool}); err != nil {
+		return nil, err
+	}
+	// The grants of each namespace and workflow, and who the caller is, with what it is told.
+	if _, err := api.NewSharing(rt, api.SharingOptions{Pool: pool}); err != nil {
+		return nil, err
+	}
+	if _, err := api.NewMe(rt, api.MeOptions{Pool: pool}); err != nil {
 		return nil, err
 	}
 	return rt, nil

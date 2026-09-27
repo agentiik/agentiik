@@ -23,6 +23,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `api.OpenSession` opens a browser's session, `__Host-agentiik_session`, 256 bits kept as its SHA-256, HttpOnly, Secure and SameSite=Lax, which `api.Principals` reads beside the bearer token: it ends 12 hours idle and 30 days after it opened, and a revocation, a removed credential, or a suspension where a credential opened it, ends it from the next request.
 - A request changing something that a session carries is a 403 unless its `Origin` is the public URL's, a session an enrolment code opened is a 403 on every route the router authorises, and a bearer token beside a session is a 400.
 - A namespace's record is read by an administrator and by whoever holds a role in it, its own or a group's, through the router's `api.OnNamespace` guard: the authorizer says where a principal holds a grant as `api.Holdings`, and a token's `within` narrows it (`access.TokenScope.Reaches`).
+- A route declaring `api.Needs.OrAdministrator` is reached by an administrator as well, whatever they hold at its scope, through a credential that carries the power, and its handler asks `api.Administering` whether the caller came in so; one declaring `api.Needs.Seeing` hands its handler `api.Sees`.
+- `api.Caller.Effective` answers what the caller holds at each scope through the credential it presented, resolved from what the authorizer says as `api.Standings`.
 
 ### API
 
@@ -37,6 +39,9 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `/api/v1/users` and `/api/v1/groups`, an administrator's, and the bootstrap token's until the first administrator enrols: users and groups created, listed, read and removed, and members put in and out touching no grant, each act audited.
 - A user is created with no credential and answered an enrolment link, `…/auth/enrol#agkenrol_…`, single use and good for an hour; asked again before they enrol, or at `POST /api/v1/users/{login}/enrolment`, a fresh one revokes it, a display name or admin left out keeping what was recorded, and a display name left out at creation being the login. The bootstrap token creating an administrator is answered a first administrator's link.
 - A login keeps to the namespace grammar, `operator` and `installation` refused, and is a 409 where a namespace holds it. Removing a user takes their empty personal namespace with them, and is refused naming one that holds something or a namespace they own, and, once the bootstrap token has ended, for the last administrator who can sign in.
+- `/api/v1/{ns}/grants` and `/api/v1/{ns}/workflows/{name}/grants` list, write and revoke grants and denies behind `grant:manage` at that scope, and an administrator writes one in any namespace; audited as `grant.create` and `grant.delete`. A workflow's list shows its namespace's grants too, each with its scope; a grant is revoked at the scope it was written at; a principal that does not exist, or a service account of a namespace its writer does not see, is 422.
+- A grant an administrator writes by the installation's power, and an administrator widening their own access, a role given to themselves, a group they are in or a service account of a namespace they own, or a deny taken from one, tell each of the namespace's owners, `admin_access_widened`, or every holder of its owner role where its record names none.
+- `GET /api/v1/me` answers the caller's record, groups, permissions per namespace and per workflow where they differ, narrowed by its token, and its notifications, kept 90 days; `DELETE /api/v1/me/notifications/{id}` dismisses one. A narrowed token reads and dismisses none.
 
 ### State
 
@@ -48,6 +53,8 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 - `db.NS.CreateRun` refuses a run past the namespace's `max_runs_per_hour`, a sliding count of the last 60 minutes whatever started the runs, with `db.RunsPerHourReached`, counting under a lock on the namespace so that replicas of the API count one after the other; migration 0033 indexes runs for it. A namespace with no such quota, as every upgraded one, is refused nothing and locks nothing.
 - `db.Wide.CreateNamespace` takes a namespace's kind, owner and quotas, `db.Wide.GrantAccess` writes a grant in any namespace and `db.Wide.AuditIn` records an act done in one, for the owner's grant at creation.
 - A fresh enrolment link ends the sessions every earlier link of its kind opened, spent or not, and a code spent before a session opens opens none.
+- Migration 0034 adds `notifications`, one row per reader: `db.NS.TellOwners` writes them in the grant's transaction, `db.Wide.NotificationsOf` reads a reader's and removes those past 90 days, `db.Wide.DismissNotification` removes one.
+- `db.NS.AccessGrantsAt` lists what applies at a scope, `db.NS.RevokeAccess` revokes a grant at the scope it was written at and answers it, and `db.NS.Present` tells a namespace or a workflow that is not there.
 
 ### Controller
 
@@ -57,15 +64,17 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 - The vendored schemas carry the access shapes of agentiik/schemas#56, and a test holds the permission and role enumerations to the Go vocabulary.
 - A fan-out of ten thousand items is handed its namespace's `max_concurrent_tasks` and no more, and another namespace's run is handed its task on the same sweep.
+- A test holds that no keyword of `workflow.schema.json`, and no field of a parsed workflow or of its graph, confers access.
 - A test holds every route `serve` registers to the permission and scope the documentation's API table names, and another upgrades a database v0.2.5 left through `init` and `serve` and uses the same operator token on it; `db.MigrateThrough` migrates as far as a release did, for such tests.
 
 ### agk
 
 - `agk token create [--for NS/NAME] [--expires 30d] [--scope ...] [--label TEXT]` prints the token alone on standard output, and `agk token list` and `agk token revoke ID` list and revoke, with `-o json` on create and list.
 - `agk run` says a 429 at the start as a refusal, exit 1, since no run was written, rather than as no outcome.
-- `login`, `whoami`, `share` and `grants` say which route they wait for, rather than naming an interim operator that is gone.
+- `login` says which route it waits for, rather than naming an interim operator that is gone.
 - `agk namespace create`, `list`, `show`, `delete` and `quotas`. `quotas` reads the quotas held, sets the flags given on top and sends that whole set, lifting a bound only where `--lift NAME` names it. A change answered with a 5xx leaves with 4.
 - `agk user create LOGIN [--admin] [--display-name NAME]` sends only what it is given and prints the enrolment link, a fresh one when run again before the user enrols; `agk user list`, `show` and `delete`, and `agk group create`, `list`, `show`, `delete`, `add` and `remove`, with `-o json` where they read.
+- `agk share NS[/WORKFLOW] --user L|--group G|--service-account NS/N --role R|--deny P [--expires D]` and `agk share NS[/WORKFLOW] --revoke ID`, `agk grants NS[/WORKFLOW]`, one grant a line with its scope and what it gives there, and `agk whoami [NS[/WORKFLOW]]`, with what the installation tells where it names no scope.
 
 ## v0.2.5, 2026-09-26
 
