@@ -108,6 +108,12 @@ func TestAgkAdministersANamespace(t *testing.T) {
 		t.Fatalf("agk namespace create answered %d:\n%s%s\nwant\n%s", code, out, errs, want)
 	}
 
+	// Reading the quotas sets nothing, whatever other flag is given.
+	var read api.Quotas
+	if code, out, errs := in.as(t, in.alice, "namespace", "quotas", "team-ops", "-o", "json"); code != exitSucceeded || json.Unmarshal([]byte(out), &read) != nil || read.MaxRunsPerHour != 500 {
+		t.Errorf("the owner reading the quotas in JSON answered %d:\n%s%s", code, out, errs)
+	}
+
 	if code, out, errs := in.as(t, in.carol, "namespace", "list"); code != exitSucceeded || out != "finance   shared  owned by nobody\nteam-ops  shared  owned by alice\n" {
 		t.Errorf("an administrator's list answered %d:\n%s%s", code, out, errs)
 	}

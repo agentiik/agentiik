@@ -161,7 +161,8 @@ func TestNamespaceRemoveRemovesOnlyAnEmptyNamespace(t *testing.T) {
 	} {
 		out.Reset()
 		err := namespace(t.Context(), database.Application, "remove", name, &out)
-		if err == nil || !strings.Contains(err.Error(), held) || !strings.Contains(err.Error(), "not removed") {
+		// Counted, and said as what it is rather than as the table a removal ran into.
+		if err == nil || !strings.Contains(err.Error(), held) || !strings.Contains(err.Error(), "not removed") || strings.Contains(err.Error(), "rows of") {
 			t.Errorf("removing %s answered %v, and it holds %s", name, err, held)
 		}
 		if out.Len() > 0 || !exists(t, admin, name) {

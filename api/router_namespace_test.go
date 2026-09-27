@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agentiik/agentiik/api"
@@ -14,9 +15,12 @@ import (
 // is answered the 404 of one that does not exist", which the router answers for a route taking
 // OnNamespace from what the authorizer says of both.
 
-// members says carol administers the installation, alice holds a grant in finance, and nobody else
-// holds anything; with broke set, the namespaces cannot be read.
-type members struct{ broke bool }
+// members says carol administers the installation, alice holds a grant in finance unless gone is
+// set, and nobody else holds anything; with broke set, the namespaces cannot be read.
+type members struct {
+	broke bool
+	gone  *atomic.Bool
+}
 
 func (members) Allow(_ context.Context, who api.Principal, what api.Permission, over api.Target) (bool, error) {
 	return who == "carol" && what == api.GrantManage && over == api.Target{}, nil
@@ -26,7 +30,7 @@ func (m members) HeldIn(_ context.Context, who api.Principal) ([]string, error) 
 	if m.broke {
 		return nil, context.DeadlineExceeded
 	}
-	if who == "alice" {
+	if who == "alice" && (m.gone == nil || !m.gone.Load()) {
 		return []string{"finance"}, nil
 	}
 	return nil, nil
@@ -153,5 +157,32 @@ func TestARouteAboutANamespaceNeedsSomebodyToSayWhoHoldsWhat(t *testing.T) {
 	}
 	if got := rt.Routes()[0]; !got.Members || got.Permission != "" || got.Scope != api.Namespace {
 		t.Errorf("the route reads back as %+v", got)
+	}
+}
+
+// A route about a namespace's record asks again, as it goes, what it was let through on: a caller
+// still holding a grant there still sees it, and one whose grant went since does not.
+func TestARouteAboutANamespaceAsksAgainWhetherItsCallerStillSeesIt(t *testing.T) {
+	gone := &atomic.Bool{}
+	rt, err := api.NewRouter(members{gone: gone}, scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var still []bool
+	rt.MustHandle("GET", "/api/v1/namespaces/{namespace}", api.OnNamespace{}, func(w http.ResponseWriter, r *http.Request, _ api.Principal, _ api.Target) {
+		for _, lost := range []bool{false, true} {
+			gone.Store(lost)
+			ok, err := api.Still(r)(r.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			still = append(still, ok)
+		}
+	})
+	if code, _ := reached(t, rt, "GET", "/api/v1/namespaces/finance", "alice"); code != http.StatusOK {
+		t.Fatalf("the route answered %d", code)
+	}
+	if len(still) != 2 || !still[0] || still[1] {
+		t.Errorf("the route asked again and was answered %v, want true while the grant held and false once it went", still)
 	}
 }
