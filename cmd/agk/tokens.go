@@ -206,9 +206,12 @@ func expiryOf(written string, now time.Time) (time.Time, error) {
 		if err != nil {
 			return time.Time{}, fmt.Errorf("%q is not a number of days: write 30d", written)
 		}
-		// Past this many days the length does not fit a Duration, and multiplying would wrap it
-		// round to some other length the token would then be minted with.
-		if n > int(math.MaxInt64/int64(24*time.Hour)) {
+		// Outside these bounds the length does not fit a Duration, and multiplying would wrap
+		// it round to some other length the token would then be minted with.
+		switch {
+		case n < 1:
+			return time.Time{}, fmt.Errorf("%q is no time at all: a token expires after it is minted", written)
+		case n > int(math.MaxInt64/int64(24*time.Hour)):
 			return time.Time{}, fmt.Errorf("%q is more days than a length holds, and a token lasts a year at most", written)
 		}
 		length = time.Duration(n) * 24 * time.Hour
