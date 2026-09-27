@@ -762,9 +762,15 @@ jetstream {
 include "accounts.conf"
 `
 
-// database migrates as the role that may change the schema, creates the namespace, keeps the hash
-// of the bootstrap token, and issues the runner beside the installation a join token of the pool
-// default, written where it reads it.
+// database migrates as the role that may change the schema, creates the namespace, gives every
+// namespace made before v0.3.0 its built-in identity, keeps the hash of the bootstrap token, and
+// issues the runner beside the installation a join token of the pool default, written where it
+// reads it.
+//
+// The namespace is created at every run, since the settings name it. Where a user's login has
+// taken its name, the two sharing one name space, init says so and goes on: the installation is no
+// less ready without it, and a run that failed there would keep every service from starting, since
+// the Compose file waits on init, over a name somebody else holds.
 //
 // A join token at every run, rather than only before the runner first joins, because a runner that
 // joined may have to join again after a setting changed, the API's address above all, and it
@@ -775,7 +781,10 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 	if err := migrate(ctx, m, p.out); err != nil {
 		return err
 	}
-	if err := namespace(ctx, m.Application, "create", name, p.out); err != nil {
+	var taken loginHoldsName
+	if err := namespace(ctx, m.Application, "create", name, p.out); errors.As(err, &taken) {
+		p.say("did not create namespace %s, which the settings name: it is a user's login, and logins and namespace names share one name space, since a user's personal namespace is named after their login. init goes on without it, and says so at every run while the settings name it", name)
+	} else if err != nil {
 		return err
 	}
 	pool, err := db.Open(ctx, m.Application.ConnString())
@@ -783,6 +792,9 @@ func (p *preparer) database(ctx context.Context, m config.Migration, name string
 		return fmt.Errorf("the database %s names could not be reached as %s: %w", config.DatabaseURL, m.Application.Role, err)
 	}
 	defer pool.Close()
+	if err := builtInIdentities(ctx, pool, p.out); err != nil {
+		return err
+	}
 	if err := bootstrapToken(ctx, pool, "init", bootstrap, nil, p.out); err != nil {
 		return err
 	}

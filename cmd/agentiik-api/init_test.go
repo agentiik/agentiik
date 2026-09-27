@@ -634,6 +634,101 @@ func TestInitMigratesCreatesTheNamespaceAndIssuesAJoinTokenAtEveryRun(t *testing
 	}
 }
 
+// A user's login holding the name of the namespace the settings name is no failure: init says so,
+// creates no namespace, and goes on to the rest, since a run that failed there would keep every
+// service from starting. It says so again at every run while the settings name it.
+func TestInitWarnsAndGoesOnWhereALoginHoldsTheNamespacesName(t *testing.T) {
+	database := freshDatabase(t)
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "demo",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	if err := initialize(t.Context(), c, d.at(firstRun)); err != nil {
+		t.Fatalf("%s\n%s", err, d.out.String())
+	}
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(t.Context()))
+	for _, stmt := range []string{
+		`insert into principals (id, kind) values ('alice', 'user')`,
+		`insert into users (login, display_name) values ('alice', 'Alice')`,
+	} {
+		if _, err := admin.Exec(t.Context(), stmt); err != nil {
+			t.Fatalf("%s: %s", stmt, err)
+		}
+	}
+	first := strings.TrimSpace(d.read(t, runnerDir, "join-token"))
+
+	c.Namespace = "alice"
+	for run := range 2 {
+		d.out.Reset()
+		if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Duration(run+1)*time.Minute))); err != nil {
+			t.Fatalf("run %d with a login holding the namespace's name failed: %s\n%s", run+2, err, d.out.String())
+		}
+		if !strings.Contains(d.out.String(), "did not create namespace alice, which the settings name: it is a user's login") {
+			t.Errorf("run %d said:\n%s", run+2, d.out.String())
+		}
+	}
+	if exists(t, admin, "alice") {
+		t.Error("a namespace was created under a user's login")
+	}
+	if strings.TrimSpace(d.read(t, runnerDir, "join-token")) == first {
+		t.Error("init stopped before the runner's join token, where a login held the namespace's name")
+	}
+}
+
+// A namespace v0.2 made, which has no built-in identity, is given one by init, recorded as a
+// creation by installation in the namespace, and a run that finds none lacking says nothing of it.
+func TestInitGivesANamespaceOfV02ItsBuiltInIdentity(t *testing.T) {
+	database := freshDatabase(t)
+	d := aPreparedDirectory(t)
+	c := config.Init{
+		Dir: d.dir, Host: "localhost", Namespace: "demo",
+		Admin: database.Admin, Application: config.Database{URL: database.Application.URL, Role: database.Application.Role},
+	}
+	if err := initialize(t.Context(), c, d.at(firstRun)); err != nil {
+		t.Fatalf("%s\n%s", err, d.out.String())
+	}
+	if strings.Contains(d.out.String(), "built-in identity") {
+		t.Errorf("init gave a built-in identity to a namespace created with one:\n%s", d.out.String())
+	}
+	admin, err := pgx.Connect(t.Context(), database.Admin.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.WithoutCancel(t.Context()))
+	if _, err := admin.Exec(t.Context(), `insert into namespaces (name) values ('legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	d.out.Reset()
+	if err := initialize(t.Context(), c, d.at(firstRun.Add(time.Minute))); err != nil {
+		t.Fatalf("%s\n%s", err, d.out.String())
+	}
+	if !strings.Contains(d.out.String(), "gave namespace legacy its built-in identity, legacy/agentiik, which holds no grant") {
+		t.Errorf("init said:\n%s", d.out.String())
+	}
+	var accounts int
+	if err := admin.QueryRow(t.Context(), `select count(*) from service_accounts where name = 'agentiik' and namespace in ('demo', 'legacy') and created_by is null`).Scan(&accounts); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 2 {
+		t.Errorf("%d of demo and legacy hold their built-in identity", accounts)
+	}
+	if got := audited(t, admin); !slices.Contains(got, "installation service_account.create legacy/agentiik done") {
+		t.Errorf("the audit log holds %q", got)
+	}
+	d.out.Reset()
+	if err := initialize(t.Context(), c, d.at(firstRun.Add(2*time.Minute))); err != nil {
+		t.Fatalf("%s\n%s", err, d.out.String())
+	}
+	if strings.Contains(d.out.String(), "built-in identity") {
+		t.Errorf("a third run said:\n%s", d.out.String())
+	}
+}
+
 // Against a database: init keeps the SHA-256 of the bootstrap token where the API reads it, at
 // every run, and never the token. A token changed replaces the hash, a run with none set keeps it,
 // and a run with none set and none kept says that nobody can create the first administrator, and
