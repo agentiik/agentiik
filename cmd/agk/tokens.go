@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -204,6 +205,11 @@ func expiryOf(written string, now time.Time) (time.Time, error) {
 		n, err := strconv.Atoi(days)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("%q is not a number of days: write 30d", written)
+		}
+		// Past this many days the length does not fit a Duration, and multiplying would wrap it
+		// round to some other length the token would then be minted with.
+		if n > int(math.MaxInt64/int64(24*time.Hour)) {
+			return time.Time{}, fmt.Errorf("%q is more days than a length holds, and a token lasts a year at most", written)
 		}
 		length = time.Duration(n) * 24 * time.Hour
 	} else {

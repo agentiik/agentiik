@@ -191,6 +191,7 @@ func TestWhatAgkTokenRefuses(t *testing.T) {
 		says  string
 	}{
 		{"an expiry of no time", in.alice, []string{"token", "create", "--expires", "0d"}, exitUsage, "no time at all"},
+		{"an expiry of more days than a length holds", in.alice, []string{"token", "create", "--expires", "213600d"}, exitUsage, "more days than a length holds"},
 		{"an expiry that does not read", in.alice, []string{"token", "create", "--expires", "soon"}, exitUsage, "neither a length"},
 		{"an empty scope entry", in.alice, []string{"token", "create", "--scope", "workflow:run,"}, exitUsage, "an entry is empty"},
 		{"a format there is not", in.alice, []string{"token", "list", "-o", "yaml"}, exitUsage, "json is the one format"},
