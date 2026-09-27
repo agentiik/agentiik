@@ -1196,6 +1196,47 @@ func TestAFinishedRunKeepsItsEnvelopesAsLongAsItsWorkflowDeclared(t *testing.T) 
 	}
 }
 
+// A run cancelled keeps its envelopes as long as one that ran to its verdict: the cancellation is
+// the last decision written of it, and resolves the date as a verdict does.
+func TestACancelledRunKeepsItsEnvelopesAsLongAsItsWorkflowDeclared(t *testing.T) {
+	core, _, pool, super := decidingOn(t, retainingWorkflow)
+	createRun(t, pool)
+	if err := core.Decide(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.Cancel(t.Context(), decidedRun); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var kept *float64
+	if err := dbtest.Superuser(t, super).QueryRow(t.Context(),
+		`select state, extract(epoch from (expires_at - finished_at)) / 86400 from runs where id = $1`,
+		string(decidedRun)).Scan(&state, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if state != "cancelled" || kept == nil || *kept != 7 {
+		t.Errorf("the run is %s and keeps its envelopes %v days after it ended, and its workflow declares 7", state, kept)
+	}
+}
+
+// A max_run_duration the controller cannot read bounds no run, and the run is not decided on it
+// as if it bounded nothing: the pass fails, naming the quota.
+func TestARunWhoseBoundCannotBeReadIsNotDecided(t *testing.T) {
+	core, q, pool, super := deciding(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`update namespaces set max_run_duration = '99999999999999999999d' where name = 'finance'`); err != nil {
+		t.Fatal(err)
+	}
+	createRun(t, pool)
+	err := core.Decide(t.Context(), decidedRun)
+	if err == nil || !strings.Contains(err.Error(), "max_run_duration") {
+		t.Errorf("a pass under a max_run_duration no clock measures answered %v", err)
+	}
+	if taken := q.taken(); len(taken) != 0 {
+		t.Errorf("the pass handed out %d tasks", len(taken))
+	}
+}
+
 // max_run_duration is the "Upper bound on a workflow's root timeout": a run of a workflow asking
 // for four hours in a namespace bounding runs at one is due at one hour, and timed out there. A
 // namespace that sets none leaves the workflow's own timeout, as before v0.3.0.

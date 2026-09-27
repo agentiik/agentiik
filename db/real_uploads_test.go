@@ -154,11 +154,16 @@ func TestWhatIsNoLongerLiveHoldsNoRoom(t *testing.T) {
 		}
 	}
 	// Found at the next count, which a write about to be refused takes again once the last is a
-	// second old.
+	// second old. The object whose artifact expired is bytes the namespace no longer counts, so
+	// writing it again takes room.
 	aged(t, conn, "2 seconds")
-	room, err := makeRoom(t, pool, "finance", digestOf("d"), 1000)
+	room, err := makeRoom(t, pool, "finance", digestOf("a"), 400)
 	if err != nil || !room.Held() {
-		t.Fatalf("the whole quota, once nothing live was left, answered %+v, %v", room, err)
+		t.Fatalf("writing again the object of an expired artifact answered %+v, %v", room, err)
+	}
+	room, err = makeRoom(t, pool, "finance", digestOf("d"), 600)
+	if err != nil || !room.Held() {
+		t.Fatalf("the rest of the quota, once nothing live was left, answered %+v, %v", room, err)
 	}
 	// The lapsed upload was let go, and not only left out of the count.
 	var left int
@@ -242,9 +247,14 @@ func TestAnUploadIsCountedAQuarterOfAnHourPastItsPolicy(t *testing.T) {
 	if _, err := conn.Exec(t.Context(), `update artifact_uploads set until = until - interval '15 minutes'`); err != nil {
 		t.Fatal(err)
 	}
+	// Written again, the object is held at the whole of what it may take: an upload that lapsed
+	// holds no room for it to count against.
 	aged(t, conn, "2 minutes")
-	if _, err := makeRoom(t, pool, "finance", digestOf("b"), 1000); err != nil {
+	if _, err := makeRoom(t, pool, "finance", digestOf("a"), 1000); err != nil {
 		t.Errorf("the whole quota, a quarter of an hour after the upload's policy, answered %v", err)
+	}
+	if held := heldOf(t, conn); held != 1000 {
+		t.Errorf("the object written again holds %d, and it may take 1,000", held)
 	}
 }
 
@@ -303,10 +313,14 @@ func TestAnObjectOfNoStatedLengthIsGivenTheRoomLeft(t *testing.T) {
 // there, although each fits alone. A namespace that sets no quota takes no lock, as before v0.3.0,
 // so its writes do not wait on each other.
 func TestTwoWritesAtOnceCannotBothTakeTheLastRoom(t *testing.T) {
-	pool, _ := bounded(t, 1000)
-	// A write before them, so that finance's room is there to be read and written rather than
-	// created by the first of the two, which would hold the second at its creation.
+	pool, conn := bounded(t, 1000)
+	// A write before them in finance, so that its room is there to be locked. legal's two are its
+	// first, so that neither finds a room to lock and both make one, the second waiting on the
+	// first's rather than failing on it.
 	if _, err := makeRoom(t, pool, "finance", digestOf("c"), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(t.Context(), `insert into namespaces (name, max_artifact_bytes) values ('legal', 1000)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,6 +329,7 @@ func TestTwoWritesAtOnceCannotBothTakeTheLastRoom(t *testing.T) {
 		waits     bool
 	}{
 		{"finance", true},
+		{"legal", true},
 		{"team-ops", false},
 	} {
 		t.Run(c.namespace, func(t *testing.T) {

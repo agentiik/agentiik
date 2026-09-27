@@ -569,3 +569,37 @@ func TestAWriteOfNoStatedLengthIsHeldToTheRoomLeft(t *testing.T) {
 		}
 	}
 }
+
+// A write whose length is past artifact_max_bytes is an object the store refuses as too large,
+// 413, and it is given the room of the most an object may be rather than refused as the quota's
+// for a length no object reaches.
+func TestAWritePastArtifactMaxBytesIsTooLargeRatherThanPastTheQuota(t *testing.T) {
+	pool, super := dbtest.Open(t)
+	if _, err := dbtest.Superuser(t, super).Exec(t.Context(),
+		`insert into namespaces (name, max_artifact_bytes) values ('finance', 1100)`); err != nil {
+		t.Fatal(err)
+	}
+	limits := agk.DefaultLimits()
+	limits.ArtifactMaxBytes = 1000
+	signed, err := artifact.NewSigned(artifact.Dir(t.TempDir()), artifact.SignedOptions{
+		Key: []byte("0123456789abcdef0123456789abcdef"), Base: "https://agentiik.example.com/objects", Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := api.NewRouter(api.DenyAll{}, bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NewObjects(rt, signed, pool); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("a", 1200)
+	url, err := signed.Presign(t.Context(), "PUT", artifact.Key("finance", digestOf([]byte(content))), "01JMZ8W4K2R7Q0E3N5T9", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := follow(t, rt, "PUT", url, content); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("1,200 bytes past an artifact_max_bytes of 1,000, in a namespace of 1,100, answered %d", w.Code)
+	}
+}
