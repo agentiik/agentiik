@@ -305,6 +305,18 @@ func (w *Wide) RevokeSessions(ctx context.Context, login string, hash []byte, at
 	return int(tag.RowsAffected()), nil
 }
 
+// EndSession revokes the session whose identifier hashes to hash, live or not, and answers whether
+// it revoked one: a sign-out. One that opens nothing now is revoked all the same, since a session a
+// suspension silences would open again when the suspension is lifted, and its holder asked for it
+// to end. Found by its hash alone, which only whoever holds its cookie can give.
+func (w *Wide) EndSession(ctx context.Context, hash []byte, at time.Time) (bool, error) {
+	tag, err := w.tx.Exec(ctx, `update sessions set revoked_at = $2 where hash = $1 and revoked_at is null`, hash, at)
+	if err != nil {
+		return false, fmt.Errorf("db: a session could not be ended: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // The kinds of enrolment code, as enrolment_codes.kind writes them.
 const (
 	// EnrolmentFirstAdministrator is the first administrator's link, made with the bootstrap

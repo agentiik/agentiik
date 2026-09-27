@@ -37,6 +37,13 @@
 // route it authorises by who asks with a 403, which hides nothing: what is refused is the
 // credential, whatever the route names. A request carrying a bearer token and a session is a 400.
 //
+// The sessions are opened on the API's own sign-in and enrolment page, GET /auth/sign-in and GET
+// /auth/enrol, which NewSignIn serves on the public URL's origin, the one a ceremony is accepted
+// from: static HTML, a stylesheet and two scripts embedded in the program, under a
+// Content-Security-Policy that lets them load nothing from anywhere else. POST
+// /api/v1/auth/sign-out, which the page offers, ends the session a request carries and clears its
+// cookie.
+//
 // # Absent and forbidden answer the same thing
 //
 // "An inaccessible workflow answering the same 404 as an absent one, so that probing yields

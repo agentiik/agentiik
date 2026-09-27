@@ -1,0 +1,40 @@
+{{template "head" .}}
+<body>
+<main id="page" data-page="sign-in" data-passkeys="{{.Passkeys}}" data-password="{{.Password}}" data-terminal-redirect="{{.Redirect}}" data-terminal-challenge="{{.Challenge}}">
+<p class="brand">Agentiik</p>
+<h1>Sign in</h1>
+<noscript><p class="problem">This page runs the passkey ceremony with JavaScript, which this browser is not running for it.</p></noscript>
+<p id="terminal" class="note" hidden>agk login is waiting in a terminal. Once you are signed in, this page hands it a one-time code, and the terminal takes it from there.</p>
+
+<section id="signed-in" hidden>
+<p id="who"></p>
+<button type="button" id="sign-out" class="quiet">Sign out</button>
+</section>
+
+<p id="enrolling" class="note" hidden>The installation asks your account for a passkey before anything else. <a href="enrol">Enrol one</a>, then sign in with it.</p>
+
+<section id="passkey" hidden>
+<p>Sign in with a passkey you enrolled, on this device or on a phone nearby.</p>
+<button type="button" id="sign-in">Sign in with a passkey</button>
+</section>
+
+<p id="unavailable" class="problem" hidden></p>
+
+<form id="password" method="post" hidden>
+<h2>With a password</h2>
+<label for="login">Login</label>
+<input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="secret">Password</label>
+<input id="secret" name="password" type="password" autocomplete="current-password" required>
+<label for="totp">One-time code <span class="hint">only if your account has one</span></label>
+<input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+<button type="submit" id="password-button">Sign in with a password</button>
+</form>
+
+<p id="status" role="status" aria-live="polite"></p>
+<p id="problem" class="problem" role="alert" hidden></p>
+
+<footer><a href="enrol">Enrol a passkey</a> from an enrolment link or with a recovery code.</footer>
+</main>
+</body>
+</html>
