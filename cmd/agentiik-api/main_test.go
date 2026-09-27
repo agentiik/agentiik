@@ -38,6 +38,9 @@ func TestAVerbIsRequiredAndTakesWhatItTakes(t *testing.T) {
 		{"namespace", "create"},
 		{"namespace", "delete", "finance"},
 		{"namespace", "create", "finance", "team-ops"},
+		{"recover"},
+		{"recover", ""},
+		{"recover", "alice", "bob"},
 		{"--version", "serve"},
 		{"--help", "serve"},
 	} {
