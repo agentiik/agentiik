@@ -136,8 +136,9 @@ const (
 	// noPasswordSignIn is every other refusal, one sentence for every reason.
 	noPasswordSignIn = "that sign-in opens nothing: the login, the password or the TOTP code does not match, or the account opens no session. Try again, or sign in with a passkey"
 
-	// tooManyAttempts is a sign-in past the count of attempts.
-	tooManyAttempts = "too many password sign-ins were tried for this account or from this address: try again once the seconds Retry-After gives have passed, or sign in with a passkey"
+	// tooManyAttempts is a sign-in past the count of attempts. When one more fits is Retry-After's
+	// to say, in seconds, which the sign-in page turns into minutes for a person.
+	tooManyAttempts = "too many password sign-ins were tried for this account or from this address in the last quarter of an hour: try again later, or sign in with a passkey"
 
 	// hashingBusy is a sign-in that waited too long for its turn to hash.
 	hashingBusy = "this installation is checking too many passwords at once to check this one in time: try again in a moment"

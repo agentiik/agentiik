@@ -2,12 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"html"
 	"html/template"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -16,7 +18,11 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/internal/dbtest"
+	"github.com/agentiik/agentiik/internal/password"
 	"github.com/agentiik/agentiik/internal/webauthn"
 	"github.com/agentiik/agentiik/internal/webauthn/webauthntest"
 )
@@ -334,7 +340,7 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 // The page's script on a stand-in browser, testdata/page_harness.js: the DOM of each page as it is
 // served, fetch answered as the API answers, navigator.credentials, location and history, driven
 // through what a person does. Signed out, the page offers the passkey; a session that may only
-// enrol is told what it needs and offered its sign-out; a password refused by the policy is not
+// enrol is told what it needs and offered its sign-out, and no sign-in, agk login's included; a password refused by the policy is not
 // offered again, whatever answers after; a sign-in agk login opened, by passkey or by password,
 // hands on its loopback address and follows the API back to it and nowhere else; an enrolment
 // link's code travels in the options' body alone and leaves the address once spent; where no
@@ -343,7 +349,118 @@ func TestThePagesConversionsAreWhatTheAPIWritesAndReads(t *testing.T) {
 // and every request is the page's own fetch, under the public URL's path, with credentials
 // same-origin and no mode, which the API's Origin check needs.
 func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
+	onAStandInBrowser(t, javaScript(t), "null")
+}
+
+// The password form on the stand-in browser, against what POST /api/v1/auth/login answers over a real
+// PostgreSQL, each answer as the route wrote it: a full session says who signed in and offers no
+// other sign-in; one that may only enrol offers the way to enrol a passkey and the sign-out, and no
+// sign-in; a wrong password keeps both forms and says so; passwords forbidden take the form away
+// and keep the passkey; and too many attempts say, in minutes, how long Retry-After asks to wait.
+func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	engine := javaScript(t)
+	answers, err := json.Marshal(passwordAnswers(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	onAStandInBrowser(t, engine, string(answers))
+}
+
+// routeAnswer is one answer of POST /api/v1/auth/login, as the harness replays it.
+type routeAnswer struct {
+	Login      string          `json:"login"`
+	Status     int             `json:"status"`
+	Body       json.RawMessage `json:"body"`
+	RetryAfter string          `json:"retryAfter,omitempty"`
+}
+
+// passwordAnswers are what the route answers, over a real PostgreSQL: alice's password where
+// passkeys are optional, bob's where one is required and he holds none, a wrong password, a
+// password where they are forbidden, and carol's eleventh attempt in a quarter of an hour.
+func passwordAnswers(t *testing.T) map[string]routeAnswer {
+	t.Helper()
+	pool, _ := dbtest.Open(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	clock := func() time.Time { return now }
+	const publicURL = "https://agentiik.example.com"
+	p, err := NewPrincipals(pool, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AcceptSessions(publicURL); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := NewRouter(p, p.Identify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
+		t.Fatal(err)
+	}
+	policy := func(passwords, passkeys string) {
+		bound := false
+		if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+			return w.SetInstallationPolicy(ctx, db.AuthPolicy{Password: passwords, Passkey: passkeys, UserVerification: "required", DeviceBoundOnly: &bound, MinPasskeys: 2}, now)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pool.Installation(t.Context(), db.Identity, func(ctx context.Context, w *db.Wide) error {
+		for _, login := range []string{"alice", "bob", "carol"} {
+			if err := w.CreateUser(ctx, db.User{Login: login, DisplayName: login}); err != nil {
+				return err
+			}
+			hash, err := password.Hash(login + "'s own")
+			if err != nil {
+				return err
+			}
+			if err := w.AddCredential(ctx, db.Credential{ID: login + "-password", Login: login, Type: db.CredentialPassword, PasswordHash: hash}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	signIn := func(login, secret string) routeAnswer {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"login": login, "password": secret})
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/auth/login", bytes.NewReader(body))
+		r.Header.Set("Origin", publicURL)
+		w := httptest.NewRecorder()
+		rt.ServeHTTP(w, r)
+		return routeAnswer{Login: login, Status: w.Code, Body: bytes.TrimSpace(w.Body.Bytes()), RetryAfter: w.Header().Get("Retry-After")}
+	}
+
+	answers := map[string]routeAnswer{}
+	policy("allowed", "optional")
+	answers["full"] = signIn("alice", "alice's own")
+	answers["wrong"] = signIn("alice", "not alice's")
+	policy("allowed", "required")
+	answers["enrolment"] = signIn("bob", "bob's own")
+	for range 10 {
+		signIn("carol", "a guess")
+	}
+	answers["tooMany"] = signIn("carol", "carol's own")
+	policy("forbidden", "required")
+	answers["forbidden"] = signIn("alice", "alice's own")
+
+	for name, want := range map[string]int{
+		"full": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
+		"forbidden": http.StatusForbidden, "tooMany": http.StatusTooManyRequests,
+	} {
+		if answers[name].Status != want {
+			t.Fatalf("the route answered %s with %d %s", name, answers[name].Status, answers[name].Body)
+		}
+	}
+	return answers
+}
+
+// onAStandInBrowser runs page.js on testdata/page_harness.js, with the pages as the templates write
+// them, and the route's answers where answers is not null, and fails the test with what the harness
+// says went otherwise.
+func onAStandInBrowser(t *testing.T, engine, answers string) {
+	t.Helper()
 	pages, err := template.ParseFS(signinFiles, "signin/*.html")
 	if err != nil {
 		t.Fatal(err)
@@ -403,6 +520,7 @@ func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 		read(signinFiles.ReadFile("signin/assets/codec.js")),
 		[]byte("function loadPage() {"), read(signinFiles.ReadFile("signin/assets/page.js")), []byte("}"),
 		[]byte("const pages = " + string(vectors) + ";"),
+		[]byte("const answers = " + answers + ";"),
 		read(os.ReadFile("testdata/page_harness.js")),
 	} {
 		script.Write(part)

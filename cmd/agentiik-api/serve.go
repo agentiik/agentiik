@@ -340,9 +340,9 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewPasswords(rt, passwords); err != nil {
 		return nil, err
 	}
-	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers. It offers no
-	// password form until POST /api/v1/auth/login is served.
-	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals}); err != nil {
+	// The sign-in and enrolment page the ceremonies run on, and the sign-out it offers, with the
+	// password form where the policy lets passwords in, now that POST /api/v1/auth/login is served.
+	if _, err := api.NewSignIn(rt, api.SignInOptions{Pool: pool, PublicURL: s.PublicURL, Sessions: principals, Passwords: true}); err != nil {
 		return nil, err
 	}
 	return rt, nil

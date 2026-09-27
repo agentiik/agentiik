@@ -89,9 +89,13 @@ function stage(name, address, { hash, insecure, raw } = {}) {
   global("fetch", (url, init) => new Promise((resolve) => {
     browser.requests.push({
       url: String(url), init, body: init && init.body ? JSON.parse(init.body) : undefined, answered: false,
-      answer(status, json) {
+      answer(status, json, headers = {}) {
         this.answered = true;
-        resolve({ status, json: async () => { if (json === undefined) { throw new SyntaxError("no body"); } return json; } });
+        resolve({
+          status,
+          headers: { get: (name) => Object.entries(headers).find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1] ?? null },
+          json: async () => { if (json === undefined) { throw new SyntaxError("no body"); } return json; },
+        });
       },
     });
   }));
@@ -148,6 +152,10 @@ const code = "agkenrol_oQtE7pKEuHkJTWZiELmHaW4Bc1fH6P_xBs51HPJ6f9U";
 const all = [];
 
 async function scenarios() {
+  if (answers) {
+    await passwordAnswers();
+    return;
+  }
   let b;
 
   scenario = "signed out";
@@ -161,12 +169,13 @@ async function scenarios() {
     "the page shows " + Object.keys(b.elements).filter((id) => visible(b, id)).join(", "));
 
   scenario = "a session that may only enrol, on the sign-in page";
-  b = stage("sign-in", "https://agentiik.example.com/auth/sign-in");
+  b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
   all.push(b);
   await settle();
   request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
   await settle();
   check(visible(b, "enrolling"), "the page does not say the account needs a passkey first");
+  check(!visible(b, "passkey") && !visible(b, "password"), "the page offers a sign-in to a session that may only enrol");
   check(visible(b, "signed-in") && /enrol/.test(text(b, "who")), "the page offers no sign-out: " + JSON.stringify(text(b, "who")));
   await fire(b, "sign-out", "click");
   const out = request(b, "auth/sign-out");
@@ -174,6 +183,16 @@ async function scenarios() {
   out.answer(204);
   await settle();
   check(!visible(b, "signed-in") && !visible(b, "enrolling") && text(b, "status") === "Signed out.", "the page did not sign out: " + text(b, "status"));
+  check(visible(b, "passkey") && visible(b, "password"), "the page offers no sign-in once signed out");
+
+  scenario = "a session that may only enrol, on a sign-in agk login opened";
+  b = stage("sign-in-password-terminal", "https://agentiik.example.com/auth/sign-in?redirect_uri=x");
+  all.push(b);
+  await settle();
+  request(b, "me").answer(403, { error: "this session enrols passkeys and nothing else" });
+  await settle();
+  check(visible(b, "terminal") && visible(b, "enrolling") && visible(b, "signed-in"), "the page does not send the session to enrol a passkey");
+  check(!visible(b, "passkey") && !visible(b, "password"), "the page offers agk login a sign-in from a session that may only enrol");
 
   scenario = "passwords withdrawn before the page knows who is signed in";
   b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
@@ -354,6 +373,7 @@ async function scenarios() {
       check(b.location.assigned === answer.redirect_to, "the page went to " + b.location.assigned);
     } else if (answer.session === "enrolment") {
       check(visible(b, "enrolling") && visible(b, "signed-in") && /enrol/.test(text(b, "who")), "the page does not send bob-martin to enrol a passkey");
+      check(!visible(b, "password") && !visible(b, "passkey"), "the page offers bob-martin another sign-in");
     } else {
       check(visible(b, "signed-in") && text(b, "who") === "Signed in as alice." && !visible(b, "password") && !visible(b, "passkey"), "the page does not say alice signed in");
     }
@@ -401,6 +421,53 @@ async function scenarios() {
       check(q.url.startsWith(browser.api), "a request went to " + q.url + " rather than under " + browser.api);
       check(q.init.credentials === "same-origin" && q.init.mode === undefined, "a request to " + q.url + " was sent with credentials " + q.init.credentials + " and mode " + q.init.mode);
     }
+  }
+}
+
+// passwordAnswers drives the password form against what POST /api/v1/auth/login answered the test,
+// over a real PostgreSQL, each answer as the route wrote it, its status, its body and its
+// Retry-After: a full session, one that may only enrol, a wrong password, passwords forbidden, and
+// too many attempts.
+async function passwordAnswers() {
+  const cases = [
+    ["full", (b) => {
+      check(visible(b, "signed-in") && text(b, "who") === "Signed in as " + answers.full.body.login + ".", "the page does not say who signed in: " + JSON.stringify(text(b, "who")));
+      check(!visible(b, "password") && !visible(b, "passkey") && !visible(b, "enrolling") && !visible(b, "problem"), "the page offers another sign-in, or says something went wrong");
+    }],
+    ["enrolment", (b) => {
+      check(visible(b, "enrolling") && visible(b, "signed-in") && /enrol/.test(text(b, "who")), "the page does not send the session to enrol a passkey");
+      check(!visible(b, "password") && !visible(b, "passkey") && !visible(b, "problem"), "the page offers a sign-in to a session that may only enrol");
+    }],
+    ["wrong", (b) => {
+      check(visible(b, "problem") && text(b, "problem").startsWith("That sign-in opens nothing"), "the page says " + JSON.stringify(text(b, "problem")));
+      check(visible(b, "password") && visible(b, "passkey") && !visible(b, "signed-in"), "the page takes the sign-in away after a wrong password");
+    }],
+    ["forbidden", (b) => {
+      check(visible(b, "problem") && /passwords are forbidden/i.test(text(b, "problem")), "the page says " + JSON.stringify(text(b, "problem")));
+      check(!visible(b, "password") && visible(b, "passkey"), "the page offers the password again, or no passkey");
+    }],
+    ["tooMany", (b) => {
+      const minutes = Math.ceil(Number(answers.tooMany.retryAfter) / 60);
+      check(visible(b, "problem") && text(b, "problem").endsWith(" Try again in " + minutes + " minutes."), "the page says " + JSON.stringify(text(b, "problem")) + " for a wait of " + answers.tooMany.retryAfter + " seconds");
+      check(visible(b, "password") && !visible(b, "signed-in"), "the page takes the password away after too many attempts");
+    }],
+  ];
+  for (const [name, then] of cases) {
+    const real = answers[name];
+    scenario = "a password sign-in answered as the route answered " + name + " (" + real.status + ")";
+    const b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+    all.push(b);
+    await settle();
+    request(b, "me").answer(401, { error: "this request carries no credential" });
+    await settle();
+    b.elements.login.value = real.login;
+    b.elements.secret.value = "whatever was typed";
+    await fire(b, "password", "submit");
+    const sent = request(b, "auth/login");
+    check(sent.body.login === real.login && sent.body.password === "whatever was typed", "the password sign-in sent " + JSON.stringify(sent.body));
+    sent.answer(real.status, real.body, real.retryAfter ? { "Retry-After": real.retryAfter } : {});
+    await settle();
+    then(b);
   }
 }
 
