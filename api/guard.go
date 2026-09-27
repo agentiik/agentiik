@@ -73,10 +73,11 @@ type Needs struct {
 	// OrAdministrator is set where an administrator reaches the route as well, whatever they
 	// hold at its scope: an installation power over every namespace, asked as every
 	// administrator's route asks it, as grant:manage at the installation through a credential
-	// that carries it. The grant routes are the ones that take it, since "an administrator may
-	// create grants in any namespace", which is how they read another namespace's payloads when
-	// they must: by granting themselves access first, where the grant is audited and the
-	// namespace's owners are told.
+	// that carries it. The routes that write a grant take it, since "an administrator may create
+	// a grant in any namespace, for anybody, as a power of the installation rather than through
+	// grant:manage there", and their handler asks Administering whether the caller came in by it,
+	// since "the namespace's owner is told of each". Nothing else of a namespace is an
+	// administrator's: "in a namespace, an administrator holds what their grants give".
 	OrAdministrator bool
 
 	// Seeing is set where the handler is given Sees, what its caller sees of the namespaces'
@@ -243,11 +244,24 @@ type OnNamespace struct{}
 func (OnNamespace) guards() guard { return guard{scope: Namespace, members: true} }
 
 // Holdings says which namespaces a principal holds a grant in, its own or one of its groups', on
-// the namespace or on a workflow of it: what a route taking OnNamespace answers a caller who does
-// not administer the installation. An Authorizer implements it where it can say.
+// the namespace or on a workflow of it: what a route taking OnNamespace, or declaring Needs.Seeing,
+// answers a caller who does not administer the installation. An Authorizer implements it where it
+// can say.
 type Holdings interface {
 	HeldIn(ctx context.Context, who Principal) ([]string, error)
 }
+
+// Administering answers, for the route serving r, whether the router let its caller through by an
+// administrator's power alone, on a route declaring Needs.OrAdministrator, rather than by the
+// permission the route needs, which the caller does not hold there. A route declaring none, and a
+// request the router did not serve, answer false.
+func Administering(r *http.Request) bool {
+	administering, _ := r.Context().Value(administeringKey{}).(bool)
+	return administering
+}
+
+// administeringKey is where the router leaves what Administering answers.
+type administeringKey struct{}
 
 // Sees answers, for the route serving r, whether its caller sees one namespace's record: every
 // namespace for an administrator, through a credential that carries the power, and otherwise one it
@@ -326,9 +340,9 @@ func (ForRunner) guards() guard { return guard{runner: true} }
 //
 // Any principal reaches it and it needs no permission, since what it answers is the caller's own,
 // and holding a credential, owning a namespace or being told something is none of the nine. It is
-// registered with HandleOwn, whose handler is given a Caller in place of a target: who asks, how the
-// credential it presented narrows it, and what it owns and holds through that credential, which the
-// router asks the authorizer rather than leaving to the handler, as it asks everything else.
+// registered with HandleOwn, whose handler is given a Caller in place of a target: who asks, how
+// the credential it presented narrows it, and what it owns and holds through that credential, which
+// the router asks the authorizer rather than leaving to the handler, as it asks everything else.
 type Own struct{}
 
 func (Own) guards() guard { return guard{own: true} }
@@ -421,9 +435,10 @@ type Effective struct {
 // grants resolve to now, each intersected with what the credential keeps at its scope, and whether
 // it administers, which the router asks the authorizer as it asks every administrator's route.
 //
-// The scopes asked about are those a grant of the caller's is written at, and those the credential's
-// within names, since a token narrowed to one workflow holds there what the namespace's grants give,
-// which no grant on that workflow says, and nothing on the namespace itself.
+// The scopes asked about are those a grant of the caller's is written at, and those the
+// credential's within names, since a token narrowed to one workflow holds there what the
+// namespace's grants give, which no grant on that workflow says, and nothing on the namespace
+// itself.
 func (c Caller) Effective(ctx context.Context) (Effective, error) {
 	if c.standings == nil || c.allow == nil {
 		return Effective{}, errors.New("api: the authorizer does not say what a principal is granted, and who the caller is answers it")

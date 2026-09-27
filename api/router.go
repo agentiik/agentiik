@@ -111,8 +111,9 @@ type Route struct {
 	OrAdministrator bool
 	Seeing          bool
 
-	// Own is set where the route answers about its caller's own credentials and those of the
-	// service accounts of the namespaces it owns, and needs no permission: see Own.
+	// Own is set where the route answers about its caller itself, its own credentials and those
+	// of the service accounts of the namespaces it owns, or who it is, and needs no permission:
+	// see Own.
 	Own bool
 }
 
@@ -348,7 +349,8 @@ func (rt *Router) MustHandleAcross(method, pattern string, g Across, h AcrossHan
 	}
 }
 
-// HandleOwn registers one route about its caller's own credentials and what it owns.
+// HandleOwn registers one route about its caller itself: its own credentials and what it owns, or
+// who it is.
 //
 // Separate from Handle for the reason HandleAcross is: the handler is given a Caller in place of a
 // target, since what it answers is the caller's own and there is nothing in its path to authorise.
@@ -572,13 +574,13 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 	}
 	// A route taking OnNamespace asks who sees which namespace instead of a permission, and
 	// refuses one naming a namespace its caller does not see.
-	var allowed bool
+	var allowed, administering bool
 	sees := seesNothing
 	if g.members {
 		sees, err = rt.seeing(r.Context(), as)
 		allowed = err == nil && (!g.within || sees(target.Namespace))
 	} else {
-		allowed, err = rt.admits(r.Context(), as, g, asked)
+		allowed, administering, err = rt.admits(r.Context(), as, g, asked)
 	}
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, "the request could not be authorised")
@@ -594,9 +596,11 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			return
 		}
 	}
-	// Set on every route, seeing nothing where the route does not take OnNamespace, for the
-	// reason the questions below are.
+	// Set on every route, seeing nothing where the route neither takes OnNamespace nor declares
+	// Needs.Seeing, and administering nowhere a route does not let an administrator through by
+	// the power alone, for the reason the questions below are.
 	r = r.WithContext(context.WithValue(r.Context(), seesKey{}, sees))
+	r = r.WithContext(context.WithValue(r.Context(), administeringKey{}, administering))
 	// Set on every route, to a question answered false where the route declares none, so that a
 	// request built from this one and served again, as a facade over the API would serve one,
 	// asks what its own route declared rather than what this one did.
@@ -631,7 +635,8 @@ func (rt *Router) serve(w http.ResponseWriter, r *http.Request, g guard, h Handl
 			sees, err := rt.seeing(ctx, again)
 			return err == nil && (!g.within || sees(target.Namespace)), err
 		}
-		return rt.admits(ctx, again, g, asked)
+		allowed, _, err := rt.admits(ctx, again, g, asked)
+		return allowed, err
 	}))
 	h(w, r, who, target)
 }
@@ -681,17 +686,19 @@ func (rt *Router) allow(ctx context.Context, as Identity, what Permission, over 
 	return rt.auth.Allow(ctx, as.Principal, what, over)
 }
 
-// admits is whether a route taking Needs lets the caller through: the permission it needs over the
-// target, and for a route an administrator reaches as well, the administrator's power where the
-// permission is not held, asked as every administrator's route asks it. The power reaches a target
-// a grant could name and nothing else, since a path naming a namespace no grant could name is the
-// absence it is to everybody, and its handler would be handed a name the database cannot hold.
-func (rt *Router) admits(ctx context.Context, as Identity, g guard, over Target) (bool, error) {
-	allowed, err := rt.allow(ctx, as, g.permission, over)
+// admits is whether a route taking Needs lets the caller through, and whether it did so by an
+// administrator's power alone: the permission it needs over the target, and for a route an
+// administrator reaches as well, the administrator's power where the permission is not held, asked
+// as every administrator's route asks it. The power reaches a target a grant could name and nothing
+// else, since a path naming a namespace no grant could name is the absence it is to everybody, and
+// its handler would be handed a name the database cannot hold.
+func (rt *Router) admits(ctx context.Context, as Identity, g guard, over Target) (allowed, administering bool, err error) {
+	allowed, err = rt.allow(ctx, as, g.permission, over)
 	if err != nil || allowed || !g.administered || !grantable(over) {
-		return allowed, err
+		return allowed, false, err
 	}
-	return rt.allow(ctx, as, GrantManage, Target{})
+	allowed, err = rt.allow(ctx, as, GrantManage, Target{})
+	return allowed, allowed, err
 }
 
 // grantable says whether a grant's scope could name the target: a namespace, or a workflow of one,

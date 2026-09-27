@@ -10,8 +10,9 @@ import (
 	"github.com/agentiik/agentiik/api"
 )
 
-// A route an administrator reaches as well, and one handed what its caller sees: the grant routes,
-// "an administrator may create grants in any namespace", and a grant naming a service account of
+// A route an administrator reaches as well, and one handed what its caller sees: the routes writing
+// a grant, since "an administrator may create a grant in any namespace, for anybody, as a power of
+// the installation rather than through grant:manage there", and a grant naming a service account of
 // another namespace answered by whether its writer sees that namespace.
 
 // sharer says carol administers the installation unless demoted is set, alice holds grant:manage on
@@ -44,12 +45,21 @@ func sharingRouter(t *testing.T, auth api.Authorizer) *api.Router {
 		t.Fatal(err)
 	}
 	rt.MustHandle("GET", "/api/v1/{namespace}/grants",
-		api.Needs{Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, seen)
+		api.Needs{Permission: api.GrantManage, Scope: api.Namespace, OrAdministrator: true, Seeing: true}, seenAdministering)
 	rt.MustHandle("GET", "/api/v1/{namespace}/workflows/{workflow}/grants",
-		api.Needs{Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true}, seen)
+		api.Needs{Permission: api.GrantManage, Scope: api.Workflow, OrAdministrator: true}, seenAdministering)
 	rt.MustHandle("GET", "/api/v1/{namespace}/secrets",
-		api.Needs{Permission: api.GrantManage, Scope: api.Namespace}, seen)
+		api.Needs{Permission: api.GrantManage, Scope: api.Namespace}, seenAdministering)
 	return rt
+}
+
+// seenAdministering writes what seen writes, and whether the caller came in by an administrator's
+// power alone, as Administering answers.
+func seenAdministering(w http.ResponseWriter, r *http.Request, who api.Principal, over api.Target) {
+	seen(w, r, who, over)
+	if api.Administering(r) {
+		w.Write([]byte("|administering"))
+	}
 }
 
 // seeing asks as who, narrowed to within where it is not empty, and answers the status and what the
@@ -67,10 +77,11 @@ func seeing(t *testing.T, rt *api.Router, path, who, within string) (int, string
 }
 
 // An administrator reaches a route declaring it in any namespace, and a workflow of one, holding
-// nothing there, but not a route that does not declare it, not through a token whose scope narrows
-// the power away, and not for a namespace no grant could name. Whoever holds the permission reaches
-// it as before, and the handler is told what its caller sees: every namespace for an administrator,
-// and those it holds a grant in and its token reaches for anybody else.
+// nothing there, and its handler is told they came in by the power; but not a route that does not
+// declare it, not through a token whose scope narrows the power away, and not for a namespace no
+// grant could name. Whoever holds the permission reaches it as before, and is not administering
+// there; the handler is told what its caller sees: every namespace for an administrator, and those
+// it holds a grant in and its token reaches for anybody else.
 func TestAnAdministratorReachesARouteThatSaysSo(t *testing.T) {
 	rt := sharingRouter(t, sharer{})
 	for _, c := range []struct {
@@ -78,9 +89,9 @@ func TestAnAdministratorReachesARouteThatSaysSo(t *testing.T) {
 		code              int
 		sees              string
 	}{
-		{"/api/v1/hr/grants", "carol", "", http.StatusOK, "finance,hr,team-ops"},
-		{"/api/v1/nowhere-yet/grants", "carol", "", http.StatusOK, "finance,hr,team-ops"},
-		{"/api/v1/hr/workflows/onboarding/grants", "carol", "", http.StatusOK, ""},
+		{"/api/v1/hr/grants", "carol", "", http.StatusOK, "finance,hr,team-ops|administering"},
+		{"/api/v1/nowhere-yet/grants", "carol", "", http.StatusOK, "finance,hr,team-ops|administering"},
+		{"/api/v1/hr/workflows/onboarding/grants", "carol", "", http.StatusOK, "|administering"},
 		{"/api/v1/hr/secrets", "carol", "", http.StatusNotFound, ""},
 		{"/api/v1/hr/grants", "carol", "hr", http.StatusNotFound, ""},
 		{"/api/v1/Not-A-Name/grants", "carol", "", http.StatusNotFound, ""},
@@ -126,8 +137,8 @@ func TestARouteAnAdministratorReachedAsksAgain(t *testing.T) {
 }
 
 // A route handed what its caller sees needs an authorizer that says who holds a grant where, and an
-// administrator's route at the installation says nothing by saying an administrator reaches it; what
-// a route declares reads back.
+// administrator's route at the installation says nothing by saying an administrator reaches it;
+// what a route declares reads back.
 func TestWhatARouteAnAdministratorReachesCannotBe(t *testing.T) {
 	ok := func(http.ResponseWriter, *http.Request, api.Principal, api.Target) {}
 	if err := router(t, api.DenyAll{}).Handle("GET", "/api/v1/{namespace}/grants", api.Needs{Permission: api.GrantManage, Scope: api.Namespace, Seeing: true}, ok); err == nil {

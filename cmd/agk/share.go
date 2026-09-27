@@ -85,7 +85,7 @@ func shareVerb(ctx context.Context, e Env, args []string) int {
 	}
 	var raw json.RawMessage
 	if _, err := installation.send(ctx, http.MethodPost, grantsPath(at), q, &raw, http.StatusCreated); err != nil {
-		return sharingRefused(e, err, at, "")
+		return sharingRefused(e, err, at, "", true)
 	}
 	if *output == "json" {
 		return indented(e, raw)
@@ -106,15 +106,15 @@ func shareVerb(ctx context.Context, e Env, args []string) int {
 	return exitSucceeded
 }
 
-// revokeGrant is agk share SCOPE --revoke ID: one grant written at that scope, from the next request
-// and the next run creation.
+// revokeGrant is agk share SCOPE --revoke ID: one grant written at that scope, from the next
+// request and the next run creation.
 func revokeGrant(ctx context.Context, e Env, at access.Scope, id, server string) int {
 	installation, ok := reach(e, server)
 	if !ok {
 		return exitUsage
 	}
 	if _, err := installation.send(ctx, http.MethodDelete, grantsPath(at)+"/"+url.PathEscape(id), nil, nil, http.StatusNoContent); err != nil {
-		return sharingRefused(e, err, at, id)
+		return sharingRefused(e, err, at, id, true)
 	}
 	fmt.Fprintf(e.Out, "revoked grant %s on %s: it gives nothing from the next request and the next run\n", id, at)
 	return exitSucceeded
@@ -139,7 +139,7 @@ func grantsVerb(ctx context.Context, e Env, args []string) int {
 	}
 	var raw json.RawMessage
 	if _, err := installation.send(ctx, http.MethodGet, grantsPath(at), nil, &raw, http.StatusOK); err != nil {
-		return sharingRefused(e, err, at, "")
+		return sharingRefused(e, err, at, "", false)
 	}
 	if *output == "json" {
 		return indented(e, raw)
@@ -158,8 +158,9 @@ func grantsVerb(ctx context.Context, e Env, args []string) int {
 }
 
 // describeGrants writes one grant a line: its identifier, whom it is for, what it gives or takes
-// away, the scope it was written at, which for a workflow's list tells what it inherits from what is
-// written on it, and the permissions it gives there, which on a workflow never hold the secrets'.
+// away, the scope it was written at, which for a workflow's list tells what it inherits from what
+// is written on it, and the permissions it gives there, which on a workflow never hold the
+// secrets'.
 func describeGrants(w io.Writer, grants []access.Grant) {
 	ids, principals, gives, scopes := 0, 0, 0, 0
 	for _, g := range grants {
@@ -199,7 +200,8 @@ func where(g access.Grant) string {
 }
 
 // whoami is agk whoami [NS[/WORKFLOW]]: the caller, its groups and what it holds, everywhere or on
-// the one namespace or workflow named, and what the installation tells it.
+// the one namespace or workflow named, and with none named, what the installation tells it, since
+// that is not about any one of them.
 func whoami(ctx context.Context, e Env, args []string) int {
 	fs := flags(e, "agk whoami", "agk whoami [<ns>[/<workflow>]] [--server <url>] [-o json]")
 	server := fs.String("server", "", "The installation. Defaults to "+serverVariable+".")
@@ -230,7 +232,7 @@ func whoami(ctx context.Context, e Env, args []string) int {
 	}
 	var raw json.RawMessage
 	if _, err := installation.send(ctx, http.MethodGet, "/api/v1/me", nil, &raw, http.StatusOK); err != nil {
-		return sharingRefused(e, err, access.Scope{}, "")
+		return sharingRefused(e, err, access.Scope{}, "", false)
 	}
 	if *output == "json" {
 		return indented(e, raw)
@@ -291,14 +293,17 @@ func permissionsLine(held []api.Permission) string {
 func noticeLine(n api.Notification) string {
 	when := n.At.UTC().Format(time.RFC3339)
 	switch {
-	case n.Kind == "admin_access_widened" && n.Grant != nil && n.Grant.Deny != "":
-		// A deny is told when an administrator took it away from their own access, since
-		// writing one widens nothing.
+	case n.Kind == "admin_access_widened" && n.Grant != nil && n.Grant.Deny != "" && n.At.After(n.Grant.GrantedAt):
+		// A deny told after it was written was taken away then, from an administrator's own
+		// access.
 		g := *n.Grant
 		return fmt.Sprintf("told %s at %s: an administrator lifted the deny of %s on %s for %s, widening their own access", n.ID, when, g.Deny, g.Scope, g.Principal)
 	case n.Kind == "admin_access_widened" && n.Grant != nil:
 		g := *n.Grant
 		gave := string(g.Role) + " on " + g.Scope.String() + " to " + g.Principal
+		if g.Deny != "" {
+			gave = "a deny of " + string(g.Deny) + " on " + g.Scope.String() + " to " + g.Principal
+		}
 		if g.ExpiresAt != nil {
 			gave += " until " + g.ExpiresAt.UTC().Format(time.RFC3339)
 		}
@@ -347,13 +352,18 @@ func grantsPath(at access.Scope) string {
 // sharingRefused says why a request about grants, or about the caller, came to nothing, and answers
 // the code to leave with: exit 1 where the installation said no, in its own sentence save where the
 // command line's says more, and exit 4 where it did not answer or answered that it could not now.
-func sharingRefused(e Env, err error, at access.Scope, id string) int {
+// changes says whether the request asked for a change, which such an answer leaves unknown.
+func sharingRefused(e Env, err error, at access.Scope, id string, changes bool) int {
 	if errors.Is(err, errUnreachable) {
 		fmt.Fprintln(e.Err, err)
 		return exitNoOutcome
 	}
 	if passing(err) && statusOf(err) != http.StatusTooManyRequests {
-		fmt.Fprintf(e.Err, "the installation answered %d, %s, and whether it did what was asked is not known: read it back with agk grants, or ask again\n", statusOf(err), err)
+		if changes {
+			fmt.Fprintf(e.Err, "the installation answered %d, %s, and whether it did what was asked is not known: read it back with agk grants, or ask again\n", statusOf(err), err)
+		} else {
+			fmt.Fprintf(e.Err, "the installation answered %d, %s, and could not answer now: ask again\n", statusOf(err), err)
+		}
 		return exitNoOutcome
 	}
 	switch status := statusOf(err); {

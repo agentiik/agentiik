@@ -413,7 +413,7 @@ func TestTheAPITakesTheCredentialRenewedInItsFile(t *testing.T) {
 // runner's own routes by the runner credential alone, and the object store by the signature in the
 // URL or the form. The API tokens are the caller's own, "for the caller or a service account of a
 // namespace it owns", which no permission names, and so is GET /api/v1/me with the caller's
-// notifications. Sharing takes grant:manage at its scope, or an administrator.
+// notifications. Sharing takes grant:manage at its scope, and writing a grant an administrator too.
 func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	database := freshDatabase(t)
 	if err := migrate(t.Context(), database, io.Discard); err != nil {
@@ -438,11 +438,12 @@ func TestServeHoldsEveryRouteToThePermissionThePageNames(t *testing.T) {
 	onRun := func(p, reveals api.Permission) api.Route {
 		return api.Route{Permission: p, Scope: api.Workflow, OfRun: true, Reveals: reveals}
 	}
-	// Sharing "requires grant:manage" at the scope the route names, and "an administrator may
-	// create grants in any namespace"; writing one is handed what its writer sees, for a service
-	// account of another namespace.
+	// Sharing "requires grant:manage" at the scope the route names, "or an administrator, whose
+	// grant notifies the namespace's owner", and writing one is handed what its writer sees, for a
+	// service account of another namespace; "in a namespace, an administrator holds what their
+	// grants give", so listing and revoking are grant:manage's alone.
 	sharing := func(at api.Scope, writes bool) api.Route {
-		return api.Route{Permission: api.GrantManage, Scope: at, OrAdministrator: true, Seeing: writes}
+		return api.Route{Permission: api.GrantManage, Scope: at, OrAdministrator: writes, Seeing: writes}
 	}
 	want := map[string]api.Route{
 		"GET /api/v1/runner-pools":                                       administrator,

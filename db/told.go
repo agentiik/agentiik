@@ -14,7 +14,8 @@ import (
 
 // What the installation tells one principal of its own accord, listed in their GET /api/v1/me: the
 // wire's $defs/notification. Not the events notifications.go keeps, which are about runs and become
-// push messages; these are about who may read what, and are read where the principal asks who it is.
+// push messages; these are about who may read what, and are read where the principal asks who it
+// is.
 //
 // "An administrator holds no implicit run:read_data. Reading another namespace's payloads means
 // granting themselves access first, which is audited and notifies the namespace's owner: a
@@ -25,8 +26,9 @@ import (
 
 // The kinds of notification, as the wire's $defs/notification names them.
 const (
-	// AdminAccessWidened is an administrator having widened their own access in a namespace,
-	// giving a role to it or taking a deny from it, told to the namespace's owners.
+	// AdminAccessWidened is an administrator having written a grant in a namespace by the
+	// installation's power, or widened their own access there, giving a role to it or taking a
+	// deny from it, told to the namespace's owners.
 	AdminAccessWidened = "admin_access_widened"
 
 	// PasskeyCounterRefused is a sign-in refused because a passkey's signature counter did not
@@ -63,18 +65,19 @@ type Notification struct {
 	Credential string
 }
 
-// TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote for their
-// own access in this namespace, or the deny g they took from it, to each of the namespace's owners
-// but actor, and answers who was told, by name. A deny in a notification is one taken away, since
-// writing one widens nothing.
+// TellOwners writes AdminAccessWidened, about the grant g an administrator, actor, wrote in this
+// namespace by the installation's power or for their own access, or the deny g they took from
+// their own access, to each of the namespace's owners but actor, and answers who was told, by
+// name. What was done is told by when: a grant told at its granted_at was written then, and a deny
+// told later was taken away then.
 //
 // "The owner told is the principal the namespace's record names. A namespace from before v0.3.0
 // names none: it becomes shared ... and every principal holding the owner role on it is told
 // instead", by a grant on the namespace, not expired at at, a deny beside it leaving the role held.
 // A group among them is told as each of its members, since a group reads nothing: one row for each,
 // so that one member dismissing it dismisses it for nobody else. A service account holding the role
-// is told as itself, since its token reads GET /api/v1/me as a user's does. actor is left out, since
-// telling somebody what they have just done tells them nothing.
+// is told as itself, since its token reads GET /api/v1/me as a user's does. actor is left out,
+// since telling somebody what they have just done tells them nothing.
 //
 // It is written in the transaction that writes the grant, so that no administrator's grant commits
 // untold, and before the audit entry that records it, which is the last statement of the

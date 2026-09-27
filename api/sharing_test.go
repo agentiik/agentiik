@@ -22,11 +22,11 @@ import (
 
 // sharing is somePrincipals serving the grant routes and the routes about the caller, with a token
 // for each principal a test asks as. Besides somePrincipals' own: frank owns finance, gina owns
-// finance/payroll alone, hank is in team-ops, which owns hr by its record, ivan views hr, and carol,
-// who administers the installation, is in admins. hr/reports is a service account of hr.
+// finance/payroll alone, hank is in team-ops, which owns hr by its record, ivan views hr, and
+// carol, who administers the installation, is in admins. hr/reports is a service account of hr.
 //
-// The routes' clock, at, runs a minute after the one grants are resolved by, so that what they write
-// is written after what was seeded, as it would be.
+// The routes' clock, at, runs a minute after the one grants are resolved by, so that what they
+// write is written after what was seeded, as it would be.
 type sharing struct {
 	principals
 	h      http.Handler
@@ -279,7 +279,8 @@ func TestAWorkflowsGrantsShowWhatItInherits(t *testing.T) {
 
 	var teamFinance string
 	in.query(t, &teamFinance, `select id from grants where principal = 'group:team-finance'`)
-	// A namespace's grant is not revoked at a workflow's route, nor a workflow's at its namespace's.
+	// A namespace's grant is not revoked at a workflow's route, nor a workflow's at its
+	// namespace's.
 	if w := in.ask(t, "DELETE", "/api/v1/finance/workflows/payroll/grants/"+teamFinance, "frank", ""); w.Code != http.StatusNotFound {
 		t.Errorf("revoking a namespace's grant at a workflow's route answered %d", w.Code)
 	}
@@ -352,104 +353,131 @@ func TestSharingTakesGrantManage(t *testing.T) {
 	}
 }
 
-// An administrator shares any namespace, and one granting themselves, or a group they belong to, is
-// told to the namespace's owners, in their GET /api/v1/me: the principal its record names, a group's
-// members for a group, or where it names none, whoever holds the owner role on it. A grant to
-// somebody else, and a deny, widen nothing and are told to nobody; the power goes no further than a
-// credential that carries it.
+// An administrator writes a grant in any namespace, for anybody, by the installation's power, and
+// the namespace's owners are told of each in their GET /api/v1/me: the principal its record names,
+// a group's members for a group, or where it names none, whoever holds the owner role on it.
+// Listing and revoking are not the power's: in a namespace, an administrator holds what their
+// grants give. The power goes no further than a credential that carries it.
 func TestAnAdministratorSharesAnyNamespaceAndItsOwnersAreTold(t *testing.T) {
 	in := someSharing(t)
-	if got := in.listed(t, "/api/v1/hr/grants", "carol"); len(got) != 2 {
-		t.Errorf("an administrator lists hr's grants as %q", got)
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/v1/hr/grants"}, {"GET", "/api/v1/finance/workflows/payroll/grants"},
+	} {
+		if w := in.ask(t, c.method, c.path, "carol", ""); w.Code != http.StatusNotFound {
+			t.Errorf("%s %s by an administrator holding nothing there answered %d", c.method, c.path, w.Code)
+		}
 	}
-	self := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","role":"editor"}`)
-	// finance's record names no owner, as a namespace from v0.2 names none: dave and frank hold the
-	// owner role on it, bob held it until an hour ago, and gina holds it on payroll alone.
-	if got := in.strings(t, `select recipient || ' ' || kind || ' ' || namespace || ' ' || (access_grant->>'id') from notifications order by recipient`); !slices.Equal(got, []string{
-		"dave admin_access_widened finance " + self.ID, "frank admin_access_widened finance " + self.ID,
-	}) {
-		t.Errorf("carol's grant to herself in finance was told as %q", got)
+	told := func(g access.Grant) []string {
+		t.Helper()
+		return in.strings(t, `select recipient from notifications where access_grant->>'id' = $1 and at = $2 order by recipient`, g.ID, in.at)
 	}
 	var detail string
-	in.query(t, &detail, `select detail from audit_log where target = $1`, self.ID)
-	if detail != `{"notified":["dave","frank"],"principal":"carol","role":"editor","scope":"finance"}` {
-		t.Errorf("carol's grant to herself is recorded as %s", detail)
+	recorded := func(action, id string) string {
+		t.Helper()
+		in.query(t, &detail, `select detail from audit_log where action = $1 and target = $2`, action, id)
+		return detail
+	}
+
+	// finance's record names no owner, as a namespace from v0.2 names none: dave and frank hold the
+	// owner role on it, bob held it until an hour ago, and gina holds it on payroll alone.
+	self := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","role":"editor"}`)
+	if got := told(self); !slices.Equal(got, []string{"dave", "frank"}) {
+		t.Errorf("carol's grant to herself in finance was told to %q", got)
+	}
+	if got := in.strings(t, `select kind || ' ' || namespace from notifications where access_grant->>'id' = $1`, self.ID); len(got) != 2 || got[0] != "admin_access_widened finance" {
+		t.Errorf("carol's grant to herself was told as %q", got)
+	}
+	if got := recorded("grant.create", self.ID); got != `{"notified":["dave","frank"],"principal":"carol","role":"editor","scope":"finance"}` {
+		t.Errorf("carol's grant to herself is recorded as %s", got)
 	}
 	if !in.holds(t, "carol", api.RunReadData, invoicingTarget) {
 		t.Error("the grant carol wrote herself gives her nothing")
 	}
-
-	// hr's record names team-ops, whose members are told, and a group carol is in widens her too.
+	// For anybody, and a deny too: the owners are told of each.
+	alice := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","role":"viewer"}`)
+	aliceDeny := in.granted(t, "/api/v1/finance/workflows/payroll/grants", "carol", `{"principal":"alice","deny":"run:read_data"}`)
+	for _, g := range []access.Grant{alice, aliceDeny} {
+		if got := told(g); !slices.Equal(got, []string{"dave", "frank"}) {
+			t.Errorf("carol's grant %+v was told to %q", g, got)
+		}
+	}
+	// hr's record names team-ops, whose members are told.
 	group := in.granted(t, "/api/v1/hr/workflows/onboarding/grants", "carol", `{"principal":"group:admins","role":"viewer"}`)
-	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1`, group.ID); !slices.Equal(got, []string{"hank"}) {
+	if got := told(group); !slices.Equal(got, []string{"hank"}) {
 		t.Errorf("carol's grant to her group in hr was told to %q", got)
 	}
-
-	// To somebody else, a deny, or by somebody who does not administer: nothing is told.
+	// By somebody who does not administer, to themselves or anybody: nothing is told.
 	before := len(in.strings(t, `select id from notifications`))
-	in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","role":"viewer"}`)
-	deny := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","deny":"secret:write"}`)
 	in.granted(t, "/api/v1/finance/grants", "frank", `{"principal":"frank","role":"editor"}`)
-	aliceDeny := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","deny":"run:read_data"}`)
-	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+aliceDeny.ID, "carol", ""); w.Code != http.StatusNoContent {
-		t.Fatalf("carol revoking alice's deny answered %d", w.Code)
-	}
-	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+self.ID, "carol", ""); w.Code != http.StatusNoContent {
-		t.Fatalf("carol revoking her own role answered %d", w.Code)
-	}
+	in.granted(t, "/api/v1/finance/grants", "frank", `{"principal":"alice","role":"editor"}`)
 	if after := len(in.strings(t, `select id from notifications`)); after != before {
-		t.Errorf("grants that widen no administrator's own access told %d notifications", after-before)
+		t.Errorf("grants by an owner who does not administer told %d notifications", after-before)
+	}
+	// Revoking is grant:manage's alone.
+	if w := in.ask(t, "DELETE", "/api/v1/finance/workflows/payroll/grants/"+aliceDeny.ID, "carol", ""); w.Code != http.StatusNotFound {
+		t.Errorf("an administrator holding nothing in finance revoked a deny there, answered %d", w.Code)
 	}
 
-	// A deny taken from her own access widens it as a role given does, and so does a role given
-	// to a service account of a namespace she owns, whose tokens she may mint; not one of a
-	// namespace she does not own.
-	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+deny.ID, "carol", ""); w.Code != http.StatusNoContent {
-		t.Fatalf("carol revoking the deny on herself answered %d", w.Code)
+	// A token narrowed by a scope carries no administrator's power, and the path an administrator
+	// is let through to is still one that is there.
+	narrowed := in.token(t, "carol", nil, []string{"hr"}, in.now.Add(time.Hour))
+	if w := in.ask(t, "POST", "/api/v1/hr/grants", narrowed, `{"principal":"carol","role":"owner"}`); w.Code != http.StatusNotFound {
+		t.Errorf("an administrator's narrowed token sharing hr answered %d", w.Code)
 	}
-	if got := in.strings(t, `select recipient || ' ' || (access_grant->>'deny') from notifications where access_grant->>'id' = $1 order by recipient`, deny.ID); !slices.Equal(got, []string{
-		"dave secret:write", "frank secret:write",
-	}) {
-		t.Errorf("carol lifting the deny on herself was told as %q", got)
+	for _, path := range []string{"/api/v1/nowhere/grants", "/api/v1/hr/workflows/nightly/grants", "/api/v1/No-Such/grants", "/api/v1/hr/workflows/%ff/grants"} {
+		if w := in.ask(t, "POST", path, "carol", `{"principal":"carol","role":"owner"}`); w.Code != http.StatusNotFound {
+			t.Errorf("POST %s by an administrator answered %d: %s", path, w.Code, w.Body)
+		}
 	}
-	in.query(t, &detail, `select detail from audit_log where action = 'grant.delete' and target = $1`, deny.ID)
-	if detail != `{"deny":"secret:write","notified":["dave","frank"],"principal":"carol","scope":"finance"}` {
-		t.Errorf("carol lifting the deny on herself is recorded as %s", detail)
-	}
+
+	// Once carol owns finance by a grant, she shares it as its owners do, and is told of by her
+	// own access alone: a role given to herself, a group she is in or a service account of a
+	// namespace she owns, whose tokens she may mint, and a deny taken from any of them.
+	deny := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"carol","deny":"secret:write"}`)
+	in.granted(t, "/api/v1/finance/grants", "frank", `{"principal":"carol","role":"owner"}`)
 	if err := in.pool.In(t.Context(), "hr", func(ctx context.Context, n *db.NS) error {
 		return n.GrantAccess(ctx, access.Grant{ID: ulid.New(), Principal: "group:admins", Scope: access.Scope{Namespace: "hr"}, Role: access.Owner, GrantedBy: "hank"})
 	}); err != nil {
 		t.Fatal(err)
 	}
+	before = len(in.strings(t, `select id from notifications`))
+	in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"ivan","role":"viewer"}`)
+	in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"alice","deny":"workflow:delete"}`)
+	if w := in.ask(t, "DELETE", "/api/v1/finance/workflows/payroll/grants/"+aliceDeny.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol, owning finance, revoking alice's deny answered %d", w.Code)
+	}
+	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+alice.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol, owning finance, revoking alice's role answered %d", w.Code)
+	}
+	if after := len(in.strings(t, `select id from notifications`)); after != before {
+		t.Errorf("an owner who administers, sharing with others, told %d notifications", after-before)
+	}
 	reports := in.granted(t, "/api/v1/finance/grants", "carol", `{"principal":"hr/reports","role":"viewer"}`)
-	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1 order by recipient`, reports.ID); !slices.Equal(got, []string{"dave", "frank"}) {
+	if got := told(reports); !slices.Equal(got, []string{"dave", "frank"}) {
 		t.Errorf("carol's grant to a service account of hr, which her group owns, was told to %q", got)
 	}
-	nightly := in.granted(t, "/api/v1/finance/workflows/payroll/grants", "carol", `{"principal":"finance/nightly","role":"viewer"}`)
-	if got := in.strings(t, `select recipient from notifications where access_grant->>'id' = $1`, nightly.ID); len(got) != 0 {
-		t.Errorf("carol's grant to a service account of finance, which she does not own, was told to %q", got)
+	if w := in.ask(t, "DELETE", "/api/v1/finance/grants/"+deny.ID, "carol", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("carol revoking the deny on herself answered %d", w.Code)
+	}
+	if got := in.strings(t, `select recipient || ' ' || (access_grant->>'deny') from notifications where access_grant->>'id' = $1 order by recipient, at`, deny.ID); !slices.Equal(got, []string{
+		"dave secret:write", "dave secret:write", "frank secret:write", "frank secret:write",
+	}) {
+		t.Errorf("carol's deny on herself, written and then lifted, was told as %q", got)
+	}
+	if got := recorded("grant.delete", deny.ID); got != `{"deny":"secret:write","notified":["dave","frank"],"principal":"carol","scope":"finance"}` {
+		t.Errorf("carol lifting the deny on herself is recorded as %s", got)
 	}
 
-	// A token narrowed by a scope carries no administrator's power, and the path an administrator
-	// is let through to is still one that is there.
-	narrowed := in.token(t, "carol", nil, []string{"finance"}, in.now.Add(time.Hour))
-	if w := in.ask(t, "GET", "/api/v1/finance/grants", narrowed, ""); w.Code != http.StatusNotFound {
-		t.Errorf("an administrator's narrowed token listing finance's grants answered %d", w.Code)
-	}
-	for _, path := range []string{"/api/v1/nowhere/grants", "/api/v1/finance/workflows/nightly/grants", "/api/v1/No-Such/grants", "/api/v1/finance/workflows/%ff/grants"} {
-		for _, method := range []string{"GET", "POST"} {
-			if w := in.ask(t, method, path, "carol", `{"principal":"carol","role":"owner"}`); w.Code != http.StatusNotFound {
-				t.Errorf("%s %s by an administrator answered %d: %s", method, path, w.Code, w.Body)
-			}
-		}
-	}
-
-	// The bootstrap token, an administrator until the first one enrols, shares as operator and
-	// widens nobody's own access, since no grant can name operator.
+	// The bootstrap token owns every namespace until it ends, and shares as operator as their
+	// owners do, widening nobody's own access, since no grant can name operator.
 	in.withBootstrap(t, "agk_op_bootstrap")
+	before = len(in.strings(t, `select id from notifications`))
 	boot := in.granted(t, "/api/v1/hr/grants", "agk_op_bootstrap", `{"principal":"alice","role":"viewer"}`)
 	if boot.GrantedBy != "operator" {
 		t.Errorf("the bootstrap token's grant was written by %q", boot.GrantedBy)
+	}
+	if after := len(in.strings(t, `select id from notifications`)); after != before {
+		t.Errorf("the bootstrap token's grant told %d notifications", after-before)
 	}
 	if w := in.ask(t, "POST", "/api/v1/hr/grants", "agk_op_bootstrap", `{"principal":"operator","role":"owner"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("a grant to operator answered %d: %s", w.Code, w.Body)

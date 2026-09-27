@@ -23,12 +23,15 @@ import (
 // the workflow YAML. In the file, workflow:write would equal grant:manage: an editor could make
 // themselves owner in the same commit." So a grant is written here and nowhere else, behind
 // grant:manage at the scope the route names, and the scope is the route's and never the body's, so
-// that nobody writes one where they do not hold grant:manage. An administrator reaches every one of
-// these routes as well, since "an administrator may create grants in any namespace", and widening
-// their own access here is told to the namespace's owners: see ownAccess.
+// that nobody writes one where they do not hold grant:manage. An administrator writes one as well,
+// since "an administrator may create a grant in any namespace, for anybody, as a power of the
+// installation rather than through grant:manage there", and "the namespace's owner is told of
+// each, as of a grant an administrator gives themselves"; an administrator widening their own
+// access is told the same way, however they came to share: see ownAccess. Listing and revoking are
+// grant:manage's alone, since "in a namespace, an administrator holds what their grants give".
 //
-// Revoking is effective "from the next request and the next run creation", which nothing here has to
-// do: Principals reads a principal's grants at every request.
+// Revoking is effective "from the next request and the next run creation", which nothing here has
+// to do: Principals reads a principal's grants at every request.
 
 // GrantRequest is a grant or a deny to write at the scope the route names: openapi.json's
 // grantCreate, one principal and exactly one of a role and a denied permission, with an optional
@@ -111,8 +114,8 @@ func NewSharing(rt *Router, o SharingOptions) (*SharingAPI, error) {
 		o.Now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &SharingAPI{pool: o.Pool, now: o.Now}
-	manage := func(at Scope, seeing bool) Needs {
-		return Needs{Permission: GrantManage, Scope: at, OrAdministrator: true, Seeing: seeing}
+	manage := func(at Scope, writes bool) Needs {
+		return Needs{Permission: GrantManage, Scope: at, OrAdministrator: writes, Seeing: writes}
 	}
 	for _, r := range []struct {
 		method  string
@@ -191,8 +194,8 @@ func (s *SharingAPI) list(w http.ResponseWriter, r *http.Request, _ Principal, o
 }
 
 // create is POST .../grants: one grant or one deny at the route's scope, audited as grant.create in
-// the transaction that writes it, and told to the namespace's owners where it gives a role to an
-// administrator's own access.
+// the transaction that writes it, and told to the namespace's owners where an administrator wrote
+// it by the installation's power, or where it gives a role to an administrator's own access.
 func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principal, over Target) {
 	at, ok := scopeAt(w, over)
 	if !ok {
@@ -245,7 +248,7 @@ func (s *SharingAPI) create(w http.ResponseWriter, r *http.Request, who Principa
 			return err
 		}
 		detail := grantDetail(g)
-		if g.Role != "" && own(g.Principal) {
+		if Administering(r) || (g.Role != "" && own(g.Principal)) {
 			told, err := n.TellOwners(ctx, g, string(who), now)
 			if err != nil {
 				return err
