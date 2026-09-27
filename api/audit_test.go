@@ -127,7 +127,7 @@ func TestASecretWriteIsRecordedWithoutItsValue(t *testing.T) {
 	}
 }
 
-// A pool created, a join token issued from it, and a runner drained and revoked are entries on the
+// A pool created, a join token issued from it, a runner joining with one and drained and revoked are
 // installation, and an order given again is recorded as having changed nothing. The join token is
 // recorded by its identifier and never by itself.
 func TestRunnerPolicyAndOrdersAreRecorded(t *testing.T) {
@@ -159,6 +159,7 @@ func TestRunnerPolicyAndOrdersAreRecorded(t *testing.T) {
 	want := []struct{ action, target, result string }{
 		{audit.RunnerPoolCreate, "gpu", audit.Done},
 		{audit.JoinTokenIssue, token["id"].(string), audit.Done},
+		{audit.RunnerJoin, runner, audit.Done},
 		{audit.RunnerDrain, runner, audit.Done},
 		{audit.RunnerDrain, runner, audit.Unchanged},
 		{audit.RunnerRevoke, runner, audit.Done},
@@ -180,7 +181,7 @@ func TestRunnerPolicyAndOrdersAreRecorded(t *testing.T) {
 	if fmt.Sprint(created["namespaces"]) != "[finance]" || created["resource_ceilings"].(map[string]any)["cpu"] != "8" {
 		t.Errorf("the pool is recorded as %v", created)
 	}
-	if d := detailOf(t, got[4]); d["reason"] != "retired" || d["results_accepted_until"] == nil {
+	if d := detailOf(t, got[5]); d["reason"] != "retired" || d["results_accepted_until"] == nil {
 		t.Errorf("the revocation is recorded as %v", d)
 	}
 }

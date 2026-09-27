@@ -252,10 +252,15 @@ func whoami(ctx context.Context, e Env, args []string) int {
 	fmt.Fprintln(e.Out, who)
 	if at.Namespace != "" {
 		// What applies to a workflow is its own key where a grant, a deny or the credential makes
-		// it other than its namespace's, and its namespace's otherwise.
+		// it other than its namespace's. With none, it is its namespace's, or nothing where denies
+		// on it take all of that: the installation leaves out a workflow the caller cannot read,
+		// rather than name it to them, so which of the two is not agk's to say.
 		held, written := me.Permissions[at.String()]
 		if !written && at.Workflow != "" {
-			held = me.Permissions[at.Namespace]
+			if inherited := me.Permissions[at.Namespace]; len(inherited) > 0 {
+				fmt.Fprintf(e.Out, "on %s: %s, from %s, unless denies there take all of it\n", at, permissionsLine(inherited), at.Namespace)
+				return exitSucceeded
+			}
 		}
 		fmt.Fprintf(e.Out, "on %s: %s\n", at, permissionsLine(held))
 		return exitSucceeded
@@ -293,21 +298,10 @@ func permissionsLine(held []api.Permission) string {
 func noticeLine(n api.Notification) string {
 	when := n.At.UTC().Format(time.RFC3339)
 	switch {
-	case n.Kind == "admin_access_widened" && n.Grant != nil && n.Grant.Deny != "" && n.At.After(n.Grant.GrantedAt):
-		// A deny told after it was written was taken away then, from an administrator's own
-		// access.
-		g := *n.Grant
-		return fmt.Sprintf("told %s at %s: an administrator lifted the deny of %s on %s for %s, widening their own access", n.ID, when, g.Deny, g.Scope, g.Principal)
 	case n.Kind == "admin_access_widened" && n.Grant != nil:
-		g := *n.Grant
-		gave := string(g.Role) + " on " + g.Scope.String() + " to " + g.Principal
-		if g.Deny != "" {
-			gave = "a deny of " + string(g.Deny) + " on " + g.Scope.String() + " to " + g.Principal
+		if said := widenedBy(n, *n.Grant); said != "" {
+			return fmt.Sprintf("told %s at %s: %s, an administrator, %s", n.ID, when, n.By, said)
 		}
-		if g.ExpiresAt != nil {
-			gave += " until " + g.ExpiresAt.UTC().Format(time.RFC3339)
-		}
-		return fmt.Sprintf("told %s at %s: %s, an administrator, granted %s", n.ID, when, g.GrantedBy, gave)
 	case n.Kind == "passkey_counter_refused":
 		return fmt.Sprintf("told %s at %s: a sign-in with your passkey %s was refused because its signature counter did not move forward, as a copy of it would; remove it if the other copy is not yours", n.ID, when, n.Credential)
 	case n.Kind == "break_glass_recovery":
@@ -316,6 +310,36 @@ func noticeLine(n api.Notification) string {
 		return fmt.Sprintf("told %s at %s: agentiik-api recover, run on the installation's host, issued %s, an administrator, a recovery code", n.ID, when, n.Login)
 	}
 	return fmt.Sprintf("told %s at %s: %s", n.ID, when, n.Kind)
+}
+
+// widenedBy says what an administrator did that widened access, by the act the notification names,
+// and nothing where it names an act this agk does not know.
+func widenedBy(n api.Notification, g access.Grant) string {
+	gives := string(g.Role) + " on " + g.Scope.String()
+	if g.Deny != "" {
+		gives = "a deny of " + string(g.Deny) + " on " + g.Scope.String()
+	}
+	until := ""
+	if g.ExpiresAt != nil {
+		until = " until " + g.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	switch n.Act {
+	case "granted":
+		return "granted " + gives + " to " + g.Principal + until
+	case "deny_lifted":
+		return "lifted the deny of " + string(g.Deny) + " on " + g.Scope.String() + " for " + g.Principal + ", widening their own access"
+	case "joined_group":
+		who := n.Login
+		if who == n.By {
+			who = "themselves"
+		}
+		return "put " + who + " in " + g.Principal + ", which holds " + gives + until
+	case "left_group":
+		return "took themselves out of " + g.Principal + ", which holds " + gives + until + ", widening their own access"
+	case "group_removed":
+		return "removed " + g.Principal + ", which they were in and which held " + gives + until + ", widening their own access"
+	}
+	return ""
 }
 
 // oneScope reads the flags and the one namespace or workflow a verb is about, written as a grant's

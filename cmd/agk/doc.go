@@ -48,7 +48,7 @@
 //	                  given on top of those held
 //
 // Two more, user and group, are an administrator's, and the bootstrap token's until the first
-// administrator has enrolled:
+// administrator has signed in:
 //
 //	agk user          create, printing the enrolment link, recover, printing a recovery code's,
 //	                  list, show and delete

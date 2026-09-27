@@ -507,11 +507,23 @@ func (s *RunnerAPI) join(w http.ResponseWriter, r *http.Request, _ Principal, _ 
 		return
 	}
 
+	// Recorded in the transaction that creates the runner, as runner.join by whoever issued the
+	// token it spent, installation for the one init issues, so that a machine let into a pool
+	// is never there unrecorded, and the entry names who let it in.
 	var joined db.Joined
 	err = s.pool.Installation(r.Context(), db.RunnerInventory, func(ctx context.Context, wide *db.Wide) error {
 		var err error
-		joined, err = wide.Join(ctx, machine, s.rotation, s.now())
-		return err
+		if joined, err = wide.Join(ctx, machine, s.rotation, s.now()); err != nil {
+			return err
+		}
+		by := joined.IssuedBy
+		if by == "" {
+			by = installationActor
+		}
+		return wide.Audit(ctx, audit.Record{
+			Actor: by, Action: audit.RunnerJoin, Target: joined.Runner, Result: audit.Done,
+			Detail: map[string]any{"pool": joined.Pool, "labels": joined.Labels},
+		})
 	})
 	switch {
 	case errors.Is(err, db.ErrNoJoinToken):

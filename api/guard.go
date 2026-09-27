@@ -462,8 +462,10 @@ type Effective struct {
 	// Permissions are what the caller holds at each scope where it holds anything: every
 	// namespace, and every workflow where a grant or a deny on it, or the credential's scope,
 	// makes what applies there other than what its namespace gives, with the whole of what
-	// applies there. A workflow whose denies take away all its namespace gives is kept, holding
-	// nothing, since leaving it out would read as the namespace's permissions applying to it.
+	// applies there. A workflow whose denies take away all its namespace gives is left out,
+	// though leaving it out reads as the namespace's permissions applying to it: it is one the
+	// caller cannot read, whose existence no answer names to them, and a client's convenience
+	// does not outweigh that.
 	Permissions map[access.Scope]access.Set
 }
 
@@ -522,7 +524,7 @@ func (c Caller) Effective(ctx context.Context) (Effective, error) {
 	for at, set := range held {
 		namespace := held[access.Scope{Namespace: at.Namespace}]
 		switch {
-		case at.Workflow == "" && set == (access.Set{}):
+		case set == (access.Set{}):
 		case at.Workflow != "" && set == namespace:
 		default:
 			out.Permissions[at] = set
