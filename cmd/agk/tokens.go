@@ -306,7 +306,7 @@ func tokenRefused(e Env, err error, id, unknown string) int {
 		fmt.Fprintf(e.Err, "the installation answered %d, %s, and %s\n", status, err, unknown)
 		return exitNoOutcome
 	case status == http.StatusUnauthorized:
-		fmt.Fprintf(e.Err, "the installation did not accept the credential in %s: %s\n", tokenVariable, err)
+		fmt.Fprintf(e.Err, "%s: %s\n", credentialRefused(e.presentsKept()), err)
 	case status == http.StatusNotFound && id != "":
 		fmt.Fprintf(e.Err, "no token %s, or not yours to revoke\n", id)
 	default:

@@ -85,7 +85,7 @@ func logs(ctx context.Context, e Env, args []string) int {
 	if len(steps) == 0 {
 		var d db.RunDetail
 		if err := at.getJSON(ctx, "/api/v1/runs/"+url.PathEscape(run), &d); err != nil {
-			fmt.Fprintf(e.Err, "%s\n", aboutRun(run, err))
+			fmt.Fprintf(e.Err, "%s\n", at.aboutRun(run, err))
 			if errors.Is(err, errUnreachable) {
 				return exitNoOutcome
 			}
@@ -205,7 +205,7 @@ var errCutOff = errors.New("the log was cut off")
 func (s *stepLog) refusedWith(err error) string {
 	switch statusOf(err) {
 	case http.StatusUnauthorized:
-		return fmt.Sprintf("the installation did not accept the credential in %s", tokenVariable)
+		return s.at.refusedCredential()
 	case http.StatusNotFound:
 		return fmt.Sprintf("run %s has no such step, or is not there, or not yours", s.run)
 	}

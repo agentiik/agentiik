@@ -242,8 +242,9 @@ func (w *Wide) RemoveCredential(ctx context.Context, login, id string) error {
 // replaced one. A password held is replaced in its row, which keeps its identifier, and so the
 // sessions it opened, which its caller ends or keeps, and the TOTP generator beside it, which goes
 // wherever the password's row goes; it is recorded as set at at and used by nobody since, as
-// $defs/passwordCredential's created_at is "when the password was last set". Where none is held,
-// one is enrolled under id.
+// $defs/passwordCredential's created_at is "when the password was last set". The codes the one it
+// replaces minted for agk login go, since whoever knew it may be who holds them, and the row they
+// would have gone with stays. Where none is held, one is enrolled under id.
 //
 // Its caller holds the user's row first (HoldUser), as every act on an account does, so that two
 // settings at once take turns rather than both enrolling one.
@@ -254,6 +255,9 @@ func (w *Wide) SetPassword(ctx context.Context, login, id, hash string, at time.
 		 returning `+credentialColumns, login, hash, at))
 	switch {
 	case err == nil:
+		if _, err := w.tx.Exec(ctx, `delete from exchange_codes where login = $1 and credential = $2`, login, c.ID); err != nil {
+			return Credential{}, false, fmt.Errorf("db: the codes the password of %s minted could not be removed: %w", login, err)
+		}
 		return c, true, nil
 	case !errors.Is(err, pgx.ErrNoRows):
 		return Credential{}, false, fmt.Errorf("db: the password of %s could not be set: %w", login, err)

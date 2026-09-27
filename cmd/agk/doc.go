@@ -28,7 +28,8 @@
 //	                  expected outputs
 //
 // These reach an installation, whose address is --server or AGENTIIK_SERVER and whose
-// credential is AGENTIIK_TOKEN and never a flag:
+// credential is AGENTIIK_TOKEN, or where it is not set the token agk login kept for that
+// installation in the local profile, and never a flag:
 //
 //	agk push          a commit registered as a version, its tree carried with it
 //	agk run           with --namespace instead of --local, a run of a pushed commit
@@ -61,10 +62,16 @@
 //	agk whoami        who the token is, its groups and what it holds, everywhere, with what
 //	                  the installation tells it, or on one namespace or workflow
 //
-// Two more verbs are in the documented table and wait for something that is not there yet:
-// login for the sign-in v0.3.0 brings, and brick init for templates released from
-// agentiik/bricks. Each is in this table and each refuses naming what is missing, because a
-// verb the documentation lists and the binary does not know is a binary that looks broken.
+// Two sign a person in and out, in a browser, and keep their token in the local profile:
+//
+//	agk login         the sign-in page opened with a loopback address and a PKCE challenge,
+//	                  the code the browser brings back traded for an API token, kept
+//	agk logout        the token kept revoked, and forgotten
+//
+// One more verb is in the documented table and waits for something that is not there yet: brick
+// init, for templates released from agentiik/bricks. It is in this table and refuses naming what
+// is missing, because a verb the documentation lists and the binary does not know is a binary
+// that looks broken.
 //
 // Three manage the API tokens of whoever runs them, and of the service accounts of the
 // namespaces they own:
@@ -166,9 +173,12 @@
 //	namespace.go     agk namespace create, list, show, delete and quotas
 //	users.go         agk user and agk group
 //	remote.go        the installation's address, the credential, and its refusals
+//	login.go         agk login and agk logout, and the loopback address the browser comes
+//	                 back to
+//	profile.go       the local profile, the token agk login keeps for each installation
 //	tokens.go        agk token create, list and revoke
 //	serviceaccounts.go  agk service-account create, list and delete
-//	absent.go        the five verbs that wait, each refusing by name
+//	absent.go        brick init, which waits, refusing by name
 //	workflow.go      the one place a workflow is read, so validate and run cannot
 //	                 disagree about what is valid
 //	inputs.go        --input, --input-file, --inputs, through package schema and nothing
@@ -181,9 +191,9 @@
 //
 // The whole command line is one function, run(ctx context.Context, e Env, args []string)
 // int, and main is four lines around it. Env carries the two writers, the working
-// directory, the clock, the environment lookup and os.Executable, so a test drives argv
-// and reads bytes, which is what issue #83 needs and what no per-command entry point
-// gives.
+// directory, the clock, the environment lookup, os.Executable, the configuration directory
+// the local profile is kept in and the way a browser is opened, so a test drives argv and
+// reads bytes, which is what issue #83 needs and what no per-command entry point gives.
 //
 // # The proof of v0.1.0
 //

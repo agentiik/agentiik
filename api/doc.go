@@ -52,6 +52,10 @@
 // confirmation and DELETE /api/v1/me/totp. Each is a browser's: a bearer token sets and removes
 // nothing, since a token that leaked would otherwise be a way to a credential that outlives it.
 //
+// agk login signs in on the same page: it opens it with a loopback address and a challenge, a sign-in
+// completed there mints a one-time code the page hands that address, and agk trades the code and
+// its verifier for an API token at POST /api/v1/auth/exchange, which NewExchange serves (exchange.go).
+//
 // # Absent and forbidden answer the same thing
 //
 // "An inaccessible workflow answering the same 404 as an absent one, so that probing yields

@@ -20,7 +20,7 @@ import (
 //
 // Every verb names the namespace it is about as its one word, as agk status names its run, and
 // reaches the installation as every other verb does, through --server or AGENTIIK_SERVER and the
-// token in AGENTIIK_TOKEN. What the installation answers is printed as the wire writes it, each
+// token in AGENTIIK_TOKEN or the one agk login kept. What the installation answers is printed as the wire writes it, each
 // quota under its own name, so that what a person reads is what they would type in a request, and
 // -o json writes the answer itself.
 
@@ -457,7 +457,7 @@ func namespaceRefused(e Env, name string, change bool, err error) int {
 	status := statusOf(err)
 	switch {
 	case status == http.StatusUnauthorized:
-		said = fmt.Sprintf("the installation did not accept the credential in %s: %s", tokenVariable, said)
+		said = credentialRefused(e.presentsKept()) + ": " + said
 	case status == http.StatusForbidden && change:
 		said = "creating, bounding and removing a namespace are an administrator's, through a token with no scope: " + said
 	case status == http.StatusNotFound && name != "":

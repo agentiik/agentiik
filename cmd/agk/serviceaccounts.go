@@ -193,7 +193,7 @@ func serviceAccountRefused(e Env, who string, change bool, absent string, err er
 		fmt.Fprintln(e.Err, said)
 		return exitNoOutcome
 	case status == http.StatusUnauthorized:
-		said = fmt.Sprintf("the installation did not accept the credential in %s: %s", tokenVariable, said)
+		said = credentialRefused(e.presentsKept()) + ": " + said
 	case status == http.StatusNotFound && absent != "":
 		said = absent
 	case status == http.StatusNotFound:

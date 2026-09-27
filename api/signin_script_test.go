@@ -367,14 +367,41 @@ func TestThePageScriptSignsInEnrolsAndSignsOutOnAStandInBrowser(t *testing.T) {
 // And the enrolment page's password, against what POST /api/v1/auth/password/enrol answers: a full
 // session says whose password is set and offers the signed-in section; one that may only enrol sends
 // its holder on to a passkey; and passwords forbidden take the form away.
+//
+// And agk login's hand-off from end to end: the page agk login opened hands the route its loopback
+// address and challenge with the password, follows the redirect_to the route wrote to that address,
+// and the code the page took there is the one POST /api/v1/auth/exchange trades, with the verifier
+// the challenge was made of, for bob's token.
 func TestThePageScriptSignsInWithAPasswordAsTheRouteAnswers(t *testing.T) {
 	engine := javaScript(t)
-	answers, err := json.Marshal(passwordAnswers(t))
+	answered, h := passwordAnswers(t)
+	answers, err := json.Marshal(answered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	onAStandInBrowser(t, engine, string(answers))
+	followed := onAStandInBrowser(t, engine, string(answers))
+	if len(followed) != 1 || !strings.HasPrefix(followed[0], terminalRedirect+"?code=") {
+		t.Fatalf("the page followed %q, and agk login's sign-in is the one it follows", followed)
+	}
+	body, _ := json.Marshal(map[string]string{
+		"code": strings.TrimPrefix(followed[0], terminalRedirect+"?code="), "code_verifier": terminalVerifier, "device_label": "agk",
+	})
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/auth/exchange", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var issued IssuedToken
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &issued) != nil || issued.APIToken.Principal != "bob" {
+		t.Errorf("the code the page handed agk login traded for %d %s", w.Code, w.Body)
+	}
 }
+
+// What the pages agk login opens are opened with, in the tests: the loopback address and the
+// challenge openapi.json's examples write, and the verifier it is the SHA-256 of.
+const (
+	terminalRedirect  = "http://127.0.0.1:53682/callback"
+	terminalChallenge = "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"
+	terminalVerifier  = "cZ8hZxDEvfLznd4Ardqn6A1NxuCFaoluRfS-47oehmE"
+)
 
 // routeAnswer is one answer of POST /api/v1/auth/login, as the harness replays it.
 type routeAnswer struct {
@@ -385,9 +412,10 @@ type routeAnswer struct {
 }
 
 // passwordAnswers are what the route answers, over a real PostgreSQL: alice's password where
-// passkeys are optional, bob's where one is required and he holds none, a wrong password, a
-// password where they are forbidden, and carol's eleventh attempt in a quarter of an hour.
-func passwordAnswers(t *testing.T) map[string]routeAnswer {
+// passkeys are optional, for the page and for agk login, bob's where one is required and he holds
+// none, a wrong password, a password where they are forbidden, and carol's eleventh attempt in a
+// quarter of an hour; with the router that answered them, which serves the exchange too.
+func passwordAnswers(t *testing.T) (map[string]routeAnswer, http.Handler) {
 	t.Helper()
 	pool, _ := dbtest.Open(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -405,6 +433,9 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 		t.Fatal(err)
 	}
 	if _, err := NewPasswords(rt, PasswordOptions{Pool: pool, PublicURL: publicURL, Now: clock, Identify: p.Identify}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewExchange(rt, ExchangeOptions{Pool: pool, PublicURL: publicURL, Now: clock}); err != nil {
 		t.Fatal(err)
 	}
 	policy := func(passwords, passkeys string) {
@@ -437,9 +468,13 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	signIn := func(login, secret string) routeAnswer {
+	signIn := func(login, secret string, terminal ...TerminalSignIn) routeAnswer {
 		t.Helper()
-		body, _ := json.Marshal(map[string]string{"login": login, "password": secret})
+		asked := map[string]any{"login": login, "password": secret}
+		for _, handedOff := range terminal {
+			asked["terminal"] = handedOff
+		}
+		body, _ := json.Marshal(asked)
 		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/v1/auth/login", bytes.NewReader(body))
 		r.Header.Set("Origin", publicURL)
 		w := httptest.NewRecorder()
@@ -481,9 +516,13 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 	policy("forbidden", "required")
 	answers["forbidden"] = signIn("alice", "alice's own")
 	answers["enrolForbidden"] = enrol("gail")
+	// Last, so that the code it minted is traded under the policy it was minted under, and bob's,
+	// since the sign-in passwords forbidden refused took alice's password.
+	policy("allowed", "optional")
+	answers["terminal"] = signIn("bob", "bob's own", TerminalSignIn{RedirectURI: terminalRedirect, CodeChallenge: terminalChallenge})
 
 	for name, want := range map[string]int{
-		"full": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
+		"full": http.StatusOK, "terminal": http.StatusOK, "enrolment": http.StatusOK, "wrong": http.StatusUnauthorized,
 		"forbidden": http.StatusForbidden, "tooMany": http.StatusTooManyRequests,
 		"enrolFull": http.StatusOK, "enrolEnrolment": http.StatusOK, "enrolForbidden": http.StatusForbidden,
 	} {
@@ -491,7 +530,7 @@ func passwordAnswers(t *testing.T) map[string]routeAnswer {
 			t.Fatalf("the route answered %s with %d %s", name, answers[name].Status, answers[name].Body)
 		}
 	}
-	return answers
+	return answers, rt
 }
 
 func sha256Of(value string) []byte {
@@ -500,9 +539,10 @@ func sha256Of(value string) []byte {
 }
 
 // onAStandInBrowser runs page.js on testdata/page_harness.js, with the pages as the templates write
-// them, and the route's answers where answers is not null, and fails the test with what the harness
-// says went otherwise.
-func onAStandInBrowser(t *testing.T, engine, answers string) {
+// them, and the route's answers where answers is not null, fails the test with what the harness
+// says went otherwise, and answers the addresses the page sent the browser to with the route's
+// answers.
+func onAStandInBrowser(t *testing.T, engine, answers string) []string {
 	t.Helper()
 	pages, err := template.ParseFS(signinFiles, "signin/*.html")
 	if err != nil {
@@ -520,9 +560,9 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 		"sign-in":          {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld"}},
 		"sign-in-password": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered"}},
 		"sign-in-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld",
-			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
+			Redirect: terminalRedirect, Challenge: terminalChallenge}},
 		"sign-in-password-terminal": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "offered",
-			Redirect: "http://127.0.0.1:53682/callback", Challenge: "Ibi4l3hyoxxry38-L3XZ59u9IdHegygM4WK38DG2YKk"}},
+			Redirect: terminalRedirect, Challenge: terminalChallenge}},
 		"sign-in-ip":           {"sign-in.html", pageData{Scripts: true, Passkeys: "unavailable", Password: "offered", Own: "offered"}},
 		"sign-in-own-withheld": {"sign-in.html", pageData{Scripts: true, Passkeys: "available", Password: "offered", Own: "withheld"}},
 		"enrol":                {"enrol.html", pageData{Scripts: true, Passkeys: "available", Password: "withheld", Own: "withheld"}},
@@ -586,6 +626,7 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 	var out struct {
 		Failures []string            `json:"failures"`
 		Drawn    map[string][]string `json:"drawn"`
+		Followed []string            `json:"followed"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &out); err != nil {
 		t.Fatalf("the harness printed what does not read: %s\n%s", err, stdout.String())
@@ -604,6 +645,7 @@ func onAStandInBrowser(t *testing.T, engine, answers string) {
 			t.Errorf("the page drew %q as\n%s\nwhich is not the reference encoder's", text, strings.Join(rows, "\n"))
 		}
 	}
+	return out.Followed
 }
 
 // qrCase is one case of testdata/qr_vectors.json: a text, the version and the mask asked for where

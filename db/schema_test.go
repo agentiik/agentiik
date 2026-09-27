@@ -273,6 +273,9 @@ func TestEveryTableIsDecidedAbout(t *testing.T) {
 		// A TOTP generator waiting for its first code is a credential on its way, and is the
 		// installation's as every credential is.
 		"totp_enrolments": true,
+		// agk login's code is a sign-in on its way to a token, before any namespace is in
+		// question.
+		"exchange_codes": true,
 	}
 
 	created := regexp.MustCompile(`(?m)^create table (\w+)`).FindAllStringSubmatch(sql, -1)

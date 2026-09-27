@@ -53,8 +53,9 @@ import (
 // the edit is meant to stay behind: the commit is pushed as it was committed, and nothing else.
 
 const (
-	// tokenVariable is where the credential comes from. Never a flag: an argument is in the
-	// shell history, in the process list and in whatever recorded the terminal.
+	// tokenVariable is where a script's credential comes from, and where it is not set agk
+	// presents the token agk login kept (profile.go). Never a flag: an argument is in the shell
+	// history, in the process list and in whatever recorded the terminal.
 	tokenVariable = "AGENTIIK_TOKEN"
 
 	// serverVariable is the installation, so that a repository does not carry one and a
@@ -81,7 +82,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	if !ok {
 		return exitUsage
 	}
-	where, token := at.base, at.token
+	where := at.base
 
 	path, err := entryOf(e, *entry)
 	if err != nil {
@@ -168,7 +169,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	name := string(wf.Metadata.Name)
 	url := fmt.Sprintf("%s/api/v1/%s/workflows/%s/versions/%s",
 		strings.TrimRight(where, "/"), *namespace, name, sha)
-	pushed, err := put(ctx, url, token, body)
+	pushed, err := put(ctx, at, url, body)
 	if errors.Is(err, errAnswerUnread) {
 		// Recorded, and what it records is what cannot be said, which is no outcome
 		// rather than a refusal.
@@ -646,9 +647,9 @@ func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
 // what it records, which is not always what was pushed, cannot be said.
 var errAnswerUnread = errors.New("the installation recorded the version, and its answer saying which image digests it records could not be read")
 
-// put sends the version and reads whatever the server says about it: what the version records,
-// or why it was refused.
-func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, error) {
+// put sends the version to url with at's credential and reads whatever the server says about it:
+// what the version records, or why it was refused.
+func put(ctx context.Context, at remote, url string, body api.Push) (api.Pushed, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return api.Pushed{}, fmt.Errorf("the version could not be written: %w", err)
@@ -657,7 +658,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 	if err != nil {
 		return api.Pushed{}, fmt.Errorf("%s: %w", url, err)
 	}
-	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Authorization", "Bearer "+at.token)
 	r.Header.Set("Content-Type", "application/json")
 
 	answer, err := client(2 * time.Minute).Do(r)
@@ -676,7 +677,7 @@ func put(ctx context.Context, url, token string, body api.Push) (api.Pushed, err
 	said := refusedBy(answer)
 	switch answer.StatusCode {
 	case http.StatusUnauthorized:
-		return api.Pushed{}, fmt.Errorf("the installation did not accept the credential in %s", tokenVariable)
+		return api.Pushed{}, errors.New(at.refusedCredential())
 	case http.StatusNotFound:
 		// The same answer an inaccessible workflow gets, which is the point: there is
 		// nothing here to tell the two apart with, and saying so is more honest than
