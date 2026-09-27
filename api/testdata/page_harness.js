@@ -356,6 +356,20 @@ async function scenarios() {
   b.elements.code.value = "agkenrol_short";
   await fire(b, "enrol", "submit");
   check(visible(b, "problem") && !b.requests.some((q) => q.url.endsWith("auth/passkey/options")), "a code outside its grammar was sent");
+  b.elements.code.value = " " + code + " ";
+  await fire(b, "enrol", "submit");
+  const recovering = request(b, "auth/passkey/options");
+  check(JSON.stringify(recovering.body) === JSON.stringify({ ceremony: "registration", code }), "the options asked with the code typed in were " + JSON.stringify(recovering.body));
+  recovering.answer(200, registration);
+  await settle();
+  const recovered = request(b, "auth/passkey/verify");
+  check(recovered.body.ceremony === "registration" && !("code" in recovered.body), "the verification sent " + JSON.stringify(recovered.body));
+  recovered.answer(200, { ceremony: "registration", login: "alice", credential: { type: "passkey", id: "made", kind: "synced" } });
+  await settle();
+  check(b.elements.code.value === "" && visible(b, "enrolled") && /alice/.test(text(b, "enrolled-what")), "the page does not say the recovery code enrolled alice");
+  request(b, "me").answer(200, { principal: "alice" });
+  await settle();
+  check(!visible(b, "code-field") && visible(b, "signed-in") && text(b, "who") === "Signed in as alice.", "the page asks for the spent code again, or does not say alice signed in");
 
   scenario = "an installation addressed by an IP address, on the sign-in page";
   b = stage("sign-in-ip", "https://192.0.2.10/auth/sign-in");
