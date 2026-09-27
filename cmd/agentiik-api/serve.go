@@ -284,6 +284,10 @@ func routes(s settings, pool *db.Pool, consumers api.BusConsumers, issuer api.Bu
 	if _, err := api.NewObjects(rt, signed); err != nil {
 		return nil, err
 	}
+	// The API tokens of whoever asks, and of the service accounts of the namespaces they own.
+	if _, err := api.NewTokens(rt, api.TokenOptions{Pool: pool}); err != nil {
+		return nil, err
+	}
 	return rt, nil
 }
 

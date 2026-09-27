@@ -37,4 +37,13 @@
 //
 // A push refused for naming a secret its pusher holds no secret:use for is the other 403: the
 // route let the pusher through on workflow:write, so the workflow is one they already reach.
+//
+// # A caller's own credentials
+//
+// The API token routes answer about their caller: "an API token for the caller or a service account
+// of a namespace it owns", and the listing and revocation of those. No permission names that, since
+// holding a credential is none of the nine, so each takes Own, and its handler is given a Caller:
+// who asks, the token presented, whether its scope narrows it, and the namespaces it owns, which
+// Principals says as Owners. A token narrowed by a scope mints none and reaches no credential but
+// itself, and the bootstrap token mints none, its one lasting use being the first administrator.
 package api
