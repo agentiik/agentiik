@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -272,10 +273,20 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 	if w := in.ask(t, "POST", "/api/v1/users", in.bootstrap, `{"login":"frank","display_name":"Frank","admin":true}`, nil); w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "first administrator enrolled") {
 		t.Errorf("the ended bootstrap token creating frank answered %d: %s", w.Code, w.Body)
 	}
+	// And an administrator creates one, answered a new user's link that they issued: a first
+	// administrator's link is the bootstrap token's alone, and it has ended.
+	var frank api.CreatedUser
+	if w := in.ask(t, "POST", "/api/v1/users", in.carol, `{"login":"frank","display_name":"Frank","admin":true}`, &frank); w.Code != http.StatusCreated || !frank.User.Admin {
+		t.Fatalf("carol creating frank, an administrator, once the bootstrap ended answered %d: %s", w.Code, w.Body)
+	}
+	if c, err := in.openCode(t, codeOf(t, frank.Enrolment.Link)); err != nil || c.Kind != db.EnrolmentNewUser || c.IssuedBy != "carol" {
+		t.Errorf("frank's link reads as %+v, %v", c, err)
+	}
 
 	// Recorded with who acted, a repeat as unchanged, and never a link's code.
 	var got []string
-	for _, e := range audited(t, in.pool) {
+	entries := audited(t, in.pool)
+	for _, e := range entries {
 		got = append(got, e.Actor+" "+e.Action+" "+e.Target+" "+e.Result)
 		for _, c := range []string{first, second, codeOf(t, erin.Enrolment.Link)} {
 			if strings.Contains(e.Detail, c) {
@@ -289,15 +300,34 @@ func TestTheBootstrapTokenCreatesTheFirstAdministratorAndAFreshLinkUntilTheyEnro
 		"operator user.create dna done", "operator enrolment.issue dna done",
 		"operator user.create dan unchanged", "operator enrolment.issue dan done",
 		"operator user.create erin done", "operator enrolment.issue erin done",
+		"carol user.create frank done", "carol enrolment.issue frank done",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the audit log reads\n%s\nand the acts were\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	// Each with what was done: the user as created, and the link's kind, expiry and whether it
+	// replaced another.
+	if len(entries) == len(want) {
+		for i, d := range []string{
+			`{"admin":true,"display_name":"Dan Martin"}`,
+			`{"expires_at":"` + in.now.Add(time.Hour).Format(time.RFC3339Nano) + `","kind":"first-administrator","replaced":false}`,
+			`{"admin":true,"display_name":"Dan Martin"}`,
+			`{"expires_at":"` + in.now.Add(time.Hour).Format(time.RFC3339Nano) + `","kind":"first-administrator","replaced":true}`,
+		} {
+			if entries[i].Detail != d {
+				t.Errorf("entry %d details %s, want %s", entries[i].Seq, entries[i].Detail, d)
+			}
+		}
+		if d := entries[len(entries)-1].Detail; !strings.Contains(d, `"kind":"enrolment"`) {
+			t.Errorf("the link carol issued frank is recorded as %s", d)
+		}
+	}
 }
 
 // Every route is an administrator's: somebody who is not one is refused with 403, as is an
-// administrator's token narrowed to a namespace or to permissions, a suspended administrator, and a
-// request with no credential is a 401. An administrator reaches each.
+// administrator's token narrowed to a namespace or to permissions; a request with no credential is a
+// 401, as is one with a suspended administrator's token, which opens nothing. An administrator
+// reaches each.
 func TestOnlyAnAdministratorAdministersUsersAndGroups(t *testing.T) {
 	in := somePeople(t)
 	in.wide(t, func(ctx context.Context, w *db.Wide) error {
@@ -342,8 +372,8 @@ func TestOnlyAnAdministratorAdministersUsersAndGroups(t *testing.T) {
 		}
 	}
 	in.exec(t, `update users set suspended = true where login = 'carol'`)
-	if w := in.ask(t, "GET", "/api/v1/users", in.carol, "", nil); w.Code == http.StatusOK {
-		t.Errorf("a suspended administrator listed the users, answered %d", w.Code)
+	if w := in.ask(t, "GET", "/api/v1/users", in.carol, "", nil); w.Code != http.StatusUnauthorized {
+		t.Errorf("a suspended administrator listing the users answered %d", w.Code)
 	}
 }
 
@@ -536,11 +566,16 @@ func TestAUserIsRemovedWithWhatTheyHeldAndTheirEmptyPersonalNamespace(t *testing
 	var got []string
 	for _, e := range audited(t, in.pool) {
 		if e.Action != audit.EnrolmentIssue {
-			got = append(got, e.Actor+" "+e.Action+" "+e.Target)
+			got = append(got, e.Actor+" "+e.Action+" "+e.Target+" "+e.Detail)
 		}
 	}
-	if want := []string{"carol user.delete bob", "carol namespace.delete dan", "carol user.delete dan"}; !slices.Equal(got, want) {
-		t.Errorf("the removals were recorded as %v", got)
+	want := []string{
+		`carol user.delete bob {"admin":false,"display_name":"bob"}`,
+		`carol namespace.delete dan {"personal":true}`,
+		`carol user.delete dan {"admin":false,"display_name":"dan"}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the removals were recorded as\n%s", strings.Join(got, "\n"))
 	}
 }
 
@@ -629,6 +664,7 @@ func TestAGroupsMembershipChangesWhatItsGrantsReachAndTouchesNoGrant(t *testing.
 		{"PUT", "/api/v1/groups/team-finance/members/Alice", "no user"},
 		{"PUT", "/api/v1/groups/nothing/members/alice", "no group"},
 		{"DELETE", "/api/v1/groups/nothing/members/alice", "no group"},
+		{"DELETE", "/api/v1/groups/team-finance/members/Alice", "no user"},
 		{"PUT", "/api/v1/groups/%ff/members/alice", "no group"},
 		{"GET", "/api/v1/groups/nothing", "no group"},
 		{"GET", "/api/v1/groups/Team", "no group"},
@@ -752,6 +788,7 @@ func TestTheBootstrapEndingWhileARequestIsServedEndsWhatItMayDo(t *testing.T) {
 		{"POST", "/api/v1/users", `{"login":"frank","display_name":"Frank"}`},
 		{"POST", "/api/v1/users", `{"login":"dan","display_name":"Dan","admin":true}`},
 		{"POST", "/api/v1/users/dan/enrolment", ""},
+		{"POST", "/api/v1/users/erin/enrolment", ""},
 		{"DELETE", "/api/v1/users/erin", ""},
 		{"POST", "/api/v1/groups", `{"name":"team-ops","members":["alice"]}`},
 		{"PUT", "/api/v1/groups/old-team/members/erin", ""},
@@ -827,22 +864,24 @@ func TestTwoRequestsCreatingOneUserAtOnceMakeOneUserAndOneOpenLink(t *testing.T)
 	}
 }
 
-// waitForLocks waits until n transactions of this test's database wait on a lock, and fails the test
-// after ten seconds.
-func (in people) waitForLocks(t *testing.T, n int) {
+// waitForLocks waits until n transactions of this test's database wait on a lock, and answers an
+// error after ten seconds. It fails nothing itself, since it is called inside a transaction, which
+// has to end for the test to: one left open by a test that stopped there holds a connection the
+// pool waits for at cleanup, for as long as the test binary is allowed to run.
+func (in people) waitForLocks(t *testing.T, n int) error {
 	t.Helper()
 	watcher := dbtest.Superuser(t, in.super)
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		var waiting int
 		if err := watcher.QueryRow(t.Context(),
 			`select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		if waiting >= n {
-			return
+			return nil
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d transactions wait on a lock, and %d were expected to", waiting, n)
+			return fmt.Errorf("%d transactions wait on a lock, and %d were expected to", waiting, n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -877,7 +916,9 @@ func TestAnActLocksItsRowsBeforeItAppendsToTheAuditLog(t *testing.T) {
 				return err
 			}
 			go func() { answered <- sent(t, in.h, r.method, r.path, in.carol, r.body) }()
-			in.waitForLocks(t, 1)
+			if err := in.waitForLocks(t, 1); err != nil {
+				return err
+			}
 			return w.Audit(ctx, audit.Record{Actor: "carol", Action: audit.GroupMemberAdd, Target: "group:team-finance", Result: audit.Done})
 		})
 		if err != nil {
@@ -901,8 +942,7 @@ func TestALinkAskedWhileTheUserEnrolsIsRefused(t *testing.T) {
 			return err
 		}
 		go func() { answered <- sent(t, in.h, "POST", "/api/v1/users/alice/enrolment", in.carol, "") }()
-		in.waitForLocks(t, 1)
-		return nil
+		return in.waitForLocks(t, 1)
 	})
 	if w := <-answered; w.Code != http.StatusConflict {
 		t.Errorf("a link asked while alice enrolled answered %d: %s", w.Code, w.Body)
@@ -955,9 +995,13 @@ func TestTheLastAdministratorWhoCanSignInIsNotRemoved(t *testing.T) {
 	codes := make(chan int, 2)
 	go func() { codes <- sent(t, in.h, "DELETE", "/api/v1/users/gina", in.carol, "").Code }()
 	go func() { codes <- sent(t, in.h, "DELETE", "/api/v1/users/carol", gina, "").Code }()
-	in.waitForLocks(t, 2)
+	// Released before anything fails, so that the two requests end with the test.
+	waited := in.waitForLocks(t, 2)
 	if err := tx.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if waited != nil {
+		t.Fatal(waited)
 	}
 	got := []int{<-codes, <-codes}
 	slices.Sort(got)
@@ -1001,13 +1045,24 @@ func TestAnActOfTheBootstrapTokenWaitsForTheEnrolmentThatEndsIt(t *testing.T) {
 		go func() {
 			answered <- sent(t, in.h, "POST", "/api/v1/users", in.bootstrap, `{"login":"erin","display_name":"Erin"}`)
 		}()
-		in.waitForLocks(t, 1)
-		return nil
+		return in.waitForLocks(t, 1)
 	})
 	if w := <-answered; w.Code != http.StatusUnauthorized {
 		t.Errorf("a user created with the bootstrap token as it ended answered %d: %s", w.Code, w.Body)
 	}
 	if n := in.count(t, `select count(*) from users where login = 'erin'`); n != 0 {
 		t.Error("the bootstrap token created erin as it ended")
+	}
+}
+
+// A listing with nothing in it is an empty list, as the wire writes one, and never null: the
+// bootstrap token's first requests find no user and no group.
+func TestAnEmptyListingIsAnEmptyList(t *testing.T) {
+	in := somePeople(t)
+	in.exec(t, `delete from principals where kind = 'user'`)
+	for path, want := range map[string]string{"/api/v1/users": `{"users":[]}`, "/api/v1/groups": `{"groups":[]}`} {
+		if w := in.ask(t, "GET", path, in.bootstrap, "", nil); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want {
+			t.Errorf("%s with nothing to list answered %d: %s", path, w.Code, w.Body)
+		}
 	}
 }

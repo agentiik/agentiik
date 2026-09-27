@@ -104,6 +104,16 @@ func TestAGrantNamesItsTask(t *testing.T) {
 	if kind, _ := KindOf(join); kind != Join {
 		t.Errorf("a join token reads as %q", kind)
 	}
+	enrol, _, err := New(Enrol, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind, ok := KindOf(enrol); kind != Enrol || !ok {
+		t.Errorf("an enrolment code reads as %q, %v", kind, ok)
+	}
+	if _, ok := KindOf("agkenrol_short"); ok {
+		t.Error("an enrolment code shorter than its secret was read as one")
+	}
 }
 
 // What cannot be minted, and what is not a credential.

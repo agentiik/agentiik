@@ -568,7 +568,7 @@ func (s *UserAPI) removeUser(w http.ResponseWriter, r *http.Request, who Princip
 	case errors.Is(err, errLastAdministrator):
 		fail(w, http.StatusConflict, fmt.Sprintf("%s is the last administrator who can sign in, and an installation with none is one nobody can administer: make another administrator, and let them enrol, first", login))
 	case errors.As(err, &holds):
-		fail(w, http.StatusConflict, fmt.Sprintf("%s was not removed: a user's personal namespace goes with them only once it holds nothing, and %s", login, holds.Held()))
+		fail(w, http.StatusConflict, fmt.Sprintf("%s was not removed with their personal namespace: %s", login, holds.Held()))
 	case errors.Is(err, db.ErrOwnsNamespace):
 		// A namespace given them as owner after it was looked for, which the table refuses
 		// all the same.
@@ -816,8 +816,10 @@ func (s *UserAPI) removeMember(w http.ResponseWriter, r *http.Request, who Princ
 
 // membership puts a user in a group or takes them out, and answers the group as it now stands.
 //
-// A login outside its grammar names no user, and is answered as one that does not exist either
-// way: taking out of a group somebody nobody could be is not a change to record.
+// A login outside its grammar is one no user can have, and is answered as no user on both, as every
+// route here answers it: a request naming Alice where it meant alice is a mistake to say, and taking
+// out of a group a name nobody can hold is not a change to record. A login on the grammar that no
+// user has now is simply not a member, and taking it out changes nothing, as the page says.
 func (s *UserAPI) membership(w http.ResponseWriter, r *http.Request, who Principal, in bool) {
 	if err := readIfAny(r, nothingAsked{}, smallMaxBytes); err != nil {
 		fail(w, statusOf(err), err.Error())

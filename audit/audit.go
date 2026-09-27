@@ -63,7 +63,8 @@ const (
 	RunnerDrain  = "runner.drain"
 	RunnerRevoke = "runner.revoke"
 	// NamespaceCreate and NamespaceDelete are the namespace changes, made by agentiik-api
-	// namespace create and remove until v0.3.0's routes make them.
+	// namespace create and remove until v0.3.0's routes make them. A user's empty personal
+	// namespace removed with them is a NamespaceDelete too.
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 
