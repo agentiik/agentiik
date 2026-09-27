@@ -177,6 +177,10 @@ const registration = {
 const code = "agkenrol_oQtE7pKEuHkJTWZiELmHaW4Bc1fH6P_xBs51HPJ6f9U";
 const all = [];
 
+// followed are the addresses the page sent the browser to with a route's real answer, for the test
+// to trade the code agk login is handed there.
+const followed = [];
+
 // drawnCodes are the QR codes the page drew, by the text it drew them for, as rows of 1 for dark.
 const drawnCodes = {};
 
@@ -874,16 +878,23 @@ async function passwordAnswers() {
       check(visible(b, "problem") && /passwords are forbidden/i.test(text(b, "problem")), "the page says " + JSON.stringify(text(b, "problem")));
       check(!visible(b, "password") && visible(b, "passkey"), "the page offers the password again, or no passkey");
     }],
+    ["terminal", (b) => {
+      check(b.location.assigned === answers.terminal.body.redirect_to, "the page went to " + b.location.assigned + " and the route sent it to " + answers.terminal.body.redirect_to);
+      check(!visible(b, "problem"), "the page says " + JSON.stringify(text(b, "problem")));
+      if (b.location.assigned) {
+        followed.push(b.location.assigned);
+      }
+    }, "sign-in-password-terminal"],
     ["tooMany", (b) => {
       const minutes = Math.ceil(Number(answers.tooMany.retryAfter) / 60);
       check(visible(b, "problem") && text(b, "problem").endsWith(" Try again in " + minutes + " minutes."), "the page says " + JSON.stringify(text(b, "problem")) + " for a wait of " + answers.tooMany.retryAfter + " seconds");
       check(visible(b, "password") && !visible(b, "signed-in"), "the page takes the password away after too many attempts");
     }],
   ];
-  for (const [name, then] of cases) {
+  for (const [name, then, page] of cases) {
     const real = answers[name];
     scenario = "a password sign-in answered as the route answered " + name + " (" + real.status + ")";
-    const b = stage("sign-in-password", "https://agentiik.example.com/auth/sign-in");
+    const b = stage(page || "sign-in-password", "https://agentiik.example.com/auth/sign-in");
     all.push(b);
     await settle();
     request(b, "me").answer(401, { error: "this request carries no credential" });
@@ -893,6 +904,9 @@ async function passwordAnswers() {
     await fire(b, "password", "submit");
     const sent = request(b, "auth/login");
     check(sent.body.login === real.login && sent.body.password === "whatever was typed", "the password sign-in sent " + JSON.stringify(sent.body));
+    // The page hands on what agk login opened it with, as the route was asked it.
+    const handedOff = page ? { redirect_uri: pages[page].data["data-terminal-redirect"], code_challenge: pages[page].data["data-terminal-challenge"] } : undefined;
+    check(JSON.stringify(sent.body.terminal) === JSON.stringify(handedOff), "the password sign-in handed on " + JSON.stringify(sent.body.terminal));
     sent.answer(real.status, real.body, real.retryAfter ? { "Retry-After": real.retryAfter } : {});
     await settle();
     then(b);
@@ -934,6 +948,6 @@ async function passwordAnswers() {
 }
 
 scenarios().then(
-  () => say(JSON.stringify({ failures, drawn: drawnCodes })),
-  (e) => say(JSON.stringify({ failures: failures.concat(["the harness failed: " + (e && e.stack ? e.stack : e)]), drawn: drawnCodes })),
+  () => say(JSON.stringify({ failures, drawn: drawnCodes, followed })),
+  (e) => say(JSON.stringify({ failures: failures.concat(["the harness failed: " + (e && e.stack ? e.stack : e)]), drawn: drawnCodes, followed })),
 );
