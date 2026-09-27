@@ -220,10 +220,10 @@ const (
 	NamespaceAdministration Reason = "a namespace created, removed or given its quotas"
 
 	// Identity is who a request is from, and the records that say so: the principals, their
-	// credentials, tokens, sessions and enrolment codes, the challenges of the passkey ceremonies,
-	// the authentication policy and the bootstrap state. A token, a session or a passkey names its
-	// principal before any namespace is in question, and administering them is the installation's
-	// business rather than a namespace's. A user's first sign-in creates their personal namespace
+	// credentials, tokens, sessions and enrolment codes, the challenges of the passkey ceremonies
+	// and the TOTP generators waiting for their first code, the authentication policy and the
+	// bootstrap state. A token, a session or a passkey names its principal before any namespace is
+	// in question, and administering them is the installation's business rather than a namespace's. A user's first sign-in creates their personal namespace
 	// in the same transaction, so that no session opens without it and none is made for a sign-in
 	// that failed.
 	Identity Reason = "who a request is from, and the principals and credentials that say so"

@@ -112,22 +112,26 @@ const (
 	APITokenRevoke = "api_token.revoke"
 )
 
-// The passkey ceremonies' events of v0.3.0's identity and access events.
+// The passkey ceremonies' and the passwords' events of v0.3.0's identity and access events.
 //
 // CredentialEnrol is a passkey registered, recorded by its credential ID with its kind, its flags
-// and its label, and EnrolmentUse the enrolment link or recovery code a registration spent.
+// and its label, a password set, recorded by its identifier with whether it replaced one, or a TOTP
+// generator confirmed; CredentialRemove is a password or a TOTP generator removed, recorded by its
+// identifier and its type, the generator that goes with a password among them. EnrolmentUse is the
+// enrolment link or recovery code a registration or a password spent.
 // BootstrapEnd is the first administrator's enrolment ending the bootstrap token, recorded once and
-// for good. SigninSucceed is a session opened, by an assertion or by the registration an enrolment
-// link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
+// for good. SigninSucceed is a session opened, by an assertion, by a password, or by the registration
+// or the password an enrolment link started. SigninFail is an assertion refused, with the reason, in a transaction of its own
 // since the sign-in it records committed nothing; its actor is the address the request came from,
 // since nobody was identified, and its target the account the passkey names, or the credential ID
 // presented where it names none.
 const (
-	CredentialEnrol = "credential.enrol"
-	EnrolmentUse    = "enrolment.use"
-	BootstrapEnd    = "bootstrap.end"
-	SigninSucceed   = "signin.succeed"
-	SigninFail      = "signin.fail"
+	CredentialEnrol  = "credential.enrol"
+	CredentialRemove = "credential.remove"
+	EnrolmentUse     = "enrolment.use"
+	BootstrapEnd     = "bootstrap.end"
+	SigninSucceed    = "signin.succeed"
+	SigninFail       = "signin.fail"
 )
 
 // The results an entry records.
