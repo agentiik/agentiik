@@ -62,6 +62,18 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 			`delete from runner_pools where name = 'default'`,
 			[]string{"names no runner label", "runner pool default, which does not exist"},
 		},
+		{
+			"a pool finance's allowed pools leave out", onPool("site=ops", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin');
+			 update namespaces set allowed_runner_pools = '{default}' where name = 'finance'`,
+			[]string{"runner pool ops", "not among the allowed_runner_pools of the namespace finance (default)"},
+		},
+		{
+			"no label, and a pool default finance's allowed pools leave out", theWorkflow,
+			`insert into runner_pools (name, labels, created_by) values ('ops', '{site=ops}', 'admin');
+			 update namespaces set allowed_runner_pools = '{ops}' where name = 'finance'`,
+			[]string{"runner pool default", "not among the allowed_runner_pools of the namespace finance (ops)"},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			core, q, pool, super := decidingOn(t, c.document)
@@ -120,7 +132,7 @@ func TestAStepWhosePoolWillNotRunTheNamespaceFailsUnpublished(t *testing.T) {
 // asked for, the use cases' site=home among them, and a step that names none goes to the pool
 // default the installation was created with. A pool that does not accept the run's namespace is
 // none of its choices, so a pool dedicated to another namespace on the same labels leaves the step
-// one pool rather than two.
+// one pool rather than two, and neither is a pool the namespace's allowed_runner_pools leave out.
 func TestAStepGoesToThePoolWhoseLabelsIncludeItsRunsOn(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -134,6 +146,12 @@ func TestAStepGoesToThePoolWhoseLabelsIncludeItsRunsOn(t *testing.T) {
 			"a label a pool dedicated to another namespace carries too", onPool("site=home", `{ cpu: "1" }`),
 			`insert into runner_pools (name, labels, accepted_namespaces, created_by) values ('home-ops', '{site=home}', '{team-ops}', 'admin')`,
 			"home",
+		},
+		{
+			"a label two pools carry, one of them allowed", onPool("site=home", `{ cpu: "1" }`),
+			`insert into runner_pools (name, labels, created_by) values ('home-2', '{site=home}', 'admin');
+			 update namespaces set allowed_runner_pools = '{default, home-2}' where name = 'finance'`,
+			"home-2",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -219,8 +237,8 @@ func TestARefusedFanOutFailsWholeWithoutASlot(t *testing.T) {
 }
 
 // The pools are read again in the transaction that issues the grant, so a pool that stopped running
-// the namespace after the pass read the pools, or one created since that carries the step's labels
-// too, gives the task no credential and publishes nothing.
+// the namespace after the pass read the pools, one the namespace stopped allowing, or one created
+// since that carries the step's labels too, gives the task no credential and publishes nothing.
 func TestAPoolChangedBeforeTheGrantIssuesNone(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -228,6 +246,7 @@ func TestAPoolChangedBeforeTheGrantIssuesNone(t *testing.T) {
 		says   string
 	}{
 		{"a pool that stopped accepting the namespace", `update runner_pools set accepted_namespaces = '{team-ops}' where name = 'ops'`, "runner pool ops"},
+		{"a namespace that stopped allowing the pool", `update namespaces set allowed_runner_pools = '{default}' where name = 'finance'`, "not among the allowed_runner_pools"},
 		{"a second pool carrying the labels", `insert into runner_pools (name, labels, created_by) values ('ops-2', '{site=ops}', 'admin')`, "runner pools ops and ops-2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
