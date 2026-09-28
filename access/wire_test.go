@@ -81,7 +81,7 @@ func TestTheScopeGrammarsAreTheWiresOwn(t *testing.T) {
 }
 
 // A principal is read on the wire's three forms, pattern for pattern: a login is a namespace's name
-// and never operator, a group is group:NAME and a service account NS/NAME, both on the namespace
+// and never operator or installation, a group is group:NAME and a service account NS/NAME, both on the namespace
 // grammar.
 func TestThePrincipalGrammarsAreTheWiresOwn(t *testing.T) {
 	defs := wireDefs(t)
@@ -89,8 +89,8 @@ func TestThePrincipalGrammarsAreTheWiresOwn(t *testing.T) {
 	if len(forms) != 3 || forms[0].Ref != "#/$defs/login" || forms[1].Ref != "#/$defs/groupRef" || forms[2].Ref != "#/$defs/serviceAccountRef" {
 		t.Fatalf("the wire's principalRef is %+v, and this package reads a login, a group and a service account", forms)
 	}
-	if login := defs["login"]; login.Ref != "#/$defs/namespace" || login.Not == nil || login.Not.Const != "operator" {
-		t.Errorf("the wire's login is %+v, and this package reads a namespace's name that is not operator", login)
+	if login := defs["login"]; login.Ref != "#/$defs/namespace" || login.Not == nil || !slices.Equal(login.Not.Enum, []string{"operator", "installation"}) {
+		t.Errorf("the wire's login is %+v, and this package reads a namespace's name that is neither operator nor installation", login)
 	}
 	if got, want := `^group:`+namespaceGrammar+`$`, defs["groupRef"].Pattern; got != want {
 		t.Errorf("a group is read as %s, and the wire writes %s", got, want)

@@ -1,0 +1,8 @@
+{
+  "id": "01M2AG2R4T6W8Y0A2C4E6G8J0M",
+  "kind": "passkey_counter_refused",
+  "at": "2026-09-27T15:10:00Z",
+  "act": "granted",
+  "by": "alice",
+  "credential": "aVBob25lUGFzc2tleQ"
+}

@@ -1,7 +1,6 @@
 {
-  "name": "alice",
-  "kind": "personal",
-  "owner": "alice",
+  "name": "demo",
+  "kind": "shared",
   "quotas": {
     "max_concurrent_tasks": 20,
     "max_retention_days": 90

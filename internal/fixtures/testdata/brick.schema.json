@@ -272,9 +272,10 @@
     },
     "portName": {
       "title": "Port name",
-      "description": "Name of a port. It becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space.",
+      "description": "Name of a port. It becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space; and it is at most 250 characters, since it becomes the file <name>.json, which a filesystem holds to 255 with its suffix.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "maxLength": 250,
       "examples": ["in", "out", "error", "rejected"]
     },
     "param": {
@@ -330,9 +331,10 @@
       ],
       "properties": {
         "name": {
-          "description": "Name the brick knows this secret by, on the grammar a workflow secret name is written on, because the two are the same name: the workflow names a secret by it, and the runner mounts the value at the mount this entry gives or, where it gives none, at /agk/secrets/<name>. A name this accepts and a workflow cannot write would be a requirement no workflow could satisfy. A workflow can only map secrets the namespace that owns it declares, so moving a workflow elsewhere breaks the reference at validation rather than silently carrying access along.",
+          "description": "Name the brick knows this secret by, on the grammar a workflow secret name is written on, because the two are the same name: the workflow names a secret by it, and the runner mounts the value at the mount this entry gives or, where it gives none, at /agk/secrets/<name>. A name this accepts and a workflow cannot write would be a requirement no workflow could satisfy, which is why it is held to the workflow's 255 characters too. A workflow can only map secrets the namespace that owns it declares, so moving a workflow elsewhere breaks the reference at validation rather than silently carrying access along.",
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "maxLength": 255,
           "examples": ["bearer", "billing"]
         },
         "optional": {

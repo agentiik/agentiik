@@ -1,0 +1,17 @@
+{
+  "id": "01M2AK5V7X9Z1B3D5F7H9K1M3P",
+  "kind": "admin_access_widened",
+  "at": "2026-09-27T09:00:00Z",
+  "act": "joined_group",
+  "by": "operator",
+  "namespace": "finance",
+  "grant": {
+    "id": "01M2AK4T6W8Y0A2C4E6G8J0M2Q",
+    "principal": "group:team-finance",
+    "scope": "finance",
+    "role": "editor",
+    "granted_by": "carol",
+    "granted_at": "2026-09-26T09:00:00Z"
+  },
+  "login": "dave"
+}

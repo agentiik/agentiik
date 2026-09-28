@@ -1,0 +1,17 @@
+# valid: a port declared with a name of 250 characters, the longest a port
+#   may be, since it becomes the file <name>.json
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: normalize
+  version: 1.0.0
+
+spec:
+  outputs:
+    rejected-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx: {}
+
+  runtime:
+    user: "65532:65532"

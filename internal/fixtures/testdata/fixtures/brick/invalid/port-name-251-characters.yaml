@@ -1,0 +1,19 @@
+# invalid: A port name of 251 characters. A port becomes the file <name>.json
+#   under /agk/out/ports/, which a filesystem holds to 255 characters with its
+#   suffix, and a workflow could not name it.
+# refused by: the schema
+# reference: https://agentiik.github.io/docs/#brick-manifest
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: normalize
+  version: 1.0.0
+
+spec:
+  outputs:
+    rejected-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx: {}
+
+  runtime:
+    user: "65532:65532"

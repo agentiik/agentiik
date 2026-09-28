@@ -73,9 +73,10 @@
   "$defs": {
     "identifier": {
       "title": "Identifier",
-      "description": "A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space.",
+      "description": "A name given in the workflow file and carried here unchanged: a step or a port. It is the same grammar the workflow file writes and the brick manifest declares, because this document is where that name actually travels: a port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS, so it carries no path separator, no comma and no space, and is at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "maxLength": 255,
       "examples": ["normalize", "out", "ok", "error"]
     },
 

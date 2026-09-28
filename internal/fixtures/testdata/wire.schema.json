@@ -2965,9 +2965,10 @@
     },
     "identifier": {
       "title": "Identifier",
-      "description": "A name given in the workflow file and carried here unchanged: a step or a port. The same grammar the workflow file writes and the brick manifest declares, carrying no path separator, no comma and no space, because the name becomes a directory, a file name and one entry of a comma separated list inside the container.",
+      "description": "A name given in the workflow file and carried here unchanged: a step or a port. The same grammar the workflow file writes and the brick manifest declares, carrying no path separator, no comma and no space, because the name becomes a directory, a file name and one entry of a comma separated list inside the container; at most 255 characters, the most a directory or a file name holds. A port is written at most 250 in the workflow file and the manifest, since it becomes the file <name>.json, and taken here up to 255, since the engine carries one of 251 to 255 until v0.4.0 refuses it where it is written, as the documentation says.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "maxLength": 255,
       "examples": [
         "invoice",
         "normalize",
@@ -2977,11 +2978,12 @@
     },
     "namespace": {
       "title": "Namespace",
-      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts cannot name a namespace, and are refused at namespace and login creation from v0.3.0.",
+      "description": "The namespace that owns the run. Every artifact, every quota and every grant is scoped to it, and deduplication in the object store never crosses it. Lowercase words joined by hyphens, at most 255 characters, the most a directory or a bus subject token holds a name to, which is also what bounds a login, a group's name and each half of a service account's, all written on this grammar. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts, stats cannot name a namespace, and are refused at namespace and login creation from v0.3.0. stats is reserved from v0.3.0 for GET /api/v1/stats/pools, which v0.6.0 serves at that path alone, so that no namespace created meanwhile takes it. Nothing renames a namespace, so one made before v0.3.0 under it keeps its name and the API still serves it, every route of it, with nothing to do; only its creation is refused: a reader validating what such an installation answers meets a refusal the API does not make.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 255,
       "not": {
-        "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts)$"
+        "pattern": "^(auth|me|users|groups|service-accounts|namespaces|runners|runner-pools|bus|tasks|bricks|runs|artifacts|stats)$"
       },
       "examples": [
         "finance",
@@ -3206,10 +3208,13 @@
     },
     "login": {
       "title": "Login",
-      "description": "What a user signs in as, and the name of the personal namespace created for them on first sign-in. Logins and namespace names share one name space, each refused where the other already exists, so a login is held to the namespace grammar and its reserved words by reference rather than by a copy: a login that could not also be a namespace would be a user whose personal namespace cannot be created. operator is refused as well, because it is the principal the interim operator token of v0.2.5 wrote on the rows it touched, and those rows keep it: a user called operator would inherit a history that is not theirs.",
+      "description": "What a user signs in as, and the name of the personal namespace created for them on first sign-in. Logins and namespace names share one name space, each refused where the other already exists, so a login is held to the namespace grammar and its reserved words by reference rather than by a copy: a login that could not also be a namespace would be a user whose personal namespace cannot be created. operator and installation are refused as well, because each names the author of rows the installation holds: operator the interim operator token of v0.2.5 on the rows it touched, and the bootstrap token on the enrolment links and grants it writes; installation the installation itself, as the author of the pool default. A user of either name would read as that author, and inherit a history that is not theirs.",
       "$ref": "#/$defs/namespace",
       "not": {
-        "const": "operator"
+        "enum": [
+          "operator",
+          "installation"
+        ]
       },
       "examples": [
         "alice",
@@ -3218,9 +3223,12 @@
     },
     "groupRef": {
       "title": "Group reference",
-      "description": "A group, written where a principal is expected: group: then the group's name. The prefix is what tells a group from a login in one string, since both are written on the same grammar; a login can hold neither a colon nor a slash, so the three forms of a principal reference never overlap. The name is held to the namespace grammar, the same pattern written after the prefix, and tools/check.py refuses the two drifting apart.",
+      "description": "A group, written where a principal is expected: group: then the group's name. The prefix is what tells a group from a login in one string, since both are written on the same grammar; a login can hold neither a colon nor a slash, so the three forms of a principal reference never overlap. The name is held to the namespace grammar, the same pattern written after the prefix, and to its 255 characters, which the not refuses past, and tools/check.py refuses either drifting apart from $defs/namespace.",
       "type": "string",
       "pattern": "^group:[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "not": {
+        "pattern": "^group:[a-z0-9-]{256}"
+      },
       "examples": [
         "group:team-finance",
         "group:finance-leads"
@@ -3228,9 +3236,12 @@
     },
     "serviceAccountRef": {
       "title": "Service account reference",
-      "description": "A service account, written where a principal is expected: the namespace it lives in, a slash, and its name. A service account belongs to one namespace, so its name alone is not unique and the namespace is part of the reference. Every namespace has a built-in one called agentiik, to which scheduled, webhook and event runs are attributed, which is why finance/agentiik is the reference that shows up most. Both halves are held to the namespace grammar, the same pattern written on either side of the slash, and tools/check.py refuses them drifting apart. The reserved words are not repeated here: a reserved word never names a namespace, so a reference through one names a principal that does not exist, and the API refuses it for that.",
+      "description": "A service account, written where a principal is expected: the namespace it lives in, a slash, and its name. A service account belongs to one namespace, so its name alone is not unique and the namespace is part of the reference. Every namespace has a built-in one called agentiik, to which scheduled, webhook and event runs are attributed, which is why finance/agentiik is the reference that shows up most. Both halves are held to the namespace grammar, the same pattern written on either side of the slash, and to its 255 characters, which the not refuses past on either side, and tools/check.py refuses either drifting apart from $defs/namespace. The reserved words are not repeated here: a reserved word never names a namespace, so a reference through one names a principal that does not exist, and the API refuses it for that.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "not": {
+        "pattern": "^[a-z0-9-]{256}|/[a-z0-9-]{256}"
+      },
       "examples": [
         "finance/agentiik",
         "team-ops/deploy-bot"
@@ -3258,19 +3269,23 @@
     },
     "actor": {
       "title": "Actor",
-      "description": "Who did something a record keeps: a principal reference, or operator. operator is the interim operator token of v0.2.5, which became the bootstrap token of v0.3.0, and the rows it wrote keep that name rather than being rewritten to a principal that did not exist when they were written. It is refused as a login for the same reason, so the one string never names two things.",
+      "description": "Who did something a record keeps: a principal reference, operator or installation. operator is the interim operator token of v0.2.5, which became the bootstrap token of v0.3.0, and the rows it wrote keep that name rather than being rewritten to a principal that did not exist when they were written. installation is the installation itself, writing what nobody asked for: the owner grant of a user's personal namespace at their first sign-in, and what the programs run with the installation's settings rather than a credential do. Both are refused as logins for the same reason, so the one string never names two things, and neither is a principal a grant or a token can name.",
       "anyOf": [
         {
           "$ref": "#/$defs/principalRef"
         },
         {
           "const": "operator"
+        },
+        {
+          "const": "installation"
         }
       ],
       "examples": [
         "alice",
         "finance/agentiik",
-        "operator"
+        "operator",
+        "installation"
       ]
     },
     "user": {
@@ -3302,7 +3317,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "The name a person reads in the console and in the sharing panel. Free text, because it is shown and never matched against: everything that decides access reads the login.",
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+          "description": "The name a person reads in the console and in the sharing panel: one line holding no control character, since it is shown in a console and printed at a terminal, where a line break forges a line and an escape sequence rewrites what is shown. Free text otherwise, because it is shown and never matched against: everything that decides access reads the login.",
           "examples": [
             "Alice Martin",
             "Bob"
@@ -3311,7 +3327,7 @@
         "admin": {
           "type": "boolean",
           "default": false,
-          "description": "Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and shown to the namespace owners.",
+          "description": "Whether the user is a platform administrator, who manages users, groups, namespaces, quotas, runners and runner policies. It grants no run:read_data anywhere: reading another namespace's payloads still means granting oneself access first, which is audited and told to the namespace's owner.",
           "examples": [
             false,
             true
@@ -3320,10 +3336,20 @@
         "suspended": {
           "type": "boolean",
           "default": false,
-          "description": "Whether the account is suspended. An account that has not enrolled a passkey when passwords are forbidden is suspended rather than left reachable by a password the policy says no longer exists; a suspended account opens no session.",
+          "description": "Whether the account is suspended. A suspended account opens no session with a credential, and its sessions and tokens open nothing while the suspension lasts; its enrolment links and recovery codes still work, since enrolling is how an account suspended for having no passkey comes back. Forbidding passwords suspends every account it reaches that holds no passkey the policy accepts, rather than leaving it reachable by a password the policy says no longer exists.",
           "examples": [
             false,
             true
+          ]
+        },
+        "suspended_for": {
+          "type": "string",
+          "enum": [
+            "no_passkey"
+          ],
+          "description": "Why the authentication policy suspended the account, where it did: no_passkey, for holding no passkey the policy accepts when passwords came to be forbidden to it. A passkey enrolled from an enrolment link or a recovery code, or a password set from one where passwords are allowed again, lifts that suspension and no other, and signs its user in, so an administrator reading it knows that a link brings the account back. Absent on an account that is not suspended, and on one suspended for a reason the policy did not write, which no enrolment lifts. Kept beside the flag rather than read off the credentials, which change after it was written.",
+          "examples": [
+            "no_passkey"
           ]
         },
         "created_at": {
@@ -3331,6 +3357,13 @@
           "description": "When the account was created.",
           "examples": [
             "2026-09-27T09:00:00Z"
+          ]
+        },
+        "last_sign_in_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the user last signed in, with a passkey or a password, so that an administrator reading one user can see an account nobody uses. Absent until the first sign-in.",
+          "examples": [
+            "2026-09-27T12:30:00Z"
           ]
         }
       },
@@ -3342,8 +3375,30 @@
           "admin": false,
           "suspended": false,
           "created_at": "2026-09-27T09:00:00Z"
+        },
+        {
+          "kind": "user",
+          "login": "dave",
+          "display_name": "Dave Moreau",
+          "admin": false,
+          "suspended": true,
+          "suspended_for": "no_passkey",
+          "created_at": "2026-09-27T09:30:00Z",
+          "last_sign_in_at": "2026-09-27T11:00:00Z"
         }
-      ]
+      ],
+      "dependentSchemas": {
+        "suspended_for": {
+          "required": [
+            "suspended"
+          ],
+          "properties": {
+            "suspended": {
+              "const": true
+            }
+          }
+        }
+      }
     },
     "group": {
       "title": "Group",
@@ -3529,7 +3584,7 @@
     },
     "passkey": {
       "title": "Passkey",
-      "description": "A Web Authentication credential, the one a user is meant to sign in with. Its kind is recorded from the Backup Eligibility and Backup State flags the authenticator reported and is shown in the console, because an administrator who cannot see whether a passkey is synced cannot reason about their exposure. Two relations between the flags are held here: Backup State can only be set where Backup Eligibility is, as Web Authentication defines them, and the kind is synced exactly when Backup Eligibility is set, which is also what device_bound_only refuses.",
+      "description": "A Web Authentication credential, the one a user is meant to sign in with. Its kind is derived from the Backup Eligibility flag alone, whatever Backup State says, and shown in the console, because an administrator who cannot see whether a passkey is synced cannot reason about their exposure: Backup State says only whether the passkey is backed up at this moment, and one eligible for backup may be copied off its device whenever its provider chooses. Two relations between the flags are held here: Backup State can only be set where Backup Eligibility is, as Web Authentication defines them, and the kind is synced exactly when Backup Eligibility is set, which is also what device_bound_only refuses.",
       "type": "object",
       "required": [
         "type",
@@ -3568,7 +3623,7 @@
         },
         "backup_eligible": {
           "type": "boolean",
-          "description": "The Backup Eligibility flag, as the authenticator reported it at registration: whether this credential can be synced off the device. It cannot change over the credential's life, which is why the kind is derived from it.",
+          "description": "The Backup Eligibility flag, as the authenticator reported it at registration: whether this credential can be synced off the device. It is fixed then, and an assertion reporting another is refused, since the passkey device_bound_only judged would no longer be the one signing in; which is why the kind is derived from it.",
           "examples": [
             true,
             false
@@ -3768,7 +3823,7 @@
     },
     "permission": {
       "title": "Permission",
-      "description": "One of the nine atoms every authorisation decision is made of, and the only strings a role expands to or a deny names. They are closed rather than open because the API decides deny by default: a permission the API does not know is one it can never grant, and a typo in a deny would otherwise silently deny nothing. secret:use and secret:write count at namespace scope only, since a declaration serves every workflow of the namespace; grant:manage at installation scope is what drains and revokes a runner.",
+      "description": "One of the nine atoms every authorisation decision is made of, and the only strings a role expands to or a deny names. They are closed rather than open because the API decides deny by default: a permission the API does not know is one it can never grant, and a typo in a deny would otherwise silently deny nothing. secret:use and secret:write count at namespace scope only, since a declaration serves every workflow of the namespace, and secret:use is checked when a version naming a secret is pushed, against the principal pushing it, never when it runs; grant:manage at installation scope is what drains and revokes a runner.",
       "type": "string",
       "enum": [
         "workflow:read",
@@ -3789,7 +3844,7 @@
     },
     "role": {
       "title": "Role",
-      "description": "A named set of permissions a grant binds, by the documentation's table: viewer reads, operator runs, editor reads, runs, writes, reads data and writes secrets, and owner adds grant:manage. operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the queries, endpoints and business rules inside it; someone who needs both holds both roles. Four and no more, since a role invented per installation is one the clients cannot explain.",
+      "description": "A named set of permissions a grant binds, by the documentation's table: viewer reads, operator runs and follows runs, editor reads, runs, writes, reads data and uses and writes secrets, and owner adds workflow:delete and grant:manage. operator deliberately lacks workflow:read, so a colleague can launch a job without seeing the queries, endpoints and business rules inside it, and run:read_data, so the payloads stay out of its reach; someone who needs both holds both roles. Four and no more, since a role invented per installation is one the clients cannot explain.",
       "type": "string",
       "enum": [
         "viewer",
@@ -3805,14 +3860,17 @@
     },
     "grantScope": {
       "title": "Grant scope",
-      "description": "Where a grant applies: a namespace by its name, inherited by every workflow inside, or one workflow as NS/NAME, the identifier the API imports a workflow by and a Terraform scope attribute holds. The workflow half is the name a workflow file's metadata.name writes, which is the identifier grammar rather than the namespace one; the namespace half is the namespace grammar, and tools/check.py holds both halves to the patterns they are copied from.",
+      "description": "Where a grant applies: a namespace by its name, inherited by every workflow inside, or one workflow as NS/NAME, the identifier the API imports a workflow by and a Terraform scope attribute holds. The workflow half is the name a workflow file's metadata.name writes, which is the identifier grammar rather than the namespace one; the namespace half is the namespace grammar, at most 255 characters, and tools/check.py holds both halves to the patterns they are copied from and the namespace half to its bound.",
       "oneOf": [
         {
           "$ref": "#/$defs/namespace"
         },
         {
           "type": "string",
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9][A-Za-z0-9_-]*$"
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9][A-Za-z0-9_-]*$",
+          "not": {
+            "pattern": "^[a-z0-9-]{256}"
+          }
         }
       ],
       "examples": [
@@ -3822,7 +3880,7 @@
     },
     "accessGrant": {
       "title": "Access grant",
-      "description": "One principal, one scope and one role, or one principal, one scope and one denied permission. Grants add up across the principal's own and its groups', at both scopes, and a deny is the only thing that subtracts: it wins over any allow at any scope. That is why a deny names a permission and not a role, since the documentation's own deny takes run:read_data away from an operator and no role is that one permission. Named access grant because $defs/grant is the bearer token issued with one task, a different thing that happens to share the word. Grants live in the platform database and never in the workflow file, where workflow:write would equal grant:manage.",
+      "description": "One principal, one scope and one role, or one principal, one scope and one denied permission. Grants add up across the principal's own and its groups', at both scopes, and a deny is the only thing that subtracts: it wins over any allow at any scope. That is why a deny names a permission and not a role, since the documentation's own deny takes run:read_data away from an editor, which holds it, and no role is that one permission. Named access grant because $defs/grant is the bearer token issued with one task, a different thing that happens to share the word. Grants live in the platform database and never in the workflow file, where workflow:write would equal grant:manage.",
       "type": "object",
       "required": [
         "id",
@@ -3881,10 +3939,11 @@
         },
         "granted_by": {
           "$ref": "#/$defs/actor",
-          "description": "Who wrote the grant: a principal holding grant:manage at this scope, or operator for a grant the bootstrap token wrote.",
+          "description": "Who wrote the grant: a principal holding grant:manage at this scope, an administrator by the installation's power, operator for a grant the bootstrap token wrote, or installation for the owner grant a user's personal namespace is created with at their first sign-in, which nobody asked for.",
           "examples": [
             "alice",
-            "operator"
+            "operator",
+            "installation"
           ]
         },
         "granted_at": {
@@ -3947,11 +4006,18 @@
           ]
         },
         "principal": {
-          "$ref": "#/$defs/principalRef",
-          "description": "Whose rights the token carries: the user who minted it, or a service account of a namespace they own. Never a group, which holds no credential.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/login"
+            },
+            {
+              "$ref": "#/$defs/serviceAccountRef"
+            }
+          ],
+          "description": "Whose rights the token carries: a user, for a token they minted or agk login's exchange minted for them, or a service account of a namespace its minter owns. Never a group, which holds no credential of its own: a group's token would be a way in that belongs to nobody. Never a namespace's built-in NS/agentiik either, for which the API mints none, since it is the installation's unattended identity and a token of it would outlive the access of whoever held it; and never the bootstrap token's operator, which mints none.",
           "examples": [
             "alice",
-            "finance/agentiik"
+            "finance/nightly-sync"
           ]
         },
         "device_label": {
@@ -4058,7 +4124,7 @@
     },
     "authPolicy": {
       "title": "Authentication policy",
-      "description": "How people prove who they are: set once per installation by an administrator, and tightened by a namespace, never loosened. Every key is optional and absent means its default on an installation; in a namespace's policy, absent means the installation's value. Whether a namespace's policy is tighter than the installation's needs both documents and is left to the API. Service accounts are outside it: they hold API tokens only.",
+      "description": "How people prove who they are: set once per installation by an administrator, and tightened by a namespace, never loosened. What applies to an account is the installation's policy tightened by that of each namespace it holds a grant in, the stricter of each setting, read at every request that asks, so that a change applies from the next one. Every key is optional and absent means its default on an installation, whose policy the API answers with every setting written; in a namespace's policy, absent means the installation's value. Whether a namespace's policy is tighter than the installation's needs both documents and is left to the API. Service accounts are outside it: they hold API tokens only.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -4069,7 +4135,7 @@
             "forbidden"
           ],
           "default": "allowed",
-          "description": "Whether a password may be used at all. forbidden deletes the stored hashes and the password endpoint refuses every attempt, rather than a form being hidden: hiding a form is not a policy. Allowed by default, as a fallback, and the only way in on an installation addressed by IP, where passkeys are unavailable.",
+          "description": "Whether a password may be used at all. forbidden deletes every stored password and the TOTP generator beside it, as rows, in the transaction that forbids them, and the endpoint refuses passwords outright; every account it reaches that holds no passkey the policy accepts is suspended, recorded as having none. Hiding a form is not a policy. It acts when passwords come to be forbidden: an account that comes under a namespace forbidding them later keeps its password until a sign-in offers it, which is refused and deletes it then. Allowed by default, as the fallback that gets a person to their first passkey, and always allowed on an installation addressed by an IP address, where no passkey ceremony runs: forbidding them there is refused.",
           "examples": [
             "allowed",
             "forbidden"
@@ -4082,7 +4148,7 @@
             "required"
           ],
           "default": "required",
-          "description": "Whether a passkey must be enrolled. required: nothing is reachable until one is, and a session opened another way is an enrolment-only session that cannot read a workflow, start a run or mint a token.",
+          "description": "Whether a passkey must be enrolled. required: a session a password opens enrols passkeys and sets its password, and nothing else, whatever passkeys the account holds, since the password is then the way to the passkeys and never a way round them; the passkey that brings the account to min_passkeys deletes the password, and a password is not set where the account holds that many already.",
           "examples": [
             "required",
             "optional"
@@ -4095,7 +4161,7 @@
             "preferred"
           ],
           "default": "required",
-          "description": "What the Relying Party asks of the authenticator, on registration and on every assertion. required makes a passkey two factors, the authenticator and whatever unlocks it, which is why no TOTP is ever asked on top of one.",
+          "description": "What the Relying Party asks of the authenticator, on registration and on every assertion. required makes a passkey two factors, the authenticator and whatever unlocks it, which is why no TOTP is ever asked on top of one. A sign-in's options ask it wherever any policy of the installation requires it, since whose policy applies is known only once the passkey names its account.",
           "examples": [
             "required",
             "preferred"
@@ -4104,7 +4170,7 @@
         "device_bound_only": {
           "type": "boolean",
           "default": false,
-          "description": "Refuses a credential whose Backup Eligibility flag is set, that is, a synced passkey, for a population where trusting the cloud account that syncs it is unacceptable.",
+          "description": "Refuses a credential whose Backup Eligibility flag is set, that is, a synced passkey, for a population where trusting the cloud account that syncs it is unacceptable. A synced passkey then signs nobody in, what one opened before opens nothing from the next request, and it counts for none toward min_passkeys.",
           "examples": [
             false,
             true
@@ -4114,7 +4180,7 @@
           "type": "integer",
           "minimum": 1,
           "default": 2,
-          "description": "How many passkeys a user must hold before their password may be removed, and below which removing one is refused. Two by default, so that losing a device is an inconvenience rather than an incident. At least one, since zero would let a password go from an account with nothing to replace it.",
+          "description": "How many passkeys the policy accepts a user must hold before their password goes, and below which none of them is removed; a synced passkey counts for none where device_bound_only applies. Two by default, so that losing a device is an inconvenience rather than an incident. At least one, since zero would let a password go from an account with nothing to replace it.",
           "examples": [
             2,
             3
@@ -4137,12 +4203,11 @@
     },
     "namespaceRecord": {
       "title": "Namespace record",
-      "description": "A namespace as an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner and its quotas. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API.",
+      "description": "A namespace as an administrator creates it and the API lists it: its name, whether it is someone's personal namespace or a shared one, its owner where it has one, and its quotas. Named namespace record because $defs/namespace is the name alone, which every other shape here refers to. Every user owns a personal namespace named after their login, created on first sign-in, which they cannot delete or rename; that the name is the owner's login needs both strings and is left to the API. A namespace from before v0.3.0 is shared and names no owner, since an administrator made it for whoever used it and v0.2 had nobody to name.",
       "type": "object",
       "required": [
         "name",
-        "kind",
-        "owner"
+        "kind"
       ],
       "additionalProperties": false,
       "properties": {
@@ -4168,7 +4233,7 @@
         },
         "owner": {
           "$ref": "#/$defs/principalRef",
-          "description": "Who owns it: the user, for a personal namespace, and a user or a group for a shared one. The owner is who a self-granted administrator's access is reported to.",
+          "description": "Who owns it: the user, for a personal namespace, and a user or a group for a shared one. The owner is who is told when an administrator widens their own access in it. Absent on a namespace from before v0.3.0, which v0.2 made with nobody to name; every principal holding the owner role on it is told instead. Never absent on a personal namespace, which is its user's.",
           "examples": [
             "group:finance-leads",
             "alice"
@@ -4176,11 +4241,16 @@
         },
         "quotas": {
           "$ref": "#/$defs/quotas",
-          "description": "What this namespace may consume. Absent sets no bound of its own.",
+          "description": "What this namespace may consume. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, so the API answers both; the other four appear where they are set, and absent bound nothing of the namespace's own.",
           "examples": [
             {
               "max_concurrent_tasks": 20,
-              "max_runs_per_hour": 500
+              "max_runs_per_hour": 500,
+              "max_retention_days": 90
+            },
+            {
+              "max_concurrent_tasks": 20,
+              "max_retention_days": 90
             }
           ]
         },
@@ -4202,6 +4272,9 @@
         }
       },
       "then": {
+        "required": [
+          "owner"
+        ],
         "properties": {
           "owner": {
             "$ref": "#/$defs/login"
@@ -4227,13 +4300,25 @@
         {
           "name": "alice",
           "kind": "personal",
-          "owner": "alice"
+          "owner": "alice",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_retention_days": 90
+          }
+        },
+        {
+          "name": "demo",
+          "kind": "shared",
+          "quotas": {
+            "max_concurrent_tasks": 20,
+            "max_retention_days": 90
+          }
         }
       ]
     },
     "quotas": {
       "title": "Quotas",
-      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Each is optional, and an absent one sets no bound at the namespace. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
+      "description": "The six bounds an administrator sets on one namespace, so that one team's load cannot starve another's. Every one is optional when written. max_concurrent_tasks and max_retention_days always hold a value, 20 and 90 until an administrator sets another, and a write leaving either out keeps the value it has: the two were a namespace's bounds in v0.2, so an upgrade refuses nothing a namespace was allowed. The other four bound nothing until they are set, and a write leaving one out removes its bound. Each numeric bound starts at one: a zero would stop the namespace from doing the thing the bound measures, which is what removing its grants or its pools is for.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -4275,7 +4360,7 @@
         },
         "max_run_duration": {
           "$ref": "#/$defs/taskMessage/properties/timeout",
-          "description": "The upper bound on a workflow's root timeout, so no run holds capacity longer than the operator accepts. Written as a duration on the grammar a timeout is written in, by reference to it.",
+          "description": "The upper bound on a workflow's root timeout, and the bound of a run whose workflow writes none, so no run holds capacity longer than the operator accepts. A root timeout above it is held to it rather than refused, read at every pass of the controller, so a lowered quota holds a run already going from its next pass. Written as a duration on the grammar a timeout is written in, by reference to it.",
           "examples": [
             "24h",
             "90m"
@@ -4311,6 +4396,253 @@
             "default",
             "dmz"
           ]
+        }
+      ]
+    },
+    "notification": {
+      "title": "Notification",
+      "description": "Something the installation tells one principal of its own accord, listed in their GET /api/v1/me and kept 90 days from when it was written, or until they dismiss it with DELETE /api/v1/me/notifications/{id}: long enough to reach someone back from leave, and bounded so that the list does not grow for ever. Three kinds, each told to whoever can act on it. admin_access_widened is an administrator having widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, which is how an administrator reads another namespace's payloads, since they hold no run:read_data of their own; it is told to the namespace's owners, because an owner does not read the audit log and the people whose data it is should hear it from the installation itself, and where the act found nobody to tell, to the other administrators as well, so that an act where nobody owns is not told only to the owner it made. passkey_counter_refused is a sign-in refused because a passkey's signature counter did not move forward, which is what a cloned authenticator's does; it is told to the passkey's user, who is the one who knows whether the other copy is theirs. break_glass_recovery is a recovery code agentiik-api recover issued an administrator from the installation's host, the one way to a recovery code no administrator vouches for; it is told to every administrator, the one recovered and suspended ones included, so that an administrator who did not run it learns that whoever holds the host did. Each kind carries what its reader needs and nothing of the others', so the fields one requires the others refuse.",
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ulid",
+          "description": "The notification's identifier, what dismissing it names.",
+          "examples": [
+            "01M2AF6V8X0Z2B4D6F8H0K2M4P"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "admin_access_widened",
+            "passkey_counter_refused",
+            "break_glass_recovery"
+          ],
+          "description": "What happened. admin_access_widened: an administrator widened access in a namespace, by a grant written there by the installation's power, a user put in a group holding a role there, or their own access widened, a role given to it or a deny taken from it; act and by say which act and who did it, namespace and grant where and which. passkey_counter_refused: a sign-in with one of the reader's passkeys was refused because its signature counter was at or below the one stored, one of the two not zero, and credential says which passkey. break_glass_recovery: agentiik-api recover issued the administrator login names a recovery code. The documentation names the three as written here.",
+          "examples": [
+            "admin_access_widened",
+            "passkey_counter_refused",
+            "break_glass_recovery"
+          ]
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When it happened: the grant written, the deny taken away or the membership changed, the sign-in refused, or the recovery code issued. The 90 days it is kept are counted from here.",
+          "examples": [
+            "2026-09-27T14:00:00Z"
+          ]
+        },
+        "act": {
+          "type": "string",
+          "enum": [
+            "granted",
+            "deny_lifted",
+            "joined_group",
+            "left_group",
+            "group_removed"
+          ],
+          "description": "Which act widened access, on admin_access_widened alone, since the grant alone does not say: a group's grant was written by somebody else, long before, and a deny lifted names whoever wrote the deny. granted: a grant or a deny the administrator wrote by the installation's power, or a role they gave their own access. deny_lifted: a deny they revoked from their own access. joined_group: a user they put in a group holding a role in the namespace, themselves or somebody else, whom login names. left_group: they took themselves out of a group whose deny applied in the namespace. group_removed: they removed a group they were in, whose deny applied in the namespace. The documentation names the five as written here.",
+          "examples": [
+            "granted",
+            "joined_group"
+          ]
+        },
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/login"
+            },
+            {
+              "const": "operator"
+            }
+          ],
+          "description": "Who did it, on admin_access_widened alone: the administrator's login, or operator for the bootstrap token, which administers the installation until the first administrator has signed in. Named rather than referred to, as login is, so that removing the account leaves what the others were told.",
+          "examples": [
+            "alice",
+            "operator"
+          ]
+        },
+        "namespace": {
+          "$ref": "#/$defs/namespace",
+          "description": "The namespace the administrator acted in, on admin_access_widened alone: one whose record names the reader as its owner, or, where the record names none, as a namespace from before v0.3.0 does, one on which the reader holds the owner role, by a grant of their own or of a group they are in; or, where the act found nobody to tell there, any namespace, the reader being another administrator.",
+          "examples": [
+            "finance"
+          ]
+        },
+        "grant": {
+          "$ref": "#/$defs/accessGrant",
+          "description": "What the reader is told of, on admin_access_widened alone, as it was written: a grant the administrator wrote for anybody by the installation's power; a role given to their own access, theirs, a group's they are in or a service account's of a namespace they own; a deny they took from it, as it was before it went; or the grant of a group a user was put in, or the deny of one the administrator took themselves out of or removed. Its principal and granted_by may be others than who acted, whom by names. Kept whole rather than referred to, since it may be revoked before its reader comes to read it.",
+          "examples": [
+            {
+              "id": "01M2AF4T6V8X0Z2B4D6F8H0K2M",
+              "principal": "carol",
+              "scope": "finance",
+              "role": "editor",
+              "expires_at": "2026-09-28T14:00:00Z",
+              "granted_by": "carol",
+              "granted_at": "2026-09-27T14:00:00Z"
+            },
+            {
+              "id": "01M2AF8X0Z2B4D6F8H0K2M4P6R",
+              "principal": "group:team-finance",
+              "scope": "finance",
+              "role": "viewer",
+              "granted_by": "alice",
+              "granted_at": "2026-09-20T09:00:00Z"
+            }
+          ]
+        },
+        "credential": {
+          "$ref": "#/$defs/passkey/properties/id",
+          "description": "The passkey whose assertion was refused, on passkey_counter_refused alone, by the credential ID GET /api/v1/me/credentials lists it with, so that its user can find it and remove it with DELETE /api/v1/me/credentials/{id} where the other copy is not theirs. The API does not lock it: WebAuthn calls a counter that did not move a signal rather than a proof, and a lock would let a faulty authenticator shut its owner out.",
+          "examples": [
+            "aVBob25lUGFzc2tleQ"
+          ]
+        },
+        "login": {
+          "$ref": "#/$defs/login",
+          "description": "The administrator agentiik-api recover issued a recovery code, on break_glass_recovery; or the user an administrator put in a group, on admin_access_widened whose act is joined_group, and there alone, since the group routes are an administrator's and an owner could not learn otherwise who now holds the role. Named rather than referred to, so that removing the account, which is what the others may do on reading this, leaves what they were told.",
+          "examples": [
+            "alice"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "admin_access_widened"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "namespace",
+              "grant",
+              "act",
+              "by"
+            ],
+            "properties": {
+              "credential": false
+            },
+            "if": {
+              "required": [
+                "act"
+              ],
+              "properties": {
+                "act": {
+                  "const": "joined_group"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "login"
+              ]
+            },
+            "else": {
+              "properties": {
+                "login": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "passkey_counter_refused"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "credential"
+            ],
+            "properties": {
+              "namespace": false,
+              "grant": false,
+              "act": false,
+              "by": false,
+              "login": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "break_glass_recovery"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "login"
+            ],
+            "properties": {
+              "namespace": false,
+              "grant": false,
+              "act": false,
+              "by": false,
+              "credential": false
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "id": "01M2AF6V8X0Z2B4D6F8H0K2M4P",
+          "kind": "admin_access_widened",
+          "at": "2026-09-27T14:00:00Z",
+          "act": "granted",
+          "by": "carol",
+          "namespace": "finance",
+          "grant": {
+            "id": "01M2AF4T6V8X0Z2B4D6F8H0K2M",
+            "principal": "carol",
+            "scope": "finance",
+            "role": "editor",
+            "expires_at": "2026-09-28T14:00:00Z",
+            "granted_by": "carol",
+            "granted_at": "2026-09-27T14:00:00Z"
+          }
+        },
+        {
+          "id": "01M2AJ4T6W8Y0A2C4E6G8J0M2P",
+          "kind": "admin_access_widened",
+          "at": "2026-09-27T17:20:00Z",
+          "act": "joined_group",
+          "by": "alice",
+          "namespace": "finance",
+          "grant": {
+            "id": "01M2AF8X0Z2B4D6F8H0K2M4P6R",
+            "principal": "group:team-finance",
+            "scope": "finance",
+            "role": "viewer",
+            "granted_by": "carol",
+            "granted_at": "2026-09-20T09:00:00Z"
+          },
+          "login": "dave"
+        },
+        {
+          "id": "01M2AG2R4T6W8Y0A2C4E6G8J0M",
+          "kind": "passkey_counter_refused",
+          "at": "2026-09-27T15:10:00Z",
+          "credential": "aVBob25lUGFzc2tleQ"
+        },
+        {
+          "id": "01M2AH3S5V7X9Z1B3D5F7H9K1M",
+          "kind": "break_glass_recovery",
+          "at": "2026-09-27T16:40:00Z",
+          "login": "alice"
         }
       ]
     }

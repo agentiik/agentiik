@@ -26,7 +26,7 @@ import (
 // Version is the agentiik/schemas release the tree under testdata was taken from. The
 // same value is written in testdata/SCHEMAS_VERSION, where a person updating the corpus
 // finds it, and a test holds the two together.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 //go:embed testdata
 var vendored embed.FS

@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "What each fixture pins. A fixture under valid/ must be accepted by the schema named beside it. A fixture under invalid/ must be refused; refused_by says by what. schema means the JSON Schema document alone refuses it, and a consumer can assert that with a validator and nothing else. validator means the documentation states the rule but JSON Schema cannot express it, because it needs the graph, the brick manifest, the included file or the expression language; those fixtures are schema valid on purpose and are refused by the workflow validator instead.",
   "schemas": {
     "workflow": "../workflow.schema.json",
@@ -23,7 +23,8 @@
     "role": "../wire.schema.json",
     "permission": "../wire.schema.json",
     "namespace-record": "../wire.schema.json",
-    "auth-policy": "../wire.schema.json"
+    "auth-policy": "../wire.schema.json",
+    "notification": "../wire.schema.json"
   },
   "notes": [
     "Read the fixtures with a YAML 1.2 parser. The trigger block is spelled on:, as the documentation spells it, and a YAML 1.1 parser reads that bare key as the boolean true. A loader that does so will fail every fixture carrying a trigger, and will do the same to the workflows people write.",
@@ -79,6 +80,10 @@
           "file": "workflow/valid/run-timeout.yaml",
           "covers": "timeout at the root, which bounds the whole run, beside the step limit of the same name",
           "source": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/valid/names-at-their-bounds.yaml",
+          "covers": "a step name of 255 characters, a sub-workflow called with each half of its reference at 255, and a port, the edge naming it and a workflow output of 250, each the longest it may be"
         }
       ],
       "invalid": [
@@ -108,13 +113,43 @@
         },
         {
           "file": "workflow/invalid/namespace-reserved.yaml",
-          "rule": "A namespace named after a word the API routes on. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs and artifacts cannot name a namespace.",
+          "rule": "A namespace named after a word the API routes on. The API's first path segment decides the route, so auth, me, users, groups, service-accounts, namespaces, runners, runner-pools, bus, tasks, bricks, runs, artifacts and stats cannot name a namespace.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
         },
         {
           "file": "workflow/invalid/step-name-not-an-identifier.yaml",
           "rule": "A step name that is not an identifier. The name is used in needs, in expressions and in the run detail, so it stays to letters, digits, hyphens and underscores.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/step-name-256-characters.yaml",
+          "rule": "A step name of 256 characters. A step becomes a directory of its task's work directory, and no filesystem holds a name longer than 255.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/port-name-251-characters.yaml",
+          "rule": "An output port of 251 characters. A port becomes the file <name>.json, which a filesystem holds to 255 characters with its suffix.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/sub-workflow-name-256-characters.yaml",
+          "rule": "A sub-workflow called by a name of 256 characters. Each half of <namespace>/<name> is a name, at most 255 characters, and a maxLength would bound the whole reference, so the pattern counts each half.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/include-namespace-256-characters.yaml",
+          "rule": "A workflow included from a namespace of 256 characters. Each half of <namespace>/<name> is a name, at most 255 characters.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
+        },
+        {
+          "file": "workflow/invalid/workflow-output-251-characters.yaml",
+          "rule": "A workflow output of 251 characters. A workflow output becomes the file <name>.json, as a port does, which a filesystem holds to 255 characters with its suffix.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#yaml"
         },
@@ -433,6 +468,11 @@
           "file": "brick/valid/secret-mount-with-a-dot.yaml",
           "covers": "a secret mounted under a file name carrying a dot, as a key file naturally does, and a secret whose mount is not its name: the mount the task message and the grant redemption then carry on the same grammar",
           "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
+          "file": "brick/valid/port-name-250-characters.yaml",
+          "covers": "a port declared with a name of 250 characters, the longest a port may be, since it becomes the file <name>.json",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
         }
       ],
       "invalid": [
@@ -491,6 +531,12 @@
           "reference": "https://agentiik.github.io/docs/#brick-manifest"
         },
         {
+          "file": "brick/invalid/port-name-251-characters.yaml",
+          "rule": "A port name of 251 characters. A port becomes the file <name>.json under /agk/out/ports/, which a filesystem holds to 255 characters with its suffix, and a workflow could not name it.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#brick-manifest"
+        },
+        {
           "file": "brick/invalid/port-name-with-comma.yaml",
           "rule": "A port name carrying a comma. A port name becomes a directory under /agk/in/, a file name under /agk/out/ports/ and one entry of the comma separated AGK_OUT_PORTS.",
           "refused_by": "schema",
@@ -545,6 +591,11 @@
           "file": "envelope/valid/retry-attempt.json",
           "covers": "a batch published by a second attempt, carrying one item with no payload of its own and nothing attached",
           "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/valid/step-name-255-characters.json",
+          "covers": "a batch from a step whose name is 255 characters, the longest a name the workflow file writes may be",
+          "reference": "https://agentiik.github.io/docs/#yaml"
         }
       ],
       "invalid": [
@@ -595,6 +646,12 @@
           "rule": "Metadata carrying a key the envelope does not define. The shard index reaches a container as AGK_SHARD and does not travel in the envelope.",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#envelope-structure"
+        },
+        {
+          "file": "envelope/invalid/meta-step-256-characters.json",
+          "rule": "An envelope naming a step of 256 characters. A step becomes a directory, and no filesystem holds a name longer than 255; workflow/invalid/step-name-256-characters.yaml refuses the name where it is written and this refuses it where it travels.",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#yaml"
         },
         {
           "file": "envelope/invalid/meta-port-with-comma.json",
@@ -865,18 +922,36 @@
           "covers": "a user: a login, a display name, and whether the account is an administrator's or suspended"
         },
         {
+          "file": "wire/valid/principal-user-signed-in.json",
+          "covers": "a user who has signed in, with when they last did, as GET /api/v1/users/{login} answers it"
+        },
+        {
           "file": "wire/valid/principal-group.json",
           "covers": "a group of users, by login, as the documentation's team-finance is"
         },
         {
           "file": "wire/valid/principal-service-account-built-in.json",
           "covers": "the built-in identity of a namespace, NS/agentiik, which scheduled, webhook and event runs are attributed to and which nobody created"
+        },
+        {
+          "file": "wire/valid/principal-user-suspended-no-passkey.json",
+          "covers": "a user the policy suspended for holding no passkey when passwords came to be forbidden, which an enrolment link or a recovery code lifts, as GET /api/v1/users/{login} answers it"
+        },
+        {
+          "file": "wire/valid/principal-user-login-255-characters.json",
+          "covers": "a login of 255 characters, the most a namespace's name holds, since a login is also the name of its personal namespace"
         }
       ],
       "invalid": [
         {
           "file": "wire/invalid/principal-user-login-operator.json",
           "rule": "operator is refused as a login: it is the principal the v0.2.5 operator token wrote on the rows it touched, and those rows keep it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-login-installation.json",
+          "rule": "installation is refused as a login: it names the installation itself as the author of the pool default, and a user of that name would read as that author",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
         },
@@ -893,8 +968,32 @@
           "reference": "https://agentiik.github.io/docs/#auth"
         },
         {
+          "file": "wire/invalid/principal-user-display-name-two-lines.json",
+          "rule": "a display name is one line holding no control character, since it is printed at a terminal, where a line break forges a line of its own",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#api"
+        },
+        {
           "file": "wire/invalid/principal-group-holding-a-group.json",
           "rule": "a group is a named set of users, so its members are logins and a group reference is not one",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-user-suspended-for-not-suspended.json",
+          "rule": "suspended_for says why an account is suspended, so an account that is not suspended carries none",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/principal-user-login-stats.json",
+          "rule": "stats is reserved from v0.3.0, for GET /api/v1/stats/pools which v0.6.0 serves, and a login is also the name of its personal namespace",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/principal-user-login-256-characters.json",
+          "rule": "a login is at most 255 characters, the most a directory or a bus subject token holds a name to, since it is also the name of its personal namespace",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
         }
@@ -913,12 +1012,26 @@
         {
           "file": "wire/valid/principal-ref-service-account.json",
           "covers": "a service account, named NS/NAME, here the namespace's built-in identity"
+        },
+        {
+          "file": "wire/valid/principal-ref-group-255-characters.json",
+          "covers": "a group whose name is 255 characters, the most a name holds"
+        },
+        {
+          "file": "wire/valid/principal-ref-service-account-255-characters.json",
+          "covers": "a service account whose namespace and name are each 255 characters, the most a name holds"
         }
       ],
       "invalid": [
         {
           "file": "wire/invalid/principal-ref-operator.json",
           "rule": "operator names the v0.2.5 operator token on the rows it wrote and is no principal a grant or a token can name",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-ref-installation.json",
+          "rule": "installation names the installation itself as the author of the pool default, and is no principal a grant or a token can name",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
         },
@@ -931,6 +1044,18 @@
         {
           "file": "wire/invalid/principal-ref-group-uppercase.json",
           "rule": "a group's name is written on the namespace grammar, lowercase words joined by hyphens",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-ref-group-name-256-characters.json",
+          "rule": "a group's name is at most 255 characters, as a namespace's is, inside its reference as anywhere",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
+        },
+        {
+          "file": "wire/invalid/principal-ref-service-account-name-256-characters.json",
+          "rule": "each half of a service account reference is at most 255 characters, as a namespace's name is",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#principals"
         }
@@ -1014,9 +1139,9 @@
         },
         {
           "file": "wire/invalid/api-token-for-a-group.json",
-          "rule": "a token belongs to the caller or to a service account it owns; a group is a set of users and holds no credential, which the API refuses at minting",
-          "refused_by": "validator",
-          "reference": "https://agentiik.github.io/docs/#principals"
+          "rule": "a token is held by a user or a service account, never a group, which holds no credential of its own: a group's token would be a way in that belongs to nobody",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#sessions-and-tokens"
         }
       ]
     },
@@ -1032,7 +1157,11 @@
         },
         {
           "file": "wire/valid/access-grant-deny.json",
-          "covers": "the documentation's deny: alice keeps workflow:run on monthly-invoicing and loses run:read_data, whatever any allow gives"
+          "covers": "the documentation's deny: alice, an editor of finance through team-finance, loses run:read_data on monthly-invoicing and keeps the rest of the role there, whatever any allow gives"
+        },
+        {
+          "file": "wire/valid/access-grant-owner-by-installation.json",
+          "covers": "the owner grant a user's personal namespace is created with at their first sign-in, written by the installation, since nobody asked for it"
         }
       ],
       "invalid": [
@@ -1057,6 +1186,12 @@
         {
           "file": "wire/invalid/access-grant-scope-reserved.json",
           "rule": "a scope is a namespace or one workflow in it, and a reserved word can never name a namespace",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/access-grant-scope-namespace-256-characters.json",
+          "rule": "the namespace half of a workflow's scope is a namespace's name, at most 255 characters",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
         }
@@ -1116,7 +1251,11 @@
         },
         {
           "file": "wire/valid/namespace-record-personal.json",
-          "covers": "a personal namespace, named after its owner's login and bound by no quota of its own"
+          "covers": "a personal namespace, named after its owner's login, with the two quotas every namespace holds at their defaults"
+        },
+        {
+          "file": "wire/valid/namespace-record-upgraded.json",
+          "covers": "a namespace from before v0.3.0, shared and owned by nobody, since v0.2 had nobody to name, with the two quotas it held then"
         },
         {
           "file": "wire/valid/namespace-record-tightened.json",
@@ -1135,6 +1274,12 @@
           "rule": "a personal namespace belongs to one user, named after their login",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#scopes-and-resolution"
+        },
+        {
+          "file": "wire/invalid/namespace-record-personal-without-owner.json",
+          "rule": "a personal namespace is its user's, so it always names its owner; only a shared namespace from before v0.3.0 names none",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#storage"
         },
         {
           "file": "wire/invalid/namespace-record-personal-not-named-after-its-owner.json",
@@ -1165,6 +1310,12 @@
           "rule": "a namespace may tighten the installation's policy and never loosen it, so allowing passwords where the installation forbids them is refused; it needs the installation's policy beside this record, so the API holds it",
           "refused_by": "validator",
           "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/namespace-record-name-256-characters.json",
+          "rule": "a namespace's name is at most 255 characters, the most a directory or a bus subject token holds a name to",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#principals"
         }
       ]
     },
@@ -1199,6 +1350,80 @@
         {
           "file": "wire/invalid/auth-policy-user-verification-discouraged.json",
           "rule": "user_verification is required or preferred; Web Authentication's discouraged would make a passkey one factor",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        }
+      ]
+    },
+    "notification": {
+      "valid": [
+        {
+          "file": "wire/valid/notification-admin-access-widened.json",
+          "covers": "an administrator having granted themselves editor in finance for a day, told to the namespace's owner with the grant they wrote, the act, granted, and who did it"
+        },
+        {
+          "file": "wire/valid/notification-admin-access-widened-joined-group.json",
+          "covers": "an administrator having put dave in a group holding viewer in finance, told to the namespace's owner with the group's grant, written by somebody else long before, joined_group, who did it and the user put in"
+        },
+        {
+          "file": "wire/valid/notification-admin-access-widened-by-operator.json",
+          "covers": "the bootstrap token having put dave in a group holding editor in finance, told as by operator, the one act of the token's that is told, since a grant it writes is told to nobody, the token owning every namespace"
+        },
+        {
+          "file": "wire/valid/notification-passkey-counter-refused.json",
+          "covers": "a sign-in refused because a passkey's signature counter did not move forward, told to its user with the passkey's credential ID and no namespace"
+        },
+        {
+          "file": "wire/valid/notification-break-glass-recovery.json",
+          "covers": "agentiik-api recover having issued the administrator alice a recovery code from the installation's host, told to every administrator with her login and nothing else"
+        }
+      ],
+      "invalid": [
+        {
+          "file": "wire/invalid/notification-counter-refused-naming-a-namespace.json",
+          "rule": "a sign-in names no namespace, so a refused sign-in's notification carries none; each kind carries what its reader needs and nothing of the other's",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-access-widened-without-grant.json",
+          "rule": "an owner told of an administrator widening their own access is told which grant they wrote, so that it can be read and revoked",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#administrators"
+        },
+        {
+          "file": "wire/invalid/notification-access-widened-without-act.json",
+          "rule": "an owner told of an administrator widening access is told which act did it, since the grant alone does not say: a group's grant was written long before, and a deny lifted names whoever wrote it",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#administrators"
+        },
+        {
+          "file": "wire/invalid/notification-access-widened-by-nobody.json",
+          "rule": "an owner told of an administrator widening access is told who did it, which the grant's granted_by need not be",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#administrators"
+        },
+        {
+          "file": "wire/invalid/notification-joined-group-without-login.json",
+          "rule": "a user put in a group is named to the owners told of it, who could not learn otherwise who now holds the group's role, since the group routes are an administrator's alone",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#administrators"
+        },
+        {
+          "file": "wire/invalid/notification-granted-naming-a-login.json",
+          "rule": "login names the user put in a group, on joined_group alone; any other act names nobody put anywhere",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#administrators"
+        },
+        {
+          "file": "wire/invalid/notification-counter-refused-naming-an-act.json",
+          "rule": "a sign-in refused for a passkey's counter was no administrator's act, so it names none and nobody who did it; each kind carries what its reader needs and nothing of the other's",
+          "refused_by": "schema",
+          "reference": "https://agentiik.github.io/docs/#auth"
+        },
+        {
+          "file": "wire/invalid/notification-break-glass-without-login.json",
+          "rule": "every administrator is told which account the break-glass path issued a recovery code, since an administrator who did not run it has to know whose it was",
           "refused_by": "schema",
           "reference": "https://agentiik.github.io/docs/#auth"
         }
