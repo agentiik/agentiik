@@ -53,7 +53,7 @@ func NewPackWriter(w io.Writer, count int) (*PackWriter, error) {
 	if count < 0 || count > math.MaxUint32 {
 		return nil, fmt.Errorf("repo: a pack of %d objects, and a pack counts to %d", count, uint32(math.MaxUint32))
 	}
-	p := &PackWriter{out: &packSink{w: w, sum: sha1.New(), crc: crc32.NewIEEE()}, count: count}
+	p := &PackWriter{out: &packSink{w: w, sum: sha1.New(), crc: crc32.NewIEEE()}, count: count, objects: make([]PackedObject, 0, count)}
 	p.out.Write(appendPackHeader(nil, uint32(count)))
 	return p, p.out.err
 }

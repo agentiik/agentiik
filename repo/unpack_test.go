@@ -3,6 +3,7 @@ package repo
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"compress/zlib"
 	"context"
 	"crypto/sha1"
@@ -395,41 +396,59 @@ func TestDeltasAreResolvedWhateverOrderTheyComeIn(t *testing.T) {
 	repo := memory{}
 	thin := []byte(strings.Repeat("a base the repository holds\n", 50))
 	thinID := repo.put(TypeBlob, thin)
-
-	b := &builder{}
-	want := map[ID]bool{}
-	// A REF_DELTA against an object resolved from a thin base, which comes after it in the pack:
-	// its base is known only once the thin one has been resolved.
-	d1, r1 := edit(thin, "one\n")
-	d2, r2 := edit(r1, "two\n")
-	b.ref(HashObject(TypeBlob, r1), d2)
-	b.ref(thinID, d1)
-	// An OFS_DELTA against that REF_DELTA, and a REF_DELTA against an object sent whole later.
-	d3, r3 := edit(r2, "three\n")
-	b.ofs(0, d3)
-	whole := []byte(strings.Repeat("sent whole\n", 20))
-	d4, r4 := edit(whole, "four\n")
-	b.ref(HashObject(TypeBlob, whole), d4)
-	b.whole(TypeBlob, whole)
-	for _, data := range [][]byte{r1, r2, r3, r4, whole} {
-		want[HashObject(TypeBlob, data)] = true
-	}
-	out, u := unpack(t, b.all(), UnpackOptions{Bases: repo})
-	got := map[ID]bool{}
-	for _, o := range u.Objects {
-		got[o.ID] = true
-	}
-	if !maps.Equal(got, want) {
-		t.Errorf("read %d objects, and the pack holds %d", len(got), len(want))
-	}
-	st := store(t, out, u)
-	for id := range want {
-		if _, _, err := ReadObject(context.Background(), st, id, 1<<20); err != nil {
-			t.Error(err)
+	// The bases a thin pack names are asked of the repository in the order of their IDs. So the
+	// object made against the thin base is given an ID sorting before it, which the repository is
+	// asked for first and lacks, and one sorting after it, which is resolved before it is asked for.
+	suffixes := map[string]string{}
+	for i := 0; len(suffixes) < 2; i++ {
+		suffix := fmt.Sprintf("one, %d\n", i)
+		r1 := append(bytes.Clone(thin), suffix...)
+		id := HashObject(TypeBlob, r1)
+		if bytes.Compare(id[:], thinID[:]) < 0 {
+			suffixes["asked for first and lacked"] = cmp.Or(suffixes["asked for first and lacked"], suffix)
+		} else {
+			suffixes["resolved before it is asked for"] = cmp.Or(suffixes["resolved before it is asked for"], suffix)
 		}
 	}
-	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "a delta against "+thinID.String()) {
-		t.Errorf("without the repository, the pack reads with %v, which does not name the base it lacks", err)
+	for name, suffix := range suffixes {
+		t.Run(name, func(t *testing.T) {
+			b := &builder{}
+			want := map[ID]bool{}
+			// A REF_DELTA against an object resolved from a thin base, which comes after it in the
+			// pack: its base is known only once the thin one has been resolved.
+			d1, r1 := edit(thin, suffix)
+			d2, r2 := edit(r1, "two\n")
+			b.ref(HashObject(TypeBlob, r1), d2)
+			b.ref(thinID, d1)
+			// An OFS_DELTA against that REF_DELTA, and a REF_DELTA against an object sent whole later.
+			d3, r3 := edit(r2, "three\n")
+			b.ofs(0, d3)
+			whole := []byte(strings.Repeat("sent whole\n", 20))
+			d4, r4 := edit(whole, "four\n")
+			b.ref(HashObject(TypeBlob, whole), d4)
+			b.whole(TypeBlob, whole)
+			for _, data := range [][]byte{r1, r2, r3, r4, whole} {
+				want[HashObject(TypeBlob, data)] = true
+			}
+			out, u := unpack(t, b.all(), UnpackOptions{Bases: repo})
+			got := map[ID]bool{}
+			for _, o := range u.Objects {
+				got[o.ID] = true
+			}
+			if !maps.Equal(got, want) {
+				t.Errorf("read %d objects, and the pack holds %d", len(got), len(want))
+			}
+			st := store(t, out, u)
+			for id := range want {
+				if _, _, err := ReadObject(context.Background(), st, id, 1<<20); err != nil {
+					t.Error(err)
+				}
+			}
+			err := unpackErr(t, b.all(), UnpackOptions{})
+			if err == nil || !strings.Contains(err.Error(), "which neither the pack nor the repository holds") {
+				t.Errorf("without the repository, the pack reads with %v", err)
+			}
+		})
 	}
 }
 
@@ -514,7 +533,7 @@ func TestWhatIsHeldWholeIsBounded(t *testing.T) {
 
 	b := &builder{}
 	b.whole(TypeTree, big)
-	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "held whole") {
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "parsed whole") {
 		t.Errorf("a tree larger than what is held reads with %v", err)
 	}
 	b = &builder{}
@@ -543,6 +562,59 @@ func TestWhatIsHeldWholeIsBounded(t *testing.T) {
 	b.whole(TypeBlob, bytes.Repeat([]byte("y"), 1000))
 	if _, err := Unpack(context.Background(), bytes.NewReader(b.all()), int64(len(b.all())), io.Discard, UnpackOptions{}); err != nil {
 		t.Errorf("a blob sent whole, which is never held, is refused with %v", err)
+	}
+}
+
+func TestACommitATreeAndATagAreParsedWithinTheirBound(t *testing.T) {
+	defer func(was int64) { maxParsed = was }(maxParsed)
+	maxParsed = 50
+	one, _ := EncodeTree([]TreeEntry{{Name: "a", Mode: ModeFile, ID: HashObject(TypeBlob, []byte("a"))}})
+	two, _ := EncodeTree([]TreeEntry{
+		{Name: "a", Mode: ModeFile, ID: HashObject(TypeBlob, []byte("a"))},
+		{Name: "b", Mode: ModeFile, ID: HashObject(TypeBlob, []byte("b"))},
+	})
+	b := &builder{}
+	b.whole(TypeBlob, bytes.Repeat([]byte("x"), 70))
+	b.whole(TypeTree, one)
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err != nil {
+		t.Errorf("a blob past what is parsed, which is never parsed, and a tree within it read with %v", err)
+	}
+	b = &builder{}
+	b.whole(TypeTree, two)
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "a tree of 58 bytes, which is parsed whole, and the most that is is 50") {
+		t.Errorf("a tree past what is parsed reads with %v", err)
+	}
+	b = &builder{}
+	b.ofs(b.whole(TypeTree, one), delta(len(one), len(two), insertOp(two)))
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "result is 58 bytes, more than the 50") {
+		t.Errorf("a delta resolving to a tree past what is parsed reads with %v", err)
+	}
+}
+
+func TestAPackThatExpandsPastWhatAPushHoldsIsRefused(t *testing.T) {
+	defer func(was int64) { maxUnpacked = was }(maxUnpacked)
+	maxUnpacked = 1300
+	base := bytes.Repeat([]byte("0123456789"), 40)
+	// Each delta copies the whole base and adds a byte: a few bytes sent, 400 resolved.
+	b := &builder{}
+	i := b.whole(TypeBlob, base)
+	for n := range 2 {
+		d, _ := edit(base, fmt.Sprint(n))
+		b.ofs(i, d)
+	}
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err != nil {
+		t.Errorf("a pack holding %d bytes reads with %v", 400+401+401, err)
+	}
+	d, _ := edit(base, "2")
+	b.ofs(i, d)
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "more than 1300 bytes once inflated and resolved") {
+		t.Errorf("a pack of deltas copying one base over and over reads with %v", err)
+	}
+	// And a blob of zeros, a few bytes of zlib stream, is refused before it is inflated.
+	b = &builder{}
+	b.whole(TypeBlob, make([]byte, 1301))
+	if err := unpackErr(t, b.all(), UnpackOptions{}); err == nil || !strings.Contains(err.Error(), "more than 1300 bytes") {
+		t.Errorf("a blob that inflates past what a push holds reads with %v", err)
 	}
 }
 

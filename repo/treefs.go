@@ -42,7 +42,7 @@ func (t *TreeFS) tree(id ID) ([]TreeEntry, error) {
 	if ok {
 		return entries, nil
 	}
-	typ, data, err := ReadObject(t.ctx, t.objects, id, maxHeld)
+	typ, data, err := ReadObject(t.ctx, t.objects, id, heldBound(TypeTree))
 	if err != nil {
 		return nil, err
 	}

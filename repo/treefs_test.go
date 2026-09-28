@@ -122,6 +122,12 @@ func TestAFileReadWholeIsBoundedAsWhatElseIsHeld(t *testing.T) {
 	if _, err := fs.ReadFile(fsys, "agentiik.yaml"); err != nil {
 		t.Errorf("a file smaller than what is held reads with %v", err)
 	}
+	defer func(was int64) { maxParsed = was }(maxParsed)
+	maxParsed = 100
+	fsys = NewTreeFS(context.Background(), st, gitID(t, s.dir, "main^{tree}"))
+	if _, err := fs.ReadDir(fsys, "."); err == nil || !strings.Contains(err.Error(), "more than the 100") {
+		t.Errorf("a tree larger than what is parsed lists with %v", err)
+	}
 }
 
 func TestATreeIsReadAsItIsWalked(t *testing.T) {

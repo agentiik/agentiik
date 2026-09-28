@@ -16,9 +16,9 @@ import (
 
 // fuzzBounds keeps what one input can make a target allocate to a mebibyte.
 func fuzzBounds(f *testing.F) {
-	held, cache := maxHeld, deltaBaseCache
-	maxHeld, deltaBaseCache = 1<<20, 4<<10
-	f.Cleanup(func() { maxHeld, deltaBaseCache = held, cache })
+	held, cache, unpacked := maxHeld, deltaBaseCache, maxUnpacked
+	maxHeld, deltaBaseCache, maxUnpacked = 1<<20, 4<<10, 8<<20
+	f.Cleanup(func() { maxHeld, deltaBaseCache, maxUnpacked = held, cache, unpacked })
 }
 
 func FuzzUnpack(f *testing.F) {

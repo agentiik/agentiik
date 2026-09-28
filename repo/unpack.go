@@ -53,9 +53,10 @@ type Unpacked struct {
 //
 // Whole entries are copied as they were sent, header rewritten and zlib stream untouched, and
 // resolved deltas compressed once. Memory is bounded whatever the pack holds: a blob sent whole is
-// inflated as it is read and never held, and what is held, a commit, a tree, a tag, a delta and
-// its base, is at most MaxHeldBytes, with DeltaBaseCacheBytes of bases kept for the deltas made
-// against them.
+// inflated as it is read and never held, what is held, a delta and its base, is at most
+// MaxHeldBytes, and a commit, a tree or a tag MaxParsedBytes, with DeltaBaseCacheBytes of bases
+// kept for the deltas made against them. The work and the pack written are bounded too: the
+// objects of the pack weigh at most MaxUnpackedBytes once inflated and resolved.
 func Unpack(ctx context.Context, r io.ReaderAt, size int64, w io.Writer, opts UnpackOptions) (*Unpacked, error) {
 	u, err := newUnpacker(ctx, r, size, w, opts)
 	if err != nil {
@@ -74,7 +75,7 @@ func newUnpacker(ctx context.Context, r io.ReaderAt, size int64, w io.Writer, op
 	case size < packHeaderLen+packTrailerLen:
 		return nil, fmt.Errorf("repo: a pack of %d bytes, shorter than a header and a trailer", size)
 	}
-	return &unpacker{ctx: ctx, r: r, w: w, end: size - packTrailerLen, opts: opts, refKids: map[ID][]int32{}}, nil
+	return &unpacker{ctx: ctx, r: r, w: w, end: size - packTrailerLen, opts: opts}, nil
 }
 
 func (u *unpacker) run() (*Unpacked, error) {
@@ -98,14 +99,20 @@ type packEntry struct {
 	offset, data int64
 	// size is the size of its content once inflated: the object's, or the delta's.
 	size int64
-	// base is the position of the entry an OFS_DELTA is made against, or of the ID a REF_DELTA
-	// names in the unpacker's refBases.
+	// base is the position of the entry an OFS_DELTA is made against.
 	base int32
 	kind byte
 	id   ID
 }
 
 func (e *packEntry) isDelta() bool { return e.kind == kindOfsDelta || e.kind == kindRefDelta }
+
+// refDelta is a REF_DELTA entry and the ID of what it is made against: 24 bytes, where a map from
+// the ID to the entries would take some hundred.
+type refDelta struct {
+	base  ID
+	entry int32
+}
 
 type unpacker struct {
 	ctx  context.Context
@@ -117,17 +124,28 @@ type unpacker struct {
 	z    io.ReadCloser
 
 	entries []packEntry
-	// refBases are the IDs REF_DELTA entries name, and refKids the entries made against each of
-	// them not resolved yet. ofsKids are the entries made against each entry by offset: those of
-	// entry i are ofsKids[ofsFrom[i]:ofsFrom[i+1]].
-	refBases []ID
-	refKids  map[ID][]int32
+	// refs are the REF_DELTA entries, each with the ID it names, sorted by that ID once the pack
+	// has been read, an entry taken being set to -1 once it has been resolved. ofsKids are the
+	// entries made against each entry by offset: those of entry i are
+	// ofsKids[ofsFrom[i]:ofsFrom[i+1]].
+	refs     []refDelta
 	ofsKids  []int32
 	ofsFrom  []int32
 	resolved int
 	// held is how many bytes the frames of the resolution hold, and peak the most they have held
 	// at once, which a test holds to the bound.
 	held, peak int64
+	// unpacked is how much the objects read so far weigh, inflated and resolved.
+	unpacked int64
+}
+
+// count adds an object of size bytes to what the push has unpacked, and refuses it past
+// MaxUnpackedBytes.
+func (u *unpacker) count(size int64) error {
+	if u.unpacked += size; u.unpacked > maxUnpacked {
+		return fmt.Errorf("repo: the pack's objects weigh more than %d bytes once inflated and resolved, the most one push may hold", maxUnpacked)
+	}
+	return nil
 }
 
 // read is the first pass: every entry's header, where it begins and ends, and the ID of every
@@ -208,8 +226,10 @@ func (u *unpacker) readEntry(c *counter) ([]byte, error) {
 		return nil, fmt.Errorf("an entry of kind %d, which is none of git's", kind)
 	case Type(kind).valid() && size > u.opts.MaxObjectBytes:
 		return nil, fmt.Errorf("%s of %d bytes, more than the %d an object may be", kindName(kind), size, u.opts.MaxObjectBytes)
-	case kind != byte(TypeBlob) && size > maxHeld:
-		return nil, fmt.Errorf("%s of %d bytes, which is held whole, and the most that is is %d", kindName(kind), size, maxHeld)
+	case e.isDelta() && size > maxHeld:
+		return nil, fmt.Errorf("a delta of %d bytes, which is held whole, and the most that is is %d", size, maxHeld)
+	case Type(kind).valid() && kind != byte(TypeBlob) && size > heldBound(Type(kind)):
+		return nil, fmt.Errorf("%s of %d bytes, which is parsed whole, and the most that is is %d", kindName(kind), size, heldBound(Type(kind)))
 	}
 	switch kind {
 	case kindOfsDelta:
@@ -227,10 +247,14 @@ func (u *unpacker) readEntry(c *counter) ([]byte, error) {
 		if _, err := io.ReadFull(c, base[:]); err != nil {
 			return nil, err
 		}
-		e.base = int32(len(u.refBases))
-		u.refBases = append(u.refBases, base)
+		u.refs = append(u.refs, refDelta{base: base, entry: int32(len(u.entries))})
 	}
 	e.data = c.n
+	if !e.isDelta() {
+		if err := u.count(size); err != nil {
+			return nil, err
+		}
+	}
 	if u.z == nil {
 		u.z, err = zlib.NewReader(c)
 	} else {
@@ -298,7 +322,7 @@ func (u *unpacker) check(id ID, t Type, data []byte) error {
 	case TypeCommit:
 		_, err = ParseCommit(data)
 	case TypeTree:
-		_, err = ParseTree(data)
+		err = checkTree(data)
 	case TypeTag:
 		_, err = ParseTag(data)
 	}
@@ -340,15 +364,12 @@ func (u *unpacker) resolve() error {
 	u.ofsKids = make([]int32, u.ofsFrom[n])
 	next := slices.Clone(u.ofsFrom[:n])
 	for i, e := range u.entries {
-		switch e.kind {
-		case kindOfsDelta:
+		if e.kind == kindOfsDelta {
 			u.ofsKids[next[e.base]] = int32(i)
 			next[e.base]++
-		case kindRefDelta:
-			base := u.refBases[e.base]
-			u.refKids[base] = append(u.refKids[base], int32(i))
 		}
 	}
+	slices.SortStableFunc(u.refs, func(a, b refDelta) int { return bytes.Compare(a.base[:], b.base[:]) })
 	for i, e := range u.entries {
 		if !e.isDelta() {
 			if err := u.from(&frame{entry: int32(i), id: e.id, t: Type(e.kind)}); err != nil {
@@ -359,10 +380,11 @@ func (u *unpacker) resolve() error {
 	// What is left is made against objects the pack does not hold whole. The repository is asked
 	// for each; one it lacks may yet be an object the pack holds as a delta against another base,
 	// and it is taken from what is left to resolve when that delta is.
-	for _, id := range u.unresolvedBases() {
-		if _, still := u.refKids[id]; !still || u.opts.Bases == nil {
+	for i, r := range u.refs {
+		if r.entry < 0 || (i > 0 && u.refs[i-1].base == r.base) || u.opts.Bases == nil {
 			continue
 		}
+		id := r.base
 		t, data, err := ReadObject(u.ctx, u.opts.Bases, id, maxHeld)
 		if errors.Is(err, ErrMissing) {
 			continue
@@ -376,22 +398,15 @@ func (u *unpacker) resolve() error {
 			return err
 		}
 	}
-	if missing := u.unresolvedBases(); len(missing) > 0 {
-		return fmt.Errorf("repo: a delta against %s, which neither the pack nor the repository holds", missing[0])
+	for _, r := range u.refs {
+		if r.entry >= 0 {
+			return fmt.Errorf("repo: a delta against %s, which neither the pack nor the repository holds", r.base)
+		}
 	}
 	if u.resolved != n {
 		return fmt.Errorf("repo: %d of the pack's entries were never resolved", n-u.resolved)
 	}
 	return nil
-}
-
-func (u *unpacker) unresolvedBases() []ID {
-	ids := make([]ID, 0, len(u.refKids))
-	for id := range u.refKids {
-		ids = append(ids, id)
-	}
-	slices.SortFunc(ids, func(a, b ID) int { return bytes.Compare(a[:], b[:]) })
-	return ids
 }
 
 // kids are the entries made against an object, which are taken from what is left to resolve.
@@ -400,9 +415,14 @@ func (u *unpacker) kids(f *frame) []int32 {
 	if f.entry >= 0 {
 		kids = u.ofsKids[u.ofsFrom[f.entry]:u.ofsFrom[f.entry+1]]
 	}
-	if byID, ok := u.refKids[f.id]; ok {
-		kids = append(slices.Clip(kids), byID...)
-		delete(u.refKids, f.id)
+	// Appended to, the entries by offset are copied first rather than written over.
+	kids = slices.Clip(kids)
+	i, _ := slices.BinarySearchFunc(u.refs, f.id, func(r refDelta, id ID) int { return bytes.Compare(r.base[:], id[:]) })
+	for ; i < len(u.refs) && u.refs[i].base == f.id; i++ {
+		if u.refs[i].entry >= 0 {
+			kids = append(kids, u.refs[i].entry)
+			u.refs[i].entry = -1
+		}
 	}
 	return kids
 }
@@ -432,8 +452,11 @@ func (u *unpacker) descend(stack []*frame, kids []int32) error {
 		if err != nil {
 			return err
 		}
-		data, err := u.apply(base, k)
+		data, err := u.apply(base, k, parent.t)
 		if err != nil {
+			return err
+		}
+		if err := u.count(int64(len(data))); err != nil {
 			return err
 		}
 		f := &frame{entry: k, id: HashObject(parent.t, data), t: parent.t, data: data}
@@ -461,8 +484,8 @@ func (u *unpacker) descend(stack []*frame, kids []int32) error {
 	return nil
 }
 
-// apply resolves the delta at entry k against base.
-func (u *unpacker) apply(base []byte, k int32) ([]byte, error) {
+// apply resolves the delta at entry k against base, into an object of type t.
+func (u *unpacker) apply(base []byte, k int32, t Type) ([]byte, error) {
 	e := &u.entries[k]
 	end := u.end
 	if int(k)+1 < len(u.entries) {
@@ -473,7 +496,7 @@ func (u *unpacker) apply(base []byte, k int32) ([]byte, error) {
 		var data []byte
 		// What a delta resolves to is an object like any other, and bounded as one, besides being
 		// held whole.
-		if data, err = applyDelta(base, delta, min(maxHeld, u.opts.MaxObjectBytes)); err == nil {
+		if data, err = applyDelta(base, delta, min(heldBound(t), u.opts.MaxObjectBytes)); err == nil {
 			return data, nil
 		}
 	}
@@ -498,7 +521,7 @@ func (u *unpacker) dataOf(stack []*frame) ([]byte, error) {
 		j = 0
 	}
 	for k := j + 1; k <= top; k++ {
-		data, err := u.apply(stack[k-1].data, stack[k].entry)
+		data, err := u.apply(stack[k-1].data, stack[k].entry, stack[k].t)
 		if err != nil {
 			return nil, err
 		}
