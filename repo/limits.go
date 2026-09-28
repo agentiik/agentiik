@@ -9,9 +9,10 @@ const (
 	// temporary file before a byte of it is read, and this is the disk that takes.
 	MaxPackBytes int64 = 2 << 30
 
-	// MaxPackObjects is the most objects one pushed pack may hold: 1,048,576. Reading one holds
-	// some ninety bytes an object until it is resolved, so this is under a hundred megabytes at
-	// its worst, where a workflow repository holds thousands of objects in its whole history.
+	// MaxPackObjects is the most objects one pushed pack may hold: 1,048,576. Reading one holds a
+	// little over a hundred bytes an object until the pack written is closed, and some two hundred
+	// where every entry is a delta naming its base by ID, so this is 200 MiB at its worst, where a
+	// workflow repository holds thousands of objects in its whole history.
 	MaxPackObjects = 1 << 20
 
 	// MaxDeltaDepth is the longest chain of deltas an object may be resolved through: 50, git's
