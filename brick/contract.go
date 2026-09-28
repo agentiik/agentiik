@@ -19,12 +19,18 @@ import (
 
 // The paths the contract names. A brick reads its inputs under InDir and writes its
 // outputs under OutDir, and those two directories are the whole of what is promised.
+//
+// RepoDir is where the workflow repository tree is, "mounted read-only at /agk/repo/ in
+// every step". It is named here, beside the two edges, because the API that answers a
+// runner with the files a step's files place over it has to spell it as the driver that
+// binds it does, and the API links no driver.
 const (
 	Root        = "/agk"
 	InDir       = "/agk/in"
 	OutDir      = "/agk/out"
 	OutPortsDir = "/agk/out/ports"
 	OutFilesDir = "/agk/out/files"
+	RepoDir     = "/agk/repo"
 )
 
 // envelopeFileName is what an input envelope is called under its mount. A brick reads
