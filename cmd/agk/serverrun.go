@@ -19,6 +19,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/cmd/agk/internal/local"
 	"github.com/agentiik/agentiik/db"
+	"github.com/agentiik/agentiik/graph"
 )
 
 // agk run on an installation: the workflow a pushed commit holds, started there and followed
@@ -115,7 +116,10 @@ func runOnServer(ctx context.Context, e Env, o serverRun) int {
 		return exitRefused
 	}
 	tree := committed(files)
-	wf, err := loadCommitted(tree, filepath.Base(path), filepath.Dir(path), sha)
+	// Read as a stored version is, because it is one: a commit pushed before the bound a port is
+	// written to is started by the installation as before, and refusing it here would stop it
+	// before it was asked for.
+	wf, err := loadCommitted(tree, filepath.Base(path), filepath.Dir(path), sha, graph.LoadStored)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
