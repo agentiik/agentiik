@@ -26,12 +26,6 @@ func TestTheBrickCorpus(t *testing.T) {
 				t.Fatal(err)
 			}
 			m, err := brick.ParseManifest(doc)
-			if task, ok := deferredManifests[c.File]; ok {
-				if err != nil {
-					t.Fatalf("this manifest is refused now, so it is no longer deferred to %s: take it out of deferredManifests (%v)", task, err)
-				}
-				t.Skipf("accepted until %s", task)
-			}
 			switch {
 			case c.Valid && err != nil:
 				t.Fatalf("the corpus says this manifest covers %s, and it was refused: %v", c.Covers, err)
@@ -46,12 +40,25 @@ func TestTheBrickCorpus(t *testing.T) {
 	}
 }
 
-// deferredManifests are the fixtures the corpus refuses that this reader still accepts, because
-// the documentation gives the refusal to a later release, and which one: a port of 251 to 255
-// characters is "nothing yet, a v0.4.0 task: it is accepted", since the engine carries one of up
-// to 255 until then; the schema already holds it to 250.
-var deferredManifests = map[string]string{
-	"fixtures/brick/invalid/port-name-251-characters.yaml": "v0.4.0, which refuses a port past 250 characters in the manifest reader",
+// TestAStoredManifestReadsBackWhatTheCorpusRefusesPastThePortBound holds the fixture the corpus
+// refuses for a port of 251 characters to the stored reading: ParseManifest refuses it where a
+// version is made, and a version recorded before the bound was, holding such a manifest, is read
+// back as it was accepted, as is the image a task of it runs.
+func TestAStoredManifestReadsBackWhatTheCorpusRefusesPastThePortBound(t *testing.T) {
+	doc, err := fs.ReadFile(fixtures.FS, "fixtures/brick/invalid/port-name-251-characters.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := brick.ParseManifest(doc); err == nil {
+		t.Fatal("the manifest was read where a version is made, and the corpus refuses it")
+	}
+	m, err := brick.ParseStoredManifest(doc)
+	if err != nil {
+		t.Fatalf("the stored reading refused it: %v", err)
+	}
+	if err := m.CheckPortLengths(); err == nil {
+		t.Error("what the stored reading read is held to the bound all the same where a version is made, and it was not")
+	}
 }
 
 // TestAPortSchemaResolvesAgainstTheManifest holds the rule about pointers: a definition
@@ -239,17 +246,18 @@ spec:
 }
 
 // A name the manifest writes is at most 255 characters, the longest a file name is: a
-// port becomes a file under /agk/out/ports/ and a secret, unless it says otherwise, a
-// file under /agk/secrets/.
+// secret, unless it says otherwise, becomes a file under /agk/secrets/. A port is at most
+// 250, since it becomes the file <name>.json under /agk/out/ports/, where a version is made;
+// a manifest a version already holds is read back with a port of up to 255.
 func TestANameIsNoLongerThanAFileName(t *testing.T) {
 	longest := strings.Repeat("n", 255)
-	manifest := func(port, secret string) []byte {
+	manifest := func(block, port, secret string) []byte {
 		return []byte(`
 apiVersion: agentiik.dev/v1
 kind: Brick
 metadata: { name: normalize, version: 1.0.0 }
 spec:
-  outputs:
+  ` + block + `:
     ` + port + `: {}
   secrets:
     - name: ` + secret + `
@@ -257,20 +265,35 @@ spec:
     user: "65532:65532"
 `)
 	}
-	if _, err := brick.ParseManifest(manifest(longest, longest)); err != nil {
-		t.Errorf("a port and a secret of 255 characters were refused: %v", err)
+	for _, block := range []string{"inputs", "outputs"} {
+		if _, err := brick.ParseManifest(manifest(block, longest[:250], longest)); err != nil {
+			t.Errorf("a port of 250 characters in spec.%s and a secret of 255 were refused: %v", block, err)
+		}
+		_, err := brick.ParseManifest(manifest(block, longest[:251], "billing"))
+		if err == nil {
+			t.Errorf("a port of 251 characters in spec.%s was accepted where a version is made", block)
+		} else if said := err.Error(); !strings.Contains(said, "at most 250") || !strings.Contains(said, "spec."+block) || strings.Contains(said, longest[:251]) {
+			t.Errorf("a port of 251 characters in spec.%s was refused with %q", block, said)
+		}
+		if _, err := brick.ParseStoredManifest(manifest(block, longest, "billing")); err != nil {
+			t.Errorf("a stored manifest carrying a port of 255 characters in spec.%s was refused: %v", block, err)
+		}
 	}
 	for what, doc := range map[string][]byte{
-		"a port":   manifest(longest+"n", "billing"),
-		"a secret": manifest("ok", longest+"n"),
+		"a port":   manifest("outputs", longest+"n", "billing"),
+		"a secret": manifest("outputs", "ok", longest+"n"),
 	} {
-		_, err := brick.ParseManifest(doc)
-		if err == nil {
-			t.Errorf("%s of 256 characters was accepted", what)
-			continue
-		}
-		if said := err.Error(); !strings.Contains(said, "at most 255") {
-			t.Errorf("%s of 256 characters was refused with %q", what, said)
+		for reader, read := range map[string]func([]byte) (brick.Manifest, error){
+			"ParseManifest": brick.ParseManifest, "ParseStoredManifest": brick.ParseStoredManifest,
+		} {
+			_, err := read(doc)
+			if err == nil {
+				t.Errorf("%s of 256 characters was accepted by %s", what, reader)
+				continue
+			}
+			if said := err.Error(); !strings.Contains(said, "at most 255") {
+				t.Errorf("%s of 256 characters was refused by %s with %q", what, reader, said)
+			}
 		}
 	}
 }

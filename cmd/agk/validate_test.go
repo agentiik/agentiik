@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -271,5 +272,37 @@ func TestAskingACommandForItsFlagsIsNotAUsageError(t *testing.T) {
 	e, _, _ := reading(t)
 	if code := run(t.Context(), e, []string{"validate", "--nosuchflag"}); code != exitUsage {
 		t.Errorf("a flag that is not defined leaves with %d, want %d", code, exitUsage)
+	}
+}
+
+// A port past agk.PortMaxBytes is refused by agk validate and agk run --local alike, which read
+// one file one way, before a daemon is reached: "a port or a workflow output at most 250", since
+// each becomes the file <name>.json.
+func TestAPortPastItsBoundIsRefusedBeforeADaemonIsReached(t *testing.T) {
+	dir := t.TempDir()
+	long := "rejected-" + strings.Repeat("x", 242)
+	if err := os.WriteFile(filepath.Join(dir, entryPoint), []byte(`
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: reconciliation, namespace: finance }
+steps:
+  reconcile:
+    image: alpine:3.21
+    script: ["true"]
+    outputs: [out, `+long+`]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"validate"}, {"run", "--local"}} {
+		code, out, errs := runner(t, dir, args...)
+		if code != exitRefused {
+			t.Errorf("agk %s answered %d, and the file is refused: %s%s", strings.Join(args, " "), code, out, errs)
+		}
+		if !strings.Contains(errs, "at most 250") || !strings.Contains(errs, "steps.reconcile.outputs") {
+			t.Errorf("agk %s refused it with %q", strings.Join(args, " "), errs)
+		}
+		if strings.Contains(errs, "speaks API") {
+			t.Errorf("agk %s probed a daemon before refusing the file:\n%s", strings.Join(args, " "), errs)
+		}
 	}
 }

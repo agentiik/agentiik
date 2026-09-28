@@ -22,6 +22,18 @@ const identifierPattern = `^[A-Za-z0-9][A-Za-z0-9_-]*$`
 // as well as bytes.
 const IdentifierMaxBytes = 255
 
+// PortMaxBytes is the longest a port or a workflow output is written, in a workflow file or a
+// brick manifest: IdentifierMaxBytes less the five characters of .json, since each becomes the
+// file <name>.json, a port under /agk/out/ports/ and a workflow output under a local run's
+// outputs/, and a filesystem holds that file's name to 255.
+//
+// It is held where a version is made and nowhere else: by agk validate, agk run --local, agk
+// push and the push route, over the file and over the manifests the push carries. A version
+// recorded before the bound was, with a port of 251 to 255 characters, is read back as it was
+// accepted, since nothing may break for what an installation already holds; so Port.Validate,
+// which is what the wire and the envelope hold a port to, stays at IdentifierMaxBytes.
+const PortMaxBytes = IdentifierMaxBytes - len(".json")
+
 // ReservedNamespaces are the words the API routes on as the first segment after /api/v1/,
 // or will, which is why they cannot name a namespace: GET /api/v1/runs/{id} and GET
 // /api/v1/{ns}/runs would both claim /api/v1/runs/runs, and the router answers such a

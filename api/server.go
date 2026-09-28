@@ -427,8 +427,11 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request, who Principal, ove
 	}
 	// Built before it is written, so that a version that cannot be rebuilt is refused at the
 	// push rather than discovered by the first run of it. That includes a tag no digest was
-	// resolved for, which is a push from an agk that resolves none.
-	g, err := version.Build(v)
+	// resolved for, which is a push from an agk that resolves none. Built as a new version is,
+	// so a port or a workflow output past agk.PortMaxBytes, in the file, a file it includes or a
+	// manifest, is refused here, where the version is made, and never where a stored one is
+	// read back.
+	g, err := version.BuildNew(v)
 	if err != nil {
 		fail(w, http.StatusUnprocessableEntity, err.Error())
 		return

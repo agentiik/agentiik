@@ -139,6 +139,27 @@ func (m Manifest) InputPorts() []agk.Port { return portNamesOf(m.Spec.Inputs) }
 // OutputPorts are the ports the brick writes, in name order.
 func (m Manifest) OutputPorts() []agk.Port { return portNamesOf(m.Spec.Outputs) }
 
+// CheckPortLengths refuses a port declared past agk.PortMaxBytes, inputs and outputs alike.
+//
+// An output port becomes the file <name>.json under /agk/out/ports/, which a filesystem holds to
+// 255 characters with its suffix, and an input port is the port an edge of the workflow feeds,
+// which the workflow names within the same bound. It is what ParseManifest adds to
+// ParseStoredManifest, and it stands apart so that a manifest already read, and kept by image
+// digest, can be held to it where a version is about to be made.
+func (m Manifest) CheckPortLengths() error {
+	for _, block := range []struct {
+		key   string
+		ports map[agk.Port]ManifestPort
+	}{{"inputs", m.Spec.Inputs}, {"outputs", m.Spec.Outputs}} {
+		for _, name := range portNamesOf(block.ports) {
+			if len(name) > agk.PortMaxBytes {
+				return fmt.Errorf("spec.%s carries the port %.64s..., which is %d characters long: a port is at most %d, since an output port becomes the file <name>.json under /agk/out/ports/, which no filesystem holds past %d characters, and a workflow names every port within the same bound", block.key, name, len(name), agk.PortMaxBytes, agk.IdentifierMaxBytes)
+			}
+		}
+	}
+	return nil
+}
+
 func portNamesOf(ports map[agk.Port]ManifestPort) []agk.Port {
 	names := make([]agk.Port, 0, len(ports))
 	for name := range ports {
@@ -179,7 +200,31 @@ var (
 // secret entry fails publication rather than being ignored". The places where the author
 // is writing JSON Schema stay open and travel through untouched: a params entry, a
 // definitions entry and a port schema "carry the whole 2020-12 vocabulary".
+//
+// It is the reader of a manifest a version is about to be made with, so it holds a port to
+// agk.PortMaxBytes as well (CheckPortLengths). A manifest a version already holds is read
+// with ParseStoredManifest instead.
 func ParseManifest(doc []byte) (Manifest, error) {
+	m, err := ParseStoredManifest(doc)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := m.CheckPortLengths(); err != nil {
+		return Manifest{}, err
+	}
+	return m, nil
+}
+
+// ParseStoredManifest is ParseManifest less the bound a port is written to, agk.PortMaxBytes: the
+// reader of a manifest a version already holds, which is every manifest a version is rebuilt
+// from and every one a runner reads out of the image a task names.
+//
+// A version recorded before the bound was may hold a brick declaring a port of 251 to 255
+// characters, and its runs, its replays and the rebuild of its graph have to go on as they did
+// before the upgrade: every rule stands, the grammar and the 255 characters no filesystem goes
+// past included, and this one is refused where a version is made rather than where one is read
+// back.
+func ParseStoredManifest(doc []byte) (Manifest, error) {
 	var v any
 	if err := yaml.Unmarshal(doc, &v); err != nil {
 		return Manifest{}, fmt.Errorf("the manifest is not a YAML document: %w", err)

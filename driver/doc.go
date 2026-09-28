@@ -124,7 +124,7 @@
 // a container to adopt by label. Pull by digest, reading every message of the progress
 // stream, because the daemon reports a failed pull as an error object inside a 200 that has
 // already streamed half its layers. Read /agk/brick.yaml out of the image and cache what
-// brick.ParseManifest returns under the image digest. Both are bounded by the task's
+// brick.ParseStoredManifest returns under the image digest. Both are bounded by the task's
 // deadline where there is nothing to adopt: a deadline that passes during either ends the
 // task timed_out with no container, which is an ending and not an error, since nothing
 // failed, and a stop that landed during them ends it cancelled. Adopt, or create. Prepare
