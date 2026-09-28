@@ -1,0 +1,51 @@
+# extends is followed depth first and applied from the outermost block in:
+# .base, then .api-brick, then defaults, then the step's own values. Each
+# keyword is replaced whole by the next layer that writes it, save params,
+# which merge by name: invoice's retry carries no backoff, since it replaces
+# .base's whole. defaults.timeout is above the blocks' timeout, and below a
+# step's own.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+
+include:
+  - path: ./fragments/blocks.yaml
+
+defaults:
+  timeout: 10m
+
+.api-brick:
+  extends: .base
+  resources: { memory: 512Mi }
+  network: egress
+  egress:
+    allow: ["api.billing.example.com:443"]
+  params:
+    endpoint: https://billing.example.com/v2
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]
+
+  invoice:
+    extends: .api-brick
+    image: ghcr.io/acme/agk-invoice:1.4.0
+    needs: [fetch]
+    retry: { max: 5, on: [transient, lost] }
+    params:
+      dunning_days: 30
+    outputs: [out, error]
+
+  ledger:
+    extends: .base
+    image: ghcr.io/acme/agk-ledger:3.1.0
+    needs:
+      - { step: invoice, port: out, as: in }
+    timeout: 1m
+    params:
+      account: "706000"
+    outputs: [out]

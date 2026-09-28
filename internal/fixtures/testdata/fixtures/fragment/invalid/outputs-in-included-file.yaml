@@ -1,0 +1,13 @@
+# invalid: outputs in an included file. What a workflow returns is its boundary,
+#   declared by the workflow itself, so that reading one file tells you what
+#   that workflow is.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+outputs:
+  invoices:
+    from: { step: archive, port: out }

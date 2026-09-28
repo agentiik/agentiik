@@ -332,33 +332,32 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 	}
 	in := anInstallation(t)
 
-	// A workflow below the top of its repository, so that the root is the entry point's
-	// directory rather than the repository's, with an include that itself includes, an
-	// executable script, a name with a space, a second file holding the script's bytes at
-	// the other mode, and an empty file. The repository around it holds files of its own,
-	// which the runner must not be handed.
+	// A workflow at the root of its repository, where the entry point always is, with an
+	// include that itself includes, an executable script, a name with a space, a second file
+	// holding the script's bytes at the other mode, an empty file, and a file the workflow
+	// never names, which a step sees all the same: the whole tree is mounted.
 	dir := repository(t)
-	write(t, dir, "README.md", "# the repository, outside the workflow's directory\n")
-	write(t, dir, "billing/agentiik.yaml", treeWorkflow)
-	write(t, dir, "billing/fragments/common.yaml", treeFragment)
-	write(t, dir, "billing/fragments/nested/deeper.yaml", treeNested)
-	write(t, dir, "billing/scripts/render.sh", renderScript)
-	if err := os.Chmod(filepath.Join(dir, "billing/scripts/render.sh"), 0o755); err != nil {
+	write(t, dir, "README.md", "# the repository, which the workflow names nothing of\n")
+	write(t, dir, "agentiik.yaml", treeWorkflow)
+	write(t, dir, "fragments/common.yaml", treeFragment)
+	write(t, dir, "fragments/nested/deeper.yaml", treeNested)
+	write(t, dir, "scripts/render.sh", renderScript)
+	if err := os.Chmod(filepath.Join(dir, "scripts/render.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write(t, dir, "billing/data/monthly report.txt", "a name with a space\n")
-	write(t, dir, "billing/data/render copy.sh", renderScript)
-	write(t, dir, "billing/data/empty", "")
-	commitAll(t, dir, "a workflow below the top")
+	write(t, dir, "data/monthly report.txt", "a name with a space\n")
+	write(t, dir, "data/render copy.sh", renderScript)
+	write(t, dir, "data/empty", "")
+	commitAll(t, dir, "a workflow and its files")
 	sha := gitIn(t, dir, "rev-parse", "HEAD")
-	want := gitsView(t, dir, sha+":billing")
+	want := gitsView(t, dir, sha)
 
-	code, said := in.pushFrom(t, filepath.Join(dir, "billing"))
+	code, said := in.pushFrom(t, dir)
 	if code != exitSucceeded {
 		t.Fatalf("push answered %d: %s", code, said)
 	}
 	// And the same commit pushed again is the same version, which the server answers as one.
-	if code, said := in.pushFrom(t, filepath.Join(dir, "billing")); code != exitSucceeded {
+	if code, said := in.pushFrom(t, dir); code != exitSucceeded {
 		t.Fatalf("pushing the same commit again answered %d: %s", code, said)
 	}
 
@@ -414,8 +413,8 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 		t.Fatalf("redeeming answered %d", code)
 	}
 
-	// Every file of the commit at the entry point's directory, and nothing beside it, each
-	// fetched through the URL it came with and compared byte for byte and mode for mode.
+	// Every file of the commit, and nothing else, each fetched through the URL it came with and
+	// compared byte for byte and mode for mode.
 	var paths []string
 	urls := map[string]string{}
 	for _, e := range grant.Tree {
@@ -423,7 +422,7 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 		urls[e.Path] = e.URL
 		committed, held := want[e.Path]
 		if !held {
-			t.Errorf("the runner is handed %q, which the commit does not hold under billing/", e.Path)
+			t.Errorf("the runner is handed %q, which the commit does not hold", e.Path)
 			continue
 		}
 		if e.Mode != committed.mode {
@@ -450,7 +449,7 @@ func TestWhatARunnerIsHandedIsTheCommitThatWasPushed(t *testing.T) {
 		}
 	}
 	if wantPaths := slices.Sorted(maps.Keys(want)); !slices.Equal(paths, wantPaths) {
-		t.Errorf("the runner is handed %q, and the commit holds %q under billing/", paths, wantPaths)
+		t.Errorf("the runner is handed %q, and the commit holds %q", paths, wantPaths)
 	}
 	// Two files of the same bytes are one object whatever their modes, and one URL.
 	if urls["scripts/render.sh"] == "" || urls["scripts/render.sh"] != urls["data/render copy.sh"] {

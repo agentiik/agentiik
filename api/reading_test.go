@@ -92,7 +92,7 @@ func withSomeRuns(t *testing.T) someRuns {
 	h := s.servedTo(t, everything{who: "admin"})
 	start := func(namespace, workflow string) string {
 		t.Helper()
-		if w, _ := call(t, h, "PUT", "/api/v1/"+namespace+"/workflows/"+workflow+"/versions/"+aCommit, "admin", aPush(t)); w.Code != http.StatusOK {
+		if w, _ := call(t, h, "PUT", "/api/v1/"+namespace+"/workflows/"+workflow+"/versions/"+aCommit, "admin", aPushOf(t, named(workflowDocument, namespace, workflow))); w.Code != http.StatusOK {
 			t.Fatalf("the push answered %d: %s", w.Code, w.Body)
 		}
 		w, started := call(t, h, "POST", "/api/v1/"+namespace+"/workflows/"+workflow+"/runs", "admin",

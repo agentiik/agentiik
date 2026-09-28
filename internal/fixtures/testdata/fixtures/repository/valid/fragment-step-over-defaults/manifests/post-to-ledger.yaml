@@ -1,0 +1,24 @@
+# The manifest ghcr.io/acme/agk-ledger:3.1.0 carries at /agk/brick.yaml, as the namespace's
+# store recorded it under the digest the tag is pinned to.
+
+apiVersion: agentiik.dev/v1
+kind: Brick
+
+metadata:
+  name: post-to-ledger
+  version: 3.1.0
+  summary: Posts each invoice to the general ledger.
+
+spec:
+  inputs:
+    in: {}
+  outputs:
+    out: {}
+
+  params:
+    account: { type: string, pattern: "^[0-9]{6}$", required: true }
+    journal: { type: string }
+    currency: { type: string, pattern: "^[A-Z]{3}$" }
+
+  runtime:
+    user: "65532:65532"

@@ -1,0 +1,10 @@
+{
+  "namespace": "finance",
+  "name": "vat-reconciliation",
+  "default_branch": "master",
+  "protected": false,
+  "labels": {},
+  "created_at": "2026-09-27T14:30:00Z",
+  "head": null,
+  "clone_url": "https://agentiik.example.com/finance/vat-reconciliation.git"
+}

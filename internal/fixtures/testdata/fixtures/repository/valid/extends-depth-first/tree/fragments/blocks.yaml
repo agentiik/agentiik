@@ -1,0 +1,10 @@
+.base:
+  timeout: 5m
+  retry:
+    max: 3
+    on: [transient]
+    backoff: { type: exponential, base: 2s, max: 90s }
+  resources: { cpu: "1", memory: 1Gi }
+  runs_on: [arch=amd64]
+  params:
+    currency: EUR

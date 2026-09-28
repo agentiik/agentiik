@@ -1,0 +1,12 @@
+{
+  "namespace": "finance",
+  "repository": "monthly-invoicing",
+  "commit": "c63e4576f8ecae49ecdc72894bf70ea3a5b32c07",
+  "pins": {
+    "ghcr.io/acme/agk-fetch-orders:1.2.0": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f"
+  },
+  "manifests": {
+    "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f": "manifests/fetch-orders.yaml"
+  },
+  "secrets": []
+}

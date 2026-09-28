@@ -1,0 +1,66 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "999b5a33d57d5c417c634d12876fd6ecefac84b1",
+  "includes": [
+    {
+      "path": "fragments/scripts.yaml"
+    }
+  ],
+  "order": [
+    "fetch",
+    "report"
+  ],
+  "steps": {
+    "fetch": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f",
+      "brick": {
+        "name": "fetch-orders",
+        "version": "1.2.0"
+      },
+      "outputs": [
+        "out"
+      ],
+      "idempotent": true
+    },
+    "report": {
+      "kind": "script",
+      "image": "alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704",
+      "needs": [
+        {
+          "step": "fetch",
+          "port": "out",
+          "as": "in"
+        }
+      ],
+      "outputs": [
+        "out"
+      ],
+      "idempotent": true,
+      "script": [
+        "agk items > /tmp/items.json",
+        "agk emit out --from /tmp/items.json"
+      ],
+      "before_script": [
+        "echo \"defaults before\" >&2",
+        "apk add --no-cache jq",
+        "apk add --no-cache curl",
+        "echo \"own before\" >&2"
+      ],
+      "after_script": [
+        "echo \"included defaults after\" >&2",
+        "echo \".tools after\" >&2",
+        "echo \".report-tools after\" >&2",
+        "echo \"own after\" >&2"
+      ],
+      "shell": [
+        "/bin/sh",
+        "-eu"
+      ],
+      "extends": [
+        ".report-tools",
+        ".tools"
+      ]
+    }
+  }
+}

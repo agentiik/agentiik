@@ -28,16 +28,6 @@ func TestTheWorkflowCorpus(t *testing.T) {
 	for _, c := range cases {
 		t.Run(path.Base(c.File), func(t *testing.T) {
 			doc := read(t, c.File)
-
-			// One fixture is the included file itself, which is where the rule it
-			// pins can be seen at all: a fragment is not an entry point and is never
-			// read as one.
-			if c.Role != "" {
-				_, err := ParseFragment(doc)
-				held(t, err, ruleOf(c.File))
-				return
-			}
-
 			wf, err := Parse(doc)
 			switch {
 			case c.Valid:
@@ -58,6 +48,49 @@ func TestTheWorkflowCorpus(t *testing.T) {
 					t.Fatalf("the corpus says this document is schema valid and it was refused when read: %v", err)
 				}
 				held(t, refusal(t, wf, c.Manifest), ruleOf(c.File))
+			}
+		})
+	}
+}
+
+// TestTheFragmentCorpus holds the included file to its own group of the corpus: a fragment is
+// not an entry point and is never read as one, so what it may carry is read by ParseFragment and
+// nothing else. Each key that makes a document an entry point is refused by a rule of its own,
+// the one the corpus files the fixture under, and a key nothing defines by the file's shape.
+func TestTheFragmentCorpus(t *testing.T) {
+	cases, err := fixtures.Fragments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("the corpus holds no included file")
+	}
+	for _, c := range cases {
+		t.Run(path.Base(c.File), func(t *testing.T) {
+			doc := read(t, c.File)
+			_, err := ParseFragment(doc)
+			switch {
+			case c.Valid:
+				if err != nil {
+					t.Fatalf("the corpus says this included file covers %s, and it was refused: %v", c.Covers, err)
+				}
+			case strings.HasSuffix(string(ruleOf(c.File)), "-in-included-file") && ruleOf(c.File) != "unknown-key-in-included-file":
+				held(t, err, ruleOf(c.File))
+				// Placed at the key, since writing it at all is what is refused.
+				var r *Refusal
+				errors.As(err, &r)
+				key := strings.TrimSuffix(string(r.Rule), "-in-included-file")
+				if key == "api-version" {
+					key = "apiVersion"
+				}
+				lines := strings.Split(string(doc), "\n")
+				if r.At.Line < 1 || r.At.Line > len(lines) || r.At.Column < 1 || !strings.HasPrefix(lines[r.At.Line-1][r.At.Column-1:], key+":") {
+					t.Errorf("the refusal is placed at %d:%d, which is not where %s is written", r.At.Line, r.At.Column, key)
+				}
+			default:
+				if err == nil {
+					t.Fatalf("this included file was read without complaint, and the corpus refuses it by its shape: %s", c.Rule)
+				}
 			}
 		})
 	}

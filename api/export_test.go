@@ -45,3 +45,10 @@ func BetweenIdentifyAndSetPolicy(s *PolicyAPI, f func()) { s.checked = f }
 
 // Questions is how many transactions p has opened to say who a principal is and what it holds.
 func Questions(p *Principals) int64 { return p.questions.Load() }
+
+// CheckTree is checkTree, the transport's own rules a pushed tree is held to before any version
+// is judged, which a test reaches without a database.
+var CheckTree = checkTree
+
+// ManifestsCarried is manifestsCarried, the manifests a push carries as version.Check reaches them.
+var ManifestsCarried = manifestsCarried

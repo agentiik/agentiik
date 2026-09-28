@@ -1,0 +1,14 @@
+# invalid: on in an included file. What starts a workflow is its boundary, declared by
+#   the workflow itself, so that reading one file tells you what that workflow
+#   is.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+      timezone: Europe/Paris

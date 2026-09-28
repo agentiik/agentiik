@@ -144,6 +144,12 @@ func aPush(t *testing.T) api.Push {
 	return aPushOf(t, workflowDocument)
 }
 
+// named is a workflow document whose metadata names it namespace/workflow, which is what a new
+// version pushed there has to write.
+func named(document, namespace, workflow string) string {
+	return strings.Replace(document, "metadata: { name: monthly-invoicing, namespace: finance }", "metadata: { name: "+workflow+", namespace: "+namespace+" }", 1)
+}
+
 // aPushOf is the ordinary push of another workflow document.
 func aPushOf(t *testing.T, document string) api.Push {
 	t.Helper()

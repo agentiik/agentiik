@@ -1,0 +1,41 @@
+# valid: everything an included file may carry. Written as the root agentiik.yaml
+#   of a library repository, it is what another workflow's include:
+#   [{ workflow: finance/common, ref: v2.1.0 }] reads; the library's own hook
+#   validates it as a fragment, and nothing runs it.
+# covers: include, vars, secrets, defaults, steps with a hidden block and a
+#   step among them, and a hidden block at the root.
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+include:
+  - path: ./retry-policy.yaml
+  - path: /shared/labels.yaml
+
+vars:
+  currency: EUR
+  dunning_days: 30
+
+secrets: [billing]
+
+defaults:
+  timeout: 10m
+  network: none
+  before_script:
+    - echo "$AGK_WORKFLOW $AGK_STEP" >&2
+
+.billing-api:
+  network: egress
+  egress:
+    allow: ["api.billing.example.com:443"]
+  secrets: [billing]
+
+steps:
+
+  .vat-check:
+    extends: .billing-api
+    image: ghcr.io/acme/agk-vat-check@sha256:3b7e40a1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9
+    params:
+      currency: ${{ vars.currency }}
+
+  archive:
+    image: ghcr.io/acme/agk-archive@sha256:44de908840a673cc25120ecd3e506292d691f72937ce1da04a6ee4252ff4c115
+    outputs: [out]

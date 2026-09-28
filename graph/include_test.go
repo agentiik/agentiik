@@ -2,6 +2,8 @@ package graph
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -18,7 +20,21 @@ func tree(files map[string]string) fstest.MapFS {
 	return fsys
 }
 
-func loaded(t *testing.T, files map[string]string, remote map[WorkflowRef]Fragment) *Workflow {
+// repositories are the other repositories a workflow include reaches, each ref with its tree,
+// every one answered at the same commit.
+type repositories map[WorkflowRef]map[string]string
+
+const libraryCommit = "c7972389ef8c63fa88ce6c3893d8c75ba8bbb7b3"
+
+func (r repositories) Include(ref WorkflowRef) (fs.FS, string, error) {
+	files, ok := r[ref]
+	if !ok {
+		return nil, "", fmt.Errorf("no repository %s", ref.text())
+	}
+	return tree(files), libraryCommit, nil
+}
+
+func loaded(t *testing.T, files map[string]string, remote Remote) *Workflow {
 	t.Helper()
 	wf, err := Load(tree(files), "agentiik.yaml", remote)
 	if err != nil {
@@ -159,10 +175,11 @@ steps:
 	}
 }
 
-// TestAWorkflowIncludeArrivesAlreadyFetched holds the boundary: resolving one "reaches
-// another repository at a tag or a commit, requires workflow:read on it", which is not
-// something the evaluator does. It is handed the fragment or it refuses.
-func TestAWorkflowIncludeArrivesAlreadyFetched(t *testing.T) {
+// TestAWorkflowIncludeArrivesThroughWhatReachesRepositories holds the boundary: resolving one
+// "reaches another repository at a tag or a commit, requires workflow:read on it", which is not
+// something the evaluator does. It is handed the other repository's tree or it refuses, and it
+// reads that tree's root agentiik.yaml as a fragment.
+func TestAWorkflowIncludeArrivesThroughWhatReachesRepositories(t *testing.T) {
 	files := map[string]string{
 		"agentiik.yaml": `
 apiVersion: agentiik.dev/v1
@@ -183,14 +200,13 @@ steps:
 		t.Fatal("a workflow include nobody resolved was passed over")
 	}
 
-	fragment, err := ParseFragment([]byte(".shared:\n  timeout: 45s\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := WorkflowRef{Namespace: "finance", Name: "common", Ref: "v2.1.0"}
-	wf := loaded(t, files, map[WorkflowRef]Fragment{ref: *fragment})
+	wf := loaded(t, files, repositories{ref: {"agentiik.yaml": ".shared:\n  timeout: 45s\n"}})
 	if got := wf.Steps["one"].Timeout; time.Duration(got) != 45*time.Second {
 		t.Fatalf("the fragment contributed %s", got)
+	}
+	if got := wf.Included(); len(got) != 1 || got[0].Workflow != ref || got[0].Commit != libraryCommit {
+		t.Fatalf("the include was recorded as %+v, and a workflow include is recorded with the commit its ref resolved to", got)
 	}
 }
 
@@ -451,7 +467,9 @@ steps:
 // include exists to keep. A path include "resolves inside the same commit", and the
 // commit a fetched fragment was written in is the other repository's: resolving one
 // against the tree in hand would read a file of this repository in another's name, and
-// what it read would change under a commit nobody pinned.
+// what it read would change under a commit nobody pinned. So the library's own path
+// includes resolve in the library, and a file it lacks is refused in its name however
+// many files of that name this repository holds.
 func TestAFetchedFragmentResolvesItsOwnPathsWhereItWasWritten(t *testing.T) {
 	files := map[string]string{
 		"agentiik.yaml": `
@@ -472,16 +490,87 @@ steps:
 		"common-bricks.yaml": ".shared:\n  timeout: 45s\n",
 	}
 
-	fragment, err := ParseFragment([]byte("include:\n  - path: ./common-bricks.yaml\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := WorkflowRef{Namespace: "finance", Name: "common", Ref: "v2.1.0"}
-	_, err = Load(tree(files), "agentiik.yaml", map[WorkflowRef]Fragment{ref: *fragment})
-	if err == nil {
-		t.Fatal("a fetched fragment resolved a path include against this repository's tree")
+	library := map[string]string{"agentiik.yaml": "include:\n  - path: ./common-bricks.yaml\n"}
+	_, err := Load(tree(files), "agentiik.yaml", repositories{ref: library})
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != RuleIncludeMissing {
+		t.Fatalf("a fetched fragment resolved a path include against this repository's tree: %v", err)
 	}
-	if !strings.Contains(err.Error(), "common-bricks.yaml") {
-		t.Fatalf("the refusal does not name the path it would have read: %v", err)
+	if r.At.File != "finance/common@v2.1.0:agentiik.yaml" || r.At.Line != 2 {
+		t.Fatalf("the refusal is placed at %s, and the include is written on line 2 of the library's root file", r.At)
+	}
+
+	library["common-bricks.yaml"] = ".shared:\n  timeout: 30s\n"
+	files["agentiik.yaml"] = strings.Replace(files["agentiik.yaml"], "    outputs: [out]", "    extends: .shared\n    outputs: [out]", 1)
+	wf := loaded(t, files, repositories{ref: library})
+	if got := wf.Steps["one"].Timeout; time.Duration(got) != 30*time.Second {
+		t.Fatalf("the library's own include contributed %s, and it is the library's file that is read", got)
+	}
+	if got := wf.Included(); len(got) != 1 || got[0].Path != "" {
+		t.Fatalf("the includes applied were recorded as %+v: a path include of another repository is that repository's", got)
+	}
+}
+
+// A workflow include is remembered apart from every file of this tree, a file whose path spells
+// the include included: each is applied, whichever comes first.
+func TestAWorkflowIncludeIsNotAFileOfTheTreeSpelledTheSame(t *testing.T) {
+	ref := WorkflowRef{Namespace: "finance", Name: "lib", Ref: "v1"}
+	for _, order := range []string{
+		"  - path: finance/lib@v1\n  - workflow: finance/lib\n    ref: v1\n",
+		"  - workflow: finance/lib\n    ref: v1\n  - path: finance/lib@v1\n",
+	} {
+		wf := loaded(t, map[string]string{
+			"agentiik.yaml": `apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: both }
+include:
+` + order + `steps:
+  a:
+    extends: .fromlib
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+  b:
+    extends: .fromfile
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+`,
+			"finance/lib@v1": ".fromfile:\n  timeout: 1m\n",
+		}, repositories{ref: {"agentiik.yaml": ".fromlib:\n  timeout: 2m\n"}})
+		if len(wf.Included()) != 2 {
+			t.Errorf("including %q applied %+v", order, wf.Included())
+		}
+	}
+}
+
+// A library's root file is open while its own includes resolve, so that one of them including it
+// again is refused as the ring it is, where that include is written in the library.
+func TestALibraryIncludingItsRootAgainIsACycle(t *testing.T) {
+	ref := WorkflowRef{Namespace: "finance", Name: "common", Ref: "v2.1.0"}
+	_, err := Load(tree(map[string]string{
+		"agentiik.yaml": `apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: ringed }
+include:
+  - workflow: finance/common
+    ref: v2.1.0
+steps:
+  a:
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    script: [echo]
+    outputs: [out]
+`,
+	}), "agentiik.yaml", repositories{ref: {
+		"agentiik.yaml":   "include:\n  - path: ./blocks/one.yaml\n",
+		"blocks/one.yaml": "include:\n  - path: ../agentiik.yaml\n",
+	}})
+	var r *Refusal
+	if !errors.As(err, &r) || r.Rule != RuleIncludeCycle {
+		t.Fatalf("the library including its root again was refused by %v", err)
+	}
+	if want := (Position{File: "finance/common@v2.1.0:blocks/one.yaml", Line: 2, Column: 11}); r.At != want {
+		t.Errorf("the ring is refused at %s, and it is closed at %s", r.At, want)
 	}
 }

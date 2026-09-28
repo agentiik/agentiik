@@ -1,0 +1,2 @@
+.api-brick:
+  timeout: 2m

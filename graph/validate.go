@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -38,6 +39,12 @@ func Check(wf *Workflow) error {
 		checkExpressions,
 	} {
 		if err := check(wf); err != nil {
+			// A refusal no one place holds, a cycle or a published tool, is about the
+			// entry point, which is the file that declares the graph and its surface.
+			var r *Refusal
+			if errors.As(err, &r) && r.At.File == "" {
+				r.At.File = wf.Entry()
+			}
 			return err
 		}
 	}
@@ -58,7 +65,7 @@ func checkSteps(wf *Workflow) error {
 			return fmt.Errorf("graph: step %s: the step runs nothing: a step runs an image, or calls a sub-workflow with workflow: <namespace>/<name>", name)
 		}
 		if len(st.Script) > 0 && len(st.Outputs) == 0 {
-			return refuse(RuleScriptWithoutOutputs, name, "", "the image is a base image, no manifest is read and nothing about its ports is inferred, so outputs must be declared")
+			return place(refuse(RuleScriptWithoutOutputs, name, "", "the image is a base image, no manifest is read and nothing about its ports is inferred, so outputs must be declared"), wf.StepAt(name, "script"))
 		}
 		// A matrix fan-out is "the cartesian product of variable lists", and "every
 		// combination is a shard". A step that names the strategy and declares no
@@ -69,9 +76,9 @@ func checkSteps(wf *Workflow) error {
 		if st.Strategy.FanOut == FanOutMatrix && len(st.Strategy.Matrix) == 0 {
 			return fmt.Errorf("graph: step %s: strategy.fan_out is matrix and the step declares no matrix: a matrix fan-out is the cartesian product of variable lists, every combination is a shard, and a product of no list is a shard of nothing", name)
 		}
-		for _, secret := range st.Secrets {
+		for i, secret := range st.Secrets {
 			if !slices.Contains(wf.Secrets, secret) {
-				return refuse(RuleSecretNotDeclared, name, "", fmt.Sprintf("the step mounts %s, which the secrets block does not name: secrets are mounted by the name the secrets block lists them under, and only secrets the owning namespace declares can be named there", secret))
+				return place(refuse(RuleSecretNotDeclared, name, "", fmt.Sprintf("the step mounts %s, which the secrets block does not name: secrets are mounted by the name the secrets block lists them under, and only secrets the owning namespace declares can be named there", secret)), wf.StepAt(name, "secrets", i))
 			}
 		}
 	}
@@ -82,13 +89,13 @@ func checkSteps(wf *Workflow) error {
 // port of a step to one input port of another. That is the only form of dependency."
 func checkEdges(wf *Workflow) error {
 	for _, name := range slices.Sorted(maps.Keys(wf.Steps)) {
-		for _, e := range wf.Steps[name].Needs {
+		for i, e := range wf.Steps[name].Needs {
 			from, ok := wf.Steps[e.Step]
 			if !ok {
-				return refuse(RuleNeedsUnknownStep, name, e.Port, fmt.Sprintf("the edge comes from %s, which the workflow does not declare: an edge is the only form of dependency there is, so it has to name something that exists", e.Step))
+				return place(refuse(RuleNeedsUnknownStep, name, e.Port, fmt.Sprintf("the edge comes from %s, which the workflow does not declare: an edge is the only form of dependency there is, so it has to name something that exists", e.Step)), wf.StepAt(name, "needs", i, "step"))
 			}
 			if !publishes(from, e.Port) {
-				return refuse(RuleEdgePortNotDeclared, name, e.Port, fmt.Sprintf("the edge takes %s from %s, which publishes %s: an edge cannot invent a port on a step", e.Port, e.Step, whatItPublishes(from)))
+				return place(refuse(RuleEdgePortNotDeclared, name, e.Port, fmt.Sprintf("the edge takes %s from %s, which publishes %s: an edge cannot invent a port on a step", e.Port, e.Step, whatItPublishes(from))), wf.StepAt(name, "needs", i, "port"))
 			}
 		}
 	}
@@ -174,11 +181,12 @@ func checkWorkflowOutputs(wf *Workflow) error {
 	for _, name := range slices.Sorted(maps.Keys(wf.Outputs)) {
 		out := wf.Outputs[name]
 		st, ok := wf.Steps[out.From.Step]
+		from := origin{src: wf.src, path: []any{"outputs", name, "from"}}
 		if !ok {
-			return refuse(RuleOutputFromUnknownStep, out.From.Step, out.From.Port, fmt.Sprintf("the output %s is taken from %s, which the workflow does not declare", name, out.From.Step))
+			return place(refuse(RuleOutputFromUnknownStep, out.From.Step, out.From.Port, fmt.Sprintf("the output %s is taken from %s, which the workflow does not declare", name, out.From.Step)), from.at("step").value())
 		}
 		if !publishes(st, out.From.Port) {
-			return refuse(RuleEdgePortNotDeclared, out.From.Step, out.From.Port, fmt.Sprintf("the output %s is taken from the port %s of %s, which publishes %s: an output is a view of one step port, and a port nobody publishes is a view of nothing", name, out.From.Port, out.From.Step, whatItPublishes(st)))
+			return place(refuse(RuleEdgePortNotDeclared, out.From.Step, out.From.Port, fmt.Sprintf("the output %s is taken from the port %s of %s, which publishes %s: an output is a view of one step port, and a port nobody publishes is a view of nothing", name, out.From.Port, out.From.Step, whatItPublishes(st))), from.at("port").value())
 		}
 	}
 	return nil

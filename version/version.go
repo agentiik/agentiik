@@ -1,7 +1,10 @@
-// Package version turns a stored workflow version back into a graph.
+// Package version judges a tree as the version it would be made of, and turns a stored version
+// back into a graph.
 //
-// It fills controller.Versions, which the controller states and calls and does not implement, in
-// the same arrangement graph.Driver and controller.Queue already have.
+// Check is the one validation: agk validate, agk run --local, agk push, the push route and the
+// pre-receive hook all judge a version by it, so that the command line and the hook can never
+// disagree. Build and Store fill controller.Versions, which the controller states and calls and
+// does not implement, in the same arrangement graph.Driver and controller.Queue already have.
 //
 // # What a version is
 //
@@ -124,25 +127,11 @@ func (s *Store) Graph(ctx context.Context, namespace, workflow, commit string) (
 // of it runs. Version.Tree is what a container is given, and plays no part here.
 //
 // And so are the rules it was accepted under. What a version holds is read with graph.LoadStored
-// and brick.ParseStoredManifest, which leave out the one bound added since a version could be
-// stored, a port or a workflow output past agk.PortMaxBytes, so that a version recorded before
-// it keeps rebuilding, and its runs and replays keep going, after an upgrade. A version about to
-// be recorded is built with BuildNew.
+// and brick.ParseStoredManifest, which leave out the rules added since a version could be stored,
+// the bound a port and a workflow output are written to among them, so that a version recorded
+// before them keeps rebuilding, and its runs and replays keep going, after an upgrade. A version
+// about to be recorded is judged by Check.
 func Build(v db.Version) (*graph.Graph, error) {
-	return build(v, graph.LoadStored, brick.ParseStoredManifest)
-}
-
-// BuildNew is Build for a version a push is about to record: the same graph, from the same files,
-// with every rule a version is held to where it is made, the bound a port and a workflow output
-// are written to among them, in the entry point, in every file it includes and in every manifest
-// the push carries.
-func BuildNew(v db.Version) (*graph.Graph, error) {
-	return build(v, graph.Load, brick.ParseManifest)
-}
-
-// build is Build and BuildNew, loading the workflow with load and reading each manifest with
-// manifest.
-func build(v db.Version, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fragment) (*graph.Workflow, error), manifest func([]byte) (brick.Manifest, error)) (*graph.Graph, error) {
 	if v.Entry == "" || len(v.Document) == 0 {
 		return nil, fmt.Errorf("version: %s@%s carries no entry point", v.Workflow, v.Commit)
 	}
@@ -152,7 +141,7 @@ func build(v db.Version, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fr
 		tree[path] = &fstest.MapFile{Data: body, Mode: 0o444}
 	}
 
-	wf, err := load(tree, v.Entry, nil)
+	wf, err := graph.LoadStored(tree, v.Entry, nil)
 	if err != nil {
 		return nil, fmt.Errorf("version: %s@%s could not be loaded: %w", v.Workflow, v.Commit, err)
 	}
@@ -164,7 +153,7 @@ func build(v db.Version, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fr
 	read := make(map[string][]byte, len(v.Manifests))
 	for _, image := range slices.Sorted(maps.Keys(v.Manifests)) {
 		body := v.Manifests[image]
-		m, err := manifest(body)
+		m, err := brick.ParseStoredManifest(body)
 		if err != nil {
 			return nil, fmt.Errorf("version: the manifest of %s in %s@%s: %w", image, v.Workflow, v.Commit, err)
 		}
@@ -234,47 +223,29 @@ func pin(v db.Version, wf *graph.Workflow) error {
 	return nil
 }
 
-// Capture is the half of a push that the graph is rebuilt from: the tree as it is now, reduced to
-// what the workflow actually reaches, plus the manifest of every image it names. The whole tree
-// travels beside it in the push, as what a container is given, and is not this function's.
+// Capture is what a version holds of a tree, as Check reads it given the manifests of the images
+// its bricks run and nothing else of the installation: the entry point and every file it reaches,
+// and the manifest of every image a brick step runs. An image named by a tag keeps it, and the
+// caller records the digest it was resolved to beside it, as agk push does.
 //
 // Reduced rather than whole, because this is what a run is decided from, read back every time a
 // graph is rebuilt and required to rebuild it with nothing else in reach. Holding every file of
 // the repository would make it grow with the repository rather than with the workflow, when the
 // files a step sees are already named by the version's tree and held as objects.
-//
-// What it keeps is what graph.Load read, recorded as it read it. That is exact by construction
-// and it is the only way to be exact: an include may itself include, a fragment is opaque from
-// out here, and working out the closure by parsing the include blocks again would be this package
-// reimplementing resolution in order to agree with resolution.
 func Capture(tree fs.FS, entry string, manifests map[string]brick.Manifest) (db.Version, error) {
-	watched := &watcher{under: tree, read: map[string][]byte{}}
-	wf, err := graph.Load(watched, entry, nil)
+	checked, err := Check(context.Background(), tree, Checking{Entry: entry, Resolvers: Resolvers{
+		Manifest: func(_ context.Context, image string, _ agk.Step) ([]byte, error) {
+			m, ok := manifests[image]
+			if !ok {
+				return nil, ErrNotHeld
+			}
+			return m.Document(), nil
+		},
+	}})
 	if err != nil {
 		return db.Version{}, err
 	}
-	if err := graph.Check(wf); err != nil {
-		return db.Version{}, err
-	}
-
-	document, held := watched.read[entry]
-	if !held {
-		return db.Version{}, fmt.Errorf("version: the entry point %s was not read", entry)
-	}
-
-	v := db.Version{
-		Entry: entry, Document: document,
-		Includes: map[string][]byte{}, Manifests: map[string][]byte{},
-	}
-	for path, body := range watched.read {
-		if path != entry {
-			v.Includes[path] = body
-		}
-	}
-	for image, m := range manifests {
-		v.Manifests[image] = m.Document()
-	}
-	return v, nil
+	return checked.Version, nil
 }
 
 // watcher is a tree that remembers what was read out of it.

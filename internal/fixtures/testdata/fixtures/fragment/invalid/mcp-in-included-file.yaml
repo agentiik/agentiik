@@ -3,7 +3,7 @@
 #   it, so that reading one file tells you everything that workflow exposes.
 #   This fixture is the included file itself, named by an entry point as
 #   include: [{ path: ./common-bricks.yaml }].
-# refused by: the validator, beyond what JSON Schema can state
+# refused by: the schema, which holds an included file to $defs/fragment
 # reference: https://agentiik.github.io/docs/#publishing-tools
 
 # ./common-bricks.yaml, merged into an entry point by a path include

@@ -1,0 +1,7 @@
+[
+  {
+    "path": "scripts/normalize.py",
+    "mode": "120000",
+    "target": "normalize-v2.py"
+  }
+]

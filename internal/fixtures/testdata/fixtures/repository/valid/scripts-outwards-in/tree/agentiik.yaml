@@ -1,0 +1,45 @@
+# before_script and after_script are merged from defaults and extends outwards
+# in: the defaults' commands first, then each block's from the outermost, then
+# the step's own. Within defaults, this file's before_script replaces the
+# included one, as any keyword of defaults does. A brick step carries none of
+# them, since a brick runs its own entry point.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+include:
+  - path: ./fragments/scripts.yaml
+
+defaults:
+  before_script:
+    - echo "defaults before" >&2
+
+.report-tools:
+  extends: .tools
+  before_script:
+    - apk add --no-cache curl
+  after_script:
+    - echo ".report-tools after" >&2
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]
+
+  report:
+    extends: .report-tools
+    image: alpine:3.21@sha256:5f8b1e1ad4503f1abb00387333cc6ebac7c77193d6adf4c3917794e7102dc704
+    needs: [fetch]
+    shell: ["/bin/sh", "-eu"]
+    before_script:
+      - echo "own before" >&2
+    script:
+      - agk items > /tmp/items.json
+      - agk emit out --from /tmp/items.json
+    after_script:
+      - echo "own after" >&2
+    outputs: [out]

@@ -1,0 +1,16 @@
+{
+  "namespace": "finance",
+  "repository": "monthly-invoicing",
+  "commit": "79c01c9a02c146cfdab005726abbd04fd70ee8da",
+  "pins": {
+    "ghcr.io/acme/agk-archive:0.3.0": "ghcr.io/acme/agk-archive@sha256:8a0a16ff199cb6dffee3d12f49901f13fe41c427b7763b742e5403c4fe985f3c",
+    "ghcr.io/acme/agk-invoice:1.4.0": "ghcr.io/acme/agk-invoice@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595",
+    "ghcr.io/acme/agk-normalize:2.0.0": "ghcr.io/acme/agk-normalize@sha256:b49415b1399b63bbb8588eb75fecb98972650e051a94b73b8835672d6c747bb7"
+  },
+  "manifests": {
+    "ghcr.io/acme/agk-archive@sha256:8a0a16ff199cb6dffee3d12f49901f13fe41c427b7763b742e5403c4fe985f3c": "manifests/archive-invoices.yaml",
+    "ghcr.io/acme/agk-invoice@sha256:8214cabcb148ac56e69ee08e1554684f7609d08b58c4527938fdcf400be68595": "manifests/issue-invoices.yaml",
+    "ghcr.io/acme/agk-normalize@sha256:b49415b1399b63bbb8588eb75fecb98972650e051a94b73b8835672d6c747bb7": "manifests/normalize-orders.yaml"
+  },
+  "secrets": []
+}

@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
-	"github.com/agentiik/agentiik/graph"
+	"github.com/agentiik/agentiik/agk"
 	"github.com/agentiik/agentiik/internal/dockertest"
+	versions "github.com/agentiik/agentiik/version"
 )
 
 // reading is an Env for the commands that read: two buffers, the package directory, and a clock
@@ -222,7 +225,7 @@ func TestTheVersionIsAFlagAndNotACommand(t *testing.T) {
 // refusal written in two different words by validate and by run is the thing one reader of a
 // workflow exists to prevent.
 func TestTheStepNamedForAnImageIsTheStepThatRunsItAsABrick(t *testing.T) {
-	wf, err := graph.Parse([]byte(`
+	tree := fstest.MapFS{"agentiik.yaml": &fstest.MapFile{Data: []byte(`
 apiVersion: agentiik.dev/v1
 kind: Workflow
 metadata:
@@ -241,16 +244,22 @@ steps:
     needs:
       - { step: a-script, port: out, as: in }
     outputs: [ok]
-`))
-	if err != nil {
-		t.Fatal(err)
+`)}}
+	var asked []agk.Step
+	_, err := versions.Check(t.Context(), tree, versions.Checking{Resolvers: versions.Resolvers{
+		Manifest: func(_ context.Context, image string, step agk.Step) ([]byte, error) {
+			asked = append(asked, step)
+			return nil, versions.ErrNotHeld
+		},
+	}})
+	if err == nil {
+		t.Fatal("a brick step whose manifest was not read was accepted")
 	}
-	referenced := references(wf)
-	if len(referenced) != 1 {
-		t.Fatalf("the workflow names %d images to read a manifest of, and one step of the two runs a brick: %+v", len(referenced), referenced)
+	if len(asked) != 1 {
+		t.Fatalf("a manifest was read for %v, and one step of the two runs a brick", asked)
 	}
-	if got := referenced[0].Step; got != "z-brick" {
-		t.Errorf("the image is read for step %s, want z-brick: a script step has no manifest to be held to, whatever it sorts before", got)
+	if asked[0] != "z-brick" {
+		t.Errorf("the image is read for step %s, want z-brick: a script step has no manifest to be held to, whatever it sorts before", asked[0])
 	}
 }
 

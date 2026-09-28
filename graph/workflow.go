@@ -45,10 +45,37 @@ type Workflow struct {
 	// column a value was written at rather than at a key somewhere in the file.
 	doc *ast.File
 
+	// src is the entry point as a file of the tree, named by Load once it knows which, and
+	// root is the document as it was decoded, kept for the blocks the resolved graph writes
+	// as the file wrote them: on, mcp and concurrency.
+	src  *source
+	root map[string]any
+
+	// includeAt and secretAt are where the entry point writes each include and each secret,
+	// and once Load has resolved the includes secretAt is where each secret was first named,
+	// in whichever file. origins is, for each resolved step, where each keyword that won was
+	// written, so that a refusal about a step names the line of the value it refuses.
+	includeAt []origin
+	secretAt  map[string]origin
+	origins   map[agk.Step]map[string]origin
+
+	// included is every include resolution applied, in the order it applied them.
+	included []Included
+
 	// resolved says whether extends had everything it needed. A file that declares
 	// includes has not been given them by Parse, so an extends naming a block this
 	// document does not carry is left for Load rather than refused here.
 	resolved bool
+}
+
+// Included is one include as resolution applied it: a file of this tree by its path from the
+// root, or another repository with the ref the include wrote and the commit that ref resolved
+// to, which every run of a version records so that the other repository moving a tag
+// afterwards changes nothing this one does.
+type Included struct {
+	Path     string
+	Workflow WorkflowRef
+	Commit   string
 }
 
 // Metadata is what the workflow is called and which namespace owns it. "Ownership is not
@@ -246,6 +273,10 @@ type Defaults struct {
 	BeforeScript    []string
 	AfterScript     []string
 	When            []When
+
+	// written is where each keyword this block carries was written, the step keywords among
+	// them where the block is a step's, and it moves with the value as layers are applied.
+	written map[string]origin
 }
 
 // Step is one step of the graph, with every keyword resolved: what arrived from an
@@ -287,10 +318,10 @@ type Step struct {
 	AfterScript  []string
 	Shell        []string
 
-	// Extends is the hidden block this step was written against, kept after resolution
-	// because a run detail that says where a setting came from reads better than one
-	// that shows the setting alone.
-	Extends string
+	// Extends is the hidden blocks this step inherits from, the one it names first and each
+	// block that one extends after it, kept after resolution because a run detail that says
+	// where a setting came from reads better than one that shows the setting alone.
+	Extends []string
 }
 
 // Call is a step that calls a sub-workflow instead of running a container: "workflow:

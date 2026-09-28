@@ -83,7 +83,7 @@ func TestTheSameInputsAreTheSameValuesLocallyAndOnAnInstallation(t *testing.T) {
 	for i := 1; i < len(given); i += 2 {
 		flags = append(flags, given[i])
 	}
-	wf, tree, _, err := load(Env{Dir: dir}, "")
+	wf, tree, _, err := load(t.Context(), Env{Dir: dir}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

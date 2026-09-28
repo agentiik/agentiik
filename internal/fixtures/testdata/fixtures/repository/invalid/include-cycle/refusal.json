@@ -1,0 +1,6 @@
+{
+  "rule": "include-cycle",
+  "file": "fragments/second.yaml",
+  "line": 2,
+  "column": 11
+}

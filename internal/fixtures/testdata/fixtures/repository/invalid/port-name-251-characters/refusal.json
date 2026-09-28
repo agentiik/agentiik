@@ -1,0 +1,6 @@
+{
+  "rule": "port-name-251-characters",
+  "file": "fragments/export.yaml",
+  "line": 8,
+  "column": 9
+}

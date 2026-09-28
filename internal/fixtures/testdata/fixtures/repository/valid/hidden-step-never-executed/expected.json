@@ -1,0 +1,51 @@
+{
+  "workflow": "monthly-invoicing",
+  "commit": "1f489e5ded9f0bcd5bed788c0578e95e739d5d98",
+  "includes": [],
+  "order": [
+    "fetch",
+    "normalize"
+  ],
+  "steps": {
+    "fetch": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-fetch-orders@sha256:6a851b18304b7f94542f6b2c5d159ace56a5a8ab2faad1fa9ce7c63d14ad171f",
+      "brick": {
+        "name": "fetch-orders",
+        "version": "1.2.0"
+      },
+      "outputs": [
+        "out"
+      ],
+      "idempotent": true
+    },
+    "normalize": {
+      "kind": "brick",
+      "image": "ghcr.io/acme/agk-normalize@sha256:b49415b1399b63bbb8588eb75fecb98972650e051a94b73b8835672d6c747bb7",
+      "brick": {
+        "name": "normalize-orders",
+        "version": "2.0.0"
+      },
+      "needs": [
+        {
+          "step": "fetch",
+          "port": "out",
+          "as": "in"
+        }
+      ],
+      "outputs": [
+        "ok",
+        "rejected"
+      ],
+      "params": {
+        "currency": "EUR"
+      },
+      "timeout": "3m",
+      "idempotent": true,
+      "extends": [
+        ".template",
+        ".defaults-for-bricks"
+      ]
+    }
+  }
+}

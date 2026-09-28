@@ -85,6 +85,24 @@ func manifests(t *testing.T) map[string]brick.Manifest {
 	return map[string]brick.Manifest{theImage: m}
 }
 
+// bundled is the tree a version's own files make, which is what a version about to be recorded is
+// judged over.
+func bundled(v db.Version) (fstest.MapFS, map[string]brick.Manifest, error) {
+	fsys := fstest.MapFS{v.Entry: &fstest.MapFile{Data: v.Document}}
+	for p, body := range v.Includes {
+		fsys[p] = &fstest.MapFile{Data: body}
+	}
+	manifests := map[string]brick.Manifest{}
+	for image, body := range v.Manifests {
+		m, err := brick.ParseStoredManifest(body)
+		if err != nil {
+			return nil, nil, err
+		}
+		manifests[image] = m
+	}
+	return fsys, manifests, nil
+}
+
 // What is captured is what the workflow reaches, and nothing else. A repository holds a great
 // deal a workflow does not name, and a version that stored all of it would grow with the
 // repository rather than with the workflow.
@@ -473,7 +491,15 @@ func TestAVersionStoredBeforeThePortBoundIsRebuiltAsItWasAccepted(t *testing.T) 
 		t.Errorf("the edge on the port of 251 characters reaches %v", got)
 	}
 
-	if _, err := version.BuildNew(aVersionNaming("rejected", "in", "unmatched", "spare", "unused")); err != nil {
+	made := func(v db.Version) error {
+		fsys, manifests, err := bundled(v)
+		if err != nil {
+			return err
+		}
+		_, err = version.Capture(fsys, "agentiik.yaml", manifests)
+		return err
+	}
+	if err := made(aVersionNaming("rejected", "in", "unmatched", "spare", "unused")); err != nil {
 		t.Fatalf("a new version naming no port past 250 characters was refused: %v", err)
 	}
 	for where, v := range map[string]db.Version{
@@ -484,7 +510,7 @@ func TestAVersionStoredBeforeThePortBoundIsRebuiltAsItWasAccepted(t *testing.T) 
 		if _, err := version.Build(v); err != nil {
 			t.Errorf("a stored version with a port past 250 characters in %s was refused when rebuilt: %v", where, err)
 		}
-		if _, err := version.BuildNew(v); err == nil || !strings.Contains(err.Error(), "at most 250") {
+		if err := made(v); err == nil || !strings.Contains(err.Error(), "at most 250") {
 			t.Errorf("a new version with a port past 250 characters in %s was built, or refused with %v", where, err)
 		}
 	}

@@ -1,0 +1,20 @@
+# normalize declares an output its brick's manifest does not carry.
+
+apiVersion: agentiik.dev/v1
+kind: Workflow
+
+metadata:
+  name: monthly-invoicing
+  namespace: finance
+
+steps:
+  fetch:
+    image: ghcr.io/acme/agk-fetch-orders:1.2.0
+    outputs: [out]
+
+  normalize:
+    image: ghcr.io/acme/agk-normalize:2.0.0
+    needs: [fetch]
+    outputs:
+      - ok
+      - accepted

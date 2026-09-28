@@ -19,6 +19,7 @@ import (
 	"github.com/agentiik/agentiik/api"
 	"github.com/agentiik/agentiik/brick"
 	"github.com/agentiik/agentiik/internal/dockertest"
+	versions "github.com/agentiik/agentiik/version"
 )
 
 // agk push, which is where "a version is a commit" stops being a sentence and starts refusing
@@ -548,43 +549,75 @@ func TestAMistypedEntryPointIsSaidToBeNowhere(t *testing.T) {
 	}
 }
 
-// The tree is rooted at the entry point's directory, the root load gives every include, and not at
-// the top of the repository it is committed to: run from billing/, a push carries billing/ and
-// nothing beside it.
-func TestAWorkflowBelowTheTopCarriesItsOwnDirectory(t *testing.T) {
+// "The entry point is always at the root": a workflow kept in a directory of a larger repository is
+// pushed as a repository of its own, and a push run from billing/, or given -f billing/agentiik.yaml,
+// is refused naming the command that makes one, before a byte of the tree is read. Until v0.4.0 it
+// pushed billing/ alone, and a version pushed that way stays runnable; a new one is not made so.
+func TestAWorkflowBelowTheTopIsRefusedNamingTheSplitThatMakesItsRepository(t *testing.T) {
 	dir := repository(t)
 	write(t, dir, "billing/agentiik.yaml", scriptWorkflow)
 	write(t, dir, "billing/scripts/render.sh", "#!/bin/sh\necho hello\n")
 	commitAll(t, dir, "a second workflow")
 
-	code, out, errs, got := pushing(t, filepath.Join(dir, "billing"), http.StatusOK)
-	if code != exitSucceeded {
-		t.Fatalf("push answered %d: %s%s", code, out, errs)
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	for _, c := range []struct {
+		from string
+		args []string
+	}{
+		{filepath.Join(dir, "billing"), nil},
+		{dir, []string{"-f", "billing/agentiik.yaml"}},
+	} {
+		code, _, errs, got := pushing(t, c.from, http.StatusOK, c.args...)
+		if code != exitRefused || got != nil {
+			t.Fatalf("a push of billing/agentiik.yaml answered %d: %s", code, errs)
+		}
+		for _, want := range []string{"billing/agentiik.yaml", "entry-point-below-root", "git subtree split --prefix billing"} {
+			if !strings.Contains(errs, want) {
+				t.Errorf("the refusal does not say %q: %s", want, errs)
+			}
+		}
 	}
-	if want := []string{"agentiik.yaml", "scripts/render.sh"}; strings.Join(keysOf(got.Tree), " ") != strings.Join(want, " ") {
-		t.Errorf("the tree holds %v, where billing/ holds %v", keysOf(got.Tree), want)
+	said, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(said), "ls-tree") || strings.Contains(string(said), "cat-file") {
+		t.Error("the tree was read before the entry point was found below the root")
 	}
 }
 
-// What is pushed is the commit, so a commit is pushed from wherever its entry point was when it was
-// committed, even where a later commit has removed that directory from the working copy.
-func TestACommitFromBeforeItsDirectoryWasRemovedIsPushed(t *testing.T) {
+// agk push judges a version as the installation and a hook will: the namespace a push is made to is
+// the one the file writes, where it writes one, and a push to another is refused before anything is
+// sent, at the line that writes it.
+func TestAPushToAnotherNamespaceThanTheFileWritesIsRefused(t *testing.T) {
 	dir := repository(t)
-	write(t, dir, "legacy/agentiik.yaml", scriptWorkflow)
-	write(t, dir, "legacy/scripts/old.sh", "#!/bin/sh\necho old\n")
-	commitAll(t, dir, "the legacy workflow")
-	earlier := gitIn(t, dir, "rev-parse", "HEAD")
-	gitIn(t, dir, "rm", "-rq", "legacy")
-	gitIn(t, dir, "commit", "-qm", "the legacy workflow retired")
+	code, _, errs, got := pushing(t, dir, http.StatusOK, "--namespace", "team-ops")
+	if code != exitRefused || got != nil {
+		t.Fatalf("a push to team-ops of a workflow of finance answered %d: %s", code, errs)
+	}
+	if !strings.Contains(errs, "agentiik.yaml:4:49: metadata-namespace-not-repository") {
+		t.Errorf("the refusal reads %q", errs)
+	}
+}
 
-	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier, "-f", "legacy/agentiik.yaml")
+// What is pushed is the commit, so a commit is pushed although a later commit has removed its entry
+// point from the working copy.
+func TestACommitFromBeforeItsEntryPointWasRemovedIsPushed(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "scripts/old.sh", "#!/bin/sh\necho old\n")
+	commitAll(t, dir, "the workflow and its script")
+	earlier := gitIn(t, dir, "rev-parse", "HEAD")
+	gitIn(t, dir, "rm", "-q", "agentiik.yaml")
+	gitIn(t, dir, "commit", "-qm", "the workflow retired")
+
+	code, out, errs, got, path := pushingTo(t, dir, http.StatusOK, "--commit", earlier)
 	if code != exitSucceeded {
 		t.Fatalf("push answered %d: %s%s", code, out, errs)
 	}
 	if !strings.HasSuffix(path, "/versions/"+earlier) {
 		t.Errorf("the version was sent to %s", path)
 	}
-	// Rooted at the entry point's directory, as it was when that directory was on the disk.
 	if got.Entry != "agentiik.yaml" || string(got.Tree["agentiik.yaml"].Content) != scriptWorkflow {
 		t.Errorf("the entry point travelled as %q in a tree holding %v", got.Entry, keysOf(got.Tree))
 	}
@@ -724,7 +757,7 @@ func TestANameHoldingTheReplacementCharacterIsRefusedBeforeTheTreeIsRead(t *test
 func TestANameTheInstallationRefusesIsRefusedBeforeTheTreeIsRead(t *testing.T) {
 	for _, c := range []struct{ name, path, says string }{
 		{"a backslash", `scripts\render.sh`, "backslash"},
-		{"a name longer than a filesystem holds", "data/" + strings.Repeat("n", api.TreeNameMaxBytes+1), fmt.Sprint(api.TreeNameMaxBytes)},
+		{"a name longer than a filesystem holds", "data/" + strings.Repeat("n", versions.TreeNameMaxBytes+1), fmt.Sprint(versions.TreeNameMaxBytes)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := repository(t)

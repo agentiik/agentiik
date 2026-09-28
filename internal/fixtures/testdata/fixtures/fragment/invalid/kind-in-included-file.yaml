@@ -1,0 +1,10 @@
+# invalid: kind in an included file. An included file is a fragment, not an entry
+#   point: it has no apiVersion, no kind and no metadata.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+kind: Workflow

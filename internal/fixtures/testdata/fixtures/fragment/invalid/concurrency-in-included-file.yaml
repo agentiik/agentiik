@@ -1,0 +1,12 @@
+# invalid: concurrency in an included file. How runs of a workflow queue behind one
+#   another is the workflow's own, declared where the workflow is, so that
+#   reading one file tells you what that workflow is.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+concurrency:
+  group: monthly-invoicing

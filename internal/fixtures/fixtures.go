@@ -43,10 +43,11 @@ func init() {
 	FS = sub
 }
 
-// Case is one fixture and what it pins. File is its path inside FS. Valid says which
-// way it pins it: a valid document has to be accepted, an invalid one refused. Rule is
-// what an invalid document is refused by, in the corpus's own words, and Covers is what
-// a valid one covers; each carries the one that applies to it.
+// Case is one fixture and what it pins. File is its path inside FS: a document, or for a
+// repository case the directory holding the case. Valid says which way it pins it: a valid
+// document has to be accepted, an invalid one refused. Rule is what an invalid document is
+// refused by, in the corpus's own words, and Covers is what a valid one covers; each carries
+// the one that applies to it.
 type Case struct {
 	File   string
 	Valid  bool
@@ -66,21 +67,18 @@ type Case struct {
 	// checked against. The rule such a fixture pins is about the two documents
 	// together, so neither file alone shows it. Empty when the fixture stands alone.
 	Manifest string
-
-	// Role says that a fixture is not an entry point. The one fixture carrying it is
-	// the included file itself, which is where the rule it pins can be seen at all.
-	Role string
 }
 
 // entry is one fixture as the index writes it. Valid and invalid entries carry
-// different keys, and one struct reads both because the keys do not collide.
+// different keys, and one struct reads both because the keys do not collide. A
+// repository case is a directory, which the index names as case rather than file.
 type entry struct {
 	File      string `json:"file"`
+	Case      string `json:"case"`
 	Covers    string `json:"covers"`
 	Rule      string `json:"rule"`
 	RefusedBy string `json:"refused_by"`
 	Manifest  string `json:"manifest"`
-	Role      string `json:"role"`
 }
 
 // corpus is one document's fixtures: what must be accepted, and what must be refused.
@@ -91,11 +89,24 @@ type corpus struct {
 
 // index is the part of fixtures/index.json this package reads.
 type index struct {
-	Version  string `json:"version"`
+	Version string `json:"version"`
+
+	// Repositories are the cases about several documents together, each a directory: a
+	// pushed tree, what the installation holds for it, and the graph it resolves to or the
+	// one refusal it meets.
+	Repositories corpus `json:"repositories"`
+
 	Fixtures struct {
 		Envelope corpus `json:"envelope"`
 		Workflow corpus `json:"workflow"`
 		Brick    corpus `json:"brick"`
+
+		// Fragment is an included file, which is not an entry point and is never read as
+		// one.
+		Fragment corpus `json:"fragment"`
+
+		// ResolvedGraph is the graph a version resolves to, as the wire writes it.
+		ResolvedGraph corpus `json:"resolved-graph"`
 
 		// The wire is one document holding several messages, so the index names each
 		// message separately and so does this.
@@ -127,6 +138,24 @@ func Workflows() ([]Case, error) { return read(func(i index) corpus { return i.F
 // Bricks returns the brick manifest corpus, valid documents first, in the order the
 // index lists them.
 func Bricks() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Brick }) }
+
+// Fragments returns the included file corpus, valid documents first, in the order the index
+// lists them: what an included file may carry, and each key that makes a document an entry
+// point, refused in one.
+func Fragments() ([]Case, error) { return read(func(i index) corpus { return i.Fixtures.Fragment }) }
+
+// ResolvedGraphs returns the resolved graph corpus: the documentation's workflow as its version
+// resolves it, and records the wire refuses.
+func ResolvedGraphs() ([]Case, error) {
+	return read(func(i index) corpus { return i.Fixtures.ResolvedGraph })
+}
+
+// Repositories returns the repository corpus, valid cases first, in the order the index lists
+// them. Each case is a directory: tree/ is the pushed commit's tree and tree.json the entries
+// it holds that cannot be files, case.json the repository, the commit and what the installation
+// holds, and expected.json the graph a valid case resolves to or refusal.json the one refusal
+// an invalid case meets.
+func Repositories() ([]Case, error) { return read(func(i index) corpus { return i.Repositories }) }
 
 // TaskMessages returns the task message corpus, which is what the controller publishes and what
 // a runner reads. Nothing checked it until the bus was built and turned out to be putting a
@@ -226,20 +255,18 @@ func read(pick func(index) corpus) ([]Case, error) {
 	cases := make([]Case, 0, len(c.Valid)+len(c.Invalid))
 	for _, e := range c.Valid {
 		cases = append(cases, Case{
-			File:     "fixtures/" + e.File,
+			File:     "fixtures/" + e.File + e.Case,
 			Valid:    true,
 			Covers:   e.Covers,
 			Manifest: manifestPath(e.Manifest),
-			Role:     e.Role,
 		})
 	}
 	for _, e := range c.Invalid {
 		cases = append(cases, Case{
-			File:      "fixtures/" + e.File,
+			File:      "fixtures/" + e.File + e.Case,
 			Rule:      e.Rule,
 			RefusedBy: e.RefusedBy,
 			Manifest:  manifestPath(e.Manifest),
-			Role:      e.Role,
 		})
 	}
 	for _, c := range cases {

@@ -173,7 +173,7 @@ func someTenants(t *testing.T) *tenants {
 
 	// Two workflows, a run of one, and a secret of each provider.
 	for _, workflow := range []string{"monthly-invoicing", "payroll"} {
-		x.must("PUT", "/api/v1/finance/workflows/"+workflow+"/versions/"+theCommit, x.as["alice"], aPush(t), http.StatusOK)
+		x.must("PUT", "/api/v1/finance/workflows/"+workflow+"/versions/"+theCommit, x.as["alice"], aPushNamed(t, workflow), http.StatusOK)
 	}
 	started := x.answer(x.must("POST", "/api/v1/finance/workflows/monthly-invoicing/runs", x.as["alice"],
 		api.Start{Commit: theCommit, Inputs: map[string]any{"orders": []any{}}}, http.StatusAccepted))
@@ -566,7 +566,7 @@ func TestAnAbsentNameAndAnInvisibleOneTakeAsLongToRefuse(t *testing.T) {
 	}
 	x := someTenants(t)
 	for i := range 18 {
-		x.must("PUT", fmt.Sprintf("/api/v1/finance/workflows/extra-%02d/versions/%s", i, theCommit), x.as["alice"], aPush(t), http.StatusOK)
+		x.must("PUT", fmt.Sprintf("/api/v1/finance/workflows/extra-%02d/versions/%s", i, theCommit), x.as["alice"], aPushNamed(t, fmt.Sprintf("extra-%02d", i)), http.StatusOK)
 	}
 	for _, c := range []struct{ who, method, absent, present string }{
 		{"mallory", "GET", "/api/v1/runs/" + ulid.New(), "/api/v1/runs/" + x.run},

@@ -119,7 +119,7 @@ func runLocal(ctx context.Context, e Env, args []string) int {
 	// depth first, then defaults, then the step's own values; graph.Check is the steps,
 	// the edges, the cycles, the workflow outputs, the mcp surface and the expression
 	// scopes. The tree is the working tree, unmodified.
-	wf, tree, root, err := load(e, *entry)
+	wf, tree, root, err := load(ctx, e, *entry)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused

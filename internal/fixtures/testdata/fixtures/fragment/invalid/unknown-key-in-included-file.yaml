@@ -1,0 +1,12 @@
+# invalid: A key an included file does not define. An included file is closed like
+#   every block the language owns, so a misspelling is refused rather than
+#   quietly doing nothing.
+# refused by: the schema, which holds an included file to $defs/fragment
+# reference: https://agentiik.github.io/docs/#includes-and-inheritance
+
+.api-brick:
+  timeout: 2m
+  network: egress
+
+defualts:
+  timeout: 10m
