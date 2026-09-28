@@ -160,11 +160,25 @@ func (u *unpacker) read() error {
 			return err
 		}
 		offset := c.n
-		if err := u.readEntry(c); err != nil {
+		data, err := u.readEntry(c)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				err = io.ErrUnexpectedEOF
 			}
 			return fmt.Errorf("repo: the entry at offset %d: %w", offset, err)
+		}
+		// An object sent whole is checked, handed to Visit and written as soon as it is read, and
+		// a refusal names it rather than where it was.
+		if e := &u.entries[len(u.entries)-1]; !e.isDelta() {
+			t := Type(e.kind)
+			if t != TypeBlob {
+				if err := u.check(e.id, t, data); err != nil {
+					return err
+				}
+			}
+			if err := u.out.addDeflated(e.id, t, e.size, io.NewSectionReader(u.r, e.data, c.n-e.data)); err != nil {
+				return err
+			}
 		}
 	}
 	if c.n != u.end {
@@ -180,37 +194,38 @@ func (u *unpacker) read() error {
 	return nil
 }
 
-// readEntry reads one entry, the counter standing where it begins.
-func (u *unpacker) readEntry(c *counter) error {
+// readEntry reads one entry, the counter standing where it begins, and answers the content of a
+// commit, a tree or a tag sent whole.
+func (u *unpacker) readEntry(c *counter) ([]byte, error) {
 	e := packEntry{offset: c.n}
 	kind, size, err := readEntryHeader(c, max(u.opts.MaxObjectBytes, maxHeld))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	e.kind, e.size = kind, size
 	switch {
 	case !Type(kind).valid() && !e.isDelta():
-		return fmt.Errorf("an entry of kind %d, which is none of git's", kind)
+		return nil, fmt.Errorf("an entry of kind %d, which is none of git's", kind)
 	case Type(kind).valid() && size > u.opts.MaxObjectBytes:
-		return fmt.Errorf("%s of %d bytes, more than the %d an object may be", kindName(kind), size, u.opts.MaxObjectBytes)
+		return nil, fmt.Errorf("%s of %d bytes, more than the %d an object may be", kindName(kind), size, u.opts.MaxObjectBytes)
 	case kind != byte(TypeBlob) && size > maxHeld:
-		return fmt.Errorf("%s of %d bytes, which is held whole, and the most that is is %d", kindName(kind), size, maxHeld)
+		return nil, fmt.Errorf("%s of %d bytes, which is held whole, and the most that is is %d", kindName(kind), size, maxHeld)
 	}
 	switch kind {
 	case kindOfsDelta:
 		distance, err := readOfsDelta(c)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		k, ok := slices.BinarySearchFunc(u.entries, e.offset-distance, func(b packEntry, off int64) int { return cmp.Compare(b.offset, off) })
 		if distance <= 0 || !ok {
-			return fmt.Errorf("a delta whose base is %d bytes before it, where no entry of the pack begins", distance)
+			return nil, fmt.Errorf("a delta whose base is %d bytes before it, where no entry of the pack begins", distance)
 		}
 		e.base = int32(k)
 	case kindRefDelta:
 		var base ID
 		if _, err := io.ReadFull(c, base[:]); err != nil {
-			return err
+			return nil, err
 		}
 		e.base = int32(len(u.refBases))
 		u.refBases = append(u.refBases, base)
@@ -222,7 +237,7 @@ func (u *unpacker) readEntry(c *counter) error {
 		err = u.z.(zlib.Resetter).Reset(c, nil)
 	}
 	if err != nil {
-		return fmt.Errorf("a zlib stream that does not begin as one: %w", err)
+		return nil, fmt.Errorf("a zlib stream that does not begin as one: %w", err)
 	}
 	if e.isDelta() {
 		n, err := io.Copy(io.Discard, io.LimitReader(u.z, size))
@@ -233,10 +248,10 @@ func (u *unpacker) readEntry(c *counter) error {
 			err = atEnd(u.z)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		u.entries = append(u.entries, e)
-		return nil
+		return nil, nil
 	}
 	t := Type(kind)
 	h := newObjectHash(t, size)
@@ -259,17 +274,12 @@ func (u *unpacker) readEntry(c *counter) error {
 		err = atEnd(u.z)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	e.id = sumID(h)
 	u.entries = append(u.entries, e)
 	u.resolved++
-	if t != TypeBlob {
-		if err := u.check(e.id, t, data); err != nil {
-			return err
-		}
-	}
-	return u.out.addDeflated(e.id, t, size, io.NewSectionReader(u.r, e.data, c.n-e.data))
+	return data, nil
 }
 
 func kindName(kind byte) string {

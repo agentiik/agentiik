@@ -39,14 +39,16 @@
 //
 // # What is not supported
 //
-//   - SHA-1 alone. A repository in SHA-256 is refused, as a workflow's commit is 7 to 40
-//     hexadecimal digits wherever the documentation names one.
+//   - SHA-1 alone, since a workflow's commit is 7 to 40 hexadecimal digits wherever the
+//     documentation names one. An ID is twenty bytes, and a pack a SHA-256 repository writes
+//     does not read as one; the routes refuse such a repository by the object format it names.
 //   - Pack version 2 and index version 2, which are what git writes. Pack version 3, index
 //     version 1, multi-pack indexes, bitmaps and reverse indexes are not read.
 //   - Writing deltas. A fetch copies whole objects; making deltas for it is for later.
 //   - The content of .gitmodules and .gitattributes, which git fsck parses to vet the submodules
-//     and attributes a checkout would act on. Their names and modes are checked; their text is
-//     not, since the version check refuses submodules outright.
+//     and attributes a checkout would act on. Their names and modes are checked and their text is
+//     not: the server checks nothing out, and a version holding a submodule is to be refused at
+//     the push whatever .gitmodules says.
 //   - The protocols themselves. upload-pack and receive-pack, their capabilities, negotiation and
 //     reports, are the smart HTTP routes' to speak, over this package's packets and packs.
 //
