@@ -23,7 +23,29 @@ import (
 // name a file outside the tree. A workflow include arrives already fetched, in remote,
 // because resolving one is reaching another repository at a ref, and reaching another
 // repository is not something this package does.
+//
+// It reads a tree a version is about to be made of, with Parse and ParseFragment, so a port and a
+// workflow output are held to agk.PortMaxBytes in every file. LoadStored reads what a version
+// already holds.
 func Load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow, error) {
+	return load(fsys, entry, remote, Parse, ParseFragment)
+}
+
+// LoadStored is Load for a version already stored: the same resolution over the same files, with
+// every rule but the bound a port and a workflow output are written to, agk.PortMaxBytes.
+//
+// A version recorded before that bound was may name a port or an output of 251 to 255 characters,
+// and its runs, its replays and the rebuild of its graph have to go on as they did before the
+// upgrade, since nothing may break for what an installation already holds. The bound is refused
+// where a version is made, by agk validate, agk run --local, agk push and the push route, and
+// never where one is read back, which is package version's Build.
+func LoadStored(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow, error) {
+	return load(fsys, entry, remote, parse, parseFragment)
+}
+
+// load is Load and LoadStored, reading the entry point with workflow and every file it includes
+// with fragment.
+func load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment, workflow func([]byte) (*Workflow, error), fragment func([]byte) (*Fragment, error)) (*Workflow, error) {
 	if fsys == nil {
 		return nil, fmt.Errorf("the workflow cannot be loaded: a run is pinned to a commit and the tree of that commit is what the entry point is read out of")
 	}
@@ -34,7 +56,7 @@ func Load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow,
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", entry, err)
 	}
-	wf, err := Parse(doc)
+	wf, err := workflow(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +64,12 @@ func Load(fsys fs.FS, entry string, remote map[WorkflowRef]Fragment) (*Workflow,
 	// What the includes carry, in declaration order, each one overriding what came
 	// before it and all of them under the entry point's own.
 	held := &included{
-		blocks:  map[string]stepValues{},
-		values:  map[agk.Step]stepValues{},
-		vars:    Vars{},
-		visited: map[string]bool{},
-		open:    map[string]bool{entry: true},
+		blocks:   map[string]stepValues{},
+		values:   map[agk.Step]stepValues{},
+		vars:     Vars{},
+		visited:  map[string]bool{},
+		open:     map[string]bool{entry: true},
+		fragment: fragment,
 	}
 	if err := held.gather(fsys, path.Dir(entry), wf.Include, remote); err != nil {
 		return nil, err
@@ -105,6 +128,10 @@ type included struct {
 	defaults Defaults
 	visited  map[string]bool
 	open     map[string]bool
+
+	// fragment reads an included file: ParseFragment where a version is made, and its stored
+	// reading where one is read back.
+	fragment func([]byte) (*Fragment, error)
 }
 
 // gather resolves one include list in declaration order. A fragment's own includes are
@@ -130,7 +157,7 @@ func (in *included) gather(fsys fs.FS, dir string, includes []Include, remote ma
 			if err != nil {
 				return fmt.Errorf("including %s: %w. A path include resolves inside the same commit, so the file has to be in the tree the run was pinned to", include.Path, err)
 			}
-			parsed, err := ParseFragment(doc)
+			parsed, err := in.fragment(doc)
 			if err != nil {
 				return fmt.Errorf("including %s: %w", include.Path, err)
 			}

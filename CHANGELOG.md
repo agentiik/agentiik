@@ -4,13 +4,28 @@ The releases of `agentiik`. Every repository carries the same version and is tag
 
 ## Unreleased
 
-### Repository
+### Upgrading
 
-- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to git's own checks of each object, a refusal naming the check as git does (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. A push is bounded in what it sends, holds and unpacks, each bound a constant with its reason. Its readers are fuzzed from what git writes.
+- A version stored before this release naming a port or a workflow output of 251 to 255 characters, or a secret its namespace does not declare, rebuilds, starts and runs as before, with nothing to do: both rules are applied where a version is made, and never where a stored one is read back (`version.Build`, `graph.LoadStored`, `brick.ParseStoredManifest`, a task's read of its image, `agk run --namespace`). Pushed again with the same files, from an agk of any release, it is answered as that version, unchanged; with other files, 409 as before.
+
+### API
+
+- A push naming a port or a workflow output past 250 characters (`agk.PortMaxBytes`), in the entry point, a file it includes or a manifest it carries, is refused with 422 before any of its tree is stored (`version.BuildNew`).
+- A push naming a secret its namespace does not declare is refused with 422 before any of its tree is stored, naming the secret and the steps that mount it, once the pusher holds `secret:use`.
+
+### agk
+
+- `agk validate`, `agk run --local` and `agk push` refuse a port or a workflow output past 250 characters in the file and in the manifests they read (`graph.Load`, `brick.ParseManifest`, `driver.Docker.Manifest`).
+- `agk run --local` says before its first step that it executes the working tree, uncommitted changes included, and is labelled local.
 
 ### Tests
 
+- The corpus's three documents refusing a port or a workflow output of 251 characters are refused, and are read by the stored readings.
 - The runner's boundary test refuses package `repo` by name: a runner never speaks git.
+
+### Repository
+
+- Package `repo` reads and writes git on the standard library alone, for the repositories the API is to serve: SHA-1 object IDs; commits, trees and tags held to git's own checks of each object, a refusal naming the check as git does (`hasDotgit`, `treeNotSorted`); packs of version 2, their deltas resolved against the pack or, in a thin pack, the repository, and written back whole so that an entry is copied into a fetch as it is stored; indexes of version 2, the same bytes `git index-pack` writes; pkt-line with side-band; and a tree as an `fs.FS`, read as it is walked. A push is bounded in what it sends, holds and unpacks, each bound a constant with its reason. Its readers are fuzzed from what git writes.
 
 ## v0.3.0, 2026-09-28
 

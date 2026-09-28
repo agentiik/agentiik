@@ -573,3 +573,24 @@ func TestANamespaceIsOneSegmentOfThePath(t *testing.T) {
 		t.Errorf("the run was asked for at %q, raw %q", s.path, s.rawPath)
 	}
 }
+
+// A commit pushed before the bound a port is written to, naming one of 251 characters, is one the
+// installation holds and starts as before, so agk run asks for it rather than refusing it here as
+// agk push would: nothing may break for what an installation already holds.
+func TestACommitStoredBeforeThePortBoundIsStillAskedFor(t *testing.T) {
+	dir := repository(t)
+	write(t, dir, "agentiik.yaml", strings.Replace(strings.ReplaceAll(scriptWorkflow, "port: ok", "port: ok"+strings.Repeat("x", 249)), "outputs: [ok]", "outputs: [ok"+strings.Repeat("x", 249)+"]", 1))
+	commitAll(t, dir, "a port of 251 characters, pushed before the bound")
+
+	s := &standIn{readings: []db.RunDetail{runReading(agk.Succeeded, agk.VerdictSucceeded, aTask(agk.TaskSucceeded, new(0)))}}
+	url := installationAt(t, s)
+	code, out, errs := against(t.Context(), dir, url, "run", "--namespace", "finance")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.path != "/api/v1/finance/workflows/monthly-invoicing/runs" {
+		t.Fatalf("the run was never asked for, and agk run answered %d: %s%s", code, out, errs)
+	}
+	if strings.Contains(errs, "at most 250") {
+		t.Errorf("the commit was refused on this side: %s", errs)
+	}
+}

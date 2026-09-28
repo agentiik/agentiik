@@ -172,13 +172,17 @@ func resolveImage(ctx context.Context, cli *docker.Client, cache *manifests, t g
 		return out, nil
 	}
 
-	m, err := brick.ParseManifest(document)
+	// Read as a manifest a version already holds, since a task runs the image of a version and
+	// one recorded before the bound a port is written to may name a port of 251 to 255
+	// characters, whose runs go on after an upgrade. Where a version is about to be made, Manifest
+	// holds what this read to the bound.
+	m, err := brick.ParseStoredManifest(document)
 	if err != nil {
 		return out, fault(t.Step, ErrContractBroken, ChargeBrick,
 			"%s of %s: %v", brick.ManifestPath, ref, err)
 	}
 	if declaresRootUser(m.Spec.Runtime.User) {
-		// brick.ParseManifest already refuses the three spellings where a
+		// brick.ParseStoredManifest already refuses the three spellings where a
 		// manifest is read, so this is the second gate rather than the first. It
 		// stays because the refusal that matters is the one before a container
 		// is created, and because this one names the step and the image.
@@ -370,6 +374,11 @@ func declaresRootUser(user string) bool {
 // There is no absent answer. graph.Images names the image of a non-script step, and such a
 // step is held to its manifest, so an image with no /agk/brick.yaml is a contract break
 // here rather than the base image a script step legitimately runs in.
+//
+// Its callers are about to make a version, or to run a working tree as one would be made, so
+// the manifest is held to the bound a port is written to as brick.ParseManifest holds it,
+// whatever the cache kept: a task's own read of the same image leaves the bound out, for the
+// versions recorded before it.
 func (d *Docker) Manifest(ctx context.Context, step agk.Step, image string) (brick.Manifest, error) {
 	r, err := resolveImage(ctx, d.cli, d.cache, graph.Task{Step: step, Image: image}, "", nil)
 	if err != nil {
@@ -378,6 +387,10 @@ func (d *Docker) Manifest(ctx context.Context, step agk.Step, image string) (bri
 	if r.Manifest == nil {
 		return brick.Manifest{}, fault(step, ErrContractBroken, ChargeBrick,
 			"%s carries no %s: an image becomes a brick by carrying one, and a step that is not a script step is held to the ports and the parameters its manifest declares", r.Ref, brick.ManifestPath)
+	}
+	if err := r.Manifest.CheckPortLengths(); err != nil {
+		return brick.Manifest{}, fault(step, ErrContractBroken, ChargeBrick,
+			"%s of %s: %v", brick.ManifestPath, r.Ref, err)
 	}
 	return *r.Manifest, nil
 }

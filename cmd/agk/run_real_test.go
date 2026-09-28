@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,5 +184,61 @@ steps:
 	}
 	if step, exit := strings.Index(report, "step only"), strings.Index(report, "exit code 17"); step < 0 || exit < step {
 		t.Errorf("the report reads %q, and it names the step before the exit code", report)
+	}
+}
+
+// "agk run --local is the one run no commit describes: it executes the working tree, uncommitted
+// changes included, and is labelled so that no history mistakes it for something reproducible."
+// The narration says so, naming the tree, before any step is narrated, and the run record a
+// history reads carries the label and no commit.
+func TestALocalRunSaysItExecutesTheWorkingTreeAndNoCommit(t *testing.T) {
+	needsARealDaemon(t)
+	dir := oneEntryPoint(t, `
+apiVersion: agentiik.dev/v1
+kind: Workflow
+metadata: { name: one, namespace: finance }
+steps:
+  only:
+    image: alpine:3.21
+    outputs: [out]
+    script: ["true"]
+`)
+
+	code, out, errs := runner(t, dir, "run", "--local")
+	if code != exitSucceeded {
+		t.Fatalf("the exit code is %d\n%s\n%s", code, out, errs)
+	}
+	said := strings.Index(errs, "this run executes the working tree in the current directory, uncommitted changes included")
+	if said < 0 {
+		t.Fatalf("the narration does not say the run executes the working tree it was run in:\n%s", errs)
+	}
+	if !strings.Contains(errs[said:], "labelled local") {
+		t.Errorf("the line does not name the label a history reads:\n%s", errs)
+	}
+	if step := strings.Index(errs, "  only  "); step < 0 || step < said {
+		t.Errorf("a step was narrated before the run said what it executes:\n%s", errs)
+	}
+	if strings.Contains(out, "working tree") {
+		t.Errorf("the line is on standard output, which carries the report alone: %s", out)
+	}
+
+	records, err := filepath.Glob(filepath.Join(dir, ".agk", "runs", "*", "run.json"))
+	if err != nil || len(records) != 1 {
+		t.Fatalf("the run record is not where the layout names it: %v %v", records, err)
+	}
+	doc, err := os.ReadFile(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Commit      string `json:"commit"`
+		TriggeredBy string `json:"triggered_by"`
+		Local       bool   `json:"local"`
+	}
+	if err := json.Unmarshal(doc, &record); err != nil {
+		t.Fatal(err)
+	}
+	if !record.Local || record.TriggeredBy != "local" || record.Commit != "" {
+		t.Errorf("the run record reads %s, and a local run is labelled local with no commit", doc)
 	}
 }

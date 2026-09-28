@@ -73,7 +73,23 @@ func without(keys []string, drop string) []string {
 // further: an extends naming a block the file does not carry is left standing, because
 // an included fragment may carry it and Parse was not given the fragments. Load, which
 // has them, refuses what is still unresolved.
+//
+// It reads a file a version is about to be made of, so a port and a workflow output are
+// held to agk.PortMaxBytes. LoadStored reads what a version already holds without it.
 func Parse(doc []byte) (*Workflow, error) {
+	wf, err := parse(doc)
+	if err != nil {
+		return nil, err
+	}
+	if err := portLengths(wf.Outputs, wf.MCP, wf.values, wf.blocks); err != nil {
+		return nil, err
+	}
+	return wf, nil
+}
+
+// parse is Parse less the bound a port is written to, which is how a version already stored
+// is read back (LoadStored).
+func parse(doc []byte) (*Workflow, error) {
 	root, file, err := document(doc)
 	if err != nil {
 		return nil, err
@@ -161,7 +177,23 @@ type Fragment struct {
 // inputs, the outputs and the triggers, which are the workflow's other boundary; an
 // included file that declared one of them would move the boundary out of the file that
 // names it.
+//
+// A port a fragment's steps and hidden blocks name is held to agk.PortMaxBytes, as Parse holds
+// the entry point's.
 func ParseFragment(doc []byte) (*Fragment, error) {
+	f, err := parseFragment(doc)
+	if err != nil {
+		return nil, err
+	}
+	if err := portLengths(nil, nil, f.values, f.blocks); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// parseFragment is ParseFragment less the bound a port is written to, which is how a fragment a
+// stored version carries is read back (LoadStored).
+func parseFragment(doc []byte) (*Fragment, error) {
 	root, _, err := document(doc)
 	if err != nil {
 		return nil, err

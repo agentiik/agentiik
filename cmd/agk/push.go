@@ -136,7 +136,7 @@ func push(ctx context.Context, e Env, args []string) int {
 	// about any file both of them hold.
 	tree := committed(files)
 	base := filepath.Base(path)
-	wf, err := loadCommitted(tree, base, filepath.Dir(path), sha)
+	wf, err := loadCommitted(tree, base, filepath.Dir(path), sha, graph.Load)
 	if err != nil {
 		refusal(e.Err, err)
 		return exitRefused
@@ -625,15 +625,20 @@ func committed(files map[string]api.PushFile) fstest.MapFS {
 	return tree
 }
 
-// loadCommitted is load, reading the commit rather than the disk: the same graph.Load and the same
-// graph.Check, over the tree that travels.
-func loadCommitted(tree fs.FS, base, dir, sha string) (*graph.Workflow, error) {
+// loadCommitted is load, reading the commit rather than the disk: the same graph.Check, over the
+// tree that travels, after the loader the caller names.
+//
+// agk push gives graph.Load, since it is making a version. agk run on an installation gives
+// graph.LoadStored, since the commit it names is one the installation already holds as it was
+// pushed, which may be before a bound added since, and the installation starts it all the same:
+// the command reads it only for the name the version was pushed under.
+func loadCommitted(tree fs.FS, base, dir, sha string, load func(fs.FS, string, map[graph.WorkflowRef]graph.Fragment) (*graph.Workflow, error)) (*graph.Workflow, error) {
 	// place.holds has refused a commit with nothing at the path, so what is left to say here is
 	// the commit holding a directory there.
 	if info, err := fs.Stat(tree, base); err == nil && info.IsDir() {
 		return nil, fmt.Errorf("%s is a directory in %s: -f names the entry point itself, which is %s inside it", base, short(sha), entryPoint)
 	}
-	wf, err := graph.Load(tree, base, nil)
+	wf, err := load(tree, base, nil)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w. The tree read was %s at %s", err, dir, short(sha))
 	}

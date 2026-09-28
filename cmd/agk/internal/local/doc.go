@@ -207,7 +207,7 @@
 //	   state.json.
 //
 // Everything below the loop is already merged and this package calls none of it directly.
-// Inside driver.Run: resolveImage, brick.ParseManifest cached by digest, brick.WriteInputs,
+// Inside driver.Run: resolveImage, brick.ParseStoredManifest cached by digest, brick.WriteInputs,
 // the mounts and the AGK_ environment, create, the wait opened before the start, attach,
 // start, brick.Collect, Store.Put per file, brick.Spill, agk.Band, graph.Result. If any of
 // that appeared here it would be in the wrong place.
