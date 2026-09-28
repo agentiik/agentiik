@@ -434,32 +434,31 @@ func TestDeltasAreResolvedWhateverOrderTheyComeIn(t *testing.T) {
 }
 
 func TestResolvingDeltasHoldsItsBasesWithinTheCache(t *testing.T) {
-	// A blob, and three generations of two deltas each against the one before: every delta is
-	// made against a base some other delta is made against too, so a base let go is one resolved
-	// again.
+	// A blob and a chain of twelve deltas, each made against the one before, then a second delta
+	// against each link, which comes after the whole chain: once the chain's end is resolved, every
+	// link is needed again, and one let go is resolved again from the blob, down the chain.
 	build := func(root []byte, b *builder, rootIndex int, thinBase *ID) map[ID]bool {
 		want := map[ID]bool{}
-		type node struct {
+		type link struct {
 			index int
 			data  []byte
 		}
-		level := []node{{rootIndex, root}}
-		for generation := range 3 {
-			var next []node
-			for _, n := range level {
-				for kid := range 2 {
-					d, data := edit(n.data, fmt.Sprintf("generation %d, kid %d\n", generation, kid))
-					var i int
-					if n.index < 0 {
-						i = b.ref(*thinBase, d)
-					} else {
-						i = b.ofs(n.index, d)
-					}
-					next = append(next, node{i, data})
-					want[HashObject(TypeBlob, data)] = true
-				}
+		chain := []link{{rootIndex, root}}
+		against := func(l link, d []byte) int {
+			if l.index < 0 {
+				return b.ref(*thinBase, d)
 			}
-			level = next
+			return b.ofs(l.index, d)
+		}
+		for i := range 12 {
+			d, data := edit(chain[i].data, fmt.Sprintf("link %d\n", i))
+			chain = append(chain, link{against(chain[i], d), data})
+			want[HashObject(TypeBlob, data)] = true
+		}
+		for i, l := range chain {
+			d, data := edit(l.data, fmt.Sprintf("beside link %d\n", i))
+			against(l, d)
+			want[HashObject(TypeBlob, data)] = true
 		}
 		return want
 	}

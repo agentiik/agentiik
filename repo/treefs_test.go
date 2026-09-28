@@ -68,16 +68,19 @@ func TestATreeReadsAsAFileSystem(t *testing.T) {
 func TestATreeFollowsNoLinkAndOpensNoSubmodule(t *testing.T) {
 	s, st := sampleStore(t)
 	fsys := NewTreeFS(context.Background(), st, gitID(t, s.dir, "main^{tree}"))
-	for name, mode := range map[string]fs.FileMode{"link": fs.ModeSymlink, "vendor/sub": fs.ModeIrregular} {
+	for name, c := range map[string]struct {
+		mode fs.FileMode
+		is   string
+	}{"link": {fs.ModeSymlink, "a symbolic link"}, "vendor/sub": {fs.ModeIrregular, "a submodule"}} {
 		info, err := fs.Stat(fsys, name)
-		if err != nil || info.Mode().Type() != mode {
+		if err != nil || info.Mode().Type() != c.mode {
 			t.Errorf("%s stats as %v, %v", name, info, err)
 		}
-		if _, err := fsys.Open(name); err == nil {
-			t.Errorf("%s opens", name)
+		if _, err := fsys.Open(name); err == nil || !strings.Contains(err.Error(), c.is) {
+			t.Errorf("%s opens with %v, where it is refused as %s", name, err, c.is)
 		}
-		if _, err := fsys.Open(name + "/x"); err == nil || errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("a path through %s opens with %v, where it is refused for what it crosses", name, err)
+		if _, err := fsys.Open(name + "/x"); err == nil || !strings.Contains(err.Error(), c.is) {
+			t.Errorf("a path through %s opens with %v, where it is refused as crossing %s", name, err, c.is)
 		}
 	}
 	if info, err := fs.Stat(fsys, "link"); err != nil || info.Size() != int64(len("agentiik.yaml")) {
